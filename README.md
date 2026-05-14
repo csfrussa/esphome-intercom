@@ -583,16 +583,25 @@ number:
 
 # Buttons for manual control
 button:
-  - platform: intercom_api
-    intercom_api_id: intercom
-    call:
-      name: "Call"
-    next_contact:
-      name: "Next Contact"
-    previous_contact:
-      name: "Previous Contact"
-    decline:
-      name: "Decline"
+  - platform: template
+    name: "Call"
+    on_press:
+      - intercom_api.call_toggle: intercom
+
+  - platform: template
+    name: "Next Contact"
+    on_press:
+      - intercom_api.next_contact: intercom
+
+  - platform: template
+    name: "Previous Contact"
+    on_press:
+      - intercom_api.prev_contact: intercom
+
+  - platform: template
+    name: "Decline"
+    on_press:
+      - intercom_api.decline_call: intercom
 
 # Example: call a specific room from a YAML automation
 button:
