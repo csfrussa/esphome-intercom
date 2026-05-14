@@ -286,22 +286,33 @@ number:
 
 Use these actions in automations or lambdas:
 
-For Home Assistant-facing controls, prefer the native button platform. The
-actions below remain available for GPIO buttons, display widgets, scripts and
-direct automations without creating button entities.
+For Home Assistant-facing controls in shared/public packages, prefer standard
+template buttons that call the intercom actions. This avoids making the basic
+YAML path depend on ESPHome external-component platform cache state. The native
+`button: platform: intercom_api` platform is still available for custom local
+YAMLs that explicitly want it.
 
 ```yaml
 button:
-  - platform: intercom_api
-    intercom_api_id: intercom
-    call:
-      name: "Call"
-    next_contact:
-      name: "Next Contact"
-    previous_contact:
-      name: "Previous Contact"
-    decline:
-      name: "Decline"
+  - platform: template
+    name: "Call"
+    on_press:
+      - intercom_api.call_toggle: intercom
+
+  - platform: template
+    name: "Next Contact"
+    on_press:
+      - intercom_api.next_contact: intercom
+
+  - platform: template
+    name: "Previous Contact"
+    on_press:
+      - intercom_api.prev_contact: intercom
+
+  - platform: template
+    name: "Decline"
+    on_press:
+      - intercom_api.decline_call: intercom
 ```
 
 ### intercom_api.start
