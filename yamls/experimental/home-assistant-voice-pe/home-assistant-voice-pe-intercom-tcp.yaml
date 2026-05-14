@@ -1,0 +1,109 @@
+# =============================================================================
+# Home Assistant Voice PE + intercom_api experiment.
+#
+# This YAML keeps the official Voice PE audio stack intact and only adds the
+# native intercom layer. The Voice PE is not a Generic S3: its microphones are
+# processed by the onboard XMOS voice front-end before ESPHome receives them.
+#
+# Expected audio graph:
+#   XMOS processed mic -> i2s_mics channel 0 -> intercom_api TX
+#   intercom_api RX -> intercom resampler -> Voice PE mixer -> AIC3204 speaker
+#
+# This is an experimental bring-up target, not a validated release preset.
+# =============================================================================
+
+substitutions:
+  name: ha-voice-pe-intercom
+  friendly_name: Home Assistant Voice PE Intercom
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  intercom_tcp_port: "6054"
+
+packages:
+  voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  intercom_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
+  intercom_ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api.yaml@dev
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+
+external_components:
+  - source: ${ext_components_source}
+    components: [audio_processor, intercom_api]
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+speaker:
+  # The official Voice PE mixer already combines media and announcements.
+  # Add one more input for intercom audio instead of replacing the hardware
+  # speaker, DAC, sendspin, jack compensation or media player.
+  - id: !extend mixing_speaker
+    source_speakers:
+      - id: intercom_mixing_input
+        timeout: never
+
+  - platform: resampler
+    id: intercom_resampling_speaker
+    output_speaker: intercom_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+
+intercom_api:
+  id: intercom
+  microphone:
+    microphone: i2s_mics
+    channels: 0
+  speaker: intercom_resampling_speaker
+  tasks_stack_in_psram: true
+  network_socket_headroom: 4
+  ringing_timeout: 30s
+  calling_timeout: 30s
+
+  on_streaming:
+    - mixer_speaker.apply_ducking:
+        id: media_mixing_input
+        decibel_reduction: 20
+        duration: 0.0s
+
+  on_idle:
+    - mixer_speaker.apply_ducking:
+        id: media_mixing_input
+        decibel_reduction: 0
+        duration: 1.0s
+
+  on_hangup:
+    - mixer_speaker.apply_ducking:
+        id: media_mixing_input
+        decibel_reduction: 0
+        duration: 1.0s
+
+  on_call_failed:
+    - mixer_speaker.apply_ducking:
+        id: media_mixing_input
+        decibel_reduction: 0
+        duration: 1.0s
+
+button:
+  - platform: intercom_api
+    intercom_api_id: intercom
+    call:
+      name: Call
+      id: call_button
+      icon: mdi:phone
+    next_contact:
+      name: Next Contact
+      id: next_contact_button
+      icon: mdi:skip-next
+    previous_contact:
+      name: Previous Contact
+      id: prev_contact_button
+      icon: mdi:skip-previous
+    decline:
+      name: Decline
+      id: decline_button
+      icon: mdi:phone-hangup
