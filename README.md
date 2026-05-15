@@ -1276,7 +1276,9 @@ The upcoming tested pattern is:
   sends a PBX-lite decline reason back to the ESP.
 
 Replace `/lovelace/intercom` below with your real dashboard view, for example
-`/dashboard-citofono/0`. The word `intercom` is not special.
+`/your-dashboard/your-view`. The word `intercom` is not special. If Home
+Assistant generated a URL ending in `/0`, that just means the first Lovelace
+view has no custom path.
 
 ```yaml
 alias: Doorbell Notification
