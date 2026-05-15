@@ -72,6 +72,7 @@ Highlights:
 
 - ESP-to-ESP calls, ESP-to-Home Assistant calls, browser softphone calls and HA-bridged calls share the same state model.
 - Ringing, answer, decline, hangup, busy and error reasons are propagated through ESP sensors, the Lovelace card and HA events.
+- Actionable mobile notifications can answer or decline an ESP doorbell call from the Home Assistant app. Answer opens the card and starts the real browser/app audio path; Decline sends a PBX-lite decline back to the ESP.
 - TCP and UDP variants are both provided. TCP is the safer starting point for routed networks and containers; UDP is useful on simple LANs where latency is the priority.
 - Full voice devices can keep media playback, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP.
 - The audio engine was reworked around earlier stack and buffer allocation, cleaner I2S lifecycle, better ducking, AEC reference handling and socket accounting.
@@ -101,6 +102,18 @@ closest YAML, adapt the board pins and audio hardware, add the ESP through the
 ESPHome integration, then install `intercom_native`. Home Assistant is
 discovered as a destination and the ESP can call or be called from a GPIO
 button, LVGL button, automation, service call or Lovelace card.
+
+### Discovery Rule
+
+If Home Assistant is part of the setup, use the standard HA-managed phonebook:
+each ESP publishes its `intercom_endpoint` through the native ESPHome API, and
+HA publishes the combined roster as `sensor.intercom_phonebook`.
+
+Do **not** enable ESP-side mDNS discovery for normal HA installs. The optional
+`packages/intercom/mdns_discovery.yaml` package is for ESP-only deployments
+without HA as the phonebook authority. It lets ESPs find each other directly on
+a simple local network, but it is not the routing layer for HA-managed PBX-lite,
+VPN, VLAN, Docker or routed subnet setups.
 
 ### PBX-lite mental model
 
@@ -159,7 +172,8 @@ the snippets below when you are building a custom target.
    - [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml)
 3. Add each ESP through the ESPHome integration in Home Assistant.
 4. Verify that HA exposes `sensor.intercom_phonebook`. That is the authoritative
-   roster for the standard packages.
+   roster for the standard packages. Do not add the mDNS discovery package in
+   this HA-managed path.
 5. Use the ESP buttons, display, Home Assistant service, or Lovelace card to
    call a selected contact.
 
@@ -190,6 +204,12 @@ binary_sensor:
 When the ESP calls that HA contact, the Lovelace card rings and can answer from
 the browser or mobile app. The standard intercom callback package also fires the
 `esphome.intercom_call` event for automations.
+
+For mobile doorbells, the Companion app notification can expose two useful
+actions: **Answer** and **Decline**. Answer deep-links to the Lovelace card with
+`?intercom_answer=1`, so the card can request microphone access and start the
+full-duplex audio stream. Decline stays in the automation path and calls
+`intercom_native.decline`, which sends the decline reason back to the ESP.
 
 ### Room-to-room intercom: fixed buttons
 
@@ -402,6 +422,10 @@ job, not mDNS's. In HA-managed mode, `sensor.intercom_phonebook` is the source
 of truth; each ESP locally shapes the protocol-aware roster into its own TCP or
 UDP dial plan.
 
+In routed networks, VLANs and VPNs, fix the advertised IPs and routes used by
+`sensor.intercom_phonebook`; do not try to solve HA reachability by enabling
+ESP-side mDNS discovery. mDNS is link-local discovery, not a PBX route.
+
 ---
 
 ## Installation
@@ -431,6 +455,41 @@ _The config flow enables the TCP and UDP listeners used by ESP peers and the HA 
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
+#### After Every Intercom Native Upgrade: Hard Refresh The Card Page
+
+After upgrading `intercom_native`, hard refresh every Home Assistant dashboard
+view that contains an `intercom-card`.
+
+Several reported "broken card" or "intercom not working" issues were eventually
+traced back to the browser or mobile app still running an old cached copy of the
+card JavaScript after the integration had already been upgraded. The card URL is
+versioned from the installed Intercom Native component, but some clients can
+still keep stale frontend state until their cache is cleared.
+
+On desktop Chrome or Chromium:
+
+1. Open the dashboard page that contains the intercom card.
+2. Press `F12` to open Developer Tools.
+3. Right-click the browser refresh button.
+4. Choose **Empty cache and hard reload**.
+5. Check the version shown at the bottom-right of the card. It must match the
+   Intercom Native version you just installed.
+
+On the Home Assistant Companion app for Android:
+
+1. Close the app.
+2. Open Android **Settings**.
+3. Open the Home Assistant app settings.
+4. Clear the app cache.
+5. Reopen the app and check the card version shown at the bottom-right.
+
+Home Assistant can update/reload Lovelace resources, and this integration
+already registers the card with a versioned URL. The remaining stale-cache case
+is client-side: the browser or companion app may keep an already loaded
+JavaScript module alive until the page/app is refreshed. Until the card gets its
+own version-mismatch warning, do this after every Intercom Native upgrade,
+especially after major releases.
+
 #### Option B: Manual install
 
 ```bash
@@ -443,7 +502,7 @@ Then add via UI: **Settings → Integrations → Add Integration → Intercom Na
 The integration will:
 - Bind TCP and UDP listener sockets on the configured ports.
 - Register the WebSocket API commands for the card.
-- Register HA peer `_intercom-tcp._tcp` and/or `_intercom-udp._udp` mDNS services.
+- Register HA peer `_intercom-tcp._tcp` and/or `_intercom-udp._udp` mDNS services for ESP-only discovery compatibility.
 - Publish the protocol-aware phonebook (`sensor.intercom_phonebook`) for ESP subscribers.
 - Register voluptuous-validated services (`answer`, `decline`, `hangup`, `call`, `forward`, `purge_devices`).
 - Auto-register the Lovelace card as a frontend resource.
@@ -476,6 +535,28 @@ external_components:
 ```
 
 > **Note**: `audio_processor` must be listed because it provides the shared `AudioProcessor` interface used by both `esp_aec` and `esp_afe`. Use `esp_aec` for lightweight single-mic setups, `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below).
+
+#### After ESP Firmware Package Upgrades: Clear ESPHome Build Cache
+
+When you upgrade this project and flash ESP firmware built from the new YAMLs,
+force ESPHome to rebuild from a clean cache at least once. This is especially
+important after major releases, package reshuffles, external component changes
+or ESPHome version upgrades.
+
+If you compile from the ESPHome dashboard, use the build-cache cleanup action
+for the device or the global **Clear all** action if your dashboard exposes it,
+then compile/upload again.
+
+If you compile from the ESPHome CLI, delete the `.esphome` build cache
+directories from your ESPHome YAML compilation paths before compiling again. For
+example, from the directory that contains your YAML files:
+
+```bash
+find . -type d -name .esphome -prune -exec rm -rf {} +
+```
+
+If your YAMLs live in multiple folders, repeat the cleanup for each folder or
+run it from the common parent that contains only your ESPHome build files.
 
 #### Minimal Configuration
 
@@ -681,6 +762,11 @@ show_protocol: true
 The card automatically discovers ESPHome devices with the `intercom_api` component. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_protocol: true`, the header appends `- TCP` / `- UDP`; the mode line shows `Home Assistant - ESP`, `ESP - ESP`, or `Inter-protocol TCP-UDP` / `Inter-protocol UDP-TCP`.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.intercom_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
+
+After every Intercom Native upgrade, hard refresh this dashboard view and verify
+that the version printed at the bottom-right of the card matches the installed
+integration version. See
+[After Every Intercom Native Upgrade: Hard Refresh The Card Page](#after-every-intercom-native-upgrade-hard-refresh-the-card-page).
 
 The Lovelace card provides **full-duplex bidirectional audio** with the ESP device: you can talk and listen simultaneously through your browser or the Home Assistant Companion app. The card captures audio from your microphone via `getUserMedia()` and plays incoming audio from the ESP in real-time.
 
@@ -1254,9 +1340,84 @@ Common symptoms and fixes are documented in **[docs/troubleshooting.md](docs/tro
 
 ## Home Assistant Automation
 
-When an ESP device calls the HA location name, it fires an `esphome.intercom_call` event. Use this to trigger push notifications, flash lights, play chimes, or any other automation.
+When an ESP device calls the HA location name, it fires an
+`esphome.intercom_call` event. Use this to trigger push notifications, flash
+lights, play chimes, or any other automation.
 
-See [examples/doorbell-automation.yaml](examples/doorbell-automation.yaml) for a ready-to-use doorbell notification with mobile push and action buttons.
+The mobile notification can expose real **Answer** and **Decline** actions:
+
+- Replace every `/lovelace/intercom` below with the real dashboard view that
+  contains your `intercom-card`, for example `/dashboard-citofono/0`. The word
+  `intercom` is not special and no dashboard with that name is required.
+- **Answer** must be a `URI` action that opens the dashboard with
+  `?intercom_answer=1`. The card is the only place that can request microphone
+  permission and create the full-duplex browser or app audio stream.
+- **Decline** can stay in Home Assistant automation logic. The mobile app emits
+  `mobile_app_notification_action`, then HA calls `intercom_native.decline` and
+  sends the PBX-lite decline reason back to the ESP.
+
+```yaml
+alias: Doorbell Notification
+description: Send push notification when an ESP calls Home Assistant
+triggers:
+  - trigger: event
+    event_type: esphome.intercom_call
+conditions: []
+actions:
+  - action: notify.mobile_app_your_phone
+    data:
+      title: "Incoming Call"
+      message: "{{ trigger.event.data.caller }} is calling..."
+      data:
+        tag: intercom_call
+        url: /lovelace/intercom
+        clickAction: /lovelace/intercom
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: "Answer"
+            uri: /lovelace/intercom?intercom_answer=1
+          - action: DECLINE_INTERCOM
+            title: "Decline"
+  - action: persistent_notification.create
+    data:
+      title: "Incoming Call"
+      message: "{{ trigger.event.data.caller }} is calling..."
+      notification_id: intercom_call
+  - wait_for_trigger:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: DECLINE_INTERCOM
+    timeout: "00:00:30"
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger is not none }}"
+    then:
+      - action: intercom_native.decline
+        target:
+          device_id: "{{ trigger.event.data.device_id }}"
+        data:
+          reason: declined
+      - action: notify.mobile_app_your_phone
+        data:
+          message: clear_notification
+          data:
+            tag: intercom_call
+    else:
+      - action: notify.mobile_app_your_phone
+        data:
+          message: clear_notification
+          data:
+            tag: intercom_call
+mode: single
+```
+
+See [examples/doorbell-automation.yaml](examples/doorbell-automation.yaml) for
+the same pattern as a standalone file.
 
 ---
 

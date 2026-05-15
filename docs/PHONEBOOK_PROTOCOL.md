@@ -186,6 +186,16 @@ Standard HA-managed firmware does not run ESP-side mDNS announce/discovery.
 The ESP publishes `intercom_endpoint` over the native ESPHome API and HA owns
 the central phonebook.
 
+Use this rule when choosing a discovery path:
+
+- With HA installed: use `sensor.intercom_phonebook`.
+- Without HA as phonebook authority: optionally use ESP-side mDNS discovery.
+
+Do not combine ESP-side mDNS discovery with the standard HA-managed packages as
+a way to solve routing. In VPN, VLAN or routed subnet deployments, the fix is
+correct address advertisement and bidirectional reachability for the endpoints
+inside `sensor.intercom_phonebook`.
+
 For ESP-only deployments, include `packages/intercom/mdns_discovery.yaml`.
 That package enables both:
 
@@ -199,6 +209,9 @@ transport is enabled:
 ```text
 Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
 ```
+
+That HA mDNS advertisement is for compatibility with ESP-only discovery flows.
+It is not the source of truth for normal HA-managed firmware.
 
 ## Non-Goals
 

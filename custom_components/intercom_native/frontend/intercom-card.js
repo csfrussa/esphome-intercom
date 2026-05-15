@@ -81,6 +81,7 @@ class IntercomCard extends HTMLElement {
     // Auto-answer
     this._autoAnswer = false;
     this._autoAnswering = false;  // Prevents re-entry during auto-answer
+    this._deepLinkAnswerConsumed = false;
 
     // Remote-end progress / ended-call surface. Both come from HA bus
     // events fired by the bridge (`intercom_native_bridge_state_changed`)
@@ -464,10 +465,48 @@ class IntercomCard extends HTMLElement {
         }
       }
 
+      this._maybeAnswerFromUrl(newEspState);
+
       if (needsRender) {
         this._render();
       }
     }
+  }
+
+  _shouldAnswerFromUrl() {
+    if (this._deepLinkAnswerConsumed) return false;
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const value = (params.get("intercom_answer") || "").toLowerCase();
+      return value === "1" || value === "true" || value === "yes";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  _clearAnswerUrlParam() {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("intercom_answer");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    } catch (_) {
+      // Best effort only. Leaving the parameter is harmless because the local
+      // consumed flag prevents repeated answers in this card instance.
+    }
+  }
+
+  _maybeAnswerFromUrl(espState) {
+    if (!this._shouldAnswerFromUrl()) return;
+    if (this._autoAnswering || this._starting) return;
+    const state = (espState || this._getEspState()).toLowerCase();
+    const isCallingHa = (state === "calling" || state === "outgoing")
+        && this._getDestination() === this._getHaName();
+    if (!isCallingHa) return;
+
+    this._deepLinkAnswerConsumed = true;
+    this._clearAnswerUrlParam();
+    this._autoAnswering = true;
+    this._tryAutoAnswer({ requirePersistentPermission: false });
   }
 
   _getConfigDeviceId() {
@@ -1353,10 +1392,11 @@ class IntercomCard extends HTMLElement {
     this._audioStreaming = false;
   }
 
-  async _tryAutoAnswer() {
+  async _tryAutoAnswer(options = {}) {
+    const requirePersistentPermission = options.requirePersistentPermission !== false;
     // Check if browser has persistent mic permission
     try {
-      if (navigator.permissions?.query) {
+      if (requirePersistentPermission && navigator.permissions?.query) {
         const perm = await navigator.permissions.query({ name: "microphone" });
         if (perm.state !== "granted") {
           _ic_log.info("intercom: auto-answer skipped, mic permission not persistent");

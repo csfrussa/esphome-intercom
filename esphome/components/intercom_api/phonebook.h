@@ -314,9 +314,12 @@ class Phonebook {
     }
 
     if (protocol == ContactProtocol::HA) {
-      if (parts.size() != 4 && parts.size() != 5) return false;
+      if (parts.size() != 4 && parts.size() != 5 && parts.size() != 6) return false;
       if (!parse_u16_(trim_(parts[3]), &out->port)) return false;
       if (parts.size() == 5 && !parse_u16_(trim_(parts[4]), &out->control_port)) {
+        return false;
+      }
+      if (parts.size() == 6 && !parse_u16_(trim_(parts[5]), &out->control_port)) {
         return false;
       }
       return true;

@@ -495,6 +495,15 @@ They are for installs without a central HA phonebook; combining them with HA API
 traffic and intercom sockets adds avoidable lwIP/socket load, especially while
 HA is disconnecting or restarting.
 
+Decision rule:
+
+- HA-managed firmware: `sensor.intercom_phonebook` is the phonebook source.
+- ESP-only firmware without HA: mDNS can build the local phonebook.
+
+For routed networks, VLANs, Docker/HA containers or VPNs, fix the advertised
+endpoint addresses and routing. ESP-side mDNS discovery is not a substitute for
+reachability between the IPs and ports published in the phonebook.
+
 For direct ESP-only installs, enable the opt-in discovery package:
 
 ```yaml

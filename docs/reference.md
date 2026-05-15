@@ -125,6 +125,7 @@ The phonebook is the single contract.
 - **Empty at boot is normal**: HA phonebook sensors (or a YAML script) populate it.
 - **Dedup by name only**: same name = same slot, no duplicates. On endpoint conflict, last writer wins (documented in `phonebook.h`).
 - **Protocol-aware rows are the contract**: `Name|tcp|ip|port`, `Name|udp|ip|audio|control`, `Name|ha|ip|tcp_port|udp_audio|udp_control`. Short manual rows are accepted in YAML scripts and interpreted according to the local transport.
+- **HA-managed installs use the HA phonebook, not ESP-side mDNS**: standard YAMLs consume `sensor.intercom_phonebook`. The optional mDNS discovery package is only for ESP-only installs that do not use HA as the phonebook authority.
 - **Conflict scenarios are benign**:
   - same-transport peer: HA publishes the direct endpoint from that ESP's `intercom_endpoint` entity.
   - cross-protocol peer: `intercom_api` shapes the typed row to the HA bridge endpoint locally; mDNS never crosses protocols.
@@ -329,6 +330,9 @@ Standard HA-managed firmware does not run ESP-side mDNS announce/discovery.
 Include `packages/intercom/mdns_discovery.yaml` only for ESP-only deployments
 that must build a local phonebook without HA.
 Cross-protocol bridging stays HA's job (TCP <-> UDP via the bridge), not mDNS's.
+For VPN, VLAN, routed subnet or HA container deployments, troubleshoot
+`sensor.intercom_phonebook`, advertised HA addresses and firewall/routes. Do not
+enable ESP-side mDNS discovery to make HA reachable.
 
 ## Home Assistant services
 
@@ -516,6 +520,10 @@ mode: single
 ### Doorbell with actionable notification and decline
 
 Send a push notification with Answer and Decline actions. If the user taps Decline, the call is ended.
+Answer opens the Lovelace card with `intercom_answer=1`; the card must create the
+phone audio stream, so Answer cannot be a backend-only service call.
+Replace `/lovelace/intercom` with the dashboard view that contains your
+`intercom-card`; the path name is not special.
 
 ```yaml
 alias: Doorbell notification with actions
@@ -534,8 +542,8 @@ actions:
         clickAction: /lovelace/intercom
         actions:
           - action: URI
-            title: "Open Intercom"
-            uri: /lovelace/intercom
+            title: "Answer"
+            uri: /lovelace/intercom?intercom_answer=1
           - action: DECLINE_INTERCOM
             title: "Decline"
   - wait_for_trigger:
@@ -549,6 +557,8 @@ actions:
   - action: intercom_native.decline
     target:
       device_id: "{{ trigger.event.data.device_id }}"
+    data:
+      reason: declined
   - action: notify.mobile_app_phone
     data:
       message: clear_notification
