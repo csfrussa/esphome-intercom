@@ -20,6 +20,7 @@ This is the working list for refreshing README and documentation media for the
 |---|---|---|---|
 | `docs/images/call-from-home-assistant-to-esp.gif` | GIF | Browser card or HA calls an ESP | Captured: target ESP card only, ring, answer, hangup |
 | `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Casa, HA rings, answer or hangup sequence visible |
+| `docs/images/mobile-notification-answer.gif` | GIF | Android notification answers an ESP call | Captured: notification actions, HA app opening, card in full-duplex call |
 | `docs/images/cross-protocol-bridge.gif` | GIF | HA PBX-lite bridge | Captured: WS3 UDP calls Spotpear TCP through HA, ringing, answer, hangup |
 | `docs/images/decline-reason.png` | Screenshot | Reason propagation | Decline with custom reason, DND or busy visible in card/sensor |
 | `docs/images/busy-reason.png` | Screenshot | Busy behavior | One call active, second caller rejected with `busy` |

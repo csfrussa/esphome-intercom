@@ -1358,6 +1358,12 @@ The mobile notification can expose real **Answer** and **Decline** actions:
   `mobile_app_notification_action`, then HA calls `intercom_native.decline` and
   sends the PBX-lite decline reason back to the ESP.
 
+![Answer an ESP call from the Home Assistant mobile notification](docs/images/mobile-notification-answer.gif)
+
+The GIF above shows the tested Android Companion app flow: the ESP calls Home
+Assistant, the notification opens the intercom dashboard with
+`intercom_answer=1`, then the card starts the real full-duplex audio path.
+
 ```yaml
 alias: Doorbell Notification
 description: Send push notification when an ESP calls Home Assistant
