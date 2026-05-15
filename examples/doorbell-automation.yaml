@@ -11,7 +11,9 @@
 #
 # Replace notify.mobile_app_your_phone with your mobile app service.
 # Replace every /lovelace/intercom value with the dashboard view that contains
-# your intercom-card, for example /dashboard-citofono/0.
+# your intercom-card, for example /your-dashboard/your-view. If Home Assistant
+# generated a URL ending in /0, that simply means the first Lovelace view has no
+# custom path.
 
 alias: Doorbell Notification
 description: Send push notification when doorbell rings - tap to open intercom

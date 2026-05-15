@@ -523,7 +523,8 @@ Send a push notification with Answer and Decline actions. If the user taps Decli
 Answer opens the Lovelace card with `intercom_answer=1`; the card must create the
 phone audio stream, so Answer cannot be a backend-only service call.
 Replace `/lovelace/intercom` with the dashboard view that contains your
-`intercom-card`; the path name is not special.
+`intercom-card`; the path name is not special. If Home Assistant generated a URL
+ending in `/0`, that simply means the first Lovelace view has no custom path.
 
 ```yaml
 alias: Doorbell notification with actions

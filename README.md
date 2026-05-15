@@ -1347,8 +1347,10 @@ lights, play chimes, or any other automation.
 The mobile notification can expose real **Answer** and **Decline** actions:
 
 - Replace every `/lovelace/intercom` below with the real dashboard view that
-  contains your `intercom-card`, for example `/dashboard-citofono/0`. The word
-  `intercom` is not special and no dashboard with that name is required.
+  contains your `intercom-card`, for example `/your-dashboard/your-view`. The
+  word `intercom` is not special and no dashboard with that name is required.
+  If Home Assistant generated a URL ending in `/0`, that just means the first
+  Lovelace view has no custom path.
 - **Answer** must be a `URI` action that opens the dashboard with
   `?intercom_answer=1`. The card is the only place that can request microphone
   permission and create the full-duplex browser or app audio stream.
