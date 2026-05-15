@@ -1254,9 +1254,89 @@ Common symptoms and fixes are documented in **[docs/troubleshooting.md](docs/tro
 
 ## Home Assistant Automation
 
-When an ESP device calls the HA location name, it fires an `esphome.intercom_call` event. Use this to trigger push notifications, flash lights, play chimes, or any other automation.
+When an ESP device calls the HA location name, it fires an
+`esphome.intercom_call` event. Use this to trigger push notifications, flash
+lights, play chimes, or any other automation.
 
-See [examples/doorbell-automation.yaml](examples/doorbell-automation.yaml) for a ready-to-use doorbell notification with mobile push and action buttons.
+In the current `2026.5.0` release, the safe mobile pattern is to send a
+notification that opens the dashboard containing the `intercom-card`, then
+answer from the card. Direct **Answer** from the notification itself requires
+card-side deep-link support and is already implemented and tested on `dev`; it
+will be available in the next release. Please be patient for that upcoming
+version instead of trying to force it on `2026.5.0`.
+
+The upcoming tested pattern is:
+
+- **Answer** is a `URI` action that opens the dashboard view containing
+  `intercom-card` with `?intercom_answer=1`. The card must handle Answer because
+  it is the only part that can request microphone permission and start the
+  full-duplex browser or Home Assistant app audio stream.
+- **Decline** stays in Home Assistant automation logic. The mobile app emits
+  `mobile_app_notification_action`, then HA calls `intercom_native.decline` and
+  sends a PBX-lite decline reason back to the ESP.
+
+Replace `/lovelace/intercom` below with your real dashboard view, for example
+`/dashboard-citofono/0`. The word `intercom` is not special.
+
+```yaml
+alias: Doorbell Notification
+description: Send push notification when an ESP calls Home Assistant
+triggers:
+  - trigger: event
+    event_type: esphome.intercom_call
+conditions: []
+actions:
+  - action: notify.mobile_app_your_phone
+    data:
+      title: "Incoming Call"
+      message: "{{ trigger.event.data.caller }} is calling..."
+      data:
+        tag: intercom_call
+        url: /lovelace/intercom
+        clickAction: /lovelace/intercom
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: "Answer"
+            uri: /lovelace/intercom?intercom_answer=1
+          - action: DECLINE_INTERCOM
+            title: "Decline"
+  - action: persistent_notification.create
+    data:
+      title: "Incoming Call"
+      message: "{{ trigger.event.data.caller }} is calling..."
+      notification_id: intercom_call
+  - wait_for_trigger:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: DECLINE_INTERCOM
+    timeout: "00:00:30"
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger is not none }}"
+    then:
+      - action: intercom_native.decline
+        target:
+          device_id: "{{ trigger.event.data.device_id }}"
+        data:
+          reason: declined
+      - action: notify.mobile_app_your_phone
+        data:
+          message: clear_notification
+          data:
+            tag: intercom_call
+    else:
+      - action: notify.mobile_app_your_phone
+        data:
+          message: clear_notification
+          data:
+            tag: intercom_call
+mode: single
+```
 
 ---
 
