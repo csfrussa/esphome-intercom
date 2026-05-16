@@ -16,6 +16,8 @@ The current audio stack uses these Espressif components:
 | `espressif/esp-sr` | `esp_aec`, `esp_afe`, pulled directly or through GMF | Espressif MIT-style license, restricted to Espressif products | Provides AEC, AFE, SE/BSS, VAD, NS and AGC libraries. Some DSP implementation is shipped by Espressif as precompiled target libraries. |
 | `espressif/gmf_ai_audio` | `esp_afe` | Espressif Modified MIT, restricted to Espressif products | Provides `esp_gmf_afe_manager`, the feed/fetch/suspend/runtime-feature manager used by the dual-mic AFE backend. |
 | `espressif/gmf_core` | Transitive dependency of `gmf_ai_audio` | Espressif Modified MIT, restricted to Espressif products | Base GMF object and support layer required by `gmf_ai_audio`. |
+| `espressif/esp_audio_effects` | `i2s_audio_duplex` | Espressif MIT-style license, restricted to Espressif products | Provides `esp_ae_rate_cvt`, used for the 48 kHz bus to 16 kHz mic/ref conversion on P4, WS3, Spotpear and no-codec AEC builds. |
+| `espressif/esp_codec_dev` | `i2s_audio_duplex` codec-backed builds | Apache-2.0 | Provides codec control plus I2S read/write. P4 and WS3 use ES7210/ES8311 through it; Spotpear single-mic uses ES8311 input/output through it. Generic no-codec AEC still uses the same bus facade with `codec_if = NULL`. |
 
 ## Reference Components
 
@@ -24,8 +26,49 @@ conformance, but are not currently a replacement for `i2s_audio_duplex`:
 
 | Component or BSP | Used for | License family | Notes |
 |---|---|---|---|
-| `espressif/esp_codec_dev` | Reference for codec control patterns | Apache-2.0 | Abstracts codec control, I2S open/read/write, output volume, input gain and per-channel gain. |
 | Waveshare `esp32_p4_wifi6_touch_lcd_x` BSP | Reference for Waveshare P4 pinout, ES8311/ES7210 setup and PA control | See upstream BSP package | The BSP uses `esp_codec_dev` and standard I2S examples. Our full-duplex TDM path still needs custom ESPHome integration for mic/ref staging, mixer, intercom and Home Assistant entities. |
+
+## Generated-Code Coverage
+
+The migration is not P4-only. The current generated-code snapshots confirm:
+
+- Waveshare P4 landscape AFE: TDM ES7210 input and ES8311 output go through
+  `esp_codec_dev`; dual mic is structural with SE/BSS enabled and AEC booting
+  disabled for controlled tests.
+- Waveshare S3 full AFE: TDM ES7210 input and ES8311 output also go through
+  `esp_codec_dev`; dual mic is structural with SE/BSS enabled.
+- Spotpear single-mic full AFE: ES8311 input and ES8311 output go through
+  `esp_codec_dev`; AEC/NS/AGC/VAD remain on the single-mic `esp_afe` path.
+- Generic S3 AEC: remains no-codec and uses standalone `esp_aec` over the same
+  `i2s_audio_duplex` bus facade.
+
+## PSRAM Policy
+
+Do not treat all Espressif components the same:
+
+- `esp-sr` AFE exposes `memory_alloc_mode` in `afe_config_t`. Public YAMLs can
+  choose `more_internal`, `internal_psram_balance` or `more_psram`; the current
+  default stays aligned with Espressif's PSRAM-friendly AFE profile unless a
+  board-specific test proves otherwise.
+- `esp_gmf_afe_manager` has no public allocation toggle. Its manager object and
+  feed buffer use `heap_caps_calloc_prefer(..., MALLOC_CAP_SPIRAM,
+  MALLOC_CAP_INTERNAL)`, and its feed/fetch task stacks are created in PSRAM
+  when `CONFIG_SPIRAM_BOOT_INIT` is available. This is an Espressif baseline,
+  not a fork point unless runtime evidence points at it.
+- `gmf_core` OAL helpers generally allocate from PSRAM when
+  `CONFIG_SPIRAM_BOOT_INIT` is enabled. We currently use only the GMF AFE
+  manager path, not a full GMF pipeline.
+- `esp_codec_dev` does not expose a PSRAM policy in its public codec/data APIs.
+  Our integration passes existing IDF I2S handles and the component mostly owns
+  small codec/data interface objects plus codec register state.
+- `esp_audio_effects` `esp_ae_rate_cvt` exposes quality/performance knobs
+  (`complexity` and `perf_type`), but no public "allocate in PSRAM" knob. Our
+  wrapper controls the scratch buffers it owns and opens all converter handles
+  before the first realtime frame.
+
+Runtime test interpretation: PSRAM use inside GMF/esp-sr is expected. If a test
+crashes or glitches, first capture the stack and memory snapshot; do not fork or
+override Espressif allocation policy without evidence.
 
 ## Migration Matrix
 
@@ -40,9 +83,9 @@ entities or device-specific data routing.
 | `esp_gmf_aec` from `gmf_ai_audio` | GMF pipeline element for standalone AEC | Defer | It is relevant to future standalone AEC cleanup, but the current `esp_aec` migration already uses the low-level esp-sr `afe_aec` API without importing a full GMF pipeline. |
 | `afe_aec` from `esp-sr` | Low-level standalone AEC API | Integrated now | No-codec and single-mic AEC devices keep a direct ESPHome-friendly processor while still using Espressif's current AEC implementation. |
 | `gmf_audio` / `aud_rate_cvt` | GMF audio pipeline elements, including rate conversion, interleave and deinterleave | Reference for now | Official examples run codec at 48 kHz and insert `aud_rate_cvt` before AEC. We copied the underlying converter first; a full GMF IO pipeline remains a separate design decision because ESPHome owns microphone, speaker, mixer and intercom callbacks. |
-| `esp_audio_effects` / `esp_ae_rate_cvt` | Standalone C API behind GMF rate conversion | Integrated now | Replaces the default custom FIR/esp-dsp decimator with Espressif's official rate converter while keeping the ESPHome duplex task and callback routing. Multi-channel mic/ref conversion uses one handle so relative latency stays coupled. |
-| `gmf_io` / `io_codec_dev` | GMF IO wrapper around `esp_codec_dev_read/write` | Defer | Useful if we move `i2s_audio_duplex` to a GMF pipeline. Not enough by itself because we still need ESPHome mic callbacks, speaker mixer, intercom and reference staging. |
-| `esp_codec_dev` | Codec control and optional I2S read/write abstraction | Copy patterns first, integrate later only if it reduces code | Good source for ES8311/ES7210 gain, channel gain, volume and open/read/write semantics. It does not automatically solve the full-duplex TDM ref/mic staging we need. |
+| `esp_audio_effects` / `esp_ae_rate_cvt` | Standalone C API behind GMF rate conversion | Integrated now | Replaces the old custom rate converter with Espressif's official rate converter while keeping the ESPHome duplex task and callback routing. Multi-channel mic/ref conversion uses one handle so relative latency stays coupled. |
+| `gmf_io` / `io_codec_dev` | GMF IO wrapper around `esp_codec_dev_read/write` | Defer | Useful only if we move `i2s_audio_duplex` to a GMF pipeline. The lower `esp_codec_dev` read/write layer is already integrated, so `io_codec_dev` would mostly add GMF port ownership. |
+| `esp_codec_dev` | Codec control plus I2S read/write abstraction | Integrated now | `i2s_audio_duplex` now creates one shared I2S data interface and separate IN/OUT codec devices, matching Espressif's test pattern. ES7210/ES8311 control, gain, channel gain, volume, mute and data read/write now go through the official component while ESPHome keeps mic/speaker callback routing. |
 | `esp_board_manager` / `periph_i2s` | Board/peripheral lifecycle manager for I2S TX/RX STD/TDM/PDM | Copy patterns now | It confirms the TX/RX clock lifecycle constraint: TX and RX must be initialized together because TX generates the clock. It is not a complete audio processor or ESPHome duplex replacement. |
 | `esp_capture` audio sources | High-level capture sources, including codec AEC capture | Do not integrate now | It owns a capture pipeline and source lifecycle intended for recording/streaming. It conflicts with ESPHome's microphone, speaker, mixer and intercom ownership. Useful as reference only. |
 | Waveshare BSP | Board pinout, codec, PA and display/touch setup | Copy patterns only | It validates hardware constants and codec setup style. Its audio examples are standard I2S/codec flows, not our 48 kHz full-duplex TDM with two mics plus reference. |

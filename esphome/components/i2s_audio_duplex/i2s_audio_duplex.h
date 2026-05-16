@@ -83,9 +83,9 @@ class FirDecimator {
 
   // Contiguous int16 input.
   void process(const int16_t *in, int16_t *out, size_t in_count);
-  // Preallocate scratch for strided input paths before the first realtime frame.
+  // Preallocate scratch and open the Espressif converter before the first realtime frame.
   bool prepare(size_t in_count);
-  // Strided int16 input: deinterleave into scratch, then SIMD FIR.
+  // Strided int16 input: deinterleave into scratch, then rate-convert.
   void process_strided(const int16_t *in, int16_t *out, size_t out_count,
                        size_t stride, size_t offset);
   // Strided int32 input with inline >>16 downshift.
@@ -461,10 +461,10 @@ class I2SAudioDuplex : public Component {
   uint32_t output_sample_rate_{0};     // 0 = use sample_rate_ (no decimation)
   uint32_t decimation_ratio_{1};       // sample_rate_ / output_sample_rate_ (computed in setup)
 
-  // FIR decimators for mic path
+  // Espressif rate converters for mic and software-reference paths.
   MultiChannelFirDecimator rx_decimator_;  // Multi-channel: TDM/stereo RX path
   FirDecimator mic_decimator_;             // Fallback: mono RX without TDM/stereo
-  FirDecimator play_ref_decimator_;     // Mono mode: bus-rate ref from play() decimated in audio_task
+  FirDecimator play_ref_decimator_;        // Mono mode: bus-rate ref from play() converted in audio_task
 
   // I2S handles - BOTH created from single channel for duplex
   i2s_chan_handle_t tx_handle_{nullptr};
@@ -596,7 +596,7 @@ class I2SAudioDuplex : public Component {
   // Allocated on audio_task_ entry and reused while the current frame shape
   // fits. Runtime processor reconfigures can grow frame sizes, so
   // allocate_audio_buffers_ validates the shape and reallocates before the
-  // task touches RX/FIR buffers.
+  // task touches RX/rate-converter buffers.
   void release_audio_buffers_();
   int16_t *prealloc_rx_buffer_{nullptr};
   int16_t *prealloc_mic_buffer_{nullptr};

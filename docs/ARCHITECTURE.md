@@ -49,7 +49,7 @@ flowchart TD
         Contract["🧠 AudioProcessor<br/>process(mic, ref)"]
         AFE["🎯 esp_afe<br/>AEC + SE/NS/AGC/VAD"]
         AEC["👂 esp_aec<br/>AEC only"]
-        Pass["passthrough"]
+        NoProc["no processor"]
     end
 
     subgraph Consumers["👂 Mic consumers"]
@@ -63,7 +63,7 @@ flowchart TD
     Duplex -->|"mic + ref frames"| Contract
     Contract --> AFE
     Contract --> AEC
-    Contract --> Pass
+    Contract --> NoProc
     Contract -->|"processed mic"| Intercom
     Contract -->|"processed mic"| MWW
     Contract -->|"processed mic"| VA
@@ -170,7 +170,8 @@ MR (1-mic) path: same diagram, `total_channels_=2` (mic + ref) instead of 3. The
 
 ## 4. `audio_processor` contract
 
-This is the only interface consumers see. Its stability is what lets `esp_afe`, `esp_aec` and the passthrough implementation be hot-swappable.
+This is the only processor interface consumers see. Its stability is what lets
+`esp_afe`, `esp_aec` and no-processor builds share the same transport surface.
 
 ```cpp
 class AudioProcessor {
@@ -178,9 +179,8 @@ class AudioProcessor {
   // Stable identity: sample rate, mic channels, frame size.
   virtual FrameSpec frame_spec() const = 0;
 
-  // Monotonic counter. Increments whenever frame_spec() changes
-  // (e.g. SE on↔off flips mic_channels between 2 and 1). Consumers
-  // that cache buffer sizes observe this and reallocate.
+  // Monotonic counter. Increments whenever frame_spec() changes.
+  // Consumers that cache buffer sizes observe this and reallocate.
   virtual uint32_t frame_spec_revision() const = 0;
 
   // Feed one frame in, get one frame out. In-place safe.
@@ -208,7 +208,12 @@ Invariants the caller must respect:
 
 ## 5. Drain protocol (config change without stopping the task)
 
-AEC toggle, SE toggle and NS toggle all change the esp-sr instance shape without tearing down `i2s_audio_duplex`. The implementation is a lock-free three-state handshake between `process()` (hot path) and `set_aec_enabled_runtime_()` / `recreate_instance_()` (config path).
+AEC and VAD toggle live through Espressif's GMF AFE manager. NS, AGC, type,
+mode and other graph-shape changes rebuild the esp-sr instance without tearing
+down `i2s_audio_duplex`. Dual-mic AFE keeps SE/BSS structural, so there is no
+runtime SE switch on the P4/WS3 dual-mic path. The rebuild implementation is a
+lock-free three-state handshake between `process()` (hot path) and
+`recreate_instance_()` (config path).
 
 Three atomics:
 
@@ -258,7 +263,10 @@ Consumers want diagnostic/raw tap points and processed frames, but production MW
 
 ### 6.3 Why esp-sr lives behind `audio_processor` and not used directly
 
-Three reasons: the passthrough and `esp_aec` implementations don't need esp-sr; `frame_spec_revision` is a narrower contract than esp-sr's runtime reconfigure API; and the contract can be mocked without bringing up DMA, which makes consumers unit-testable.
+Three reasons: no-processor builds and `esp_aec` do not need full esp-sr AFE;
+`frame_spec_revision` is a narrower contract than esp-sr's runtime reconfigure
+API; and the contract can be mocked without bringing up DMA, which makes
+consumers unit-testable.
 
 ### 6.4 Why static-allocation PSRAM stacks in `intercom_api`
 

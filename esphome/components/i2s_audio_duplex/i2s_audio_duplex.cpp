@@ -868,8 +868,8 @@ void I2SAudioDuplex::start() {
   // make the component look like active playback; otherwise the last mic
   // consumer leaving would fail to park the pipeline.
 
-  // Reset FIR decimators for clean state. rx_decimator_ is lazily initialised
-  // inside audio_session_, so reset only when its consumer path is active.
+  // Reset rate converters for clean state. allocate_audio_buffers_ reopens
+  // them before the first realtime frame after this start.
   this->mic_decimator_.reset();
   if (this->use_tdm_bus_ || this->use_stereo_aec_ref_) {
     this->rx_decimator_.reset();

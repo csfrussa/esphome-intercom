@@ -132,7 +132,7 @@ const audio_codec_ctrl_if_t *CodecDevBackend::new_i2c_ctrl_(uint8_t address) {
   ctrl->base.close = ctrl_close;
   ctrl->bus = this->i2c_bus_;
   ctrl->address = address;
-  ctrl->open = true;
+  ctrl->open = false;
   return &ctrl->base;
 #else
   (void) address;

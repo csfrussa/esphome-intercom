@@ -349,11 +349,11 @@ That is the canary for "you forgot the per-board PGA override" or wiring fault. 
 
 > **Note**: `use_tdm_reference` and `use_stereo_aec_reference` are mutually exclusive. TDM mode uses `I2S_SLOT_MODE_STEREO` for the I2S channel (required to get all TDM slots in DMA).
 
-### Multi-Rate: 48kHz I2S Bus with FIR Decimation
+### Multi-Rate: 48kHz I2S Bus with Espressif Rate Conversion
 
 Many audio codecs (ES8311, ES7210, WM8960) operate **natively at 48kHz**. Running the I2S bus at 16kHz forces the codec's internal PLL to generate a non-standard clock, which often results in audible artifacts, worse SNR, and suboptimal DAC/ADC performance. At 48kHz the codec produces noticeably cleaner audio: lower noise floor, better high-frequency response for TTS and media playback.
 
-The challenge: AEC (ESP-SR), Micro Wake Word (TFLite Micro), Voice Assistant STT, and intercom all require **16kHz** input. The solution is to run the I2S bus at 48kHz and internally decimate the mic path to 16kHz using a FIR anti-alias filter.
+The challenge: AEC (ESP-SR), Micro Wake Word (TFLite Micro), Voice Assistant STT, and intercom all require **16kHz** input. The solution is to run the I2S bus at 48kHz and convert the mic/ref path to 16kHz with Espressif's official `esp_ae_rate_cvt` from `esp_audio_effects`.
 
 #### Signal Flow
 
@@ -361,24 +361,22 @@ The challenge: AEC (ESP-SR), Micro Wake Word (TFLite Micro), Voice Assistant STT
                     ┌─── Speaker path ──────────────────────────────→ I2S TX (48kHz)
                     │    (native rate, no resampling)
 I2S bus: 48kHz ─────┤
-                    │    ┌─ FIR decimate ×3 ─┐
+                    │    ┌─ esp_ae_rate_cvt ×3 ─┐
                     └─── Mic path (48kHz) ───┘──→ 16kHz ──→ AEC / MWW / VA / intercom
 ```
 
-The FIR decimator uses a **31-tap lowpass filter** (Kaiser window β=8.0, cutoff 7.5kHz, ~35dB stopband attenuation (adequate for speech)) implemented in **float32** on the ESP32-S3 hardware FPU. It is applied separately to the mic channel and the AEC reference channel. CPU overhead at ratio=3 is approximately **0.5% of Core 0** per frame, which is negligible.
+`esp_ae_rate_cvt` is the standalone C API behind Espressif's GMF `aud_rate_cvt` element. The TDM/stereo path uses one multi-channel converter handle for selected mic/ref channels, so the relative latency between microphones and reference stays coupled. Mono software-reference AEC uses the same converter for both RX mic and TX reference.
 
-If `output_sample_rate` is omitted the decimation ratio is 1 and the FIR code is **completely bypassed**: zero overhead, fully backward compatible.
+If `output_sample_rate` is omitted the conversion ratio is 1 and the converter path is bypassed.
 
 | Parameter | Value |
 |-----------|-------|
-| FIR taps | 31 |
-| Window | Kaiser β=8.0 |
-| Cutoff | 7.5kHz (below Nyquist @ 16kHz) |
-| Stopband attenuation | ~60dB |
-| Arithmetic | float32 (hardware FPU) |
+| Backend | Espressif `esp_audio_effects` / `esp_ae_rate_cvt` |
+| Processing mode | Interleaved for mono, deinterleaved multi-channel for TDM/stereo mic/ref |
+| Complexity | 3 |
+| Performance mode | `ESP_AE_RATE_CVT_PERF_TYPE_SPEED` |
 | Supported ratios | 2, 3, 4, 5, 6 |
-| CPU overhead (ratio=3) | ~0.5% of Core 0 per frame |
-| Memory per decimator | 31 × 4 = 124 bytes delay line |
+| Allocation timing | Handles and scratch buffers are prepared before the first realtime audio frame |
 
 #### i2s_audio_duplex Config
 
@@ -387,7 +385,7 @@ i2s_audio_duplex:
   id: i2s_duplex
   # ... pins ...
   sample_rate: 48000           # I2S bus rate (ES8311/ES7210 native, best DAC quality)
-  output_sample_rate: 16000    # Mic/AEC/MWW/VA decimated to 16kHz via FIR filter
+  output_sample_rate: 16000    # Mic/AEC/MWW/VA converted to 16kHz via esp_ae_rate_cvt
   processor_id: aec_component
   use_stereo_aec_reference: true    # Reference from I2S RX stereo deinterleave (no delay needed)
 
@@ -642,13 +640,12 @@ The audio task is an internal FreeRTOS task with three properties worth knowing 
   does not destroy the task or channel objects. A subsequent `start` reuses the
   same TCB, stack and READY channels.
 - **In-place reconfigure**. When the linked processor's `frame_spec` changes
-  (typical example: `esp_afe` SE toggle flipping `mic_channels` between 1 and
-  2), the audio task observes the `frame_spec_revision()` bump at the top of its
-  main loop and reinitialises decimator, reference extraction and output buffers
-  in place. Worst-case-sized buffers are preallocated by the parked audio task
-  once the processor frame shape is known, before the first media/call
-  activation. The reconfigure path does not call `heap_caps_alloc` and cannot
-  fragment SPIRAM.
+  (for example after an AFE mode or graph rebuild), the audio task observes the
+  `frame_spec_revision()` bump at the top of its main loop and reinitialises
+  rate conversion, reference extraction and output buffers in place.
+  Worst-case-sized buffers are preallocated by the parked audio task once the
+  processor frame shape is known, before the first media/call activation. The
+  reconfigure path does not call `heap_caps_alloc` and cannot fragment SPIRAM.
 
 This is why mic consumers (MWW, Voice Assistant, intercom) survive an internal stop/start cycle: the task and its consumer registry are intact across reconfigure.
 

@@ -112,6 +112,28 @@ bool I2SAudioDuplex::allocate_audio_buffers_(AudioTaskCtx &ctx) {
   const size_t tdm_tx_bytes =
       ctx.use_tdm_ref ? ctx.bus_frame_size * ctx.tdm_total_slots * ctx.i2s_bps : 0;
 
+  auto prepare_rate_converters = [&]() -> bool {
+    if (ctx.ratio <= 1) {
+      return true;
+    }
+    bool ready = true;
+    if (ctx.use_tdm_ref || ctx.use_stereo_aec_ref) {
+      ready = this->rx_decimator_.prepare(
+          ctx.bus_frame_size, ctx.input_frame_size, ctx.rx_decimator_channels);
+    } else {
+      // Mono RX uses either contiguous int16 input or strided int32 input.
+      // Prepare the official Espressif converter handle here so the first
+      // realtime frame does not call esp_ae_rate_cvt_open().
+      ready = this->mic_decimator_.prepare(ctx.bus_frame_size);
+    }
+    if (ready && processor_buffers_needed && !ctx.use_stereo_aec_ref && !ctx.use_tdm_ref) {
+      // No-codec / software-reference AEC decimates the TX speaker frame into
+      // direct_aec_ref_. Keep that converter hot before speaker playback starts.
+      ready = this->play_ref_decimator_.prepare(ctx.bus_frame_size);
+    }
+    return ready;
+  };
+
   if (this->audio_buffers_allocated_) {
     const bool fits =
         this->prealloc_rx_buffer_ != nullptr && this->prealloc_rx_buffer_bytes_ >= rx_bytes &&
@@ -131,6 +153,10 @@ bool I2SAudioDuplex::allocate_audio_buffers_(AudioTaskCtx &ctx) {
          (this->prealloc_tdm_tx_buffer_ != nullptr &&
           this->prealloc_tdm_tx_buffer_bytes_ >= tdm_tx_bytes));
     if (fits) {
+      if (!prepare_rate_converters()) {
+        this->release_audio_buffers_();
+        return false;
+      }
       return true;
     }
     ESP_LOGI(TAG, "Audio buffer shape changed; reallocating buffers");
@@ -177,7 +203,7 @@ bool I2SAudioDuplex::allocate_audio_buffers_(AudioTaskCtx &ctx) {
     // Sized to ctx.input_frame_bytes: the AEC reference is the signal that
     // enters the DSP alongside the mic, so it lives on the input side of the
     // processor (AudioProcessor::process expects in_ref of input_samples len).
-    // The TX-side FIR writes input_frame_size samples here per frame.
+    // The TX-side rate converter writes input_frame_size samples here per frame.
     // Honours buffers_in_psram_ alongside the rest.
     if (!this->direct_aec_ref_ && !ctx.use_stereo_aec_ref && !ctx.use_tdm_ref) {
       alloc_i16_buffer(&this->direct_aec_ref_, nullptr, ctx.input_frame_bytes, buf_caps, true);
@@ -253,21 +279,9 @@ bool I2SAudioDuplex::allocate_audio_buffers_(AudioTaskCtx &ctx) {
   }
 #endif
 
-  if (ctx.ratio > 1) {
-    bool fir_ready = true;
-    if (ctx.use_tdm_ref || ctx.use_stereo_aec_ref) {
-      fir_ready = this->rx_decimator_.prepare(
-          ctx.bus_frame_size, ctx.input_frame_size, ctx.rx_decimator_channels);
-    } else if (ctx.i2s_bps == 4) {
-      // 32-bit mono RX uses process_strided_32(), which deinterleaves into
-      // internal FIR scratch. Prepare it here instead of allocating on the
-      // first audio frame.
-      fir_ready = this->mic_decimator_.prepare(ctx.bus_frame_size);
-    }
-    if (!fir_ready) {
-      this->release_audio_buffers_();
-      return false;
-    }
+  if (!prepare_rate_converters()) {
+    this->release_audio_buffers_();
+    return false;
   }
 
   this->audio_buffers_allocated_ = true;
@@ -512,7 +526,7 @@ void I2SAudioDuplex::audio_session_() {
     this->process_tx_path_(ctx);
 
 #ifdef USE_AUDIO_PROCESSOR
-    // Frame_spec change (e.g. SE toggled, MR<->MMR switch): exit this session
+    // Frame_spec change, for example an AFE mode or graph rebuild: exit this session
     // so the outer audio_task_ wrapper can re-enter audio_session_ with a
     // fresh ctx. Preallocated buffers are already worst-case sized, so the
     // restart does not touch the heap.
@@ -648,8 +662,8 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
   ctx.consecutive_i2s_errors = 0;
   ctx.invalid_state_errors = 0;
 
-  // Convert 32-bit I2S samples to 16-bit only when FIR strided does NOT handle it.
-  // When ratio > 1, the FIR decimator reads 32-bit directly via process_strided_32.
+  // Convert 32-bit I2S samples to 16-bit only when the strided rate converter
+  // does not handle it. When ratio > 1, process_strided_32 reads 32-bit input.
   if (ctx.i2s_bps == 4 && ctx.ratio <= 1) {
     auto *src32 = reinterpret_cast<int32_t *>(ctx.rx_buffer);
     size_t total_i2s_samples = ctx.rx_frame_bytes / sizeof(int32_t);
@@ -697,7 +711,7 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
   } else
 #endif
   if (ctx.use_stereo_aec_ref) {
-    // Stereo: mic + ref via multi-channel FIR
+    // Stereo: mic + ref via multi-channel rate conversion.
     const uint8_t mi = ctx.ref_channel_right ? 0 : 1;
     const uint8_t ri = ctx.ref_channel_right ? 1 : 0;
     uint8_t ch_offsets[2] = {mi, ri};
@@ -722,9 +736,9 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
 
   // Fused loop: DC offset + mic attenuation in one pass.
   // For dual-mic: mic1 is in mic_buffer, mic2 is in processor_mic_buffer[i*2+1]
-  // (both filled by the multi-channel FIR). Apply DC+atten on both, update in-place.
+  // (both filled by the multi-channel rate converter). Apply DC+atten on both, update in-place.
   // When neither DC nor attenuation is needed, processor_mic_buffer (dual_mic case)
-  // is left as-is: the multi-channel FIR has already produced correct values for both mics.
+  // is left as-is: the multi-channel rate converter has already produced correct values for both mics.
   const bool do_dc = ctx.correct_dc_offset;
   const bool do_atten = ctx.mic_attenuation != 1.0f;
   const bool dual_mic = ctx.processor_mic_channels > 1 && ctx.processor_mic_buffer != nullptr;
@@ -748,7 +762,7 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
       ctx.mic_buffer[i] = s1;
 
       if (dual_mic) {
-        // mic2 already in processor_mic_buffer interleaved by multi-channel FIR
+        // mic2 already in processor_mic_buffer interleaved by multi-channel rate conversion.
         int16_t s2 = ctx.processor_mic_buffer[i * 2 + 1];
         if (do_dc) {
           int32_t inp2 = (int32_t) s2 << 16;
@@ -768,7 +782,7 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
       }
     }
   }
-  // dual_mic with no DC/atten: processor_mic_buffer already correct from FIR (see top comment).
+  // dual_mic with no DC/atten: processor_mic_buffer already correct from the rate converter.
 }
 
 void I2SAudioDuplex::update_tdm_slot_levels_(const AudioTaskCtx &ctx) {
@@ -964,7 +978,7 @@ void I2SAudioDuplex::process_tx_path_(AudioTaskCtx &ctx) {
   // downstream storage and consumer reads happen at the smaller output size.
   // Two safety properties of this gating:
   //   1) Decimation only runs on a complete frame (speaker_got == bus_frame_bytes),
-  //      otherwise the FIR delay-line would absorb zero-padding and pollute the
+  //      otherwise the converter state would absorb zero-padding and pollute the
   //      next valid frame's reference for ~32 samples.
   //   2) Skipping the save on a short read keeps the last good reference, same
   //      as the prior implementation.
@@ -975,7 +989,7 @@ void I2SAudioDuplex::process_tx_path_(AudioTaskCtx &ctx) {
     if (full_frame && this->direct_aec_ref_ != nullptr) {
       // Decimate TX -> processor rate into direct_aec_ref_ scratch, then push
       // the decimated frame into the ring. direct_aec_ref_ is sized for
-      // input_frame_bytes by allocate_audio_buffers_() (the FIR writes
+      // input_frame_bytes by allocate_audio_buffers_() (the converter writes
       // bus_frame_size / ratio = input_frame_size samples).
       this->play_ref_decimator_.process(ctx.spk_buffer, this->direct_aec_ref_, ctx.bus_frame_size);
       const size_t ref_bytes = ctx.input_frame_bytes;
