@@ -274,11 +274,27 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
     return true;
   }
 
+  // Match Espressif's TDM codec-dev tests: bring up playback first, then record,
+  // so the TX side has configured the shared clock before RX starts consuming it.
+  if (this->tx_dev_ != nullptr && tx_config != nullptr) {
+    auto fs = make_sample_info_(*tx_config);
+    int ret = esp_codec_dev_open(this->tx_dev_, &fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+      ESP_LOGE(TAG, "Failed to open TX codec device: %d", ret);
+      return false;
+    }
+    if (!this->es8311_.enabled) {
+      esp_codec_dev_set_out_vol(this->tx_dev_, 100);
+    }
+  }
   if (this->rx_dev_ != nullptr && rx_config != nullptr) {
     auto fs = make_sample_info_(*rx_config);
     int ret = esp_codec_dev_open(this->rx_dev_, &fs);
     if (ret != ESP_CODEC_DEV_OK) {
       ESP_LOGE(TAG, "Failed to open RX codec device: %d", ret);
+      if (this->tx_dev_ != nullptr) {
+        esp_codec_dev_close(this->tx_dev_);
+      }
       return false;
     }
     if (this->es7210_.enabled) {
@@ -290,21 +306,6 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
       this->set_input_gain(this->es8311_input_.input_gain_db);
     }
   }
-  if (this->tx_dev_ != nullptr && tx_config != nullptr) {
-    auto fs = make_sample_info_(*tx_config);
-    int ret = esp_codec_dev_open(this->tx_dev_, &fs);
-    if (ret != ESP_CODEC_DEV_OK) {
-      ESP_LOGE(TAG, "Failed to open TX codec device: %d", ret);
-      if (this->rx_dev_ != nullptr) {
-        esp_codec_dev_close(this->rx_dev_);
-      }
-      return false;
-    }
-    if (!this->es8311_.enabled) {
-      esp_codec_dev_set_out_vol(this->tx_dev_, 100);
-    }
-  }
-
   this->open_ = true;
   return true;
 }

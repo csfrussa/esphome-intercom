@@ -42,6 +42,37 @@ The migration is not P4-only. The current generated-code snapshots confirm:
 - Generic S3 AEC: remains no-codec and uses standalone `esp_aec` over the same
   `i2s_audio_duplex` bus facade.
 
+## Source Audit Findings
+
+The current integration has been checked against the Espressif component sources
+resolved in the generated builds:
+
+- `esp_codec_dev` accepts `codec_if = NULL` as long as `data_if` is present and
+  `dev_type` is not `ESP_CODEC_DEV_TYPE_NONE`. This is the supported no-codec
+  path used by generic AEC builds: `esp_codec_dev_open()` still opens the I2S
+  data interface, and output falls back to software volume if no codec volume
+  callback exists.
+- The shared I2S data interface plus separate IN and OUT device handles is an
+  official pattern. Espressif's `codec_dev_test` creates one `data_if`, one
+  ES8311 DAC device and one ES8311 ADC device, then opens, closes and reopens
+  record and playback in both orders.
+- Spotpear's single physical ES8311 does not need to be forced into one
+  `ESP_CODEC_DEV_TYPE_IN_OUT` device. Espressif's ES8311 driver tracks paired
+  ADC/DAC codec instances internally, and the official test covers the same
+  split-device shape we use for ESPHome's separate microphone and speaker
+  surfaces.
+- The TDM ES7210 plus ES8311 flow is also covered by Espressif tests: playback
+  uses ES8311 OUT, record uses ES7210 IN, both share one I2S `data_if`, and the
+  record side can select a non-contiguous TDM channel mask.
+- `esp_gmf_afe_manager` exposes runtime feature toggles for AEC, VAD, SE and
+  WakeNet. It does not expose NS or AGC in its feature enum, so keeping NS/AGC
+  changes as AFE recreate operations is deliberate while staying on the stock
+  manager.
+- `esp_gmf_afe_manager_get_chunk_size()` exposes the feed chunk size only. The
+  wrapper learns a differing fetch size from the first result callback and bumps
+  the ESPHome frame-spec revision if needed. This is a known integration edge to
+  watch during runtime tests, not a reason to bypass the manager.
+
 ## PSRAM Policy
 
 Do not treat all Espressif components the same:

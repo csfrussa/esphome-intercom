@@ -8,7 +8,7 @@
 #
 # Audio pipeline (i2s_audio_duplex @ 48 kHz, stereo AEC reference):
 #
-#   I2S RX 48kHz stereo → L=ref R=mic → FIR x3 ──┐
+#   I2S RX 48kHz stereo → L=ref R=mic → esp_ae_rate_cvt x3 ──┐
 #                                                └── esp_afe (AEC + NS + AGC) → mic_afe → VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
@@ -146,7 +146,7 @@ esp32:
     type: esp-idf
     advanced:
       # -O2 codegen on our audio components: 5-15 % throughput on tight loops
-      # (deinterleave, FIR, gain/scale, RMS) at the cost of +30-80 KB flash
+      # (deinterleave, rate conversion, gain/scale, RMS) at the cost of +30-80 KB flash
       # and slightly higher stack peaks. Flash headroom is ~1.9 MB on this
       # build, audio_task stack has its own headroom from task_stack_size.
       compiler_optimization: PERF
@@ -240,7 +240,7 @@ i2c:
 # =============================================================================
 # ESP AFE (Audio Front End)
 # Full front-end with AEC + NS + VAD + AGC. Single mic (no Speech Enhancement).
-# mic_num=1 keeps i2s_audio_duplex on the mono path (no dual-mic FIR/buffer).
+# mic_num=1 keeps i2s_audio_duplex on the mono path (no dual-mic rate-converter buffer).
 # =============================================================================
 esp_afe:
   id: afe_processor

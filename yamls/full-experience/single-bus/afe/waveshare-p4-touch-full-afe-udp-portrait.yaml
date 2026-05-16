@@ -26,9 +26,9 @@
 #   8":  model: CUSTOM + JD9365 init_sequence             (800x1280, backlight GPIO26)
 #   10.1": model: WAVESHARE-P4-NANO-10.1                  (800x1280, backlight GPIO26)
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + FIR decimation to 16kHz):
+# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
-#   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → FIR x3 ──────┐
+#   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → esp_ae_rate_cvt x3 ──────┐
 #                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
@@ -232,7 +232,7 @@ i2c:
     scan: false
 
 # =============================================================================
-# Audio: i2s_audio_duplex (48kHz bus, FIR decimation to 16kHz for mic/AEC/VA)
+# Audio: i2s_audio_duplex (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
 # =============================================================================
 # ES8311 (DAC) and ES7210 (ADC) share BCLK/LRCLK/MCLK with separate data pins.
 # Runtime raw TDM probing on the P4 Touch 10.1 matches the working v4.0.0
@@ -242,7 +242,7 @@ i2c:
 # =============================================================================
 # ESP AFE (Audio Front End)
 # Stable P4 front-end from the smoke probe: esp-sr FD, dual-mic MMNR feed,
-# hardware TDM reference, and the custom FIR decimator. `input_format` is the
+# hardware TDM reference, and the custom Espressif rate converter. `input_format` is the
 # logical AFE frame after local staging, not the raw ES7210 slot order:
 # raw slots are mic/ref/mic/unused, then esp_afe stages them as mic/mic/unused/ref.
 # Waveshare GMF examples use RMNM in their codec stack; switching this YAML to
@@ -3021,8 +3021,8 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # FD is the P4 profile. The custom FIR stays mandatory on P4; the ESP-DSP
-    # FIR path produces whistle/click artifacts on this RISC-V target.
+    # FD is the P4 profile. Keep the Espressif rate-conversion backend fixed
+    # for this target so this select only changes the AFE mode.
     options:
       - "fd_low_cost"
       - "fd_high_perf"

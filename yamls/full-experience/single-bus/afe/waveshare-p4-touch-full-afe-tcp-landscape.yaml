@@ -28,7 +28,7 @@
 #
 # Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
-#   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → FIR x3 ──────┐
+#   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → esp_ae_rate_cvt x3 ──────┐
 #                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
@@ -278,7 +278,7 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO11          # From ES7210 ADC (BSP_I2S_DSIN)
   i2s_dout_pin: GPIO9          # To ES8311 DAC (BSP_I2S_DOUT)
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
-  output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz via FIR x3
+  output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz via esp_ae_rate_cvt x3
   processor_id: afe_processor
   fir_decimator: esp_ae_rate_cvt
   codec:
@@ -3148,8 +3148,8 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # FD is the P4 profile. The custom FIR stays mandatory on P4; the ESP-DSP
-    # FIR path produces whistle/click artifacts on this RISC-V target.
+    # FD is the P4 profile. Keep the Espressif rate-conversion backend fixed
+    # for this target so this select only changes the AFE mode.
     options:
       - "fd_low_cost"
       - "fd_high_perf"

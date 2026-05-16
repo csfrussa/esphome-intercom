@@ -255,7 +255,7 @@ i2s_audio_duplex:
 #### Notes
 
 - `esp_ae_rate_cvt` is a target-specific prebuilt Espressif software library, not a documented hardware resampling peripheral.
-- The multichannel TDM/stereo path compacts the selected slots into an interleaved mic/ref frame, then calls one `esp_ae_rate_cvt_process()` handle for all channels.
+- The multichannel TDM/stereo path deinterleaves the selected slots and calls one `esp_ae_rate_cvt_deintlv_process()` handle for the selected mic/ref channels, keeping their conversion latency coupled.
 
 ### AEC with Voice Assistant + MWW
 

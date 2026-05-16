@@ -5,7 +5,7 @@
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
 #
 # Audio pipeline:
-#   MEMS mic → i2s_audio_duplex (48kHz) → FIR x3 → esp_aec (AEC SR linear) → mic_main → VA / Intercom TX / MWW
+#   MEMS mic → i2s_audio_duplex (48kHz) → esp_ae_rate_cvt x3 → esp_aec (AEC SR linear) → mic_main → VA / Intercom TX / MWW
 #
 #   Media       → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → class-D amp

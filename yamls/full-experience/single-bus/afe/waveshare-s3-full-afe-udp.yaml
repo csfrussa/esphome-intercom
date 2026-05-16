@@ -16,7 +16,7 @@
 #   LEDs: GPIO38 (WS2812 x7)
 #   BOOT: GPIO0
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + FIR decimation to 16kHz):
+# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
 # Verified Waveshare ESP32-S3-AUDIO-Board slot map, board oriented with:
 #   - speaker at the bottom
@@ -29,8 +29,8 @@
 #   - slot 3 = near-silent / unused on this board revision
 #
 # Dual-mic target:
-#   ES7210 TDM slots [0, 2]          → FIR x3 ──┐
-#   ES7210 TDM slot 1 (DAC ref)      → FIR x3 ──┴── esp_afe (AEC + Speech Enhancement + VAD) → mono mic_main → VA / Intercom TX / MWW
+#   ES7210 TDM slots [0, 2]          → esp_ae_rate_cvt x3 ──┐
+#   ES7210 TDM slot 1 (DAC ref)      → esp_ae_rate_cvt x3 ──┴── esp_afe (AEC + Speech Enhancement + VAD) → mono mic_main → VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311 DAC
@@ -222,7 +222,7 @@ i2s_audio_duplex:
   buffers_in_psram: true
 
 # =============================================================================
-# Microphone (ES7210 ADC, 16kHz output after FIR decimation + AEC)
+# Microphone (ES7210 ADC, 16kHz output after Espressif rate conversion + AEC)
 # =============================================================================
 microphone:
   - platform: i2s_audio_duplex

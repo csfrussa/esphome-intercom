@@ -177,7 +177,7 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 
 ## Known constraints
 
-- Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must decimate; `i2s_audio_duplex` does this with a 31-tap Kaiser FIR.
+- Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must decimate; `i2s_audio_duplex` does this with Espressif's `esp_ae_rate_cvt`.
 - Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*`) require a handle rebuild, which causes a ~70 ms audio gap. Do not change mode while a call is streaming; the AEC select wraps this with state guards in the ready-to-flash YAMLs.
 - `filter_length` is compile-time-sized but runtime-mutable. Longer filters give better echo-tail coverage at the cost of CPU.
 - The `sr_high_perf` mode needs a contiguous DMA-capable internal allocation. On a fragmented heap the pre-flight check refuses the switch and logs a warning; the device keeps running on the previous mode.
