@@ -273,7 +273,6 @@ esp_afe:
   vad_enabled: false
   agc_enabled: true
   se_enabled: false
-  task_priority: 19
   # Buffer placement: PSRAM for the AFE staging triad (replicates pre-knob default).
   # Toggle individual flags off to free Core 0 cycles at the cost of internal RAM.
   feed_buf_in_psram: true       # ~3 KB scratch
@@ -308,7 +307,7 @@ i2s_audio_duplex:
 # =============================================================================
 # MICROPHONE
 # Single mic_afe: SR linear AEC preserves spectral features for all consumers
-# (VA STT, intercom TX, MWW). No separate raw microphone path needed with sr_low_cost mode.
+# (VA STT, intercom TX, MWW). No separate unprocessed microphone path needed with sr_low_cost mode.
 # =============================================================================
 microphone:
   - platform: i2s_audio_duplex

@@ -88,10 +88,10 @@ substitutions:
   ic_settings_switch_height: "36"
   ic_settings_label_font: font_body
 
-  # P4 default runtime AFE profile: keep AEC/Speech Enhancement active by default; the shared
-  # packages/esp_afe/dual_mic_entities.yaml package consumes these values.
-  afe_aec_restore_mode: ALWAYS_ON
-  afe_se_restore_mode: ALWAYS_ON
+  # P4 AFE profile: dual mic keeps SE/BSS structural. AEC remains runtime
+  # togglable, but starts/restores OFF so boot tests are not falsified by HA
+  # switch restoration.
+  afe_aec_restore_mode: RESTORE_DEFAULT_OFF
 
 packages:
   p4_base: !include ../../../../packages/platform/esp32p4_base.yaml
@@ -284,13 +284,12 @@ esp_afe:
   mode: low_cost
   mic_num: 2
   input_format: MMNR
-  aec_enabled: true
+  aec_enabled: false
   aec_filter_length: 4
-  se_enabled: true             # Required for dual-mic MMNR / BSS topology.
-  ns_enabled: true
+  se_enabled: true             # Structural dual-mic SE/BSS; no runtime SE toggle.
+  ns_enabled: false
   vad_enabled: false           # MWW covers wake detection; AFE VAD can be enabled for tests.
-  agc_enabled: true
-  task_priority: 19
+  agc_enabled: false
   # P4 RISC-V: keep the AFE staging triad in INTERNAL DRAM. Letting these
   # land in PSRAM trips a saturation/crash inside esp_aec3_dlfft_process
   # under 2-mic SE/AEC3 (input frames clip to 0 dBFS, then MEPC=0 panic).
@@ -303,7 +302,7 @@ i2s_audio_duplex:
   id: i2s_duplex
   # Concurrent TLS streams (music + TTS + intercom) are tight on internal RAM.
   # Move the audio task's own stack to PSRAM (matches waveshare-s3-full-afe).
-  # The task is not CPU-bound (per-frame work lives in esp_afe's feed_task), so
+  # The task is not CPU-bound (per-frame work lives in GMF AFE manager tasks), so
   # PSRAM stack latency is acceptable.
   audio_stack_in_psram: true
   i2s_lrclk_pin: GPIO10
@@ -314,7 +313,6 @@ i2s_audio_duplex:
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
   output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz via FIR x3
   processor_id: afe_processor
-  reset_processor_on_speaker_start: true
   fir_decimator: custom        # P4: bypass dsps_fird_s16 SIMD (esp-dsp #117/#102 RISC-V)
   slot_bit_width: 16
   use_tdm_reference: true
@@ -323,7 +321,7 @@ i2s_audio_duplex:
   tdm_ref_slot: 1              # ES7210 TDM: slot 1 = ES8311 feedback/AEC reference
   # P4 stability profile: keep the audio task stack in PSRAM, but keep
   # per-frame RX/TX/ref buffers in INTERNAL RAM. Putting the hot audio
-  # frame buffers in PSRAM makes the pre-AFE path share bandwidth/cache
+  # frame buffers in PSRAM makes the hot I2S staging path share bandwidth/cache
   # pressure with MIPI/LVGL/hosted-WiFi and is a prime suspect for the
   # strong click/metallic artefact; moving the stack too was what exhausted
   # internal RAM during earlier stress tests.
@@ -2029,7 +2027,7 @@ lvgl:
     # Bound entities (must exist in the device YAML):
     #   numbers : master_volume, mic_gain (-20..0 dB post-AFE trim)
     #   switches: speaker_mute, mute (mic), auto_answer_switch
-    #             dnd_switch, aec_switch, vad_switch, se_switch
+    #             dnd_switch, aec_switch, vad_switch
     #             wake_word_switch
     #   selects : aec_mode_select  (options published by esp_afe FD pipeline)
     #
@@ -2274,37 +2272,6 @@ lvgl:
                         id: aec_mode_select
                         index: !lambda 'return x;'
 
-              # ========================================================================
-              # SECTION: AFE PIPELINE
-              # ========================================================================
-              - obj:
-                  width: ${ic_settings_row_width}
-                  height: 2
-                  bg_color: 0x444444
-                  border_width: 0
-                  pad_all: 0
-              - label:
-                  width: ${ic_settings_row_width}
-                  text: "AFE Pipeline"
-                  text_align: CENTER
-                  text_color: 0x88AAFF
-                  text_font: ${ic_settings_label_font}
-              - label:
-                  width: ${ic_settings_row_width}
-                  text: "Speech Enhancement"
-                  text_align: CENTER
-                  text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
-              - switch:
-                  id: ui_se_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
-                  state:
-                    checked: !lambda 'return id(se_switch).state;'
-                  on_value:
-                    - lambda: |-
-                        if (x) id(se_switch).turn_on();
-                        else id(se_switch).turn_off();
               - label:
                   width: ${ic_settings_row_width}
                   text: "Voice Activity Detector"
@@ -3248,22 +3215,6 @@ select:
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
           id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
-
-  - platform: template
-    name: Speech Enhancement Output Source
-    id: bss_output_source_select
-    icon: mdi:source-branch
-    options:
-      - "auto"
-      - "result_data"
-      - "raw0"
-      - "raw1"
-    initial_option: "auto"
-    optimistic: true
-    restore_value: true
-    set_action:
-      - lambda: |-
-          id(afe_processor).set_bss_output_source_name(x.c_str());
 
 # =============================================================================
 # TEXT SENSORS

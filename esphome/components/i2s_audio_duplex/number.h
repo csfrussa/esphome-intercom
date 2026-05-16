@@ -15,7 +15,6 @@ namespace i2s_audio_duplex {
 class MicGainNumber : public number::Number, public Component {
  public:
   void set_parent(I2SAudioDuplex *parent) { this->parent_ = parent; }
-  void set_pre_aec(bool pre_aec) { this->pre_aec_ = pre_aec; }
   void set_min_db(float min_db) { this->min_db_ = min_db; }
   void set_max_db(float max_db) { this->max_db_ = max_db; }
 
@@ -32,8 +31,8 @@ class MicGainNumber : public number::Number, public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("i2s_duplex.mic_gain", "Mic Gain Number (dB, %s, range %.1f..%.1f)",
-                  this->pre_aec_ ? "pre-AEC" : "post-AEC", this->min_db_, this->max_db_);
+    ESP_LOGCONFIG("i2s_duplex.mic_gain", "Mic Gain Number (post-processor dB, range %.1f..%.1f)",
+                  this->min_db_, this->max_db_);
   }
 
  protected:
@@ -47,11 +46,7 @@ class MicGainNumber : public number::Number, public Component {
   void apply_(float value) {
     if (this->parent_ != nullptr) {
       float linear = std::pow(10.0f, value / 20.0f);
-      if (this->pre_aec_) {
-        this->parent_->set_mic_attenuation(linear);
-      } else {
-        this->parent_->set_mic_gain(linear);
-      }
+      this->parent_->set_mic_gain(linear);
     }
   }
 
@@ -66,7 +61,6 @@ class MicGainNumber : public number::Number, public Component {
 
   I2SAudioDuplex *parent_{nullptr};
   ESPPreferenceObject pref_;
-  bool pre_aec_{false};
   float min_db_{-20.0f};
   float max_db_{30.0f};
 };

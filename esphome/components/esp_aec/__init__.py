@@ -62,15 +62,10 @@ async def to_code(config):
 
     cg.add_define("USE_AUDIO_PROCESSOR")
 
-    # Add ESP-SR as IDF component dependency (uses IDF component registry).
-    # ESP32-P4 RISC-V is pinned to 2.3.x because 2.4.x regresses the dual-mic
-    # AEC + SE/BSS path used here. S3 builds keep 2.4.x for AEC_MODE_FD_LOW_COST,
-    # AEC_MODE_FD_HIGH_PERF and aec_create_from_config.
-    import esphome.components.esp32 as esp32
-    if CORE.is_esp32 and esp32.get_esp32_variant() == "ESP32P4":
-        add_idf_component(name="espressif/esp-sr", ref="~2.3.0")
-    else:
-        add_idf_component(name="espressif/esp-sr", ref="~2.4.0")
+    # Use esp-sr 2.4.4, the same generation used by Espressif GMF AEC.
+    # esp_aec wraps the low-level afe_aec API directly so no-codec devices do
+    # not need the full GMF pipeline or codec stack.
+    add_idf_component(name="espressif/esp-sr", ref="2.4.4")
 
 
 @automation.register_action(

@@ -825,20 +825,27 @@ void I2SAudioDuplex::run_processor_(AudioTaskCtx &ctx) {
 #endif
 
 // ════════════════════════════════════════════════════════════════════════════
-// AEC + CALLBACKS: raw callbacks → AEC processing → gain → post callbacks
+// AEC/AFE + CALLBACKS: processing → gain → post-processor callbacks
 // ════════════════════════════════════════════════════════════════════════════
 void I2SAudioDuplex::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
   if (!this->rx_handle_ || ctx.output_buffer == nullptr)
     return;
 
-  // Raw mic callbacks: pre-AEC audio for MWW
-  if (ctx.mic_running && !this->raw_mic_callbacks_.empty()) {
-    for (auto &callback : this->raw_mic_callbacks_) {
-      callback((const uint8_t *) ctx.mic_buffer, ctx.input_frame_bytes);
-    }
-  }
-
 #ifdef USE_AUDIO_PROCESSOR
+  if (ctx.processor_enabled && (!ctx.processor_ready ||
+      ctx.spk_ref_buffer == nullptr || ctx.aec_output == nullptr)) {
+    // Processor configured but unavailable: fail closed. Production consumers
+    // must never receive implicit raw mic audio from a configured processor
+    // path during init, teardown, reinit, or allocation failure.
+    if (ctx.aec_output != nullptr) {
+      memset(ctx.aec_output, 0, ctx.output_frame_bytes);
+      ctx.output_buffer = ctx.aec_output;
+      ctx.current_output_frame_size = ctx.output_frame_size;
+      ctx.current_output_frame_bytes = ctx.output_frame_bytes;
+    } else {
+      memset(ctx.output_buffer, 0, ctx.current_output_frame_bytes);
+    }
+  } else
 #if SOC_I2S_SUPPORTS_TDM
   if (ctx.use_tdm_ref && ctx.processor_ready &&
       ctx.spk_ref_buffer != nullptr && ctx.aec_output != nullptr) {
@@ -873,15 +880,13 @@ void I2SAudioDuplex::process_aec_and_callbacks_(AudioTaskCtx &ctx) {
   } else
 #endif
   if (!ctx.use_tdm_ref && ctx.processor_ready &&
-      ctx.spk_ref_buffer != nullptr && ctx.aec_output != nullptr &&
-      // Stereo AEC: reference is embedded in I2S RX (L=DAC loopback), always available.
-      // Mono AEC: reference comes from speaker ring buffer, only valid when speaker is active.
-      (ctx.use_stereo_aec_ref ||
-       (ctx.speaker_running && !ctx.speaker_paused &&
-        (ctx.now_ms - this->last_speaker_audio_ms_.load(std::memory_order_relaxed) <= AEC_ACTIVE_TIMEOUT_MS)))) {
+      ctx.spk_ref_buffer != nullptr && ctx.aec_output != nullptr) {
 
     // Mono mode: get AEC reference (direct from TX or ring buffer).
     // Reference is post-volume PCM, no additional scaling (Espressif TYPE2 pattern).
+    // When playback is idle, fill_mono_aec_reference_() zero-fills the ref and
+    // we still call the processor. That keeps MWW/VA/intercom on the processed
+    // surface instead of silently bypassing to raw mic audio.
     if (!ctx.use_stereo_aec_ref) {
       this->fill_mono_aec_reference_(ctx);
     }
@@ -922,7 +927,8 @@ void I2SAudioDuplex::fill_mono_aec_reference_(AudioTaskCtx &ctx) {
     return;
   }
 
-  // No reference available: zero-fill (AEC will pass-through without echo cancellation)
+  // No reference available: zero-fill so the processor still owns the output
+  // surface instead of bypassing to raw mic audio.
   memset(ctx.spk_ref_buffer, 0, ref_bytes);
 }
 

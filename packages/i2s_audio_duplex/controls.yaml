@@ -7,11 +7,7 @@
 #
 # Exposes the stable user-facing controls:
 #   - Master Volume: speaker-backed software volume for non-codec boards
-#   - Mic Gain: post-AEC/AFE gain for level trim after echo cancellation
-#
-# Pre-AEC mic gain is intentionally not part of the standard controls. Keep it
-# as a hardware-tuning override only when a specific microphone clips before
-# AEC/AFE.
+#   - Mic Gain: post-processor gain for level trim after AEC/AFE
 # =============================================================================
 
 number:

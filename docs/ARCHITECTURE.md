@@ -49,7 +49,7 @@ flowchart TD
         Contract["🧠 AudioProcessor<br/>process(mic, ref)"]
         AFE["🎯 esp_afe<br/>AEC + SE/NS/AGC/VAD"]
         AEC["👂 esp_aec<br/>AEC only"]
-        Pass["➡️ passthrough"]
+        Pass["passthrough"]
     end
 
     subgraph Consumers["👂 Mic consumers"]
@@ -90,8 +90,8 @@ All audio components share three conventions:
 | Task | Component | Core | Priority | Stack | Role |
 |------|-----------|:---:|:-------:|:-----:|------|
 | `i2s_audio_task` | `i2s_audio_duplex` | 0 | 19 | 8 KB PSRAM | I²S read/write, decimation, callbacks |
-| `afe_feed` | `esp_afe` | 1 | 5 | 12 KB | Pops frames, calls `afe_handle_->feed()` |
-| `afe_fetch` | `esp_afe` | 1 | 7 (`task_priority_ − 1`) | 4 KB | Blocks on `fetch_with_delay()`, writes ring |
+| `afe_feed` | `esp_gmf_afe_manager` | 0 | 5 | 3 KB | Pulls frames from ESPHome read callback, calls esp-sr `feed()` |
+| `afe_fetch` | `esp_gmf_afe_manager` | 1 | 5 | 3 KB | Blocks on esp-sr `fetch()`, invokes ESPHome result callback |
 | `intercom_srv` | `intercom_api` | 1 | 5 | PSRAM static | Transport RX/control and call FSM handoff |
 | `intercom_tx` | `intercom_api` | 0 | 5 | PSRAM static | Mic capture → AEC → network (AEC-own mode) |
 | `intercom_spk` | `intercom_api` | 0 | 4 | PSRAM static | Speaker playback + AEC reference |
@@ -101,14 +101,14 @@ All audio components share three conventions:
 
 Why the priority choices:
 - **I²S at 19** is between lwIP (18) and WiFi (23): high enough that network can't starve audio, low enough that WiFi stays responsive.
-- **feed_task at 5** matches the esp-skainet reference. The Speech Enhancement worker runs at the same priority on the same core with round-robin; `feed()` can block on the esp-sr internal ring without affecting the realtime path.
+- **GMF AFE tasks at 5** follow Espressif's `esp_gmf_afe_manager` defaults. The realtime I²S task only stages frames into a bounded bridge; esp-sr feed/fetch run in the manager tasks.
 - **speaker/MWW/LVGL at 1** is the ESPHome convention for non-realtime work that can tolerate starvation under I/O pressure.
 
 Core affinity:
 - Core 0 is the canonical Espressif AEC core (voice pipeline + ES7210 DMA).
-- Core 1 is reserved for inference (MWW), UI (LVGL) and the AFE workers. Dual-mic Speech Enhancement workers share core 1 with MWW; the priority gap keeps them cooperative.
+- Core 1 is reserved for inference (MWW), UI (LVGL) and the GMF AFE fetch side. The GMF feed task follows Espressif's default core 0 placement.
 
-The 2-mic `feed_task` runs as a dedicated task at priority 5 (not inline in the audio task). Speech Enhancement processing can take longer than one frame under load; if `feed()` were called inline, the audio task would block on the esp-sr internal ring and drop frames.
+The 2-mic feed path runs through Espressif's GMF AFE manager, not inline in the audio task. Speech Enhancement processing can take longer than one frame under load; if `feed()` were called inline, the audio task would block on the esp-sr internal ring and drop frames.
 
 ---
 
@@ -124,9 +124,6 @@ One frame = 32 ms = 512 samples @ 16 kHz per channel.
                                     │                   dsps_fird_s16 SIMD or
                                     │                   custom float scalar)
                                     │ build interleaved frame
-                                    │ raw_mic_callback (intercom_tx_passthrough,
-                                    │                   diagnostics)
-                                    ▼
                             audio_processor->process(frame)
                               = esp_afe::process()
                                     │
@@ -135,21 +132,20 @@ One frame = 32 ms = 512 samples @ 16 kHz per channel.
                                     │ push NOSPLIT into feed_input_ring_
                                     │ (non-blocking, atomic)
                                     ▼
-                            afe_feed task (core 1, prio 5)
+                            GMF afe_feed task (core 0, prio 5)
                                     │
-                                    │ pop frame
-                                    │ afe_handle_->feed()   ← Speech Enhancement worker fires
-                                    │                         here, may block
+                                    │ read_cb pops frame
+                                    │ esp-sr feed()   ← Speech Enhancement worker fires
+                                    │                   here, may block
                                     ▼
                             [esp-sr internal ring, owned by esp-sr]
                                     │
                                     ▼
-                            afe_fetch task (core 1, prio 7)
+                            GMF afe_fetch task (core 1, prio 5)
                                     │
-                                    │ afe_fetch_with_delay()  ← returns
-                                    │                           processed mic +
-                                    │                           VAD state
-                                    │ push into fetch_output_ring_
+                                    │ esp-sr fetch()  ← returns processed mic +
+                                    │                   VAD state
+                                    │ result_cb pushes into fetch_output_ring_
                                     ▼
                             audio_processor->process() return
                               (reads fetch_output_ring_ non-blocking)
@@ -261,7 +257,7 @@ Alternative considered: move the task into the processor, let the transport be a
 
 ### 6.2 Why the consumer list in `i2s_audio_duplex`, not in the processor
 
-Consumers want raw mic frames (diagnostics, intercom passthrough) *and* processed frames (MWW, VA). The transport is the only component that sees both. Putting the consumer list in the processor would force the transport to re-plumb raw callbacks separately.
+Consumers want diagnostic/raw tap points and processed frames, but production MWW, VA and intercom TX must use the processed stream when a processor is configured. The transport is the only component that can expose both surfaces without leaking raw audio into processor consumers.
 
 ### 6.3 Why esp-sr lives behind `audio_processor` and not used directly
 
@@ -271,9 +267,13 @@ Three reasons: the passthrough and `esp_aec` implementations don't need esp-sr; 
 
 PSRAM stacks on S3/PSRAM builds are the ESPHome-blessed pattern for large network/transport tasks where the stack peak is known. Internal RAM stays free for the Speech Enhancement worker and MWW inference. Board YAMLs should opt in only after validating PSRAM stack support for their target. See `esphome/components/intercom_api/intercom_api.h` for the per-task sizing rationale in code comments.
 
-### 6.5 Why the `esp_afe` feed/fetch tasks are created dynamically
+### 6.5 Why `esp_afe` uses the GMF AFE manager tasks
 
-The task lifetime matches the AFE instance lifetime: toggling all features off tears the AFE down, toggling any feature back on rebuilds it. Dynamic `xTaskCreatePinnedToCore` is the natural fit for that lifecycle. Static TCBs would require reuse across stop/start, which ran into a FreeRTOS ready-list corruption under rapid reconfigure bursts on core 1. Dynamic creation pays ~16 KB heap churn per reconfigure; on a 260 KB internal heap this is acceptable.
+The feed/fetch lifetime is delegated to Espressif's `esp_gmf_afe_manager`.
+It creates the canonical feed and fetch tasks once per AFE instance, suspends
+them with an event bit while idle, and resumes them when ESPHome provides a
+read callback. This removes our previous FreeRTOS task churn while keeping the
+realtime I2S task decoupled from potentially blocking esp-sr `feed()` work.
 
 ### 6.6 Why the mic consumer registry, not a refcount
 
@@ -281,15 +281,30 @@ Consumers register once at setup. The transport tracks them as opaque tokens in 
 
 ### 6.7 Why the `i2s_audio_duplex` audio task is permanent
 
-Reconfigure (e.g. 2-mic -> 1-mic when Speech Enhancement toggles off) does not destroy the audio task. The task sits on a `frame_spec_revision` observer loop; when the revision bumps it reinitialises the decimator, the reference extraction and the output buffers in place, then resumes. Destroying and recreating the task on every toggle would cause audible gaps and lose consumer state that is keyed off the task handle.
+Reconfigure does not destroy the audio task. The task sits on a
+`frame_spec_revision` observer loop; when the revision bumps it reinitialises
+the decimator, the reference extraction and the output buffers in place, then
+resumes. Destroying and recreating the task on every toggle would cause audible
+gaps and lose consumer state that is keyed off the task handle. Dual-mic AFE
+keeps SE/BSS structural, so runtime SE toggles no longer force a 2-mic to
+1-mic frame-spec transition.
 
 ---
 
 ## 7. The "all features disabled" fast path
 
-`esp_afe` supports `aec_enabled=false`, `se_enabled=false`, `ns_enabled=false`, `agc_enabled=false`. With all four off, the esp-sr instance has nothing to do and `process()` short-circuits to a memcpy of the input frame.
+Single-mic `esp_afe` supports `aec_enabled=false`, `se_enabled=false`,
+`ns_enabled=false`, `agc_enabled=false`. With all features off, the esp-sr
+instance has nothing to do and the component tears it down. The standard
+processor output emits silence in this state, not raw microphone audio. Raw or
+pre-AFE audio belongs only to explicit diagnostic taps or no-processor paths,
+never to MWW, VA or intercom TX when an AFE processor is configured. Dual-mic
+AFE keeps SE/BSS structural, so that all-off state is not reachable on the P4
+landscape path.
 
-Why it exists: symmetric config surface. Users can disable any subset, including all. A `dump_config` that reports "all features disabled, component is a passthrough" is less surprising than one that errors out.
+Why it exists: symmetric config surface. Users can disable any subset,
+including all, without forcing a config validation error. Silence is safer than
+an implicit raw bypass.
 
 Why it stays: it costs nothing (a single `if` on the hot path), has no runtime risk, and is exercised during reconfigure transitions (brief windows where a user has toggled all features off before re-enabling one). Removing it would force consumers to drop the processor entirely in this edge case, which they can't easily do at runtime.
 

@@ -10,7 +10,7 @@
 # Invoke from the device's on_boot:
 #   - script.execute: settings_p4_sync_widgets
 # at a priority below 200 (after switch entities have completed their
-# restore_mode and after the AFE pipeline has wired vad/ns/agc/se/aec).
+# restore_mode and after the AFE pipeline has wired vad/ns/agc/aec).
 # Run once per boot is enough for the carousel to come up matching the
 # entity state. Subsequent runtime entity changes can re-call this script
 # (for example from each switch's on_turn_on/on_turn_off) to keep the UI
@@ -51,10 +51,6 @@ script:
       - lvgl.dropdown.update:
           id: ui_aec_mode_dd
           selected_text: !lambda 'return id(aec_mode_select).current_option();'
-      - lvgl.switch.update:
-          id: ui_se_sw
-          state:
-            checked: !lambda 'return id(se_switch).state;'
       - lvgl.switch.update:
           id: ui_vad_sw
           state:

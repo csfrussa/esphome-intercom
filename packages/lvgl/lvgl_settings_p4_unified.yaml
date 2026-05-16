@@ -9,7 +9,7 @@
 # Bound entities (must exist in the device YAML):
 #   numbers : master_volume, mic_gain (-20..0 dB post-AFE trim)
 #   switches: speaker_mute, mute (mic), auto_answer_switch
-#             dnd_switch, aec_switch, vad_switch, se_switch
+#             dnd_switch, aec_switch, vad_switch
 #             wake_word_switch
 #   selects : aec_mode_select  (options published by esp_afe FD pipeline)
 #
@@ -253,37 +253,6 @@ widgets:
                   id: aec_mode_select
                   index: !lambda 'return x;'
 
-        # ========================================================================
-        # SECTION: AFE PIPELINE
-        # ========================================================================
-        - obj:
-            width: ${ic_settings_row_width}
-            height: 2
-            bg_color: 0x444444
-            border_width: 0
-            pad_all: 0
-        - label:
-            width: ${ic_settings_row_width}
-            text: "AFE Pipeline"
-            text_align: CENTER
-            text_color: 0x88AAFF
-            text_font: ${ic_settings_label_font}
-        - label:
-            width: ${ic_settings_row_width}
-            text: "Speech Enhancement"
-            text_align: CENTER
-            text_color: 0xFFFFFF
-            text_font: ${ic_settings_label_font}
-        - switch:
-            id: ui_se_sw
-            width: ${ic_settings_switch_width}
-            height: ${ic_settings_switch_height}
-            state:
-              checked: !lambda 'return id(se_switch).state;'
-            on_value:
-              - lambda: |-
-                  if (x) id(se_switch).turn_on();
-                  else id(se_switch).turn_off();
         - label:
             width: ${ic_settings_row_width}
             text: "Voice Activity Detector"

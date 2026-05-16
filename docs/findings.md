@@ -43,13 +43,13 @@ upstream state machine to report real VAD transitions.
 
 If the ref slot RMS stays silent while the speaker is active, the duplex driver emits a WARN (see troubleshooting). That is the canary for "you forgot to override the PGA for your board".
 
-## P4 esp-sr version split
+## P4 esp-sr generation
 
-Do not read the P4 `esp_aec` pin as the version used by every P4 firmware.
+The P4 audio components are now aligned on esp-sr 2.4.4.
 
-- `esp_aec` pins ESP32-P4 to `espressif/esp-sr ~2.3.0` because the standalone
-  P4 AEC smoke path regressed when bumped to 2.4.x.
-- `esp_afe` depends on `espressif/esp-sr ~2.4.0`; the P4 full-experience AFE
-  YAMLs use `esp_afe`, so they exercise the 2.4.x AFE path.
+- `esp_aec` wraps the low-level `afe_aec` helper from esp-sr 2.4.4.
+- `esp_afe` uses `espressif/gmf_ai_audio` 0.8.2, which depends on esp-sr 2.4.4
+  and provides Espressif's AFE manager for feed/fetch/suspend/runtime AEC
+  toggles.
 - The P4 full-AEC YAML is kept under `yamls/experimental/` as a reference.
   Public P4 presets should be validated against the AFE path.

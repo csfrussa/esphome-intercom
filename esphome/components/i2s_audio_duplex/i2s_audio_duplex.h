@@ -35,7 +35,9 @@ using audio_processor::ProcessorTelemetry;
 // Maximum listener count for microphone/speaker reference counting
 static constexpr UBaseType_t MAX_LISTENERS = 16;
 
-// Callback type for mic data: receives raw PCM samples (pointer + length, zero-copy).
+// Callback type for mic data: receives the public post-processor PCM stream
+// (pointer + length, zero-copy). Raw/pre-processor taps are diagnostic-only and
+// must not feed MWW, VA or intercom TX.
 // IMPORTANT: Callbacks are invoked from the audio task (high priority, Core 0).
 // They MUST NOT block, allocate memory, do network I/O, or hold locks.
 // Target completion: <1ms to avoid I2S DMA underruns.
@@ -184,9 +186,6 @@ class I2SAudioDuplex : public Component {
   void set_mic_channel_right(bool right) { this->mic_channel_right_ = right; }
   void set_tx_slot_right(bool right) { this->tx_slot_right_ = right; }
   void set_slot_bit_width(uint8_t sbw) { this->slot_bit_width_ = sbw; }
-  void set_reset_processor_on_speaker_start(bool enabled) {
-    this->reset_processor_on_speaker_start_ = enabled;
-  }
 
   // AEC setter
   void set_processor(AudioProcessor *aec);
@@ -197,7 +196,7 @@ class I2SAudioDuplex : public Component {
   void set_mic_gain(float gain);
   float get_mic_gain() const { return this->mic_gain_.load(std::memory_order_relaxed); }
 
-  // Pre-AEC mic attenuation - for hot mics like ES8311 that overdrive
+  // Input gain/attenuation before the audio processor, for hot or weak mics.
   void set_mic_attenuation(float atten);
   float get_mic_attenuation() const { return this->mic_attenuation_.load(std::memory_order_relaxed); }
   // Master volume is independent from the speaker abstraction volume used by
@@ -243,7 +242,6 @@ class I2SAudioDuplex : public Component {
 
   // Microphone interface
   void add_mic_data_callback(MicDataCallback callback) { this->mic_callbacks_.push_back(callback); }
-  void add_raw_mic_data_callback(MicDataCallback callback) { this->raw_mic_callbacks_.push_back(callback); }
 
   // Consumer registry: each consumer (a microphone wrapper, intercom TX path,
   // etc.) registers an opaque token. The audio task gates mic callbacks on
@@ -510,8 +508,7 @@ class I2SAudioDuplex : public Component {
   int32_t dc_prev_output_secondary_persistent_{0};
 
   // Mic data callbacks
-  std::vector<MicDataCallback> mic_callbacks_;       // Post-AEC (for VA/STT)
-  std::vector<MicDataCallback> raw_mic_callbacks_;   // Pre-AEC (for MWW)
+  std::vector<MicDataCallback> mic_callbacks_;       // Post-processor stream for MWW, VA, intercom
 
   // Speaker output callbacks (for mixer pending_playback_frames tracking)
   std::vector<SpeakerOutputCallback> speaker_output_callbacks_;
@@ -524,7 +521,6 @@ class I2SAudioDuplex : public Component {
   // AEC support
   AudioProcessor *processor_{nullptr};
   std::atomic<bool> processor_enabled_{false};  // Runtime toggle (only enabled when processor_ is set)
-  bool reset_processor_on_speaker_start_{false};
   std::atomic<bool> processor_background_consumer_registered_{false};
   void sync_processor_background_consumer_();
   int16_t *direct_aec_ref_{nullptr};     // AEC reference from previous TX frame (processor rate, mono mode)
@@ -537,7 +533,7 @@ class I2SAudioDuplex : public Component {
 
   // Volume control (atomic: written from main loop, read from audio task via snapshot)
   std::atomic<float> mic_gain_{1.0f};         // 0.0 - 2.0 (1.0 = unity gain, applied AFTER AEC)
-  std::atomic<float> mic_attenuation_{1.0f};  // Pre-AEC attenuation for hot mics (0.1 = -20dB, applied BEFORE AEC)
+  std::atomic<float> mic_attenuation_{1.0f};  // Input gain staging before the processor.
   std::atomic<float> speaker_volume_{1.0f};  // combined output*master public/debug value
   std::atomic<int16_t> speaker_volume_q15_{32767};  // combined hot-path fixed-point volume
   std::atomic<int16_t> output_volume_q15_{32767};   // media_player/speaker abstraction volume
@@ -577,9 +573,9 @@ class I2SAudioDuplex : public Component {
 
   // Pre-allocated audio task buffers (owned by component, not by ctx).
   // Allocated on audio_task_ entry and reused while the current frame shape
-  // fits. Runtime processor reconfigures (for example MR<->MMR BSS toggles)
-  // can grow frame sizes, so allocate_audio_buffers_ validates the shape and
-  // reallocates before the task touches RX/FIR buffers.
+  // fits. Runtime processor reconfigures can grow frame sizes, so
+  // allocate_audio_buffers_ validates the shape and reallocates before the
+  // task touches RX/FIR buffers.
   void release_audio_buffers_();
   int16_t *prealloc_rx_buffer_{nullptr};
   int16_t *prealloc_mic_buffer_{nullptr};

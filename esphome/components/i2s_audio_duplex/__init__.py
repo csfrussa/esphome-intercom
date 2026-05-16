@@ -62,7 +62,6 @@ CONF_TASK_PRIORITY = "task_priority"
 CONF_TASK_CORE = "task_core"
 CONF_TASK_STACK_SIZE = "task_stack_size"
 CONF_TX_CHANNEL = "tx_channel"
-CONF_RESET_PROCESSOR_ON_SPEAKER_START = "reset_processor_on_speaker_start"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
 CONF_AEC_REF_RING_IN_PSRAM = "aec_ref_ring_in_psram"
 CONF_AUDIO_STACK_IN_PSRAM = "audio_stack_in_psram"
@@ -87,7 +86,7 @@ StartAction = i2s_audio_duplex_ns.class_("StartAction", automation.Action)
 StopAction = i2s_audio_duplex_ns.class_("StopAction", automation.Action)
 
 # AudioProcessor abstract interface (defined in audio_processor/audio_processor.h)
-# Both esp_aec::EspAec and future esp_afe::EspAfe inherit from this.
+# Both esp_aec::EspAec and esp_afe::EspAfe inherit from this adapter.
 AudioProcessor = cg.esphome_ns.namespace("audio_processor").class_("AudioProcessor")
 
 # I2S port count per SoC variant (from SOC_I2S_NUM in soc_caps.h)
@@ -202,7 +201,6 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_NUM_CHANNELS, default=1): cv.one_of(1, 2, int=True),
         cv.Optional(CONF_MIC_CHANNEL, default="left"): cv.one_of("left", "right", lower=True),
         cv.Optional(CONF_TX_CHANNEL, default="left"): cv.one_of("left", "right", lower=True),
-        cv.Optional(CONF_RESET_PROCESSOR_ON_SPEAKER_START, default=False): cv.boolean,
         cv.Optional(CONF_I2S_MODE, default="primary"): cv.one_of("primary", "secondary", lower=True),
         cv.Optional(CONF_USE_APLL, default=False): cv.boolean,
         cv.Optional(CONF_I2S_NUM, default=0): cv.int_range(min=0, max=2),
@@ -214,7 +212,8 @@ CONFIG_SCHEMA = cv.All(
         # If omitted, equals sample_rate (no decimation)
         cv.Optional(CONF_OUTPUT_SAMPLE_RATE): cv.int_range(min=8000, max=48000),
         cv.Optional(CONF_PROCESSOR_ID): cv.use_id(AudioProcessor),
-        # Pre-AEC mic gain/attenuation: <1.0 attenuates (hot mics), >1.0 amplifies (weak mics)
+        # Input gain/attenuation before the processor: <1.0 attenuates hot mics,
+        # >1.0 amplifies weak mics. This is gain staging, not a separate mic output.
         cv.Optional(CONF_MIC_ATTENUATION, default=1.0): cv.float_range(min=0.01, max=32.0),
         # ES8311 digital feedback: RX is stereo with L=DAC(reference), R=ADC(mic)
         # Requires ES8311 register 0x44 bits[6:4]=4 (ADCDAT_SEL=DACL+ADC)
@@ -403,13 +402,12 @@ async def to_code(config):
     # Slot bit width: 0 = auto (match bits_per_sample)
     sbw = config[CONF_SLOT_BIT_WIDTH]
     cg.add(var.set_slot_bit_width(0 if sbw == "auto" else sbw))
-    cg.add(var.set_reset_processor_on_speaker_start(config[CONF_RESET_PROCESSOR_ON_SPEAKER_START]))
 
     # Set output sample rate if specified (enables decimation)
     if CONF_OUTPUT_SAMPLE_RATE in config:
         cg.add(var.set_output_sample_rate(config[CONF_OUTPUT_SAMPLE_RATE]))
 
-    # Set mic attenuation for hot mics (applied BEFORE AEC)
+    # Set input gain/attenuation before the audio processor.
     cg.add(var.set_mic_attenuation(config[CONF_MIC_ATTENUATION]))
 
     # ES8311 digital feedback mode: stereo RX with L=ref, R=mic
@@ -497,4 +495,3 @@ async def i2s_audio_duplex_action_to_code(config, action_id, template_arg, args)
     var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
     return var
-

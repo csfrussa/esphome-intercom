@@ -5,12 +5,13 @@
 #
 # `Voice Detected` is a binary sensor emitted by AFE voice-activity analysis.
 # `Voice Activity Detector` is the runtime switch that enables/disables
-# that analysis. `Speech Enhancement` controls the AFE SE/BSS path.
+# that analysis. Speech Enhancement / BSS is structural on dual-mic AFE
+# builds: disabling it makes esp-sr fall back to first-mic-only, so it is not
+# exposed as a runtime switch here.
 # =============================================================================
 
 substitutions:
-  afe_aec_restore_mode: RESTORE_DEFAULT_ON
-  afe_se_restore_mode: RESTORE_DEFAULT_ON
+  afe_aec_restore_mode: RESTORE_DEFAULT_OFF
   afe_vad_restore_mode: ALWAYS_OFF
 
 binary_sensor:
@@ -28,11 +29,6 @@ switch:
       name: Echo Cancellation
       icon: mdi:ear-hearing
       restore_mode: ${afe_aec_restore_mode}
-    se:
-      id: se_switch
-      name: Speech Enhancement
-      icon: mdi:microphone-variant
-      restore_mode: ${afe_se_restore_mode}
     vad:
       id: vad_switch
       name: Voice Activity Detector

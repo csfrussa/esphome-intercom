@@ -160,11 +160,9 @@ For comparison, `esp_afe` in MR LOW_COST mode costs ~72 KB internal + ~733 KB PS
 ## Dependencies
 
 - ESP32 only, restricted to S3 and P4 variants (enforced in `_validate_esp32_variant`).
-- Pulls `espressif/esp-sr` via ESPHome's IDF component manager. ESP32-S3
-  builds use `~2.4.0`; ESP32-P4 builds are pinned to `~2.3.0` in
-  `esp_aec` only because the P4 RISC-V AEC path regressed in the 2.4 bump
-  during smoke testing. `esp_afe` full-experience P4 builds use the
-  `esp_afe` component, which currently depends on esp-sr `~2.4.0`.
+- Pulls `espressif/esp-sr` 2.4.4 via ESPHome's IDF component manager and wraps
+  the low-level `afe_aec` helper. This keeps standalone AEC aligned with the
+  same esp-sr generation used by the GMF-backed `esp_afe` path.
 - Implements [`AudioProcessor`](../audio_processor/README.md), so it can be referenced by any component that accepts that interface.
 
 ## Logging

@@ -284,7 +284,7 @@ void I2SAudioDuplex::setup() {
   this->log_memory_snapshot_("after_speaker_ring");
 
   // AEC reference (mono mode only; stereo/TDM get ref from I2S RX).
-  // direct_aec_ref_ is allocated lazily in allocate_audio_buffers_() once the
+  // direct_aec_ref_ is allocated by allocate_audio_buffers_() once the
   // processor frame spec is known. Storage matches input_frame_bytes because
   // AudioProcessor::process consumes in_ref at input_samples length; the TX-side
   // decimator writes one input-side reference frame here at the processor rate,
@@ -312,6 +312,12 @@ void I2SAudioDuplex::setup() {
     this->mark_failed();
     return;
   }
+
+  // Reserve the hot-path RX/TX/processor buffers as early as the real frame
+  // shape allows. The allocation itself runs on the parked audio task, so this
+  // does not move heavy heap work into the ESPHome setup thread. If processor
+  // setup has not published a frame_spec yet, loop() will retry.
+  this->request_audio_preallocation_();
 
   ESP_LOGI(TAG, "I2S Audio Duplex ready (speaker_buf=%u bytes, task precreated)",
            (unsigned)this->speaker_buffer_size_);
@@ -437,8 +443,6 @@ void I2SAudioDuplex::dump_config() {
   ESP_LOGCONFIG(TAG, "  Task: priority=%u, core=%d, stack=%u",
                 this->task_priority_, this->task_core_, (unsigned)this->task_stack_size_);
   ESP_LOGCONFIG(TAG, "  I2S Preparation: setup prepares channels to READY");
-  ESP_LOGCONFIG(TAG, "  Reset Processor On Speaker Start: %s",
-                this->reset_processor_on_speaker_start_ ? "enabled" : "disabled");
   ESP_LOGCONFIG(TAG, "  I2S Hardware State: %s",
                 i2s_hardware_state_to_string_(
                     static_cast<I2SHardwareState>(this->i2s_hardware_state_.load(std::memory_order_relaxed))));
@@ -984,15 +988,11 @@ void I2SAudioDuplex::start_speaker() {
     ESP_LOGW(TAG, "Speaker start refused: duplex did not enter RUNNING");
     return;
   }
-  if (!this->speaker_running_.exchange(true, std::memory_order_relaxed)) {
+  if (!this->speaker_running_.load(std::memory_order_relaxed)) {
     this->direct_aec_ref_valid_ = false;
     this->tdm_ref_silent_frames_.store(0, std::memory_order_relaxed);
-    if (this->reset_processor_on_speaker_start_ && this->processor_ != nullptr &&
-        this->processor_enabled_.load(std::memory_order_relaxed)) {
-      bool ok = this->processor_->reset_buffers();
-      ESP_LOGI(TAG, "Audio processor buffer reset on speaker start: %s",
-               ok ? "ok" : "failed");
-    }
+  }
+  if (!this->speaker_running_.exchange(true, std::memory_order_relaxed)) {
     this->speaker_start_trigger_.trigger();
     this->update_runtime_state_();
   }

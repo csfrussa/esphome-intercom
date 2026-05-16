@@ -2,6 +2,7 @@
 
 #ifdef USE_ESP32
 
+#include <algorithm>
 #include <cstring>
 
 #include "esp_heap_caps.h"
@@ -72,7 +73,9 @@ void EspAec::setup() {
       return;
     }
   }
-  this->handle_ = aec_create(this->sample_rate_, this->filter_length_, 1, this->mode_);
+  this->handle_ = afe_aec_create("MR", this->filter_length_,
+                                 afe_type_from_mode_(this->mode_),
+                                 afe_cost_from_mode_(this->mode_));
   if (this->handle_ == nullptr) {
     ESP_LOGE(TAG, "Failed to create AEC instance");
     vSemaphoreDelete(this->handle_mutex_);
@@ -80,7 +83,19 @@ void EspAec::setup() {
     this->mark_failed();
     return;
   }
-  this->cached_frame_size_ = aec_get_chunksize(this->handle_);
+  this->cached_frame_size_ = afe_aec_get_chunksize(this->handle_);
+  const size_t input_bytes = static_cast<size_t>(this->cached_frame_size_) * 2 * sizeof(int16_t);
+  this->input_frame_ = static_cast<int16_t *>(
+      heap_caps_aligned_alloc(16, input_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (this->input_frame_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate AEC MR input frame");
+    afe_aec_destroy(this->handle_);
+    this->handle_ = nullptr;
+    vSemaphoreDelete(this->handle_mutex_);
+    this->handle_mutex_ = nullptr;
+    this->mark_failed();
+    return;
+  }
   this->last_frame_size_ = this->cached_frame_size_;
 }
 
@@ -89,15 +104,23 @@ EspAec::~EspAec() {
     {
       audio_processor::ScopedLock lock(this->handle_mutex_);
       if (this->handle_ != nullptr) {
-        aec_destroy(this->handle_);
+        afe_aec_destroy(this->handle_);
         this->handle_ = nullptr;
+      }
+      if (this->input_frame_ != nullptr) {
+        heap_caps_free(this->input_frame_);
+        this->input_frame_ = nullptr;
       }
     }
     vSemaphoreDelete(this->handle_mutex_);
     this->handle_mutex_ = nullptr;
   } else if (this->handle_ != nullptr) {
-    aec_destroy(this->handle_);
+    afe_aec_destroy(this->handle_);
     this->handle_ = nullptr;
+  }
+  if (this->input_frame_ != nullptr) {
+    heap_caps_free(this->input_frame_);
+    this->input_frame_ = nullptr;
   }
 }
 
@@ -122,8 +145,8 @@ FrameSpec EspAec::frame_spec() const {
 
 bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
                      uint8_t mic_channels_in) {
-  // Single-mic only; mic_channels_in is interface boilerplate. 10 ms cap
-  // serialises against reinit_(); pass-through on miss beats stalling.
+  // Single-mic only; mic_channels_in is interface boilerplate. The 10 ms cap
+  // serialises against reinit_(); on miss we emit silence, never raw mic audio.
   const size_t frame_bytes = static_cast<size_t>(this->cached_frame_size_) * sizeof(int16_t);
   if (out == nullptr) {
     this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
@@ -135,20 +158,26 @@ bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     return false;
   }
   if (in_ref == nullptr) {
-    memcpy(out, in_mic, frame_bytes);
+    memset(out, 0, frame_bytes);
     this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
   audio_processor::ScopedLock lock(this->handle_mutex_, pdMS_TO_TICKS(10));
-  if (!lock || this->handle_ == nullptr) {
-    memcpy(out, in_mic, frame_bytes);
+  if (!lock || this->handle_ == nullptr || this->input_frame_ == nullptr) {
+    memset(out, 0, frame_bytes);
     this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
-  aec_process(this->handle_,
-              const_cast<int16_t *>(in_mic),
-              const_cast<int16_t *>(in_ref),
-              out);
+  const int mic_stride = std::max<int>(1, mic_channels_in);
+  for (int i = 0; i < this->cached_frame_size_; i++) {
+    this->input_frame_[2 * i] = in_mic[i * mic_stride];
+    this->input_frame_[2 * i + 1] = in_ref[i];
+  }
+  size_t out_bytes = afe_aec_process(this->handle_, this->input_frame_, out);
+  if (out_bytes != frame_bytes) {
+    this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
   this->frame_count_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
@@ -217,19 +246,36 @@ bool EspAec::reinit_(aec_mode_t new_mode) {
   }
 
   audio_processor::ScopedLock lock(this->handle_mutex_);
-  aec_handle_t *old_handle = this->handle_;
+  afe_aec_handle_t *old_handle = this->handle_;
+  int16_t *old_input_frame = this->input_frame_;
   aec_mode_t old_mode = this->mode_;
   // Build the next handle first; roll back if create fails.
-  aec_handle_t *new_handle = aec_create(this->sample_rate_, this->filter_length_, 1, new_mode);
+  afe_aec_handle_t *new_handle = afe_aec_create("MR", this->filter_length_,
+                                                afe_type_from_mode_(new_mode),
+                                                afe_cost_from_mode_(new_mode));
   if (new_handle == nullptr) {
     ESP_LOGE(TAG, "Failed to create new AEC instance, keeping previous mode=%s", get_mode_name(old_mode));
     return false;
   }
+  int new_frame_size = afe_aec_get_chunksize(new_handle);
+  const size_t input_bytes = static_cast<size_t>(new_frame_size) * 2 * sizeof(int16_t);
+  int16_t *new_input_frame = static_cast<int16_t *>(
+      heap_caps_aligned_alloc(16, input_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (new_input_frame == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate new AEC MR input frame, keeping previous mode=%s",
+             get_mode_name(old_mode));
+    afe_aec_destroy(new_handle);
+    return false;
+  }
   this->handle_ = new_handle;
+  this->input_frame_ = new_input_frame;
   this->mode_ = new_mode;
-  this->cached_frame_size_ = aec_get_chunksize(new_handle);
+  this->cached_frame_size_ = new_frame_size;
   if (old_handle != nullptr) {
-    aec_destroy(old_handle);
+    afe_aec_destroy(old_handle);
+  }
+  if (old_input_frame != nullptr) {
+    heap_caps_free(old_input_frame);
   }
   if (this->cached_frame_size_ != this->last_frame_size_) {
     this->last_frame_size_ = this->cached_frame_size_;
@@ -239,6 +285,23 @@ bool EspAec::reinit_(aec_mode_t new_mode) {
            (int) this->mode_, this->cached_frame_size_,
            this->cached_frame_size_ * 1000 / this->sample_rate_);
   return true;
+}
+
+afe_type_t EspAec::afe_type_from_mode_(aec_mode_t mode) {
+  switch (static_cast<int>(mode)) {
+    case AEC_MODE_SR_LOW_COST:
+    case AEC_MODE_SR_HIGH_PERF:
+      return AFE_TYPE_SR;
+    case 5:
+    case 6:
+      return static_cast<afe_type_t>(3);  // AFE_TYPE_FD in esp-sr 2.4+
+    default:
+      return AFE_TYPE_VC;
+  }
+}
+
+afe_mode_t EspAec::afe_cost_from_mode_(aec_mode_t mode) {
+  return is_high_perf_mode_(mode) ? AFE_MODE_HIGH_PERF : AFE_MODE_LOW_COST;
 }
 
 }  // namespace esp_aec

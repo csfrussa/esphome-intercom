@@ -12,8 +12,6 @@ from .. import (
 DEPENDENCIES = ["i2s_audio_duplex"]
 CODEOWNERS = ["@n-IA-hane"]
 
-CONF_PRE_AEC = "pre_aec"
-
 I2SAudioDuplexMicrophone = i2s_audio_duplex_ns.class_(
     "I2SAudioDuplexMicrophone",
     microphone.Microphone,
@@ -63,7 +61,6 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(I2SAudioDuplexMicrophone),
             cv.GenerateID(CONF_I2S_AUDIO_DUPLEX_ID): cv.use_id(I2SAudioDuplex),
-            cv.Optional(CONF_PRE_AEC, default=False): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _reject_child_audio_overrides,
@@ -78,6 +75,3 @@ async def to_code(config):
 
     parent = await cg.get_variable(config[CONF_I2S_AUDIO_DUPLEX_ID])
     cg.add(var.set_parent(parent))
-
-    if config[CONF_PRE_AEC]:
-        cg.add(var.set_pre_aec(True))

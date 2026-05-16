@@ -6,7 +6,7 @@
 
 #ifdef USE_ESP32
 
-#include <esp_aec.h>
+#include <esp_afe_aec.h>
 #include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -61,8 +61,11 @@ class EspAec : public Component, public AudioProcessor {
 
  protected:
   bool reinit_(aec_mode_t new_mode);
+  static afe_type_t afe_type_from_mode_(aec_mode_t mode);
+  static afe_mode_t afe_cost_from_mode_(aec_mode_t mode);
 
-  aec_handle_t *handle_{nullptr};
+  afe_aec_handle_t *handle_{nullptr};
+  int16_t *input_frame_{nullptr};
   // L1 fix: guards handle_ lifecycle between process() and reinit_() / destructor.
   SemaphoreHandle_t handle_mutex_{nullptr};
   int sample_rate_{16000};

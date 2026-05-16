@@ -1486,6 +1486,11 @@ Your support helps me dedicate more time to open source development. Thank you! 
 
 MIT License - See [LICENSE](LICENSE) for details.
 
+Audio builds may resolve Espressif components such as `esp-sr`,
+`gmf_ai_audio`, `gmf_core` and `esp_codec_dev` through ESPHome's IDF Component
+Manager. See [Espressif Components And Licenses](docs/ESPRESSIF_COMPONENTS.md)
+for the component-level license notes and usage restrictions.
+
 ---
 
 ## Contributing

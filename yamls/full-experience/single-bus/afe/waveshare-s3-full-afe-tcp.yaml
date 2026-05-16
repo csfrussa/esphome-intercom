@@ -208,7 +208,6 @@ esp_afe:
   ns_enabled: true
   vad_enabled: false
   agc_enabled: true
-  task_priority: 19
   # Buffer placement: PSRAM for the AFE staging triad (replicates pre-knob default).
   # Toggle individual flags off to free Core 0 cycles at the cost of internal RAM.
   feed_buf_in_psram: true       # ~3 KB scratch
@@ -220,8 +219,8 @@ i2s_audio_duplex:
   # 2-mic Speech Enhancement + concurrent TLS streams (music + TTS + intercom) exhaust the
   # ~30KB of internal RAM WS3 has available to user code. Moving the audio
   # task's own stack to PSRAM recovers ~8KB and is enough headroom to keep
-  # all three streams stable. The task is not CPU-bound (per-frame work
-  # lives in esp_afe's feed_task on core 1), so PSRAM stack latency is
+  # all three streams stable. The task is not CPU-bound (per-frame AFE work
+  # lives in Espressif GMF AFE manager tasks), so PSRAM stack latency is
   # acceptable here.
   audio_stack_in_psram: true
   i2s_lrclk_pin: GPIO14

@@ -7,7 +7,6 @@ from esphome.const import CONF_MAX_VALUE, CONF_MIN_VALUE, ENTITY_CATEGORY_CONFIG
 from . import i2s_audio_duplex_ns, I2SAudioDuplex, CONF_I2S_AUDIO_DUPLEX_ID
 CONF_MIC_GAIN = "mic_gain"
 CONF_SPEAKER_VOLUME = "speaker_volume"
-CONF_PRE_AEC = "pre_aec"
 CONF_SPEAKER_ID = "speaker_id"
 
 # Number classes
@@ -19,7 +18,6 @@ MIC_GAIN_SCHEMA = number.number_schema(
     entity_category=ENTITY_CATEGORY_CONFIG,
     icon="mdi:microphone",
 ).extend({
-    cv.Optional(CONF_PRE_AEC, default=False): cv.boolean,
     cv.Optional(CONF_MIN_VALUE, default=-20.0): cv.float_range(min=-20.0, max=30.0),
     cv.Optional(CONF_MAX_VALUE, default=30.0): cv.float_range(min=-20.0, max=30.0),
 })
@@ -36,7 +34,6 @@ MIC_GAIN_SCHEMA = cv.All(MIC_GAIN_SCHEMA, _validate_mic_gain_range)
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(CONF_I2S_AUDIO_DUPLEX_ID): cv.use_id(I2SAudioDuplex),
     cv.Optional(CONF_MIC_GAIN): MIC_GAIN_SCHEMA,
-    cv.Optional("mic_gain_pre_aec"): MIC_GAIN_SCHEMA,
     cv.Optional(CONF_SPEAKER_VOLUME): number.number_schema(
         SpeakerVolumeNumber,
         entity_category=ENTITY_CATEGORY_CONFIG,
@@ -59,7 +56,6 @@ async def _setup_mic_gain(config, key, parent):
         )
         await cg.register_component(var, conf)
         cg.add(var.set_parent(parent))
-        cg.add(var.set_pre_aec(conf[CONF_PRE_AEC]))
         cg.add(var.set_min_db(conf[CONF_MIN_VALUE]))
         cg.add(var.set_max_db(conf[CONF_MAX_VALUE]))
 
@@ -68,7 +64,6 @@ async def to_code(config):
     parent = await cg.get_variable(config[CONF_I2S_AUDIO_DUPLEX_ID])
 
     await _setup_mic_gain(config, CONF_MIC_GAIN, parent)
-    await _setup_mic_gain(config, "mic_gain_pre_aec", parent)
 
     if CONF_SPEAKER_VOLUME in config:
         conf = config[CONF_SPEAKER_VOLUME]

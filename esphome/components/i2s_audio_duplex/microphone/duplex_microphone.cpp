@@ -36,16 +36,10 @@ void I2SAudioDuplexMicrophone::setup() {
   this->audio_buffer_.reserve(callback_buffer_bytes);
   ESP_LOGCONFIG(TAG, "  Callback Buffer: %u bytes", (unsigned) callback_buffer_bytes);
 
-  // Register callback with the parent I2SAudioDuplex to receive mic data
-  // pre_aec=true: raw mic for wake word detection (not suppressed by AEC)
-  // pre_aec=false: AEC-processed mic for voice assistant STT
-  if (this->pre_aec_) {
-    this->parent_->add_raw_mic_data_callback(
-        [this](const uint8_t *data, size_t len) { this->on_audio_data_(data, len); });
-  } else {
-    this->parent_->add_mic_data_callback(
-        [this](const uint8_t *data, size_t len) { this->on_audio_data_(data, len); });
-  }
+  // Standard microphone output is always post-processor. MWW, VA and
+  // intercom all consume the same cleaned stream.
+  this->parent_->add_mic_data_callback(
+      [this](const uint8_t *data, size_t len) { this->on_audio_data_(data, len); });
 }
 
 void I2SAudioDuplexMicrophone::dump_config() {

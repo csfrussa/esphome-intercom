@@ -22,14 +22,14 @@ With i2s_audio_duplex:
   - **Direct TX reference** (default): Uses the previous TX frame as AEC reference. No ring buffer, no delay tuning. Works with any setup (discrete MEMS mic + amp, or codec). The reference is decimated **on the TX side** (matches the Espressif `esp-gmf aec_rec` pipeline: rate conversion before AEC), so storage and the consumer both work at the processor rate. This produces a phase-coherent `(mic, ref)` pair and avoids the ghost-tail residual that an RX-side decimation introduces. The AEC adaptive filter compensates for the ~1 chunk latency automatically.
   - **ES8311 Digital Feedback** (recommended for ES8311): Stereo I2S with L=DAC ref, R=ADC mic. Sample-accurate reference. Enable with `use_stereo_aec_reference: true`.
   - **TDM Hardware Reference** (for ES7210 + ES8311): ES7210 in TDM mode captures DAC analog output on a dedicated ADC channel (e.g. MIC3). Sample-aligned with mic data. Enable with `use_tdm_reference: true`.
-- **Dual Mic Path**: `pre_aec` option for raw mic (diagnostics) alongside AEC-processed mic (VA/STT/MWW)
+- **Post-Processor Mic Path**: the standard microphone platform always emits the processed stream from `esp_aec` or `esp_afe`, so MWW, VA and intercom share one stable post-processor source.
 - **PSRAM Buffers**: `buffers_in_psram` option moves the non-hot-path audio buffers (AEC mic/ref, processor interleave, multi-channel mic, spk_ref) to PSRAM. `rx_buffer` and `spk_buffer` stay in internal RAM regardless (I2S hot path, PSRAM bus contention would cause glitches). Typical saving: ~15-20KB internal heap. Required for `sr_low_cost` AEC on memory-constrained devices.
-- **Volume Controls**: Master volume (speaker-backed, persistent) and post-AEC/AFE mic gain (-20 to +30 dB, persistent). Pre-AEC mic gain remains available as an advanced hardware-tuning override, but is not exposed by the standard packages.
+- **Volume Controls**: Master volume (speaker-backed, persistent) and post-AEC/AFE mic gain (-20 to +30 dB, persistent). Board-level input gain staging remains a YAML option through `mic_attenuation`, not a Home Assistant user control.
 - **Codec-less Support**: `slot_bit_width: 32` for MEMS mics (INMP441, MSM261, SPH0645) + I2S amp on same bus. `correct_dc_offset: true` for mics without built-in HPF
 - **Number Platform**: Native `mic_gain` and Master Volume entities with `ESPPreferenceObject` persistence. The YAML option is still `speaker_volume`, but the standard packages expose the user-facing number as `master_volume`. When both `i2s_audio_duplex` and `intercom_api` are present, `i2s_audio_duplex` owns the number entities and `intercom_api` defers to avoid conflicts.
 - **Cross-Component Validation**: `FINAL_VALIDATE_SCHEMA` prevents dual audio processors (both `i2s_audio_duplex` and `intercom_api` with a processor configured) and dual DC offset removal, catching configuration errors at compile time
-- **AEC Gating**: Auto-disables AEC when speaker is silent in mono/stereo modes (prevents filter drift). TDM mode is always-on (hardware ref captures silence naturally).
-- **Consumer Registry**: Multiple mic consumers share the I2S bus safely (MWW + VA + intercom). Each consumer registers once at setup via `register_mic_consumer()` and stays registered across internal stop/start cycles (e.g. on a 2-mic → 1-mic reconfigure).
+- **Processor Surface**: When `processor_id` is configured, microphone callbacks receive processed audio or silence. They never receive an implicit raw bypass while the processor is stopped, rebuilding, or waiting for reference.
+- **Consumer Registry**: Multiple mic consumers share the I2S bus safely (MWW + VA + intercom). Each consumer registers once at setup via `register_mic_consumer()` and stays registered across internal stop/start cycles.
 - **CPU-Aware Scheduling**: `taskYIELD()` between frames for MWW inference headroom during AEC
 - **Multi-Rate Support**: Run I2S bus at 48kHz for high-quality DAC output while mic/AEC/VA operate at 16kHz via internal FIR decimation
 - **Configurable Reference Channel**: Choose left or right stereo channel as AEC reference (supports ES8311, ES8388, and other codecs)
@@ -155,7 +155,7 @@ speaker:
 | `output_sample_rate` | int | - | Mic/AEC output rate. If set, enables FIR decimation (must divide `sample_rate` evenly, max ratio 6) |
 | `fir_decimator` | string | `dsps_fird_s16` | FIR kernel for the mic decimation. `dsps_fird_s16` uses the esp-dsp SIMD kernel (`_aes3` on ESP32-S3); `custom` uses a pure-float scalar implementation. See [FIR Decimator Kernel](#fir-decimator-kernel) below. |
 | `processor_id` | ID | - | Reference to audio processor component (`esp_aec` or `esp_afe`) for echo cancellation and audio processing |
-| `mic_attenuation` | float | 1.0 | Pre-AEC mic gain/attenuation (0.01-32.0). <1.0 attenuates hot mics, >1.0 amplifies weak mics. Keep this as board-level tuning; normal user-facing volume should be handled by the post-AEC/AFE `mic_gain` number. |
+| `mic_attenuation` | float | 1.0 | Input gain/attenuation before the processor (0.01-32.0). <1.0 attenuates hot mics, >1.0 amplifies weak mics. Keep this as board-level tuning; normal user-facing volume should be handled by the post-AEC/AFE `mic_gain` number. |
 | `slot_bit_width` | int | auto | I2S slot width in bits (16 or 32). Set to 32 for MEMS mics without codec (INMP441, MSM261, SPH0645). |
 | `correct_dc_offset` | bool | false | Enable DC offset removal. Required for MEMS mics without built-in HPF (MSM261, SPH0645). |
 | `use_stereo_aec_reference` | bool | false | ES8311 digital feedback mode (see below) |
@@ -169,7 +169,7 @@ speaker:
 | `task_core` | int | 0 | Core affinity: 0 or 1 for pinned, -1 for unpinned. Default 0 follows Espressif AEC pattern. |
 | `task_stack_size` | int | 8192 | Audio task stack size in bytes (4096-32768). Increase if you see stack overflow warnings. |
 | `buffers_in_psram` | bool | false | Move component-owned frame buffers (RX scratch, speaker frame scratch, processor interleave, mic/ref/output buffers) to PSRAM where possible. DMA descriptors and I2S driver buffers remain internal. Saves internal heap on full builds at the cost of PSRAM traffic. |
-| `audio_stack_in_psram` | bool | false | Place the audio task's own stack in PSRAM. Saves ~8KB of DMA-capable internal RAM at the cost of ~3x slower function return paths. Only enable on boards that need the internal headroom (e.g. waveshare-s3 running 2-mic Speech Enhancement plus concurrent TLS streams from `speaker_media_player` and intercom). The audio task is not CPU-bound (heavy esp-sr work runs in `esp_afe`'s feed task on core 1), so PSRAM stack latency is acceptable here. Requires `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y` (already default on our YAMLs). Leave it `false` on any board that does not hit the "not enough internal RAM" boundary; normal lifecycle is identical to the non-opt-in path. |
+| `audio_stack_in_psram` | bool | false | Place the audio task's own stack in PSRAM. Saves ~8KB of DMA-capable internal RAM at the cost of slower function return paths. Only enable on boards that need the internal headroom. With GMF-backed `esp_afe`, heavy esp-sr work runs in Espressif manager tasks, so PSRAM stack latency is acceptable here. Requires `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y` (already default on our YAMLs). Leave it `false` on any board that does not hit the "not enough internal RAM" boundary; normal lifecycle is identical to the non-opt-in path. |
 | `aec_reference` | string | `previous_frame` | Mono-mode AEC reference source. `previous_frame` (default) reuses the prior TX frame for echo reference, no buffering, no delay tuning. `ring_buffer` stores TX in a TYPE2-style ring with configurable capacity for better frame alignment on no-codec setups. Ignored when `use_stereo_aec_reference` or `use_tdm_reference` is true. |
 | `aec_reference_buffer_ms` | int | 80 | Capacity of the AEC reference ring buffer in milliseconds (32 to 500). Only used with `aec_reference: ring_buffer`. Larger values absorb more producer/consumer jitter at the cost of latency. |
 | `aec_ref_ring_in_psram` | bool | false | Place the AEC reference ring buffer storage (~3-5 KB) in PSRAM. Default `false` keeps it in internal RAM, saving ~13.6 us/frame on Core 0 (the audio task reads and writes the ring every frame). Set `true` to save internal RAM at the cost of Core 0 PSRAM traffic. Has no effect when `aec_reference: previous_frame` (default) or when `use_stereo_aec_reference` / `use_tdm_reference` is set, since the ring is not allocated in those modes. |
@@ -194,11 +194,9 @@ These options expose the underlying I2S driver controls. Defaults are tuned for 
 
 ### Microphone Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `pre_aec` | bool | false | If true, receives raw mic audio (before AEC). Mainly for diagnostics; with `sr_low_cost` AEC, MWW works on post-AEC mic. |
-
-The public `microphone: platform: i2s_audio_duplex` entry is intentionally thin:
+The public `microphone: platform: i2s_audio_duplex` entry is intentionally thin
+and always exposes the post-processor stream. Raw/pre-AEC audio is not a
+standard microphone output path for MWW, VA or intercom:
 
 ```yaml
 microphone:
@@ -285,12 +283,6 @@ microphone:
     id: mic_aec
     i2s_audio_duplex_id: i2s_duplex
 
-  # Pre-AEC: raw mic (diagnostics only)
-  - platform: i2s_audio_duplex
-    id: mic_pre_aec
-    i2s_audio_duplex_id: i2s_duplex
-    pre_aec: true
-
 micro_wake_word:
   microphone: mic_aec     # Post-AEC works with SR linear AEC
 
@@ -298,7 +290,7 @@ voice_assistant:
   microphone: mic_aec
 ```
 
-With SR linear AEC, MWW detects reliably on post-AEC audio even during TTS playback. No separate raw microphone path is needed. MWW task priority can be boosted from default 3 to 8 via `on_boot` lambda for reliable barge-in.
+With SR linear AEC, MWW detects reliably on post-AEC audio even during TTS playback. No separate unprocessed microphone path is needed. MWW task priority can be boosted from default 3 to 8 via `on_boot` lambda for reliable barge-in.
 
 ### AEC Mode Comparison
 
@@ -625,7 +617,7 @@ binary_sensor:
 - **Speaker Buffer**: the public `speaker: platform: i2s_audio_duplex` exposes ESPHome-compatible `buffer_duration` and `timeout` options. Default `buffer_duration: 500ms` allocates a mono PCM staging ring at the I2S bus rate, preferably in PSRAM.
 - **Task Priority**: 19 (above lwIP at 18, below WiFi at 23). Configurable via `task_priority` YAML option.
 - **Core Affinity**: Pinned to Core 0 (canonical Espressif AEC pattern; frees Core 1 for MWW inference and LVGL). Configurable via `task_core` YAML option.
-- **AEC Gating**: Mono/stereo modes process AEC only when speaker had real audio within last 250ms. TDM mode is always-on (hardware ref captures silence naturally, no filter drift).
+- **Processor Surface**: Mono, stereo and TDM processor modes all keep callbacks on the processed surface. Mono software-reference mode zero-fills the reference when playback is idle instead of bypassing the processor.
 - **Thread Safety**: All cross-thread variables use `std::atomic` with `memory_order_relaxed`, including `float` mic gains and cached speaker volume. The software speaker volume is converted to Q15 when the value changes, then the audio task snapshots that fixed-point value once per frame and applies it with the SIMD/Q15 helper. Ring buffer resets use atomic request flags (`request_speaker_reset_`) to avoid concurrent access between main thread and audio task.
 - **Task Structure**: `audio_task_()` is split into `process_rx_path_()`, `process_aec_and_callbacks_()`, and `process_tx_path_()`, sharing state via `AudioTaskCtx` struct. AEC buffers use 16-byte aligned allocation for ESP-SR SIMD safety.
 - **I2S hardware lifecycle**: ESP-IDF I2S channels are allocated and initialized
@@ -775,7 +767,7 @@ logger:
 
 ### MWW Not Detecting During TTS
 1. **Use `sr_low_cost` AEC mode** (not VOIP). See [AEC Mode Comparison](#aec-mode-comparison).
-2. **MWW on `mic_aec`** (post-AEC), not on a raw microphone path.
+2. **MWW on `mic_aec`** (post-AEC), not on an unprocessed microphone path.
 3. **Enable `buffers_in_psram: true`** for SR mode's 512-sample frames on ESP32-S3.
 4. **Boost MWW priority to 8** via on_boot lambda (ESPHome defaults to 3, below mixer at 10).
 5. Do NOT use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).
@@ -793,7 +785,7 @@ With `i2s_duplex` on **Core 0**, AEC no longer competes with LVGL/display on Cor
 
 - **Media files should match bus sample rate**: For best quality, use media files at the bus `sample_rate` (e.g. 48kHz). The `resampler` speaker handles conversion from any rate, but native rate avoids resampling artifacts.
 - **loopTask long-operation warnings during 48kHz streaming**: ESPHome reports `[W] mixer.speaker took a long time (110ms)` and similar warnings for `resampler.speaker`, `api`, `wifi` during audio playback. This is **expected and harmless**. These components run in loopTask (Core 1, prio 1) and process audio/network chunks that take >30ms. All real-time audio runs in dedicated tasks on Core 0 and is unaffected.
-- **AEC is ESP-SR closed-source**: Cannot reset the adaptive filter without recreating the handle. Gating (timeout-based bypass when speaker has been silent for >250ms) keeps the adaptive filter out of silence-only periods.
+- **AEC is ESP-SR closed-source**: Cannot reset the adaptive filter without recreating the handle. When a processor is configured, this component no longer bypasses to raw mic audio during idle or reinit windows; unavailable processed output is silenced.
 - **TDM analog reference vs ES8311 digital feedback**: The digital feedback path (ES8311 stereo loopback) provides a cleaner reference signal for AEC than the TDM analog path (ES7210 MIC3 capturing speaker output). Analog loopback introduces non-linear distortion from the DAC/amplifier chain that the AEC linear adaptive filter cannot fully model. Expect ~95-98% echo cancellation with analog reference vs ~99% with digital feedback. Both are adequate for voice assistant and intercom use.
 - **AEC reference**: The reference signal is always the exact post-volume PCM sent to the speaker, with no additional scaling. For hardware codec setups (ES8311, TDM), the reference naturally includes hardware volume. For software reference (no codec), the reference includes software volume. Pre-AEC mic attenuation/gain affects only the mic signal, not the reference; use it sparingly because it changes what the AEC/AFE sees.
 
