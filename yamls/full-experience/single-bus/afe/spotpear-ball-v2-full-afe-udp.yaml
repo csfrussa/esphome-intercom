@@ -91,10 +91,8 @@ packages:
   s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   status_led: !include ../../../../packages/led/status_spotpear_ball_v2.yaml
-  es8311_stereo_ref: !include ../../../../packages/codec/es8311_stereo_ref.yaml
   afe_entities: !include ../../../../packages/esp_afe/single_mic_entities.yaml
-  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
-  es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
+  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
   speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
   lvgl_settings_nav: !include ../../../../packages/lvgl/lvgl_settings_navigation.yaml
@@ -129,10 +127,6 @@ esphome:
       - script.execute: backlight_timer
       - micro_wake_word.stop:
       - delay: 1s
-      # ES8311 stereo AEC reference (shared with other spotpear-ball-v2 variants
-      # via packages/codec/es8311_stereo_ref.yaml).
-      - script.execute: es8311_stereo_ref_init
-      - script.execute: es8311_restore_volume
       - lambda: id(peer_name) = id(intercom).get_current_destination();
       - delay: 30s
       - if:
@@ -244,17 +238,6 @@ i2c:
     scan: false
 
 # =============================================================================
-# AUDIO CODEC (ES8311)
-# =============================================================================
-audio_dac:
-  - platform: es8311
-    id: es8311_dac
-    i2c_id: i2c_bus
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    mic_gain: 24DB
-
-# =============================================================================
 # ESP AFE (Audio Front End)
 # Full front-end with AEC + NS + VAD + AGC. Single mic (no Speech Enhancement).
 # mic_num=1 keeps i2s_audio_duplex on the mono path (no dual-mic FIR/buffer).
@@ -285,7 +268,7 @@ esp_afe:
 # Audio task defaults come from the component; this preset keeps the
 # single-bus ES8311 path simple and relies on stereo loopback reference.
 # Bus runs at 48kHz (ES8311 native rate, better DAC quality).
-# Internal FIR decimation x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
+# Espressif rate conversion x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
 # =============================================================================
 i2s_audio_duplex:
   id: i2s_duplex
@@ -295,12 +278,27 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO10
   i2s_dout_pin: GPIO8
   sample_rate: 48000             # I2S bus rate (ES8311 native)
-  output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate (FIR decimation x3)
+  output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
   processor_id: afe_processor
-  # ES8311 digital feedback: RX is stereo L=DAC(reference), R=ADC(mic).
+  fir_decimator: esp_ae_rate_cvt
+  codec:
+    i2c_id: i2c_bus
+    input:
+      type: es8311
+      address: 0x18
+      gain_db: 24.0
+      use_mclk: true
+      no_dac_ref: false
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: false
+  # ES8311 digital feedback through the official codec driver: RX right is
+  # DAC reference, RX left is ADC mic when no_dac_ref is false.
   # Sample-accurate reference alignment, no ring buffer delay needed.
-  # Requires ES8311 register 0x44 bits[6:4]=4 (configured in on_boot via I2C).
   use_stereo_aec_reference: true
+  reference_channel: right
   buffers_in_psram: true       # All audio buffers in PSRAM; required for sr_low_cost (512-sample frames)
   audio_stack_in_psram: true   # Full AFE + VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
 

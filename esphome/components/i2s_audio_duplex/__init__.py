@@ -11,7 +11,8 @@ If output_sample_rate is omitted, no decimation occurs (backward compatible).
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation, pins
-from esphome.const import CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE
+from esphome.components import i2c
+from esphome.const import CONF_ADDRESS, CONF_I2C_ID, CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE
 from esphome.components.esp32 import (
     add_idf_component,
     add_idf_sdkconfig_option,
@@ -71,6 +72,16 @@ CONF_AEC_REF_BUFFER_MS = "aec_reference_buffer_ms"
 CONF_TELEMETRY = "telemetry"
 CONF_TELEMETRY_LOG_INTERVAL_FRAMES = "telemetry_log_interval_frames"
 CONF_FIR_DECIMATOR = "fir_decimator"
+CONF_CODEC = "codec"
+CONF_INPUT = "input"
+CONF_OUTPUT = "output"
+CONF_TYPE = "type"
+CONF_MIC_SELECTED = "mic_selected"
+CONF_GAIN_DB = "gain_db"
+CONF_REF_CHANNEL = "ref_channel"
+CONF_REF_GAIN_DB = "ref_gain_db"
+CONF_USE_MCLK = "use_mclk"
+CONF_NO_DAC_REF = "no_dac_ref"
 CONF_ON_START = "on_start"
 CONF_ON_IDLE = "on_idle"
 CONF_ON_STATE = "on_state"
@@ -80,6 +91,8 @@ CONF_ON_SPEAKER_START = "on_speaker_start"
 CONF_ON_SPEAKER_IDLE = "on_speaker_idle"
 
 FIR_DECIMATOR_OPTIONS = ("esp_ae_rate_cvt",)
+CODEC_INPUT_TYPES = ("es7210", "es8311")
+CODEC_OUTPUT_TYPES = ("es8311",)
 
 i2s_audio_duplex_ns = cg.esphome_ns.namespace("i2s_audio_duplex")
 I2SAudioDuplex = i2s_audio_duplex_ns.class_("I2SAudioDuplex", cg.Component)
@@ -258,6 +271,25 @@ CONFIG_SCHEMA = cv.All(
         # Enable per-stage cycle counting and diagnostics (debug only, adds overhead)
         cv.Optional(CONF_TELEMETRY, default=False): cv.boolean,
         cv.Optional(CONF_TELEMETRY_LOG_INTERVAL_FRAMES, default=128): cv.int_range(min=1, max=8192),
+        cv.Optional(CONF_CODEC): cv.Schema({
+            cv.GenerateID(CONF_I2C_ID): cv.use_id(i2c.I2CBus),
+            cv.Optional(CONF_INPUT): cv.Schema({
+                cv.Optional(CONF_TYPE, default="es7210"): cv.one_of(*CODEC_INPUT_TYPES, lower=True),
+                cv.Optional(CONF_ADDRESS, default=0x40): cv.i2c_address,
+                cv.Optional(CONF_MIC_SELECTED, default=0x0F): cv.hex_uint8_t,
+                cv.Optional(CONF_GAIN_DB, default=30.0): cv.float_range(min=0.0, max=37.5),
+                cv.Optional(CONF_REF_CHANNEL): cv.int_range(min=0, max=15),
+                cv.Optional(CONF_REF_GAIN_DB, default=0.0): cv.float_range(min=0.0, max=37.5),
+                cv.Optional(CONF_USE_MCLK, default=True): cv.boolean,
+                cv.Optional(CONF_NO_DAC_REF, default=False): cv.boolean,
+            }),
+            cv.Optional(CONF_OUTPUT): cv.Schema({
+                cv.Optional(CONF_TYPE, default="es8311"): cv.one_of(*CODEC_OUTPUT_TYPES, lower=True),
+                cv.Optional(CONF_ADDRESS, default=0x18): cv.i2c_address,
+                cv.Optional(CONF_USE_MCLK, default=True): cv.boolean,
+                cv.Optional(CONF_NO_DAC_REF, default=True): cv.boolean,
+            }),
+        }),
         # Lifecycle hooks for board-level power policy. Use the speaker hooks
         # for amp power gating; the generic duplex hooks also fire on mic-only
         # activity such as wake-word listeners.
@@ -363,6 +395,7 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
 
     add_idf_component(name="espressif/esp_audio_effects", ref="1.0.2")
+    add_idf_component(name="espressif/esp_codec_dev", ref="1.5.4")
     await cg.register_component(var, config)
 
     # Define USE_I2S_AUDIO_DUPLEX so other components know it's available
@@ -430,6 +463,37 @@ async def to_code(config):
         if len(mic_slots) > 1:
             cg.add(var.set_secondary_tdm_mic_slot(mic_slots[1]))
         cg.add(var.set_tdm_ref_slot(config[CONF_TDM_REF_SLOT]))
+
+    if CONF_CODEC in config:
+        codec_conf = config[CONF_CODEC]
+        i2c_bus = await cg.get_variable(codec_conf[CONF_I2C_ID])
+        cg.add(var.set_codec_i2c_bus(i2c_bus))
+        if CONF_INPUT in codec_conf:
+            input_conf = codec_conf[CONF_INPUT]
+            if input_conf[CONF_TYPE] == "es7210":
+                has_ref_gain = CONF_REF_CHANNEL in input_conf
+                cg.add(var.configure_es7210_codec(
+                    input_conf[CONF_ADDRESS],
+                    input_conf[CONF_MIC_SELECTED],
+                    input_conf[CONF_GAIN_DB],
+                    has_ref_gain,
+                    input_conf.get(CONF_REF_CHANNEL, 0),
+                    input_conf[CONF_REF_GAIN_DB],
+                ))
+            elif input_conf[CONF_TYPE] == "es8311":
+                cg.add(var.configure_es8311_input_codec(
+                    input_conf[CONF_ADDRESS],
+                    input_conf[CONF_USE_MCLK],
+                    input_conf[CONF_NO_DAC_REF],
+                    input_conf[CONF_GAIN_DB],
+                ))
+        if CONF_OUTPUT in codec_conf:
+            output_conf = codec_conf[CONF_OUTPUT]
+            cg.add(var.configure_es8311_codec(
+                output_conf[CONF_ADDRESS],
+                output_conf[CONF_USE_MCLK],
+                output_conf[CONF_NO_DAC_REF],
+            ))
 
     # Audio task tuning
     _add_config_setters(

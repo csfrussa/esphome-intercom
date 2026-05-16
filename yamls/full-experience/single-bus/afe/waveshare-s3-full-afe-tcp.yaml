@@ -52,10 +52,6 @@ substitutions:
   wake_word_probability_cutoff: "0.60"
   wake_word_sliding_window_size: "6"
 
-  # ES8311 DAC volume mapping (0-100% -> min-max float)
-  es8311_volume_min: "0.15"
-  es8311_volume_max: "0.75"
-
   # Microphone ID for package mute switch
   mic_id: mic_main
 
@@ -70,10 +66,8 @@ packages:
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   status_led: !include ../../../../packages/led/status_ws2812_ring.yaml
   led_state_full: !include ../../../../packages/led/state_full_ring.yaml
-  es7210_tdm: !include ../../../../packages/codec/es7210_tdm.yaml
   afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
-  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
-  es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
+  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
   speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_switch.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
   speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
@@ -104,10 +98,6 @@ esphome:
       - globals.set:
           id: g_applied_led
           value: "0"
-      # ES7210 TDM configuration (shared with waveshare-p4 via
-      # packages/codec/es7210_tdm.yaml).
-      - script.execute: es7210_tdm_init
-      - script.execute: es8311_restore_volume
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -177,27 +167,8 @@ tca9555:
     i2c_id: internal_i2c
 
 # =============================================================================
-# Audio: Codec + AEC + I2S Duplex
+# Audio: AFE + esp_codec_dev I2S Duplex
 # =============================================================================
-audio_dac:
-  - platform: es8311
-    id: es8311_dac
-    i2c_id: internal_i2c
-    address: 0x18
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    use_mclk: true
-    mic_gain: 24DB
-
-audio_adc:
-  - platform: es7210
-    id: es7210_adc
-    i2c_id: internal_i2c
-    address: 0x40
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    mic_gain: 24dB
-
 esp_afe:
   id: afe_processor
   type: fd
@@ -231,6 +202,19 @@ i2s_audio_duplex:
   sample_rate: 48000
   output_sample_rate: 16000
   processor_id: afe_processor
+  fir_decimator: esp_ae_rate_cvt
+  codec:
+    i2c_id: internal_i2c
+    input:
+      type: es7210
+      address: 0x40
+      mic_selected: 0x0F
+      gain_db: 24.0
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: true
   use_tdm_reference: true
   tdm_total_slots: 4
   tdm_mic_slots: [0, 2]  # Verified right-side mic, left-side mic

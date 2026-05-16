@@ -111,13 +111,17 @@ void I2SAudioDuplex::set_output_volume_q15(int16_t q15) {
 void I2SAudioDuplex::update_combined_speaker_volume_() {
   const int16_t output_q15 = this->output_volume_q15_.load(std::memory_order_relaxed);
   const int16_t master_q15 = this->master_volume_q15_.load(std::memory_order_relaxed);
-  const int16_t combined_q15 = multiply_q15(output_q15, master_q15);
+  const bool hardware_master = this->codec_backend_.has_output_codec();
+  const int16_t combined_q15 = hardware_master ? output_q15 : multiply_q15(output_q15, master_q15);
   const float linear = static_cast<float>(combined_q15) / 32767.0f;
-  this->speaker_volume_.store(linear, std::memory_order_relaxed);
+  this->speaker_volume_.store(static_cast<float>(master_q15) / 32767.0f, std::memory_order_relaxed);
   const int16_t previous = this->speaker_volume_q15_.exchange(combined_q15, std::memory_order_relaxed);
+  if (hardware_master) {
+    this->codec_backend_.set_output_volume(static_cast<float>(master_q15) / 32767.0f);
+  }
   if (previous != combined_q15) {
-    ESP_LOGD(TAG, "Speaker software volume: output_q15=%d master_q15=%d combined_q15=%d linear=%.3f previous_q15=%d",
-             output_q15, master_q15, combined_q15, linear, previous);
+    ESP_LOGD(TAG, "Speaker volume: output_q15=%d master_q15=%d hot_q15=%d linear=%.3f hw_master=%s previous_q15=%d",
+             output_q15, master_q15, combined_q15, linear, hardware_master ? "yes" : "no", previous);
   }
 }
 
@@ -439,6 +443,8 @@ void I2SAudioDuplex::dump_config() {
   ESP_LOGCONFIG(TAG, "  Task: priority=%u, core=%d, stack=%u",
                 this->task_priority_, this->task_core_, (unsigned)this->task_stack_size_);
   ESP_LOGCONFIG(TAG, "  I2S Preparation: setup prepares channels to READY");
+  ESP_LOGCONFIG(TAG, "  Codec Backend: esp_codec_dev (input=%s, output=%s)",
+                this->codec_backend_.input_codec_name(), this->codec_backend_.output_codec_name());
   ESP_LOGCONFIG(TAG, "  I2S Hardware State: %s",
                 i2s_hardware_state_to_string_(
                     static_cast<I2SHardwareState>(this->i2s_hardware_state_.load(std::memory_order_relaxed))));
@@ -691,9 +697,69 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
   }
 
   this->set_i2s_hardware_state_(I2SHardwareState::READY);
+  if (!this->setup_codec_backend_(clk_src)) {
+    ESP_LOGE(TAG, "Failed to prepare esp_codec_dev backend");
+    this->deinit_i2s_();
+    this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+    return false;
+  }
   this->log_memory_snapshot_("after_i2s_prepare");
   ESP_LOGI(TAG, "I2S DUPLEX prepared (%s, READY)", this->use_tdm_bus_ ? "TDM" : "standard");
   return true;
+}
+
+CodecDevBackend::SampleConfig I2SAudioDuplex::make_tx_sample_config_() const {
+  CodecDevBackend::SampleConfig cfg;
+  cfg.sample_rate = this->sample_rate_;
+  cfg.bits_per_sample = this->bits_per_sample_;
+  cfg.mclk_multiple = this->mclk_multiple_;
+#if SOC_I2S_SUPPORTS_TDM
+  if (this->use_tdm_bus_) {
+    cfg.channels = this->tdm_total_slots_;
+    cfg.channel_mask = 0;
+    for (uint8_t i = 0; i < this->tdm_total_slots_; i++) {
+      cfg.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
+    }
+    return cfg;
+  }
+#endif
+  if (this->num_channels_ == 2) {
+    cfg.channels = 2;
+    cfg.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+  } else {
+    cfg.channels = 2;
+    cfg.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(this->tx_slot_right_ ? 1 : 0);
+  }
+  return cfg;
+}
+
+CodecDevBackend::SampleConfig I2SAudioDuplex::make_rx_sample_config_() const {
+  CodecDevBackend::SampleConfig cfg;
+  cfg.sample_rate = this->sample_rate_;
+  cfg.bits_per_sample = this->bits_per_sample_;
+  cfg.mclk_multiple = this->mclk_multiple_;
+#if SOC_I2S_SUPPORTS_TDM
+  if (this->use_tdm_bus_) {
+    cfg.channels = this->tdm_total_slots_;
+    cfg.channel_mask = 0;
+    for (uint8_t i = 0; i < this->tdm_total_slots_; i++) {
+      cfg.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
+    }
+    return cfg;
+  }
+#endif
+  if (this->use_stereo_aec_ref_) {
+    cfg.channels = 2;
+    cfg.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+  } else {
+    cfg.channels = 2;
+    cfg.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(this->mic_channel_right_ ? 1 : 0);
+  }
+  return cfg;
+}
+
+bool I2SAudioDuplex::setup_codec_backend_(i2s_clock_src_t clk_src) {
+  return this->codec_backend_.setup(this->i2s_num_, this->tx_handle_, this->rx_handle_, clk_src);
 }
 
 bool I2SAudioDuplex::enable_i2s_channels_() {
@@ -710,33 +776,17 @@ bool I2SAudioDuplex::enable_i2s_channels_() {
     return false;
   }
 
-  bool tx_enabled = false;
-  bool rx_enabled = false;
-  esp_err_t err;
-  if (this->tx_handle_) {
-    err = i2s_channel_enable(this->tx_handle_);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Failed to enable TX channel: %s", esp_err_to_name(err));
-      this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
-      return false;
-    }
-    tx_enabled = true;
+  auto tx_cfg = this->make_tx_sample_config_();
+  auto rx_cfg = this->make_rx_sample_config_();
+  if (!this->codec_backend_.open(this->tx_handle_ ? &tx_cfg : nullptr,
+                                 this->rx_handle_ ? &rx_cfg : nullptr)) {
+    ESP_LOGE(TAG, "Failed to open esp_codec_dev backend");
+    this->set_i2s_hardware_state_(I2SHardwareState::READY);
+    return false;
   }
-  if (this->rx_handle_) {
-    err = i2s_channel_enable(this->rx_handle_);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Failed to enable RX channel: %s", esp_err_to_name(err));
-      if (tx_enabled) {
-        i2s_channel_disable(this->tx_handle_);
-      }
-      this->set_i2s_hardware_state_(I2SHardwareState::READY);
-      return false;
-    }
-    rx_enabled = true;
-  }
-
-  (void) tx_enabled;
-  (void) rx_enabled;
+  this->codec_backend_.set_output_volume(
+      static_cast<float>(this->master_volume_q15_.load(std::memory_order_relaxed)) / 32767.0f);
+  this->codec_backend_.set_output_mute(false);
   this->set_i2s_hardware_state_(I2SHardwareState::RUNNING);
   this->log_memory_snapshot_("after_i2s_enable");
   ESP_LOGI(TAG, "I2S DUPLEX running (%s)", this->use_tdm_bus_ ? "TDM" : "standard");
@@ -754,25 +804,14 @@ void I2SAudioDuplex::disable_i2s_channels_() {
     return;
   }
   this->set_i2s_hardware_state_(I2SHardwareState::STOPPING);
-  esp_err_t err;
-  if (this->tx_handle_) {
-    err = i2s_channel_disable(this->tx_handle_);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-      ESP_LOGW(TAG, "TX channel disable failed: %s", esp_err_to_name(err));
-    }
-  }
-  if (this->rx_handle_) {
-    err = i2s_channel_disable(this->rx_handle_);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-      ESP_LOGW(TAG, "RX channel disable failed: %s", esp_err_to_name(err));
-    }
-  }
+  this->codec_backend_.close();
   this->set_i2s_hardware_state_(I2SHardwareState::READY);
   this->log_memory_snapshot_("after_i2s_disable");
 }
 
 void I2SAudioDuplex::deinit_i2s_() {
   this->disable_i2s_channels_();
+  this->codec_backend_.teardown();
   if (this->tx_handle_) {
     i2s_del_channel(this->tx_handle_);
     this->tx_handle_ = nullptr;

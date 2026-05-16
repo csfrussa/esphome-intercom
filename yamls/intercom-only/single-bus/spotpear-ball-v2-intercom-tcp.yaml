@@ -70,9 +70,7 @@ packages:
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
   status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  es8311_stereo_ref: !include ../../../packages/codec/es8311_stereo_ref.yaml
-  duplex_mic_gain: !include ../../../packages/i2s_audio_duplex/mic_gain.yaml
-  es8311_volume: !include ../../../packages/codec/es8311_volume.yaml
+  duplex_controls: !include ../../../packages/i2s_audio_duplex/controls.yaml
   duplex_aec_controls: !include ../../../packages/i2s_audio_duplex/aec_controls.yaml
   speaker_power: !include ../../../packages/i2s_audio_duplex/speaker_power_output.yaml
   lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
@@ -97,10 +95,6 @@ esphome:
       - light.turn_off: status_led
       - script.execute: backlight_timer
       - delay: 1s
-      # ES8311 stereo AEC reference (shared with spotpear-ball-v2-full variants
-      # via packages/codec/es8311_stereo_ref.yaml).
-      - script.execute: es8311_stereo_ref_init
-      - script.execute: es8311_restore_volume
       - lambda: id(peer_name) = id(intercom).get_current_destination();
       - script.execute: update_ic_idle_labels
       # Settings carousel page list (swipe-left cycle order). Defined in
@@ -227,17 +221,6 @@ i2c:
     scan: false
 
 # =============================================================================
-# Audio codec (ES8311)
-# =============================================================================
-audio_dac:
-  - platform: es8311
-    id: es8311_dac
-    i2c_id: i2c_bus
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    mic_gain: 24DB
-
-# =============================================================================
 # Echo cancellation (esp_aec, voip_high_perf)
 # =============================================================================
 esp_aec:
@@ -247,7 +230,7 @@ esp_aec:
   mode: voip_high_perf
 
 # =============================================================================
-# I2S Audio Duplex (bus 48kHz ES8311 native, FIR x3 to 16kHz for AEC/intercom)
+# I2S Audio Duplex (bus 48kHz ES8311 native, Espressif rate conversion to 16kHz)
 # =============================================================================
 i2s_audio_duplex:
   id: i2s_duplex
@@ -257,12 +240,26 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO10
   i2s_dout_pin: GPIO8
   sample_rate: 48000             # I2S bus rate (ES8311 native)
-  output_sample_rate: 16000      # Mic/AEC/intercom output rate (FIR decimation x3)
+  output_sample_rate: 16000      # Mic/AEC/intercom output rate
   processor_id: aec_processor
-  # ES8311 digital feedback: RX is stereo with L=DAC(reference), R=ADC(mic).
-  # Sample-accurate reference; requires ES8311 register 0x44 bits[6:4]=4
-  # (configured in on_boot via es8311_stereo_ref_init).
+  fir_decimator: esp_ae_rate_cvt
+  codec:
+    i2c_id: i2c_bus
+    input:
+      type: es8311
+      address: 0x18
+      gain_db: 24.0
+      use_mclk: true
+      no_dac_ref: false
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: false
+  # ES8311 digital feedback through the official codec driver: RX right is
+  # DAC reference, RX left is ADC mic when no_dac_ref is false.
   use_stereo_aec_reference: true
+  reference_channel: right
 
 # =============================================================================
 # Microphone (post-AEC, mic_main is required by intercom_only package)
@@ -282,7 +279,6 @@ speaker:
   - platform: i2s_audio_duplex
     id: hw_speaker
     i2s_audio_duplex_id: i2s_duplex
-    audio_dac: es8311_dac
     sample_rate: 48000
 
   - platform: mixer

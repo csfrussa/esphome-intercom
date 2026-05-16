@@ -10,6 +10,10 @@
 #   - Mic Gain: post-processor gain for level trim after AEC/AFE
 # =============================================================================
 
+substitutions:
+  mic_gain_min: "-20"
+  mic_gain_max: "30"
+
 number:
   - platform: i2s_audio_duplex
     i2s_audio_duplex_id: i2s_duplex
@@ -20,3 +24,5 @@ number:
     mic_gain:
       id: mic_gain
       name: Mic Gain
+      min_value: ${mic_gain_min}
+      max_value: ${mic_gain_max}

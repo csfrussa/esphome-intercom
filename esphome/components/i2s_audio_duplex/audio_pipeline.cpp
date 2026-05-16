@@ -22,8 +22,6 @@ namespace i2s_audio_duplex {
 
 static const char *const TAG = "i2s_duplex";
 
-// I2S new driver uses milliseconds directly, NOT FreeRTOS ticks
-static const uint32_t I2S_IO_TIMEOUT_MS = 50;
 // Default frame size when no AudioProcessor is attached.
 static const size_t DEFAULT_FRAME_SIZE = 256;
 static constexpr size_t AUDIO_BUFFER_ALIGN = 16;
@@ -621,10 +619,8 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
   if (!this->rx_handle_)
     return;
 
-  size_t bytes_read;
-  esp_err_t err = i2s_channel_read(this->rx_handle_, ctx.rx_buffer, ctx.rx_frame_bytes,
-                                    &bytes_read, I2S_IO_TIMEOUT_MS);
-  if (err == ESP_ERR_INVALID_STATE) {
+  const bool read_ok = this->codec_backend_.read(ctx.rx_buffer, ctx.rx_frame_bytes);
+  if (!read_ok && !this->codec_backend_.is_open()) {
     // Brief INVALID_STATE around stop() teardown is expected (channel
     // disabled mid-flight). Escalate only if duplex_running_ is still
     // true and the condition persists, which means the RX channel got
@@ -639,16 +635,13 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
     }
     return;
   }
-  if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
-    LOG_W_THROTTLED("i2s_channel_read failed: %s", esp_err_to_name(err));
+  if (!read_ok) {
+    LOG_W_THROTTLED("esp_codec_dev_read failed");
     if (++ctx.consecutive_i2s_errors > 100) {
       ESP_LOGE(TAG, "Persistent I2S read errors (%d)", ctx.consecutive_i2s_errors);
       this->has_i2s_error_.store(true, std::memory_order_relaxed);
       this->duplex_running_.store(false, std::memory_order_relaxed);
     }
-    return;
-  }
-  if (err != ESP_OK || bytes_read != ctx.rx_frame_bytes) {
     return;
   }
 
@@ -659,7 +652,7 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
   // When ratio > 1, the FIR decimator reads 32-bit directly via process_strided_32.
   if (ctx.i2s_bps == 4 && ctx.ratio <= 1) {
     auto *src32 = reinterpret_cast<int32_t *>(ctx.rx_buffer);
-    size_t total_i2s_samples = bytes_read / sizeof(int32_t);
+    size_t total_i2s_samples = ctx.rx_frame_bytes / sizeof(int32_t);
     for (size_t i = 0; i < total_i2s_samples; i++) {
       ctx.rx_buffer[i] = static_cast<int16_t>(src32[i] >> 16);
     }
@@ -1003,7 +996,7 @@ void I2SAudioDuplex::process_tx_path_(AudioTaskCtx &ctx) {
 #endif
 
   // Prepare TX: format expansion + TDM interleave
-  const void *tx_data;
+  void *tx_data;
   size_t tx_bytes;
 #if SOC_I2S_SUPPORTS_TDM
   if (ctx.use_tdm_ref && ctx.tdm_tx_buffer != nullptr) {
@@ -1048,9 +1041,8 @@ void I2SAudioDuplex::process_tx_path_(AudioTaskCtx &ctx) {
     tx_bytes = total_tx_samples * ctx.i2s_bps;
   }
 
-  size_t bytes_written;
-  esp_err_t err = i2s_channel_write(this->tx_handle_, tx_data, tx_bytes, &bytes_written, I2S_IO_TIMEOUT_MS);
-  if (err == ESP_ERR_INVALID_STATE) {
+  const bool write_ok = this->codec_backend_.write(tx_data, tx_bytes);
+  if (!write_ok && !this->codec_backend_.is_open()) {
     if (this->duplex_running_.load(std::memory_order_relaxed)) {
       if (++ctx.invalid_state_errors > 100) {
         ESP_LOGE(TAG, "Persistent I2S TX INVALID_STATE (%d) - channel corrupted",
@@ -1059,14 +1051,14 @@ void I2SAudioDuplex::process_tx_path_(AudioTaskCtx &ctx) {
         this->duplex_running_.store(false, std::memory_order_relaxed);
       }
     }
-  } else if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
-    LOG_W_THROTTLED("i2s_channel_write failed: %s", esp_err_to_name(err));
+  } else if (!write_ok) {
+    LOG_W_THROTTLED("esp_codec_dev_write failed");
     if (++ctx.consecutive_i2s_errors > 100) {
       ESP_LOGE(TAG, "Persistent I2S write errors (%d)", ctx.consecutive_i2s_errors);
       this->has_i2s_error_.store(true, std::memory_order_relaxed);
       this->duplex_running_.store(false, std::memory_order_relaxed);
     }
-  } else if (err == ESP_OK) {
+  } else {
     ctx.consecutive_i2s_errors = 0;
     ctx.invalid_state_errors = 0;
   }
@@ -1074,7 +1066,7 @@ void I2SAudioDuplex::process_tx_path_(AudioTaskCtx &ctx) {
   // Report frames actually consumed from the ring buffer (not silence/pad frames).
   // Using got (ring buffer read) instead of bytes_written (I2S output) prevents
   // counting silence frames as "played" during underruns.
-  if (err == ESP_OK && ctx.speaker_got > 0 && !this->speaker_output_callbacks_.empty()) {
+  if (write_ok && ctx.speaker_got > 0 && !this->speaker_output_callbacks_.empty()) {
     uint32_t frames_played = ctx.speaker_got / sizeof(int16_t);
     int64_t timestamp = esp_timer_get_time();
     for (auto &cb : this->speaker_output_callbacks_) {

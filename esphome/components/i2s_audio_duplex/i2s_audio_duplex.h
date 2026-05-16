@@ -4,6 +4,7 @@
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
+#include "codec_dev_backend.h"
 #include "../audio_processor/ring_buffer_caps.h"
 
 #include <driver/i2s_std.h>
@@ -177,6 +178,36 @@ class I2SAudioDuplex : public Component {
   void set_mic_channel_right(bool right) { this->mic_channel_right_ = right; }
   void set_tx_slot_right(bool right) { this->tx_slot_right_ = right; }
   void set_slot_bit_width(uint8_t sbw) { this->slot_bit_width_ = sbw; }
+  void set_codec_i2c_bus(i2c::I2CBus *bus) { this->codec_backend_.set_i2c_bus(bus); }
+  void configure_es7210_codec(uint8_t address, uint8_t mic_selected, float input_gain_db,
+                              bool has_ref_channel_gain, uint8_t ref_channel, float ref_channel_gain_db) {
+    CodecDevBackend::Es7210Config cfg;
+    cfg.enabled = true;
+    cfg.address = address;
+    cfg.mic_selected = mic_selected;
+    cfg.input_gain_db = input_gain_db;
+    cfg.has_ref_channel_gain = has_ref_channel_gain;
+    cfg.ref_channel = ref_channel;
+    cfg.ref_channel_gain_db = ref_channel_gain_db;
+    this->codec_backend_.set_es7210_config(cfg);
+  }
+  void configure_es8311_input_codec(uint8_t address, bool use_mclk, bool no_dac_ref, float input_gain_db) {
+    CodecDevBackend::Es8311InputConfig cfg;
+    cfg.enabled = true;
+    cfg.address = address;
+    cfg.use_mclk = use_mclk;
+    cfg.no_dac_ref = no_dac_ref;
+    cfg.input_gain_db = input_gain_db;
+    this->codec_backend_.set_es8311_input_config(cfg);
+  }
+  void configure_es8311_codec(uint8_t address, bool use_mclk, bool no_dac_ref) {
+    CodecDevBackend::Es8311Config cfg;
+    cfg.enabled = true;
+    cfg.address = address;
+    cfg.use_mclk = use_mclk;
+    cfg.no_dac_ref = no_dac_ref;
+    this->codec_backend_.set_es8311_config(cfg);
+  }
 
   // AEC setter
   void set_processor(AudioProcessor *aec);
@@ -294,6 +325,9 @@ class I2SAudioDuplex : public Component {
   bool enable_i2s_channels_();
   void disable_i2s_channels_();
   void deinit_i2s_();
+  bool setup_codec_backend_(i2s_clock_src_t clk_src);
+  CodecDevBackend::SampleConfig make_tx_sample_config_() const;
+  CodecDevBackend::SampleConfig make_rx_sample_config_() const;
 
   static void audio_task(void *param);
   // Top-level task entry: outer loop that spawns one audio_session_ per start()/stop()
@@ -435,6 +469,7 @@ class I2SAudioDuplex : public Component {
   // I2S handles - BOTH created from single channel for duplex
   i2s_chan_handle_t tx_handle_{nullptr};
   i2s_chan_handle_t rx_handle_{nullptr};
+  CodecDevBackend codec_backend_;
 
   // State
   std::atomic<bool> duplex_running_{false};

@@ -99,10 +99,8 @@ packages:
   core: !include ../../../../packages/va_intercom.yaml
   intercom_transport: !include ../../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
-  es7210_tdm: !include ../../../../packages/codec/es7210_tdm.yaml
   afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
-  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
-  es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
+  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
   speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
   lvgl_p4_ppa: !include ../../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
@@ -119,19 +117,6 @@ esphome:
   on_boot:
     - priority: 200
       then:
-        # ES7210 TDM configuration. Runtime raw TDM probing on this P4 Touch
-        # layout showed slot 0 + slot 2 as physical mics and slot 1 as the
-        # ES8311 feedback/AEC reference.
-        - script.execute: es7210_tdm_init
-        # Keep the hardware reference below saturation. A hot reference makes
-        # esp-sr AEC diverge instead of cancelling.
-        - lambda: |-
-            if (!id(es7210_adc).write_byte(0x44, 0x10)) {
-              ESP_LOGE("es7210_tdm", "Failed to set P4 MIC2 reference PGA to 0dB");
-            } else {
-              ESP_LOGI("es7210_tdm", "P4 MIC2 reference PGA set to 0dB");
-            }
-        - script.execute: es8311_restore_volume
         - lambda: id(peer_name) = id(intercom).get_current_destination();
     - priority: -100
       then:
@@ -253,30 +238,12 @@ i2c:
 # layout: slot 0 + slot 2 are the physical mics, slot 1 follows speaker
 # playback as the ES8311 feedback/AEC reference, slot 3 is unused.
 
-audio_dac:
-  - platform: es8311
-    id: es8311_dac
-    i2c_id: internal_i2c
-    address: 0x18
-    bits_per_sample: 16bit
-    sample_rate: 48000           # Match I2S bus rate
-    use_mclk: true
-    mic_gain: 24DB       # ES8311 ADC gain (unused; ES7210 handles mic)
-
-audio_adc:
-  - platform: es7210
-    id: es7210_adc
-    i2c_id: internal_i2c
-    address: 0x40
-    bits_per_sample: 16bit
-    sample_rate: 48000           # Match I2S bus rate
-    mic_gain: 30dB       # ES7210 physical mics. MIC2 reference is overridden to 0dB at boot.
-
 # =============================================================================
 # ESP AFE (Audio Front End)
 # Stable P4 front-end from the raw slot probe: esp-sr FD, dual-mic MMNR feed,
-# hardware TDM reference, and the custom FIR decimator. The raw ES7210 slot
-# order is mic/ref/mic/unused; esp_afe stages it as mic/mic/unused/ref.
+# hardware TDM reference, esp_codec_dev codec control and Espressif rate
+# conversion. The raw ES7210 slot order is mic/ref/mic/unused; esp_afe stages
+# it as mic/mic/unused/ref.
 # =============================================================================
 esp_afe:
   id: afe_processor
@@ -314,6 +281,20 @@ i2s_audio_duplex:
   output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz via FIR x3
   processor_id: afe_processor
   fir_decimator: esp_ae_rate_cvt
+  codec:
+    i2c_id: internal_i2c
+    input:
+      type: es7210
+      address: 0x40
+      mic_selected: 0x0F
+      gain_db: 30.0
+      ref_channel: 1
+      ref_gain_db: 0.0
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: true
   slot_bit_width: 16
   use_tdm_reference: true
   tdm_total_slots: 4
