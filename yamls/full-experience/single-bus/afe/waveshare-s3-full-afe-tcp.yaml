@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  ext_components_source: "../../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+  assets_base: "../../../../"
 
   # Wake word sensitivity (per-device tuning)
   wake_word_probability_cutoff: "0.60"
@@ -63,20 +63,20 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@main
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@main
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@main
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@main
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@main
-  es7210_tdm: github://n-IA-hane/esphome-intercom/packages/codec/es7210_tdm.yaml@main
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@main
-  duplex_mic_gain: github://n-IA-hane/esphome-intercom/packages/i2s_audio_duplex/mic_gain.yaml@main
-  es8311_volume: github://n-IA-hane/esphome-intercom/packages/codec/es8311_volume.yaml@main
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/i2s_audio_duplex/speaker_power_switch.yaml@main
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k.yaml@main
-  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k.yaml@main
+  core: !include ../../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../../packages/led/status_ws2812_ring.yaml
+  led_state_full: !include ../../../../packages/led/state_full_ring.yaml
+  es7210_tdm: !include ../../../../packages/codec/es7210_tdm.yaml
+  afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
+  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
+  es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
+  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_switch.yaml
+  speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
+  speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
 
 # =============================================================================
 # ESPHome Base

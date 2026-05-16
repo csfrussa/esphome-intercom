@@ -7,7 +7,7 @@
 # that conflicts with the main_page tileview.
 #
 # Bound entities (must exist in the device YAML):
-#   numbers : master_volume, mic_gain (-20..+30 dB)
+#   numbers : master_volume, mic_gain (-20..0 dB post-AFE trim)
 #   switches: speaker_mute, mute (mic), auto_answer_switch
 #             dnd_switch, aec_switch, vad_switch, se_switch
 #             wake_word_switch

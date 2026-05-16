@@ -5,7 +5,6 @@
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 
 #include "esphome/core/hal.h"
@@ -72,268 +71,6 @@ size_t I2SAudioDuplex::get_mic_callback_buffer_size() const {
 #endif
   return samples * sizeof(int16_t);
 }
-
-#ifdef USE_DUPLEX_DEBUG_PROBE
-static constexpr uint32_t DBG_FLAG_RX_BAD = 1u << 0;
-static constexpr uint32_t DBG_FLAG_SPK_UNDERRUN = 1u << 1;
-static constexpr uint32_t DBG_FLAG_TRIGGER = 1u << 2;
-
-static uint16_t abs_delta_u16(int32_t a, int32_t b) {
-  int32_t d = a - b;
-  if (d < 0)
-    d = -d;
-  return d > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(d);
-}
-
-static int16_t rms_db10_from_sumsq(uint64_t sumsq, size_t n) {
-  if (n == 0 || sumsq == 0)
-    return -1200;
-  const float rms = std::sqrt(static_cast<float>(sumsq) / static_cast<float>(n));
-  const float db = 20.0f * std::log10(rms / 32768.0f);
-  int32_t db10 = static_cast<int32_t>(std::lround(db * 10.0f));
-  if (db10 < -1200)
-    db10 = -1200;
-  if (db10 > 60)
-    db10 = 60;
-  return static_cast<int16_t>(db10);
-}
-
-bool I2SAudioDuplex::debug_probe_init_() {
-  if (!this->debug_probe_enabled_)
-    return true;
-  if (this->debug_probe_ring_ != nullptr)
-    return true;
-
-  if (this->debug_probe_dump_frames_ > this->debug_probe_frames_) {
-    this->debug_probe_dump_frames_ = this->debug_probe_frames_;
-  }
-
-  const size_t bytes = static_cast<size_t>(this->debug_probe_frames_) * sizeof(DebugProbeFrame);
-  this->debug_probe_ring_ = static_cast<DebugProbeFrame *>(
-      heap_caps_calloc(this->debug_probe_frames_, sizeof(DebugProbeFrame),
-                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (this->debug_probe_ring_ == nullptr) {
-    this->debug_probe_ring_ = static_cast<DebugProbeFrame *>(
-        heap_caps_calloc(this->debug_probe_frames_, sizeof(DebugProbeFrame),
-                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  }
-  if (this->debug_probe_ring_ == nullptr) {
-    ESP_LOGE(TAG, "Debug probe allocation failed (%u bytes)", (unsigned) bytes);
-    return false;
-  }
-
-  this->debug_probe_capacity_ = this->debug_probe_frames_;
-  this->debug_probe_write_seq_ = 0;
-  this->debug_probe_last_trigger_seq_ = 0;
-  memset(this->debug_probe_prev_valid_, 0, sizeof(this->debug_probe_prev_valid_));
-  ESP_LOGI(TAG, "Debug probe armed (%u frames, %u bytes, trigger_delta=%u)",
-           (unsigned) this->debug_probe_frames_, (unsigned) bytes,
-           (unsigned) this->debug_probe_trigger_delta_);
-  return true;
-}
-
-I2SAudioDuplex::DebugProbeMetric I2SAudioDuplex::debug_probe_metric_i16_(
-    I2SAudioDuplex::DebugProbeStream stream, const int16_t *data, size_t n, size_t stride) {
-  DebugProbeMetric m{};
-  if (data == nullptr || n == 0 || stride == 0) {
-    return m;
-  }
-
-  int16_t prev = data[0];
-  m.first_sample = prev;
-  uint64_t sumsq = 0;
-  for (size_t i = 0; i < n; i++) {
-    int16_t sample = data[i * stride];
-    const int32_t s = sample;
-    const uint16_t abs_s = static_cast<uint16_t>(s < 0 ? -s : s);
-    if (abs_s > m.peak)
-      m.peak = abs_s;
-    if (i > 0) {
-      uint16_t d = abs_delta_u16(sample, prev);
-      if (d > m.max_delta)
-        m.max_delta = d;
-    }
-    prev = sample;
-    sumsq += static_cast<uint64_t>(s * s);
-  }
-  m.last_sample = prev;
-  if (this->debug_probe_prev_valid_[stream]) {
-    m.boundary_delta = abs_delta_u16(m.first_sample, this->debug_probe_prev_last_[stream]);
-  }
-  this->debug_probe_prev_last_[stream] = m.last_sample;
-  this->debug_probe_prev_valid_[stream] = true;
-  m.rms_db10 = rms_db10_from_sumsq(sumsq, n);
-  return m;
-}
-
-I2SAudioDuplex::DebugProbeMetric I2SAudioDuplex::debug_probe_metric_i32_top16_(
-    I2SAudioDuplex::DebugProbeStream stream, const int32_t *data, size_t n, size_t stride) {
-  DebugProbeMetric m{};
-  if (data == nullptr || n == 0 || stride == 0) {
-    return m;
-  }
-
-  int16_t prev = static_cast<int16_t>(data[0] >> 16);
-  m.first_sample = prev;
-  uint64_t sumsq = 0;
-  for (size_t i = 0; i < n; i++) {
-    int16_t sample = static_cast<int16_t>(data[i * stride] >> 16);
-    const int32_t s = sample;
-    const uint16_t abs_s = static_cast<uint16_t>(s < 0 ? -s : s);
-    if (abs_s > m.peak)
-      m.peak = abs_s;
-    if (i > 0) {
-      uint16_t d = abs_delta_u16(sample, prev);
-      if (d > m.max_delta)
-        m.max_delta = d;
-    }
-    prev = sample;
-    sumsq += static_cast<uint64_t>(s * s);
-  }
-  m.last_sample = prev;
-  if (this->debug_probe_prev_valid_[stream]) {
-    m.boundary_delta = abs_delta_u16(m.first_sample, this->debug_probe_prev_last_[stream]);
-  }
-  this->debug_probe_prev_last_[stream] = m.last_sample;
-  this->debug_probe_prev_valid_[stream] = true;
-  m.rms_db10 = rms_db10_from_sumsq(sumsq, n);
-  return m;
-}
-
-void I2SAudioDuplex::debug_probe_record_(const AudioTaskCtx &ctx) {
-  if (!this->debug_probe_enabled_ || this->debug_probe_ring_ == nullptr || this->debug_probe_capacity_ == 0)
-    return;
-
-  DebugProbeFrame frame{};
-  frame.seq = ++this->debug_probe_write_seq_;
-  frame.timestamp_us = esp_timer_get_time();
-  frame.flags = ctx.debug_flags | (ctx.speaker_underrun ? DBG_FLAG_SPK_UNDERRUN : 0);
-  frame.i2s_read_us = ctx.debug_i2s_read_us;
-  frame.rx_us = ctx.debug_rx_us;
-  frame.process_us = ctx.debug_process_us;
-  frame.tx_us = ctx.debug_tx_us;
-  frame.frame_us = ctx.debug_frame_us;
-
-  if (ctx.rx_buffer != nullptr) {
-    if (ctx.use_tdm_ref) {
-      const size_t raw_slots = std::min<size_t>(ctx.tdm_total_slots, 4);
-      for (size_t slot = 0; slot < raw_slots; slot++) {
-        DebugProbeStream stream = static_cast<DebugProbeStream>(DBG_RAW0 + slot);
-        if (ctx.i2s_bps == 4 && ctx.ratio > 1) {
-          frame.metrics[stream] = this->debug_probe_metric_i32_top16_(
-              stream, reinterpret_cast<const int32_t *>(ctx.rx_buffer) + slot,
-              ctx.bus_frame_size, ctx.tdm_total_slots);
-        } else {
-          frame.metrics[stream] = this->debug_probe_metric_i16_(
-              stream, ctx.rx_buffer + slot, ctx.bus_frame_size, ctx.tdm_total_slots);
-        }
-      }
-    } else {
-      if (ctx.i2s_bps == 4 && ctx.ratio > 1) {
-        frame.metrics[DBG_RAW0] = this->debug_probe_metric_i32_top16_(
-            DBG_RAW0, reinterpret_cast<const int32_t *>(ctx.rx_buffer), ctx.bus_frame_size, 1);
-      } else {
-        frame.metrics[DBG_RAW0] = this->debug_probe_metric_i16_(
-            DBG_RAW0, ctx.rx_buffer, ctx.bus_frame_size, 1);
-      }
-    }
-  }
-
-  frame.metrics[DBG_MIC1] = this->debug_probe_metric_i16_(DBG_MIC1, ctx.mic_buffer, ctx.input_frame_size, 1);
-  if (ctx.processor_mic_channels > 1 && ctx.processor_mic_buffer != nullptr) {
-    frame.metrics[DBG_MIC2] = this->debug_probe_metric_i16_(DBG_MIC2, ctx.processor_mic_buffer + 1,
-                                                            ctx.input_frame_size, 2);
-  }
-  frame.metrics[DBG_REF] = this->debug_probe_metric_i16_(DBG_REF, ctx.spk_ref_buffer, ctx.input_frame_size, 1);
-  frame.metrics[DBG_OUT] = this->debug_probe_metric_i16_(DBG_OUT, ctx.output_buffer,
-                                                         ctx.current_output_frame_size, 1);
-  frame.metrics[DBG_SPK] = this->debug_probe_metric_i16_(DBG_SPK, ctx.spk_buffer, ctx.bus_frame_size, 1);
-
-  bool trigger = (frame.flags & (DBG_FLAG_RX_BAD | DBG_FLAG_SPK_UNDERRUN)) != 0;
-  for (uint8_t i = 0; i < DBG_STREAM_COUNT; i++) {
-    const auto &m = frame.metrics[i];
-    if (m.max_delta >= this->debug_probe_trigger_delta_ ||
-        m.boundary_delta >= this->debug_probe_trigger_delta_) {
-      trigger = true;
-      break;
-    }
-  }
-
-  if (trigger) {
-    frame.flags |= DBG_FLAG_TRIGGER;
-  }
-
-  const uint16_t index = (frame.seq - 1) % this->debug_probe_capacity_;
-  this->debug_probe_ring_[index] = frame;
-
-  if (trigger &&
-      (this->debug_probe_last_trigger_seq_ == 0 ||
-       frame.seq - this->debug_probe_last_trigger_seq_ >= this->debug_probe_cooldown_frames_)) {
-    this->debug_probe_last_trigger_seq_ = frame.seq;
-    this->debug_probe_dump_("trigger", frame.seq);
-  }
-}
-
-void I2SAudioDuplex::debug_probe_dump(const char *reason) {
-  this->debug_probe_dump_(reason, this->debug_probe_write_seq_);
-}
-
-void I2SAudioDuplex::debug_probe_dump_(const char *reason, uint32_t trigger_seq) {
-  if (!this->debug_probe_enabled_ || this->debug_probe_ring_ == nullptr || this->debug_probe_capacity_ == 0) {
-    ESP_LOGW(TAG, "Debug probe dump requested but probe is not initialized");
-    return;
-  }
-
-  const uint32_t latest = this->debug_probe_write_seq_;
-  if (latest == 0) {
-    ESP_LOGW(TAG, "Debug probe dump requested before any audio frame");
-    return;
-  }
-
-  const uint32_t available = std::min<uint32_t>(latest, this->debug_probe_capacity_);
-  const uint32_t dump_count = std::min<uint32_t>(available, this->debug_probe_dump_frames_);
-  const uint32_t start = latest >= dump_count ? latest - dump_count + 1 : 1;
-
-  ESP_LOGW(TAG, "DBG_PROBE dump reason=%s latest=%u trigger=%u frames=%u threshold=%u",
-           reason, (unsigned) latest, (unsigned) trigger_seq, (unsigned) dump_count,
-           (unsigned) this->debug_probe_trigger_delta_);
-  ESP_LOGW(TAG, "DBG_PROBE format: stream=rms_db/peak/max_delta/boundary_delta");
-
-  for (uint32_t seq = start; seq <= latest; seq++) {
-    const auto &f = this->debug_probe_ring_[(seq - 1) % this->debug_probe_capacity_];
-    if (f.seq != seq)
-      continue;
-    ESP_LOGW(TAG,
-             "DBG[%u] flags=0x%02x us(frame=%u read=%u rx=%u proc=%u tx=%u) "
-             "raw0=%.1f/%u/%u/%u raw1=%.1f/%u/%u/%u raw2=%.1f/%u/%u/%u raw3=%.1f/%u/%u/%u",
-             (unsigned) f.seq, (unsigned) f.flags,
-             (unsigned) f.frame_us, (unsigned) f.i2s_read_us, (unsigned) f.rx_us,
-             (unsigned) f.process_us, (unsigned) f.tx_us,
-             f.metrics[DBG_RAW0].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_RAW0].peak,
-             (unsigned) f.metrics[DBG_RAW0].max_delta, (unsigned) f.metrics[DBG_RAW0].boundary_delta,
-             f.metrics[DBG_RAW1].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_RAW1].peak,
-             (unsigned) f.metrics[DBG_RAW1].max_delta, (unsigned) f.metrics[DBG_RAW1].boundary_delta,
-             f.metrics[DBG_RAW2].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_RAW2].peak,
-             (unsigned) f.metrics[DBG_RAW2].max_delta, (unsigned) f.metrics[DBG_RAW2].boundary_delta,
-             f.metrics[DBG_RAW3].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_RAW3].peak,
-             (unsigned) f.metrics[DBG_RAW3].max_delta, (unsigned) f.metrics[DBG_RAW3].boundary_delta);
-    ESP_LOGW(TAG,
-             "DBG[%u] mic1=%.1f/%u/%u/%u mic2=%.1f/%u/%u/%u ref=%.1f/%u/%u/%u "
-             "out=%.1f/%u/%u/%u spk=%.1f/%u/%u/%u",
-             (unsigned) f.seq,
-             f.metrics[DBG_MIC1].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_MIC1].peak,
-             (unsigned) f.metrics[DBG_MIC1].max_delta, (unsigned) f.metrics[DBG_MIC1].boundary_delta,
-             f.metrics[DBG_MIC2].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_MIC2].peak,
-             (unsigned) f.metrics[DBG_MIC2].max_delta, (unsigned) f.metrics[DBG_MIC2].boundary_delta,
-             f.metrics[DBG_REF].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_REF].peak,
-             (unsigned) f.metrics[DBG_REF].max_delta, (unsigned) f.metrics[DBG_REF].boundary_delta,
-             f.metrics[DBG_OUT].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_OUT].peak,
-             (unsigned) f.metrics[DBG_OUT].max_delta, (unsigned) f.metrics[DBG_OUT].boundary_delta,
-             f.metrics[DBG_SPK].rms_db10 / 10.0f, (unsigned) f.metrics[DBG_SPK].peak,
-             (unsigned) f.metrics[DBG_SPK].max_delta, (unsigned) f.metrics[DBG_SPK].boundary_delta);
-  }
-}
-#endif  // USE_DUPLEX_DEBUG_PROBE
 
 void I2SAudioDuplex::release_audio_buffers_() {
   free_i16_buffer(&this->prealloc_rx_buffer_, &this->prealloc_rx_buffer_bytes_);
@@ -741,16 +478,6 @@ void I2SAudioDuplex::audio_session_() {
 
   // ── Main loop ──
   while (this->duplex_running_.load(std::memory_order_relaxed)) {
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    const int64_t debug_frame_start_us = esp_timer_get_time();
-    ctx.frame_seq++;
-    ctx.debug_flags = 0;
-    ctx.debug_i2s_read_us = 0;
-    ctx.debug_rx_us = 0;
-    ctx.debug_process_us = 0;
-    ctx.debug_tx_us = 0;
-    ctx.debug_frame_us = 0;
-#endif
     // Service ring buffer operations requested by main thread
     if (this->request_speaker_reset_.exchange(false, std::memory_order_relaxed)) {
       this->speaker_buffer_->reset();
@@ -774,13 +501,7 @@ void I2SAudioDuplex::audio_session_() {
     ctx.speaker_paused = this->speaker_paused_.load(std::memory_order_relaxed);
     ctx.mic_running = this->has_mic_consumers_.load(std::memory_order_relaxed);
 
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    int64_t debug_stage_start_us = esp_timer_get_time();
-#endif
     this->process_rx_path_(ctx);
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    ctx.debug_rx_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - debug_stage_start_us));
-#endif
 
     ctx.processor_enabled = this->processor_enabled_.load(std::memory_order_relaxed);
 #ifdef USE_AUDIO_PROCESSOR
@@ -789,20 +510,8 @@ void I2SAudioDuplex::audio_session_() {
 #endif
     ctx.now_ms = millis();
 
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    debug_stage_start_us = esp_timer_get_time();
-#endif
     this->process_aec_and_callbacks_(ctx);
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    ctx.debug_process_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - debug_stage_start_us));
-    debug_stage_start_us = esp_timer_get_time();
-#endif
     this->process_tx_path_(ctx);
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    ctx.debug_tx_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - debug_stage_start_us));
-    ctx.debug_frame_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - debug_frame_start_us));
-    this->debug_probe_record_(ctx);
-#endif
 
 #ifdef USE_AUDIO_PROCESSOR
     // Frame_spec change (e.g. SE toggled, MR<->MMR switch): exit this session
@@ -913,15 +622,8 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
     return;
 
   size_t bytes_read;
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  const int64_t debug_i2s_read_start_us = esp_timer_get_time();
-#endif
   esp_err_t err = i2s_channel_read(this->rx_handle_, ctx.rx_buffer, ctx.rx_frame_bytes,
                                     &bytes_read, I2S_IO_TIMEOUT_MS);
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  ctx.debug_i2s_read_us = static_cast<uint32_t>(
-      std::max<int64_t>(0, esp_timer_get_time() - debug_i2s_read_start_us));
-#endif
   if (err == ESP_ERR_INVALID_STATE) {
     // Brief INVALID_STATE around stop() teardown is expected (channel
     // disabled mid-flight). Escalate only if duplex_running_ is still
@@ -938,9 +640,6 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
     return;
   }
   if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    ctx.debug_flags |= DBG_FLAG_RX_BAD;
-#endif
     LOG_W_THROTTLED("i2s_channel_read failed: %s", esp_err_to_name(err));
     if (++ctx.consecutive_i2s_errors > 100) {
       ESP_LOGE(TAG, "Persistent I2S read errors (%d)", ctx.consecutive_i2s_errors);
@@ -950,9 +649,6 @@ void I2SAudioDuplex::process_rx_path_(AudioTaskCtx &ctx) {
     return;
   }
   if (err != ESP_OK || bytes_read != ctx.rx_frame_bytes) {
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    ctx.debug_flags |= DBG_FLAG_RX_BAD;
-#endif
     return;
   }
 

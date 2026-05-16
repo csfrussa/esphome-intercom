@@ -16,6 +16,8 @@ class MicGainNumber : public number::Number, public Component {
  public:
   void set_parent(I2SAudioDuplex *parent) { this->parent_ = parent; }
   void set_pre_aec(bool pre_aec) { this->pre_aec_ = pre_aec; }
+  void set_min_db(float min_db) { this->min_db_ = min_db; }
+  void set_max_db(float max_db) { this->max_db_ = max_db; }
 
   void setup() override {
     float value;
@@ -25,19 +27,20 @@ class MicGainNumber : public number::Number, public Component {
       this->apply_(value);
       this->publish_state(value);
     } else {
-      this->publish_state(0.0f);  // 0 dB = unity gain
+      this->publish_state(this->clamp_db_(0.0f));  // 0 dB = unity gain when allowed
     }
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("i2s_duplex.mic_gain", "Mic Gain Number (dB, %s)", this->pre_aec_ ? "pre-AEC" : "post-AEC");
+    ESP_LOGCONFIG("i2s_duplex.mic_gain", "Mic Gain Number (dB, %s, range %.1f..%.1f)",
+                  this->pre_aec_ ? "pre-AEC" : "post-AEC", this->min_db_, this->max_db_);
   }
 
  protected:
-  static float clamp_db_(float value) {
+  float clamp_db_(float value) const {
     if (!std::isfinite(value)) return 0.0f;
-    if (value < -20.0f) return -20.0f;
-    if (value > 30.0f) return 30.0f;
+    if (value < this->min_db_) return this->min_db_;
+    if (value > this->max_db_) return this->max_db_;
     return value;
   }
 
@@ -64,6 +67,8 @@ class MicGainNumber : public number::Number, public Component {
   I2SAudioDuplex *parent_{nullptr};
   ESPPreferenceObject pref_;
   bool pre_aec_{false};
+  float min_db_{-20.0f};
+  float max_db_{30.0f};
 };
 
 class SpeakerVolumeNumber : public number::Number, public Component {

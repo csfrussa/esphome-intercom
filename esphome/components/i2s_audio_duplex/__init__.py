@@ -62,6 +62,7 @@ CONF_TASK_PRIORITY = "task_priority"
 CONF_TASK_CORE = "task_core"
 CONF_TASK_STACK_SIZE = "task_stack_size"
 CONF_TX_CHANNEL = "tx_channel"
+CONF_RESET_PROCESSOR_ON_SPEAKER_START = "reset_processor_on_speaker_start"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
 CONF_AEC_REF_RING_IN_PSRAM = "aec_ref_ring_in_psram"
 CONF_AUDIO_STACK_IN_PSRAM = "audio_stack_in_psram"
@@ -70,11 +71,6 @@ CONF_AEC_REF_BUFFER_MS = "aec_reference_buffer_ms"
 CONF_TELEMETRY = "telemetry"
 CONF_TELEMETRY_LOG_INTERVAL_FRAMES = "telemetry_log_interval_frames"
 CONF_FIR_DECIMATOR = "fir_decimator"
-CONF_DEBUG_PROBE = "debug_probe"
-CONF_DEBUG_PROBE_FRAMES = "debug_probe_frames"
-CONF_DEBUG_PROBE_DUMP_FRAMES = "debug_probe_dump_frames"
-CONF_DEBUG_PROBE_TRIGGER_DELTA = "debug_probe_trigger_delta"
-CONF_DEBUG_PROBE_COOLDOWN_FRAMES = "debug_probe_cooldown_frames"
 CONF_ON_START = "on_start"
 CONF_ON_IDLE = "on_idle"
 CONF_ON_STATE = "on_state"
@@ -89,7 +85,6 @@ i2s_audio_duplex_ns = cg.esphome_ns.namespace("i2s_audio_duplex")
 I2SAudioDuplex = i2s_audio_duplex_ns.class_("I2SAudioDuplex", cg.Component)
 StartAction = i2s_audio_duplex_ns.class_("StartAction", automation.Action)
 StopAction = i2s_audio_duplex_ns.class_("StopAction", automation.Action)
-DumpDebugProbeAction = i2s_audio_duplex_ns.class_("DumpDebugProbeAction", automation.Action)
 
 # AudioProcessor abstract interface (defined in audio_processor/audio_processor.h)
 # Both esp_aec::EspAec and future esp_afe::EspAfe inherit from this.
@@ -207,6 +202,7 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_NUM_CHANNELS, default=1): cv.one_of(1, 2, int=True),
         cv.Optional(CONF_MIC_CHANNEL, default="left"): cv.one_of("left", "right", lower=True),
         cv.Optional(CONF_TX_CHANNEL, default="left"): cv.one_of("left", "right", lower=True),
+        cv.Optional(CONF_RESET_PROCESSOR_ON_SPEAKER_START, default=False): cv.boolean,
         cv.Optional(CONF_I2S_MODE, default="primary"): cv.one_of("primary", "secondary", lower=True),
         cv.Optional(CONF_USE_APLL, default=False): cv.boolean,
         cv.Optional(CONF_I2S_NUM, default=0): cv.int_range(min=0, max=2),
@@ -262,15 +258,6 @@ CONFIG_SCHEMA = cv.All(
         # Enable per-stage cycle counting and diagnostics (debug only, adds overhead)
         cv.Optional(CONF_TELEMETRY, default=False): cv.boolean,
         cv.Optional(CONF_TELEMETRY_LOG_INTERVAL_FRAMES, default=128): cv.int_range(min=1, max=8192),
-        # Deep audio observability. When enabled, the component records compact
-        # per-frame metrics for raw TDM slots, post-FIR channels, final output
-        # and speaker TX. It auto-dumps a ring snapshot when a click-like sample
-        # discontinuity is detected. Compile-time gated by USE_DUPLEX_DEBUG_PROBE.
-        cv.Optional(CONF_DEBUG_PROBE, default=False): cv.boolean,
-        cv.Optional(CONF_DEBUG_PROBE_FRAMES, default=96): cv.int_range(min=8, max=256),
-        cv.Optional(CONF_DEBUG_PROBE_DUMP_FRAMES, default=32): cv.int_range(min=4, max=256),
-        cv.Optional(CONF_DEBUG_PROBE_TRIGGER_DELTA, default=12000): cv.int_range(min=1, max=32767),
-        cv.Optional(CONF_DEBUG_PROBE_COOLDOWN_FRAMES, default=512): cv.int_range(min=0, max=65535),
         # Lifecycle hooks for board-level power policy. Use the speaker hooks
         # for amp power gating; the generic duplex hooks also fire on mic-only
         # activity such as wake-word listeners.
@@ -416,6 +403,7 @@ async def to_code(config):
     # Slot bit width: 0 = auto (match bits_per_sample)
     sbw = config[CONF_SLOT_BIT_WIDTH]
     cg.add(var.set_slot_bit_width(0 if sbw == "auto" else sbw))
+    cg.add(var.set_reset_processor_on_speaker_start(config[CONF_RESET_PROCESSOR_ON_SPEAKER_START]))
 
     # Set output sample rate if specified (enables decimation)
     if CONF_OUTPUT_SAMPLE_RATE in config:
@@ -474,15 +462,6 @@ async def to_code(config):
         cg.add_define("USE_DUPLEX_TELEMETRY")
         cg.add(var.set_telemetry_log_interval_frames(config[CONF_TELEMETRY_LOG_INTERVAL_FRAMES]))
 
-    # Deep debug probe: opt-in and compile-time gated.
-    if config[CONF_DEBUG_PROBE]:
-        cg.add_define("USE_DUPLEX_DEBUG_PROBE")
-        cg.add(var.set_debug_probe_enabled(True))
-        cg.add(var.set_debug_probe_frames(config[CONF_DEBUG_PROBE_FRAMES]))
-        cg.add(var.set_debug_probe_dump_frames(config[CONF_DEBUG_PROBE_DUMP_FRAMES]))
-        cg.add(var.set_debug_probe_trigger_delta(config[CONF_DEBUG_PROBE_TRIGGER_DELTA]))
-        cg.add(var.set_debug_probe_cooldown_frames(config[CONF_DEBUG_PROBE_COOLDOWN_FRAMES]))
-
     for key, trigger_getter, args in (
         (CONF_ON_START, var.get_start_trigger, []),
         (CONF_ON_IDLE, var.get_idle_trigger, []),
@@ -519,14 +498,3 @@ async def i2s_audio_duplex_action_to_code(config, action_id, template_arg, args)
     await cg.register_parented(var, config[CONF_ID])
     return var
 
-
-@automation.register_action(
-    "i2s_audio_duplex.dump_debug_probe",
-    DumpDebugProbeAction,
-    I2S_AUDIO_DUPLEX_ACTION_SCHEMA,
-    synchronous=True,
-)
-async def i2s_audio_duplex_dump_debug_probe_action_to_code(config, action_id, template_arg, args):
-    var = cg.new_Pvariable(action_id, template_arg)
-    await cg.register_parented(var, config[CONF_ID])
-    return var

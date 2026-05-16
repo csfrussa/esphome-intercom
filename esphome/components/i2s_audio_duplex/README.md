@@ -287,7 +287,7 @@ microphone:
 
   # Pre-AEC: raw mic (diagnostics only)
   - platform: i2s_audio_duplex
-    id: mic_raw
+    id: mic_pre_aec
     i2s_audio_duplex_id: i2s_duplex
     pre_aec: true
 
@@ -298,7 +298,7 @@ voice_assistant:
   microphone: mic_aec
 ```
 
-With SR linear AEC, MWW detects reliably on post-AEC audio even during TTS playback. No need for a separate `mic_raw` path. MWW task priority can be boosted from default 3 to 8 via `on_boot` lambda for reliable barge-in.
+With SR linear AEC, MWW detects reliably on post-AEC audio even during TTS playback. No separate raw microphone path is needed. MWW task priority can be boosted from default 3 to 8 via `on_boot` lambda for reliable barge-in.
 
 ### AEC Mode Comparison
 
@@ -775,7 +775,7 @@ logger:
 
 ### MWW Not Detecting During TTS
 1. **Use `sr_low_cost` AEC mode** (not VOIP). See [AEC Mode Comparison](#aec-mode-comparison).
-2. **MWW on `mic_aec`** (post-AEC), NOT `mic_raw`.
+2. **MWW on `mic_aec`** (post-AEC), not on a raw microphone path.
 3. **Enable `buffers_in_psram: true`** for SR mode's 512-sample frames on ESP32-S3.
 4. **Boost MWW priority to 8** via on_boot lambda (ESPHome defaults to 3, below mixer at 10).
 5. Do NOT use `sr_high_perf` on ESP32-S3 (exhausts DMA memory).

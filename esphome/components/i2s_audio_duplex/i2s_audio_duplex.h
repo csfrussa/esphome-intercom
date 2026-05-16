@@ -184,6 +184,9 @@ class I2SAudioDuplex : public Component {
   void set_mic_channel_right(bool right) { this->mic_channel_right_ = right; }
   void set_tx_slot_right(bool right) { this->tx_slot_right_ = right; }
   void set_slot_bit_width(uint8_t sbw) { this->slot_bit_width_ = sbw; }
+  void set_reset_processor_on_speaker_start(bool enabled) {
+    this->reset_processor_on_speaker_start_ = enabled;
+  }
 
   // AEC setter
   void set_processor(AudioProcessor *aec);
@@ -300,17 +303,6 @@ class I2SAudioDuplex : public Component {
   void set_aec_ref_buffer_ms(uint32_t ms) { this->aec_ref_buffer_ms_ = ms; }
   void set_aec_ref_ring_in_psram(bool psram) { this->aec_ref_ring_in_psram_ = psram; }
   void set_telemetry_log_interval_frames(uint16_t frames) { this->telemetry_log_interval_frames_ = frames; }
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  void set_debug_probe_enabled(bool enabled) { this->debug_probe_enabled_ = enabled; }
-  void set_debug_probe_frames(uint16_t frames) { this->debug_probe_frames_ = frames; }
-  void set_debug_probe_dump_frames(uint16_t frames) { this->debug_probe_dump_frames_ = frames; }
-  void set_debug_probe_trigger_delta(uint16_t delta) { this->debug_probe_trigger_delta_ = delta; }
-  void set_debug_probe_cooldown_frames(uint16_t frames) { this->debug_probe_cooldown_frames_ = frames; }
-  void debug_probe_dump(const char *reason = "manual");
-#else
-  void debug_probe_dump(const char *reason = "manual") { (void) reason; }
-#endif
-
  protected:
   bool init_i2s_duplex_();
   bool prepare_i2s_channels_();
@@ -402,15 +394,6 @@ class I2SAudioDuplex : public Component {
     bool mic_running{false};
     uint32_t now_ms{0};
 
-#ifdef USE_DUPLEX_DEBUG_PROBE
-    uint32_t frame_seq{0};
-    uint32_t debug_flags{0};
-    uint32_t debug_i2s_read_us{0};
-    uint32_t debug_rx_us{0};
-    uint32_t debug_process_us{0};
-    uint32_t debug_tx_us{0};
-    uint32_t debug_frame_us{0};
-#endif
   };
 
   // Refactored audio processing functions (called from audio_task_ main loop)
@@ -426,50 +409,6 @@ class I2SAudioDuplex : public Component {
   // frame, with zero-fill fallback). TDM and stereo paths pre-fill the buffer
   // during RX deinterleave and must not call this.
   void fill_mono_aec_reference_(AudioTaskCtx &ctx);
-
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  struct DebugProbeMetric {
-    int16_t rms_db10{-1200};
-    uint16_t peak{0};
-    uint16_t max_delta{0};
-    uint16_t boundary_delta{0};
-    int16_t first_sample{0};
-    int16_t last_sample{0};
-  };
-
-  enum DebugProbeStream : uint8_t {
-    DBG_RAW0 = 0,
-    DBG_RAW1,
-    DBG_RAW2,
-    DBG_RAW3,
-    DBG_MIC1,
-    DBG_MIC2,
-    DBG_REF,
-    DBG_OUT,
-    DBG_SPK,
-    DBG_STREAM_COUNT,
-  };
-
-  struct DebugProbeFrame {
-    uint32_t seq{0};
-    int64_t timestamp_us{0};
-    uint32_t flags{0};
-    uint32_t i2s_read_us{0};
-    uint32_t rx_us{0};
-    uint32_t process_us{0};
-    uint32_t tx_us{0};
-    uint32_t frame_us{0};
-    DebugProbeMetric metrics[DBG_STREAM_COUNT]{};
-  };
-
-  bool debug_probe_init_();
-  void debug_probe_record_(const AudioTaskCtx &ctx);
-  void debug_probe_dump_(const char *reason, uint32_t trigger_seq);
-  DebugProbeMetric debug_probe_metric_i16_(DebugProbeStream stream, const int16_t *data,
-                                           size_t n, size_t stride);
-  DebugProbeMetric debug_probe_metric_i32_top16_(DebugProbeStream stream, const int32_t *data,
-                                                 size_t n, size_t stride);
-#endif
 
   // Pre-allocate audio task working buffers as soon as the processor frame
   // shape is known. Buffers persist across internal stop()+start() cycles so
@@ -585,6 +524,7 @@ class I2SAudioDuplex : public Component {
   // AEC support
   AudioProcessor *processor_{nullptr};
   std::atomic<bool> processor_enabled_{false};  // Runtime toggle (only enabled when processor_ is set)
+  bool reset_processor_on_speaker_start_{false};
   std::atomic<bool> processor_background_consumer_registered_{false};
   void sync_processor_background_consumer_();
   int16_t *direct_aec_ref_{nullptr};     // AEC reference from previous TX frame (processor rate, mono mode)
@@ -632,20 +572,6 @@ class I2SAudioDuplex : public Component {
   StaticTask_t audio_task_tcb_{};            // Static TCB for the permanent audio task
   uint16_t telemetry_log_interval_frames_{128};
 
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  bool debug_probe_enabled_{false};
-  uint16_t debug_probe_frames_{96};
-  uint16_t debug_probe_dump_frames_{32};
-  uint16_t debug_probe_trigger_delta_{12000};
-  uint16_t debug_probe_cooldown_frames_{512};
-  DebugProbeFrame *debug_probe_ring_{nullptr};
-  uint16_t debug_probe_capacity_{0};
-  uint32_t debug_probe_write_seq_{0};
-  uint32_t debug_probe_last_trigger_seq_{0};
-  int16_t debug_probe_prev_last_[DBG_STREAM_COUNT]{};
-  bool debug_probe_prev_valid_[DBG_STREAM_COUNT]{};
-#endif
-
   // Error propagation: set by audio_task_ on persistent I2S failures
   std::atomic<bool> has_i2s_error_{false};
 
@@ -682,11 +608,6 @@ template<typename... Ts> class StartAction : public Action<Ts...>, public Parent
 template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<I2SAudioDuplex> {
  public:
   void play(const Ts &...x) override { this->parent_->stop(); }
-};
-
-template<typename... Ts> class DumpDebugProbeAction : public Action<Ts...>, public Parented<I2SAudioDuplex> {
- public:
-  void play(const Ts &...x) override { this->parent_->debug_probe_dump(); }
 };
 
 }  // namespace i2s_audio_duplex

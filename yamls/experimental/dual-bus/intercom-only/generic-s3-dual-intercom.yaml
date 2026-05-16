@@ -29,7 +29,7 @@ substitutions:
   # ---- External components: Remote (release / users without local clone) ----
   # ext_components_source: "github://n-IA-hane/esphome-intercom@main"
   # ---- External components: Local (dev, clone repo first; toggle by swapping the comment) ----
-  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  ext_components_source: "../../../../esphome/components"
 
 # =============================================================================
 # Package: shared intercom state machine
@@ -39,11 +39,11 @@ packages:
   # core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@main
   # s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
   # ---- Local (dev, clone repo first; toggle: comment the remote block above and uncomment the block below) ----
-  core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@main
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@main
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@main
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
+  core: !include ../../../../packages/intercom_only.yaml
+  intercom_transport: !include ../../../../packages/intercom/transport_tcp.yaml
+  speaker_mute: !include ../../../../packages/intercom/speaker_mute.yaml
+  s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
 
 esphome:
   name: ${name}

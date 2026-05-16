@@ -283,14 +283,6 @@ void I2SAudioDuplex::setup() {
   }
   this->log_memory_snapshot_("after_speaker_ring");
 
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  if (this->debug_probe_enabled_ && !this->debug_probe_init_()) {
-    ESP_LOGE(TAG, "Failed to initialize debug probe");
-    this->mark_failed();
-    return;
-  }
-#endif
-
   // AEC reference (mono mode only; stereo/TDM get ref from I2S RX).
   // direct_aec_ref_ is allocated lazily in allocate_audio_buffers_() once the
   // processor frame spec is known. Storage matches input_frame_bytes because
@@ -445,20 +437,13 @@ void I2SAudioDuplex::dump_config() {
   ESP_LOGCONFIG(TAG, "  Task: priority=%u, core=%d, stack=%u",
                 this->task_priority_, this->task_core_, (unsigned)this->task_stack_size_);
   ESP_LOGCONFIG(TAG, "  I2S Preparation: setup prepares channels to READY");
+  ESP_LOGCONFIG(TAG, "  Reset Processor On Speaker Start: %s",
+                this->reset_processor_on_speaker_start_ ? "enabled" : "disabled");
   ESP_LOGCONFIG(TAG, "  I2S Hardware State: %s",
                 i2s_hardware_state_to_string_(
                     static_cast<I2SHardwareState>(this->i2s_hardware_state_.load(std::memory_order_relaxed))));
 #ifdef USE_DUPLEX_TELEMETRY
   ESP_LOGCONFIG(TAG, "  Telemetry Log Interval: %u frames", (unsigned) this->telemetry_log_interval_frames_);
-#endif
-#ifdef USE_DUPLEX_DEBUG_PROBE
-  if (this->debug_probe_enabled_) {
-    ESP_LOGCONFIG(TAG, "  Debug Probe: %u frames, dump=%u, trigger_delta=%u, cooldown=%u",
-                  (unsigned) this->debug_probe_frames_,
-                  (unsigned) this->debug_probe_dump_frames_,
-                  (unsigned) this->debug_probe_trigger_delta_,
-                  (unsigned) this->debug_probe_cooldown_frames_);
-  }
 #endif
 }
 
@@ -1000,6 +985,14 @@ void I2SAudioDuplex::start_speaker() {
     return;
   }
   if (!this->speaker_running_.exchange(true, std::memory_order_relaxed)) {
+    this->direct_aec_ref_valid_ = false;
+    this->tdm_ref_silent_frames_.store(0, std::memory_order_relaxed);
+    if (this->reset_processor_on_speaker_start_ && this->processor_ != nullptr &&
+        this->processor_enabled_.load(std::memory_order_relaxed)) {
+      bool ok = this->processor_->reset_buffers();
+      ESP_LOGI(TAG, "Audio processor buffer reset on speaker start: %s",
+               ok ? "ok" : "failed");
+    }
     this->speaker_start_trigger_.trigger();
     this->update_runtime_state_();
   }

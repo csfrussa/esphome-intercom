@@ -2,7 +2,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import number, speaker
-from esphome.const import ENTITY_CATEGORY_CONFIG, UNIT_PERCENT
+from esphome.const import CONF_MAX_VALUE, CONF_MIN_VALUE, ENTITY_CATEGORY_CONFIG, UNIT_PERCENT
 
 from . import i2s_audio_duplex_ns, I2SAudioDuplex, CONF_I2S_AUDIO_DUPLEX_ID
 CONF_MIC_GAIN = "mic_gain"
@@ -20,7 +20,18 @@ MIC_GAIN_SCHEMA = number.number_schema(
     icon="mdi:microphone",
 ).extend({
     cv.Optional(CONF_PRE_AEC, default=False): cv.boolean,
+    cv.Optional(CONF_MIN_VALUE, default=-20.0): cv.float_range(min=-20.0, max=30.0),
+    cv.Optional(CONF_MAX_VALUE, default=30.0): cv.float_range(min=-20.0, max=30.0),
 })
+
+
+def _validate_mic_gain_range(config):
+    if config[CONF_MIN_VALUE] >= config[CONF_MAX_VALUE]:
+        raise cv.Invalid("mic_gain min_value must be lower than max_value")
+    return config
+
+
+MIC_GAIN_SCHEMA = cv.All(MIC_GAIN_SCHEMA, _validate_mic_gain_range)
 
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(CONF_I2S_AUDIO_DUPLEX_ID): cv.use_id(I2SAudioDuplex),
@@ -42,13 +53,15 @@ async def _setup_mic_gain(config, key, parent):
         conf = config[key]
         var = await number.new_number(
             conf,
-            min_value=-20.0,
-            max_value=30.0,
+            min_value=conf[CONF_MIN_VALUE],
+            max_value=conf[CONF_MAX_VALUE],
             step=1.0,
         )
         await cg.register_component(var, conf)
         cg.add(var.set_parent(parent))
         cg.add(var.set_pre_aec(conf[CONF_PRE_AEC]))
+        cg.add(var.set_min_db(conf[CONF_MIN_VALUE]))
+        cg.add(var.set_max_db(conf[CONF_MAX_VALUE]))
 
 
 async def to_code(config):

@@ -5,14 +5,15 @@
   "website": "https://github.com/niahane",
   "model": "hey_trowyayoh.tflite",
   "trained_languages": [
-    "en"
+    "en",
+    "it"
   ],
   "version": 2,
   "micro": {
-    "probability_cutoff": 0.60,
-    "sliding_window_size": 6,
+    "probability_cutoff": 0.7,
+    "sliding_window_size": 10,
     "feature_step_size": 10,
-    "tensor_arena_size": 30000,
+    "tensor_arena_size": 45000,
     "minimum_esphome_version": "2024.7.0"
   }
 }

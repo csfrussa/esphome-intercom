@@ -99,8 +99,10 @@ Caveats:
 |---|---|---|---|---|
 | Waveshare S3 Audio board | ESP32-S3 | 2 (ES7210 TDM, ref slot 2) | full + afe | `full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml` |
 | Waveshare S3 Audio board (UDP) | ESP32-S3 | 2 (ES7210 TDM, ref slot 2) | full + afe + udp | `full-experience/single-bus/afe/waveshare-s3-full-afe-udp.yaml` |
-| Waveshare P4 touch panel (experimental) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp.yaml` |
-| Waveshare P4 touch panel (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp.yaml` |
+| Waveshare P4 touch panel portrait (experimental, TCP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-portrait.yaml` |
+| Waveshare P4 touch panel portrait (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-portrait.yaml` |
+| Waveshare P4 touch panel landscape (experimental, TCP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-landscape.yaml` |
+| Waveshare P4 touch panel landscape (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-landscape.yaml` |
 | Spotpear Ball v2 | ESP32-S3 | 1 (ES8311 ADC) | full + afe (SR low-cost) | `full-experience/single-bus/afe/spotpear-ball-v2-full-afe-tcp.yaml` |
 | Spotpear Ball v2 (UDP) | ESP32-S3 | 1 (ES8311 ADC) | full + afe + udp | `full-experience/single-bus/afe/spotpear-ball-v2-full-afe-udp.yaml` |
 | Spotpear Ball v2 intercom-only | ESP32-S3 | 1 | intercom + single | `intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml` |

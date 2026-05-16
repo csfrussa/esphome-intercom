@@ -31,9 +31,9 @@ substitutions:
   friendly_name: Spotpear Ball v2
   mic_id: mic_aec
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  ext_components_source: "../../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+  assets_base: "../../../../"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -83,22 +83,22 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@main
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@main
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@main
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
-  es8311_stereo_ref: github://n-IA-hane/esphome-intercom/packages/codec/es8311_stereo_ref.yaml@main
-  duplex_mic_gain: github://n-IA-hane/esphome-intercom/packages/i2s_audio_duplex/mic_gain.yaml@main
-  es8311_volume: github://n-IA-hane/esphome-intercom/packages/codec/es8311_volume.yaml@main
-  duplex_aec_controls: github://n-IA-hane/esphome-intercom/packages/i2s_audio_duplex/aec_controls.yaml@main
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/i2s_audio_duplex/speaker_power_output.yaml@main
-  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@main
-  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@main
-  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@main
-  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@main
-  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@main
-  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_full.yaml@main
+  core: !include ../../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
+  es8311_stereo_ref: !include ../../../../packages/codec/es8311_stereo_ref.yaml
+  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
+  es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
+  duplex_aec_controls: !include ../../../../packages/i2s_audio_duplex/aec_controls.yaml
+  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
+  lvgl_settings_nav: !include ../../../../packages/lvgl/lvgl_settings_navigation.yaml
+  lvgl_settings_sync_volumes: !include ../../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
+  lvgl_settings_sync_mute: !include ../../../../packages/lvgl/lvgl_settings_sync_mute.yaml
+  lvgl_settings_sync_aec: !include ../../../../packages/lvgl/lvgl_settings_sync_aec.yaml
+  lvgl_settings_sync_va: !include ../../../../packages/lvgl/lvgl_settings_sync_va.yaml
+  spotpear_intercom_nav: !include ../../../../packages/lvgl/spotpear_intercom/nav_full.yaml
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION
@@ -290,7 +290,7 @@ i2s_audio_duplex:
 # =============================================================================
 # MICROPHONE
 # Single mic_aec: SR linear AEC preserves spectral features for all consumers
-# (VA STT, intercom TX, MWW). No mic_raw needed with sr_low_cost mode.
+# (VA STT, intercom TX, MWW). No separate raw microphone path needed with sr_low_cost mode.
 # =============================================================================
 microphone:
   - platform: i2s_audio_duplex
