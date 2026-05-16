@@ -212,38 +212,41 @@ AEC and VAD toggle live through Espressif's GMF AFE manager. NS, AGC, type,
 mode and other graph-shape changes rebuild the esp-sr instance without tearing
 down `i2s_audio_duplex`. Dual-mic AFE keeps SE/BSS structural, so there is no
 runtime SE switch on the P4/WS3 dual-mic path. The rebuild implementation is a
-lock-free three-state handshake between `process()` (hot path) and
+lock-free two-atomic handshake between `process()` (hot path) and
 `recreate_instance_()` (config path).
 
-Three atomics:
+Two atomics:
 
 ```
-process_active_  : set by process() on entry, cleared on exit
-drain_requested_ : set by config task to request quiesce
-config_epoch_    : bumped on each successful swap
+drain_request_ : set by config task to request quiesce
+process_busy_  : set by process() while it is inside the instance-critical section
 ```
 
 Sequence, config task side:
 ```
-  drain_requested_ = true
-  wait until process_active_ == 0 (spin with yield, bounded)
   take config_mutex_
+  drain_request_ = true
+  wait until process_busy_ == false (spin with yield, bounded)
   free previous esp-sr instance
   create new esp-sr instance
-  bump config_epoch_
+  drain_request_ = false
   release config_mutex_
-  drain_requested_ = false
 ```
 
 Sequence, `process()` side:
 ```
-  if (drain_requested_) return paused-output
-  process_active_ = true
+  process_busy_ = true
+  if (drain_request_) {
+    process_busy_ = false
+    return silence
+  }
   … do work …
-  process_active_ = false
+  process_busy_ = false
 ```
 
-Atomics, not a mutex, on the hot path: asymmetric cost. The hot path runs at 31 Hz, the config path at most once per second during user toggles. A mutex would pay lock/unlock on every frame; atomics pay only under a flag that is normally false.
+The config task owns `config_mutex_` while the instance is detached and rebuilt.
+The hot path never takes that mutex; it uses the atomic drain pair to either run
+against a stable instance or emit silence before the rebuild begins.
 
 The protocol is documented as a block comment in `esphome/components/esp_afe/esp_afe.h` so future contributors see it next to the code.
 
