@@ -17,7 +17,7 @@ If your goal is simply **"I want a full-duplex intercom/citofono with Home Assis
 
 You will see PBX-lite language below. Do not let that scare you: it is the internal model that lets ESPs, Home Assistant and the browser card call each other consistently. You can still use it as a normal one-button intercom. The PBX-lite model matters when you add more rooms, route through HA, bridge TCP and UDP, or want clear ringing, decline, busy and error reasons.
 
-Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, FIR decimation, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
+Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
 ![Dashboard Preview](docs/images/dashboard.png)
 
@@ -1088,7 +1088,7 @@ for the trade-off in detail.
 
 ### [`i2s_audio_duplex`](esphome/components/i2s_audio_duplex/README.md)
 
-Full-duplex I2S driver that lets mic and speaker share one I2S bus (ES8311, ES8388, WM8960, or MEMS + I2S amp). Runs the codec bus at 48 kHz and decimates the mic to 16 kHz via a 31-tap Kaiser FIR. Three zero-config AEC reference modes (direct TX, ES8311 stereo loopback, ES7210 TDM), dual mic outputs (pre-AEC for MWW, post-AEC for VA/STT), runtime AEC mode switching from Home Assistant, and optional PSRAM buffer placement.
+Full-duplex I2S driver that lets mic and speaker share one I2S bus (ES8311, ES8388, WM8960, or MEMS + I2S amp). Runs the codec bus at 48 kHz and converts mic/ref streams to 16 kHz with Espressif `esp_ae_rate_cvt`. Three zero-config AEC reference modes (direct TX, ES8311 stereo loopback, ES7210 TDM), post-processor mic output for MWW/VA/intercom, runtime AEC mode switching from Home Assistant, and optional PSRAM buffer placement.
 
 ### [`esp_aec`](esphome/components/esp_aec/README.md)
 

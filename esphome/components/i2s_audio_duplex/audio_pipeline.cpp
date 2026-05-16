@@ -354,8 +354,8 @@ bool I2SAudioDuplex::prepare_audio_context_(AudioTaskCtx &ctx, bool require_proc
     ctx.rx_decimator_channels = ctx.use_tdm_ref
         ? (ctx.processor_mic_channels > 1 ? 3 : 2)  // MMR or MR
         : 2;  // stereo: mic + ref
-    this->rx_decimator_.init(ctx.ratio, ctx.rx_decimator_channels);
-    this->rx_decimator_.set_use_float_fir(this->fir_decimator_custom_);
+    this->rx_decimator_.init(ctx.ratio, ctx.rx_decimator_channels,
+                             this->sample_rate_, this->get_output_sample_rate());
   }
 
   // ── Frame sizing ──

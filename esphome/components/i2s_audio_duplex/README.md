@@ -31,7 +31,7 @@ With i2s_audio_duplex:
 - **Processor Surface**: When `processor_id` is configured, microphone callbacks receive processed audio or silence. They never receive an implicit raw bypass while the processor is stopped, rebuilding, or waiting for reference.
 - **Consumer Registry**: Multiple mic consumers share the I2S bus safely (MWW + VA + intercom). Each consumer registers once at setup via `register_mic_consumer()` and stays registered across internal stop/start cycles.
 - **CPU-Aware Scheduling**: `taskYIELD()` between frames for MWW inference headroom during AEC
-- **Multi-Rate Support**: Run I2S bus at 48kHz for high-quality DAC output while mic/AEC/VA operate at 16kHz via internal FIR decimation
+- **Multi-Rate Support**: Run I2S bus at 48kHz for high-quality DAC output while mic/AEC/VA operate at 16kHz via Espressif rate conversion
 - **Configurable Reference Channel**: Choose left or right stereo channel as AEC reference (supports ES8311, ES8388, and other codecs)
 
 ## Architecture
@@ -74,7 +74,7 @@ flowchart TD
 
 | Task | Core | Priority | Role |
 |------|------|----------|------|
-| `i2s_duplex` (audio_task) | **Core 0** | **19** | I2S read/write + FIR decimation + audio processor (esp_aec/esp_afe) |
+| `i2s_duplex` (audio_task) | **Core 0** | **19** | I2S read/write + rate conversion + audio processor (esp_aec/esp_afe) |
 | `intercom_tx` | Core 0 | 5 | Mic to network + audio processor during intercom calls |
 | `intercom_spk` | Core 0 | 4 | Network to speaker, AEC reference feed |
 | `intercom_srv` | Core 1 | 5 | TCP RX, call FSM (stays Core 1 for LVGL callback safety) |
@@ -152,8 +152,8 @@ speaker:
 | `i2s_din_pin` | pin | -1 | Data input from codec (microphone) |
 | `i2s_dout_pin` | pin | -1 | Data output to codec (speaker) |
 | `sample_rate` | int | 16000 | I2S bus sample rate (8000-48000) |
-| `output_sample_rate` | int | - | Mic/AEC output rate. If set, enables FIR decimation (must divide `sample_rate` evenly, max ratio 6) |
-| `fir_decimator` | string | `dsps_fird_s16` | FIR kernel for the mic decimation. `dsps_fird_s16` uses the esp-dsp SIMD kernel (`_aes3` on ESP32-S3); `custom` uses a pure-float scalar implementation. See [FIR Decimator Kernel](#fir-decimator-kernel) below. |
+| `output_sample_rate` | int | - | Mic/AEC output rate. If set, enables sample-rate conversion (must divide `sample_rate` evenly, max ratio 6) |
+| `fir_decimator` | string | `esp_ae_rate_cvt` | Compatibility name for the sample-rate conversion backend. Only Espressif `esp_audio_effects` (`esp_ae_rate_cvt`) is supported. See [Rate Conversion Backend](#rate-conversion-backend) below. |
 | `processor_id` | ID | - | Reference to audio processor component (`esp_aec` or `esp_afe`) for echo cancellation and audio processing |
 | `mic_attenuation` | float | 1.0 | Input gain/attenuation before the processor (0.01-32.0). <1.0 attenuates hot mics, >1.0 amplifies weak mics. Keep this as board-level tuning; normal user-facing volume should be handled by the post-AEC/AFE `mic_gain` number. |
 | `slot_bit_width` | int | auto | I2S slot width in bits (16 or 32). Set to 32 for MEMS mics without codec (INMP441, MSM261, SPH0645). |
@@ -226,40 +226,36 @@ Setting `sample_rate`, `bits_per_sample`, or `num_channels` on the child
 microphone is rejected at configuration time because those values would not
 change the shared I2S bus.
 
-### FIR Decimator Kernel
+### Rate Conversion Backend
 
-When `output_sample_rate` is set, the component runs a 32-tap Kaiser FIR low-pass before downsampling the mic stream. The YAML option `fir_decimator` selects which kernel does the math:
+When `output_sample_rate` is set, the component converts the mic/ref stream from the I2S bus rate to the processor rate with Espressif's official `esp_ae_rate_cvt` from `esp_audio_effects`. The YAML option is still named `fir_decimator` for compatibility, but it now accepts only `esp_ae_rate_cvt`.
 
 | Value | Implementation | When to use |
 |-------|----------------|-------------|
-| `dsps_fird_s16` (default) | `dsps_fird_s16` from esp-dsp. On ESP32-S3 this resolves to the `_aes3` SIMD kernel for high throughput. Q15 fixed-point. | All chips where the SIMD kernel is known to produce clean output (S3 confirmed). |
-| `custom` | Pure-float scalar FIR implemented in this component. Unity DC gain, identical coefficient set to `dsps_fird_s16` (single-precision instead of Q15). Slightly slower but numerically clean on every chip variant. | ESP32-P4. The RISC-V `dsps_fird_s16` kernel produces rect-wave artifacts (esp-dsp issues [#117](https://github.com/espressif/esp-dsp/issues/117), [#102](https://github.com/espressif/esp-dsp/issues/102)) that bleed quantization noise into the AEC adaptive filter and surface as musical noise on the wire. The custom kernel sidesteps the SIMD path entirely. |
+| `esp_ae_rate_cvt` (default) | Espressif `esp_audio_effects` rate converter. Multi-channel RX uses one handle for mic/ref so relative latency stays coupled. Configured as 16-bit, complexity 3, `ESP_AE_RATE_CVT_PERF_TYPE_SPEED`. | Normal path for P4/S3 AFE and AEC builds. This matches Espressif GMF examples that open codec/I2S at 48 kHz and insert `aud_rate_cvt` before AEC/AFE at 16 kHz. |
 
-The selected kernel is logged at boot in `dump_config()`:
+The selected backend is logged at boot in `dump_config()`:
 
 ```
-[C][i2s_audio_duplex:...]:   FIR Decimator: custom (float scalar, 32-tap Kaiser)
+[C][i2s_audio_duplex:...]:   Rate Converter: esp_ae_rate_cvt
 ```
 
-#### Example: P4 yaml selecting the custom kernel
+#### Example: P4 yaml using the Espressif backend
 
 ```yaml
 i2s_audio_duplex:
   id: i2s_duplex
   sample_rate: 48000
   output_sample_rate: 16000
-  fir_decimator: custom        # ESP32-P4: bypass dsps_fird_s16 SIMD bug
+  fir_decimator: esp_ae_rate_cvt
   processor_id: aec_processor
   # ... other options ...
 ```
 
-S3 yamls leave `fir_decimator` unset (or set it explicitly to `dsps_fird_s16`) to keep the SIMD throughput.
-
 #### Notes
 
-- Both kernels are compiled into every build; the choice is a single boolean checked once per `process()` call (branch is predicted, effectively free in the audio task hot path).
-- The custom kernel allocates ~256 bytes per decimator instance for the float delay line and per-channel position counter; total overhead on a 3-channel TDM setup is ~1 KB.
-- If/when esp-dsp upstream resolves issues #117/#102 on RISC-V, the P4 yaml can be flipped back to `dsps_fird_s16` without further code changes.
+- `esp_ae_rate_cvt` is a target-specific prebuilt Espressif software library, not a documented hardware resampling peripheral.
+- The multichannel TDM/stereo path compacts the selected slots into an interleaved mic/ref frame, then calls one `esp_ae_rate_cvt_process()` handle for all channels.
 
 ### AEC with Voice Assistant + MWW
 
@@ -476,7 +472,7 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO10     # SDOUT (codec → ESP)
   i2s_dout_pin: GPIO8     # SDIN (ESP → codec)
   sample_rate: 48000             # ES8311 native rate (better DAC quality)
-  output_sample_rate: 16000      # Mic/AEC/MWW/VA at 16kHz (FIR decimation ×3)
+  output_sample_rate: 16000      # Mic/AEC/MWW/VA at 16kHz (rate conversion x3)
   use_stereo_aec_reference: true # Digital feedback (recommended)
 ```
 

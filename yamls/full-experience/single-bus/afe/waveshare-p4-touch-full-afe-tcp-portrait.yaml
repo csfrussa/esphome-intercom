@@ -320,7 +320,7 @@ i2s_audio_duplex:
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
   output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz via FIR x3
   processor_id: afe_processor
-  fir_decimator: custom        # P4: bypass dsps_fird_s16 SIMD (esp-dsp #117/#102 RISC-V)
+  fir_decimator: esp_ae_rate_cvt
   slot_bit_width: 16
   use_tdm_reference: true
   tdm_total_slots: 4

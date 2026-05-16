@@ -62,20 +62,14 @@ enum class I2SHardwareState : uint8_t {
   ERROR = 5,
 };
 
-// FIR decimator parameters: 32-tap Q15, ~35 dB stopband, cutoff 7.5 kHz at 48 kHz.
-// Coefficients and esp-dsp wiring live in the .cpp via Pimpl, so consumers of this
-// header don't pay the dsps_fir.h parse cost. See FirDecimatorImpl in i2s_audio_duplex.cpp.
-static constexpr size_t FIR_NUM_TAPS = 32;
 static constexpr uint8_t MC_FIR_MAX_CH = 3;
 
 // Forward declarations for Pimpl.
 class FirDecimatorImpl;
 class MultiChannelFirDecimatorImpl;
 
-// FIR decimator: consumes samples at high rate, produces at low rate.
-// Backed by esp-dsp dsps_fird_s16; on ESP32-S3 resolves to the _aes3 SIMD kernel.
-// Strided variants deinterleave into a shared scratch buffer before the FIR,
-// since the SIMD kernel requires contiguous input.
+// Sample-rate converter: consumes samples at high rate, produces at low rate.
+// Backed by Espressif esp_ae_rate_cvt from esp_audio_effects.
 class FirDecimator {
  public:
   FirDecimator();
@@ -83,11 +77,8 @@ class FirDecimator {
   FirDecimator(const FirDecimator &) = delete;
   FirDecimator &operator=(const FirDecimator &) = delete;
 
-  void init(uint32_t ratio);
+  void init(uint32_t ratio, uint32_t src_rate = 0, uint32_t dest_rate = 0);
   void reset();
-  // When true, process_* uses the pure-float scalar FIR (custom kernel).
-  // When false (default), uses dsps_fird_s16 (esp-dsp SIMD on supported chips).
-  void set_use_float_fir(bool b);
 
   // Contiguous int16 input.
   void process(const int16_t *in, int16_t *out, size_t in_count);
@@ -104,8 +95,9 @@ class FirDecimator {
   std::unique_ptr<FirDecimatorImpl> impl_;
 };
 
-// Multi-channel FIR decimator: decimates N channels from TDM/stereo rx_buffer in one pass.
-// Per-channel dsps_fird_s16 (SIMD _aes3 on S3). Max 3 channels (MMR: mic1 + mic2 + ref).
+// Multi-channel sample-rate converter: decimates N channels from TDM/stereo
+// rx_buffer in one pass. One esp_ae_rate_cvt handle processes all selected
+// channels so mic/ref latency stays coupled. Max 3 channels (MMR: mic1 + mic2 + ref).
 class MultiChannelFirDecimator {
  public:
   MultiChannelFirDecimator();
@@ -113,9 +105,8 @@ class MultiChannelFirDecimator {
   MultiChannelFirDecimator(const MultiChannelFirDecimator &) = delete;
   MultiChannelFirDecimator &operator=(const MultiChannelFirDecimator &) = delete;
 
-  void init(uint32_t ratio, uint8_t num_channels);
+  void init(uint32_t ratio, uint8_t num_channels, uint32_t src_rate = 0, uint32_t dest_rate = 0);
   void reset();
-  void set_use_float_fir(bool b);
   // Preallocate scratch and per-channel output buffers before the first
   // realtime TDM/stereo decimation frame.
   bool prepare(size_t in_count, size_t out_count, uint8_t num_channels);
@@ -211,14 +202,10 @@ class I2SAudioDuplex : public Component {
   // ES8311 Digital Feedback mode: RX is stereo with L=DAC(ref), R=ADC(mic)
   void set_use_stereo_aec_reference(bool use) { this->use_stereo_aec_ref_ = use; }
 
-  // YAML `fir_decimator: custom | dsps_fird_s16` (default dsps_fird_s16).
-  // When custom, the FIR decimators run a pure-float scalar kernel instead of
-  // the SIMD dsps_fird_s16. Workaround for chips where the SIMD kernel is
-  // unreliable (notably ESP32-P4 RISC-V: esp-dsp issues #117/#102 produce
-  // rect-wave artifacts, which then propagate quantization noise into esp_aec
-  // adaptive filter -> musical noise on the wire). Boards that don't suffer
-  // the bug should leave this on the default for the SIMD throughput.
-  void set_fir_decimator_custom(bool b) { this->fir_decimator_custom_ = b; }
+  // YAML `fir_decimator` is retained as a compatibility name, but the only
+  // supported backend is Espressif esp_ae_rate_cvt.
+  void set_fir_decimator_backend(uint8_t backend) { (void) backend; }
+  void set_fir_decimator_custom(bool b) { (void) b; }
 
   // Reference channel selection: false=left (default), true=right
   void set_reference_channel_right(bool right) { this->ref_channel_right_ = right; }
@@ -351,7 +338,7 @@ class I2SAudioDuplex : public Component {
     // ── Working buffers (heap-allocated, owned by audio_task_) ──
     // processor_mic_buffer is interleaved when a secondary mic is active
     // (layout: [mic1[i], mic2[i]] for i in [0, rx_frames)).
-    // FIR decimation reads rx_buffer with a stride, so no separate
+    // Rate conversion reads rx_buffer with a stride, so no separate
     // deinterleave buffer is kept.
     int16_t *rx_buffer{nullptr};
     int16_t *mic_buffer{nullptr};
@@ -539,7 +526,6 @@ class I2SAudioDuplex : public Component {
   std::atomic<int16_t> output_volume_q15_{32767};   // media_player/speaker abstraction volume
   std::atomic<int16_t> master_volume_q15_{32767};   // board master volume
   bool use_stereo_aec_ref_{false}; // ES8311 digital feedback: RX stereo with L=ref, R=mic
-  bool fir_decimator_custom_{false}; // YAML fir_decimator: custom (vs default dsps_fird_s16)
   bool ref_channel_right_{false};  // Which channel is AEC reference: false=L, true=R
 
   // TDM bus/reference (ES7210 in TDM mode)

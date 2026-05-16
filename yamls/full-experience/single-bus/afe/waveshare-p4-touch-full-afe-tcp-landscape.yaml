@@ -26,7 +26,7 @@
 #   8":  model: CUSTOM + JD9365 init_sequence             (800x1280, backlight GPIO26)
 #   10.1": model: WAVESHARE-10.1-DSI-TOUCH-A              (800x1280, backlight GPIO26)
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + FIR decimation to 16kHz):
+# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
 #   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → FIR x3 ──────┐
 #                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / Intercom TX / MWW
@@ -246,7 +246,7 @@ i2c:
     scan: false
 
 # =============================================================================
-# Audio: i2s_audio_duplex (48kHz bus, FIR decimation to 16kHz for mic/AEC/VA)
+# Audio: i2s_audio_duplex (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
 # =============================================================================
 # ES8311 (DAC) and ES7210 (ADC) share BCLK/LRCLK/MCLK with separate data pins.
 # Runtime raw TDM probing on the P4 Touch 10.1 matches the working v4.0.0
@@ -313,7 +313,7 @@ i2s_audio_duplex:
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
   output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz via FIR x3
   processor_id: afe_processor
-  fir_decimator: custom        # P4: bypass dsps_fird_s16 SIMD (esp-dsp #117/#102 RISC-V)
+  fir_decimator: esp_ae_rate_cvt
   slot_bit_width: 16
   use_tdm_reference: true
   tdm_total_slots: 4

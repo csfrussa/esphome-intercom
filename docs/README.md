@@ -27,7 +27,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:
 
 - [`intercom_api`](../esphome/components/intercom_api/README.md), the PBX-lite TCP/UDP transport, call state machine and Home Assistant bridge.
-- [`i2s_audio_duplex`](../esphome/components/i2s_audio_duplex/README.md), a full-duplex I²S driver with FIR decimation, AEC reference capture and dual mic outputs.
+- [`i2s_audio_duplex`](../esphome/components/i2s_audio_duplex/README.md), a full-duplex I²S driver with Espressif rate conversion, AEC reference capture and post-processor mic output.
 - [`esp_aec`](../esphome/components/esp_aec/README.md), standalone ESP-SR echo cancellation.
 - [`esp_afe`](../esphome/components/esp_afe/README.md), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
 - [`audio_processor`](../esphome/components/audio_processor/README.md), the abstract processor interface that `esp_aec` and `esp_afe` implement.

@@ -255,10 +255,8 @@ void I2SAudioDuplex::setup() {
       this->mark_failed();
       return;
     }
-    this->mic_decimator_.init(this->decimation_ratio_);
-    this->play_ref_decimator_.init(this->decimation_ratio_);
-    this->mic_decimator_.set_use_float_fir(this->fir_decimator_custom_);
-    this->play_ref_decimator_.set_use_float_fir(this->fir_decimator_custom_);
+    this->mic_decimator_.init(this->decimation_ratio_, this->sample_rate_, this->get_output_sample_rate());
+    this->play_ref_decimator_.init(this->decimation_ratio_, this->sample_rate_, this->get_output_sample_rate());
     // rx_decimator_ is lazily initialized inside audio_session_ once the
     // processor has reported its frame_spec and we know how many channels
     // the RX stream carries (mono / stereo-AEC / TDM-with-or-without-second-mic).
@@ -420,9 +418,7 @@ void I2SAudioDuplex::dump_config() {
   if (this->decimation_ratio_ > 1) {
     ESP_LOGCONFIG(TAG, "  Output Rate: %u Hz (decimation x%u)",
                   (unsigned)this->get_output_sample_rate(), (unsigned)this->decimation_ratio_);
-    ESP_LOGCONFIG(TAG, "  FIR Decimator: %s",
-                  this->fir_decimator_custom_ ? "custom (float scalar, 32-tap Kaiser)"
-                                              : "dsps_fird_s16 (esp-dsp SIMD)");
+    ESP_LOGCONFIG(TAG, "  Rate Converter: esp_ae_rate_cvt");
   }
   ESP_LOGCONFIG(TAG, "  Speaker Buffer: %u bytes (%u ms)", (unsigned)this->speaker_buffer_size_,
                 (unsigned)this->speaker_buffer_duration_ms_);

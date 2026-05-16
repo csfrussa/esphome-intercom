@@ -13,6 +13,7 @@ import esphome.config_validation as cv
 from esphome import automation, pins
 from esphome.const import CONF_ID, CONF_NUM_CHANNELS, CONF_SAMPLE_RATE
 from esphome.components.esp32 import (
+    add_idf_component,
     add_idf_sdkconfig_option,
     get_esp32_variant,
     include_builtin_idf_component,
@@ -78,7 +79,7 @@ CONF_ON_MIC_IDLE = "on_mic_idle"
 CONF_ON_SPEAKER_START = "on_speaker_start"
 CONF_ON_SPEAKER_IDLE = "on_speaker_idle"
 
-FIR_DECIMATOR_OPTIONS = ("custom", "dsps_fird_s16")
+FIR_DECIMATOR_OPTIONS = ("esp_ae_rate_cvt",)
 
 i2s_audio_duplex_ns = cg.esphome_ns.namespace("i2s_audio_duplex")
 I2SAudioDuplex = i2s_audio_duplex_ns.class_("I2SAudioDuplex", cg.Component)
@@ -269,11 +270,9 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_ON_MIC_IDLE): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_SPEAKER_START): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_SPEAKER_IDLE): automation.validate_automation(single=True),
-        # FIR decimator kernel selection. Default `dsps_fird_s16` (esp-dsp SIMD,
-        # `_aes3` on ESP32-S3). Set to `custom` to use a pure-float scalar
-        # implementation that bypasses the SIMD kernel; required on chips where
-        # the SIMD path is unreliable (e.g. ESP32-P4 RISC-V, esp-dsp #117/#102).
-        cv.Optional(CONF_FIR_DECIMATOR, default="dsps_fird_s16"):
+        # Compatibility name for the sample-rate conversion backend. Only
+        # Espressif esp_audio_effects rate conversion is supported.
+        cv.Optional(CONF_FIR_DECIMATOR, default="esp_ae_rate_cvt"):
             cv.one_of(*FIR_DECIMATOR_OPTIONS, lower=True),
     }).extend(cv.COMPONENT_SCHEMA),
     _validate_sample_rates,
@@ -362,6 +361,8 @@ def _add_config_setters(var, config, setters):
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
+
+    add_idf_component(name="espressif/esp_audio_effects", ref="1.0.2")
     await cg.register_component(var, config)
 
     # Define USE_I2S_AUDIO_DUPLEX so other components know it's available
@@ -442,7 +443,7 @@ async def to_code(config):
             (CONF_AUDIO_STACK_IN_PSRAM, var.set_audio_stack_in_psram),
         ),
     )
-    cg.add(var.set_fir_decimator_custom(config[CONF_FIR_DECIMATOR] == "custom"))
+    cg.add(var.set_fir_decimator_backend(0))
 
     # AEC reference mode (only relevant for no-codec setups)
     cg.add(var.set_aec_reference_mode(config[CONF_AEC_REFERENCE_MODE] == "ring_buffer"))

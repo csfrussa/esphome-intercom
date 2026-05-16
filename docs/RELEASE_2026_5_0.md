@@ -130,7 +130,7 @@ Main changes:
 - Media volume and Master Volume now behave as a cascade.
 - Software attenuation is real across the range, not just mute versus full
   scale.
-- AEC reference capture, FIR decimation and single-bus duplex handling were
+- AEC reference capture, rate conversion and single-bus duplex handling were
   tightened across supported boards.
 - ES7210 TDM reference-slot behavior is documented and guarded with runtime
   warnings.
