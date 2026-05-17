@@ -1,5 +1,7 @@
 #include "codec_dev_backend.h"
 
+#include "esphome/core/defines.h"
+
 #ifdef USE_ESP32
 
 #include <audio_codec_ctrl_if.h>
@@ -132,7 +134,9 @@ const audio_codec_ctrl_if_t *CodecDevBackend::new_i2c_ctrl_(uint8_t address) {
   ctrl->base.close = ctrl_close;
   ctrl->bus = this->i2c_bus_;
   ctrl->address = address;
-  ctrl->open = false;
+  // Espressif's audio_codec_new_i2c_ctrl() returns an already-open control
+  // interface; ES7210/ES8311 constructors check that before creating codecs.
+  ctrl->open = true;
   return &ctrl->base;
 #else
   (void) address;

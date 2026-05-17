@@ -175,15 +175,17 @@ esp_afe:
   mode: low_cost
   mic_num: 2
   aec_filter_length: 4
+  memory_alloc_mode: internal_psram_balance
   se_enabled: true
   ns_enabled: true
   vad_enabled: false
   agc_enabled: true
-  # Buffer placement: PSRAM for the AFE staging triad (replicates pre-knob default).
-  # Toggle individual flags off to free Core 0 cycles at the cost of internal RAM.
-  feed_buf_in_psram: true       # ~3 KB scratch
-  feed_ring_in_psram: true      # ~12 KB staging ring
-  fetch_ring_in_psram: true     # ~4 KB output ring
+  # Keep the ESPHome staging bridge internal on S3 AFE targets. The GMF/esp-sr
+  # workers already own their PSRAM policy; adding PSRAM traffic here can starve
+  # AFE workers under MWW/VA load.
+  feed_buf_in_psram: false      # ~3 KB scratch
+  feed_ring_in_psram: false     # ~12 KB staging ring
+  fetch_ring_in_psram: false    # ~4 KB output ring
 
 i2s_audio_duplex:
   id: i2s_duplex

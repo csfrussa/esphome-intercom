@@ -53,7 +53,10 @@ static inline void free_i16_buffer(int16_t **buffer, size_t *buffer_bytes = null
 }
 
 size_t I2SAudioDuplex::get_mic_callback_buffer_size() const {
-  size_t samples = DEFAULT_FRAME_SIZE;
+  // ESPHome microphone callbacks are copied from the realtime audio task, so
+  // the backing vector must already cover later processor frame_spec bumps.
+  // GMF AFE on P4/S3 can publish 1024-sample output frames after setup.
+  size_t samples = std::max<size_t>(DEFAULT_FRAME_SIZE, 1024);
 #ifdef USE_AUDIO_PROCESSOR
   const audio_processor::FrameSpec fallback_spec{};
   samples = std::max(samples, std::max(fallback_spec.input_samples, fallback_spec.output_samples));

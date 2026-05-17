@@ -37,8 +37,10 @@ The migration is not P4-only. The current generated-code snapshots confirm:
   disabled for controlled tests.
 - Waveshare S3 full AFE: TDM ES7210 input and ES8311 output also go through
   `esp_codec_dev`; dual mic is structural with SE/BSS enabled.
-- Spotpear single-mic full AFE: ES8311 input and ES8311 output go through
-  `esp_codec_dev`; AEC/NS/AGC/VAD remain on the single-mic `esp_afe` path.
+- Spotpear single-mic AEC: ES8311 input and ES8311 output go through
+  `esp_codec_dev`; stereo RX supplies mic plus playback reference, and the
+  processor is standalone `esp_aec` over Espressif's `afe_aec_create("MR", ...)`
+  contract.
 - Generic S3 AEC: remains no-codec and uses standalone `esp_aec` over the same
   `i2s_audio_duplex` bus facade.
 
@@ -64,6 +66,11 @@ resolved in the generated builds:
 - The TDM ES7210 plus ES8311 flow is also covered by Espressif tests: playback
   uses ES8311 OUT, record uses ES7210 IN, both share one I2S `data_if`, and the
   record side can select a non-contiguous TDM channel mask.
+- Single-mic plus playback-reference AEC is covered by Espressif's low-level
+  `afe_aec` contract: the input format `MR` means one microphone channel and
+  one playback reference channel. Spotpear uses this direct official path after
+  runtime testing showed the full AFE manager feed/fetch path saturating on the
+  single-mic codec topology.
 - `esp_gmf_afe_manager` exposes runtime feature toggles for AEC, VAD, SE and
   WakeNet. It does not expose NS or AGC in its feature enum, so keeping NS/AGC
   changes as AFE recreate operations is deliberate while staying on the stock
@@ -111,8 +118,8 @@ entities or device-specific data routing.
 |---|---|---|---|
 | `esp_gmf_afe_manager` from `gmf_ai_audio` | Owns esp-sr AFE feed/fetch tasks, suspend/resume and runtime feature toggles | Integrated now | It is the official manager layer we were reimplementing. `esp_afe` now uses it directly and leaves its default feed/fetch task settings and allocations intact. |
 | `esp_gmf_afe` from `gmf_ai_audio` | Full GMF AFE element with WakeNet/VAD/command state machine | Do not integrate now | MWW and VA are ESPHome/TensorFlow consumers. Pulling this in would duplicate state machines we do not use. The lower manager gives the useful part without forcing WakeNet/command flow. |
-| `esp_gmf_aec` from `gmf_ai_audio` | GMF pipeline element for standalone AEC | Defer | It is relevant to future standalone AEC cleanup, but the current `esp_aec` migration already uses the low-level esp-sr `afe_aec` API without importing a full GMF pipeline. |
-| `afe_aec` from `esp-sr` | Low-level standalone AEC API | Integrated now | No-codec and single-mic AEC devices keep a direct ESPHome-friendly processor while still using Espressif's current AEC implementation. |
+| `esp_gmf_aec` from `gmf_ai_audio` | GMF pipeline element for standalone AEC | Defer | It is relevant to future standalone AEC cleanup, but the current `esp_aec` path already uses the same low-level esp-sr `afe_aec` engine without importing GMF port ownership into ESPHome's microphone and speaker facade. |
+| `afe_aec` from `esp-sr` | Low-level standalone AEC API | Integrated now | No-codec and Spotpear single-mic AEC devices keep a direct ESPHome-friendly processor while still using Espressif's current AEC implementation and official `MR` input format. |
 | `gmf_audio` / `aud_rate_cvt` | GMF audio pipeline elements, including rate conversion, interleave and deinterleave | Reference for now | Official examples run codec at 48 kHz and insert `aud_rate_cvt` before AEC. We copied the underlying converter first; a full GMF IO pipeline remains a separate design decision because ESPHome owns microphone, speaker, mixer and intercom callbacks. |
 | `esp_audio_effects` / `esp_ae_rate_cvt` | Standalone C API behind GMF rate conversion | Integrated now | Replaces the old custom rate converter with Espressif's official rate converter while keeping the ESPHome duplex task and callback routing. Multi-channel mic/ref conversion uses one handle so relative latency stays coupled. |
 | `gmf_io` / `io_codec_dev` | GMF IO wrapper around `esp_codec_dev_read/write` | Defer | Useful only if we move `i2s_audio_duplex` to a GMF pipeline. The lower `esp_codec_dev` read/write layer is already integrated, so `io_codec_dev` would mostly add GMF port ownership. |

@@ -164,7 +164,13 @@ Timing budget per 32 ms frame:
 
 End-to-end latency from mic to consumer: ~96 ms (three 32 ms frame periods, two in esp-sr internal buffering).
 
-MR (1-mic) path: same diagram, `total_channels_=2` (mic + ref) instead of 3. The feed stack is still sized for MR worst case (WebRTC NS inline → 12 KB).
+Single-mic plus playback-reference targets do not need this full AFE manager
+path unless they need the extra AFE stages. Spotpear Ball v2 uses the official
+`afe_aec_create("MR", ...)` contract through `esp_aec`: the stereo codec input
+is reduced to one microphone channel plus one playback-reference channel, then
+`i2s_audio_duplex` emits the AEC-processed mic frame to the same consumers.
+P4 and WS3 remain on `esp_afe` because their 2-mic topology benefits from the
+full AFE path and structural SE/BSS.
 
 ---
 
@@ -266,10 +272,10 @@ Consumers want diagnostic/raw tap points and processed frames, but production MW
 
 ### 6.3 Why esp-sr lives behind `audio_processor` and not used directly
 
-Three reasons: no-processor builds and `esp_aec` do not need full esp-sr AFE;
-`frame_spec_revision` is a narrower contract than esp-sr's runtime reconfigure
-API; and the contract can be mocked without bringing up DMA, which makes
-consumers unit-testable.
+Three reasons: no-processor builds and single-mic `esp_aec` targets do not
+need full esp-sr AFE; `frame_spec_revision` is a narrower contract than
+esp-sr's runtime reconfigure API; and the contract can be mocked without
+bringing up DMA, which makes consumers unit-testable.
 
 ### 6.4 Why static-allocation PSRAM stacks in `intercom_api`
 
@@ -282,6 +288,11 @@ It creates the canonical feed and fetch tasks once per AFE instance, suspends
 them with an event bit while idle, and resumes them when ESPHome provides a
 read callback. This removes our previous FreeRTOS task churn while keeping the
 realtime I2S task decoupled from potentially blocking esp-sr `feed()` work.
+
+Single-mic AEC-only targets are intentionally handled by `esp_aec` instead of
+forcing them through this manager. That keeps the topology on Espressif's
+explicit `MR` AEC contract and avoids adding private GMF helpers or a parallel
+custom AEC path.
 
 ### 6.6 Why the mic consumer registry, not a refcount
 
@@ -301,8 +312,8 @@ keeps SE/BSS structural, so runtime SE toggles no longer force a 2-mic to
 
 ## 7. The "all features disabled" fast path
 
-Single-mic `esp_afe` supports `aec_enabled=false`, `se_enabled=false`,
-`ns_enabled=false`, `agc_enabled=false`. With all features off, the esp-sr
+`esp_afe` supports `aec_enabled=false`, `se_enabled=false`, `ns_enabled=false`,
+`agc_enabled=false`. With all features off, the esp-sr
 instance has nothing to do and the component tears it down. The standard
 processor output emits silence in this state, not raw microphone audio. Raw or
 pre-AFE audio belongs only to explicit diagnostic taps or no-processor paths,
@@ -344,7 +355,7 @@ Questions a fresh designer would ask, and the current answer.
 
 ### 8.3 Should the drain protocol be a FreeRTOS EventGroup?
 
-**Current**: three atomics.
+**Current**: two atomics, `drain_request_` and `process_busy_`.
 
 **Alternative**: `xEventGroupWaitBits` / `xEventGroupSetBits` on the config side.
 

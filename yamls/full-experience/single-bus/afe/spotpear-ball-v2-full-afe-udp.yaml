@@ -1,15 +1,12 @@
 # =============================================================================
-# SPOTPEAR BALL V2 - VOICE ASSISTANT + INTERCOM UDP + WAKE WORD (esp_afe pipeline)
+# SPOTPEAR BALL V2 - VOICE ASSISTANT + INTERCOM UDP + WAKE WORD (esp_aec pipeline)
 # =============================================================================
 # Target board: Spotpear Ball v2 (ESP32-S3 with GC9A01A 240x240 round display,
-# ES8311 mono codec, CST816 touch, GPIO0 button). Local-development variant
-# of the aec track; switches the mic processor from esp_aec to esp_afe
-# (NS + AGC + VAD; single mic, no Speech Enhancement).
+# ES8311 mono codec, CST816 touch, GPIO0 button).
 #
 # Audio pipeline (i2s_audio_duplex @ 48 kHz, stereo AEC reference):
 #
-#   I2S RX 48kHz stereo → L=ref R=mic → esp_ae_rate_cvt x3 ──┐
-#                                                └── esp_afe (AEC + NS + AGC) → mic_afe → VA / Intercom TX / MWW
+#   I2S RX 48kHz stereo -> L=ref R=mic -> esp_ae_rate_cvt x3 -> esp_aec (MR AEC) -> mic_afe -> VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
@@ -91,7 +88,7 @@ packages:
   s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   status_led: !include ../../../../packages/led/status_spotpear_ball_v2.yaml
-  afe_entities: !include ../../../../packages/esp_afe/single_mic_entities.yaml
+  duplex_aec_controls: !include ../../../../packages/i2s_audio_duplex/aec_controls.yaml
   duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
   speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
@@ -99,7 +96,6 @@ packages:
   lvgl_settings_sync_volumes: !include ../../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
   lvgl_settings_sync_mute: !include ../../../../packages/lvgl/lvgl_settings_sync_mute.yaml
   lvgl_settings_sync_aec: !include ../../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  lvgl_settings_sync_afe: !include ../../../../packages/lvgl/lvgl_settings_sync_afe_single_mic.yaml
   lvgl_settings_sync_va: !include ../../../../packages/lvgl/lvgl_settings_sync_va.yaml
   spotpear_intercom_nav: !include ../../../../packages/lvgl/spotpear_intercom/nav_full.yaml
 
@@ -166,7 +162,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_afe, audio_processor]
+    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor]
 
 # =============================================================================
 # CONNECTIVITY
@@ -183,7 +179,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # DEBUG keeps PBX-lite signaling + AEC/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -238,29 +234,15 @@ i2c:
     scan: false
 
 # =============================================================================
-# ESP AFE (Audio Front End)
-# Full front-end with AEC + NS + VAD + AGC. Single mic (no Speech Enhancement).
-# mic_num=1 keeps i2s_audio_duplex on the mono path (no dual-mic rate-converter buffer).
+# ESP AEC
+# Official ESP-SR AEC path for one microphone plus one playback reference.
+# Spotpear supplies that reference as the ES8311 stereo right channel.
 # =============================================================================
-esp_afe:
-  id: afe_processor
-  type: sr
-  mode: low_cost
-  mic_num: 1
-  aec_enabled: true
-  aec_filter_length: 4
-  ns_enabled: true
-  # On this 1-mic sr_low_cost preset, enabling VAD together with AEC can
-  # stall AFE fetch output. MWW already covers wake detection here, so VAD
-  # stays off by default.
-  vad_enabled: false
-  agc_enabled: true
-  se_enabled: false
-  # Buffer placement: PSRAM for the AFE staging triad (replicates pre-knob default).
-  # Toggle individual flags off to free Core 0 cycles at the cost of internal RAM.
-  feed_buf_in_psram: true       # ~3 KB scratch
-  feed_ring_in_psram: true      # ~12 KB staging ring
-  fetch_ring_in_psram: true     # ~4 KB output ring
+esp_aec:
+  id: aec_processor
+  sample_rate: 16000
+  filter_length: 4
+  mode: sr_low_cost
 
 # =============================================================================
 # I2S AUDIO DUPLEX (single bus for ES8311)
@@ -279,7 +261,7 @@ i2s_audio_duplex:
   i2s_dout_pin: GPIO8
   sample_rate: 48000             # I2S bus rate (ES8311 native)
   output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
-  processor_id: afe_processor
+  processor_id: aec_processor
   fir_decimator: esp_ae_rate_cvt
   codec:
     i2c_id: i2c_bus
@@ -299,13 +281,13 @@ i2s_audio_duplex:
   # Sample-accurate reference alignment, no ring buffer delay needed.
   use_stereo_aec_reference: true
   reference_channel: right
-  buffers_in_psram: true       # All audio buffers in PSRAM; required for sr_low_cost (512-sample frames)
-  audio_stack_in_psram: true   # Full AFE + VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
+  buffers_in_psram: true       # All audio buffers in PSRAM; required for 512-sample AEC frames
+  audio_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
 
 # =============================================================================
 # MICROPHONE
-# Single mic_afe: SR linear AEC preserves spectral features for all consumers
-# (VA STT, intercom TX, MWW). No separate unprocessed microphone path needed with sr_low_cost mode.
+# Single mic_afe: processed AEC output for all consumers (VA STT, intercom TX, MWW).
+# No separate unprocessed microphone path is exposed.
 # =============================================================================
 microphone:
   - platform: i2s_audio_duplex
@@ -446,8 +428,8 @@ voice_assistant:
   microphone: mic_afe
   media_player: speaker_media_player
   micro_wake_word: mww
-  noise_suppression_level: 0   # AFE does NS locally
-  auto_gain: 0dBFS             # AFE does AGC locally
+  noise_suppression_level: 0   # Standalone ESP-SR AEC path only
+  auto_gain: 0dBFS             # Keep gain fixed for AEC/MWW stability
   volume_multiplier: 2.0
   on_timer_started:
     - script.execute: update_timer_state
@@ -1668,7 +1650,7 @@ switch:
 
   # Intercom switches
 
-  # AFE runtime toggles
+  # AEC runtime toggles
 # =============================================================================
 # Select Entities
 # =============================================================================
@@ -1683,7 +1665,7 @@ select:
     initial_option: "sr_low_cost"
     # Non-optimistic: see waveshare-s3-full-afe-tcp.yaml for rationale.
     optimistic: false
-    restore_value: true
+    restore_value: false
     set_action:
       - if:
           condition:
@@ -1707,8 +1689,8 @@ select:
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
                   - i2s_audio_duplex.stop: i2s_duplex
-                  - esp_afe.set_mode:
-                      id: afe_processor
+                  - esp_aec.set_mode:
+                      id: aec_processor
                       mode: !lambda 'return x;'
                   - i2s_audio_duplex.start: i2s_duplex
                   - delay: 300ms
@@ -1718,7 +1700,7 @@ select:
                       then:
                         - script.execute: start_mww_when_ready
       - lambda: |-
-          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
+          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
 
 # =============================================================================
 # TEXT SENSORS
@@ -2932,7 +2914,7 @@ lvgl:
     # ========================================================================
     # SETTINGS PAGE (one vertical scroll surface for round displays)
     # ========================================================================
-    # Spotpear round-display settings surface for full AFE builds.
+    # Spotpear round-display settings surface for full AEC builds.
     # The page is one vertical scroll view: swipe down exits to Intercom only when
     # the scroll position is already at the top. Widget IDs intentionally match the
     # generic settings sync packages.
@@ -3172,7 +3154,7 @@ lvgl:
                   id: aec_mode_select
                   index: !lambda 'return x;'
         - label:
-            text: "Voice"
+            text: "Voice assistant"
             align: TOP_MID
             y: 538
             width: ${ic_settings_mid_width}
@@ -3182,90 +3164,6 @@ lvgl:
         - obj:
             align: TOP_MID
             y: 570
-            width: ${ic_settings_mid_width}
-            height: 38
-            bg_opa: TRANSP
-            border_width: 0
-            pad_all: 0
-            widgets:
-              - label:
-                  text: "Noise suppression"
-                  align: LEFT_MID
-                  x: 0
-                  width: 120
-                  text_font: montserrat_14
-                  text_color: 0xB0B0B0
-              - switch:
-                  id: ui_ns_sw
-                  align: RIGHT_MID
-                  width: 44
-                  height: 24
-                  state:
-                    checked: !lambda 'return id(ns_switch).state;'
-                  on_value:
-                    - lambda: |-
-                        if (x == id(ns_switch).state) return;
-                        if (x) id(ns_switch).turn_on();
-                        else id(ns_switch).turn_off();
-        - obj:
-            align: TOP_MID
-            y: 616
-            width: ${ic_settings_mid_width}
-            height: 38
-            bg_opa: TRANSP
-            border_width: 0
-            pad_all: 0
-            widgets:
-              - label:
-                  text: "Auto gain control"
-                  align: LEFT_MID
-                  x: 0
-                  width: 120
-                  text_font: montserrat_14
-                  text_color: 0xB0B0B0
-              - switch:
-                  id: ui_agc_sw
-                  align: RIGHT_MID
-                  width: 44
-                  height: 24
-                  state:
-                    checked: !lambda 'return id(agc_switch).state;'
-                  on_value:
-                    - lambda: |-
-                        if (x == id(agc_switch).state) return;
-                        if (x) id(agc_switch).turn_on();
-                        else id(agc_switch).turn_off();
-        - obj:
-            align: TOP_MID
-            y: 662
-            width: ${ic_settings_mid_width}
-            height: 38
-            bg_opa: TRANSP
-            border_width: 0
-            pad_all: 0
-            widgets:
-              - label:
-                  text: "Voice Activity Detector"
-                  align: LEFT_MID
-                  x: 0
-                  width: 120
-                  text_font: montserrat_14
-                  text_color: 0xB0B0B0
-              - switch:
-                  id: ui_vad_sw
-                  align: RIGHT_MID
-                  width: 44
-                  height: 24
-                  state:
-                    checked: !lambda 'return id(vad_switch).state;'
-                  on_value:
-                    - lambda: |-
-                        if (x == id(vad_switch).state) return;
-                        if (x) id(vad_switch).turn_on();
-                        else id(vad_switch).turn_off();
-        - obj:
-            align: TOP_MID
-            y: 708
             width: ${ic_settings_mid_width}
             height: 38
             bg_opa: TRANSP
@@ -3293,7 +3191,7 @@ lvgl:
                         else id(wake_word_switch).turn_off();
         - obj:
             align: TOP_MID
-            y: 790
+            y: 652
             width: 1
             height: 1
             bg_opa: TRANSP
