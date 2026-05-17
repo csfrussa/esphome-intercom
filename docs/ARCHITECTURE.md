@@ -260,6 +260,40 @@ The protocol is documented as a block comment in `esphome/components/esp_afe/esp
 
 ## 6. Notable design decisions
 
+### 6.0 Component modularity and ownership
+
+The current audio stack is composition-based. Espressif libraries are integrated
+inside the ESPHome component that owns the matching hardware or processing
+concern, rather than exposed as a new mandatory component chain:
+
+- `i2s_audio_duplex` owns the I2S controller, codec/data I/O, sample-rate
+  conversion, mic/speaker ESPHome surfaces, consumer registry and AEC reference
+  extraction. It can be used without `intercom_api`.
+- `esp_aec` owns standalone Espressif AEC through `afe_aec_create()` and
+  implements `AudioProcessor`. It has no dependency on `i2s_audio_duplex` or
+  `intercom_api`; either component may call it when their topology is valid.
+- `esp_afe` owns full AFE lifecycle through Espressif's GMF AFE manager and
+  implements `AudioProcessor`. It requires a steady-frame caller, practically
+  `i2s_audio_duplex`, but it still does not depend on `intercom_api`.
+- `intercom_api` owns PBX-lite signaling, phonebook state and network audio
+  transport. In the standard full-duplex YAMLs it consumes the microphone and
+  speaker exposed by `i2s_audio_duplex`; it does not own the Espressif codec,
+  GMF or rate-converter backends.
+
+This lets users build smaller surfaces:
+
+| Use case | Components |
+|---|---|
+| Full-duplex mic/speaker only | `i2s_audio_duplex` |
+| Voice Assistant or MWW with AEC | `i2s_audio_duplex` + `esp_aec` or `esp_afe` |
+| Intercom with shared codec bus | `i2s_audio_duplex` + `intercom_api` + optional `esp_aec` or `esp_afe` |
+| Standalone intercom on separate mic/speaker hardware | `intercom_api` + optional `esp_aec` |
+
+The only cross-component checks are ownership guards: if both `i2s_audio_duplex`
+and `intercom_api` are present, only one of them may configure an audio
+processor or DC-offset removal. That guard prevents duplicate processing but
+does not make either component a hard dependency of the other.
+
 ### 6.1 Why `i2s_audio_duplex` owns the audio task, not `audio_processor`
 
 The transport owns the single audio task and exposes raw + processed frames via callbacks. The processor exposes `process()` synchronously and runs its own async workers internally.

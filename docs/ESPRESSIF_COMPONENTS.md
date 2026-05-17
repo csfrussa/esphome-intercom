@@ -19,6 +19,26 @@ The current audio stack uses these Espressif components:
 | `espressif/esp_audio_effects` | `i2s_audio_duplex` | Espressif MIT-style license, restricted to Espressif products | Provides `esp_ae_rate_cvt`, used for the 48 kHz bus to 16 kHz mic/ref conversion on P4, WS3, Spotpear and no-codec AEC builds. |
 | `espressif/esp_codec_dev` | `i2s_audio_duplex` codec-backed builds | Apache-2.0 | Provides codec control plus I2S read/write. P4 and WS3 use ES7210/ES8311 through it; Spotpear single-mic uses ES8311 input/output through it. Generic no-codec AEC still uses the same bus facade with `codec_if = NULL`. |
 
+## Component Boundaries
+
+The Espressif integrations are internal backends of existing ESPHome
+components, not new mandatory external components layered on top of each other.
+The public composition stays modular:
+
+| ESPHome component | Espressif backend it owns | Required project components | Optional peers |
+|---|---|---|---|
+| `i2s_audio_duplex` | `esp_codec_dev` for codec/data I/O, `esp_audio_effects` for rate conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `intercom_api`, MWW and VA as consumers |
+| `esp_aec` | `esp-sr` low-level `afe_aec` API | `audio_processor` | `i2s_audio_duplex` or standalone `intercom_api` as the caller |
+| `esp_afe` | `gmf_ai_audio` `esp_gmf_afe_manager` plus `esp-sr` | `audio_processor` | `i2s_audio_duplex` as the required steady-frame caller |
+| `intercom_api` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `i2s_audio_duplex` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
+
+`i2s_audio_duplex` does not depend on `intercom_api`. A user can install only
+`audio_processor`, `i2s_audio_duplex` and optionally `esp_aec` or `esp_afe` for
+a Voice Assistant, media-player, microphone/speaker, or custom callback build.
+The cross-component validation only runs when both `i2s_audio_duplex` and
+`intercom_api` appear in the same YAML, to prevent double ownership of AEC or
+DC-offset correction.
+
 ## Reference Components
 
 These components are used as official reference material for board and codec

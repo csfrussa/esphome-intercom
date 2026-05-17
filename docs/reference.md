@@ -144,6 +144,21 @@ Two audio processing components are available, both implementing the `AudioProce
 
 They are drop-in replacements **only behind `i2s_audio_duplex`**, which feeds the processor with the fixed 512-sample 16 kHz frames that `esp_afe` requires. When `intercom_api` talks to the processor directly (no `i2s_audio_duplex`, typical of dual-bus MEMS + I2S amp setups), use `esp_aec` only. The AFE pipeline needs a stable producer task that `intercom_api`'s standalone mic path does not provide.
 
+### Modularity rule
+
+The audio components are intentionally modular:
+
+- `i2s_audio_duplex` can be used by itself as a full-duplex ESPHome
+  microphone/speaker provider.
+- `esp_aec` and `esp_afe` are optional processors referenced through
+  `processor_id`.
+- `intercom_api` is optional and consumes the microphone/speaker surfaces when
+  present. It is not a dependency of `i2s_audio_duplex`.
+
+The validation between `i2s_audio_duplex` and `intercom_api` is a conflict
+guard, not a coupling requirement. It only rejects configurations where both
+components try to own the same processor or DC-offset correction stage.
+
 ## esp_aec component
 
 | Option | Type | Default | Description |

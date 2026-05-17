@@ -18,6 +18,7 @@ With i2s_audio_duplex:
 
 - **True Full-Duplex**: Simultaneous mic input and speaker output on one I2S bus
 - **Standard Platforms**: Exposes `microphone` and `speaker` platform classes (compatible with Voice Assistant, MWW, intercom_api)
+- **Modular Use**: Does not depend on `intercom_api`. Use it as a standalone full-duplex microphone/speaker component, or compose it with `esp_aec`, `esp_afe`, Voice Assistant, MWW, media player and intercom as needed.
 - **Audio Processor Integration**: Built-in audio processing via `esp_aec` (AEC only) or `esp_afe` (AEC + NS + VAD + AGC) components. Both implement the `AudioProcessor` interface and are configured via `processor_id`. Three AEC reference modes:
   - **Direct TX reference** (default): Uses the previous TX frame as AEC reference. No ring buffer, no delay tuning. Works with any setup (discrete MEMS mic + amp, or codec). The reference is decimated **on the TX side** (matches the Espressif `esp-gmf aec_rec` pipeline: rate conversion before AEC), so storage and the consumer both work at the processor rate. This produces a phase-coherent `(mic, ref)` pair and avoids the ghost-tail residual that an RX-side decimation introduces. The AEC adaptive filter compensates for the ~1 chunk latency automatically.
   - **ES8311 Digital Feedback** (recommended for ES8311): Stereo I2S with L=ADC mic, R=DAC ref. Sample-accurate reference. Enable with `use_stereo_aec_reference: true`.
@@ -75,9 +76,9 @@ flowchart TD
 | Task | Core | Priority | Role |
 |------|------|----------|------|
 | `i2s_duplex` (audio_task) | **Core 0** | **19** | I2S read/write + rate conversion + audio processor (esp_aec/esp_afe) |
-| `intercom_tx` | Core 0 | 5 | Mic to network + audio processor during intercom calls |
-| `intercom_spk` | Core 0 | 4 | Network to speaker, AEC reference feed |
-| `intercom_srv` | Core 1 | 5 | TCP RX, call FSM (stays Core 1 for LVGL callback safety) |
+| `intercom_tx` | Core 0 | 5 | Only when `intercom_api` is present: mic to network |
+| `intercom_spk` | Core 0 | 4 | Only when standalone `intercom_api.processor_id` is used |
+| `intercom_srv` | Core 1 | 5 | Only when `intercom_api` is present: TCP RX, call FSM |
 | `mixer` (ESPHome) | Any | 10 | Mix VA + intercom audio to speaker |
 | `MWW inference` (ESPHome) | Unpinned | 3→**8** | Wake word TFLite inference (boost via on_boot lambda) |
 | ESPHome main loop / LVGL | Core 1 | 1 | Switches, sensors, display, etc. |
@@ -115,6 +116,38 @@ external_components:
     # Or with esp_afe (full AFE pipeline: AEC + NS + VAD + AGC):
     # components: [audio_processor, i2s_audio_duplex, esp_afe]
 ```
+
+`intercom_api` is not required. Add it only when the device is also an
+intercom endpoint:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/n-IA-hane/esphome-intercom
+      ref: main
+    components: [audio_processor, i2s_audio_duplex, esp_aec, intercom_api]
+```
+
+### Component Boundaries
+
+`i2s_audio_duplex` owns the shared I2S bus, codec/data backend, rate conversion,
+AEC reference extraction, microphone output and speaker input. It loads
+Espressif `esp_codec_dev` and `esp_audio_effects` internally because those are
+part of the bus backend.
+
+The component does not load or require `intercom_api`. When `intercom_api` is
+also present, it is just another consumer of the microphone and speaker
+surfaces. Compile-time validation prevents both components from owning the same
+audio processor or DC-offset stage, but that validation is conditional and does
+not create a dependency.
+
+`esp_aec` and `esp_afe` are optional `AudioProcessor` providers:
+
+- `esp_aec` can be called by `i2s_audio_duplex` or by standalone `intercom_api`
+  on separate mic/speaker hardware.
+- `esp_afe` should be called by `i2s_audio_duplex`, because the AFE manager
+  expects steady 16 kHz frames and stable mic/reference timing.
 
 ## Configuration
 

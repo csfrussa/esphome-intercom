@@ -43,7 +43,9 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
-    components: [audio_processor, esp_aec, i2s_audio_duplex, intercom_api]
+    components: [audio_processor, esp_aec, i2s_audio_duplex]
+    # Add intercom_api only when this device is also an intercom endpoint.
+    # components: [audio_processor, esp_aec, i2s_audio_duplex, intercom_api]
 
 esp_aec:
   id: aec_processor
