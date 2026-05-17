@@ -1,5 +1,7 @@
 #pragma once
 
+#include "esphome/core/defines.h"
+
 #ifdef USE_ESP32
 
 #include <driver/i2s_types.h>
@@ -62,7 +64,8 @@ class CodecDevBackend {
   void set_es8311_input_config(const Es8311InputConfig &config) { this->es8311_input_ = config; }
   void set_es8311_config(const Es8311Config &config) { this->es8311_ = config; }
 
-  bool setup(uint8_t i2s_port, i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
+  bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
+             i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
              i2s_clock_src_t clk_src);
   bool open(const SampleConfig *tx_config, const SampleConfig *rx_config);
   void close();
@@ -95,7 +98,12 @@ class CodecDevBackend {
   Es8311InputConfig es8311_input_{};
   Es8311Config es8311_{};
 
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  const audio_codec_data_if_t *rx_data_if_{nullptr};
+  const audio_codec_data_if_t *tx_data_if_{nullptr};
+#else
   const audio_codec_data_if_t *data_if_{nullptr};
+#endif
   const audio_codec_ctrl_if_t *es7210_ctrl_{nullptr};
   const audio_codec_ctrl_if_t *es8311_input_ctrl_{nullptr};
   const audio_codec_ctrl_if_t *es8311_ctrl_{nullptr};

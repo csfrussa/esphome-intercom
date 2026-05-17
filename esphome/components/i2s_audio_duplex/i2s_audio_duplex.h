@@ -163,6 +163,26 @@ class I2SAudioDuplex : public Component {
   void set_mclk_pin(int pin) { this->mclk_pin_ = pin; }
   void set_din_pin(int pin) { this->din_pin_ = pin; }
   void set_dout_pin(int pin) { this->dout_pin_ = pin; }
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  void configure_rx_bus(uint8_t i2s_num, int lrclk_pin, int bclk_pin, int mclk_pin, int din_pin) {
+    this->rx_bus_.configured = true;
+    this->rx_bus_.i2s_num = i2s_num;
+    this->rx_bus_.lrclk_pin = lrclk_pin;
+    this->rx_bus_.bclk_pin = bclk_pin;
+    this->rx_bus_.mclk_pin = mclk_pin;
+    this->rx_bus_.din_pin = din_pin;
+    this->dual_i2s_bus_ = true;
+  }
+  void configure_tx_bus(uint8_t i2s_num, int lrclk_pin, int bclk_pin, int mclk_pin, int dout_pin) {
+    this->tx_bus_.configured = true;
+    this->tx_bus_.i2s_num = i2s_num;
+    this->tx_bus_.lrclk_pin = lrclk_pin;
+    this->tx_bus_.bclk_pin = bclk_pin;
+    this->tx_bus_.mclk_pin = mclk_pin;
+    this->tx_bus_.dout_pin = dout_pin;
+    this->dual_i2s_bus_ = true;
+  }
+#endif
   void set_sample_rate(uint32_t rate) { this->sample_rate_ = rate; }
   void set_output_sample_rate(uint32_t rate) { this->output_sample_rate_ = rate; }
   void set_bits_per_sample(uint8_t bps) { this->bits_per_sample_ = bps; }
@@ -470,6 +490,21 @@ class I2SAudioDuplex : public Component {
   i2s_chan_handle_t tx_handle_{nullptr};
   i2s_chan_handle_t rx_handle_{nullptr};
   CodecDevBackend codec_backend_;
+
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  struct I2SBusConfig {
+    bool configured{false};
+    uint8_t i2s_num{0};
+    int lrclk_pin{-1};
+    int bclk_pin{-1};
+    int mclk_pin{-1};
+    int din_pin{-1};
+    int dout_pin{-1};
+  };
+  bool dual_i2s_bus_{false};
+  I2SBusConfig rx_bus_;
+  I2SBusConfig tx_bus_;
+#endif
 
   // State
   std::atomic<bool> duplex_running_{false};

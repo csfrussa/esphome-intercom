@@ -395,12 +395,33 @@ void I2SAudioDuplex::loop() {
 
 void I2SAudioDuplex::dump_config() {
   ESP_LOGCONFIG(TAG, "I2S Audio Duplex:");
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  if (this->dual_i2s_bus_) {
+    ESP_LOGCONFIG(TAG, "  I2S Layout: dual bus");
+    ESP_LOGCONFIG(TAG, "  RX Bus: port=%u LRCLK=%d BCLK=%d MCLK=%d DIN=%d",
+                  this->rx_bus_.i2s_num, this->rx_bus_.lrclk_pin, this->rx_bus_.bclk_pin,
+                  this->rx_bus_.mclk_pin, this->rx_bus_.din_pin);
+    ESP_LOGCONFIG(TAG, "  TX Bus: port=%u LRCLK=%d BCLK=%d MCLK=%d DOUT=%d",
+                  this->tx_bus_.i2s_num, this->tx_bus_.lrclk_pin, this->tx_bus_.bclk_pin,
+                  this->tx_bus_.mclk_pin, this->tx_bus_.dout_pin);
+  } else {
+    ESP_LOGCONFIG(TAG, "  I2S Layout: shared bus");
+    ESP_LOGCONFIG(TAG, "  LRCLK Pin: %d", this->lrclk_pin_);
+    ESP_LOGCONFIG(TAG, "  BCLK Pin: %d", this->bclk_pin_);
+    ESP_LOGCONFIG(TAG, "  MCLK Pin: %d", this->mclk_pin_);
+    ESP_LOGCONFIG(TAG, "  DIN Pin: %d", this->din_pin_);
+    ESP_LOGCONFIG(TAG, "  DOUT Pin: %d", this->dout_pin_);
+    ESP_LOGCONFIG(TAG, "  I2S Port: %u", this->i2s_num_);
+  }
+#else
+  ESP_LOGCONFIG(TAG, "  I2S Layout: shared bus");
   ESP_LOGCONFIG(TAG, "  LRCLK Pin: %d", this->lrclk_pin_);
   ESP_LOGCONFIG(TAG, "  BCLK Pin: %d", this->bclk_pin_);
   ESP_LOGCONFIG(TAG, "  MCLK Pin: %d", this->mclk_pin_);
   ESP_LOGCONFIG(TAG, "  DIN Pin: %d", this->din_pin_);
   ESP_LOGCONFIG(TAG, "  DOUT Pin: %d", this->dout_pin_);
   ESP_LOGCONFIG(TAG, "  I2S Port: %u", this->i2s_num_);
+#endif
   ESP_LOGCONFIG(TAG, "  I2S Role: %s", this->i2s_mode_secondary_ ? "secondary (slave)" : "primary (master)");
   ESP_LOGCONFIG(TAG, "  I2S Bus Rate: %u Hz", (unsigned)this->sample_rate_);
   ESP_LOGCONFIG(TAG, "  I2S Bits Per Sample: %u", this->bits_per_sample_);
@@ -482,8 +503,43 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     }
   }
 
-  bool need_tx = (this->dout_pin_ >= 0);
-  bool need_rx = (this->din_pin_ >= 0);
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  const bool dual_bus = this->dual_i2s_bus_;
+#else
+  constexpr bool dual_bus = false;
+#endif
+  if (dual_bus && this->use_tdm_bus_) {
+    ESP_LOGE(TAG, "dual I2S bus currently supports standard I2S only; TDM reference requires shared bus");
+    this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+    return false;
+  }
+
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  const uint8_t tx_i2s_num = dual_bus ? this->tx_bus_.i2s_num : this->i2s_num_;
+  const uint8_t rx_i2s_num = dual_bus ? this->rx_bus_.i2s_num : this->i2s_num_;
+  const int tx_mclk_pin = dual_bus ? this->tx_bus_.mclk_pin : this->mclk_pin_;
+  const int tx_bclk_pin = dual_bus ? this->tx_bus_.bclk_pin : this->bclk_pin_;
+  const int tx_lrclk_pin = dual_bus ? this->tx_bus_.lrclk_pin : this->lrclk_pin_;
+  const int tx_dout_pin = dual_bus ? this->tx_bus_.dout_pin : this->dout_pin_;
+  const int rx_mclk_pin = dual_bus ? this->rx_bus_.mclk_pin : this->mclk_pin_;
+  const int rx_bclk_pin = dual_bus ? this->rx_bus_.bclk_pin : this->bclk_pin_;
+  const int rx_lrclk_pin = dual_bus ? this->rx_bus_.lrclk_pin : this->lrclk_pin_;
+  const int rx_din_pin = dual_bus ? this->rx_bus_.din_pin : this->din_pin_;
+#else
+  const uint8_t tx_i2s_num = this->i2s_num_;
+  const uint8_t rx_i2s_num = this->i2s_num_;
+  const int tx_mclk_pin = this->mclk_pin_;
+  const int tx_bclk_pin = this->bclk_pin_;
+  const int tx_lrclk_pin = this->lrclk_pin_;
+  const int tx_dout_pin = this->dout_pin_;
+  const int rx_mclk_pin = this->mclk_pin_;
+  const int rx_bclk_pin = this->bclk_pin_;
+  const int rx_lrclk_pin = this->lrclk_pin_;
+  const int rx_din_pin = this->din_pin_;
+#endif
+
+  bool need_tx = (tx_dout_pin >= 0);
+  bool need_rx = (rx_din_pin >= 0);
 
   if (!need_tx && !need_rx) {
     ESP_LOGE(TAG, "At least one of din_pin or dout_pin must be configured");
@@ -530,7 +586,7 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     }
   }
   i2s_chan_config_t chan_cfg = {
-      .id = static_cast<i2s_port_t>(this->i2s_num_),
+      .id = static_cast<i2s_port_t>(dual_bus ? tx_i2s_num : this->i2s_num_),
       .role = this->i2s_mode_secondary_ ? I2S_ROLE_SLAVE : I2S_ROLE_MASTER,
       .dma_desc_num = DMA_BUFFER_COUNT,
       .dma_frame_num = dma_frame_num,
@@ -541,19 +597,49 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
 #endif
   };
 
-  i2s_chan_handle_t *tx_ptr = need_tx ? &this->tx_handle_ : nullptr;
-  i2s_chan_handle_t *rx_ptr = need_rx ? &this->rx_handle_ : nullptr;
-
-  esp_err_t err = i2s_new_channel(&chan_cfg, tx_ptr, rx_ptr);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to create I2S channel: %s", esp_err_to_name(err));
-    this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
-    return false;
+  esp_err_t err = ESP_OK;
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  if (dual_bus) {
+    if (need_tx) {
+      chan_cfg.id = static_cast<i2s_port_t>(tx_i2s_num);
+      err = i2s_new_channel(&chan_cfg, &this->tx_handle_, nullptr);
+      if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create TX I2S channel on port %u: %s",
+                 tx_i2s_num, esp_err_to_name(err));
+        this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+        return false;
+      }
+    }
+    if (need_rx) {
+      chan_cfg.id = static_cast<i2s_port_t>(rx_i2s_num);
+      err = i2s_new_channel(&chan_cfg, nullptr, &this->rx_handle_);
+      if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create RX I2S channel on port %u: %s",
+                 rx_i2s_num, esp_err_to_name(err));
+        this->deinit_i2s_();
+        this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+        return false;
+      }
+    }
+  } else {
+#endif
+    i2s_chan_handle_t *tx_ptr = need_tx ? &this->tx_handle_ : nullptr;
+    i2s_chan_handle_t *rx_ptr = need_rx ? &this->rx_handle_ : nullptr;
+    err = i2s_new_channel(&chan_cfg, tx_ptr, rx_ptr);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to create I2S channel: %s", esp_err_to_name(err));
+      this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+      return false;
+    }
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
   }
+#endif
 
-  ESP_LOGD(TAG, "I2S channel created: TX=%s RX=%s",
+  ESP_LOGD(TAG, "I2S channel created: TX=%s(port %u) RX=%s(port %u)",
            this->tx_handle_ ? "yes" : "no",
-           this->rx_handle_ ? "yes" : "no");
+           tx_i2s_num,
+           this->rx_handle_ ? "yes" : "no",
+           rx_i2s_num);
 
   auto pin_or_nc = [](int pin) -> gpio_num_t {
     return pin >= 0 ? static_cast<gpio_num_t>(pin) : GPIO_NUM_NC;
@@ -639,11 +725,11 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
         },
         .slot_cfg = get_std_slot_config(this->i2s_comm_fmt_, bit_width, tx_slot_mode),
         .gpio_cfg = {
-            .mclk = pin_or_nc(this->mclk_pin_),
-            .bclk = pin_or_nc(this->bclk_pin_),
-            .ws = pin_or_nc(this->lrclk_pin_),
-            .dout = pin_or_nc(this->dout_pin_),
-            .din = pin_or_nc(this->din_pin_),
+            .mclk = pin_or_nc(tx_mclk_pin),
+            .bclk = pin_or_nc(tx_bclk_pin),
+            .ws = pin_or_nc(tx_lrclk_pin),
+            .dout = pin_or_nc(tx_dout_pin),
+            .din = dual_bus ? GPIO_NUM_NC : pin_or_nc(rx_din_pin),
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -660,6 +746,13 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
 
     // RX configuration - always independent of TX num_channels
     i2s_std_config_t rx_cfg = tx_cfg;
+    if (dual_bus) {
+      rx_cfg.gpio_cfg.mclk = pin_or_nc(rx_mclk_pin);
+      rx_cfg.gpio_cfg.bclk = pin_or_nc(rx_bclk_pin);
+      rx_cfg.gpio_cfg.ws = pin_or_nc(rx_lrclk_pin);
+      rx_cfg.gpio_cfg.dout = GPIO_NUM_NC;
+      rx_cfg.gpio_cfg.din = pin_or_nc(rx_din_pin);
+    }
     if (this->use_stereo_aec_ref_) {
       rx_cfg.slot_cfg = get_std_slot_config(this->i2s_comm_fmt_, bit_width, I2S_SLOT_MODE_STEREO);
       rx_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
@@ -759,7 +852,14 @@ CodecDevBackend::SampleConfig I2SAudioDuplex::make_rx_sample_config_() const {
 }
 
 bool I2SAudioDuplex::setup_codec_backend_(i2s_clock_src_t clk_src) {
-  return this->codec_backend_.setup(this->i2s_num_, this->tx_handle_, this->rx_handle_, clk_src);
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  const uint8_t tx_i2s_num = this->dual_i2s_bus_ ? this->tx_bus_.i2s_num : this->i2s_num_;
+  const uint8_t rx_i2s_num = this->dual_i2s_bus_ ? this->rx_bus_.i2s_num : this->i2s_num_;
+#else
+  const uint8_t tx_i2s_num = this->i2s_num_;
+  const uint8_t rx_i2s_num = this->i2s_num_;
+#endif
+  return this->codec_backend_.setup(tx_i2s_num, rx_i2s_num, this->tx_handle_, this->rx_handle_, clk_src);
 }
 
 bool I2SAudioDuplex::enable_i2s_channels_() {

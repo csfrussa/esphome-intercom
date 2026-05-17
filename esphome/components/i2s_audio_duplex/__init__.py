@@ -54,6 +54,8 @@ CONF_USE_APLL = "use_apll"
 CONF_I2S_NUM = "i2s_num"
 CONF_MCLK_MULTIPLE = "mclk_multiple"
 CONF_I2S_COMM_FMT = "i2s_comm_fmt"
+CONF_RX_BUS = "rx_bus"
+CONF_TX_BUS = "tx_bus"
 CONF_USE_TDM_REFERENCE = "use_tdm_reference"
 CONF_TDM_TOTAL_SLOTS = "tdm_total_slots"
 CONF_TDM_MIC_SLOT = "tdm_mic_slot"
@@ -93,6 +95,27 @@ CONF_ON_SPEAKER_IDLE = "on_speaker_idle"
 FIR_DECIMATOR_OPTIONS = ("esp_ae_rate_cvt",)
 CODEC_INPUT_TYPES = ("es7210", "es8311")
 CODEC_OUTPUT_TYPES = ("es8311",)
+
+I2S_OPTIONAL_MCLK = cv.Any(
+    cv.int_range(min=-1, max=-1),
+    pins.internal_gpio_output_pin_number,
+)
+
+I2S_RX_BUS_SCHEMA = cv.Schema({
+    cv.Required(CONF_I2S_NUM): cv.int_range(min=0, max=2),
+    cv.Required(CONF_I2S_LRCLK_PIN): pins.internal_gpio_output_pin_number,
+    cv.Required(CONF_I2S_BCLK_PIN): pins.internal_gpio_output_pin_number,
+    cv.Optional(CONF_I2S_MCLK_PIN, default=-1): I2S_OPTIONAL_MCLK,
+    cv.Required(CONF_I2S_DIN_PIN): pins.internal_gpio_input_pin_number,
+})
+
+I2S_TX_BUS_SCHEMA = cv.Schema({
+    cv.Required(CONF_I2S_NUM): cv.int_range(min=0, max=2),
+    cv.Required(CONF_I2S_LRCLK_PIN): pins.internal_gpio_output_pin_number,
+    cv.Required(CONF_I2S_BCLK_PIN): pins.internal_gpio_output_pin_number,
+    cv.Optional(CONF_I2S_MCLK_PIN, default=-1): I2S_OPTIONAL_MCLK,
+    cv.Required(CONF_I2S_DOUT_PIN): pins.internal_gpio_output_pin_number,
+})
 
 i2s_audio_duplex_ns = cg.esphome_ns.namespace("i2s_audio_duplex")
 I2SAudioDuplex = i2s_audio_duplex_ns.class_("I2SAudioDuplex", cg.Component)
@@ -188,15 +211,44 @@ def _validate_pcm_format(config):
     return config
 
 
+def _validate_dual_bus_config(config):
+    """Validate optional RX/TX bus split without changing legacy single-bus YAML."""
+    has_rx_bus = CONF_RX_BUS in config
+    has_tx_bus = CONF_TX_BUS in config
+    if has_rx_bus != has_tx_bus:
+        raise cv.Invalid("rx_bus and tx_bus must be configured together")
+
+    if has_rx_bus:
+        if config.get(CONF_USE_TDM_REFERENCE, False) or CONF_TDM_MIC_SLOTS in config:
+            raise cv.Invalid("rx_bus/tx_bus dual-bus mode does not support TDM yet")
+        if config[CONF_RX_BUS][CONF_I2S_NUM] == config[CONF_TX_BUS][CONF_I2S_NUM]:
+            raise cv.Invalid("rx_bus and tx_bus must use different i2s_num values")
+        for pin_key in (CONF_I2S_LRCLK_PIN, CONF_I2S_BCLK_PIN, CONF_I2S_DIN_PIN, CONF_I2S_DOUT_PIN):
+            if config.get(pin_key, -1) != -1:
+                raise cv.Invalid(
+                    f"{pin_key} must be set inside rx_bus/tx_bus when dual-bus mode is used"
+                )
+    else:
+        if config.get(CONF_I2S_LRCLK_PIN, -1) == -1:
+            raise cv.Invalid("i2s_lrclk_pin is required when rx_bus/tx_bus are not used")
+        if config.get(CONF_I2S_BCLK_PIN, -1) == -1:
+            raise cv.Invalid("i2s_bclk_pin is required when rx_bus/tx_bus are not used")
+
+    return config
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(I2SAudioDuplex),
-        cv.Required(CONF_I2S_LRCLK_PIN): pins.internal_gpio_output_pin_number,
-        cv.Required(CONF_I2S_BCLK_PIN): pins.internal_gpio_output_pin_number,
-        cv.Optional(CONF_I2S_MCLK_PIN, default=-1): cv.Any(
+        cv.Optional(CONF_I2S_LRCLK_PIN, default=-1): cv.Any(
             cv.int_range(min=-1, max=-1),
             pins.internal_gpio_output_pin_number,
         ),
+        cv.Optional(CONF_I2S_BCLK_PIN, default=-1): cv.Any(
+            cv.int_range(min=-1, max=-1),
+            pins.internal_gpio_output_pin_number,
+        ),
+        cv.Optional(CONF_I2S_MCLK_PIN, default=-1): I2S_OPTIONAL_MCLK,
         cv.Optional(CONF_I2S_DIN_PIN, default=-1): cv.Any(
             cv.int_range(min=-1, max=-1),
             pins.internal_gpio_input_pin_number,
@@ -218,6 +270,8 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_I2S_MODE, default="primary"): cv.one_of("primary", "secondary", lower=True),
         cv.Optional(CONF_USE_APLL, default=False): cv.boolean,
         cv.Optional(CONF_I2S_NUM, default=0): cv.int_range(min=0, max=2),
+        cv.Optional(CONF_RX_BUS): I2S_RX_BUS_SCHEMA,
+        cv.Optional(CONF_TX_BUS): I2S_TX_BUS_SCHEMA,
         cv.Optional(CONF_MCLK_MULTIPLE, default=256): cv.one_of(128, 256, 384, 512, int=True),
         cv.Optional(CONF_I2S_COMM_FMT, default="philips"): cv.one_of(
             "philips", "msb", "pcm_short", "pcm_long", lower=True,
@@ -311,6 +365,7 @@ CONFIG_SCHEMA = cv.All(
     _validate_sample_rates,
     _validate_tdm_config,
     _validate_pcm_format,
+    _validate_dual_bus_config,
 )
 
 
@@ -321,12 +376,23 @@ def _final_validate(config):
         raise cv.Invalid(f"Unsupported ESP32 variant: {variant}")
 
     max_ports = I2S_PORTS[variant]
-    i2s_num = config.get(CONF_I2S_NUM, 0)
-    if i2s_num >= max_ports:
-        raise cv.Invalid(
-            f"i2s_num {i2s_num} exceeds available I2S ports on {variant} "
-            f"(max port index: {max_ports - 1})"
-        )
+    if CONF_RX_BUS in config:
+        if max_ports < 2:
+            raise cv.Invalid(f"rx_bus/tx_bus dual-bus mode requires at least two I2S ports on {variant}")
+        for bus_key in (CONF_RX_BUS, CONF_TX_BUS):
+            i2s_num = config[bus_key][CONF_I2S_NUM]
+            if i2s_num >= max_ports:
+                raise cv.Invalid(
+                    f"{bus_key}.i2s_num {i2s_num} exceeds available I2S ports on {variant} "
+                    f"(max port index: {max_ports - 1})"
+                )
+    else:
+        i2s_num = config.get(CONF_I2S_NUM, 0)
+        if i2s_num >= max_ports:
+            raise cv.Invalid(
+                f"i2s_num {i2s_num} exceeds available I2S ports on {variant} "
+                f"(max port index: {max_ports - 1})"
+            )
 
     use_tdm = config.get(CONF_USE_TDM_REFERENCE, False)
     if use_tdm and variant not in TDM_VARIANTS:
@@ -401,6 +467,8 @@ async def to_code(config):
 
     # Define USE_I2S_AUDIO_DUPLEX so other components know it's available
     cg.add_define("USE_I2S_AUDIO_DUPLEX")
+    if CONF_RX_BUS in config:
+        cg.add_define("USE_I2S_AUDIO_DUPLEX_DUAL_BUS")
     include_builtin_idf_component("esp_driver_i2s")
     add_idf_sdkconfig_option("CONFIG_I2S_ISR_IRAM_SAFE", True)
 
@@ -423,6 +491,24 @@ async def to_code(config):
         ),
     )
     cg.add(var.set_i2s_mode_secondary(config[CONF_I2S_MODE] == "secondary"))
+
+    if CONF_RX_BUS in config:
+        rx_bus = config[CONF_RX_BUS]
+        tx_bus = config[CONF_TX_BUS]
+        cg.add(var.configure_rx_bus(
+            rx_bus[CONF_I2S_NUM],
+            rx_bus[CONF_I2S_LRCLK_PIN],
+            rx_bus[CONF_I2S_BCLK_PIN],
+            rx_bus[CONF_I2S_MCLK_PIN],
+            rx_bus[CONF_I2S_DIN_PIN],
+        ))
+        cg.add(var.configure_tx_bus(
+            tx_bus[CONF_I2S_NUM],
+            tx_bus[CONF_I2S_LRCLK_PIN],
+            tx_bus[CONF_I2S_BCLK_PIN],
+            tx_bus[CONF_I2S_MCLK_PIN],
+            tx_bus[CONF_I2S_DOUT_PIN],
+        ))
 
     # Map comm format string to enum index
     comm_fmt_map = {"philips": 0, "msb": 1, "pcm_short": 2, "pcm_long": 3}

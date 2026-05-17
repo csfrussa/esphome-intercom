@@ -172,6 +172,14 @@ is reduced to one microphone channel plus one playback-reference channel, then
 P4 and WS3 remain on `esp_afe` because their 2-mic topology benefits from the
 full AFE path and structural SE/BSS.
 
+Codec-less dual-bus targets still use the same processor contract. The physical
+layout changes only below `i2s_audio_duplex`: ESP-IDF allocates one RX simplex
+channel on the microphone I2S port and one TX simplex channel on the speaker
+I2S port, both normally with the ESP as clock master. Above that layer the
+processor still receives the official `MR` shape: one microphone channel and
+one playback-reference channel. The dual-bus code is compile-time gated and is
+not present in single-bus builds.
+
 ---
 
 ## 4. `audio_processor` contract

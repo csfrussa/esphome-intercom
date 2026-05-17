@@ -63,6 +63,10 @@ The migration is not P4-only. The current generated-code snapshots confirm:
   contract.
 - Generic S3 AEC: remains no-codec and uses standalone `esp_aec` over the same
   `i2s_audio_duplex` bus facade.
+- Generic S3 dual-bus intercom: remains no-codec and uses the same
+  `i2s_audio_duplex` facade, but creates separate ESP-IDF I2S simplex channels
+  for RX and TX and separate `esp_codec_dev` data interfaces. This path is only
+  compiled when YAML uses `rx_bus` and `tx_bus`.
 
 ## Source Audit Findings
 
@@ -91,6 +95,12 @@ resolved in the generated builds:
   one playback reference channel. Spotpear uses this direct official path after
   runtime testing showed the full AFE manager feed/fetch path saturating on the
   single-mic codec topology.
+- Dual physical I2S buses are handled at the IDF channel layer, not by changing
+  the ESP-SR audio contract. ESP-IDF supports simplex channel allocation by
+  passing only one channel handle to `i2s_new_channel()`. The dual-bus no-codec
+  path uses one RX simplex channel and one TX simplex channel on different I2S
+  ports, then feeds the same mono mic plus playback reference frames to
+  `afe_aec`.
 - `esp_gmf_afe_manager` exposes runtime feature toggles for AEC, VAD, SE and
   WakeNet. It does not expose NS or AGC in its feature enum, so keeping NS/AGC
   changes as AFE recreate operations is deliberate while staying on the stock

@@ -1,6 +1,6 @@
 # I2S Audio Duplex - Full-Duplex I2S for ESPHome
 
-True simultaneous microphone and speaker operation on a single I2S bus for audio codecs.
+True simultaneous microphone and speaker operation on a shared I2S bus for audio codecs, or on separate RX/TX I2S controllers for codec-less boards.
 
 ## Why This Component?
 
@@ -16,7 +16,7 @@ With i2s_audio_duplex:
 
 ## Features
 
-- **True Full-Duplex**: Simultaneous mic input and speaker output on one I2S bus
+- **True Full-Duplex**: Simultaneous mic input and speaker output on one shared I2S bus, or on two separate ESP-IDF I2S controllers when `rx_bus` and `tx_bus` are configured
 - **Standard Platforms**: Exposes `microphone` and `speaker` platform classes (compatible with Voice Assistant, MWW, intercom_api)
 - **Modular Use**: Does not depend on `intercom_api`. Use it as a standalone full-duplex microphone/speaker component, or compose it with `esp_aec`, `esp_afe`, Voice Assistant, MWW, media player and intercom as needed.
 - **Audio Processor Integration**: Built-in audio processing via `esp_aec` (AEC only) or `esp_afe` (AEC + NS + VAD + AGC) components. Both implement the `AudioProcessor` interface and are configured via `processor_id`. Three AEC reference modes:
@@ -26,7 +26,8 @@ With i2s_audio_duplex:
 - **Post-Processor Mic Path**: the standard microphone platform always emits the processed stream from `esp_aec` or `esp_afe`, so MWW, VA and intercom share one stable post-processor source.
 - **PSRAM Buffers**: `buffers_in_psram` option moves the non-hot-path audio buffers (AEC mic/ref, processor interleave, multi-channel mic, spk_ref) to PSRAM. `rx_buffer` and `spk_buffer` stay in internal RAM regardless (I2S hot path, PSRAM bus contention would cause glitches). Typical saving: ~15-20KB internal heap. Required for `sr_low_cost` AEC on memory-constrained devices.
 - **Volume Controls**: Master volume (speaker-backed, persistent) and post-AEC/AFE mic gain (-20 to +30 dB, persistent). Board-level input gain staging remains a YAML option through `mic_attenuation`, not a Home Assistant user control.
-- **Codec-less Support**: `slot_bit_width: 32` for MEMS mics (INMP441, MSM261, SPH0645) + I2S amp on same bus. `correct_dc_offset: true` for mics without built-in HPF
+- **Codec-less Support**: `slot_bit_width: 32` for MEMS mics (INMP441, MSM261, SPH0645) + I2S amp on the same bus or on separate RX/TX buses. `correct_dc_offset: true` for mics without built-in HPF
+- **Dual I2S Bus Support**: optional `rx_bus` and `tx_bus` split mode for discrete I2S microphones and amplifiers on separate ESP-IDF I2S controllers. The feature is compile-time gated and does not enter single-bus builds.
 - **Number Platform**: Native `mic_gain` and Master Volume entities with `ESPPreferenceObject` persistence. The YAML option is still `speaker_volume`, but the standard packages expose the user-facing number as `master_volume`. When both `i2s_audio_duplex` and `intercom_api` are present, `i2s_audio_duplex` owns the number entities and `intercom_api` defers to avoid conflicts.
 - **Cross-Component Validation**: `FINAL_VALIDATE_SCHEMA` prevents dual audio processors (both `i2s_audio_duplex` and `intercom_api` with a processor configured) and dual DC offset removal, catching configuration errors at compile time
 - **Processor Surface**: When `processor_id` is configured, microphone callbacks receive processed audio or silence. They never receive an implicit raw bypass while the processor is stopped, rebuilding, or waiting for reference.
@@ -174,6 +175,50 @@ speaker:
     i2s_audio_duplex_id: i2s_duplex
 ```
 
+### Dual-Bus Codec-Less Setup
+
+Use `rx_bus` and `tx_bus` when the microphone and amplifier are wired to
+different ESP32 I2S controllers, for example INMP441 plus MAX98357A on separate
+BCLK/LRCLK pairs. This follows ESP-IDF simplex channel allocation: one RX
+channel on the mic port and one TX channel on the speaker port. The ESP should
+normally stay I2S primary on both buses so it owns both clocks.
+
+Dual-bus support is compile-time gated. If `rx_bus` and `tx_bus` are absent, the
+generated build does not define `USE_I2S_AUDIO_DUPLEX_DUAL_BUS` and the C++
+split-data-interface path is not compiled.
+
+```yaml
+i2s_audio_duplex:
+  id: i2s_duplex
+  rx_bus:
+    i2s_num: 0
+    i2s_lrclk_pin: GPIO37
+    i2s_bclk_pin: GPIO36
+    i2s_din_pin: GPIO35
+  tx_bus:
+    i2s_num: 1
+    i2s_lrclk_pin: GPIO6
+    i2s_bclk_pin: GPIO5
+    i2s_dout_pin: GPIO7
+  sample_rate: 48000
+  output_sample_rate: 16000
+  slot_bit_width: 32
+  correct_dc_offset: true
+  processor_id: aec_processor
+```
+
+First-version limits:
+
+- `rx_bus` and `tx_bus` must be configured together and must use different
+  `i2s_num` values.
+- Dual-bus mode is standard I2S only. TDM reference remains a shared-bus codec
+  topology.
+- Put `i2s_lrclk_pin`, `i2s_bclk_pin`, `i2s_din_pin` and `i2s_dout_pin` inside
+  `rx_bus` or `tx_bus`. Do not mix top-level bus pins with split-bus pins.
+- For physically separated mic/speaker clocks, start no-codec AEC tests with
+  `esp_aec.filter_length: 8`; this gives the adaptive filter a longer delay
+  tail without adding custom DSP.
+
 ### Configuration Options
 
 | Option | Type | Default | Description |
@@ -184,6 +229,8 @@ speaker:
 | `i2s_mclk_pin` | pin | -1 | Master Clock pin (if codec requires) |
 | `i2s_din_pin` | pin | -1 | Data input from codec (microphone) |
 | `i2s_dout_pin` | pin | -1 | Data output to codec (speaker) |
+| `rx_bus` | object | - | Optional dual-bus RX configuration with `i2s_num`, `i2s_lrclk_pin`, `i2s_bclk_pin`, optional `i2s_mclk_pin`, and `i2s_din_pin`. Requires `tx_bus`. |
+| `tx_bus` | object | - | Optional dual-bus TX configuration with `i2s_num`, `i2s_lrclk_pin`, `i2s_bclk_pin`, optional `i2s_mclk_pin`, and `i2s_dout_pin`. Requires `rx_bus`. |
 | `sample_rate` | int | 16000 | I2S bus sample rate (8000-48000) |
 | `output_sample_rate` | int | - | Mic/AEC output rate. If set, enables sample-rate conversion (must divide `sample_rate` evenly, max ratio 6) |
 | `fir_decimator` | string | `esp_ae_rate_cvt` | Compatibility name for the sample-rate conversion backend. Only Espressif `esp_audio_effects` (`esp_ae_rate_cvt`) is supported. See [Rate Conversion Backend](#rate-conversion-backend) below. |

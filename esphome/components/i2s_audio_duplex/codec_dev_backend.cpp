@@ -165,12 +165,57 @@ const char *CodecDevBackend::input_codec_name() const {
   return "none";
 }
 
-bool CodecDevBackend::setup(uint8_t i2s_port, i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
+bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
+                            i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
                             i2s_clock_src_t clk_src) {
   this->teardown();
 
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  const bool shared_i2s_data = tx_i2s_port == rx_i2s_port;
+  if (shared_i2s_data) {
+    audio_codec_i2s_cfg_t i2s_cfg = {
+        .port = tx_i2s_port,
+        .rx_handle = rx_handle,
+        .tx_handle = tx_handle,
+        .clk_src = static_cast<int>(clk_src),
+    };
+    this->tx_data_if_ = audio_codec_new_i2s_data(&i2s_cfg);
+    if (this->tx_data_if_ == nullptr) {
+      ESP_LOGE(TAG, "Failed to create shared esp_codec_dev I2S data interface");
+      return false;
+    }
+    this->rx_data_if_ = this->tx_data_if_;
+  } else {
+    if (rx_handle != nullptr) {
+      audio_codec_i2s_cfg_t rx_i2s_cfg = {
+          .port = rx_i2s_port,
+          .rx_handle = rx_handle,
+          .tx_handle = nullptr,
+          .clk_src = static_cast<int>(clk_src),
+      };
+      this->rx_data_if_ = audio_codec_new_i2s_data(&rx_i2s_cfg);
+      if (this->rx_data_if_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create RX esp_codec_dev I2S data interface");
+        return false;
+      }
+    }
+    if (tx_handle != nullptr) {
+      audio_codec_i2s_cfg_t tx_i2s_cfg = {
+          .port = tx_i2s_port,
+          .rx_handle = nullptr,
+          .tx_handle = tx_handle,
+          .clk_src = static_cast<int>(clk_src),
+      };
+      this->tx_data_if_ = audio_codec_new_i2s_data(&tx_i2s_cfg);
+      if (this->tx_data_if_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create TX esp_codec_dev I2S data interface");
+        return false;
+      }
+    }
+  }
+#else
   audio_codec_i2s_cfg_t i2s_cfg = {
-      .port = i2s_port,
+      .port = tx_i2s_port,
       .rx_handle = rx_handle,
       .tx_handle = tx_handle,
       .clk_src = static_cast<int>(clk_src),
@@ -180,6 +225,7 @@ bool CodecDevBackend::setup(uint8_t i2s_port, i2s_chan_handle_t tx_handle, i2s_c
     ESP_LOGE(TAG, "Failed to create esp_codec_dev I2S data interface");
     return false;
   }
+#endif
 
   if (rx_handle != nullptr && this->es7210_.enabled) {
     this->es7210_ctrl_ = this->new_i2c_ctrl_(this->es7210_.address);
@@ -242,7 +288,11 @@ bool CodecDevBackend::setup(uint8_t i2s_port, i2s_chan_handle_t tx_handle, i2s_c
     esp_codec_dev_cfg_t rx_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
         .codec_if = this->rx_codec_if_,
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+        .data_if = this->rx_data_if_,
+#else
         .data_if = this->data_if_,
+#endif
     };
     this->rx_dev_ = esp_codec_dev_new(&rx_cfg);
     if (this->rx_dev_ == nullptr) {
@@ -255,7 +305,11 @@ bool CodecDevBackend::setup(uint8_t i2s_port, i2s_chan_handle_t tx_handle, i2s_c
     esp_codec_dev_cfg_t tx_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
         .codec_if = this->tx_codec_if_,
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+        .data_if = this->tx_data_if_,
+#else
         .data_if = this->data_if_,
+#endif
     };
     this->tx_dev_ = esp_codec_dev_new(&tx_cfg);
     if (this->tx_dev_ == nullptr) {
@@ -265,8 +319,14 @@ bool CodecDevBackend::setup(uint8_t i2s_port, i2s_chan_handle_t tx_handle, i2s_c
   }
 
   this->prepared_ = true;
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s, data_if=%s)",
+           this->input_codec_name(), this->output_codec_name(),
+           shared_i2s_data ? "shared" : "split");
+#else
   ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s)",
            this->input_codec_name(), this->output_codec_name());
+#endif
   return true;
 }
 
@@ -409,10 +469,23 @@ void CodecDevBackend::teardown() {
     this->tx_dev_ = nullptr;
   }
   this->destroy_codecs_();
+#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+  const audio_codec_data_if_t *rx_data_if = this->rx_data_if_;
+  const audio_codec_data_if_t *tx_data_if = this->tx_data_if_;
+  if (rx_data_if != nullptr) {
+    audio_codec_delete_data_if(this->rx_data_if_);
+    this->rx_data_if_ = nullptr;
+  }
+  if (tx_data_if != nullptr && tx_data_if != rx_data_if) {
+    audio_codec_delete_data_if(this->tx_data_if_);
+  }
+  this->tx_data_if_ = nullptr;
+#else
   if (this->data_if_ != nullptr) {
     audio_codec_delete_data_if(this->data_if_);
     this->data_if_ = nullptr;
   }
+#endif
   this->prepared_ = false;
   this->open_ = false;
 }
