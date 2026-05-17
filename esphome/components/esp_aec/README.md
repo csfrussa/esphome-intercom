@@ -27,7 +27,8 @@ Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the `AudioProces
 | Scenario | Pick |
 |----------|------|
 | Intercom only, single mic, no VA | `esp_aec` (lighter on RAM and CPU) |
-| Intercom + VA + Micro Wake Word, single mic | `esp_aec` in `sr_low_cost` mode (preserves spectral features for MWW) |
+| Intercom + VA + Micro Wake Word, single mic with audible speaker echo | `esp_aec` in `fd_low_cost` mode (Espressif full-duplex AEC) |
+| Intercom + VA + Micro Wake Word, single mic with low speaker leakage | `esp_aec` in `sr_low_cost` mode (preserves spectral features for MWW) |
 | Intercom + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
 | Standalone `intercom_api` without `i2s_audio_duplex` (dual-bus MEMS + amp) | `esp_aec` (the AFE feed/fetch model needs the steady frames that `i2s_audio_duplex` produces) |
@@ -63,18 +64,20 @@ i2s_audio_duplex:
 | `id` | ID | required | Component identifier referenced by `i2s_audio_duplex.processor_id` or `intercom_api.processor_id`. |
 | `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to decimate from the I²S bus rate when needed. |
 | `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (intercom-only, ~128 ms tail). Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
-| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **VOIP modes** for intercom-only (residual echo suppressor for human ears), **SR modes** for full-experience with MWW (linear-only, preserves spectral features). Public YAMLs in this repo restrict the runtime select to a single engine per tier - see "Runtime mode switching" below. |
+| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for intercom-only. Public YAMLs in this repo restrict or order runtime choices per target - see "Runtime mode switching" below. |
 
 ## AEC modes
 
-esp-sr ships two completely different AEC engines:
+esp-sr 2.4.4 ships SR, VOIP and FD AEC modes:
 
 | Mode | Engine | CPU on Core 0 (S3 @ 240 MHz, 16 kHz mono) | RES | MWW on post-AEC | Recommended |
 |------|--------|--------------------------------------|-----|-----------------|-------------|
-| `sr_low_cost` | `esp_aec3` linear | **~22 %** | No | **10/10** | Default for VA + MWW setups |
+| `sr_low_cost` | `esp_aec3` linear | **~22 %** | No | **10/10** | VA + MWW when speaker leakage is already mild |
 | `sr_high_perf` | `esp_aec3` FFT | ~25 % | No | 10/10 | Only when contiguous DMA-capable internal RAM is available |
 | `voip_low_cost` | `dios_ssp_aec` Speex | ~58 % | Yes | 2/10 | Intercom-only, mild echo, low CPU budget |
 | `voip_high_perf` | `dios_ssp_aec` | ~64 % | Yes | 2/10 | **Default for intercom-only** (with `filter_length: 8` for 128 ms tail) |
+| `fd_low_cost` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Codec-backed full-duplex devices with audible speaker echo, such as Spotpear ES8311 loopback |
+| `fd_high_perf` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Same use case when contiguous DMA-capable internal RAM is available |
 
 Why `sr_*` is recommended for VA + MWW: the SR engines use a linear-only adaptive filter that preserves the spectral features the wake-word neural model relies on. The VOIP engines add a residual echo suppressor (RES) that distorts those features and drops MWW detection rate from 10/10 to 2/10 in our hardware tests.
 
@@ -91,7 +94,7 @@ Why `sr_*` is recommended for VA + MWW: the SR engines use a linear-only adaptiv
 | `FeatureControl feature_control(AudioFeature)` | `AEC` is `RESTART_REQUIRED`; everything else is `NOT_SUPPORTED`. |
 | `bool set_feature(AudioFeature, bool enabled)` | Toggle AEC (rebuilds the handle, ~70 ms gap). |
 | `ProcessorTelemetry telemetry() const` | Frame count and ring-buffer free percent for diagnostics. |
-| `bool reconfigure(int type, int mode)` | Switch AEC mode by numeric code. `type` selects the engine (0 = SR / `esp_aec3`, non-zero = VC / `dios_ssp_aec`); `mode` selects the variant (0 = LOW_COST, 1 = HIGH_PERF). Combinations: (0,0) `sr_low_cost`, (0,1) `sr_high_perf`, (1,0) `voip_low_cost`, (1,1) `voip_high_perf`. Prefer the YAML action `esp_aec.set_mode` for automations. |
+| `bool reconfigure(int type, int mode)` | Switch AEC mode by numeric code. `type` selects the engine (0 = SR, 1 = VC, 2 = FD); `mode` selects the variant (0 = LOW_COST, 1 = HIGH_PERF). Prefer the YAML action `esp_aec.set_mode` for automations. |
 | `bool reinit_by_name(const std::string &name)` | Switch AEC mode by name (`"sr_low_cost"` etc.). Recommended entry point. Returns false on rejection (for example, when `sr_high_perf` cannot allocate DMA). |
 | `std::string get_mode_name() const` | Current mode as a string. Read this after `reinit_by_name` to confirm the switch was accepted. |
 
@@ -121,7 +124,7 @@ select:
       - lambda: 'id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());'
 ```
 
-Full-experience with MWW - SR engine only:
+Full-experience with MWW and codec loopback where echo is audible - SR plus FD choices:
 
 ```yaml
 select:
@@ -131,7 +134,9 @@ select:
     options:
       - "sr_low_cost"
       - "sr_high_perf"
-    initial_option: "sr_low_cost"
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_low_cost"
     optimistic: false
     restore_value: true
     set_action:
@@ -178,7 +183,7 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 ## Known constraints
 
 - Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must decimate; `i2s_audio_duplex` does this with Espressif's `esp_ae_rate_cvt`.
-- Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*`) require a handle rebuild, which causes a ~70 ms audio gap. Do not change mode while a call is streaming; the AEC select wraps this with state guards in the ready-to-flash YAMLs.
+- Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*` vs `fd_*`) require a handle rebuild, which causes a short audio gap. Do not change mode while a call is streaming; the AEC select wraps this with state guards in the ready-to-flash YAMLs.
 - `filter_length` is compile-time-sized but runtime-mutable. Longer filters give better echo-tail coverage at the cost of CPU.
 - The `sr_high_perf` mode needs a contiguous DMA-capable internal allocation. On a fragmented heap the pre-flight check refuses the switch and logs a warning; the device keeps running on the previous mode.
 
@@ -186,6 +191,12 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 
 **Echo cancellation does nothing.**
 Make sure the consumer (typically `i2s_audio_duplex` or `intercom_api`) actually links `processor_id: aec_processor`. The component initialises silently even when nobody references it.
+
+**The far end still hears the speaker on a codec-backed full-duplex device.**
+Use `fd_low_cost` first. For ES8311 digital feedback, verify
+`no_dac_ref: false`, `use_stereo_aec_reference: true` and
+`reference_channel: right`, because Espressif's ES8311 driver outputs
+`ADCL + DACR` in this mode.
 
 **Wake word detection rate dropped after enabling AEC.**
 You are likely on a `voip_*` mode. Switch to `sr_low_cost`. The VOIP engines apply a residual echo suppressor that distorts the features the MWW model expects.

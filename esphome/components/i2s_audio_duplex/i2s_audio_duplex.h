@@ -230,7 +230,7 @@ class I2SAudioDuplex : public Component {
   void set_output_volume_q15(int16_t q15);
   float get_speaker_volume() const { return this->speaker_volume_.load(std::memory_order_relaxed); }
 
-  // ES8311 Digital Feedback mode: RX is stereo with L=DAC(ref), R=ADC(mic)
+  // ES8311 Digital Feedback mode: RX is stereo with L=ADC(mic), R=DAC(ref)
   void set_use_stereo_aec_reference(bool use) { this->use_stereo_aec_ref_ = use; }
 
   // YAML `fir_decimator` is retained as a compatibility name, but the only
@@ -560,7 +560,7 @@ class I2SAudioDuplex : public Component {
   std::atomic<int16_t> speaker_volume_q15_{32767};  // combined hot-path fixed-point volume
   std::atomic<int16_t> output_volume_q15_{32767};   // media_player/speaker abstraction volume
   std::atomic<int16_t> master_volume_q15_{32767};   // board master volume
-  bool use_stereo_aec_ref_{false}; // ES8311 digital feedback: RX stereo with L=ref, R=mic
+  bool use_stereo_aec_ref_{false}; // ES8311 digital feedback: RX stereo with L=mic, R=ref
   bool ref_channel_right_{false};  // Which channel is AEC reference: false=L, true=R
 
   // TDM bus/reference (ES7210 in TDM mode)

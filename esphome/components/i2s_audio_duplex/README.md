@@ -20,7 +20,7 @@ With i2s_audio_duplex:
 - **Standard Platforms**: Exposes `microphone` and `speaker` platform classes (compatible with Voice Assistant, MWW, intercom_api)
 - **Audio Processor Integration**: Built-in audio processing via `esp_aec` (AEC only) or `esp_afe` (AEC + NS + VAD + AGC) components. Both implement the `AudioProcessor` interface and are configured via `processor_id`. Three AEC reference modes:
   - **Direct TX reference** (default): Uses the previous TX frame as AEC reference. No ring buffer, no delay tuning. Works with any setup (discrete MEMS mic + amp, or codec). The reference is decimated **on the TX side** (matches the Espressif `esp-gmf aec_rec` pipeline: rate conversion before AEC), so storage and the consumer both work at the processor rate. This produces a phase-coherent `(mic, ref)` pair and avoids the ghost-tail residual that an RX-side decimation introduces. The AEC adaptive filter compensates for the ~1 chunk latency automatically.
-  - **ES8311 Digital Feedback** (recommended for ES8311): Stereo I2S with L=DAC ref, R=ADC mic. Sample-accurate reference. Enable with `use_stereo_aec_reference: true`.
+  - **ES8311 Digital Feedback** (recommended for ES8311): Stereo I2S with L=ADC mic, R=DAC ref. Sample-accurate reference. Enable with `use_stereo_aec_reference: true`.
   - **TDM Hardware Reference** (for ES7210 + ES8311): ES7210 in TDM mode captures DAC analog output on a dedicated ADC channel (e.g. MIC3). Sample-aligned with mic data. Enable with `use_tdm_reference: true`.
 - **Post-Processor Mic Path**: the standard microphone platform always emits the processed stream from `esp_aec` or `esp_afe`, so MWW, VA and intercom share one stable post-processor source.
 - **PSRAM Buffers**: `buffers_in_psram` option moves the non-hot-path audio buffers (AEC mic/ref, processor interleave, multi-channel mic, spk_ref) to PSRAM. `rx_buffer` and `spk_buffer` stay in internal RAM regardless (I2S hot path, PSRAM bus contention would cause glitches). Typical saving: ~15-20KB internal heap. Required for `sr_low_cost` AEC on memory-constrained devices.
@@ -38,7 +38,7 @@ With i2s_audio_duplex:
 
 ```mermaid
 flowchart TD
-    RX["🎛️ I2S RX"] --> Stereo["🎚️ Stereo codec<br/>L=ref, R=mic"]
+    RX["🎛️ I2S RX"] --> Stereo["🎚️ Stereo codec<br/>L=mic, R=ref"]
     RX --> TDM["🎚️ TDM codec<br/>mic slots + ref slot"]
     RX --> Mono["🎙️ Mono mic<br/>ref from speaker history"]
 
@@ -313,7 +313,9 @@ i2s_audio_duplex:
 
 **How it works:**
 - ES8311 register 0x44 is configured to output DAC+ADC on ASDOUT as stereo
-- L channel = DAC loopback (reference signal), R channel = ADC (microphone), configurable via `reference_channel`
+- L channel = ADC microphone, R channel = DAC loopback reference when
+  `no_dac_ref: false` writes the Espressif ES8311 `ADCL + DACR` setting.
+  Set `reference_channel: right` for this codec loopback mode.
 - Reference is **sample-accurate** (same I2S frame as mic) → best possible AEC
 - The reference comes directly from the I2S RX deinterleave, sample-accurate
 

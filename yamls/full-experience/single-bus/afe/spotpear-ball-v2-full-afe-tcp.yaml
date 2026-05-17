@@ -6,7 +6,7 @@
 #
 # Audio pipeline (i2s_audio_duplex @ 48 kHz, stereo AEC reference):
 #
-#   I2S RX 48kHz stereo -> L=ref R=mic -> esp_ae_rate_cvt x3 -> esp_aec (MR AEC) -> mic_afe -> VA / Intercom TX / MWW
+#   I2S RX 48kHz stereo -> L=mic R=ref -> esp_ae_rate_cvt x3 -> esp_aec (MR AEC) -> mic_afe -> VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
@@ -242,7 +242,7 @@ esp_aec:
   id: aec_processor
   sample_rate: 16000
   filter_length: 4
-  mode: sr_low_cost
+  mode: fd_low_cost
 
 # =============================================================================
 # I2S AUDIO DUPLEX (single bus for ES8311)
@@ -1661,7 +1661,9 @@ select:
     options:
       - "sr_low_cost"
       - "sr_high_perf"
-    initial_option: "sr_low_cost"
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_low_cost"
     # Non-optimistic: see waveshare-s3-full-afe-tcp.yaml for rationale.
     optimistic: false
     restore_value: false

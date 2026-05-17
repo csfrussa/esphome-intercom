@@ -229,8 +229,9 @@ CONFIG_SCHEMA = cv.All(
         # Input gain/attenuation before the processor: <1.0 attenuates hot mics,
         # >1.0 amplifies weak mics. This is gain staging, not a separate mic output.
         cv.Optional(CONF_MIC_ATTENUATION, default=1.0): cv.float_range(min=0.01, max=32.0),
-        # ES8311 digital feedback: RX is stereo with L=DAC(reference), R=ADC(mic)
-        # Requires ES8311 register 0x44 bits[6:4]=4 (ADCDAT_SEL=DACL+ADC)
+        # ES8311 digital feedback: RX is stereo with L=ADC(mic), R=DAC(reference)
+        # when no_dac_ref is false. Espressif's driver writes REG44=0x58,
+        # documented in-source as "ADCL + DACR".
         cv.Optional(CONF_USE_STEREO_AEC_REF, default=False): cv.boolean,
         # Which stereo channel carries the AEC reference (default: left)
         cv.Optional(CONF_REFERENCE_CHANNEL, default="left"): cv.one_of("left", "right", lower=True),
@@ -444,7 +445,7 @@ async def to_code(config):
     # Set input gain/attenuation before the audio processor.
     cg.add(var.set_mic_attenuation(config[CONF_MIC_ATTENUATION]))
 
-    # ES8311 digital feedback mode: stereo RX with L=ref, R=mic
+    # ES8311 digital feedback mode: stereo RX with L=mic, R=ref
     cg.add(var.set_use_stereo_aec_reference(config[CONF_USE_STEREO_AEC_REF]))
 
     # Reference channel selection (left or right)
