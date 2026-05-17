@@ -263,6 +263,7 @@ i2s_audio_duplex:
   output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
   processor_id: aec_processor
   fir_decimator: esp_ae_rate_cvt
+  tx_channel: right              # ES8311 loopback exposes DACR as the AEC reference
   codec:
     i2c_id: i2c_bus
     input:
@@ -276,8 +277,8 @@ i2s_audio_duplex:
       address: 0x18
       use_mclk: true
       no_dac_ref: false
-  # ES8311 digital feedback through the official codec driver: RX right is
-  # DAC reference, RX left is ADC mic when no_dac_ref is false.
+  # ES8311 digital feedback through the official codec driver: RX left is
+  # ADC mic and RX right is DACR reference when no_dac_ref is false.
   # Sample-accurate reference alignment, no ring buffer delay needed.
   use_stereo_aec_reference: true
   reference_channel: right
