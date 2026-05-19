@@ -178,17 +178,21 @@ esp_afe:
   mode: low_cost
   mic_num: 2
   aec_filter_length: 4
+  aec_nlp_level: normal
   memory_alloc_mode: more_psram
   se_enabled: true
   ns_enabled: true
   vad_enabled: false
-  agc_enabled: true
+  # WS3 keeps AGC out of the runtime profile. It can improve MWW sensitivity
+  # under playback, but on this target it causes TTS/media stutter and any
+  # runtime toggle requires a full AFE rebuild.
+  agc_enabled: false
   # Worst-case HTTPS media/TTS + intercom needs contiguous internal/DMA heap for
-  # TLS and I2S. Move the ESPHome AFE bridge buffers to PSRAM and keep the AFE
-  # DSP work itself inside Espressif GMF/esp-sr.
-  feed_buf_in_psram: true       # ~3 KB scratch
+  # TLS and I2S. Keep only the large staging ring in PSRAM; the per-frame
+  # scratch and fetch output ring stay internal to avoid PSRAM jitter.
+  feed_buf_in_psram: false      # ~3 KB hot scratch
   feed_ring_in_psram: true      # ~24 KB staging ring on 2-mic + ref FD
-  fetch_ring_in_psram: true     # ~8 KB output ring
+  fetch_ring_in_psram: false    # ~8 KB hot output ring
 
 i2s_audio_duplex:
   id: i2s_duplex
