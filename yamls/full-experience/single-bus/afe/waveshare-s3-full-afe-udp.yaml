@@ -175,7 +175,7 @@ esp_afe:
   mode: low_cost
   mic_num: 2
   aec_filter_length: 4
-  memory_alloc_mode: internal_psram_balance
+  memory_alloc_mode: more_psram
   se_enabled: true
   ns_enabled: true
   vad_enabled: false
