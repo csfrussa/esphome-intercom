@@ -306,6 +306,7 @@ void I2SAudioDuplex::audio_task_() {
     if (this->prealloc_requested_.exchange(false, std::memory_order_acq_rel)) {
       this->preallocate_audio_buffers_from_task_();
     }
+    this->service_speaker_reset_();
     if (!this->duplex_running_.load(std::memory_order_relaxed)) {
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
       continue;
@@ -494,13 +495,7 @@ void I2SAudioDuplex::audio_session_() {
   // ── Main loop ──
   while (this->duplex_running_.load(std::memory_order_relaxed)) {
     // Service ring buffer operations requested by main thread
-    if (this->request_speaker_reset_.exchange(false, std::memory_order_relaxed)) {
-      this->speaker_buffer_->reset();
-      this->direct_aec_ref_valid_ = false;
-      if (this->aec_ref_ring_buffer_) {
-        this->aec_ref_ring_buffer_->reset();
-      }
-    }
+    this->service_speaker_reset_();
     // Reset per-frame state
     ctx.output_buffer = nullptr;
     ctx.current_output_frame_size = ctx.input_frame_size;

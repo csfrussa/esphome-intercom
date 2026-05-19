@@ -111,6 +111,10 @@ esp32:
       CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
       CONFIG_MBEDTLS_DYNAMIC_BUFFER: "y"
       CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN: "16384"
+      # Hardware AES needs internal DMA bounce buffers even when TLS buffers
+      # live in PSRAM. WS3 dual-mic AFE leaves too little contiguous DMA heap
+      # during streaming, so use mbedTLS software AES on this 240 MHz S3.
+      CONFIG_MBEDTLS_HARDWARE_AES: "n"
 
 psram:
   mode: octal

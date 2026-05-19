@@ -550,6 +550,7 @@ class I2SAudioDuplex : public Component {
   static const char *i2s_hardware_state_to_string_(I2SHardwareState state);
   void set_i2s_hardware_state_(I2SHardwareState state);
   void log_memory_snapshot_(const char *label) const;
+  void service_speaker_reset_();
 
   // TDM AEC reference health: incremented every frame the reference
   // slot reads "silent" (RMS < threshold) while the speaker is active.

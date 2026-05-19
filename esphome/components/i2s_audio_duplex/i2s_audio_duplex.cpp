@@ -188,6 +188,19 @@ void I2SAudioDuplex::set_i2s_hardware_state_(I2SHardwareState state) {
   }
 }
 
+void I2SAudioDuplex::service_speaker_reset_() {
+  if (!this->request_speaker_reset_.exchange(false, std::memory_order_relaxed)) {
+    return;
+  }
+  if (this->speaker_buffer_) {
+    this->speaker_buffer_->reset();
+  }
+  this->direct_aec_ref_valid_ = false;
+  if (this->aec_ref_ring_buffer_) {
+    this->aec_ref_ring_buffer_->reset();
+  }
+}
+
 void I2SAudioDuplex::log_memory_snapshot_(const char *label) const {
   ESP_LOGI(TAG,
            "Memory[%s]: internal_free=%u largest_internal=%u dma_free=%u largest_dma=%u psram_free=%u",
@@ -959,10 +972,6 @@ void I2SAudioDuplex::start() {
   }
 
   this->has_i2s_error_.store(false, std::memory_order_relaxed);
-  // Cross-thread mailbox: ask the audio task to drain speaker_buffer_
-  // from its own context before resuming TX. Calling reset() inline
-  // would race the consumer's read indices on the same RingBuffer.
-  this->request_speaker_reset_.store(true, std::memory_order_relaxed);
   // start_speaker()/stop_speaker() own speaker_running_. A mic-only start
   // still writes silence to TX to keep the duplex bus clocked, but it must not
   // make the component look like active playback; otherwise the last mic
