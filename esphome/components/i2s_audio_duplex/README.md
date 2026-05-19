@@ -20,7 +20,7 @@ With i2s_audio_duplex:
 - **Standard Platforms**: Exposes `microphone` and `speaker` platform classes (compatible with Voice Assistant, MWW, intercom_api)
 - **Modular Use**: Does not depend on `intercom_api`. Use it as a standalone full-duplex microphone/speaker component, or compose it with `esp_aec`, `esp_afe`, Voice Assistant, MWW, media player and intercom as needed.
 - **Audio Processor Integration**: Built-in audio processing via `esp_aec` (AEC only) or `esp_afe` (AEC + NS + VAD + AGC) components. Both implement the `AudioProcessor` interface and are configured via `processor_id`. Three AEC reference modes:
-  - **Direct TX reference** (default): Uses the previous TX frame as AEC reference. No ring buffer, no delay tuning. Works with any setup (discrete MEMS mic + amp, or codec). The reference is decimated **on the TX side** (matches the Espressif `esp-gmf aec_rec` pipeline: rate conversion before AEC), so storage and the consumer both work at the processor rate. This produces a phase-coherent `(mic, ref)` pair and avoids the ghost-tail residual that an RX-side decimation introduces. The AEC adaptive filter compensates for the ~1 chunk latency automatically.
+  - **Direct TX reference** (default): Uses the previous TX frame as AEC reference. No ring buffer, no delay tuning. Works with any setup (discrete MEMS mic + amp, or codec). The reference is rate-converted **on the TX side** with Espressif `esp_ae_rate_cvt` (matches the Espressif `esp-gmf aec_rec` pipeline: rate conversion before AEC), so storage and the consumer both work at the processor rate. This produces a phase-coherent `(mic, ref)` pair and avoids the ghost-tail residual that an RX-side conversion introduces. The AEC adaptive filter compensates for the ~1 chunk latency automatically.
   - **ES8311 Digital Feedback** (recommended for ES8311): Stereo I2S with L=ADC mic, R=DAC ref. Sample-accurate reference. Enable with `use_stereo_aec_reference: true`.
   - **TDM Hardware Reference** (for ES7210 + ES8311): ES7210 in TDM mode captures DAC analog output on a dedicated ADC channel (e.g. MIC3). Sample-aligned with mic data. Enable with `use_tdm_reference: true`.
 - **Post-Processor Mic Path**: the standard microphone platform always emits the processed stream from `esp_aec` or `esp_afe`, so MWW, VA and intercom share one stable post-processor source.
@@ -797,7 +797,7 @@ The driver and its helper entities log under namespaced tags so callers can mute
 
 - `WARN` - `i2s_channel_read/write` failures (rate-limited 1st-5th + every 100th via `I2S_LOG_W_THROTTLED`), `TX/RX channel re-enable failed`, audio task did not park within 600 ms
 - `INFO` - driver lifecycle (`I2S DUPLEX initialized`, `Duplex audio started/stopped`, `Mic consumer registered/removed`, `Duplex going idle`), AEC reference mode chosen
-- `DEBUG` - channel creation details (TDM mask, decimation ratio), per-frame audio session start/end, TDM slot configuration
+- `DEBUG` - channel creation details (TDM mask, rate-conversion ratio), per-frame audio session start/end, TDM slot configuration
 
 **Telemetry overhead**
 

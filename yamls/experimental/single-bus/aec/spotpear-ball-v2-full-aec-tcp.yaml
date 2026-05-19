@@ -6,7 +6,7 @@
 #
 # Audio pipeline (i2s_audio_duplex @ 48 kHz, stereo AEC reference):
 #
-#   I2S RX 48kHz stereo → L=ref R=mic → FIR x3 ──┐
+#   I2S RX 48kHz stereo → L=ref R=mic → esp_ae_rate_cvt x3 ──┐
 #                                                └── esp_aec (SR linear) → mic_aec → VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
@@ -263,7 +263,7 @@ esp_aec:
 # Full-duplex I2S: mic + speaker on same bus, managed by one FreeRTOS task.
 # audio_task runs on Core 1 at priority 9, processes AEC inline.
 # Bus runs at 48kHz (ES8311 native rate, better DAC quality).
-# Internal FIR decimation x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
+# Espressif `esp_ae_rate_cvt` x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
 # =============================================================================
 i2s_audio_duplex:
   id: i2s_duplex
@@ -273,7 +273,7 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO10
   i2s_dout_pin: GPIO8
   sample_rate: 48000             # I2S bus rate (ES8311 native)
-  output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate (FIR decimation x3)
+  output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate (esp_ae_rate_cvt x3)
   processor_id: aec_processor
   # ES8311 digital feedback: RX is stereo L=DAC(reference), R=ADC(mic).
   # Sample-accurate reference alignment, no ring buffer delay needed.

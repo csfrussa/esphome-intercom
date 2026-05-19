@@ -9,7 +9,7 @@
 # `peer_intercom_ip` fallback remains only for manual two-node testing.
 #
 # Audio pipeline:
-#   MEMS mic -> i2s_audio_duplex (48kHz) -> FIR x3 -> esp_aec -> intercom TX
+#   MEMS mic -> i2s_audio_duplex (48kHz) -> esp_ae_rate_cvt x3 -> esp_aec -> intercom TX
 #   Intercom RX (16kHz) -> resampler -> hw_speaker (48kHz) -> class-D amp
 #
 # HARDWARE (adapt GPIOs to YOUR board):

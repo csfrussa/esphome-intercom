@@ -139,7 +139,7 @@ Two audio processing components are available, both implementing the `AudioProce
 - **`esp_aec`**: Standalone echo cancellation. Lightweight (~80 KB internal RAM). Use when you only need AEC.
 - **`esp_afe`**: Full AFE pipeline with two modes:
   - **Single-mic (MR)**: AEC + NS + VAD + AGC (~100 KB internal RAM)
-  - **Dual-mic (MMR)**: AEC + Speech Enhancement (~120 KB internal RAM). Spatial voice isolation using 2 microphones
+  - **Dual-mic (MMR/MMNR)**: AEC + structural Speech Enhancement/BSS (~120 KB internal RAM). Public dual-mic profiles keep AGC disabled and expose only live AEC/VAD controls
   - Runtime toggle switches, diagnostic sensors, and mode switching in Home Assistant
 
 They are drop-in replacements **only behind `i2s_audio_duplex`**, which feeds the processor with the fixed 512-sample 16 kHz frames that `esp_afe` requires. When `intercom_api` talks to the processor directly (no `i2s_audio_duplex`, typical of dual-bus MEMS + I2S amp setups), use `esp_aec` only. The AFE pipeline needs a stable producer task that `intercom_api`'s standalone mic path does not provide.
@@ -168,7 +168,7 @@ components try to own the same processor or DC-offset correction stage.
 | `filter_length` | int | 4 | Echo tail in frames. Range 1 to 8. Frame size depends on `mode`: 32 ms in SR modes, 16 ms in VOIP modes. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (intercom-only, ~128 ms tail). |
 | `mode` | string | `voip_low_cost` | AEC algorithm mode. Pick the engine to match the use case: **VOIP modes** for intercom-only (human ears, residual echo suppressor active), **SR modes** for full-experience with MWW (linear-only, preserves spectral features). Do not mix engines at runtime, see "AEC engine standard" below. |
 
-**AEC modes** (ESP-SR library, two completely different engines):
+**AEC modes** (ESP-SR 2.4.4 library, distinct engine families):
 
 | Mode | Engine | CPU (Core 0) | RES | MWW on post-AEC | Recommended |
 |------|--------|-------------|-----|-----------------|-------------|
@@ -179,12 +179,11 @@ components try to own the same processor or DC-offset correction stage.
 
 ### AEC engine standard (intercom-only vs full-experience)
 
-`aec_create()` in esp-sr 2.3.1 has a silent FFT-table calloc-fail bug
-that crashes the next `aec_process` if `filter_length > 4` and the
-contiguous DMA-capable internal block is too small. The bug only emerges
-on cross-engine transitions (VOIP ↔ SR), because each engine allocates
-a different scratch layout. Public YAMLs in this repo restrict the
-runtime AEC select to a single engine per tier:
+The ESP-SR AEC engines allocate different scratch layouts, and high-perf modes
+need a contiguous DMA-capable internal block. Public YAMLs in this repo restrict
+the runtime AEC select to a single engine family per tier, and the component
+pre-flights high-perf allocation before switching. That keeps runtime tests from
+turning an allocation miss into a delayed crash in the next `aec_process()`.
 
 | Tier | filter_length | Initial mode | Runtime select options | Engine |
 |---|---|---|---|---|
@@ -192,9 +191,12 @@ runtime AEC select to a single engine per tier:
 | Full-experience AEC (with MWW) | 4 | `sr_low_cost` | `sr_low_cost`, `sr_high_perf` | `esp_aec3` |
 
 Full-experience AFE setups select the engine via `esp_afe.mode` /
-`esp_afe.afe_type` and do not use the `esp_aec` select at all.
+`esp_afe.afe_type` and do not use the `esp_aec` select at all. P4 and WS3
+dual-mic AFE profiles use the Espressif GMF AFE manager plus `esp-sr` 2.4.4.
 
-CPU figures measured on ESP32-S3 at 240 MHz feeding one 16 kHz mic channel (S3 reference hardware, esp-sr 2.3.1). They scale roughly linearly with the sample rate.
+CPU figures are historical ESP32-S3 reference measurements at 240 MHz feeding
+one 16 kHz mic channel. Treat them as relative guidance and re-check per target
+when changing ESP-SR versions, mode families or sample-rate conversion.
 
 > **Important**: SR modes use a **linear-only** adaptive filter that preserves spectral features for neural wake word detection. VOIP modes add a **residual echo suppressor** (RES) that distorts features, reducing MWW detection from 10/10 to 2/10. Use `sr_low_cost` for VA + MWW setups. SR mode requires `buffers_in_psram: true` on ESP32-S3 (512-sample frames need more memory than the internal heap can usually spare). `sr_high_perf` needs a contiguous DMA-capable internal block at switch time; the component runs a pre-flight heap check and refuses the switch if the block is not available, rather than crashing.
 
@@ -208,12 +210,12 @@ Full audio front-end pipeline with runtime control, diagnostics, and dual-mic Sp
 | `type` | string | `sr` | `sr` (speech recognition, linear AEC) or `vc` (voice communication, nonlinear AEC) |
 | `mode` | string | `low_cost` | `low_cost` or `high_perf` |
 | `mic_num` | int | 1 | Number of microphones (1 or 2). Set to 2 for Speech Enhancement |
-| `se_enabled` | bool | false | Speech Enhancement / spatial source separation. Requires `mic_num: 2`. When active, replaces NS and AGC with spatial source separation |
+| `se_enabled` | bool | false | Speech Enhancement / spatial source separation. Requires `mic_num: 2`. On dual-mic input, `afe_config_check()` prioritizes SE/BSS over NS |
 | `aec_enabled` | bool | true | Echo cancellation |
 | `aec_filter_length` | int | 4 | AEC filter length in frames (1-8) |
-| `ns_enabled` | bool | true | Noise suppression (WebRTC). No effect when SE is active |
+| `ns_enabled` | bool | true | Noise suppression (WebRTC). On dual-mic SE/BSS input, Espressif may clear this stage during `afe_config_check()` |
 | `vad_enabled` | bool | false | Voice activity detection |
-| `agc_enabled` | bool | true | Automatic gain control (WebRTC). No effect when SE is active |
+| `agc_enabled` | bool | true | Automatic gain control (WebRTC). Supported at boot when retained by Espressif's checked config, but public dual-mic profiles keep it disabled and do not expose an AGC switch |
 | `memory_alloc_mode` | string | `more_psram` | Memory allocation strategy |
 
 ```yaml

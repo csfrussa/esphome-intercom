@@ -37,7 +37,7 @@ building blocks are public packages under `packages/debug/`.
 
 ## Single-bus vs Dual-bus
 
-- **Single-bus**: mic and speaker share one I2S peripheral via `i2s_audio_duplex`. Used by devices with audio codecs (ES8311, ES7210+ES8311). Enables stereo AEC reference, TDM multi-mic, and 48kHz bus rate with FIR decimation to 16kHz.
+- **Single-bus**: mic and speaker share one I2S peripheral via `i2s_audio_duplex`. Used by devices with audio codecs (ES8311, ES7210+ES8311). Enables stereo AEC reference, TDM multi-mic, and 48kHz bus rate with Espressif `esp_ae_rate_cvt` conversion to 16kHz.
 
 - **Dual-bus**: mic and speaker on separate I2S peripherals using standard ESPHome `i2s_audio`. Simpler setup for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
 

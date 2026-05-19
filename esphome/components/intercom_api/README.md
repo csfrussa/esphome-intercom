@@ -64,9 +64,9 @@ For go2rtc, point `remote_ip` at the go2rtc host and configure go2rtc with a
 Echo cancellation quality depends on how the speaker reference is captured:
 
 - **With `i2s_audio_duplex`** (recommended): mic and speaker share the same
-  I2S bus and the duplex driver hands an already-decimated, phase-coherent
-  reference to the AEC each frame. After the TX-side decimation refactor in
-  v4.0.0 the residual echo is essentially gone.
+  I2S bus and the duplex driver hands an already rate-converted,
+  phase-coherent reference to the AEC each frame. After the TX-side
+  rate-conversion refactor in v4.0.0 the residual echo is essentially gone.
 - **Standalone `intercom_api`** (mic + speaker on separate components): the
   speaker reference is captured into a 80 ms ring buffer (`spk_ref_buffer_`)
   and consumed by the mic AEC pass. Producer and consumer run on different

@@ -64,7 +64,7 @@ i2s_audio_duplex:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `id` | ID | required | Component identifier referenced by `i2s_audio_duplex.processor_id` or `intercom_api.processor_id`. |
-| `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to decimate from the I²S bus rate when needed. |
+| `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to rate-convert from the I²S bus rate when needed. |
 | `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (intercom-only, ~128 ms tail). Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
 | `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for intercom-only. Public YAMLs in this repo restrict or order runtime choices per target - see "Runtime mode switching" below. |
 
@@ -184,7 +184,7 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 
 ## Known constraints
 
-- Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must decimate; `i2s_audio_duplex` does this with Espressif's `esp_ae_rate_cvt`.
+- Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must rate-convert; `i2s_audio_duplex` does this with Espressif's `esp_ae_rate_cvt`.
 - Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*` vs `fd_*`) require a handle rebuild, which causes a short audio gap. Do not change mode while a call is streaming; the AEC select wraps this with state guards in the ready-to-flash YAMLs.
 - `filter_length` is compile-time-sized but runtime-mutable. Longer filters give better echo-tail coverage at the cost of CPU.
 - The `sr_high_perf` mode needs a contiguous DMA-capable internal allocation. On a fragmented heap the pre-flight check refuses the switch and logs a warning; the device keeps running on the previous mode.

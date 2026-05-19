@@ -19,6 +19,20 @@ The current audio stack uses these Espressif components:
 | `espressif/esp_audio_effects` | `i2s_audio_duplex` | Espressif MIT-style license, restricted to Espressif products | Provides `esp_ae_rate_cvt`, used for the 48 kHz bus to 16 kHz mic/ref conversion on P4, WS3, Spotpear and no-codec AEC builds. |
 | `espressif/esp_codec_dev` | `i2s_audio_duplex` codec-backed builds | Apache-2.0 | Provides codec control plus I2S read/write. P4 and WS3 use ES7210/ES8311 through it; Spotpear single-mic uses ES8311 input/output through it. Generic no-codec AEC still uses the same bus facade with `codec_if = NULL`. |
 
+Current generated P4 and S3 builds resolve the audio stack to:
+
+| Component | Version |
+|---|---|
+| `espressif/esp-sr` | `2.4.4` |
+| `espressif/gmf_ai_audio` | `0.8.2` |
+| `espressif/gmf_core` | `0.8.3` |
+| `espressif/esp_audio_effects` | `1.0.2` |
+| `espressif/esp_codec_dev` | `1.5.4` |
+
+There is no P4 downgrade pin for `esp-sr`. The P4 full AFE target uses the same
+GMF/ESP-SR generation as the S3 dual-mic target, including the `esp32p4` and
+`esp32p4_less_v3` headers and prebuilt libraries shipped by Espressif.
+
 ## Component Boundaries
 
 The Espressif integrations are internal backends of existing ESPHome
@@ -54,7 +68,8 @@ The migration is not P4-only. The current generated-code snapshots confirm:
 
 - Waveshare P4 landscape AFE: TDM ES7210 input and ES8311 output go through
   `esp_codec_dev`; dual mic is structural with SE/BSS enabled and AEC booting
-  disabled for controlled tests.
+  disabled for controlled tests. It uses `gmf_ai_audio` and `esp-sr` 2.4.4,
+  not the historical standalone P4 `esp-sr` 2.3.x override.
 - Waveshare S3 full AFE: TDM ES7210 input and ES8311 output also go through
   `esp_codec_dev`; dual mic is structural with SE/BSS enabled.
 - Spotpear single-mic AEC: ES8311 input and ES8311 output go through
@@ -133,6 +148,12 @@ Do not treat all Espressif components the same:
   (`complexity` and `perf_type`), but no public "allocate in PSRAM" knob. Our
   wrapper controls the scratch buffers it owns and opens all converter handles
   before the first realtime frame.
+- The public dual-mic full-experience targets use a hybrid bridge-buffer
+  placement: keep the per-frame AFE feed scratch and fetch output ring internal,
+  move the larger AFE feed staging ring to PSRAM, and place ESPHome-owned audio
+  and intercom frame buffers in PSRAM. DMA descriptors and I2S driver buffers
+  remain internal. This is the current WS3/P4 baseline for HTTPS media plus TTS
+  plus intercom stress.
 
 Runtime test interpretation: PSRAM use inside GMF/esp-sr is expected. If a test
 crashes or glitches, first capture the stack and memory snapshot; do not fork or

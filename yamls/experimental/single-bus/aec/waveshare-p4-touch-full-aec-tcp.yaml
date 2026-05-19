@@ -26,9 +26,9 @@
 #   8":  model: CUSTOM + JD9365 init_sequence             (800x1280, backlight GPIO26)
 #   10.1": model: WAVESHARE-10.1-DSI-TOUCH-A              (800x1280, backlight GPIO26)
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + FIR decimation to 16kHz):
+# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
-#   ES7210 TDM [mic1, mic2, ref, nc] → FIR x3 ──┐
+#   ES7210 TDM [mic1, mic2, ref, nc] → esp_ae_rate_cvt x3 ──┐
 #                                               └── AEC (SR linear) → mic_aec → VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
@@ -237,7 +237,7 @@ i2c:
     scan: false
 
 # =============================================================================
-# Audio: i2s_audio_duplex (48kHz bus, FIR decimation to 16kHz for mic/AEC/VA)
+# Audio: i2s_audio_duplex (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
 # =============================================================================
 # ES8311 (DAC) and ES7210 (ADC) share BCLK/LRCLK/MCLK with separate data pins.
 # ES8311 DAC output wired to ES7210 MIC3, providing TDM hardware AEC reference (slot 2).
@@ -275,7 +275,7 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO11          # From ES7210 ADC (BSP_I2S_DSIN)
   i2s_dout_pin: GPIO9          # To ES8311 DAC (BSP_I2S_DOUT)
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
-  output_sample_rate: 16000    # Mic/AEC/MWW/VA decimated to 16kHz via FIR x3
+  output_sample_rate: 16000    # Mic/AEC/MWW/VA converted to 16kHz via esp_ae_rate_cvt x3
   processor_id: aec_processor
   fir_decimator: esp_ae_rate_cvt
   use_tdm_reference: true

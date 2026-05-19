@@ -24,7 +24,7 @@ upstream state machine to report real VAD transitions.
 **What `i2s_audio_duplex` provides** that stock `i2s_audio` does not:
 
 - **Single I2S controller, both directions**: TX and RX share the same `i2s_chan_handle_t` pair, configured once at start time. Required for any single-bus codec.
-- **Frame cadence guarantee**: TX and RX run lock-step in one task. The AEC reference is the previous TX frame, decimated on the TX side (matches Espressif's `esp-gmf aec_rec` pipeline). Phase coherent, no skew, no ghost-tail residual.
+- **Frame cadence guarantee**: TX and RX run lock-step in one task. The AEC reference is the previous TX frame, rate-converted on the TX side with Espressif's converter (matches Espressif's `esp-gmf aec_rec` pipeline). Phase coherent, no skew, no ghost-tail residual.
 - **TDM hardware reference**: When paired with ES7210 in TDM mode, captures the DAC analog feedback on a dedicated ADC slot. Sample-aligned with mic data. The board YAML chooses which slot via `tdm_ref_slot` (Korvo-2 baseline = slot 2 / MIC3, Waveshare P4 Touch = slot 1 / MIC2). The audio task watches the chosen slot's RMS while the speaker is active and emits a one-shot WARN ("TDM AEC reference silent for N frames...") if it stays below -60 dBFS for ~3.2 s, so wiring or PGA mistakes surface immediately instead of running a dead reference forever.
 - **Stereo digital reference (ES8311)**: Stereo I2S frame with L=DAC ref, R=ADC mic. Same single-bus codec, sample-accurate ref without extra hardware.
 - **Multi-rate operation**: I2S bus at 48 kHz (for high-quality DAC), mic/AEC/VA at 16 kHz via Espressif `esp_ae_rate_cvt`. Not expressible in stock `i2s_audio`.

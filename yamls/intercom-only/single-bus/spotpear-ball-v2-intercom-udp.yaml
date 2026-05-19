@@ -7,7 +7,7 @@
 #
 # Audio pipeline (mixer topology shared with the Spotpear full builds):
 #
-#   I2S RX 48kHz stereo (L=DAC ref, R=ADC mic) ─FIR x3─> esp_aec @16k ──> mic_main ──> intercom TX
+#   I2S RX 48kHz stereo (L=DAC ref, R=ADC mic) ─esp_ae_rate_cvt x3─> esp_aec @16k ──> mic_main ──> intercom TX
 #
 #   Intercom RX (16kHz) ──> intercom_speaker  (resampler 16→48) ─┐
 #   Ringtone   (FLAC)   ──> ringtone_speaker  (resampler 16→48) ─┴─> audio_mixer (48k) ──> hw_speaker ──> ES8311 DAC

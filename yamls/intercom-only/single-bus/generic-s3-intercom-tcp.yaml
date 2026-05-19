@@ -5,7 +5,7 @@
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
 #
 # Audio pipeline:
-#   MEMS mic → i2s_audio_duplex (48kHz) → FIR x3 → esp_aec → mic_main → intercom TX
+#   MEMS mic → i2s_audio_duplex (48kHz) → esp_ae_rate_cvt x3 → esp_aec → mic_main → intercom TX
 #   Intercom RX (16kHz) → resampler → hw_speaker (48kHz) → class-D amp
 #
 # AEC defaults validated for single-bus MEMS+amp (intercom-only, no MWW):
@@ -13,8 +13,8 @@
 #   filter_length: 8                ~128 ms tail at voip 16 ms/frame
 #   aec_reference: previous_frame   default, ~16 ms latency, no extra buffer
 #
-# 48kHz bus + FIR decimation is required on no-codec MEMS+amp setups; 16kHz
-# native gives significantly worse AEC. Codec devices with hardware digital
+# 48kHz bus + Espressif rate conversion is required on no-codec MEMS+amp
+# setups; 16kHz native gives significantly worse AEC. Codec devices with hardware digital
 # loopback (ES8311 stereo / ES7210 TDM) can run at 16kHz native instead.
 #
 # HARDWARE (adapt GPIOs to YOUR board):

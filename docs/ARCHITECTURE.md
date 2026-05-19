@@ -89,7 +89,7 @@ All audio components share three conventions:
 
 | Task | Component | Core | Priority | Stack | Role |
 |------|-----------|:---:|:-------:|:-----:|------|
-| `i2s_audio_task` | `i2s_audio_duplex` | 0 | 19 | 8 KB PSRAM | I²S read/write, decimation, callbacks |
+| `i2s_audio_task` | `i2s_audio_duplex` | 0 | 19 | 8 KB PSRAM | I²S read/write, Espressif rate conversion, callbacks |
 | `afe_feed` | `esp_gmf_afe_manager` | 0 | 5 | 3 KB | Pulls frames from ESPHome read callback, calls esp-sr `feed()` |
 | `afe_fetch` | `esp_gmf_afe_manager` | 1 | 5 | 3 KB | Blocks on esp-sr `fetch()`, invokes ESPHome result callback |
 | `intercom_srv` | `intercom_api` | 1 | 5 | PSRAM static | Transport RX/control and call FSM handoff |
@@ -214,7 +214,7 @@ Invariants the processor promises:
 Invariants the caller must respect:
 1. Observe `frame_spec_revision()` before reading `frame_spec()` each cycle.
 2. Never call `process()` concurrently from multiple tasks.
-3. When frame_spec changes, internal buffers (decimator ratio, reference extraction, ring-buffer sizes) must be recomputed before the next call.
+3. When frame_spec changes, internal buffers (rate-conversion ratio, reference extraction, ring-buffer sizes) must be recomputed before the next call.
 
 `i2s_audio_duplex` implements this via a permanent audio task that detects revision bumps at the top of each iteration and reinitialises its local buffers in place, without recreating the FreeRTOS task.
 
@@ -306,7 +306,7 @@ does not make either component a hard dependency of the other.
 
 The transport owns the single audio task and exposes raw + processed frames via callbacks. The processor exposes `process()` synchronously and runs its own async workers internally.
 
-Alternative considered: move the task into the processor, let the transport be a pure DMA pump. Rejected because the transport has hardware knowledge (TDM vs stereo, decimation ratio, reference channel placement) that the processor does not want to know, and two of the four supported use cases (intercom-only, intercom+AEC) don't have an AFE-style processor at all.
+Alternative considered: move the task into the processor, let the transport be a pure DMA pump. Rejected because the transport has hardware knowledge (TDM vs stereo, rate-conversion ratio, reference channel placement) that the processor does not want to know, and two of the four supported use cases (intercom-only, intercom+AEC) don't have an AFE-style processor at all.
 
 ### 6.2 Why the consumer list in `i2s_audio_duplex`, not in the processor
 
@@ -344,7 +344,7 @@ Consumers register once at setup. The transport tracks them as opaque tokens in 
 
 Reconfigure does not destroy the audio task. The task sits on a
 `frame_spec_revision` observer loop; when the revision bumps it reinitialises
-the decimator, the reference extraction and the output buffers in place, then
+the Espressif rate converter, the reference extraction and the output buffers in place, then
 resumes. Destroying and recreating the task on every toggle would cause audible
 gaps and lose consumer state that is keyed off the task handle. Dual-mic AFE
 keeps SE/BSS structural, so runtime SE toggles no longer force a 2-mic to

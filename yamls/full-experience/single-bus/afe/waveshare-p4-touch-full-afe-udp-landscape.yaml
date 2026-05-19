@@ -59,8 +59,8 @@ substitutions:
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
 
-  # P4 uses ES7210 input gain plus AFE AGC for capture level. The user-facing
-  # Mic Gain entity is post-AFE trim, so keep it attenuation/unity only.
+  # P4 uses ES7210 input gain plus the AFE dual-mic profile for capture level.
+  # The user-facing Mic Gain entity is post-AFE trim, so keep it attenuation/unity only.
   mic_gain_min: "-20"
   mic_gain_max: "0"
 
@@ -258,17 +258,17 @@ esp_afe:
   input_format: MMNR
   aec_enabled: false
   aec_filter_length: 4
+  aec_nlp_level: normal
   se_enabled: true             # Structural dual-mic SE/BSS; no runtime SE toggle.
-  ns_enabled: false
+  ns_enabled: true              # SE/BSS is structural; keep the dual-mic profile aligned with WS3.
   vad_enabled: false           # MWW covers wake detection; AFE VAD can be enabled for tests.
   agc_enabled: false
-  # P4 RISC-V: keep the AFE staging triad in INTERNAL DRAM. Letting these
-  # land in PSRAM trips a saturation/crash inside esp_aec3_dlfft_process
-  # under 2-mic SE/AEC3 (input frames clip to 0 dBFS, then MEPC=0 panic).
-  # WS3 Xtensa tolerates PSRAM here; P4 build of esp-sr does not.
-  feed_buf_in_psram: false      # ~3 KB scratch
-  feed_ring_in_psram: false     # ~12 KB staging ring
-  fetch_ring_in_psram: false    # ~4 KB output ring
+  # Same hybrid placement as WS3 dual-mic AFE: keep per-frame scratch/output
+  # internal for latency, move the larger feed staging ring to PSRAM to preserve
+  # contiguous internal/DMA heap under HTTPS media + TTS + intercom load.
+  feed_buf_in_psram: false
+  feed_ring_in_psram: true
+  fetch_ring_in_psram: false
 
 i2s_audio_duplex:
   id: i2s_duplex
@@ -283,7 +283,7 @@ i2s_audio_duplex:
   i2s_din_pin: GPIO11          # From ES7210 ADC (BSP_I2S_DSIN)
   i2s_dout_pin: GPIO9          # To ES8311 DAC (BSP_I2S_DOUT)
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
-  output_sample_rate: 16000    # Mic/AFE/MWW/VA decimated to 16kHz
+  output_sample_rate: 16000    # Mic/AFE/MWW/VA converted to 16kHz via esp_ae_rate_cvt x3
   processor_id: afe_processor
   fir_decimator: esp_ae_rate_cvt
   codec:
@@ -305,13 +305,9 @@ i2s_audio_duplex:
   tdm_total_slots: 4
   tdm_mic_slots: [0, 2]        # ES7210 TDM: slot 0 + slot 2 = physical microphones
   tdm_ref_slot: 1              # ES7210 TDM: slot 1 = ES8311 feedback/AEC reference
-  # P4 stability profile: keep the audio task stack in PSRAM, but keep
-  # per-frame RX/TX/ref buffers in INTERNAL RAM. Putting the hot audio
-  # frame buffers in PSRAM makes the hot I2S staging path share bandwidth/cache
-  # pressure with MIPI/LVGL/hosted-WiFi and is a prime suspect for the
-  # strong click/metallic artefact; moving the stack too was what exhausted
-  # internal RAM during earlier stress tests.
-  buffers_in_psram: false
+  # Match the current dual-mic full-experience policy. DMA/I2S buffers stay
+  # internal in the component; this moves only component-owned frame buffers.
+  buffers_in_psram: true
 
 # mic_afe: post-AFE (Speech Enhancement + AEC + VAD) for VA STT, intercom TX, AND MWW.
 # Same beamformed/cleaned stream feeds every consumer.
@@ -463,7 +459,7 @@ voice_assistant:
   media_player: speaker_media_player
   micro_wake_word: mww
   noise_suppression_level: 0   # AFE does NS locally
-  auto_gain: 0dBFS             # AFE does AGC locally
+  auto_gain: 0dBFS             # Do not add HA-side AGC on top of the AFE profile
   # Keep VA playback PCM at unity. Board loudness belongs to ES8311
   # `master_volume`; digital boost here can clip before the AEC reference path.
   volume_multiplier: 1.0
@@ -491,9 +487,8 @@ voice_assistant:
 intercom_api:
   id: intercom
   protocol: udp
-  # Keep intercom_api task stacks and frame staging buffers in internal RAM on
-  # P4. The board-level packages already move long-lived hosted/audio stacks
-  # to PSRAM where validated; this path stays latency-first.
+  tasks_stack_in_psram: true
+  frame_buffers_in_psram: true
   microphone: mic_afe          # Post-AEC: no echo in transmitted audio
   speaker: intercom_speaker
   ringing_timeout: 30s
