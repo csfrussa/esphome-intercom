@@ -66,8 +66,6 @@ esphome:
   friendly_name: ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
-    # Keep 4MB S3 modules OTA-capable with the full AFE feature set.
-    board_build.partitions: ../../../../../../../partitions/esp32s3_4mb_ota_afe.csv
 
 esp32:
   board: esp32-s3-devkitc-1
