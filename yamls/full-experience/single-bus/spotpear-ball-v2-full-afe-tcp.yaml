@@ -30,9 +30,9 @@ substitutions:
   friendly_name: Spotpear Ball v2
   mic_id: mic_afe
 
-  ext_components_source: "../../../../esphome/components"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "../../../../"
+  assets_base: "../../../"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -78,22 +78,22 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: !include ../../../../packages/va_intercom.yaml
-  intercom_transport: !include ../../../../packages/intercom/transport_tcp.yaml
-  phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
-  s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../../packages/led/status_spotpear_ball_v2.yaml
-  afe_entities: !include ../../../../packages/esp_afe/single_mic_entities.yaml
-  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
-  speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
-  lvgl_settings_nav: !include ../../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  lvgl_settings_sync_va: !include ../../../../packages/lvgl/lvgl_settings_sync_va.yaml
-  spotpear_intercom_nav: !include ../../../../packages/lvgl/spotpear_intercom/nav_full.yaml
+  core: !include ../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
+  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
+  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
+  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
+  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
+  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
+  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_full.yaml
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION

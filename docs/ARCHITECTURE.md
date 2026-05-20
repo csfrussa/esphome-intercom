@@ -405,10 +405,11 @@ Questions a fresh designer would ask, and the current answer.
 
 ### 8.4 Should there be a test-matrix of real YAMLs for every topology?
 
-**Current**: intercom-only, generic full AEC, and hardware-specific full AFE
-YAMLs live under `yamls/`. Generic full experience intentionally uses
-`esp_aec`; `esp_afe` stays reserved for boards whose codec/mic topology really
-benefits from AFE stages such as Speech Enhancement, VAD, NS, or AGC.
+**Current**: intercom-only, generic full AEC, generic full AFE, and
+hardware-specific full AFE YAMLs live under `yamls/`. Generic full AEC is the
+lighter 4 MB-oriented profile with `previous_frame` reference; generic full AFE
+is the heavier Espressif AFE profile with TYPE2-style software reference for
+larger flash layouts.
 
 **Why not in the current design**: no shipping device uses those intermediate topologies, so the maintenance surface is not justified.
 

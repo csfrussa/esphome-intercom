@@ -168,8 +168,8 @@ the snippets below when you are building a custom target.
 
 1. Install the Home Assistant `intercom_native` integration.
 2. Flash one ready YAML per device, for example:
-   - [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-tcp.yaml)
-   - [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml)
+   - [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml)
+   - [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml)
 3. Add each ESP through the ESPHome integration in Home Assistant.
 4. Verify that HA exposes `sensor.intercom_phonebook`. That is the authoritative
    roster for the standard packages. Do not add the mDNS discovery package in
@@ -953,19 +953,21 @@ sequenceDiagram
 
 | Device | YAML | Microphone | Speaker | I2S Mode | Audio pipeline | Features |
 |--------|------|------------|---------|----------|----------------|----------|
-| **Spotpear Ball v2 (AFE)** | [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-tcp.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom + LVGL |
-| **Spotpear Ball v2 (AFE UDP)** | [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-udp.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | Same full experience, UDP intercom transport |
+| **Spotpear Ball v2 (AFE)** | [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom + LVGL |
+| **Spotpear Ball v2 (AFE UDP)** | [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | Same full experience, UDP intercom transport |
 | **Spotpear Ball v2 (intercom)** | [`spotpear-ball-v2-intercom-tcp.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | Intercom only |
-| **Waveshare S3-Audio (AFE)** | [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LED + AFE switches/sensors |
-| **Waveshare S3-Audio (AFE UDP)** | [`waveshare-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-udp.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
-| **Waveshare P4-Touch portrait (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-portrait.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LVGL touch |
-| **Waveshare P4-Touch portrait (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
-| **Waveshare P4-Touch landscape (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + Intercom |
-| **Waveshare P4-Touch landscape (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, UDP intercom transport |
-| **Generic S3 (full AFE)** | [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom |
-| **Generic S3 (full AFE UDP)** | [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) | Same full experience, UDP intercom transport |
-| **Generic S3 (intercom)** | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` (TX-side decimated ref) | Intercom only |
-| **Generic S3 (dual bus)** _(experimental)_ | [`generic-s3-dual-intercom.yaml`](yamls/experimental/dual-bus/intercom-only/generic-s3-dual-intercom.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | Ring-buffer reference (intercom_api) | Intercom only |
+| **Waveshare S3-Audio (AFE)** | [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LED + AFE switches/sensors |
+| **Waveshare S3-Audio (AFE UDP)** | [`waveshare-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-udp.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
+| **Waveshare P4-Touch portrait (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LVGL touch |
+| **Waveshare P4-Touch portrait (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
+| **Waveshare P4-Touch landscape (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + Intercom |
+| **Waveshare P4-Touch landscape (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, UDP intercom transport |
+| **Generic S3 (full AEC light)** | [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + Intercom, lighter 4 MB-oriented preset |
+| **Generic S3 (full AEC light UDP)** | [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | Same full AEC light experience, UDP intercom transport |
+| **Generic S3 (full AFE)** | [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
+| **Generic S3 (full AFE UDP)** | [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | Same full AFE experience, UDP intercom transport, requires >4 MB app slot |
+| **Generic S3 (intercom)** | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | Intercom only |
+| **Generic S3 dual bus (intercom UDP)** | [`generic-s3-intercom-udp.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | Intercom only |
 
 > **Want to help expand this list?** Send me a device to test or consider a [donation](https://github.com/sponsors/n-IA-hane), every bit helps!
 
@@ -977,13 +979,15 @@ sequenceDiagram
 - ESP-IDF framework (not Arduino)
 - **sdkconfig tuning** for PSRAM devices: `DATA_CACHE_64KB` + `DATA_CACHE_LINE_64B` (S3) or `CACHE_L2_CACHE_256KB` (P4), plus `SPIRAM_FETCH_INSTRUCTIONS` + `SPIRAM_RODATA`. See [esp_audio_stack README](esphome/components/esp_audio_stack/README.md#psram-and-sdkconfig-requirements) for details.
 
-Generic full-experience S3 builds use `esp_aec`, not the full `esp_afe`
-framework. The full AEC TCP/UDP generic YAMLs compile on the default 4 MB
-ESP32-S3 DevKitC OTA partition, but they are close to the limit
-(about 1.69 MB used of a 1.84 MB app slot). For real generic hardware, prefer
-8 MB or 16 MB flash if you want room for future models/features. The example
-GPIOs are placeholders: on ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so
-move BCLK/LRCLK/DIN/LED to board-safe pins before flashing.
+Generic full-experience S3 now has two maintained presets. Use
+`generic-s3-full-aec-*` for the lighter 4 MB-oriented build: it keeps VA, MWW,
+media, mixer and intercom but uses standalone `esp_aec` with the lightweight
+`previous_frame` reference. Use `generic-s3-full-afe-*` when you want the full
+Espressif AFE pipeline with NS/AGC/VAD and the canonical TYPE2-style software
+reference; that profile needs an app slot larger than the default 4 MB OTA slot,
+so 8 MB or 16 MB flash is recommended. The example GPIOs are placeholders: on
+ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so move BCLK/LRCLK/DIN/LED to
+board-safe pins before flashing.
 
 The P4 YAMLs are experimental hardware targets. They are useful for ongoing
 ESP32-P4/LVGL/hosted-Wi-Fi work, but the stable release reference devices are
@@ -1180,9 +1184,9 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
 
 AEC uses Espressif's closed-source ESP-SR library. All modes have similar CPU cost per frame (~7ms out of 16ms budget). The difference is primarily in memory allocation and adaptive filter quality.
 
-Maintained full-experience YAMLs use `esp_afe` by default. `esp_aec` remains
-the lighter standalone path for intercom-only presets and custom builds that
-only need echo cancellation.
+Maintained full-experience YAMLs now include both paths: `generic-s3-full-aec-*`
+for the lighter standalone AEC profile, and `*-full-afe-*` for the heavier AFE
+profile with NS/AGC/VAD.
 
 For custom VA + MWW builds that deliberately use standalone AEC,
 `sr_low_cost` is the recommended `esp_aec` mode. Linear-only AEC preserves
@@ -1435,20 +1439,27 @@ See [examples/dashboard.yaml](examples/dashboard.yaml) for a complete Lovelace d
 
 Working configs tested on real hardware, organized by use case. Not sure which one to pick? See the [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) for a decision tree.
 
+### Full Experience with `esp_aec` (VA + MWW + Intercom, lighter)
+
+| File | Device | Audio |
+|------|--------|-------|
+| [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic standalone AEC, single-bus mono, previous-frame reference |
+| [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AEC light profile, UDP intercom transport |
+
 ### Full Experience with `esp_afe` (VA + MWW + Intercom + NS/AGC/VAD, heavier)
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic AFE, single-bus mono, TX-side decimated reference |
-| [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AFE, UDP intercom transport |
-| [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
-| [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-udp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Same as TCP full AFE, UDP intercom transport |
-| [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
-| [`waveshare-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-udp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | Same as TCP full AFE, UDP intercom transport |
-| [`waveshare-p4-touch-full-afe-tcp-portrait.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement, TCP intercom |
-| [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, same full AFE, UDP intercom transport |
-| [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement, TCP intercom |
-| [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, same full AFE, UDP intercom transport |
+| [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic AFE, single-bus mono, TYPE2-style software reference, requires >4 MB app slot |
+| [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AFE, UDP intercom transport, requires >4 MB app slot |
+| [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
+| [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Same as TCP full AFE, UDP intercom transport |
+| [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
+| [`waveshare-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-udp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | Same as TCP full AFE, UDP intercom transport |
+| [`waveshare-p4-touch-full-afe-tcp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement, TCP intercom |
+| [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, same full AFE, UDP intercom transport |
+| [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement, TCP intercom |
+| [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, same full AFE, UDP intercom transport |
 
 ### Intercom Only (no VA, no MWW)
 
@@ -1456,7 +1467,7 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 |------|--------|-------|
 | [`spotpear-ball-v2-intercom-tcp.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, `esp_aec`, intercom display |
 | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) | Generic ESP32-S3 (MEMS+amp, single bus) | Single-bus, `esp_aec` |
-| [`generic-s3-dual-intercom.yaml`](yamls/experimental/dual-bus/intercom-only/generic-s3-dual-intercom.yaml) _(experimental)_ | Generic ESP32-S3 (dual I2S) | Dual-bus, ring-buffer reference |
+| [`generic-s3-intercom-udp.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml) | Generic ESP32-S3 (dual I2S, UDP) | Dual-bus, `esp_aec`, previous-frame reference |
 
 ---
 

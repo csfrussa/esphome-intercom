@@ -99,7 +99,10 @@ The migration is not P4-only. The current generated-code snapshots confirm:
   processor is standalone `esp_aec` over Espressif's `afe_aec_create("MR", ...)`
   contract.
 - Generic S3 AEC: remains no-codec and uses standalone `esp_aec` over the same
-  `esp_audio_stack` bus facade.
+  `esp_audio_stack` bus facade, with `previous_frame` as the light reference
+  profile for intercom-only and full AEC presets.
+- Generic S3 AFE: remains no-codec but uses `esp_afe` over the same bus facade,
+  with the TYPE2-style software reference path for larger flash layouts.
 - Generic S3 dual-bus intercom: remains no-codec and uses the same
   `esp_audio_stack` facade, but creates separate ESP-IDF I2S simplex channels
   for RX and TX and separate `esp_codec_dev` data interfaces. This path is only

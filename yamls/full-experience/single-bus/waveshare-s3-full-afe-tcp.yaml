@@ -1,5 +1,5 @@
 # =============================================================================
-# Waveshare ESP32-S3-AUDIO-Board: VA + Intercom + MWW (UDP intercom)
+# Waveshare ESP32-S3-AUDIO-Board: VA + Intercom + MWW (no display)
 # =============================================================================
 #
 # Hardware:
@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "../../../../esphome/components"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "../../../../"
+  assets_base: "../../../"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -55,18 +55,18 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: !include ../../../../packages/va_intercom.yaml
-  intercom_transport: !include ../../../../packages/intercom/transport_udp.yaml
-  phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
-  s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../../packages/led/status_ws2812_ring.yaml
-  led_state_full: !include ../../../../packages/led/state_full_ring.yaml
-  afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
-  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_switch.yaml
-  speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
-  speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
+  core: !include ../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
+  led_state_full: !include ../../../packages/led/state_full_ring.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
 
 # =============================================================================
 # ESPHome Base
@@ -220,6 +220,10 @@ esp_audio_stack:
   task_core: 0
   task_priority: 19
   task_stack_size: 8192
+  # Official IDF i2s_chan_config_t knob. 240 frames is the IDF/periph_i2s
+  # default and halves the WS3 full-duplex TDM DMA reservation vs the previous
+  # 10ms auto value (~480 frames), recovering ~23 KB contiguous internal heap.
+  dma_frame_num: 240
   gmf_io:
     reader:
       io_size: 0
@@ -309,7 +313,6 @@ voice_assistant:
 intercom_api:
   tasks_stack_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   frame_buffers_in_psram: true # Processor frame buffers (mic/ref/out, ~3 KB) in PSRAM
-  protocol: udp
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s

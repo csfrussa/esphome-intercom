@@ -1,5 +1,5 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM + VA (ESP AUDIO STACK UDP) - Single I2S bus, no hardware codec
+# GENERIC ESP32-S3 INTERCOM + VA (ESP AUDIO STACK) - Single I2S bus, no hardware codec
 # =============================================================================
 # Full-featured config: Intercom + Media Player + mixer (VA/MWW ready).
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
@@ -13,7 +13,8 @@
 #
 # HARDWARE (adapt GPIOs to YOUR board):
 #   - Board: Any ESP32-S3 with PSRAM
-#   - Flash: 4 MB compiles but is tight; 8 MB or 16 MB is recommended
+#   - Flash: requires an ESP32-S3 layout with an app slot larger than the
+#     default 4 MB OTA slot; 8 MB or 16 MB flash is recommended
 #   - Microphone: Any I2S MEMS mic on DIN pin
 #   - Speaker: Any I2S class-D amp on DOUT pin
 #   - Mic and speaker SHARE BCLK + LRCLK (same I2S bus, full-duplex)
@@ -33,34 +34,33 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "../../../../esphome/components"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "../../../../"
+  assets_base: "../../../"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
 
-  # Non-default ports used by the integration test matrix to prove that mDNS,
-  # HA phonebook generation, and UDP bridge dialing do not assume 6054/6055.
-  intercom_udp_audio_port: "6156"
-  intercom_udp_control_port: "6157"
+  # Non-default port used by the integration test matrix to prove that mDNS,
+  # HA phonebook generation, and TCP bridge dialing do not assume 6054.
+  intercom_tcp_port: "6154"
 
 # =============================================================================
 # Package: shared VA + Intercom state machine
 # =============================================================================
 packages:
-  core: !include ../../../../packages/va_intercom.yaml
-  intercom_transport: !include ../../../../packages/intercom/transport_udp.yaml
-  phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
-  speaker_mute: !include ../../../../packages/intercom/speaker_mute.yaml
-  s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../../packages/led/status_ws2812_single.yaml
-  led_state_full: !include ../../../../packages/led/state_full_single.yaml
-  speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
-  speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
-  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
-  afe_entities: !include ../../../../packages/esp_afe/single_mic_entities.yaml
+  core: !include ../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
+  led_state_full: !include ../../../packages/led/state_full_single.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
 
 esphome:
   name: ${name}
@@ -180,6 +180,10 @@ esp_audio_stack:
   slot_bit_width: 32
   correct_dc_offset: true
   processor_id: afe_processor
+  # No-codec AEC reference. ring_buffer is the Espressif/ADF TYPE2-style
+  # software reference: speaker PCM is staged in a delay-tunable ring before
+  # being fed to AFE. Use previous_frame only for lighter custom builds.
+  aec_reference: ring_buffer
   buffers_in_psram: true
 
 # =============================================================================
@@ -198,6 +202,7 @@ speaker:
     id: hw_speaker
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
+
 
 # =============================================================================
 # Micro Wake Word: Device part
@@ -224,7 +229,6 @@ voice_assistant:
 intercom_api:
   tasks_stack_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
   frame_buffers_in_psram: true # Processor frame buffers (mic/ref/out, ~3 KB) in PSRAM
-  protocol: udp
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s

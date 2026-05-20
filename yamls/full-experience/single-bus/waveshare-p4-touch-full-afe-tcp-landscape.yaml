@@ -47,10 +47,10 @@ substitutions:
   friendly_name: Waveshare P4 Touch
   mic_id: mic_afe
 
-  # Toggled by scripts/yaml_paths.sh between local (../../../../...) and remote
+  # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # (github://n-IA-hane/esphome-intercom@<branch>) modes.
-  ext_components_source: "../../../../esphome/components"
-  assets_base: "../../../../"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
 
   # Logical LVGL dimensions after software rotation.
   display_width: "1280"
@@ -94,19 +94,19 @@ substitutions:
   afe_aec_restore_mode: RESTORE_DEFAULT_OFF
 
 packages:
-  p4_base: !include ../../../../packages/platform/esp32p4_base.yaml
-  p4_c6_sdio: !include ../../../../packages/board/esp32p4_c6_sdio.yaml
-  core: !include ../../../../packages/va_intercom.yaml
-  intercom_transport: !include ../../../../packages/intercom/transport_tcp.yaml
-  phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
-  afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
-  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
-  lvgl_p4_ppa: !include ../../../../packages/lvgl/p4_ppa.yaml
+  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
+  core: !include ../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: !include ../../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
+  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION

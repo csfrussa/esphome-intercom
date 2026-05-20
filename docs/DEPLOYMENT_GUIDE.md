@@ -33,18 +33,17 @@ Follow the first branch that matches your hardware and intent.
    - Two (mic bus + speaker bus, independent pins) → `experimental/dual-bus/`
      (compile-only, end-to-end calls not validated yet)
 
-3. **(full-experience / single-bus only) How many microphones do you have?**
-   - Two microphones → `afe/` with ESP-SR Speech Enhancement, AEC, NS, AGC,
-     and VAD.
-   - One microphone → `afe/` with ESP-SR single-mic AFE, AEC, NS, AGC, and
-     VAD controls where supported.
-
-   `esp_aec` remains available for intercom-only presets and custom lighter
-   builds, but maintained full-experience YAMLs use `esp_afe`.
+3. **(full-experience / single-bus only) Which processor profile fits?**
+   - Codec/TDM boards and dual-mic targets → `esp_afe` presets with ESP-SR AFE,
+     AEC, NS, AGC, VAD, and hardware/TDM playback reference.
+   - Generic one-mic no-codec targets with 4 MB flash → `generic-s3-full-aec-*`,
+     using standalone `esp_aec` plus the lighter `previous_frame` reference.
+   - Generic one-mic no-codec targets with larger flash → `generic-s3-full-afe-*`,
+     using `esp_afe` plus the canonical TYPE2-style software reference.
 
 4. **Network transport: TCP (default), UDP, or both?**
    - **TCP** (default): framed PBX-lite protocol on `tcp_port` (default 6054). Start here for routed networks, VLANs, HA Container/Docker installs, Wi-Fi segments with filtering, or any deployment where predictable delivery matters more than shaving protocol overhead.
-   - **UDP**: pick the matching `*-udp.yaml` variant from the same tier as the TCP file (`intercom-only` or `full-experience/single-bus/afe`). Audio on `udp_audio_port` (default 6054, different protocol stack from TCP), control on `udp_control_port` (default 6055). Same `MessageHeader` framing on the control socket as TCP, raw L16 PCM on the audio socket. UDP is a good fit for simple LANs where low latency is the priority and the network passes the audio/control ports cleanly; packet loss is audible because audio datagrams are not retransmitted.
+   - **UDP**: pick the matching `*-udp.yaml` variant from the same tier as the TCP file (`intercom-only` or `full-experience/single-bus`). Audio on `udp_audio_port` (default 6054, different protocol stack from TCP), control on `udp_control_port` (default 6055). Same `MessageHeader` framing on the control socket as TCP, raw L16 PCM on the audio socket. UDP is a good fit for simple LANs where low latency is the priority and the network passes the audio/control ports cleanly; packet loss is audible because audio datagrams are not retransmitted.
    - The HA `Intercom Native` integration can serve **both protocols at the same time**: tick `use_tcp` and/or `use_udp` in the config flow (defaults: TCP on, UDP off). HA acts as the bridge for cross-protocol calls.
 
 ### Cross-protocol bridges (TCP <-> UDP)
@@ -98,21 +97,23 @@ Caveats:
 
 | Device | Chip | Mics | Config | YAML |
 |---|---|---|---|---|
-| Waveshare S3 Audio board | ESP32-S3 | 2 (ES7210 TDM, ref slot 2) | full + afe | `full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml` |
-| Waveshare S3 Audio board (UDP) | ESP32-S3 | 2 (ES7210 TDM, ref slot 2) | full + afe + udp | `full-experience/single-bus/afe/waveshare-s3-full-afe-udp.yaml` |
-| Waveshare P4 touch panel portrait (experimental, TCP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-portrait.yaml` |
-| Waveshare P4 touch panel portrait (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-portrait.yaml` |
-| Waveshare P4 touch panel landscape (experimental, TCP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-landscape.yaml` |
-| Waveshare P4 touch panel landscape (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-landscape.yaml` |
-| Spotpear Ball v2 | ESP32-S3 | 1 (ES8311 ADC) | full + afe (SR low-cost) | `full-experience/single-bus/afe/spotpear-ball-v2-full-afe-tcp.yaml` |
-| Spotpear Ball v2 (UDP) | ESP32-S3 | 1 (ES8311 ADC) | full + afe + udp | `full-experience/single-bus/afe/spotpear-ball-v2-full-afe-udp.yaml` |
+| Waveshare S3 Audio board | ESP32-S3 | 2 (ES7210 TDM, ref slot 2) | full + afe | `full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml` |
+| Waveshare S3 Audio board (UDP) | ESP32-S3 | 2 (ES7210 TDM, ref slot 2) | full + afe + udp | `full-experience/single-bus/waveshare-s3-full-afe-udp.yaml` |
+| Waveshare P4 touch panel portrait (experimental, TCP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-portrait.yaml` |
+| Waveshare P4 touch panel portrait (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/waveshare-p4-touch-full-afe-udp-portrait.yaml` |
+| Waveshare P4 touch panel landscape (experimental, TCP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe | `full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-landscape.yaml` |
+| Waveshare P4 touch panel landscape (experimental, UDP) | ESP32-P4 | 2 (ES7210 TDM, ref slot 1) | full + afe + udp | `full-experience/single-bus/waveshare-p4-touch-full-afe-udp-landscape.yaml` |
+| Spotpear Ball v2 | ESP32-S3 | 1 (ES8311 ADC) | full + afe (SR low-cost) | `full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml` |
+| Spotpear Ball v2 (UDP) | ESP32-S3 | 1 (ES8311 ADC) | full + afe + udp | `full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml` |
 | Spotpear Ball v2 intercom-only | ESP32-S3 | 1 | intercom + single | `intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml` |
-| Generic S3 speaker + MEMS | ESP32-S3 | 1 | intercom + dual (experimental) | `experimental/dual-bus/intercom-only/generic-s3-dual-intercom.yaml` |
+| Generic S3 speaker + MEMS dual-bus (UDP) | ESP32-S3 | 1 | intercom + dual + previous-frame ref | `intercom-only/dual-bus/generic-s3-intercom-udp.yaml` |
 | Generic S3 single-bus MEMS+amp | ESP32-S3 | 1 | intercom + duplex (TCP) | `intercom-only/single-bus/generic-s3-intercom-tcp.yaml` |
 | Generic S3 single-bus MEMS+amp (UDP) | ESP32-S3 | 1 | intercom + duplex (UDP) | `intercom-only/single-bus/generic-s3-intercom-udp.yaml` |
 | Spotpear Ball v2 intercom-only (UDP, LVGL) | ESP32-S3 | 1 | intercom + duplex (UDP) | `intercom-only/single-bus/spotpear-ball-v2-intercom-udp.yaml` |
-| Generic S3 single-bus MEMS+amp + VA/MWW | ESP32-S3 | 1 | full + afe (SR low-cost) | `full-experience/single-bus/afe/generic-s3-full-afe-tcp.yaml` |
-| Generic S3 single-bus MEMS+amp + VA/MWW (UDP) | ESP32-S3 | 1 | full + afe + udp | `full-experience/single-bus/afe/generic-s3-full-afe-udp.yaml` |
+| Generic S3 single-bus MEMS+amp + VA/MWW light | ESP32-S3 | 1 | full + aec + previous-frame ref | `full-experience/single-bus/generic-s3-full-aec-tcp.yaml` |
+| Generic S3 single-bus MEMS+amp + VA/MWW light (UDP) | ESP32-S3 | 1 | full + aec + udp + previous-frame ref | `full-experience/single-bus/generic-s3-full-aec-udp.yaml` |
+| Generic S3 single-bus MEMS+amp + VA/MWW AFE | ESP32-S3 | 1 | full + afe + TYPE2 ref, >4 MB app slot | `full-experience/single-bus/generic-s3-full-afe-tcp.yaml` |
+| Generic S3 single-bus MEMS+amp + VA/MWW AFE (UDP) | ESP32-S3 | 1 | full + afe + udp + TYPE2 ref, >4 MB app slot | `full-experience/single-bus/generic-s3-full-afe-udp.yaml` |
 
 ### TDM ref slot per board
 
@@ -148,9 +149,10 @@ Why the split:
   (10/10 → 2/10 detection rate observed). SR modes are linear-only and
   preserve the spectrum, so MWW keeps working.
 
-Default `aec_reference: previous_frame` works for both. Switch to
-`aec_reference: ring_buffer` (with `aec_reference_buffer_ms`) only if a
-specific room/hardware combo shows residual echo with the default.
+The maintained generic AEC profiles explicitly use `aec_reference:
+previous_frame` to avoid compiling the TYPE2 ring path. The component default is
+`ring_buffer`, which is the Espressif/ADF TYPE2-style software reference and is
+used by the heavier generic AFE preset.
 
 ## Home Assistant network requirements
 
@@ -221,11 +223,13 @@ This is **per-device** and runtime-toggleable. There is no global integration "m
 
 ## Hardware sizing
 
-- **Generic S3 full experience** is intentionally `esp_aec`, not full
-  `esp_afe`. The TCP/UDP generic AEC builds fit the default 4 MB DevKitC OTA
-  app slot, but only with modest margin: about 1.69 MB used of a 1.84 MB slot.
-  Prefer 8 MB or 16 MB flash for real deployments, and move the example
-  BCLK/LRCLK/DIN/LED pins away from ESP32-S3R8/S3R8V PSRAM pins.
+- **Generic S3 full AEC** is the lighter 4 MB-oriented full-experience preset:
+  VA, MWW, media, mixer and intercom stay enabled, while the processor is
+  standalone `esp_aec` with `aec_reference: previous_frame`.
+- **Generic S3 full AFE** is the heavier no-codec AFE preset: it enables
+  `esp_afe` with NS/AGC/VAD and the TYPE2-style software reference. Use an app
+  slot larger than the default 4 MB OTA slot; 8 MB or 16 MB flash is preferred.
+  Move the example BCLK/LRCLK/DIN/LED pins away from ESP32-S3R8/S3R8V PSRAM pins.
 - **AFE + 2 mic Speech Enhancement + two concurrent HTTPS streams** (music + TTS) is
   tight on internal RAM. On S3 boards enable
   `esp_audio_stack.audio_stack_in_psram: true` (see the

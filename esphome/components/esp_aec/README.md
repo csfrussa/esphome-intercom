@@ -20,15 +20,15 @@ Standalone Espressif AEC (Acoustic Echo Cancellation) wrapper for ESPHome.
 
 Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the `AudioProcessor` interface. Use it when the device only needs echo cancellation on the mic path and does not need the wider AFE pipeline that `esp_afe` provides (noise suppression, Speech Enhancement, VAD, AGC).
 
-Ready-to-flash full-experience YAMLs use `esp_afe` by default. `esp_aec` remains supported for custom lighter builds and is used by the maintained `intercom-only` presets.
+Ready-to-flash full-experience YAMLs include both paths: `generic-s3-full-aec-*` uses standalone `esp_aec` for the lighter 4 MB-oriented profile, while `*-full-afe-*` uses the wider `esp_afe` pipeline.
 
 ## When to use `esp_aec` vs `esp_afe`
 
 | Scenario | Pick |
 |----------|------|
 | Intercom only, single mic, no VA | `esp_aec` (lighter on RAM and CPU) |
-| Custom lighter full build where you accept standalone AEC instead of NS/AGC/VAD | `esp_aec` |
-| Maintained full-experience presets | `esp_afe` |
+| Generic full build for 4 MB-oriented devices where you accept standalone AEC instead of NS/AGC/VAD | `esp_aec` |
+| Full AFE presets, codec/TDM boards, or larger flash generic builds | `esp_afe` |
 | Intercom + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
 | Standalone `intercom_api` without `esp_audio_stack` (dual-bus MEMS + amp) | `esp_aec` (the AFE feed/fetch model needs the steady frames that `esp_audio_stack` produces) |

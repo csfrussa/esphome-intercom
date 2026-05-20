@@ -1,28 +1,25 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM (ESP AUDIO STACK) - Single I2S bus, no hardware codec
+# GENERIC ESP32-S3 INTERCOM + VA AEC LIGHT (ESP AUDIO STACK) - Single I2S bus, no hardware codec
 # =============================================================================
-# Simple intercom-only config. No media player, no mixer, no VA/MWW.
+# Full-featured lightweight config: Intercom + Media Player + mixer + VA/MWW.
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
 #
 # Audio pipeline:
-#   MEMS mic → esp_audio_stack (48kHz) → esp_ae_rate_cvt x3 → esp_aec → mic_main → intercom TX
-#   Intercom RX (16kHz) → resampler → hw_speaker (48kHz) → class-D amp
+#   MEMS mic → esp_audio_stack (48kHz) → esp_ae_rate_cvt x3 → esp_aec → mic_main → VA / Intercom TX / MWW
 #
-# AEC defaults validated for single-bus MEMS+amp (intercom-only, no MWW):
-#   mode: voip_high_perf            residual echo suppressor for human ears
-#   filter_length: 8                ~128 ms tail at voip 16 ms/frame
-#   aec_reference: previous_frame   light no-codec reference, no TYPE2 ring
-#
-# 48kHz bus + Espressif rate conversion is required on no-codec MEMS+amp
-# setups; 16kHz native gives significantly worse AEC. Codec devices with hardware digital
-# loopback (ES8311 stereo / ES7210 TDM) can run at 16kHz native instead.
+#   Media       → media_speaker (resampler) ───────────┐
+#   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → class-D amp
+#   Intercom RX → intercom_speaker (resampler) ────────┘
 #
 # HARDWARE (adapt GPIOs to YOUR board):
 #   - Board: Any ESP32-S3 with PSRAM
+#   - Flash: lighter than full AFE and intended for 4 MB S3 OTA layouts
 #   - Microphone: Any I2S MEMS mic on DIN pin
 #   - Speaker: Any I2S class-D amp on DOUT pin
 #   - Mic and speaker SHARE BCLK + LRCLK (same I2S bus, full-duplex)
 #   - LED: SK6812/WS2812 RGB (optional)
+#   - ESP32-S3R8/S3R8V: do not use PSRAM pins for I2S/LED; the GPIOs below
+#     are examples only and may need moving on those modules.
 #
 # GPIO PINOUT (example, change to match your wiring):
 #   Shared I2S:  BCLK=GPIO36, LRCLK=GPIO37, DIN=GPIO35 (mic), DOUT=GPIO7 (speaker)
@@ -31,27 +28,38 @@
 # =============================================================================
 
 substitutions:
-  # Hardware-shared identity: any firmware variant for this generic S3 board
-  # uses the same name so HA reuses the device entity and ESPHome reuses the
-  # build cache (.esphome/build/${name}).
+  # Hardware-shared identity: dropping firmware-variant suffix keeps build cache
+  # and HA device entity stable across rebuilds.
   name: generic-s3
   friendly_name: Generic S3
 
   ext_components_source: "../../../esphome/components"
 
+  assets_base: "../../../"
+
+  # Microphone ID for package mute switch
+  mic_id: mic_main
+
+  # Non-default port used by the integration test matrix to prove that mDNS,
+  # HA phonebook generation, and TCP bridge dialing do not assume 6054.
+  intercom_tcp_port: "6154"
+
 # =============================================================================
-# Package: shared intercom state machine
+# Package: shared VA + Intercom state machine
 # =============================================================================
 packages:
-  core: !include ../../../packages/intercom_only.yaml
+  core: !include ../../../packages/va_intercom.yaml
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
   status_led: !include ../../../packages/led/status_ws2812_single.yaml
+  led_state_full: !include ../../../packages/led/state_full_single.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
   audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
 
 esphome:
   name: ${name}
@@ -84,16 +92,6 @@ preferences:
   flash_write_interval: 5min
 
 api:
-  on_client_connected:
-    - lambda: |-
-        static bool published = false;
-        if (!published) {
-          published = true;
-          id(intercom).publish_entity_states();
-        }
-  # `start_call(dest)` / `decline_call(reason)` actions come from
-  # packages/intercom_only.yaml. Contact mutation stays inside intercom_api
-  # actions and the phonebook batch packages.
 
 ota:
   - platform: esphome
@@ -113,6 +111,21 @@ logger:
     api: WARN
     api.connection: WARN
     component: WARN
+    api.service: INFO
+    light: INFO
+    select: INFO
+    speaker: INFO
+    audio: INFO
+    micro_wake_word: INFO
+    voice_assistant: INFO
+    media_player: INFO
+    resampler: INFO
+    mixer_speaker: INFO
+    mdns: INFO
+    wifi: INFO
+    json: INFO
+    intercom_api: INFO
+    audio_processor: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -124,13 +137,13 @@ external_components:
     components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
-# AEC
+# ESP AEC
 # =============================================================================
 esp_aec:
   id: aec_processor
   sample_rate: 16000
-  filter_length: 8
-  mode: voip_high_perf
+  filter_length: 4
+  mode: sr_low_cost
 
 # =============================================================================
 # ESP Audio Stack
@@ -146,9 +159,9 @@ esp_audio_stack:
   slot_bit_width: 32
   correct_dc_offset: true
   processor_id: aec_processor
-  # Lightweight intercom-only no-codec reference. The component default is
-  # ring_buffer (Espressif/ADF TYPE2), but this preset keeps the previous-frame
-  # path to avoid the extra reference ring and delay tuning.
+  # Lightweight no-codec AEC reference. This full AEC preset opts into
+  # previous_frame so the Espressif/ADF TYPE2 ring-buffer path is not compiled.
+  # Remove this line or set ring_buffer for canonical TYPE2 software reference.
   aec_reference: previous_frame
   buffers_in_psram: true
 
@@ -161,7 +174,7 @@ microphone:
     esp_audio_stack_id: audio_stack
 
 # =============================================================================
-# Speaker
+# Speaker Pipeline
 # =============================================================================
 speaker:
   - platform: esp_audio_stack
@@ -169,20 +182,34 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
-  - platform: resampler
-    id: intercom_speaker
-    output_speaker: hw_speaker
-    bits_per_sample: 16
 
 # =============================================================================
-# Intercom API: Device part (merged with package callbacks)
+# Micro Wake Word: Device part
+# =============================================================================
+micro_wake_word:
+  microphone: mic_main
+  models:
+    - model: alexa
+
+# =============================================================================
+# Voice Assistant: Device part
+# =============================================================================
+voice_assistant:
+  microphone: mic_main
+  media_player: speaker_media_player
+  micro_wake_word: mww
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  volume_multiplier: 2.0
+
+# =============================================================================
+# Intercom API: Device part
 # =============================================================================
 intercom_api:
-  id: intercom
-  frame_buffers_in_psram: true
+  tasks_stack_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
+  frame_buffers_in_psram: true # Processor frame buffers (mic/ref/out, ~3 KB) in PSRAM
   microphone: mic_main
   speaker: intercom_speaker
-  dc_offset_removal: false
   ringing_timeout: 30s
   delete_contact_missing_from:
     updates_number: 5
@@ -200,15 +227,12 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # Intercom-only standard: stay inside the dios_ssp_aec engine. The two
-    # VOIP modes share the same engine, so a runtime switch never triggers
-    # an esp_aec3 FFT alloc and avoids the silent calloc-fail bug observed
-    # at filter_length>4 on cross-engine transitions. SR modes are not
-    # offered here because no MWW is present in this configuration.
+    # Full AEC light profile: stay on SR modes to preserve MWW spectral features
+    # while avoiding the heavier esp_afe pipeline.
     options:
-      - "voip_low_cost"
-      - "voip_high_perf"
-    initial_option: "voip_high_perf"
+      - "sr_low_cost"
+      - "sr_high_perf"
+    initial_option: "sr_low_cost"
     # Non-optimistic: HA reflects the live component mode, not the value the
     # user clicked. If the switch is rejected (e.g. internal RAM fragmented)
     # or the component falls back to the previous mode, the select shows the
@@ -218,21 +242,82 @@ select:
     set_action:
       - if:
           condition:
-            not:
-              intercom_api.is_idle: intercom
+            lambda: 'return id(init_in_progress);'
           then:
-            - logger.log:
-                level: WARN
-                format: "Cannot switch AEC mode during active intercom call"
+            - logger.log: "AEC mode select: skipping during boot"
           else:
-            - logger.log:
-                format: "Switching AEC mode to %s"
-                args: ['x.c_str()']
-            - esp_audio_stack.stop: audio_stack
-            - esp_aec.set_mode:
-                id: aec_processor
-                mode: !lambda 'return x;'
-            - esp_audio_stack.start: audio_stack
+            - if:
+                condition:
+                  or:
+                    - voice_assistant.is_running:
+                    - not:
+                        intercom_api.is_idle: intercom
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Cannot switch AEC mode during active VA/intercom"
+                else:
+                  - logger.log:
+                      format: "Switching AEC mode to %s"
+                      args: ['x.c_str()']
+                  - micro_wake_word.stop:
+                  - esp_audio_stack.stop: audio_stack
+                  - esp_aec.set_mode:
+                      id: aec_processor
+                      mode: !lambda 'return x;'
+                  - esp_audio_stack.start: audio_stack
+                  - delay: 300ms
+                  - if:
+                      condition:
+                        switch.is_off: mute
+                      then:
+                        - micro_wake_word.start:
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
           id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
+
+binary_sensor:
+  # BOOT button (GPIO0), multi-click
+  - platform: gpio
+    name: Boot Button
+    id: boot_button
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+      # Single click: call toggle if intercom active, otherwise VA start/stop
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                not:
+                  - intercom_api.is_idle: intercom
+              then:
+                - intercom_api.call_toggle: intercom
+              else:
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      - voice_assistant.stop:
+                    else:
+                      - voice_assistant.start:
+      # Double click: next contact
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for at most 300ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - intercom_api.next_contact: intercom
+      # Long press (1-3s): toggle mute
+      - timing:
+          - ON for 1s to 3s
+          - OFF for at least 300ms
+        then:
+          - switch.toggle: mute
