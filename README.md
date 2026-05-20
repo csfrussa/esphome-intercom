@@ -52,7 +52,7 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 - [Reference](#reference): intercom_api, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
 - [Call Flow Diagrams](#call-flow-diagrams)
 - [Hardware Support](#hardware-support)
-- [Audio components](#audio-components): i2s_audio_duplex, esp_aec, esp_afe
+- [Audio components](#audio-components): esp_audio_stack, esp_aec, esp_afe
 - [Voice Assistant + Intercom Experience](#voice-assistant--intercom-experience)
 - [What's New](#whats-new)
 - [Logging](#logging)
@@ -95,7 +95,7 @@ and display-driven voice devices.
 | One ESP as a full-duplex citofono/intercom with Home Assistant | [`yamls/intercom-only/`](yamls/intercom-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
 | Room-to-room ESP intercom | One intercom-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP. |
-| Audio driver for your own ESPHome Voice Assistant | [`i2s_audio_duplex`](esphome/components/i2s_audio_duplex/README.md) | Shared mic/speaker I2S path, speaker reference handling and audio lifecycle support without requiring intercom. |
+| Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and audio lifecycle support without requiring intercom. |
 
 For the normal intercom use case, do not start by designing a PBX. Pick the
 closest YAML, adapt the board pins and audio hardware, add the ESP through the
@@ -531,7 +531,7 @@ external_components:
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, intercom_api, esp_afe, i2s_audio_duplex]
+    components: [audio_processor, intercom_api, esp_afe, esp_audio_stack]
 ```
 
 > **Note**: `audio_processor` must be listed because it provides the shared `AudioProcessor` interface used by both `esp_aec` and `esp_afe`. Use `esp_aec` for lightweight single-mic setups, `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below).
@@ -975,7 +975,7 @@ sequenceDiagram
 - I2S microphone (INMP441, SPH0645, ES8311, etc.)
 - I2S speaker amplifier (MAX98357A, ES8311, etc.)
 - ESP-IDF framework (not Arduino)
-- **sdkconfig tuning** for PSRAM devices: `DATA_CACHE_64KB` + `DATA_CACHE_LINE_64B` (S3) or `CACHE_L2_CACHE_256KB` (P4), plus `SPIRAM_FETCH_INSTRUCTIONS` + `SPIRAM_RODATA`. See [i2s_audio_duplex README](esphome/components/i2s_audio_duplex/README.md#psram-and-sdkconfig-requirements) for details.
+- **sdkconfig tuning** for PSRAM devices: `DATA_CACHE_64KB` + `DATA_CACHE_LINE_64B` (S3) or `CACHE_L2_CACHE_256KB` (P4), plus `SPIRAM_FETCH_INSTRUCTIONS` + `SPIRAM_RODATA`. See [esp_audio_stack README](esphome/components/esp_audio_stack/README.md#psram-and-sdkconfig-requirements) for details.
 
 Generic full-experience S3 builds use `esp_aec`, not the full `esp_afe`
 framework. The full AEC TCP/UDP generic YAMLs compile on the default 4 MB
@@ -1068,25 +1068,25 @@ Three ESPHome components sit between your codec and the intercom / voice assista
 
 _The same audio stack can serve intercom, Voice Assistant, TTS and media workloads on full voice devices._
 
-Plain intercom does **not** require `i2s_audio_duplex`: `intercom_api` can run
+Plain intercom does **not** require `esp_audio_stack`: `intercom_api` can run
 on ESPHome's normal `microphone` + `speaker` components and use `esp_aec`
 through `processor_id`.
 
-Use `i2s_audio_duplex` when a board has one shared I2S bus, when you need a
+Use `esp_audio_stack` when a board has one shared I2S bus, when you need a
 phase-coherent speaker reference for AEC, or when the same ESP also runs media
 player, Piper TTS, Micro Wake Word and Voice Assistant. It can also be useful
 outside intercom projects: an ESPHome Voice Assistant device can use it as the
 shared mic/speaker transport and AEC reference path.
 
 For a composite device, put the microphone and speaker on the same I2S bus and
-use [`i2s_audio_duplex`](esphome/components/i2s_audio_duplex/README.md). The
-duplex driver hands a phase-coherent speaker reference to the AEC each frame;
+use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The
+audio stack driver hands a phase-coherent speaker reference to the AEC each frame;
 standalone `intercom_api` with separate mic and speaker components falls back
 to a 80 ms ring buffer with looser phase coherence. See
-[intercom_api AEC quality](esphome/components/intercom_api/README.md#aec-quality-standalone-vs-i2s_audio_duplex)
+[intercom_api AEC quality](esphome/components/intercom_api/README.md#aec-quality-standalone-vs-esp_audio_stack)
 for the trade-off in detail.
 
-### [`i2s_audio_duplex`](esphome/components/i2s_audio_duplex/README.md)
+### [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
 
 Full-duplex I2S driver that lets mic and speaker share one I2S bus (ES8311, ES8388, WM8960, or MEMS + I2S amp). Runs the codec bus at 48 kHz and converts mic/ref streams to 16 kHz with Espressif `esp_ae_rate_cvt`. Three zero-config AEC reference modes (direct TX, ES8311 stereo loopback, ES7210 TDM), post-processor mic output for MWW/VA/intercom, runtime AEC mode switching from Home Assistant, and optional PSRAM buffer placement.
 
@@ -1096,7 +1096,7 @@ Standalone ESP-SR echo cancellation (~80 KB internal RAM). Four modes (`sr_low_c
 
 ### [`esp_afe`](esphome/components/esp_afe/README.md)
 
-Full ESP-SR audio front-end. Chains AEC, optional spatial source separation, noise suppression, voice activity detection and automatic gain control behind `i2s_audio_duplex`. Runs on Core 0 (~22-23% load on S3 in `low_cost` mode) and the pipeline shape adapts at runtime to `mic_num` and the per-stage switches exposed in Home Assistant.
+Full ESP-SR audio front-end. Chains AEC, optional spatial source separation, noise suppression, voice activity detection and automatic gain control behind `esp_audio_stack`. Runs on Core 0 (~22-23% load on S3 in `low_cost` mode) and the pipeline shape adapts at runtime to `mic_num` and the per-stage switches exposed in Home Assistant.
 
 **What each stage does**
 
@@ -1112,7 +1112,7 @@ YAML keys cover type (`sr` for speech recognition or `vc` for voice communicatio
 
 **When to use it**
 
-Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you want runtime control of those stages from Home Assistant. For plain intercom-only setups `esp_aec` is lighter and lacks the AFE switches you would not use anyway. `esp_afe` requires `i2s_audio_duplex` in front of it; it cannot replace `esp_aec` in standalone `intercom_api` configurations (no duplex driver = no steady frame producer for the AFE feed/fetch tasks).
+Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you want runtime control of those stages from Home Assistant. For plain intercom-only setups `esp_aec` is lighter and lacks the AFE switches you would not use anyway. `esp_afe` requires `esp_audio_stack` in front of it; it cannot replace `esp_aec` in standalone `intercom_api` configurations (no audio stack driver = no steady frame producer for the AFE feed/fetch tasks).
 
 ---
 
@@ -1180,7 +1180,7 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
 
 AEC uses Espressif's closed-source ESP-SR library. All modes have similar CPU cost per frame (~7ms out of 16ms budget). The difference is primarily in memory allocation and adaptive filter quality.
 
-**Recommended: `sr_low_cost`** for most VA + MWW setups (i2s_audio_duplex devices). Linear-only AEC preserves spectral features for neural wake word detection (10/10 vs 2/10 with VOIP modes). Also uses ~60% less CPU. Requires `buffers_in_psram: true` on ESP32-S3. The Waveshare P4 AFE presets are the exception: they use ESP-SR FD mode with a hardware TDM reference, matching the board's full-duplex codec topology. For dual-bus devices without i2s_audio_duplex, use `voip_high_perf` (AEC runs inside intercom_api).
+**Recommended: `sr_low_cost`** for most VA + MWW setups (esp_audio_stack devices). Linear-only AEC preserves spectral features for neural wake word detection (10/10 vs 2/10 with VOIP modes). Also uses ~60% less CPU. Requires `buffers_in_psram: true` on ESP32-S3. The Waveshare P4 AFE presets are the exception: they use ESP-SR FD mode with a hardware TDM reference, matching the board's full-duplex codec topology. For dual-bus devices without esp_audio_stack, use `voip_high_perf` (AEC runs inside intercom_api).
 
 For devices that benefit from noise suppression and auto gain control (noisy environments, variable mic distance), use `esp_afe` instead of `esp_aec`. The AFE wraps the same AEC engine plus WebRTC NS and AGC, with runtime switches in Home Assistant.
 
@@ -1198,7 +1198,7 @@ esp_aec:
 #   ns_enabled: true
 #   agc_enabled: true
 
-i2s_audio_duplex:
+esp_audio_stack:
   # ... pins ...
   processor_id: aec_component   # works with either esp_aec or esp_afe
   buffers_in_psram: true  # Required for sr_low_cost (512-sample frames)
@@ -1283,7 +1283,7 @@ mute components but cannot reveal messages that were compiled out.
 | Protocol race / busy / glare / send drop / `MSG_ERROR` from peer | `WARN` | unexpected but recoverable |
 | Call lifecycle (`calling`, `answered`, `hung up`), bridge start/stop, mic consumer attach/detach, AFE active/idle | `INFO` | user-visible operational milestones |
 | FSM internal transitions, idempotent re-acks, transport setter logs (`_streaming false→true cause=...`), retransmits | `DEBUG` | developer-level detail |
-| Per-frame telemetry (compiled in only when `i2s_audio_duplex.telemetry: true` *and* `level: DEBUG`) | `DEBUG` | gated behind both YAML and compile-time flag |
+| Per-frame telemetry (compiled in only when `esp_audio_stack.telemetry: true` *and* `level: DEBUG`) | `DEBUG` | gated behind both YAML and compile-time flag |
 
 **Development DEBUG profile**
 
@@ -1310,7 +1310,7 @@ logger:
     # intercom_api.tcp: INFO    # framed TCP transport
     # intercom_api.udp: INFO    # UDP audio + control
     # intercom_api.settings: INFO
-    # i2s_duplex: INFO          # I2S duplex driver
+    # audio_stack: INFO          # I2S audio stack driver
     # esp_aec: INFO             # standalone AEC
     # esp_afe: INFO             # full audio front-end
     # audio_processor: INFO     # AEC reference mixer

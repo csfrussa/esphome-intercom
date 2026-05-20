@@ -20,14 +20,14 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - **Troubleshooting**: [troubleshooting.md](troubleshooting.md) lists common symptoms (no devices found, no audio, echo, latency, ringing without connect, phonebook/discovery issues) with concrete checks.
 
-- **Findings and known issues**: [findings.md](findings.md) covers upstream limitations we depend on (esp-sr VAD without WakeNet) and design decisions worth pinning (why a custom `i2s_audio_duplex` instead of stock `i2s_audio`).
+- **Findings and known issues**: [findings.md](findings.md) covers upstream limitations we depend on (esp-sr VAD without WakeNet) and design decisions worth pinning (why a custom `esp_audio_stack` instead of stock `i2s_audio`).
 
 ## Per-component docs
 
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:
 
 - [`intercom_api`](../esphome/components/intercom_api/README.md), the PBX-lite TCP/UDP transport, call state machine and Home Assistant bridge.
-- [`i2s_audio_duplex`](../esphome/components/i2s_audio_duplex/README.md), a full-duplex I²S driver with Espressif rate conversion, AEC reference capture and post-processor mic output.
+- [`esp_audio_stack`](../esphome/components/esp_audio_stack/README.md), a full-duplex I²S driver with Espressif rate conversion, AEC reference capture and post-processor mic output.
 - [`esp_aec`](../esphome/components/esp_aec/README.md), standalone ESP-SR echo cancellation.
 - [`esp_afe`](../esphome/components/esp_afe/README.md), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
 - [`audio_processor`](../esphome/components/audio_processor/README.md), the abstract processor interface that `esp_aec` and `esp_afe` implement.

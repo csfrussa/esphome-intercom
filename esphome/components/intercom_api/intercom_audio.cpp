@@ -334,7 +334,7 @@ void IntercomApi::on_microphone_data_(const uint8_t *data, size_t len) {
   // MicrophoneSource delivers 16-bit regardless of mic hardware.
   const int16_t *src = reinterpret_cast<const int16_t *>(data);
   const size_t total_samples = len / sizeof(int16_t);
-  // Skip our gain when i2s_audio_duplex owns the mic_gain entity (already applied upstream).
+  // Skip our gain when esp_audio_stack owns the mic_gain entity (already applied upstream).
   int16_t *mic_converted = this->mic_converted_.load(std::memory_order_acquire);
   const float effective_gain = mic_converted != nullptr
       ? this->mic_gain_.load(std::memory_order_relaxed)
@@ -351,7 +351,7 @@ void IntercomApi::on_microphone_data_(const uint8_t *data, size_t len) {
       if (this->dc_offset_removal_) {
         for (size_t i = 0; i < chunk; i++) {
           int32_t s = src[off + i];
-          // IIR HPF ~2.5 Hz @ 16 kHz (matches i2s_audio_duplex).
+          // IIR HPF ~2.5 Hz @ 16 kHz (matches esp_audio_stack).
           this->dc_offset_ += (s - this->dc_offset_) >> 10;
           s = s - this->dc_offset_;
           mic_converted[i] = scale_sample(static_cast<int16_t>(s), effective_gain);

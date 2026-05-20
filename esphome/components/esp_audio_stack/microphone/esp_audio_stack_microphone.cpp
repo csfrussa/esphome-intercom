@@ -1,4 +1,4 @@
-#include "duplex_microphone.h"
+#include "esp_audio_stack_microphone.h"
 
 #ifdef USE_ESP32
 
@@ -8,12 +8,12 @@
 #include "../../audio_processor/log_utils.h"
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
-static const char *const TAG = "i2s_duplex.mic";
+static const char *const TAG = "audio_stack.mic";
 
-void I2SAudioDuplexMicrophone::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up I2S Audio Duplex Microphone...");
+void ESPAudioStackMicrophone::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack Microphone...");
 
   // Counting semaphore for listener refcounting (take to decrement, give
   // to increment). Initial count == max count == MAX_LISTENERS.
@@ -42,14 +42,14 @@ void I2SAudioDuplexMicrophone::setup() {
       [this](const uint8_t *data, size_t len) { this->on_audio_data_(data, len); });
 }
 
-void I2SAudioDuplexMicrophone::dump_config() {
-  ESP_LOGCONFIG(TAG, "I2S Audio Duplex Microphone:");
+void ESPAudioStackMicrophone::dump_config() {
+  ESP_LOGCONFIG(TAG, "ESP Audio Stack Microphone:");
   ESP_LOGCONFIG(TAG, "  Sample Rate: %u Hz", this->parent_->get_output_sample_rate());
   ESP_LOGCONFIG(TAG, "  Bits Per Sample: 16");
   ESP_LOGCONFIG(TAG, "  Channels: 1 (mono)");
 }
 
-void I2SAudioDuplexMicrophone::start() {
+void ESPAudioStackMicrophone::start() {
   if (this->is_failed())
     return;
 
@@ -63,7 +63,7 @@ void I2SAudioDuplexMicrophone::start() {
   // registers interest; loop() performs the state transition.
 }
 
-void I2SAudioDuplexMicrophone::stop() {
+void ESPAudioStackMicrophone::stop() {
   if (this->is_failed() || this->active_listeners_semaphore_ == nullptr)
     return;
 
@@ -85,7 +85,7 @@ void I2SAudioDuplexMicrophone::stop() {
   // loop() will process the stop edge; do not block the ESPHome main loop.
 }
 
-void I2SAudioDuplexMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
+void ESPAudioStackMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
   if (this->state_ != microphone::STATE_RUNNING) {
     return;
   }
@@ -100,7 +100,7 @@ void I2SAudioDuplexMicrophone::on_audio_data_(const uint8_t *data, size_t len) {
   this->data_callbacks_.call(this->audio_buffer_);
 }
 
-void I2SAudioDuplexMicrophone::loop() {
+void ESPAudioStackMicrophone::loop() {
   // Propagate I2S errors from parent audio task
   if (this->parent_->has_i2s_error() && !this->status_has_error()) {
     ESP_LOGE(TAG, "I2S error detected in audio task");
@@ -131,13 +131,13 @@ void I2SAudioDuplexMicrophone::loop() {
       }
       ESP_LOGI(TAG, "Microphone started");
       if (!this->parent_->register_mic_consumer(this)) {
-        ESP_LOGW(TAG, "Parent duplex refused mic consumer registration");
+        ESP_LOGW(TAG, "Parent audio stack refused mic consumer registration");
         xSemaphoreGive(this->active_listeners_semaphore_);
         this->state_ = microphone::STATE_STOPPED;
         break;
       }
       if (!this->parent_->is_running()) {
-        ESP_LOGW(TAG, "Parent duplex failed to start; aborting microphone start");
+        ESP_LOGW(TAG, "Parent audio stack failed to start; aborting microphone start");
         this->parent_->unregister_mic_consumer(this);
         xSemaphoreGive(this->active_listeners_semaphore_);
         this->state_ = microphone::STATE_STOPPED;
@@ -160,7 +160,7 @@ void I2SAudioDuplexMicrophone::loop() {
   }
 }
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

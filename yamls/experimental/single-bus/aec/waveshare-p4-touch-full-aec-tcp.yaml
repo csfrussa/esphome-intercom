@@ -26,7 +26,7 @@
 #   8":  model: CUSTOM + JD9365 init_sequence             (800x1280, backlight GPIO26)
 #   10.1": model: WAVESHARE-10.1-DSI-TOUCH-A              (800x1280, backlight GPIO26)
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
+# Audio pipeline (esp_audio_stack at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
 #   ES7210 TDM [mic1, mic2, ref, nc] → esp_ae_rate_cvt x3 ──┐
 #                                               └── AEC (SR linear) → mic_aec → VA / Intercom TX / MWW
@@ -95,10 +95,10 @@ packages:
   phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   es7210_tdm: !include ../../../../packages/codec/es7210_tdm.yaml
-  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
+  audio_stack_mic_gain: !include ../../../../packages/esp_audio_stack/mic_gain.yaml
   es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
-  duplex_aec_controls: !include ../../../../packages/i2s_audio_duplex/aec_controls.yaml
-  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
+  audio_stack_aec_controls: !include ../../../../packages/esp_audio_stack/aec_controls.yaml
+  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
   lvgl_settings_nav: !include ../../../../packages/lvgl/lvgl_settings_navigation.yaml
   lvgl_settings_sync_volumes: !include ../../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
   lvgl_settings_sync_mute: !include ../../../../packages/lvgl/lvgl_settings_sync_mute.yaml
@@ -224,7 +224,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor, mipi_dsi]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor, mipi_dsi]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, GT9271)
@@ -237,7 +237,7 @@ i2c:
     scan: false
 
 # =============================================================================
-# Audio: i2s_audio_duplex (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
+# Audio: esp_audio_stack (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
 # =============================================================================
 # ES8311 (DAC) and ES7210 (ADC) share BCLK/LRCLK/MCLK with separate data pins.
 # ES8311 DAC output wired to ES7210 MIC3, providing TDM hardware AEC reference (slot 2).
@@ -267,8 +267,8 @@ esp_aec:
   mode: sr_low_cost        # Linear AEC, preserves spectral features for MWW
   filter_length: 4         # 64ms tail, sufficient for integrated codec path
 
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   i2s_lrclk_pin: GPIO10
   i2s_bclk_pin: GPIO12
   i2s_mclk_pin: GPIO13
@@ -277,7 +277,9 @@ i2s_audio_duplex:
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
   output_sample_rate: 16000    # Mic/AEC/MWW/VA converted to 16kHz via esp_ae_rate_cvt x3
   processor_id: aec_processor
-  fir_decimator: esp_ae_rate_cvt
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
   use_tdm_reference: true
   tdm_total_slots: 4
   tdm_mic_slot: 0              # ES7210 TDM slot 0 = ADC1 (MIC1, voice)
@@ -287,16 +289,16 @@ i2s_audio_duplex:
 # mic_aec: post-AEC for VA STT, intercom TX, AND MWW
 # SR linear AEC preserves spectral features for neural wake word detection.
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_aec
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
-# Speaker pipeline: i2s_audio_duplex → resampler → mixer (all at 48kHz)
+# Speaker pipeline: esp_audio_stack → resampler → mixer (all at 48kHz)
 speaker:
   # Hardware output: writes 48kHz PCM to I2S bus
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     audio_dac: es8311_dac
     sample_rate: 48000
 
@@ -2799,11 +2801,11 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - i2s_audio_duplex.stop: i2s_duplex
+                  - esp_audio_stack.stop: audio_stack
                   - esp_aec.set_mode:
                       id: aec_processor
                       mode: !lambda 'return x;'
-                  - i2s_audio_duplex.start: i2s_duplex
+                  - esp_audio_stack.start: audio_stack
                   - delay: 300ms
                   - if:
                       condition:

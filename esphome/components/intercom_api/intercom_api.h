@@ -71,7 +71,7 @@ enum class ConnectionState : uint8_t {
 /// opt-in via `protocol: udp`).
 ///
 /// When `processor_id` is set, the component owns its mic/speaker path
-/// and runs AEC inline. When `i2s_audio_duplex` owns the processor,
+/// and runs AEC inline. When `esp_audio_stack` owns the processor,
 /// intercom_api stays mic/speaker-passthrough.
 ///
 /// Up to two FreeRTOS tasks of its own (tx + speaker) when AEC is
@@ -321,7 +321,7 @@ class IntercomApi : public Component {
 #endif
 
   // True when intercom_api owns the AEC (processor_id wired here, not on
-  // i2s_audio_duplex). False eliminates speaker_task ~34 KB internal RAM.
+  // esp_audio_stack). False eliminates speaker_task ~34 KB internal RAM.
   bool has_intercom_processor_() const {
 #ifdef USE_AUDIO_PROCESSOR
     return this->aec_ != nullptr;

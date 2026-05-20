@@ -1,8 +1,8 @@
 # =============================================================================
-# I2S Audio Duplex user controls
+# ESP Audio Stack user controls
 # =============================================================================
 # Drop-in for devices using:
-#   i2s_audio_duplex id: i2s_duplex
+#   esp_audio_stack id: audio_stack
 #   speaker id: hw_speaker
 #
 # Exposes the stable user-facing controls:
@@ -15,8 +15,8 @@ substitutions:
   mic_gain_max: "30"
 
 number:
-  - platform: i2s_audio_duplex
-    i2s_audio_duplex_id: i2s_duplex
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
     speaker_volume:
       id: master_volume
       name: Master Volume

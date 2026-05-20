@@ -16,7 +16,7 @@
 #   LEDs: GPIO38 (WS2812 x7)
 #   BOOT: GPIO0
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
+# Audio pipeline (esp_audio_stack at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
 # Verified Waveshare ESP32-S3-AUDIO-Board slot map, board oriented with:
 #   - speaker at the bottom
@@ -67,8 +67,8 @@ packages:
   status_led: !include ../../../../packages/led/status_ws2812_ring.yaml
   led_state_full: !include ../../../../packages/led/state_full_ring.yaml
   afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
-  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
-  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_switch.yaml
+  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_switch.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
   speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
 
@@ -152,7 +152,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, intercom_api, i2s_audio_duplex, esp_afe]
+    components: [audio_processor, intercom_api, esp_audio_stack, esp_afe]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, TCA9555)
@@ -170,7 +170,7 @@ tca9555:
     i2c_id: internal_i2c
 
 # =============================================================================
-# Audio: AFE + esp_codec_dev I2S Duplex
+# Audio: AFE + Espressif-backed ESP Audio Stack
 # =============================================================================
 esp_afe:
   id: afe_processor
@@ -180,6 +180,19 @@ esp_afe:
   aec_filter_length: 4
   aec_nlp_level: normal
   memory_alloc_mode: more_psram
+  # Espressif layout:
+  # - SE/BSS worker preference stays on Core 1 at the official low priority.
+  # - GMF AFE manager feed/fetch tasks stay on different cores, as Espressif's
+  #   own GMF troubleshooting recommends for avoiding AFE task WDT.
+  task_core: 1
+  task_priority: 5
+  ringbuf_size: 8
+  feed_task_core: 0
+  feed_task_priority: 5
+  feed_task_stack_size: 3072
+  fetch_task_core: 1
+  fetch_task_priority: 5
+  fetch_task_stack_size: 3072
   se_enabled: true
   ns_enabled: true
   vad_enabled: false
@@ -194,15 +207,34 @@ esp_afe:
   feed_ring_in_psram: true      # ~24 KB staging ring on 2-mic + ref FD
   fetch_ring_in_psram: false    # ~8 KB hot output ring
 
-i2s_audio_duplex:
-  id: i2s_duplex
-  # 2-mic Speech Enhancement + concurrent TLS streams (music + TTS + intercom) exhaust the
-  # ~30KB of internal RAM WS3 has available to user code. Moving the audio
-  # task's own stack to PSRAM recovers ~8KB and is enough headroom to keep
-  # all three streams stable. The task is not CPU-bound (per-frame AFE work
-  # lives in Espressif GMF AFE manager tasks), so PSRAM stack latency is
-  # acceptable here.
+esp_audio_stack:
+  id: audio_stack
+  # WS3 full AFE profile:
+  # - audio_stack is the non-network realtime I2S bridge: Core 0 / prio 19 is
+  #   below Wi-Fi prio 23 and above lwIP prio 18, matching ESP-IDF guidance
+  #   for time-critical tasks that do not perform TCP/IP work.
+  # - audio_stack task stack in PSRAM saves ~8 KB internal heap.
+  # - component frame buffers in PSRAM preserve internal/DMA heap for Wi-Fi,
+  #   TLS, I2S DMA and esp-sr internals.
+  # - GMF codec IO stays synchronous: io_codec_dev read/write run inside the
+  #   audio_stack task, so they inherit the PSRAM stack without adding reader/
+  #   writer tasks or data-bus latency between mic/ref and AFE.
   audio_stack_in_psram: true
+  buffers_in_psram: true
+  task_core: 0
+  task_priority: 19
+  task_stack_size: 8192
+  gmf_io:
+    reader:
+      io_size: 0
+      buffer_size: 0
+      task_stack_size: 0
+      speed_monitor: false
+    writer:
+      io_size: 0
+      buffer_size: 0
+      task_stack_size: 0
+      speed_monitor: false
   i2s_lrclk_pin: GPIO14
   i2s_bclk_pin: GPIO13
   i2s_mclk_pin: GPIO12
@@ -211,7 +243,9 @@ i2s_audio_duplex:
   sample_rate: 48000
   output_sample_rate: 16000
   processor_id: afe_processor
-  fir_decimator: esp_ae_rate_cvt
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
   codec:
     i2c_id: internal_i2c
     input:
@@ -228,23 +262,22 @@ i2s_audio_duplex:
   tdm_total_slots: 4
   tdm_mic_slots: [0, 2]  # Verified right-side mic, left-side mic
   tdm_ref_slot: 1        # Verified playback reference for AEC
-  buffers_in_psram: true
 
 # =============================================================================
 # Microphone (ES7210 ADC, 16kHz output after Espressif rate conversion + AEC)
 # =============================================================================
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_main
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
 # =============================================================================
-# Speaker Pipeline: i2s_audio_duplex -> resampler -> mixer (all at 48kHz)
+# Speaker Pipeline: esp_audio_stack -> resampler -> mixer (all at 48kHz)
 # =============================================================================
 speaker:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
 
@@ -444,7 +477,7 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # FD* is the esp-sr 2.4 full-duplex pipeline (NLP baked in for two-way speech).
+    # FD* is the esp-sr 2.4 full-audio stack pipeline (NLP baked in for two-way speech).
     # Default on this board because dual-mic ES7210 TDM input enables AFE_TYPE_FD,
     # which is the recommended type for boards with mic+ref on the same bus.
     options:
@@ -479,11 +512,11 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - i2s_audio_duplex.stop: i2s_duplex
+                  - esp_audio_stack.stop: audio_stack
                   - esp_afe.set_mode:
                       id: afe_processor
                       mode: !lambda 'return x;'
-                  - i2s_audio_duplex.start: i2s_duplex
+                  - esp_audio_stack.start: audio_stack
                   - delay: 300ms
                   - if:
                       condition:

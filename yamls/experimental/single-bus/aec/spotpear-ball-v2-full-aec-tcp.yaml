@@ -4,7 +4,7 @@
 # Target board: Spotpear Ball v2 (ESP32-S3 with GC9A01A 240x240 round display,
 # ES8311 mono codec, CST816 touch, GPIO0 button).
 #
-# Audio pipeline (i2s_audio_duplex @ 48 kHz, stereo AEC reference):
+# Audio pipeline (esp_audio_stack @ 48 kHz, stereo AEC reference):
 #
 #   I2S RX 48kHz stereo → L=ref R=mic → esp_ae_rate_cvt x3 ──┐
 #                                                └── esp_aec (SR linear) → mic_aec → VA / Intercom TX / MWW
@@ -89,10 +89,10 @@ packages:
   s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   es8311_stereo_ref: !include ../../../../packages/codec/es8311_stereo_ref.yaml
-  duplex_mic_gain: !include ../../../../packages/i2s_audio_duplex/mic_gain.yaml
+  audio_stack_mic_gain: !include ../../../../packages/esp_audio_stack/mic_gain.yaml
   es8311_volume: !include ../../../../packages/codec/es8311_volume.yaml
-  duplex_aec_controls: !include ../../../../packages/i2s_audio_duplex/aec_controls.yaml
-  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
+  audio_stack_aec_controls: !include ../../../../packages/esp_audio_stack/aec_controls.yaml
+  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
   lvgl_settings_nav: !include ../../../../packages/lvgl/lvgl_settings_navigation.yaml
   lvgl_settings_sync_volumes: !include ../../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
   lvgl_settings_sync_mute: !include ../../../../packages/lvgl/lvgl_settings_sync_mute.yaml
@@ -163,7 +163,7 @@ psram:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
 # CONNECTIVITY
@@ -259,14 +259,14 @@ esp_aec:
   mode: sr_low_cost    # Linear AEC, preserves spectral features for MWW
 
 # =============================================================================
-# I2S AUDIO DUPLEX (single bus for ES8311)
+# ESP AUDIO STACK (single bus for ES8311)
 # Full-duplex I2S: mic + speaker on same bus, managed by one FreeRTOS task.
 # audio_task runs on Core 1 at priority 9, processes AEC inline.
 # Bus runs at 48kHz (ES8311 native rate, better DAC quality).
 # Espressif `esp_ae_rate_cvt` x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
 # =============================================================================
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   i2s_lrclk_pin: GPIO45
   i2s_bclk_pin: GPIO9
   i2s_mclk_pin: GPIO16
@@ -293,9 +293,9 @@ i2s_audio_duplex:
 # (VA STT, intercom TX, MWW). No separate raw microphone path needed with sr_low_cost mode.
 # =============================================================================
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_aec
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
 
 # =============================================================================
@@ -303,9 +303,9 @@ microphone:
 # hw_speaker runs at 48kHz (bus rate). ResamplerSpeaker upsamples any input.
 # =============================================================================
 speaker:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     audio_dac: es8311_dac
     sample_rate: 48000
 
@@ -1754,11 +1754,11 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - i2s_audio_duplex.stop: i2s_duplex
+                  - esp_audio_stack.stop: audio_stack
                   - esp_aec.set_mode:
                       id: aec_processor
                       mode: !lambda 'return x;'
-                  - i2s_audio_duplex.start: i2s_duplex
+                  - esp_audio_stack.start: audio_stack
                   - delay: 300ms
                   - if:
                       condition:

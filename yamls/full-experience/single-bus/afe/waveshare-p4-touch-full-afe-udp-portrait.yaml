@@ -26,7 +26,7 @@
 #   8":  model: CUSTOM + JD9365 init_sequence             (800x1280, backlight GPIO26)
 #   10.1": model: WAVESHARE-P4-NANO-10.1                  (800x1280, backlight GPIO26)
 #
-# Audio pipeline (i2s_audio_duplex at 48kHz, TDM + Espressif rate conversion to 16kHz):
+# Audio pipeline (esp_audio_stack at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
 #   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → esp_ae_rate_cvt x3 ──────┐
 #                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / Intercom TX / MWW
@@ -100,8 +100,8 @@ packages:
   intercom_transport: !include ../../../../packages/intercom/transport_udp.yaml
   phonebook_subscribe: !include ../../../../packages/intercom/phonebook_subscribe.yaml
   afe_entities: !include ../../../../packages/esp_afe/dual_mic_entities.yaml
-  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
-  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
+  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
   lvgl_p4_ppa: !include ../../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.
@@ -217,7 +217,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_afe, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, GT9271)
@@ -232,7 +232,7 @@ i2c:
     scan: false
 
 # =============================================================================
-# Audio: i2s_audio_duplex (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
+# Audio: esp_audio_stack (48kHz bus, Espressif rate conversion to 16kHz for mic/AEC/VA)
 # =============================================================================
 # ES8311 (DAC) and ES7210 (ADC) share BCLK/LRCLK/MCLK with separate data pins.
 # Runtime raw TDM probing on the P4 Touch 10.1 matches the working v4.0.0
@@ -270,8 +270,8 @@ esp_afe:
   feed_ring_in_psram: true
   fetch_ring_in_psram: false
 
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   # Concurrent TLS streams (music + TTS + intercom) are tight on internal RAM.
   # Move the audio task's own stack to PSRAM (matches waveshare-s3-full-afe).
   # The task is not CPU-bound (per-frame AFE work lives in Espressif GMF manager tasks), so
@@ -285,7 +285,9 @@ i2s_audio_duplex:
   sample_rate: 48000           # I2S bus at ES8311/ES7210 native rate
   output_sample_rate: 16000    # Mic/AFE/MWW/VA converted to 16kHz via esp_ae_rate_cvt x3
   processor_id: afe_processor
-  fir_decimator: esp_ae_rate_cvt
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
   codec:
     i2c_id: internal_i2c
     input:
@@ -312,16 +314,16 @@ i2s_audio_duplex:
 # mic_afe: post-AFE (Speech Enhancement + AEC + VAD) for VA STT, intercom TX, AND MWW.
 # Same beamformed/cleaned stream feeds every consumer.
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_afe
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
-# Speaker pipeline: i2s_audio_duplex → resampler → mixer (all at 48kHz)
+# Speaker pipeline: esp_audio_stack → resampler → mixer (all at 48kHz)
 speaker:
   # Hardware output: writes 48kHz PCM to I2S bus
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
   # 3-source mixer: media (duckable) + TTS (never ducked) + intercom
@@ -3050,11 +3052,11 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - i2s_audio_duplex.stop: i2s_duplex
+                  - esp_audio_stack.stop: audio_stack
                   - esp_afe.set_mode:
                       id: afe_processor
                       mode: !lambda 'return x;'
-                  - i2s_audio_duplex.start: i2s_duplex
+                  - esp_audio_stack.start: audio_stack
                   - delay: 300ms
                   - if:
                       condition:

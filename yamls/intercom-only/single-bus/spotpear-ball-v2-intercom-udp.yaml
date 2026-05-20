@@ -71,9 +71,9 @@ packages:
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
   status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  duplex_controls: !include ../../../packages/i2s_audio_duplex/controls.yaml
-  duplex_aec_controls: !include ../../../packages/i2s_audio_duplex/aec_controls.yaml
-  speaker_power: !include ../../../packages/i2s_audio_duplex/speaker_power_output.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
   # LVGL settings carousel: globals, navigation scripts, and the individual
   # settings pages this device exposes (swipe-left order is the include order).
   lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
@@ -194,7 +194,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
 # UDP signaling is owned by intercom_api. START/HANGUP/RING/ANSWER/DECLINE
@@ -229,10 +229,10 @@ esp_aec:
   mode: voip_high_perf
 
 # =============================================================================
-# I2S Audio Duplex (bus 48kHz ES8311 native, Espressif rate conversion to 16kHz)
+# ESP Audio Stack (bus 48kHz ES8311 native, Espressif rate conversion to 16kHz)
 # =============================================================================
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   i2s_lrclk_pin: GPIO45
   i2s_bclk_pin: GPIO9
   i2s_mclk_pin: GPIO16
@@ -241,7 +241,9 @@ i2s_audio_duplex:
   sample_rate: 48000             # I2S bus rate (ES8311 native)
   output_sample_rate: 16000      # Mic/AEC/intercom output rate
   processor_id: aec_processor
-  fir_decimator: esp_ae_rate_cvt
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
   num_channels: 2               # Drive DACL speaker and DACR AEC reference
   codec:
     i2c_id: i2c_bus
@@ -265,9 +267,9 @@ i2s_audio_duplex:
 # Microphone (post-AEC, mic_main is required by intercom_only package)
 # =============================================================================
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_main
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
 # =============================================================================
 # Speakers (mixer topology: sources -> resampler -> mixer 48kHz -> hw_speaker)
@@ -276,9 +278,9 @@ microphone:
 # directly on hw_speaker.
 # =============================================================================
 speaker:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
   - platform: mixer
@@ -310,7 +312,7 @@ media_player:
     name: None
     internal: true
     # Pin the player chain at unity gain. Default volume_initial=0.5
-    # propagates to hw_speaker.set_volume(0.5) which i2s_audio_duplex
+    # propagates to hw_speaker.set_volume(0.5) which esp_audio_stack
     # interprets via the Q15 dB curve as ~-25 dB software attenuation,
     # silencing both ringtone AND intercom RX. Clamping min=max=1.0
     # makes set_volume_() a no-op and leaves the ES8311 slider as the
@@ -816,11 +818,11 @@ select:
             - logger.log:
                 format: "Switching AEC mode to %s"
                 args: ['x.c_str()']
-            - i2s_audio_duplex.stop: i2s_duplex
+            - esp_audio_stack.stop: audio_stack
             - esp_aec.set_mode:
                 id: aec_processor
                 mode: !lambda 'return x;'
-            - i2s_audio_duplex.start: i2s_duplex
+            - esp_audio_stack.start: audio_stack
       - lambda: |-
           id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
 

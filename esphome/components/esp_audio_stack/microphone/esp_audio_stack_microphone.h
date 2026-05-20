@@ -5,7 +5,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 #include "esphome/components/microphone/microphone.h"
-#include "../i2s_audio_duplex.h"
+#include "../esp_audio_stack.h"
 
 #include <vector>
 
@@ -13,11 +13,11 @@
 #include <freertos/semphr.h>
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
-class I2SAudioDuplexMicrophone : public microphone::Microphone,
+class ESPAudioStackMicrophone : public microphone::Microphone,
                                   public Component,
-                                  public Parented<I2SAudioDuplex> {
+                                  public Parented<ESPAudioStack> {
  public:
   void setup() override;
   void loop() override;
@@ -37,7 +37,7 @@ class I2SAudioDuplexMicrophone : public microphone::Microphone,
   SemaphoreHandle_t active_listeners_semaphore_{nullptr};
 };
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

@@ -8,8 +8,12 @@
 #include "esphome/core/log.h"
 #include "../audio_processor/ring_buffer_caps.h"
 #include "../audio_processor/task_utils.h"
+#ifdef USE_INTERCOM_TCP_TRANSPORT
 #include "tcp_transport.h"
+#endif
+#ifdef USE_INTERCOM_UDP_TRANSPORT
 #include "udp_transport.h"
+#endif
 
 #include "esp_netif.h"
 #ifdef USE_INTERCOM_MDNS_ANNOUNCE
@@ -179,13 +183,22 @@ bool IntercomApi::setup_audio_processor_() {
 }
 
 bool IntercomApi::setup_transport_() {
+#ifdef USE_INTERCOM_UDP_TRANSPORT
   if (this->protocol_ == TransportType::UDP) {
     this->transport_ = std::make_unique<UdpTransport>(
         this->listen_port_, this->remote_ip_, this->remote_port_,
         this->control_port_, this->remote_control_port_,
         this->tasks_stack_in_psram_);
-  } else {
+  } else
+#endif
+#ifdef USE_INTERCOM_TCP_TRANSPORT
+  if (this->protocol_ == TransportType::TCP) {
     this->transport_ = std::make_unique<TcpTransport>(this->tcp_port_, this->tasks_stack_in_psram_);
+  } else
+#endif
+  {
+    ESP_LOGE(TAG, "Configured intercom transport was not compiled into this firmware");
+    return false;
   }
   if (!this->transport_) {
     ESP_LOGE(TAG, "Failed to allocate transport");

@@ -10,6 +10,10 @@
 #include <es7210_adc.h>
 #include <es8311_codec.h>
 #include <esp_codec_dev_types.h>
+#include <esp_gmf_io_codec_dev.h>
+#include <esp_gmf_obj.h>
+#include <esp_gmf_payload.h>
+#include <freertos/FreeRTOS.h>
 
 #ifdef USE_I2C
 #include "esphome/components/i2c/i2c_bus.h"
@@ -20,7 +24,7 @@
 #include <cstring>
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
 static const char *const TAG = "i2s_codec_dev";
 
@@ -165,12 +169,82 @@ const char *CodecDevBackend::input_codec_name() const {
   return "none";
 }
 
+bool CodecDevBackend::open_gmf_io_(esp_codec_dev_handle_t dev, esp_gmf_io_dir_t dir, const char *name,
+                                   const GmfIoConfig &gmf_config, esp_gmf_io_handle_t *io,
+                                   bool *io_open) {
+  if (dev == nullptr || io == nullptr || io_open == nullptr) {
+    return false;
+  }
+  if (*io != nullptr) {
+    return true;
+  }
+
+  codec_dev_io_cfg_t cfg = ESP_GMF_IO_CODEC_DEV_CFG_DEFAULT();
+  cfg.dev = dev;
+  cfg.dir = dir;
+  cfg.name = name;
+  cfg.io_cfg.buffer_cfg.io_size = gmf_config.io_size;
+  cfg.io_cfg.buffer_cfg.buffer_size = gmf_config.buffer_size;
+  cfg.io_cfg.thread.stack = static_cast<int>(gmf_config.task_stack_size);
+  cfg.io_cfg.thread.prio = gmf_config.task_priority;
+  cfg.io_cfg.thread.core = gmf_config.task_core;
+  cfg.io_cfg.thread.stack_in_ext = gmf_config.task_stack_in_psram;
+  cfg.io_cfg.enable_speed_monitor = gmf_config.speed_monitor;
+
+  esp_gmf_io_handle_t new_io = nullptr;
+  esp_gmf_err_t ret = esp_gmf_io_codec_dev_init(&cfg, &new_io);
+  if (ret != ESP_GMF_ERR_OK || new_io == nullptr) {
+    ESP_LOGE(TAG, "Failed to init GMF codec %s IO: %d", name, static_cast<int>(ret));
+    return false;
+  }
+  if (gmf_config.task_timeout_ms > 0) {
+    ret = esp_gmf_io_set_task_timeout(new_io, gmf_config.task_timeout_ms);
+    if (ret != ESP_GMF_ERR_OK) {
+      ESP_LOGE(TAG, "Failed to set GMF codec %s IO task timeout: %d", name, static_cast<int>(ret));
+      esp_gmf_obj_delete(new_io);
+      return false;
+    }
+  }
+  ret = esp_gmf_io_open(new_io);
+  if (ret != ESP_GMF_ERR_OK) {
+    ESP_LOGE(TAG, "Failed to open GMF codec %s IO: %d", name, static_cast<int>(ret));
+    esp_gmf_obj_delete(new_io);
+    return false;
+  }
+
+  *io = new_io;
+  *io_open = true;
+  ESP_LOGD(TAG,
+           "GMF codec %s IO open (io_size=%u buffer_size=%u task_stack=%u prio=%u core=%u psram=%s speed=%s)",
+           name, static_cast<unsigned>(gmf_config.io_size), static_cast<unsigned>(gmf_config.buffer_size),
+           static_cast<unsigned>(gmf_config.task_stack_size), static_cast<unsigned>(gmf_config.task_priority),
+           static_cast<unsigned>(gmf_config.task_core), gmf_config.task_stack_in_psram ? "yes" : "no",
+           gmf_config.speed_monitor ? "yes" : "no");
+  return true;
+}
+
+void CodecDevBackend::close_gmf_io_(esp_gmf_io_handle_t *io, bool *io_open) {
+  if (io == nullptr || *io == nullptr) {
+    if (io_open != nullptr) {
+      *io_open = false;
+    }
+    return;
+  }
+  if (io_open != nullptr && *io_open) {
+    esp_gmf_io_close(*io);
+    *io_open = false;
+  }
+  esp_gmf_obj_delete(*io);
+  *io = nullptr;
+}
+
 bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
                             i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
-                            i2s_clock_src_t clk_src) {
+                            i2s_clock_src_t clk_src, uint32_t mclk_multiple) {
   this->teardown();
+  const uint16_t codec_mclk_div = mclk_multiple == 0 ? 256 : static_cast<uint16_t>(mclk_multiple);
 
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const bool shared_i2s_data = tx_i2s_port == rx_i2s_port;
   if (shared_i2s_data) {
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -236,7 +310,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
     cfg.ctrl_if = this->es7210_ctrl_;
     cfg.master_mode = false;
     cfg.mic_selected = this->es7210_.mic_selected;
-    cfg.mclk_div = 256;
+    cfg.mclk_div = codec_mclk_div;
     this->rx_codec_if_ = es7210_codec_new(&cfg);
     if (this->rx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create ES7210 codec interface");
@@ -255,7 +329,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
     cfg.master_mode = false;
     cfg.use_mclk = this->es8311_input_.use_mclk;
     cfg.no_dac_ref = this->es8311_input_.no_dac_ref;
-    cfg.mclk_div = 256;
+    cfg.mclk_div = codec_mclk_div;
     this->rx_codec_if_ = es8311_codec_new(&cfg);
     if (this->rx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create ES8311 ADC codec interface");
@@ -276,7 +350,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
     cfg.master_mode = false;
     cfg.use_mclk = this->es8311_.use_mclk;
     cfg.no_dac_ref = this->es8311_.no_dac_ref;
-    cfg.mclk_div = 256;
+    cfg.mclk_div = codec_mclk_div;
     this->tx_codec_if_ = es8311_codec_new(&cfg);
     if (this->tx_codec_if_ == nullptr) {
       ESP_LOGE(TAG, "Failed to create ES8311 codec interface");
@@ -288,7 +362,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
     esp_codec_dev_cfg_t rx_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
         .codec_if = this->rx_codec_if_,
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
         .data_if = this->rx_data_if_,
 #else
         .data_if = this->data_if_,
@@ -305,7 +379,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
     esp_codec_dev_cfg_t tx_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
         .codec_if = this->tx_codec_if_,
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
         .data_if = this->tx_data_if_,
 #else
         .data_if = this->data_if_,
@@ -319,7 +393,7 @@ bool CodecDevBackend::setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
   }
 
   this->prepared_ = true;
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   ESP_LOGI(TAG, "esp_codec_dev backend ready (rx_codec=%s, tx_codec=%s, data_if=%s)",
            this->input_codec_name(), this->output_codec_name(),
            shared_i2s_data ? "shared" : "split");
@@ -370,6 +444,29 @@ bool CodecDevBackend::open(const SampleConfig *tx_config, const SampleConfig *rx
       this->set_input_gain(this->es8311_input_.input_gain_db);
     }
   }
+  if (this->tx_dev_ != nullptr && tx_config != nullptr &&
+      !this->open_gmf_io_(this->tx_dev_, ESP_GMF_IO_DIR_WRITER, "audio_stack_tx", this->gmf_writer_,
+                          &this->tx_io_, &this->tx_io_open_)) {
+    if (this->rx_dev_ != nullptr) {
+      esp_codec_dev_close(this->rx_dev_);
+    }
+    if (this->tx_dev_ != nullptr) {
+      esp_codec_dev_close(this->tx_dev_);
+    }
+    return false;
+  }
+  if (this->rx_dev_ != nullptr && rx_config != nullptr &&
+      !this->open_gmf_io_(this->rx_dev_, ESP_GMF_IO_DIR_READER, "audio_stack_rx", this->gmf_reader_,
+                          &this->rx_io_, &this->rx_io_open_)) {
+    this->close_gmf_io_(&this->tx_io_, &this->tx_io_open_);
+    if (this->rx_dev_ != nullptr) {
+      esp_codec_dev_close(this->rx_dev_);
+    }
+    if (this->tx_dev_ != nullptr) {
+      esp_codec_dev_close(this->tx_dev_);
+    }
+    return false;
+  }
   this->open_ = true;
   return true;
 }
@@ -378,6 +475,8 @@ void CodecDevBackend::close() {
   if (!this->open_) {
     return;
   }
+  this->close_gmf_io_(&this->rx_io_, &this->rx_io_open_);
+  this->close_gmf_io_(&this->tx_io_, &this->tx_io_open_);
   if (this->rx_dev_ != nullptr) {
     esp_codec_dev_close(this->rx_dev_);
   }
@@ -388,17 +487,50 @@ void CodecDevBackend::close() {
 }
 
 bool CodecDevBackend::read(void *data, size_t len) {
-  if (this->rx_dev_ == nullptr || data == nullptr || len == 0) {
+  if (this->rx_io_ == nullptr || data == nullptr || len == 0) {
     return false;
   }
-  return esp_codec_dev_read(this->rx_dev_, data, static_cast<int>(len)) == ESP_CODEC_DEV_OK;
+  esp_gmf_payload_t payload = {};
+  payload.buf = static_cast<uint8_t *>(data);
+  payload.buf_length = len;
+  const esp_gmf_err_io_t read_ret =
+      esp_gmf_io_acquire_read(this->rx_io_, &payload, static_cast<uint32_t>(len), portMAX_DELAY);
+  if (read_ret != ESP_GMF_IO_OK) {
+    return false;
+  }
+  const auto *target = static_cast<uint8_t *>(data);
+  const bool read_ok = payload.valid_size == len && payload.buf != nullptr;
+  if (read_ok && payload.buf != target) {
+    memcpy(data, payload.buf, len);
+  }
+  const esp_gmf_err_io_t release_ret = esp_gmf_io_release_read(this->rx_io_, &payload, portMAX_DELAY);
+  return read_ok && release_ret == ESP_GMF_IO_OK;
 }
 
 bool CodecDevBackend::write(void *data, size_t len) {
-  if (this->tx_dev_ == nullptr || data == nullptr || len == 0) {
+  if (this->tx_io_ == nullptr || data == nullptr || len == 0) {
     return false;
   }
-  return esp_codec_dev_write(this->tx_dev_, data, static_cast<int>(len)) == ESP_CODEC_DEV_OK;
+  esp_gmf_payload_t payload = {};
+  payload.buf = static_cast<uint8_t *>(data);
+  payload.buf_length = len;
+  payload.valid_size = len;
+  const esp_gmf_err_io_t acquire_ret =
+      esp_gmf_io_acquire_write(this->tx_io_, &payload, static_cast<uint32_t>(len), portMAX_DELAY);
+  if (acquire_ret != ESP_GMF_IO_OK) {
+    return false;
+  }
+  const auto *source = static_cast<uint8_t *>(data);
+  if (payload.buf != source) {
+    if (payload.buf == nullptr || payload.buf_length < len) {
+      payload.valid_size = 0;
+      esp_gmf_io_release_write(this->tx_io_, &payload, portMAX_DELAY);
+      return false;
+    }
+    memcpy(payload.buf, data, len);
+    payload.valid_size = len;
+  }
+  return esp_gmf_io_release_write(this->tx_io_, &payload, portMAX_DELAY) == ESP_GMF_IO_OK;
 }
 
 void CodecDevBackend::set_output_volume(float volume) {
@@ -469,7 +601,7 @@ void CodecDevBackend::teardown() {
     this->tx_dev_ = nullptr;
   }
   this->destroy_codecs_();
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const audio_codec_data_if_t *rx_data_if = this->rx_data_if_;
   const audio_codec_data_if_t *tx_data_if = this->tx_data_if_;
   if (rx_data_if != nullptr) {
@@ -490,7 +622,7 @@ void CodecDevBackend::teardown() {
   this->open_ = false;
 }
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

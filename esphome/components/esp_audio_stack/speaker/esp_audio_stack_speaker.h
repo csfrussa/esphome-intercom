@@ -5,7 +5,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 #include "esphome/components/speaker/speaker.h"
-#include "../i2s_audio_duplex.h"
+#include "../esp_audio_stack.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -13,11 +13,11 @@
 #include <atomic>
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
-class I2SAudioDuplexSpeaker : public speaker::Speaker,
+class ESPAudioStackSpeaker : public speaker::Speaker,
                                public Component,
-                               public Parented<I2SAudioDuplex> {
+                               public Parented<ESPAudioStack> {
  public:
   void setup() override;
   void loop() override;
@@ -55,7 +55,7 @@ class I2SAudioDuplexSpeaker : public speaker::Speaker,
   std::atomic<bool> listener_registered_{false};
 };
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

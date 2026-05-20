@@ -65,7 +65,7 @@ The HA peer name in every phonebook is `hass.config.location_name` (NEVER hardco
 | `discovery.mdns` | bool/map | `false` | Opt-in ESP-side peer discovery. Reads TXT `endpoint=<Name|protocol|ip|ports>` from `_intercom-tcp._tcp` / `_intercom-udp._udp` services and merges matching peers into the phonebook. |
 | `microphone` | ID | Required | Reference to microphone component. |
 | `speaker` | ID | Required | Reference to speaker component. |
-| `processor_id` | ID | - | Reference to an `esp_aec` component. Must be `esp_aec`, not `esp_afe`: when `intercom_api` drives its own mic (no `i2s_audio_duplex` in front), the AFE feed/fetch pipeline cannot be fed correctly. Accepts any `AudioProcessor` implementation at the type level, but only `esp_aec` is supported in practice. |
+| `processor_id` | ID | - | Reference to an `esp_aec` component. Must be `esp_aec`, not `esp_afe`: when `intercom_api` drives its own mic (no `esp_audio_stack` in front), the AFE feed/fetch pipeline cannot be fed correctly. Accepts any `AudioProcessor` implementation at the type level, but only `esp_aec` is supported in practice. |
 | `dc_offset_removal` | bool | false | Remove DC offset (for mics like SPH0645). |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled). |
 | `tasks_stack_in_psram` | bool | false | Place the three internal task stacks in PSRAM. Saves ~28 KB internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it. Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Default false keeps `intercom_api` working on plain ESP32 boards without PSRAM; board YAMLs should enable it only after validating their PSRAM stack policy. |
@@ -142,20 +142,20 @@ Two audio processing components are available, both implementing the `AudioProce
   - **Dual-mic (MMR/MMNR)**: AEC + structural Speech Enhancement/BSS (~120 KB internal RAM). Public dual-mic profiles keep AGC disabled and expose only live AEC/VAD controls
   - Runtime toggle switches, diagnostic sensors, and mode switching in Home Assistant
 
-They are drop-in replacements **only behind `i2s_audio_duplex`**, which feeds the processor with the fixed 512-sample 16 kHz frames that `esp_afe` requires. When `intercom_api` talks to the processor directly (no `i2s_audio_duplex`, typical of dual-bus MEMS + I2S amp setups), use `esp_aec` only. The AFE pipeline needs a stable producer task that `intercom_api`'s standalone mic path does not provide.
+They are drop-in replacements **only behind `esp_audio_stack`**, which feeds the processor with the fixed 512-sample 16 kHz frames that `esp_afe` requires. When `intercom_api` talks to the processor directly (no `esp_audio_stack`, typical of dual-bus MEMS + I2S amp setups), use `esp_aec` only. The AFE pipeline needs a stable producer task that `intercom_api`'s standalone mic path does not provide.
 
 ### Modularity rule
 
 The audio components are intentionally modular:
 
-- `i2s_audio_duplex` can be used by itself as a full-duplex ESPHome
+- `esp_audio_stack` can be used by itself as a full-duplex ESPHome
   microphone/speaker provider.
 - `esp_aec` and `esp_afe` are optional processors referenced through
   `processor_id`.
 - `intercom_api` is optional and consumes the microphone/speaker surfaces when
-  present. It is not a dependency of `i2s_audio_duplex`.
+  present. It is not a dependency of `esp_audio_stack`.
 
-The validation between `i2s_audio_duplex` and `intercom_api` is a conflict
+The validation between `esp_audio_stack` and `intercom_api` is a conflict
 guard, not a coupling requirement. It only rejects configurations where both
 components try to own the same processor or DC-offset correction stage.
 

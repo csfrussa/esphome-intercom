@@ -1,6 +1,6 @@
 #include "udp_transport.h"
 
-#ifdef USE_ESP32
+#if defined(USE_ESP32) && defined(USE_INTERCOM_UDP_TRANSPORT)
 
 #include <cerrno>
 #include <cstring>
@@ -467,4 +467,4 @@ void UdpTransport::ctrl_task_() {
 }  // namespace intercom_api
 }  // namespace esphome
 
-#endif  // USE_ESP32
+#endif  // USE_ESP32 && USE_INTERCOM_UDP_TRANSPORT

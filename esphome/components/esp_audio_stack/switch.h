@@ -4,14 +4,14 @@
 
 #include "esphome/components/switch/switch.h"
 #include "esphome/core/component.h"
-#include "i2s_audio_duplex.h"
+#include "esp_audio_stack.h"
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
 class AECSwitch : public switch_::Switch, public Component {
  public:
-  void set_parent(I2SAudioDuplex *parent) { this->parent_ = parent; }
+  void set_parent(ESPAudioStack *parent) { this->parent_ = parent; }
 
   void setup() override {
     if (this->parent_ == nullptr)
@@ -26,7 +26,7 @@ class AECSwitch : public switch_::Switch, public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("i2s_duplex.aec_switch", "AEC Switch");
+    ESP_LOGCONFIG("audio_stack.aec_switch", "AEC Switch");
   }
 
  protected:
@@ -37,10 +37,10 @@ class AECSwitch : public switch_::Switch, public Component {
     }
   }
 
-  I2SAudioDuplex *parent_{nullptr};
+  ESPAudioStack *parent_{nullptr};
 };
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

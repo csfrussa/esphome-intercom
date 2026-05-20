@@ -9,8 +9,8 @@
 # `peer_intercom_ip` fallback remains only for manual two-node testing.
 #
 # Audio pipeline:
-#   MEMS mic -> RX I2S bus -> i2s_audio_duplex (48kHz) -> esp_ae_rate_cvt -> esp_aec -> intercom TX
-#   Intercom RX (16kHz) -> resampler -> i2s_audio_duplex -> TX I2S bus -> class-D amp
+#   MEMS mic -> RX I2S bus -> esp_audio_stack (48kHz) -> esp_ae_rate_cvt -> esp_aec -> intercom TX
+#   Intercom RX (16kHz) -> resampler -> esp_audio_stack -> TX I2S bus -> class-D amp
 #
 # HARDWARE (adapt GPIOs to YOUR board):
 #   - Board: Any ESP32-S3 with PSRAM
@@ -45,8 +45,8 @@ packages:
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
   status_led: !include ../../../packages/led/status_ws2812_single.yaml
-  duplex_controls: !include ../../../packages/i2s_audio_duplex/controls.yaml
-  duplex_aec_controls: !include ../../../packages/i2s_audio_duplex/aec_controls.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
 
 esphome:
   name: ${name}
@@ -116,7 +116,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
 # UDP signaling is owned by intercom_api. START/HANGUP/RING/ANSWER/DECLINE
@@ -138,10 +138,10 @@ esp_aec:
   mode: voip_high_perf
 
 # =============================================================================
-# I2S Audio Duplex
+# ESP Audio Stack
 # =============================================================================
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   rx_bus:
     i2s_num: 0
     i2s_lrclk_pin: GPIO37
@@ -163,17 +163,17 @@ i2s_audio_duplex:
 # Microphone
 # =============================================================================
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_main
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
 # =============================================================================
 # Speaker
 # =============================================================================
 speaker:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
   - platform: resampler
@@ -237,11 +237,11 @@ select:
             - logger.log:
                 format: "Switching AEC mode to %s"
                 args: ['x.c_str()']
-            - i2s_audio_duplex.stop: i2s_duplex
+            - esp_audio_stack.stop: audio_stack
             - esp_aec.set_mode:
                 id: aec_processor
                 mode: !lambda 'return x;'
-            - i2s_audio_duplex.start: i2s_duplex
+            - esp_audio_stack.start: audio_stack
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
           id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());

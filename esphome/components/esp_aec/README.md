@@ -31,9 +31,9 @@ Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the `AudioProces
 | Intercom + VA + Micro Wake Word, single mic with low speaker leakage | `esp_aec` in `sr_low_cost` mode (preserves spectral features for MWW) |
 | Intercom + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
-| Standalone `intercom_api` without `i2s_audio_duplex` (dual-bus MEMS + amp) | `esp_aec` (the AFE feed/fetch model needs the steady frames that `i2s_audio_duplex` produces) |
+| Standalone `intercom_api` without `esp_audio_stack` (dual-bus MEMS + amp) | `esp_aec` (the AFE feed/fetch model needs the steady frames that `esp_audio_stack` produces) |
 
-Both components implement `AudioProcessor` at the type level, but `esp_afe` is only safely usable behind `i2s_audio_duplex`. See [docs/reference.md](../../../docs/reference.md#audio-processing-components).
+Both components implement `AudioProcessor` at the type level, but `esp_afe` is only safely usable behind `esp_audio_stack`. See [docs/reference.md](../../../docs/reference.md#audio-processing-components).
 
 ## Quick start
 
@@ -43,9 +43,9 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
-    components: [audio_processor, esp_aec, i2s_audio_duplex]
+    components: [audio_processor, esp_aec, esp_audio_stack]
     # Add intercom_api only when this device is also an intercom endpoint.
-    # components: [audio_processor, esp_aec, i2s_audio_duplex, intercom_api]
+    # components: [audio_processor, esp_aec, esp_audio_stack, intercom_api]
 
 esp_aec:
   id: aec_processor
@@ -53,17 +53,17 @@ esp_aec:
   filter_length: 4
   mode: sr_low_cost
 
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   processor_id: aec_processor
-  # ... (see i2s_audio_duplex README for the rest)
+  # ... (see esp_audio_stack README for the rest)
 ```
 
 ## Configuration options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `id` | ID | required | Component identifier referenced by `i2s_audio_duplex.processor_id` or `intercom_api.processor_id`. |
+| `id` | ID | required | Component identifier referenced by `esp_audio_stack.processor_id` or `intercom_api.processor_id`. |
 | `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to rate-convert from the I²S bus rate when needed. |
 | `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (intercom-only, ~128 ms tail). Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
 | `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for intercom-only. Public YAMLs in this repo restrict or order runtime choices per target - see "Runtime mode switching" below. |
@@ -152,7 +152,7 @@ select:
 
 ## Threading model
 
-None. `esp_aec::process()` runs synchronously on the caller's audio task. The caller (typically `i2s_audio_duplex`'s audio task on Core 0) owns the realtime thread. There are no internal worker tasks, no FreeRTOS objects beyond a mutex around mode-switch reinit.
+None. `esp_aec::process()` runs synchronously on the caller's audio task. The caller (typically `esp_audio_stack`'s audio task on Core 0) owns the realtime thread. There are no internal worker tasks, no FreeRTOS objects beyond a mutex around mode-switch reinit.
 
 ## Memory footprint
 
@@ -184,7 +184,7 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 
 ## Known constraints
 
-- Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must rate-convert; `i2s_audio_duplex` does this with Espressif's `esp_ae_rate_cvt`.
+- Sample rate is fixed at 16 kHz (the rate esp-sr's AEC expects). When the I²S bus runs faster, the upstream component must rate-convert; `esp_audio_stack` does this with Espressif's `esp_ae_rate_cvt`.
 - Mode changes (`sr_low_cost` vs `sr_high_perf` vs `voip_*` vs `fd_*`) require a handle rebuild, which causes a short audio gap. Do not change mode while a call is streaming; the AEC select wraps this with state guards in the ready-to-flash YAMLs.
 - `filter_length` is compile-time-sized but runtime-mutable. Longer filters give better echo-tail coverage at the cost of CPU.
 - The `sr_high_perf` mode needs a contiguous DMA-capable internal allocation. On a fragmented heap the pre-flight check refuses the switch and logs a warning; the device keeps running on the previous mode.
@@ -192,7 +192,7 @@ To mute AEC chatter without losing project-wide DEBUG: `logger.logs.esp_aec: INF
 ## Troubleshooting
 
 **Echo cancellation does nothing.**
-Make sure the consumer (typically `i2s_audio_duplex` or `intercom_api`) actually links `processor_id: aec_processor`. The component initialises silently even when nobody references it.
+Make sure the consumer (typically `esp_audio_stack` or `intercom_api`) actually links `processor_id: aec_processor`. The component initialises silently even when nobody references it.
 
 **The far end still hears the speaker on a codec-backed full-duplex device.**
 Use `fd_low_cost` first. For ES8311 digital feedback, verify
@@ -204,7 +204,7 @@ Use `fd_low_cost` first. For ES8311 digital feedback, verify
 You are likely on a `voip_*` mode. Switch to `sr_low_cost`. The VOIP engines apply a residual echo suppressor that distorts the features the MWW model expects.
 
 **`sr_high_perf` switch fails at runtime.**
-The pre-flight check on contiguous DMA-capable internal RAM rejected the switch. Free internal heap by enabling `buffers_in_psram: true` on `i2s_audio_duplex`, or stay on `sr_low_cost`. Check `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)` in the logs.
+The pre-flight check on contiguous DMA-capable internal RAM rejected the switch. Free internal heap by enabling `buffers_in_psram: true` on `esp_audio_stack`, or stay on `sr_low_cost`. Check `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)` in the logs.
 
 **AEC mode select in Home Assistant shows the wrong value after a switch attempt.**
 You are missing `optimistic: false` on the template select. Without it, the template auto-publishes the user-selected value over the live mode the device actually applied.

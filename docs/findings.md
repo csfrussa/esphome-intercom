@@ -15,22 +15,22 @@ A short index of upstream issues we depend on and design decisions worth pinning
 and makes the sensor less trustworthy than no VAD reading at all. Wait for the
 upstream state machine to report real VAD transitions.
 
-## Why a custom `i2s_audio_duplex` component instead of stock `i2s_audio`
+## Why a custom `esp_audio_stack` component instead of stock `i2s_audio`
 
 **The stock split**: ESPHome's `i2s_audio` instantiates a separate I2S controller for `microphone` and for `speaker`. On a board where mic and speaker live on different I2S buses (MEMS mic on one bus, I2S amp on another), this works fine.
 
 **Where it breaks**: Audio codecs like ES8311, ES8388, WM8960 expose mic and speaker on the **same I2S bus**, sharing pin lines and a clock. Two `i2s_audio` instances cannot bind the same I2S controller; they collide on the driver layer and the second one silently fails or produces glitches. The dual-instance setup also cannot do AEC properly: there is no shared frame cadence between the two paths, so the reference and mic streams are not phase-coherent.
 
-**What `i2s_audio_duplex` provides** that stock `i2s_audio` does not:
+**What `esp_audio_stack` provides** that stock `i2s_audio` does not:
 
 - **Single I2S controller, both directions**: TX and RX share the same `i2s_chan_handle_t` pair, configured once at start time. Required for any single-bus codec.
 - **Frame cadence guarantee**: TX and RX run lock-step in one task. The AEC reference is the previous TX frame, rate-converted on the TX side with Espressif's converter (matches Espressif's `esp-gmf aec_rec` pipeline). Phase coherent, no skew, no ghost-tail residual.
 - **TDM hardware reference**: When paired with ES7210 in TDM mode, captures the DAC analog feedback on a dedicated ADC slot. Sample-aligned with mic data. The board YAML chooses which slot via `tdm_ref_slot` (Korvo-2 baseline = slot 2 / MIC3, Waveshare P4 Touch = slot 1 / MIC2). The audio task watches the chosen slot's RMS while the speaker is active and emits a one-shot WARN ("TDM AEC reference silent for N frames...") if it stays below -60 dBFS for ~3.2 s, so wiring or PGA mistakes surface immediately instead of running a dead reference forever.
 - **Stereo digital reference (ES8311)**: Stereo I2S frame with L=DAC ref, R=ADC mic. Same single-bus codec, sample-accurate ref without extra hardware.
 - **Multi-rate operation**: I2S bus at 48 kHz (for high-quality DAC), mic/AEC/VA at 16 kHz via Espressif `esp_ae_rate_cvt`. Not expressible in stock `i2s_audio`.
-- **Cross-component validation**: A `FINAL_VALIDATE_SCHEMA` rejects configurations that would create dual processors or dual DC-offset removal between `i2s_audio_duplex` and `intercom_api`. Catches errors at compile time instead of as runtime audio garbage.
+- **Cross-component validation**: A `FINAL_VALIDATE_SCHEMA` rejects configurations that would create dual processors or dual DC-offset removal between `esp_audio_stack` and `intercom_api`. Catches errors at compile time instead of as runtime audio garbage.
 
-**When stock `i2s_audio` is still the right choice**: Generic boards with truly separate mic and speaker buses. For those, `intercom_api`'s standalone path runs on top of the stock components and does its own AEC via a software ring-buffer reference. Quality is lower than the duplex setup (see [`intercom_api` README, AEC quality section](../esphome/components/intercom_api/README.md#aec-quality-standalone-vs-i2s_audio_duplex)) but acceptable for non-composite use cases.
+**When stock `i2s_audio` is still the right choice**: Generic boards with truly separate mic and speaker buses. For those, `intercom_api`'s standalone path runs on top of the stock components and does its own AEC via a software ring-buffer reference. Quality is lower than the duplex setup (see [`intercom_api` README, AEC quality section](../esphome/components/intercom_api/README.md#aec-quality-standalone-vs-esp_audio_stack)) but acceptable for non-composite use cases.
 
 ## Codec baseline vs board-specific override
 
@@ -41,7 +41,7 @@ upstream state machine to report real VAD transitions.
 | WS3 / Spotpear / Korvo-2 | DAC -> MIC3 / slot 2 | `tdm_ref_slot: 2` (baseline default) | none (baseline already sets MIC3 = 30 dB) |
 | Waveshare P4 Touch | DAC -> MIC2 / slot 1 | `tdm_ref_slot: 1` | reset MIC2 PGA to 0 dB; MIC3 stays at baseline |
 
-If the ref slot RMS stays silent while the speaker is active, the duplex driver emits a WARN (see troubleshooting). That is the canary for "you forgot to override the PGA for your board".
+If the ref slot RMS stays silent while the speaker is active, the audio stack driver emits a WARN (see troubleshooting). That is the canary for "you forgot to override the PGA for your board".
 
 ## P4 esp-sr generation
 

@@ -135,7 +135,7 @@ Main changes:
 - ES7210 TDM reference-slot behavior is documented and guarded with runtime
   warnings.
 
-`i2s_audio_duplex` is not only for intercom. If you are building your own
+`esp_audio_stack` is not only for intercom. If you are building your own
 ESPHome Voice Assistant and need a shared microphone and speaker I2S path,
 speaker reference handling, or a cleaner audio lifecycle, the component can be
 used as part of that build too.

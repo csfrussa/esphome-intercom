@@ -1,13 +1,13 @@
 # =============================================================================
-# I2S Audio Duplex AEC user controls
+# ESP Audio Stack AEC user controls
 # =============================================================================
 # Use on esp_aec / standalone AEC builds. Full esp_afe builds should include
 # packages/esp_afe/*_entities.yaml instead, because AEC is controlled by AFE.
 # =============================================================================
 
 switch:
-  - platform: i2s_audio_duplex
-    i2s_audio_duplex_id: i2s_duplex
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
     aec:
       id: aec_switch
       name: Echo Cancellation

@@ -19,12 +19,12 @@ experimental hardware-specific targets.
 ```
 yamls/
   intercom-only/         Intercom without Voice Assistant or Wake Word
-    single-bus/          Devices using i2s_audio_duplex (mic+speaker on same I2S bus)
+    single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)
 
   full-experience/       VA + MWW + Intercom (complete voice assistant hub)
     single-bus/
-      aec/               i2s_audio_duplex + esp_aec
-      afe/               i2s_audio_duplex + esp_afe
+      aec/               esp_audio_stack + esp_aec
+      afe/               esp_audio_stack + esp_afe
 
   experimental/          Untested topologies (compile-only, contributions welcome)
     dual-bus/            Devices with separate I2S buses for mic and speaker
@@ -37,7 +37,7 @@ building blocks are public packages under `packages/debug/`.
 
 ## Single-bus vs Dual-bus
 
-- **Single-bus**: mic and speaker share one I2S peripheral via `i2s_audio_duplex`. Used by devices with audio codecs (ES8311, ES7210+ES8311). Enables stereo AEC reference, TDM multi-mic, and 48kHz bus rate with Espressif `esp_ae_rate_cvt` conversion to 16kHz.
+- **Single-bus**: mic and speaker share one I2S peripheral via `esp_audio_stack`. Used by devices with audio codecs (ES8311, ES7210+ES8311). Enables stereo AEC reference, TDM multi-mic, and 48kHz bus rate with Espressif `esp_ae_rate_cvt` conversion to 16kHz.
 
 - **Dual-bus**: mic and speaker on separate I2S peripherals using standard ESPHome `i2s_audio`. Simpler setup for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
 
@@ -54,7 +54,7 @@ There is one product mode: PBX-lite (implicit default). Phonebook / contacts / d
 
 ## Production logging
 
-Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; the per-frame telemetry path is additionally gated behind `i2s_audio_duplex.telemetry: true`. Audio deep-debug lives in `packages/debug/p4_audio_deep_debug.yaml`.
+Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; the per-frame telemetry path is additionally gated behind `esp_audio_stack.telemetry: true`. Audio deep-debug lives in `packages/debug/p4_audio_deep_debug.yaml`.
 
 ## P4 status
 

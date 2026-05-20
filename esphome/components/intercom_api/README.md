@@ -22,7 +22,7 @@ The HA peer name is `hass.config.location_name` (NEVER hardcoded "Home Assistant
 - **Phonebook with name-based dedup** (last writer wins on endpoint conflict)
 - **FreeRTOS Tasks** for non-blocking audio processing
 - **Finite State Machine** for call states (Idle -> Ringing -> Streaming)
-- **Audio Processor Integration** via `esp_aec`, or `esp_afe` when the microphone path is fed by `i2s_audio_duplex`
+- **Audio Processor Integration** via `esp_aec`, or `esp_afe` when the microphone path is fed by `esp_audio_stack`
 - **Persistent Settings** saved to flash
 - **ESPHome Native Platforms** for switches, numbers, sensors
 
@@ -59,12 +59,12 @@ intercom_api:
 For go2rtc, point `remote_ip` at the go2rtc host and configure go2rtc with a
 `udp://0.0.0.0:6054?codec=L16&rate=16000&channels=1` source.
 
-## AEC quality: standalone vs i2s_audio_duplex
+## AEC quality: standalone vs esp_audio_stack
 
 Echo cancellation quality depends on how the speaker reference is captured:
 
-- **With `i2s_audio_duplex`** (recommended): mic and speaker share the same
-  I2S bus and the duplex driver hands an already rate-converted,
+- **With `esp_audio_stack`** (recommended): mic and speaker share the same
+  I2S bus and the audio stack driver hands an already rate-converted,
   phase-coherent reference to the AEC each frame. After the TX-side
   rate-conversion refactor in v4.0.0 the residual echo is essentially gone.
 - **Standalone `intercom_api`** (mic + speaker on separate components): the
@@ -184,7 +184,7 @@ intercom_api:
 | `discovery.mdns` | bool/map | `false` | Opt-in ESP-side peer discovery. When `true`, a small background task queries `_intercom-tcp._tcp` / `_intercom-udp._udp`, reads TXT `endpoint=<Name|protocol|ip|ports>`, and merges matching peers into the phonebook. |
 | `microphone` | ID | Required | Reference to microphone component |
 | `speaker` | ID | Required | Reference to speaker component |
-| `processor_id` | ID | - | Reference to an audio processor. **Use `esp_aec` only** when `intercom_api` runs without `i2s_audio_duplex` in front of it (the standalone dual-bus MEMS + amp setup). `esp_afe` is type-compatible but its feed/fetch tasks need the fixed-cadence frames that only `i2s_audio_duplex` produces; pairing `esp_afe` with standalone `intercom_api` will silently fail to process audio. With `i2s_audio_duplex` in the chain both processors are valid. |
+| `processor_id` | ID | - | Reference to an audio processor. **Use `esp_aec` only** when `intercom_api` runs without `esp_audio_stack` in front of it (the standalone dual-bus MEMS + amp setup). `esp_afe` is type-compatible but its feed/fetch tasks need the fixed-cadence frames that only `esp_audio_stack` produces; pairing `esp_afe` with standalone `intercom_api` will silently fail to process audio. With `esp_audio_stack` in the chain both processors are valid. |
 | `aec_reference_delay_ms` | int | 80 | AEC ring buffer pre-fill delay (10-200ms). Tune for your hardware if echo cancellation is poor. |
 | `dc_offset_removal` | bool | false | Remove DC offset from mic signal |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled) |
@@ -280,7 +280,7 @@ number:
       # Range: -20 to +20 dB
 ```
 
-> **Note**: When `i2s_audio_duplex` is also present, `i2s_audio_duplex` owns the `mic_gain` and Master Volume number entities with full dB-scale control and persistence. In the standard packages the user-facing volume id is `master_volume`; the `speaker_volume` key is only the component's technical config option. In that case, `intercom_api`'s number entities serve as **fallback only** for non-duplex setups. A `FINAL_VALIDATE_SCHEMA` at compile time prevents conflicts by detecting when both components try to own the same functionality (dual AEC, dual DC offset).
+> **Note**: When `esp_audio_stack` is also present, `esp_audio_stack` owns the `mic_gain` and Master Volume number entities with full dB-scale control and persistence. In the standard packages the user-facing volume id is `master_volume`; the `speaker_volume` key is only the component's technical config option. In that case, `intercom_api`'s number entities serve as **fallback only** for non-duplex setups. A `FINAL_VALIDATE_SCHEMA` at compile time prevents conflicts by detecting when both components try to own the same functionality (dual AEC, dual DC offset).
 
 ## Actions
 
@@ -710,7 +710,7 @@ api:
 | tx_task | 0 | 5 | 12288 | Always created. Drains `mic_buffer_` and keeps network sends out of the microphone callback path. |
 | speaker_task | 0 | 4 | 8192 | **Only created when `processor_id` is set on `intercom_api`**. Network→speaker, processor ref. |
 
-> **Task elimination**: When `intercom_api` does NOT have its own `processor_id` (the standard case, where audio processing is handled by `i2s_audio_duplex`), `speaker_task`, `speaker_buffer_`, `spk_audio_chunk_`, `spk_ref_scaled_` and the speaker-stop semaphore are not created. `tx_task` stays alive in both modes because it decouples microphone callbacks from TCP/UDP sends. Incoming audio is played directly via `speaker_->play()`.
+> **Task elimination**: When `intercom_api` does NOT have its own `processor_id` (the standard case, where audio processing is handled by `esp_audio_stack`), `speaker_task`, `speaker_buffer_`, `spk_audio_chunk_`, `spk_ref_scaled_` and the speaker-stop semaphore are not created. `tx_task` stays alive in both modes because it decouples microphone callbacks from TCP/UDP sends. Incoming audio is played directly via `speaker_->play()`.
 
 ## Logging
 
@@ -765,7 +765,7 @@ The socket pool is sized automatically: `intercom_api` calls `socket.consume_soc
 
 ### AEC not working
 
-- Verify `processor_id` is linked to `esp_aec` when `intercom_api` owns the mic/speaker path. Use `esp_afe` only behind `i2s_audio_duplex`.
+- Verify `processor_id` is linked to `esp_aec` when `intercom_api` owns the mic/speaker path. Use `esp_afe` only behind `esp_audio_stack`.
 - Check the audio processor component is configured
 - Ensure AEC switch is ON
 

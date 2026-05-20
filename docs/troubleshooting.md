@@ -41,7 +41,7 @@ Common symptoms and fixes when setting up ESPHome Intercom.
 
 ## Echo or feedback
 
-1. Enable AEC: create an audio processor and link it via `processor_id`. With `i2s_audio_duplex`, both `esp_aec` and `esp_afe` are supported. With `intercom_api` alone (no duplex in front), use `esp_aec` only.
+1. Enable AEC: create an audio processor and link it via `processor_id`. With `esp_audio_stack`, both `esp_aec` and `esp_afe` are supported. With `intercom_api` alone (no duplex in front), use `esp_aec` only.
 2. Ensure the AEC switch is ON in Home Assistant.
 3. Reduce Master Volume.
 4. Increase physical distance between mic and speaker.
@@ -51,7 +51,7 @@ Common symptoms and fixes when setting up ESPHome Intercom.
 1. Check WiFi signal strength (should be > -70 dBm).
 2. Verify Home Assistant is not overloaded.
 3. Check for network congestion.
-4. Production YAMLs default to `logger.level: INFO`. Only flip to `DEBUG` (or enable `i2s_audio_duplex.telemetry: true`) while tuning, then revert.
+4. Production YAMLs default to `logger.level: INFO`. Only flip to `DEBUG` (or enable `esp_audio_stack.telemetry: true`) while tuning, then revert.
 
 ## ESP shows "Ringing" but browser doesn't connect
 
@@ -105,7 +105,7 @@ The ESP default `ha_peer_name_` is empty (no hardcoded "Home Assistant" or local
 
 > `TDM AEC reference silent for 100 frames while speaker active (ref -72.4 dBFS); check tdm_ref_slot wiring or set use_tdm_reference: false`
 
-`i2s_audio_duplex` watches the configured TDM reference slot while the speaker is actively driving samples. If the slot RMS stays below -60 dBFS for ~3.2 s (100 frames at 32 ms), it emits a one-shot WARN. The most common causes:
+`esp_audio_stack` watches the configured TDM reference slot while the speaker is actively driving samples. If the slot RMS stays below -60 dBFS for ~3.2 s (100 frames at 32 ms), it emits a one-shot WARN. The most common causes:
 
 - `tdm_ref_slot` does not match the board wiring. Korvo-2 baseline assumes MIC3 / slot 2; Waveshare P4 Touch uses MIC2 / slot 1. The board YAML must override `tdm_ref_slot` and (where applicable) the per-slot ES7210 PGA register.
 - ES7210 PGA for the chosen ref slot is at 0 dB or muted. The Korvo-2 baseline in `packages/codec/es7210_tdm.yaml` sets MIC3 PGA to 30 dB; boards using a different ref slot must override the corresponding PGA register from their own `on_boot` lambda after the baseline script runs.

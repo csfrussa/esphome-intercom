@@ -28,7 +28,7 @@
 #include "../audio_processor/audio_processor.h"
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
 using audio_processor::AudioProcessor;
 using audio_processor::ProcessorTelemetry;
@@ -47,7 +47,7 @@ using MicDataCallback = std::function<void(const uint8_t *data, size_t len)>;
 // Same real-time constraints as MicDataCallback apply.
 using SpeakerOutputCallback = std::function<void(uint32_t frames, int64_t timestamp)>;
 
-enum class DuplexRuntimeState : uint8_t {
+enum class AudioStackRuntimeState : uint8_t {
   IDLE = 0,
   MIC = 1,
   SPEAKER = 2,
@@ -78,18 +78,19 @@ class FirDecimator {
   FirDecimator(const FirDecimator &) = delete;
   FirDecimator &operator=(const FirDecimator &) = delete;
 
-  void init(uint32_t ratio, uint32_t src_rate = 0, uint32_t dest_rate = 0);
+  void init(uint32_t ratio, uint32_t src_rate = 0, uint32_t dest_rate = 0,
+            uint8_t complexity = 3, uint8_t perf_type = 1);
   void reset();
 
   // Contiguous int16 input.
-  void process(const int16_t *in, int16_t *out, size_t in_count);
+  bool process(const int16_t *in, int16_t *out, size_t in_count);
   // Preallocate scratch and open the Espressif converter before the first realtime frame.
-  bool prepare(size_t in_count);
+  bool prepare(size_t in_count, bool source_32bit = false);
   // Strided int16 input: deinterleave into scratch, then rate-convert.
-  void process_strided(const int16_t *in, int16_t *out, size_t out_count,
+  bool process_strided(const int16_t *in, int16_t *out, size_t out_count,
                        size_t stride, size_t offset);
   // Strided int32 input with inline >>16 downshift.
-  void process_strided_32(const int32_t *in, int16_t *out, size_t out_count,
+  bool process_strided_32(const int32_t *in, int16_t *out, size_t out_count,
                           size_t stride, size_t offset);
 
  private:
@@ -106,11 +107,13 @@ class MultiChannelFirDecimator {
   MultiChannelFirDecimator(const MultiChannelFirDecimator &) = delete;
   MultiChannelFirDecimator &operator=(const MultiChannelFirDecimator &) = delete;
 
-  void init(uint32_t ratio, uint8_t num_channels, uint32_t src_rate = 0, uint32_t dest_rate = 0);
+  void init(uint32_t ratio, uint8_t num_channels, uint32_t src_rate = 0, uint32_t dest_rate = 0,
+            uint8_t complexity = 3, uint8_t perf_type = 1);
   void reset();
   // Preallocate scratch and per-channel output buffers before the first
   // realtime TDM/stereo decimation frame.
-  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels);
+  bool prepare(size_t in_count, size_t out_count, uint8_t num_channels,
+               uint8_t source_channels, bool source_32bit);
 
   // Decimate N channels from strided int16 TDM input, producing:
   //   - mic_interleaved: [mic1, mic2, mic1, mic2, ...] (num_mic_ch interleaved, for AFE)
@@ -118,12 +121,12 @@ class MultiChannelFirDecimator {
   //   - ref_out: ref contiguous (for AEC, may be nullptr if no ref channel)
   // channel_offsets: slot indices in TDM frame [mic1_slot, mic2_slot, ref_slot]
   // num_mic_ch: 1 or 2 (how many of the channels are mic, rest is ref)
-  void process_multi(const int16_t *in, size_t out_count, size_t in_stride,
+  bool process_multi(const int16_t *in, size_t out_count, size_t in_stride,
                      const uint8_t *channel_offsets,
                      int16_t *mic_interleaved, int16_t *mic_mono,
                      int16_t *ref_out, uint8_t num_mic_ch);
   // Same but for 32-bit I2S input with inline >>16 downshift.
-  void process_multi_32(const int32_t *in, size_t out_count, size_t in_stride,
+  bool process_multi_32(const int32_t *in, size_t out_count, size_t in_stride,
                         const uint8_t *channel_offsets,
                         int16_t *mic_interleaved, int16_t *mic_mono,
                         int16_t *ref_out, uint8_t num_mic_ch);
@@ -145,7 +148,7 @@ class MultiChannelFirDecimator {
 /// decimates with FirDecimator, invokes the processor, and distributes
 /// the result to registered MicDataCallback listeners. Speaker frames
 /// come in via SpeakerOutputCallback and are written to I2S TX.
-class I2SAudioDuplex : public Component {
+class ESPAudioStack : public Component {
  public:
   void setup() override;
   void loop() override;
@@ -163,7 +166,7 @@ class I2SAudioDuplex : public Component {
   void set_mclk_pin(int pin) { this->mclk_pin_ = pin; }
   void set_din_pin(int pin) { this->din_pin_ = pin; }
   void set_dout_pin(int pin) { this->dout_pin_ = pin; }
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   void configure_rx_bus(uint8_t i2s_num, int lrclk_pin, int bclk_pin, int mclk_pin, int din_pin) {
     this->rx_bus_.configured = true;
     this->rx_bus_.i2s_num = i2s_num;
@@ -253,11 +256,6 @@ class I2SAudioDuplex : public Component {
   // ES8311 Digital Feedback mode: RX is stereo with L=ADC(mic), R=DAC(ref)
   void set_use_stereo_aec_reference(bool use) { this->use_stereo_aec_ref_ = use; }
 
-  // YAML `fir_decimator` is retained as a compatibility name, but the only
-  // supported backend is Espressif esp_ae_rate_cvt.
-  void set_fir_decimator_backend(uint8_t backend) { (void) backend; }
-  void set_fir_decimator_custom(bool b) { (void) b; }
-
   // Reference channel selection: false=left (default), true=right
   void set_reference_channel_right(bool right) { this->ref_channel_right_ = right; }
 
@@ -299,11 +297,11 @@ class I2SAudioDuplex : public Component {
   void set_speaker_paused(bool paused) { this->speaker_paused_.store(paused, std::memory_order_relaxed); }
   bool is_speaker_paused() const { return this->speaker_paused_.load(std::memory_order_relaxed); }
 
-  // Full duplex control
+  // Audio stack lifecycle control
   void start();  // Start both mic and speaker
   void stop();   // Stop both
 
-  bool is_running() const { return this->duplex_running_.load(std::memory_order_relaxed); }
+  bool is_running() const { return this->audio_stack_running_.load(std::memory_order_relaxed); }
   bool has_i2s_error() const { return this->has_i2s_error_.load(std::memory_order_relaxed); }
   Trigger<> *get_start_trigger() { return &this->start_trigger_; }
   Trigger<> *get_idle_trigger() { return &this->idle_trigger_; }
@@ -333,17 +331,52 @@ class I2SAudioDuplex : public Component {
   void set_task_priority(uint8_t prio) { this->task_priority_ = prio; }
   void set_task_core(int8_t core) { this->task_core_ = core; }
   void set_task_stack_size(uint32_t size) { this->task_stack_size_ = size; }
+  void set_dma_desc_num(uint32_t desc_num) { this->dma_desc_num_ = desc_num; }
+  void set_dma_frame_num(uint32_t frame_num) {
+    this->dma_frame_num_ = frame_num;
+    this->dma_frame_num_configured_ = true;
+  }
   void set_buffers_in_psram(bool psram) { this->buffers_in_psram_ = psram; }
   void set_audio_stack_in_psram(bool psram) { this->audio_stack_in_psram_ = psram; }
   void set_aec_reference_mode(bool use_ring_buffer) { this->aec_use_ring_buffer_ = use_ring_buffer; }
   void set_aec_ref_buffer_ms(uint32_t ms) { this->aec_ref_buffer_ms_ = ms; }
   void set_aec_ref_ring_in_psram(bool psram) { this->aec_ref_ring_in_psram_ = psram; }
   void set_telemetry_log_interval_frames(uint16_t frames) { this->telemetry_log_interval_frames_ = frames; }
+  void set_rate_cvt_complexity(uint8_t complexity) { this->rate_cvt_complexity_ = complexity; }
+  void set_rate_cvt_perf_type(uint8_t perf_type) { this->rate_cvt_perf_type_ = perf_type; }
+  void configure_gmf_reader_io(uint32_t io_size, uint32_t buffer_size, uint32_t task_stack_size,
+                               uint8_t task_priority, uint8_t task_core, bool task_stack_in_psram,
+                               bool speed_monitor, int32_t task_timeout_ms) {
+    CodecDevBackend::GmfIoConfig cfg;
+    cfg.io_size = io_size;
+    cfg.buffer_size = buffer_size;
+    cfg.task_stack_size = task_stack_size;
+    cfg.task_priority = task_priority;
+    cfg.task_core = task_core;
+    cfg.task_stack_in_psram = task_stack_in_psram;
+    cfg.speed_monitor = speed_monitor;
+    cfg.task_timeout_ms = task_timeout_ms;
+    this->codec_backend_.set_gmf_reader_config(cfg);
+  }
+  void configure_gmf_writer_io(uint32_t io_size, uint32_t buffer_size, uint32_t task_stack_size,
+                               uint8_t task_priority, uint8_t task_core, bool task_stack_in_psram,
+                               bool speed_monitor, int32_t task_timeout_ms) {
+    CodecDevBackend::GmfIoConfig cfg;
+    cfg.io_size = io_size;
+    cfg.buffer_size = buffer_size;
+    cfg.task_stack_size = task_stack_size;
+    cfg.task_priority = task_priority;
+    cfg.task_core = task_core;
+    cfg.task_stack_in_psram = task_stack_in_psram;
+    cfg.speed_monitor = speed_monitor;
+    cfg.task_timeout_ms = task_timeout_ms;
+    this->codec_backend_.set_gmf_writer_config(cfg);
+  }
  protected:
-  bool init_i2s_duplex_();
+  bool init_audio_stack_();
   bool prepare_i2s_channels_();
   bool enable_i2s_channels_();
-  void disable_i2s_channels_();
+  void close_audio_io_();
   void deinit_i2s_();
   bool setup_codec_backend_(i2s_clock_src_t clk_src);
   CodecDevBackend::SampleConfig make_tx_sample_config_() const;
@@ -355,7 +388,7 @@ class I2SAudioDuplex : public Component {
   // a FreeRTOS xTaskCreate race on a lingering TCB.
   void audio_task_();
   // One audio session: populate ctx, enter the processing loop, and return when
-  // stop() flips duplex_running_ off or the processor's frame_spec changes.
+  // stop() flips audio_stack_running_ off or the processor's frame_spec changes.
   void audio_session_();
   void update_combined_speaker_volume_();
 
@@ -378,6 +411,7 @@ class I2SAudioDuplex : public Component {
     uint32_t processor_spec_revision{0};
     bool processor_spec_loaded{false};
     uint8_t rx_decimator_channels{0};
+    bool tdm_ref_active_probe_logged{false};
 
     // ── Frame sizing ──
     size_t input_frame_size{0};
@@ -400,13 +434,16 @@ class I2SAudioDuplex : public Component {
     int16_t *spk_buffer{nullptr};
     int16_t *spk_ref_buffer{nullptr};
     int16_t *tdm_tx_buffer{nullptr};
+    int16_t *tx_interleave_buffer{nullptr};
+    int16_t *tx_silence_buffer{nullptr};
+    int16_t *tx_32_buffer{nullptr};
     int16_t *aec_output{nullptr};
 
     // ── Loop mutable state ──
     int consecutive_i2s_errors{0};
-    // INVALID_STATE counter: i2s_channel_read/write returns INVALID_STATE
+    // INVALID_STATE counter: codec/GMF IO can surface invalid state
     // briefly when stop() disables a channel; counted separately so we
-    // can escalate only when it persists while duplex_running_ stays true
+    // can escalate only when it persists while audio_stack_running_ stays true
     // (channel corrupted independently of our own teardown).
     int invalid_state_errors{0};
     // DC-HPF state lives on the component (dc_prev_*_persistent_); the
@@ -429,6 +466,11 @@ class I2SAudioDuplex : public Component {
     bool speaker_running{false};
     bool speaker_paused{false};
     bool speaker_underrun{false};
+#ifdef USE_ESP_AUDIO_STACK_TDM_REF_DIAGNOSTIC
+    size_t previous_speaker_got{0};  // previous TX frame, used to validate captured full-duplex ref
+    float previous_speaker_dbfs{-120.0f};
+    float current_speaker_dbfs{-120.0f};
+#endif
     size_t speaker_got{0};  // bytes actually read from speaker ring buffer
     bool mic_running{false};
     uint32_t now_ms{0};
@@ -440,13 +482,15 @@ class I2SAudioDuplex : public Component {
   void process_aec_and_callbacks_(AudioTaskCtx &ctx);
   void process_tx_path_(AudioTaskCtx &ctx);
   void update_tdm_slot_levels_(const AudioTaskCtx &ctx);
+  bool format_tx_frame_(AudioTaskCtx &ctx, void **tx_data, size_t *tx_bytes);
+  bool tx_bit_cvt_16_to_32_(uint8_t channels, const void *in, uint32_t sample_num, void *out);
 #ifdef USE_AUDIO_PROCESSOR
   void run_processor_(AudioTaskCtx &ctx);
 #endif
 
   // Fill ctx.spk_ref_buffer for the mono AEC path (ring buffer or previous
-  // frame, with zero-fill fallback). TDM and stereo paths pre-fill the buffer
-  // during RX deinterleave and must not call this.
+  // frame, zero-filled only when no reference exists). TDM and stereo paths
+  // pre-fill the buffer during RX deinterleave and must not call this.
   void fill_mono_aec_reference_(AudioTaskCtx &ctx);
 
   // Pre-allocate audio task working buffers as soon as the processor frame
@@ -480,18 +524,20 @@ class I2SAudioDuplex : public Component {
   uint8_t slot_bit_width_{0};          // 0 = auto (match bits_per_sample), or 16/24/32
   uint32_t output_sample_rate_{0};     // 0 = use sample_rate_ (no decimation)
   uint32_t decimation_ratio_{1};       // sample_rate_ / output_sample_rate_ (computed in setup)
+  uint8_t rate_cvt_complexity_{3};     // esp_ae_rate_cvt complexity, 1..3
+  uint8_t rate_cvt_perf_type_{1};      // esp_ae_rate_cvt perf type: 0=memory, 1=speed
 
   // Espressif rate converters for mic and software-reference paths.
   MultiChannelFirDecimator rx_decimator_;  // Multi-channel: TDM/stereo RX path
-  FirDecimator mic_decimator_;             // Fallback: mono RX without TDM/stereo
+  FirDecimator mic_decimator_;             // Mono RX without TDM/stereo
   FirDecimator play_ref_decimator_;        // Mono mode: bus-rate ref from play() converted in audio_task
 
-  // I2S handles - BOTH created from single channel for duplex
+  // I2S handles managed as a coordinated RX/TX pair
   i2s_chan_handle_t tx_handle_{nullptr};
   i2s_chan_handle_t rx_handle_{nullptr};
   CodecDevBackend codec_backend_;
 
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   struct I2SBusConfig {
     bool configured{false};
     uint8_t i2s_num{0};
@@ -507,7 +553,7 @@ class I2SAudioDuplex : public Component {
 #endif
 
   // State
-  std::atomic<bool> duplex_running_{false};
+  std::atomic<bool> audio_stack_running_{false};
   // Cached presence flag read by audio_task_ on the hot path; kept in sync
   // with mic_consumers_ (below) under mic_consumers_mutex_ on register/unregister.
   std::atomic<bool> has_mic_consumers_{false};
@@ -519,7 +565,7 @@ class I2SAudioDuplex : public Component {
   SemaphoreHandle_t mic_consumers_mutex_{nullptr};
   std::atomic<bool> speaker_running_{false};
   std::atomic<bool> speaker_paused_{false};
-  std::atomic<uint8_t> runtime_state_{static_cast<uint8_t>(DuplexRuntimeState::IDLE)};
+  std::atomic<uint8_t> runtime_state_{static_cast<uint8_t>(AudioStackRuntimeState::IDLE)};
   std::atomic<uint8_t> i2s_hardware_state_{static_cast<uint8_t>(I2SHardwareState::UNPREPARED)};
   Trigger<> start_trigger_;
   Trigger<> idle_trigger_;
@@ -539,13 +585,13 @@ class I2SAudioDuplex : public Component {
   std::atomic<bool> prealloc_requested_{false};
   std::atomic<bool> prealloc_attempted_{false};
 
-  // Deferred I2S channel teardown: stop() sets this and returns; loop()
-  // calls i2s_channel_disable when audio_task_idle_ flips. Avoids a
-  // blocking poll on the main loop during stop_speaker / unregister_mic_consumer.
+  // Deferred I2S release: stop() sets this and returns; loop() deletes the
+  // esp_driver_i2s channels after audio_task_idle_ flips.
+  // Avoids a blocking poll on the main loop during stop_speaker / unregister_mic_consumer.
   std::atomic<bool> teardown_pending_{false};
 
-  DuplexRuntimeState compute_runtime_state_() const;
-  static const char *runtime_state_to_string_(DuplexRuntimeState state);
+  AudioStackRuntimeState compute_runtime_state_() const;
+  static const char *runtime_state_to_string_(AudioStackRuntimeState state);
   void update_runtime_state_();
   static const char *i2s_hardware_state_to_string_(I2SHardwareState state);
   void set_i2s_hardware_state_(I2SHardwareState state);
@@ -618,6 +664,9 @@ class I2SAudioDuplex : public Component {
   uint8_t task_priority_{19};     // Above lwIP(18), below WiFi(23)
   int8_t task_core_{0};           // Core 0: canonical Espressif AEC pattern; -1 = unpinned
   uint32_t task_stack_size_{8192};
+  uint32_t dma_desc_num_{6};
+  uint32_t dma_frame_num_{0};
+  bool dma_frame_num_configured_{false};
   bool buffers_in_psram_{false};  // Non-DMA buffers in PSRAM (saves ~15KB internal RAM)
   bool audio_stack_in_psram_{false};  // Audio task stack in PSRAM (saves ~8KB internal RAM)
   bool aec_ref_ring_in_psram_{false};  // AEC reference ring in PSRAM (saves ~3-5 KB internal, costs ~13.6 us/frame Core 0)
@@ -641,6 +690,9 @@ class I2SAudioDuplex : public Component {
   int16_t *prealloc_spk_ref_buffer_{nullptr};
   int16_t *prealloc_aec_output_{nullptr};
   int16_t *prealloc_tdm_tx_buffer_{nullptr};
+  int16_t *prealloc_tx_interleave_buffer_{nullptr};
+  int16_t *prealloc_tx_silence_buffer_{nullptr};
+  int16_t *prealloc_tx_32_buffer_{nullptr};
   size_t prealloc_rx_buffer_bytes_{0};
   size_t prealloc_mic_buffer_bytes_{0};
   size_t prealloc_processor_mic_buffer_bytes_{0};
@@ -648,22 +700,27 @@ class I2SAudioDuplex : public Component {
   size_t prealloc_spk_ref_buffer_bytes_{0};
   size_t prealloc_aec_output_bytes_{0};
   size_t prealloc_tdm_tx_buffer_bytes_{0};
+  size_t prealloc_tx_interleave_buffer_bytes_{0};
+  size_t prealloc_tx_silence_buffer_bytes_{0};
+  size_t prealloc_tx_32_buffer_bytes_{0};
   bool audio_buffers_allocated_{false};
+  void *tx_bit_cvt_handle_{nullptr};
+  uint8_t tx_bit_cvt_channels_{0};
 
 };
 
 // Native actions for YAML automations
-template<typename... Ts> class StartAction : public Action<Ts...>, public Parented<I2SAudioDuplex> {
+template<typename... Ts> class StartAction : public Action<Ts...>, public Parented<ESPAudioStack> {
  public:
   void play(const Ts &...x) override { this->parent_->start(); }
 };
 
-template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<I2SAudioDuplex> {
+template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<ESPAudioStack> {
  public:
   void play(const Ts &...x) override { this->parent_->stop(); }
 };
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

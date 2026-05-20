@@ -1,9 +1,9 @@
 # =============================================================================
-# I2S Audio Duplex speaker power gating (GPIO output enable)
+# ESP Audio Stack speaker power gating (switch enable)
 # =============================================================================
 # Expects:
-#   - i2s_audio_duplex id: i2s_duplex
-#   - output id: speaker_enable
+#   - esp_audio_stack id: audio_stack
+#   - switch id: speaker_enable
 #   - switch id: speaker_mute
 #
 # Playback start enables the amp immediately. Playback idle starts a restartable
@@ -12,28 +12,28 @@
 # =============================================================================
 
 substitutions:
-  duplex_speaker_idle_delay: 30s
+  audio_stack_speaker_idle_delay: 30s
 
-i2s_audio_duplex:
-  id: !extend i2s_duplex
+esp_audio_stack:
+  id: !extend audio_stack
   on_speaker_start:
-    - script.stop: duplex_speaker_idle_powerdown
+    - script.stop: audio_stack_speaker_idle_powerdown
     - if:
         condition:
           switch.is_off: speaker_mute
         then:
-          - output.turn_on: speaker_enable
+          - switch.turn_on: speaker_enable
   on_speaker_idle:
-    - script.execute: duplex_speaker_idle_powerdown
+    - script.execute: audio_stack_speaker_idle_powerdown
 
 script:
-  - id: duplex_speaker_idle_powerdown
+  - id: audio_stack_speaker_idle_powerdown
     mode: restart
     then:
-      - delay: ${duplex_speaker_idle_delay}
+      - delay: ${audio_stack_speaker_idle_delay}
       - if:
           condition:
             switch.is_off: speaker_mute
           then:
-            - output.turn_off: speaker_enable
+            - switch.turn_off: speaker_enable
 

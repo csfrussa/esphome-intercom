@@ -1,8 +1,10 @@
-#include "i2s_audio_duplex.h"
+#include "esp_audio_stack.h"
 
 #ifdef USE_ESP32
 
+#include <driver/i2s_common.h>
 #include <esp_heap_caps.h>
+#include <esp_idf_version.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -19,15 +21,14 @@
 #include "../audio_processor/task_utils.h"
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
-static const char *const TAG = "i2s_duplex";
+static const char *const TAG = "audio_stack";
 
 // Audio parameters
-// IDF default I2S channel config uses 6 descriptors; upstream ESPHome I2S
-// speaker keeps ~60 ms of DMA headroom (4 x 15 ms). Keep the duplex driver on
-// the same budget: 6 descriptors x 10 ms, instead of the older 8 x 10 ms that
-// consumed extra DMA-capable internal RAM on full AFE targets.
+// IDF default I2S channel config uses 6 descriptors. Keep the old ESPHome
+// duplex latency policy while using the official esp_driver_i2s API directly:
+// one descriptor carries ~10 ms of audio, clamped to the 4092-byte DMA limit.
 static const size_t DMA_BUFFER_COUNT = 6;
 static const uint32_t DMA_BUFFER_DURATION_MS = 10;
 // Minimum speaker buffer for very small configured durations. The default comes
@@ -70,15 +71,15 @@ float sanitize_gain_factor(float gain) {
 }
 }  // namespace
 
-void I2SAudioDuplex::set_mic_gain(float gain) {
+void ESPAudioStack::set_mic_gain(float gain) {
   this->mic_gain_.store(sanitize_gain_factor(gain), std::memory_order_relaxed);
 }
 
-void I2SAudioDuplex::set_mic_attenuation(float atten) {
+void ESPAudioStack::set_mic_attenuation(float atten) {
   this->mic_attenuation_.store(sanitize_gain_factor(atten), std::memory_order_relaxed);
 }
 
-void I2SAudioDuplex::set_speaker_volume(float volume) {
+void ESPAudioStack::set_speaker_volume(float volume) {
   if (!(volume > 0.0f)) {
     volume = 0.0f;
   } else if (volume > 1.0f) {
@@ -87,13 +88,13 @@ void I2SAudioDuplex::set_speaker_volume(float volume) {
   this->set_speaker_volume_q15(volume_factor_to_q15(volume));
 }
 
-void I2SAudioDuplex::set_speaker_volume_q15(int16_t q15) {
+void ESPAudioStack::set_speaker_volume_q15(int16_t q15) {
   if (q15 < 0) q15 = 0;
   const int16_t previous = this->master_volume_q15_.exchange(q15, std::memory_order_relaxed);
   if (previous != q15) this->update_combined_speaker_volume_();
 }
 
-void I2SAudioDuplex::set_output_volume(float volume) {
+void ESPAudioStack::set_output_volume(float volume) {
   if (!(volume > 0.0f)) {
     volume = 0.0f;
   } else if (volume > 1.0f) {
@@ -102,13 +103,13 @@ void I2SAudioDuplex::set_output_volume(float volume) {
   this->set_output_volume_q15(volume_factor_to_q15(volume));
 }
 
-void I2SAudioDuplex::set_output_volume_q15(int16_t q15) {
+void ESPAudioStack::set_output_volume_q15(int16_t q15) {
   if (q15 < 0) q15 = 0;
   const int16_t previous = this->output_volume_q15_.exchange(q15, std::memory_order_relaxed);
   if (previous != q15) this->update_combined_speaker_volume_();
 }
 
-void I2SAudioDuplex::update_combined_speaker_volume_() {
+void ESPAudioStack::update_combined_speaker_volume_() {
   const int16_t output_q15 = this->output_volume_q15_.load(std::memory_order_relaxed);
   const int16_t master_q15 = this->master_volume_q15_.load(std::memory_order_relaxed);
   const bool hardware_master = this->codec_backend_.has_output_codec();
@@ -125,33 +126,33 @@ void I2SAudioDuplex::update_combined_speaker_volume_() {
   }
 }
 
-const char *I2SAudioDuplex::runtime_state_to_string_(DuplexRuntimeState state) {
+const char *ESPAudioStack::runtime_state_to_string_(AudioStackRuntimeState state) {
   switch (state) {
-    case DuplexRuntimeState::IDLE:
+    case AudioStackRuntimeState::IDLE:
       return "idle";
-    case DuplexRuntimeState::MIC:
+    case AudioStackRuntimeState::MIC:
       return "mic";
-    case DuplexRuntimeState::SPEAKER:
+    case AudioStackRuntimeState::SPEAKER:
       return "speaker";
-    case DuplexRuntimeState::DUPLEX:
+    case AudioStackRuntimeState::DUPLEX:
       return "duplex";
   }
   return "unknown";
 }
 
-DuplexRuntimeState I2SAudioDuplex::compute_runtime_state_() const {
+AudioStackRuntimeState ESPAudioStack::compute_runtime_state_() const {
   const bool mic = this->has_mic_consumers_.load(std::memory_order_relaxed);
   const bool speaker = this->speaker_running_.load(std::memory_order_relaxed);
   if (mic && speaker)
-    return DuplexRuntimeState::DUPLEX;
+    return AudioStackRuntimeState::DUPLEX;
   if (mic)
-    return DuplexRuntimeState::MIC;
+    return AudioStackRuntimeState::MIC;
   if (speaker)
-    return DuplexRuntimeState::SPEAKER;
-  return DuplexRuntimeState::IDLE;
+    return AudioStackRuntimeState::SPEAKER;
+  return AudioStackRuntimeState::IDLE;
 }
 
-void I2SAudioDuplex::update_runtime_state_() {
+void ESPAudioStack::update_runtime_state_() {
   const auto next = this->compute_runtime_state_();
   const auto next_raw = static_cast<uint8_t>(next);
   const auto prev_raw = this->runtime_state_.exchange(next_raw, std::memory_order_relaxed);
@@ -162,7 +163,7 @@ void I2SAudioDuplex::update_runtime_state_() {
   this->state_trigger_.trigger(std::string(state));
 }
 
-const char *I2SAudioDuplex::i2s_hardware_state_to_string_(I2SHardwareState state) {
+const char *ESPAudioStack::i2s_hardware_state_to_string_(I2SHardwareState state) {
   switch (state) {
     case I2SHardwareState::UNPREPARED:
       return "unprepared";
@@ -180,7 +181,7 @@ const char *I2SAudioDuplex::i2s_hardware_state_to_string_(I2SHardwareState state
   return "unknown";
 }
 
-void I2SAudioDuplex::set_i2s_hardware_state_(I2SHardwareState state) {
+void ESPAudioStack::set_i2s_hardware_state_(I2SHardwareState state) {
   const auto next_raw = static_cast<uint8_t>(state);
   const auto prev_raw = this->i2s_hardware_state_.exchange(next_raw, std::memory_order_relaxed);
   if (prev_raw != next_raw) {
@@ -188,7 +189,7 @@ void I2SAudioDuplex::set_i2s_hardware_state_(I2SHardwareState state) {
   }
 }
 
-void I2SAudioDuplex::service_speaker_reset_() {
+void ESPAudioStack::service_speaker_reset_() {
   if (!this->request_speaker_reset_.exchange(false, std::memory_order_relaxed)) {
     return;
   }
@@ -201,7 +202,7 @@ void I2SAudioDuplex::service_speaker_reset_() {
   }
 }
 
-void I2SAudioDuplex::log_memory_snapshot_(const char *label) const {
+void ESPAudioStack::log_memory_snapshot_(const char *label) const {
   ESP_LOGI(TAG,
            "Memory[%s]: internal_free=%u largest_internal=%u dma_free=%u largest_dma=%u psram_free=%u",
            label,
@@ -244,8 +245,8 @@ static i2s_tdm_slot_config_t get_tdm_slot_config(uint8_t fmt, i2s_data_bit_width
 }
 #endif  // SOC_I2S_SUPPORTS_TDM
 
-void I2SAudioDuplex::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up I2S Audio Duplex...");
+void ESPAudioStack::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack (Espressif/GMF-first backend)...");
 
   // Mutex for the mic consumer registry. Plain FreeRTOS mutex (used as lock,
   // not as a counting semaphore); replaces std::mutex to keep the public
@@ -257,8 +258,9 @@ void I2SAudioDuplex::setup() {
     return;
   }
 
-  // Compute decimation ratio: only active when output_sample_rate is explicitly set
-  // and differs from sample_rate. If not set, ratio stays 1 (no decimation, zero overhead).
+  // Compute decimation ratio. The Espressif audio-effects wrappers are also
+  // used at ratio 1 for 32-bit -> 16-bit conversion, so initialise them
+  // unconditionally.
   if (this->output_sample_rate_ > 0 && this->output_sample_rate_ != this->sample_rate_) {
     this->decimation_ratio_ = this->sample_rate_ / this->output_sample_rate_;
     if (this->decimation_ratio_ * this->output_sample_rate_ != this->sample_rate_) {
@@ -272,15 +274,16 @@ void I2SAudioDuplex::setup() {
       this->mark_failed();
       return;
     }
-    this->mic_decimator_.init(this->decimation_ratio_, this->sample_rate_, this->get_output_sample_rate());
-    this->play_ref_decimator_.init(this->decimation_ratio_, this->sample_rate_, this->get_output_sample_rate());
-    // rx_decimator_ is lazily initialized inside audio_session_ once the
-    // processor has reported its frame_spec and we know how many channels
-    // the RX stream carries (mono / stereo-AEC / TDM-with-or-without-second-mic).
     ESP_LOGI(TAG, "Multi-rate: bus=%uHz, output=%uHz, ratio=%u",
              (unsigned)this->sample_rate_, (unsigned)this->output_sample_rate_,
              (unsigned)this->decimation_ratio_);
   }
+  this->mic_decimator_.init(this->decimation_ratio_, this->sample_rate_, this->get_output_sample_rate(),
+                            this->rate_cvt_complexity_, this->rate_cvt_perf_type_);
+  this->play_ref_decimator_.init(this->decimation_ratio_, this->sample_rate_, this->get_output_sample_rate(),
+                                 this->rate_cvt_complexity_, this->rate_cvt_perf_type_);
+  // rx_decimator_ is initialized inside audio_session_ once the processor has
+  // reported its frame_spec and we know how many channels the RX stream carries.
 
   // Speaker ring buffer: stores mono PCM at bus rate (e.g. 48kHz).
   // PREFER_PSRAM: staging buffer between API play() and the i2s write path, not
@@ -290,7 +293,7 @@ void I2SAudioDuplex::setup() {
       SPEAKER_BUFFER_MIN_BYTES,
       (speaker_bytes_per_second * static_cast<size_t>(this->speaker_buffer_duration_ms_)) / 1000);
   this->speaker_buffer_ = audio_processor::create_prefer_psram(
-      this->speaker_buffer_size_, "i2s_duplex.speaker");
+      this->speaker_buffer_size_, "audio_stack.speaker");
   if (!this->speaker_buffer_) {
     ESP_LOGE(TAG, "Failed to create speaker ring buffer (%u bytes)", (unsigned)this->speaker_buffer_size_);
     this->mark_failed();
@@ -306,24 +309,18 @@ void I2SAudioDuplex::setup() {
   // not at the bus rate.
 
   // Create the permanent audio task during component setup, then park it
-  // until start() flips duplex_running_. This reserves the stack/TCB before
+  // until start() flips audio_stack_running_. This reserves the stack/TCB before
   // Wi-Fi/API/VA/MWW churn can fragment internal RAM, and removes xTaskCreate
   // from the first wake-word/audio activation path.
   const BaseType_t core = this->task_core_ >= 0 ? this->task_core_ : tskNO_AFFINITY;
   const uint32_t stack_words = this->task_stack_size_ / sizeof(StackType_t);
   if (!audio_processor::start_pinned_task(
-          audio_task, "i2s_duplex", stack_words, this, this->task_priority_,
+          audio_task, "audio_stack", stack_words, this, this->task_priority_,
           core, this->audio_stack_in_psram_, TAG,
           &this->audio_task_handle_, &this->audio_task_tcb_,
           &this->audio_task_stack_)) {
     ESP_LOGE(TAG, "Failed to create permanent audio task");
     this->has_i2s_error_.store(true, std::memory_order_relaxed);
-    this->mark_failed();
-    return;
-  }
-
-  if (!this->prepare_i2s_channels_()) {
-    ESP_LOGE(TAG, "Failed to prepare I2S channels");
     this->mark_failed();
     return;
   }
@@ -334,18 +331,18 @@ void I2SAudioDuplex::setup() {
   // setup has not published a frame_spec yet, loop() will retry.
   this->request_audio_preallocation_();
 
-  ESP_LOGI(TAG, "I2S Audio Duplex ready (speaker_buf=%u bytes, task precreated)",
+  ESP_LOGI(TAG, "ESP Audio Stack ready (speaker_buf=%u bytes, task precreated)",
            (unsigned)this->speaker_buffer_size_);
 }
 
-void I2SAudioDuplex::set_processor(AudioProcessor *processor) {
+void ESPAudioStack::set_processor(AudioProcessor *processor) {
   this->processor_ = processor;
   this->processor_enabled_.store(processor != nullptr, std::memory_order_relaxed);
   // Note: direct_aec_ref_ is allocated later in allocate_audio_buffers_() once
   // the processor frame spec is known for the current audio session.
 }
 
-void I2SAudioDuplex::sync_processor_background_consumer_() {
+void ESPAudioStack::sync_processor_background_consumer_() {
 #ifdef USE_AUDIO_PROCESSOR
   const bool want_background =
       this->processor_ != nullptr && this->processor_->wants_background_input();
@@ -365,7 +362,7 @@ void I2SAudioDuplex::sync_processor_background_consumer_() {
 #endif
 }
 
-void I2SAudioDuplex::request_audio_preallocation_() {
+void ESPAudioStack::request_audio_preallocation_() {
   if (this->prealloc_attempted_.load(std::memory_order_acquire) ||
       this->prealloc_requested_.load(std::memory_order_acquire) ||
       this->audio_task_handle_ == nullptr) {
@@ -385,30 +382,28 @@ void I2SAudioDuplex::request_audio_preallocation_() {
   xTaskNotifyGive(this->audio_task_handle_);
 }
 
-void I2SAudioDuplex::loop() {
+void ESPAudioStack::loop() {
   this->sync_processor_background_consumer_();
 
-  if (!this->duplex_running_.load(std::memory_order_relaxed) &&
+  if (!this->audio_stack_running_.load(std::memory_order_relaxed) &&
       this->audio_task_idle_.load(std::memory_order_relaxed)) {
     this->request_audio_preallocation_();
   }
 
-  // Pick up the deferred I2S channel teardown queued by stop(). We can
-  // only call i2s_channel_disable when the audio task has parked itself
-  // in its outer wait loop; doing it earlier races the task's I2S read
-  // and produces ESP_ERR_INVALID_STATE warnings. Polling here on the
-  // main loop is bounded (one check per tick, no blocking).
+  // Pick up the deferred I2S release queued by stop(). The task may still be
+  // blocked inside GMF codec IO for the current frame, so delete channels only
+  // after it has parked in the outer wait loop.
   if (this->teardown_pending_.load(std::memory_order_relaxed) &&
       this->audio_task_idle_.load(std::memory_order_relaxed)) {
-    this->disable_i2s_channels_();
+    this->deinit_i2s_();
     this->teardown_pending_.store(false, std::memory_order_relaxed);
-    ESP_LOGI(TAG, "Duplex audio stopped");
+    ESP_LOGI(TAG, "Audio stack stopped");
   }
 }
 
-void I2SAudioDuplex::dump_config() {
-  ESP_LOGCONFIG(TAG, "I2S Audio Duplex:");
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+void ESPAudioStack::dump_config() {
+  ESP_LOGCONFIG(TAG, "ESP Audio Stack:");
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   if (this->dual_i2s_bus_) {
     ESP_LOGCONFIG(TAG, "  I2S Layout: dual bus");
     ESP_LOGCONFIG(TAG, "  RX Bus: port=%u LRCLK=%d BCLK=%d MCLK=%d DIN=%d",
@@ -457,6 +452,8 @@ void I2SAudioDuplex::dump_config() {
     ESP_LOGCONFIG(TAG, "  Output Rate: %u Hz (decimation x%u)",
                   (unsigned)this->get_output_sample_rate(), (unsigned)this->decimation_ratio_);
     ESP_LOGCONFIG(TAG, "  Rate Converter: esp_ae_rate_cvt");
+    ESP_LOGCONFIG(TAG, "  Rate Converter Complexity: %u", (unsigned)this->rate_cvt_complexity_);
+    ESP_LOGCONFIG(TAG, "  Rate Converter Perf: %s", this->rate_cvt_perf_type_ == 0 ? "memory" : "speed");
   }
   ESP_LOGCONFIG(TAG, "  Speaker Buffer: %u bytes (%u ms)", (unsigned)this->speaker_buffer_size_,
                 (unsigned)this->speaker_buffer_duration_ms_);
@@ -476,23 +473,23 @@ void I2SAudioDuplex::dump_config() {
   ESP_LOGCONFIG(TAG, "  AEC: %s", this->processor_ != nullptr ? "enabled" : "disabled");
   ESP_LOGCONFIG(TAG, "  Task: priority=%u, core=%d, stack=%u",
                 this->task_priority_, this->task_core_, (unsigned)this->task_stack_size_);
-  ESP_LOGCONFIG(TAG, "  I2S Preparation: setup prepares channels to READY");
-  ESP_LOGCONFIG(TAG, "  Codec Backend: esp_codec_dev (input=%s, output=%s)",
+  ESP_LOGCONFIG(TAG, "  I2S Lifecycle: esp_driver_i2s create on start, delete on idle stop");
+  ESP_LOGCONFIG(TAG, "  Codec Backend: esp_codec_dev + gmf_io/io_codec_dev (input=%s, output=%s)",
                 this->codec_backend_.input_codec_name(), this->codec_backend_.output_codec_name());
   ESP_LOGCONFIG(TAG, "  I2S Hardware State: %s",
                 i2s_hardware_state_to_string_(
                     static_cast<I2SHardwareState>(this->i2s_hardware_state_.load(std::memory_order_relaxed))));
-#ifdef USE_DUPLEX_TELEMETRY
+#ifdef USE_ESP_AUDIO_STACK_TELEMETRY
   ESP_LOGCONFIG(TAG, "  Telemetry Log Interval: %u frames", (unsigned) this->telemetry_log_interval_frames_);
 #endif
 }
 
-bool I2SAudioDuplex::prepare_i2s_channels_() {
+bool ESPAudioStack::prepare_i2s_channels_() {
   if (this->tx_handle_ != nullptr || this->rx_handle_ != nullptr) {
     return true;
   }
 
-  ESP_LOGCONFIG(TAG, "Preparing I2S channels in DUPLEX mode...");
+  ESP_LOGCONFIG(TAG, "Preparing I2S channels in full-duplex mode...");
   this->set_i2s_hardware_state_(I2SHardwareState::PREPARING);
   this->log_memory_snapshot_("before_i2s_prepare");
 
@@ -516,7 +513,7 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     }
   }
 
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const bool dual_bus = this->dual_i2s_bus_;
 #else
   constexpr bool dual_bus = false;
@@ -527,7 +524,7 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     return false;
   }
 
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const uint8_t tx_i2s_num = dual_bus ? this->tx_bus_.i2s_num : this->i2s_num_;
   const uint8_t rx_i2s_num = dual_bus ? this->rx_bus_.i2s_num : this->i2s_num_;
   const int tx_mclk_pin = dual_bus ? this->tx_bus_.mclk_pin : this->mclk_pin_;
@@ -551,10 +548,14 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
   const int rx_din_pin = this->din_pin_;
 #endif
 
-  bool need_tx = (tx_dout_pin >= 0);
-  bool need_rx = (rx_din_pin >= 0);
+  const bool physical_tx = (tx_dout_pin >= 0);
+  const bool need_rx = (rx_din_pin >= 0);
+  // In ESP-IDF full-duplex STD/TDM, TX is the clock owner for RX. Create an
+  // explicit clock-only TX channel even for mic-only configurations so RX has
+  // BCLK/WS and the bus can be fully deleted when the audio task parks.
+  const bool need_tx = physical_tx || need_rx;
 
-  if (!need_tx && !need_rx) {
+  if (!physical_tx && !need_rx) {
     ESP_LOGE(TAG, "At least one of din_pin or dout_pin must be configured");
     this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
     return false;
@@ -568,50 +569,57 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
 #endif
   i2s_mclk_multiple_t mclk_mult = get_mclk_multiple(this->mclk_multiple_);
 
-  // DMA descriptor limit is 4092 bytes. Compute max bytes per frame across
-  // TX and RX configs, then clamp dma_frame_num to stay within the limit.
-  // RX can be wider than TX (e.g., mono TX but stereo RX for AEC feedback).
-  uint32_t bytes_per_sample = (this->bits_per_sample_ > 16) ? 4 : 2;  // 24/32-bit → 4-byte DMA container
+  ESP_LOGD(TAG, "I2S driver config: TX=%s(port %u, physical=%s) RX=%s(port %u)",
+           need_tx ? "yes" : "no", tx_i2s_num, physical_tx ? "yes" : "clock-only",
+           need_rx ? "yes" : "no", rx_i2s_num);
+
+  auto pin_or_nc = [](int pin) -> gpio_num_t {
+    return pin >= 0 ? static_cast<gpio_num_t>(pin) : GPIO_NUM_NC;
+  };
+
+  uint32_t bytes_per_sample = (this->bits_per_sample_ > 16) ? 4 : 2;
   uint32_t tx_bytes_per_frame = this->num_channels_ * bytes_per_sample;
   uint32_t rx_bytes_per_frame = tx_bytes_per_frame;
   if (this->use_stereo_aec_ref_) {
-    rx_bytes_per_frame = 2 * bytes_per_sample;  // stereo RX forced
+    rx_bytes_per_frame = 2 * bytes_per_sample;
   }
 #if SOC_I2S_SUPPORTS_TDM
   if (this->use_tdm_bus_) {
-    uint32_t tdm_frame = this->tdm_total_slots_ * bytes_per_sample;
-    rx_bytes_per_frame = tdm_frame;
+    const uint32_t tdm_frame = this->tdm_total_slots_ * bytes_per_sample;
     tx_bytes_per_frame = tdm_frame;
+    rx_bytes_per_frame = tdm_frame;
   }
 #endif
-  uint32_t max_bytes_per_frame = std::max(tx_bytes_per_frame, rx_bytes_per_frame);
-  // dma_frame_num scales with sample_rate so each DMA descriptor holds ~10 ms
-  // of audio at any rate. A hard-coded sample count would yield 256 ms total
-  // DMA latency at 16 kHz vs 85 ms at 48 kHz with the same constant, exceeding
-  // the AEC filter tail at low sample rates. esp-skainet boards use the same
-  // ~10 ms/descriptor pattern (e.g. 160 frames/desc at 16 kHz).
-  uint32_t dma_frame_num = std::max<uint32_t>(
-      64, (this->sample_rate_ * DMA_BUFFER_DURATION_MS) / 1000);
+  const uint32_t max_bytes_per_frame = std::max(tx_bytes_per_frame, rx_bytes_per_frame);
+  uint32_t dma_frame_num = this->dma_frame_num_configured_
+      ? this->dma_frame_num_
+      : std::max<uint32_t>(64, (this->sample_rate_ * DMA_BUFFER_DURATION_MS) / 1000);
   if (max_bytes_per_frame > 0) {
-    uint32_t max_frames = 4092 / max_bytes_per_frame;
+    const uint32_t max_frames = 4092 / max_bytes_per_frame;
     if (dma_frame_num > max_frames) {
+      if (this->dma_frame_num_configured_) {
+        ESP_LOGE(TAG, "dma_frame_num %u exceeds IDF DMA descriptor limit (%u frames for %u bytes/frame)",
+                 (unsigned) dma_frame_num, (unsigned) max_frames, (unsigned) max_bytes_per_frame);
+        this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
+        return false;
+      }
       dma_frame_num = max_frames;
     }
   }
-  i2s_chan_config_t chan_cfg = {
-      .id = static_cast<i2s_port_t>(dual_bus ? tx_i2s_num : this->i2s_num_),
-      .role = this->i2s_mode_secondary_ ? I2S_ROLE_SLAVE : I2S_ROLE_MASTER,
-      .dma_desc_num = DMA_BUFFER_COUNT,
-      .dma_frame_num = dma_frame_num,
-      .auto_clear_after_cb = true,
+
+  i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
+      static_cast<i2s_port_t>(dual_bus ? tx_i2s_num : this->i2s_num_),
+      this->i2s_mode_secondary_ ? I2S_ROLE_SLAVE : I2S_ROLE_MASTER);
+  chan_cfg.dma_desc_num = this->dma_desc_num_;
+  chan_cfg.dma_frame_num = dma_frame_num;
+  chan_cfg.auto_clear = true;
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
-      .auto_clear_before_cb = false,
-      .intr_priority = 0,
+  chan_cfg.auto_clear_before_cb = false;
+  chan_cfg.intr_priority = 0;
 #endif
-  };
 
   esp_err_t err = ESP_OK;
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   if (dual_bus) {
     if (need_tx) {
       chan_cfg.id = static_cast<i2s_port_t>(tx_i2s_num);
@@ -644,19 +652,9 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
       this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
       return false;
     }
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   }
 #endif
-
-  ESP_LOGD(TAG, "I2S channel created: TX=%s(port %u) RX=%s(port %u)",
-           this->tx_handle_ ? "yes" : "no",
-           tx_i2s_num,
-           this->rx_handle_ ? "yes" : "no",
-           rx_i2s_num);
-
-  auto pin_or_nc = [](int pin) -> gpio_num_t {
-    return pin >= 0 ? static_cast<gpio_num_t>(pin) : GPIO_NUM_NC;
-  };
 
 #if SOC_I2S_SUPPORTS_TDM
   if (this->use_tdm_bus_) {
@@ -700,20 +698,22 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     if (this->tx_handle_) {
       err = i2s_channel_init_tdm_mode(this->tx_handle_, &tdm_cfg);
       if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init TDM TX: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to init TX TDM channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
         this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
         return false;
       }
+      ESP_LOGD(TAG, "TX TDM channel initialized");
     }
     if (this->rx_handle_) {
       err = i2s_channel_init_tdm_mode(this->rx_handle_, &tdm_cfg);
       if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init TDM RX: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to init RX TDM channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
         this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
         return false;
       }
+      ESP_LOGD(TAG, "RX TDM channel initialized");
     }
 
     if (this->tdm_second_mic_slot_ >= 0) {
@@ -782,7 +782,7 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     if (this->tx_handle_) {
       err = i2s_channel_init_std_mode(this->tx_handle_, &tx_cfg);
       if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init TX channel: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to init TX I2S channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
         this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
         return false;
@@ -793,12 +793,13 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     if (this->rx_handle_) {
       err = i2s_channel_init_std_mode(this->rx_handle_, &rx_cfg);
       if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init RX channel: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to init RX I2S channel: %s", esp_err_to_name(err));
         this->deinit_i2s_();
         this->set_i2s_hardware_state_(I2SHardwareState::ERROR);
         return false;
       }
-      ESP_LOGD(TAG, "RX channel initialized (%s)", this->use_stereo_aec_ref_ ? "stereo" : "mono");
+      ESP_LOGD(TAG, "RX channel initialized (%s)",
+               this->use_stereo_aec_ref_ ? "stereo" : "mono");
     }
   }
 
@@ -810,11 +811,13 @@ bool I2SAudioDuplex::prepare_i2s_channels_() {
     return false;
   }
   this->log_memory_snapshot_("after_i2s_prepare");
-  ESP_LOGI(TAG, "I2S DUPLEX prepared (%s, READY)", this->use_tdm_bus_ ? "TDM" : "standard");
+  ESP_LOGI(TAG, "ESP audio stack I2S prepared through esp_driver_i2s (%s, dma_desc=%u, dma_frames=%u)",
+           this->use_tdm_bus_ ? "TDM" : "standard",
+           static_cast<unsigned>(this->dma_desc_num_), static_cast<unsigned>(dma_frame_num));
   return true;
 }
 
-CodecDevBackend::SampleConfig I2SAudioDuplex::make_tx_sample_config_() const {
+CodecDevBackend::SampleConfig ESPAudioStack::make_tx_sample_config_() const {
   CodecDevBackend::SampleConfig cfg;
   cfg.sample_rate = this->sample_rate_;
   cfg.bits_per_sample = this->bits_per_sample_;
@@ -839,7 +842,7 @@ CodecDevBackend::SampleConfig I2SAudioDuplex::make_tx_sample_config_() const {
   return cfg;
 }
 
-CodecDevBackend::SampleConfig I2SAudioDuplex::make_rx_sample_config_() const {
+CodecDevBackend::SampleConfig ESPAudioStack::make_rx_sample_config_() const {
   CodecDevBackend::SampleConfig cfg;
   cfg.sample_rate = this->sample_rate_;
   cfg.bits_per_sample = this->bits_per_sample_;
@@ -864,18 +867,19 @@ CodecDevBackend::SampleConfig I2SAudioDuplex::make_rx_sample_config_() const {
   return cfg;
 }
 
-bool I2SAudioDuplex::setup_codec_backend_(i2s_clock_src_t clk_src) {
-#ifdef USE_I2S_AUDIO_DUPLEX_DUAL_BUS
+bool ESPAudioStack::setup_codec_backend_(i2s_clock_src_t clk_src) {
+#ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const uint8_t tx_i2s_num = this->dual_i2s_bus_ ? this->tx_bus_.i2s_num : this->i2s_num_;
   const uint8_t rx_i2s_num = this->dual_i2s_bus_ ? this->rx_bus_.i2s_num : this->i2s_num_;
 #else
   const uint8_t tx_i2s_num = this->i2s_num_;
   const uint8_t rx_i2s_num = this->i2s_num_;
 #endif
-  return this->codec_backend_.setup(tx_i2s_num, rx_i2s_num, this->tx_handle_, this->rx_handle_, clk_src);
+  return this->codec_backend_.setup(tx_i2s_num, rx_i2s_num, this->tx_handle_, this->rx_handle_,
+                                    clk_src, this->mclk_multiple_);
 }
 
-bool I2SAudioDuplex::enable_i2s_channels_() {
+bool ESPAudioStack::enable_i2s_channels_() {
   auto state = static_cast<I2SHardwareState>(
       this->i2s_hardware_state_.load(std::memory_order_relaxed));
   if (state == I2SHardwareState::RUNNING) {
@@ -894,7 +898,7 @@ bool I2SAudioDuplex::enable_i2s_channels_() {
   if (!this->codec_backend_.open(this->tx_handle_ ? &tx_cfg : nullptr,
                                  this->rx_handle_ ? &rx_cfg : nullptr)) {
     ESP_LOGE(TAG, "Failed to open esp_codec_dev backend");
-    this->set_i2s_hardware_state_(I2SHardwareState::READY);
+    this->deinit_i2s_();
     return false;
   }
   this->codec_backend_.set_output_volume(
@@ -902,15 +906,15 @@ bool I2SAudioDuplex::enable_i2s_channels_() {
   this->codec_backend_.set_output_mute(false);
   this->set_i2s_hardware_state_(I2SHardwareState::RUNNING);
   this->log_memory_snapshot_("after_i2s_enable");
-  ESP_LOGI(TAG, "I2S DUPLEX running (%s)", this->use_tdm_bus_ ? "TDM" : "standard");
+  ESP_LOGI(TAG, "ESP audio stack running (%s)", this->use_tdm_bus_ ? "TDM" : "standard");
   return true;
 }
 
-bool I2SAudioDuplex::init_i2s_duplex_() {
+bool ESPAudioStack::init_audio_stack_() {
   return this->enable_i2s_channels_();
 }
 
-void I2SAudioDuplex::disable_i2s_channels_() {
+void ESPAudioStack::close_audio_io_() {
   auto state = static_cast<I2SHardwareState>(
       this->i2s_hardware_state_.load(std::memory_order_relaxed));
   if (state != I2SHardwareState::RUNNING && state != I2SHardwareState::STOPPING) {
@@ -922,8 +926,8 @@ void I2SAudioDuplex::disable_i2s_channels_() {
   this->log_memory_snapshot_("after_i2s_disable");
 }
 
-void I2SAudioDuplex::deinit_i2s_() {
-  this->disable_i2s_channels_();
+void ESPAudioStack::deinit_i2s_() {
+  this->close_audio_io_();
   this->codec_backend_.teardown();
   if (this->tx_handle_) {
     i2s_del_channel(this->tx_handle_);
@@ -937,8 +941,8 @@ void I2SAudioDuplex::deinit_i2s_() {
   ESP_LOGI(TAG, "I2S deinitialized");
 }
 
-void I2SAudioDuplex::start() {
-  if (this->duplex_running_.load(std::memory_order_relaxed)) {
+void ESPAudioStack::start() {
+  if (this->audio_stack_running_.load(std::memory_order_relaxed)) {
     return;
   }
 
@@ -946,15 +950,15 @@ void I2SAudioDuplex::start() {
   // cycle (e.g. consumer toggle) should keep the I2S channels enabled.
   this->teardown_pending_.store(false, std::memory_order_relaxed);
 
-  ESP_LOGI(TAG, "Starting duplex audio...");
+  ESP_LOGI(TAG, "Starting audio stack...");
 
-  // setup() normally pre-creates the task. Keep this fallback so manually
-  // constructed test instances still behave correctly.
+  // setup() normally pre-creates the task. Manually constructed test instances
+  // can still enter through start(), so create the task here if needed.
   if (this->audio_task_handle_ == nullptr) {
     const BaseType_t core = this->task_core_ >= 0 ? this->task_core_ : tskNO_AFFINITY;
     const uint32_t stack_words = this->task_stack_size_ / sizeof(StackType_t);
     if (!audio_processor::start_pinned_task(
-            audio_task, "i2s_duplex", stack_words, this, this->task_priority_,
+            audio_task, "audio_stack", stack_words, this, this->task_priority_,
             core, this->audio_stack_in_psram_, TAG,
             &this->audio_task_handle_, &this->audio_task_tcb_,
             &this->audio_task_stack_)) {
@@ -963,8 +967,8 @@ void I2SAudioDuplex::start() {
     }
   }
 
-  // setup() prepares channels to READY. start() owns only the transition to
-  // RUNNING; prepare_i2s_channels_() remains idempotent as an invariant guard.
+  // I2S allocation happens here, not in setup(): start() owns both driver
+  // channel creation and GMF IO open while stop() tears the bus back down.
   this->request_audio_preallocation_();
   if (!this->enable_i2s_channels_()) {
     ESP_LOGE(TAG, "Failed to start I2S");
@@ -973,7 +977,7 @@ void I2SAudioDuplex::start() {
 
   this->has_i2s_error_.store(false, std::memory_order_relaxed);
   // start_speaker()/stop_speaker() own speaker_running_. A mic-only start
-  // still writes silence to TX to keep the duplex bus clocked, but it must not
+  // still writes silence to TX to keep the full-duplex bus clocked, but it must not
   // make the component look like active playback; otherwise the last mic
   // consumer leaving would fail to park the pipeline.
 
@@ -987,20 +991,20 @@ void I2SAudioDuplex::start() {
 #endif
 
   // Wake the permanent audio task (created once in setup()).
-  this->duplex_running_.store(true, std::memory_order_relaxed);
+  this->audio_stack_running_.store(true, std::memory_order_relaxed);
   if (this->audio_task_handle_ != nullptr) {
     xTaskNotifyGive(this->audio_task_handle_);
   }
   this->start_trigger_.trigger();
-  ESP_LOGI(TAG, "Duplex audio started");
+  ESP_LOGI(TAG, "Audio stack started");
 }
 
-void I2SAudioDuplex::stop() {
-  if (!this->duplex_running_.load(std::memory_order_relaxed)) {
+void ESPAudioStack::stop() {
+  if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
     return;
   }
 
-  ESP_LOGI(TAG, "Stopping duplex audio (deferred)");
+  ESP_LOGI(TAG, "Stopping audio stack (deferred)");
 
   // Consumers stay registered across stop()/start() so the mic path is
   // reconnected automatically after an internal restart (frame_spec change).
@@ -1008,17 +1012,16 @@ void I2SAudioDuplex::stop() {
     this->speaker_idle_trigger_.trigger();
     this->update_runtime_state_();
   }
-  this->duplex_running_.store(false, std::memory_order_relaxed);
+  this->audio_stack_running_.store(false, std::memory_order_relaxed);
   this->idle_trigger_.trigger();
 
-  // Defer the I2S channel teardown to loop(): polling audio_task_idle_
-  // here would block the main task for up to 600 ms (often >60 ms),
-  // starving network/UI/LVGL. loop() picks this up on the next tick once
-  // the audio task has parked itself in its outer wait loop.
+  // Defer I2S deletion to loop(): polling audio_task_idle_ here would block
+  // the main task for up to 600 ms (often >60 ms), starving network/UI/LVGL.
+  // loop() picks this up on the next tick once the audio task has parked.
   this->teardown_pending_.store(true, std::memory_order_relaxed);
 }
 
-bool I2SAudioDuplex::register_mic_consumer(void *token) {
+bool ESPAudioStack::register_mic_consumer(void *token) {
   bool needs_start = false;
   size_t count_after = 0;
   bool first_consumer = false;
@@ -1038,7 +1041,7 @@ bool I2SAudioDuplex::register_mic_consumer(void *token) {
       this->mic_consumers_[this->mic_consumer_count_++] = token;
       count_after = this->mic_consumer_count_;
       this->has_mic_consumers_.store(true, std::memory_order_relaxed);
-      needs_start = !this->duplex_running_.load(std::memory_order_relaxed);
+      needs_start = !this->audio_stack_running_.load(std::memory_order_relaxed);
     }
   }
   if (full) {
@@ -1068,7 +1071,7 @@ bool I2SAudioDuplex::register_mic_consumer(void *token) {
   return true;
 }
 
-void I2SAudioDuplex::unregister_mic_consumer(void *token) {
+void ESPAudioStack::unregister_mic_consumer(void *token) {
   size_t count_after = 0;
   bool removed = false;
   bool last_consumer_gone = false;
@@ -1104,10 +1107,10 @@ void I2SAudioDuplex::unregister_mic_consumer(void *token) {
     if (this->processor_ != nullptr) {
       this->processor_->set_processing_active(false);
     }
-    // If no playback either, park the audio task and disable I2S channels.
-    // Task and channels stay allocated for instant wake on the next consumer.
+    // If no playback either, park the audio task and delete I2S channels once
+    // the task is idle.
     if (!this->speaker_running_.load(std::memory_order_relaxed)) {
-      ESP_LOGI(TAG, "Duplex going idle (no consumers, no playback)");
+      ESP_LOGI(TAG, "Audio stack going idle (no consumers, no playback)");
       this->stop();
     }
     this->update_runtime_state_();
@@ -1116,12 +1119,12 @@ void I2SAudioDuplex::unregister_mic_consumer(void *token) {
   }
 }
 
-void I2SAudioDuplex::start_speaker() {
-  if (!this->duplex_running_.load(std::memory_order_relaxed)) {
+void ESPAudioStack::start_speaker() {
+  if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
     this->start();
   }
-  if (!this->duplex_running_.load(std::memory_order_relaxed)) {
-    ESP_LOGW(TAG, "Speaker start refused: duplex did not enter RUNNING");
+  if (!this->audio_stack_running_.load(std::memory_order_relaxed)) {
+    ESP_LOGW(TAG, "Speaker start refused: audio stack did not enter RUNNING");
     return;
   }
   if (!this->speaker_running_.load(std::memory_order_relaxed)) {
@@ -1134,18 +1137,18 @@ void I2SAudioDuplex::start_speaker() {
   }
 }
 
-void I2SAudioDuplex::stop_speaker() {
+void ESPAudioStack::stop_speaker() {
   if (this->speaker_running_.exchange(false, std::memory_order_relaxed)) {
     this->speaker_idle_trigger_.trigger();
     this->update_runtime_state_();
   }
   // Request audio task to reset ring buffers (avoids concurrent access).
   this->request_speaker_reset_.store(true, std::memory_order_relaxed);
-  // If no mic consumers either, tear down the duplex pipeline. This signals
+  // If no mic consumers either, tear down the audio stack pipeline. This signals
   // the audio processor (e.g. AFE) it can suspend its workers and parks the
   // audio task; channels stay configured for fast wake on the next start.
   if (!this->has_mic_consumers_.load(std::memory_order_relaxed)) {
-    ESP_LOGI(TAG, "Duplex going idle (speaker stopped, no mic consumers)");
+    ESP_LOGI(TAG, "Audio stack going idle (speaker stopped, no mic consumers)");
     if (this->processor_ != nullptr) {
       this->processor_->set_processing_active(false);
     }
@@ -1153,7 +1156,7 @@ void I2SAudioDuplex::stop_speaker() {
   }
 }
 
-size_t I2SAudioDuplex::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
+size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_wait) {
   if (!this->speaker_buffer_) {
     return 0;
   }
@@ -1167,16 +1170,16 @@ size_t I2SAudioDuplex::play(const uint8_t *data, size_t len, TickType_t ticks_to
   return written;
 }
 
-size_t I2SAudioDuplex::get_speaker_buffer_available() const {
+size_t ESPAudioStack::get_speaker_buffer_available() const {
   if (!this->speaker_buffer_) return 0;
   return this->speaker_buffer_->available();
 }
 
-size_t I2SAudioDuplex::get_speaker_buffer_size() const {
+size_t ESPAudioStack::get_speaker_buffer_size() const {
   return this->speaker_buffer_size_;
 }
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

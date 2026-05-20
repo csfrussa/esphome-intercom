@@ -1,11 +1,11 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM + VA (DUPLEX) - Single I2S bus, no hardware codec
+# GENERIC ESP32-S3 INTERCOM + VA (ESP AUDIO STACK) - Single I2S bus, no hardware codec
 # =============================================================================
 # Full-featured config: Intercom + Media Player + mixer (VA/MWW ready).
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
 #
 # Audio pipeline:
-#   MEMS mic → i2s_audio_duplex (48kHz) → esp_ae_rate_cvt x3 → esp_aec (AEC SR linear) → mic_main → VA / Intercom TX / MWW
+#   MEMS mic → esp_audio_stack (48kHz) → esp_ae_rate_cvt x3 → esp_aec (AEC SR linear) → mic_main → VA / Intercom TX / MWW
 #
 #   Media       → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → class-D amp
@@ -62,8 +62,8 @@ packages:
   led_state_full: !include ../../../../packages/led/state_full_single.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
   speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
-  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
-  duplex_aec_controls: !include ../../../../packages/i2s_audio_duplex/aec_controls.yaml
+  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
+  audio_stack_aec_controls: !include ../../../../packages/esp_audio_stack/aec_controls.yaml
 
 esphome:
   name: ${name}
@@ -138,7 +138,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
 # AEC
@@ -150,10 +150,10 @@ esp_aec:
   mode: sr_low_cost
 
 # =============================================================================
-# I2S Audio Duplex
+# ESP Audio Stack
 # =============================================================================
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   i2s_lrclk_pin: GPIO37
   i2s_bclk_pin: GPIO36
   i2s_din_pin: GPIO35
@@ -169,17 +169,17 @@ i2s_audio_duplex:
 # Microphone
 # =============================================================================
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_main
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
 # =============================================================================
 # Speaker Pipeline
 # =============================================================================
 speaker:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
 
@@ -267,11 +267,11 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - i2s_audio_duplex.stop: i2s_duplex
+                  - esp_audio_stack.stop: audio_stack
                   - esp_aec.set_mode:
                       id: aec_processor
                       mode: !lambda 'return x;'
-                  - i2s_audio_duplex.start: i2s_duplex
+                  - esp_audio_stack.start: audio_stack
                   - delay: 300ms
                   - if:
                       condition:

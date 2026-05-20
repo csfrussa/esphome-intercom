@@ -1,19 +1,19 @@
-"""Sensor platform for I2S Audio Duplex diagnostics."""
+"""Sensor platform for ESP Audio Stack diagnostics."""
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import sensor
 from esphome.const import ENTITY_CATEGORY_DIAGNOSTIC
 
-from . import i2s_audio_duplex_ns, I2SAudioDuplex, CONF_I2S_AUDIO_DUPLEX_ID
+from . import esp_audio_stack_ns, ESPAudioStack, CONF_ESP_AUDIO_STACK_ID
 
 CONF_SLOT = "slot"
 CONF_TDM_SLOT_LEVELS = "tdm_slot_levels"
 
-TdmSlotLevelSensor = i2s_audio_duplex_ns.class_(
+TdmSlotLevelSensor = esp_audio_stack_ns.class_(
     "TdmSlotLevelSensor",
     sensor.Sensor,
     cg.PollingComponent,
-    cg.Parented.template(I2SAudioDuplex),
+    cg.Parented.template(ESPAudioStack),
 )
 
 
@@ -33,14 +33,14 @@ def _slot_level_schema():
 
 CONFIG_SCHEMA = cv.Schema(
     {
-        cv.GenerateID(CONF_I2S_AUDIO_DUPLEX_ID): cv.use_id(I2SAudioDuplex),
+        cv.GenerateID(CONF_ESP_AUDIO_STACK_ID): cv.use_id(ESPAudioStack),
         cv.Optional(CONF_TDM_SLOT_LEVELS): cv.ensure_list(_slot_level_schema()),
     }
 )
 
 
 async def to_code(config):
-    parent = await cg.get_variable(config[CONF_I2S_AUDIO_DUPLEX_ID])
+    parent = await cg.get_variable(config[CONF_ESP_AUDIO_STACK_ID])
 
     for conf in config.get(CONF_TDM_SLOT_LEVELS, []):
         slot = conf[CONF_SLOT]

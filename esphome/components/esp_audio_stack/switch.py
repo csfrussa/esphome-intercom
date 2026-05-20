@@ -1,17 +1,17 @@
-"""Switch platform for I2S Audio Duplex - AEC enable/disable"""
+"""Switch platform for ESP Audio Stack - AEC enable/disable"""
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import switch
 from esphome.const import ENTITY_CATEGORY_CONFIG
 
-from . import i2s_audio_duplex_ns, I2SAudioDuplex, CONF_I2S_AUDIO_DUPLEX_ID
+from . import esp_audio_stack_ns, ESPAudioStack, CONF_ESP_AUDIO_STACK_ID
 CONF_AEC = "aec"
 
 # Switch class
-AECSwitch = i2s_audio_duplex_ns.class_("AECSwitch", switch.Switch, cg.Component)
+AECSwitch = esp_audio_stack_ns.class_("AECSwitch", switch.Switch, cg.Component)
 
 CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(CONF_I2S_AUDIO_DUPLEX_ID): cv.use_id(I2SAudioDuplex),
+    cv.GenerateID(CONF_ESP_AUDIO_STACK_ID): cv.use_id(ESPAudioStack),
     cv.Optional(CONF_AEC): switch.switch_schema(
         AECSwitch,
         entity_category=ENTITY_CATEGORY_CONFIG,
@@ -21,7 +21,7 @@ CONFIG_SCHEMA = cv.Schema({
 
 
 async def to_code(config):
-    parent = await cg.get_variable(config[CONF_I2S_AUDIO_DUPLEX_ID])
+    parent = await cg.get_variable(config[CONF_ESP_AUDIO_STACK_ID])
 
     if CONF_AEC in config:
         conf = config[CONF_AEC]

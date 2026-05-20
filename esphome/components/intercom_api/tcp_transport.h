@@ -1,6 +1,8 @@
 #pragma once
 
-#ifdef USE_ESP32
+#include "esphome/core/defines.h"
+
+#if defined(USE_ESP32) && defined(USE_INTERCOM_TCP_TRANSPORT)
 
 #include "transport.h"
 
@@ -95,4 +97,4 @@ class TcpTransport : public IntercomTransport {
 }  // namespace intercom_api
 }  // namespace esphome
 
-#endif  // USE_ESP32
+#endif  // USE_ESP32 && USE_INTERCOM_TCP_TRANSPORT

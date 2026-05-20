@@ -1,5 +1,5 @@
 # =============================================================================
-# I2S Audio Duplex microphone gain control
+# ESP Audio Stack microphone gain control
 # =============================================================================
 
 substitutions:
@@ -7,8 +7,8 @@ substitutions:
   mic_gain_max: "30"
 
 number:
-  - platform: i2s_audio_duplex
-    i2s_audio_duplex_id: i2s_duplex
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
     mic_gain:
       id: mic_gain
       name: Mic Gain

@@ -1,4 +1,4 @@
-#include "duplex_speaker.h"
+#include "esp_audio_stack_speaker.h"
 
 #ifdef USE_ESP32
 
@@ -8,12 +8,12 @@
 #include <cmath>
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
-static const char *const TAG = "i2s_duplex.spk";
+static const char *const TAG = "audio_stack.spk";
 
-void I2SAudioDuplexSpeaker::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up I2S Audio Duplex Speaker...");
+void ESPAudioStackSpeaker::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack Speaker...");
 
   this->active_listeners_semaphore_ = xSemaphoreCreateCounting(MAX_LISTENERS, MAX_LISTENERS);
   if (this->active_listeners_semaphore_ == nullptr) {
@@ -31,8 +31,8 @@ void I2SAudioDuplexSpeaker::setup() {
   });
 }
 
-void I2SAudioDuplexSpeaker::dump_config() {
-  ESP_LOGCONFIG(TAG, "I2S Audio Duplex Speaker:");
+void ESPAudioStackSpeaker::dump_config() {
+  ESP_LOGCONFIG(TAG, "ESP Audio Stack Speaker:");
   ESP_LOGCONFIG(TAG, "  Sample Rate: %u Hz", this->parent_->get_sample_rate());
   ESP_LOGCONFIG(TAG, "  Bits Per Sample: 16");
   ESP_LOGCONFIG(TAG, "  Channels: 1 (mono)");
@@ -44,7 +44,7 @@ void I2SAudioDuplexSpeaker::dump_config() {
   }
 }
 
-void I2SAudioDuplexSpeaker::start() {
+void ESPAudioStackSpeaker::start() {
   if (this->is_failed())
     return;
 
@@ -68,7 +68,7 @@ void I2SAudioDuplexSpeaker::start() {
   }
 }
 
-void I2SAudioDuplexSpeaker::stop() {
+void ESPAudioStackSpeaker::stop() {
   if (this->is_failed())
     return;
 
@@ -82,7 +82,7 @@ void I2SAudioDuplexSpeaker::stop() {
   xSemaphoreGive(this->active_listeners_semaphore_);
 }
 
-void I2SAudioDuplexSpeaker::finish() {
+void ESPAudioStackSpeaker::finish() {
   // Non-blocking: set flag, loop() will call stop() once buffer is drained
   if (this->pause_state_) {
     this->set_pause_state(false);
@@ -90,11 +90,11 @@ void I2SAudioDuplexSpeaker::finish() {
   this->finishing_ = true;
 }
 
-size_t I2SAudioDuplexSpeaker::play(const uint8_t *data, size_t length) {
+size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length) {
   return this->play(data, length, 0);
 }
 
-size_t I2SAudioDuplexSpeaker::play(const uint8_t *data, size_t length,
+size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length,
                                     TickType_t ticks_to_wait) {
   if (this->is_failed()) {
     return 0;
@@ -115,11 +115,11 @@ size_t I2SAudioDuplexSpeaker::play(const uint8_t *data, size_t length,
   return written;
 }
 
-bool I2SAudioDuplexSpeaker::has_buffered_data() const {
+bool ESPAudioStackSpeaker::has_buffered_data() const {
   return this->parent_->get_speaker_buffer_available() > 0;
 }
 
-void I2SAudioDuplexSpeaker::set_volume(float volume) {
+void ESPAudioStackSpeaker::set_volume(float volume) {
   if (!std::isfinite(volume) || volume < 0.0f) {
     volume = 0.0f;
   } else if (volume > 1.0f) {
@@ -149,7 +149,7 @@ void I2SAudioDuplexSpeaker::set_volume(float volume) {
   }
 }
 
-void I2SAudioDuplexSpeaker::set_mute_state(bool mute_state) {
+void ESPAudioStackSpeaker::set_mute_state(bool mute_state) {
   this->mute_state_ = mute_state;
 
 #ifdef USE_AUDIO_DAC
@@ -172,13 +172,13 @@ void I2SAudioDuplexSpeaker::set_mute_state(bool mute_state) {
   }
 }
 
-void I2SAudioDuplexSpeaker::set_pause_state(bool pause_state) {
+void ESPAudioStackSpeaker::set_pause_state(bool pause_state) {
   this->pause_state_ = pause_state;
   this->parent_->set_speaker_paused(pause_state);
   ESP_LOGD(TAG, "Pause state: %s", pause_state ? "PAUSED" : "PLAYING");
 }
 
-void I2SAudioDuplexSpeaker::loop() {
+void ESPAudioStackSpeaker::loop() {
   // Propagate I2S errors from parent audio task
   if (this->parent_->has_i2s_error() && !this->status_has_error()) {
     ESP_LOGE(TAG, "I2S error detected in audio task");
@@ -206,7 +206,7 @@ void I2SAudioDuplexSpeaker::loop() {
       }
       this->parent_->start_speaker();
       if (!this->parent_->is_running()) {
-        ESP_LOGW(TAG, "Parent duplex failed to start; aborting speaker start");
+        ESP_LOGW(TAG, "Parent audio stack failed to start; aborting speaker start");
         this->stop();
         this->state_ = speaker::STATE_STOPPED;
         break;
@@ -235,7 +235,7 @@ void I2SAudioDuplexSpeaker::loop() {
   }
 }
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

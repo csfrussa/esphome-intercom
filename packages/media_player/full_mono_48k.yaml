@@ -17,8 +17,8 @@ media_player:
     internal: false
     task_stack_in_psram: true
     # ESPHome's native media_player volume is the source/speaker abstraction.
-    # When `packages/i2s_audio_duplex/controls.yaml` provides `master_volume`,
-    # i2s_audio_duplex cascades both in the final I2S TX path. Codec-specific
+    # When `packages/esp_audio_stack/controls.yaml` provides `master_volume`,
+    # esp_audio_stack cascades both in the final I2S TX path. Codec-specific
     # boards may instead provide `master_volume` as hardware DAC volume.
     volume_initial: 100%
     volume_min: 0%

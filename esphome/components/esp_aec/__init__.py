@@ -62,10 +62,11 @@ async def to_code(config):
 
     cg.add_define("USE_AUDIO_PROCESSOR")
 
-    # Use esp-sr 2.4.4, the same generation used by Espressif GMF AEC.
+    # Use the registry-latest esp-sr generation, matching the prototype branch
+    # policy. Pin only for a documented upstream regression.
     # esp_aec wraps the low-level afe_aec API directly so no-codec devices do
     # not need the full GMF pipeline or codec stack.
-    add_idf_component(name="espressif/esp-sr", ref="2.4.4")
+    add_idf_component(name="espressif/esp-sr", ref="*")
 
 
 @automation.register_action(

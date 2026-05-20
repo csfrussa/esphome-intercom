@@ -400,28 +400,28 @@ def _final_validate(config):
                 "(audio and control travel on separate UDP sockets)."
             )
 
-    # Check if i2s_audio_duplex is also configured
-    duplex_configs = full_config.get("i2s_audio_duplex", [])
+    # Check if esp_audio_stack is also configured
+    audio_stack_configs = full_config.get("esp_audio_stack", [])
 
-    if duplex_configs:
-        # If duplex exists, check for processor conflict
+    if audio_stack_configs:
+        # If esp_audio_stack exists, check for processor conflict
         if CONF_PROCESSOR_ID in config and config[CONF_PROCESSOR_ID] is not None:
-            for duplex in (duplex_configs if isinstance(duplex_configs, list) else [duplex_configs]):
-                if isinstance(duplex, dict) and duplex.get("processor_id") is not None:
+            for audio_stack in (audio_stack_configs if isinstance(audio_stack_configs, list) else [audio_stack_configs]):
+                if isinstance(audio_stack, dict) and audio_stack.get("processor_id") is not None:
                     raise cv.Invalid(
-                        "Both intercom_api.processor_id and i2s_audio_duplex.processor_id are configured. "
+                        "Both intercom_api.processor_id and esp_audio_stack.processor_id are configured. "
                         "This causes a race condition on the audio processor. "
-                        "Use the processor on only ONE component (i2s_audio_duplex recommended)."
+                        "Use the processor on only ONE component (esp_audio_stack recommended)."
                     )
 
         # Warn about DC offset double-filtering
         if config.get(CONF_DC_OFFSET_REMOVAL, False):
-            for duplex in (duplex_configs if isinstance(duplex_configs, list) else [duplex_configs]):
-                if isinstance(duplex, dict) and duplex.get("correct_dc_offset", False):
+            for audio_stack in (audio_stack_configs if isinstance(audio_stack_configs, list) else [audio_stack_configs]):
+                if isinstance(audio_stack, dict) and audio_stack.get("correct_dc_offset", False):
                     raise cv.Invalid(
-                        "Both intercom_api.dc_offset_removal and i2s_audio_duplex.correct_dc_offset are enabled. "
+                        "Both intercom_api.dc_offset_removal and esp_audio_stack.correct_dc_offset are enabled. "
                         "Double DC-block filtering causes instability. "
-                        "Use correct_dc_offset on i2s_audio_duplex only."
+                        "Use correct_dc_offset on esp_audio_stack only."
                     )
 
     _consume_intercom_sockets(config)
@@ -447,6 +447,10 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
     cg.add(var.set_frame_buffers_in_psram(config[CONF_FRAME_BUFFERS_IN_PSRAM]))
     cg.add(var.set_use_ha_as_first_contact(config[CONF_USE_HA_AS_FIRST_CONTACT]))
     cg.add(var.set_audio_debug(config[CONF_AUDIO_DEBUG]))
+    if config[CONF_PROTOCOL] == PROTOCOL_UDP:
+        cg.add_define("USE_INTERCOM_UDP_TRANSPORT")
+    else:
+        cg.add_define("USE_INTERCOM_TCP_TRANSPORT")
     if config[CONF_ANNOUNCE]:
         cg.add_define("USE_INTERCOM_MDNS_ANNOUNCE")
         cg.add(var.set_mdns_announce_enabled(True))

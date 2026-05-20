@@ -41,7 +41,7 @@ flowchart TD
     Core["⚙️ ESPHome core<br/>WiFi / API / logger"]
 
     subgraph IO["🎛️ Codec and I2S owner"]
-        Duplex["🎛️ i2s_audio_duplex<br/>I2S + DMA + audio task"]
+        Duplex["🎛️ esp_audio_stack<br/>I2S + DMA + audio task"]
         Codec["🎚️ ES8311 / ES7210 / MEMS<br/>mic + speaker codec"]
     end
 
@@ -72,10 +72,10 @@ flowchart TD
 ```
 
 Ownership rules:
-- `i2s_audio_duplex` owns the I²S peripheral, DMA buffers and the audio task. It knows nothing about AEC or Speech Enhancement; it just moves frames.
+- `esp_audio_stack` owns the I²S peripheral, DMA buffers and the audio task. It knows nothing about AEC or Speech Enhancement; it just moves frames.
 - `audio_processor` is the contract. It takes an interleaved mic frame and returns an interleaved mic frame, optionally with VAD / Speech Enhancement metadata.
 - `esp_afe` / `esp_aec` are `audio_processor` implementations wrapping Espressif's esp-sr library. They own their worker tasks.
-- Consumers register with `i2s_audio_duplex` to receive processed mic frames. They never talk to the processor directly.
+- Consumers register with `esp_audio_stack` to receive processed mic frames. They never talk to the processor directly.
 
 ---
 
@@ -89,7 +89,7 @@ All audio components share three conventions:
 
 | Task | Component | Core | Priority | Stack | Role |
 |------|-----------|:---:|:-------:|:-----:|------|
-| `i2s_audio_task` | `i2s_audio_duplex` | 0 | 19 | 8 KB PSRAM | I²S read/write, Espressif rate conversion, callbacks |
+| `i2s_audio_task` | `esp_audio_stack` | 0 | 19 | 8 KB PSRAM | I²S read/write, Espressif rate conversion, callbacks |
 | `afe_feed` | `esp_gmf_afe_manager` | 0 | 5 | 3 KB | Pulls frames from ESPHome read callback, calls esp-sr `feed()` |
 | `afe_fetch` | `esp_gmf_afe_manager` | 1 | 5 | 3 KB | Blocks on esp-sr `fetch()`, invokes ESPHome result callback |
 | `intercom_srv` | `intercom_api` | 1 | 5 | PSRAM static | Transport RX/control and call FSM handoff |
@@ -168,12 +168,12 @@ Single-mic plus playback-reference targets do not need this full AFE manager
 path unless they need the extra AFE stages. Spotpear Ball v2 uses the official
 `afe_aec_create("MR", ...)` contract through `esp_aec`: the stereo codec input
 is reduced to one microphone channel plus one playback-reference channel, then
-`i2s_audio_duplex` emits the AEC-processed mic frame to the same consumers.
+`esp_audio_stack` emits the AEC-processed mic frame to the same consumers.
 P4 and WS3 remain on `esp_afe` because their 2-mic topology benefits from the
 full AFE path and structural SE/BSS.
 
 Codec-less dual-bus targets still use the same processor contract. The physical
-layout changes only below `i2s_audio_duplex`: ESP-IDF allocates one RX simplex
+layout changes only below `esp_audio_stack`: ESP-IDF allocates one RX simplex
 channel on the microphone I2S port and one TX simplex channel on the speaker
 I2S port, both normally with the ESP as clock master. Above that layer the
 processor still receives the official `MR` shape: one microphone channel and
@@ -208,7 +208,7 @@ class AudioProcessor {
 
 Invariants the processor promises:
 1. `frame_spec()` is stable between `frame_spec_revision()` bumps.
-2. `process()` is call-from-any-task safe but **not** concurrent-safe. `i2s_audio_duplex` serialises all calls from its audio task.
+2. `process()` is call-from-any-task safe but **not** concurrent-safe. `esp_audio_stack` serialises all calls from its audio task.
 3. Output frame shape always matches `frame_spec()` after the bump has been observed.
 
 Invariants the caller must respect:
@@ -216,7 +216,7 @@ Invariants the caller must respect:
 2. Never call `process()` concurrently from multiple tasks.
 3. When frame_spec changes, internal buffers (rate-conversion ratio, reference extraction, ring-buffer sizes) must be recomputed before the next call.
 
-`i2s_audio_duplex` implements this via a permanent audio task that detects revision bumps at the top of each iteration and reinitialises its local buffers in place, without recreating the FreeRTOS task.
+`esp_audio_stack` implements this via a permanent audio task that detects revision bumps at the top of each iteration and reinitialises its local buffers in place, without recreating the FreeRTOS task.
 
 ---
 
@@ -224,7 +224,7 @@ Invariants the caller must respect:
 
 AEC and VAD toggle live through Espressif's GMF AFE manager. NS, AGC, type,
 mode and other graph-shape changes rebuild the esp-sr instance without tearing
-down `i2s_audio_duplex`. Dual-mic AFE keeps SE/BSS structural, so there is no
+down `esp_audio_stack`. Dual-mic AFE keeps SE/BSS structural, so there is no
 runtime SE switch on the P4/WS3 dual-mic path. The rebuild implementation is a
 lock-free two-atomic handshake between `process()` (hot path) and
 `recreate_instance_()` (config path).
@@ -274,41 +274,41 @@ The current audio stack is composition-based. Espressif libraries are integrated
 inside the ESPHome component that owns the matching hardware or processing
 concern, rather than exposed as a new mandatory component chain:
 
-- `i2s_audio_duplex` owns the I2S controller, codec/data I/O, sample-rate
+- `esp_audio_stack` owns the I2S controller, codec/data I/O, sample-rate
   conversion, mic/speaker ESPHome surfaces, consumer registry and AEC reference
   extraction. It can be used without `intercom_api`.
 - `esp_aec` owns standalone Espressif AEC through `afe_aec_create()` and
-  implements `AudioProcessor`. It has no dependency on `i2s_audio_duplex` or
+  implements `AudioProcessor`. It has no dependency on `esp_audio_stack` or
   `intercom_api`; either component may call it when their topology is valid.
 - `esp_afe` owns full AFE lifecycle through Espressif's GMF AFE manager and
   implements `AudioProcessor`. It requires a steady-frame caller, practically
-  `i2s_audio_duplex`, but it still does not depend on `intercom_api`.
+  `esp_audio_stack`, but it still does not depend on `intercom_api`.
 - `intercom_api` owns PBX-lite signaling, phonebook state and network audio
   transport. In the standard full-duplex YAMLs it consumes the microphone and
-  speaker exposed by `i2s_audio_duplex`; it does not own the Espressif codec,
+  speaker exposed by `esp_audio_stack`; it does not own the Espressif codec,
   GMF or rate-converter backends.
 
 This lets users build smaller surfaces:
 
 | Use case | Components |
 |---|---|
-| Full-duplex mic/speaker only | `i2s_audio_duplex` |
-| Voice Assistant or MWW with AEC | `i2s_audio_duplex` + `esp_aec` or `esp_afe` |
-| Intercom with shared codec bus | `i2s_audio_duplex` + `intercom_api` + optional `esp_aec` or `esp_afe` |
+| Full-duplex mic/speaker only | `esp_audio_stack` |
+| Voice Assistant or MWW with AEC | `esp_audio_stack` + `esp_aec` or `esp_afe` |
+| Intercom with shared codec bus | `esp_audio_stack` + `intercom_api` + optional `esp_aec` or `esp_afe` |
 | Standalone intercom on separate mic/speaker hardware | `intercom_api` + optional `esp_aec` |
 
-The only cross-component checks are ownership guards: if both `i2s_audio_duplex`
+The only cross-component checks are ownership guards: if both `esp_audio_stack`
 and `intercom_api` are present, only one of them may configure an audio
 processor or DC-offset removal. That guard prevents duplicate processing but
 does not make either component a hard dependency of the other.
 
-### 6.1 Why `i2s_audio_duplex` owns the audio task, not `audio_processor`
+### 6.1 Why `esp_audio_stack` owns the audio task, not `audio_processor`
 
 The transport owns the single audio task and exposes raw + processed frames via callbacks. The processor exposes `process()` synchronously and runs its own async workers internally.
 
 Alternative considered: move the task into the processor, let the transport be a pure DMA pump. Rejected because the transport has hardware knowledge (TDM vs stereo, rate-conversion ratio, reference channel placement) that the processor does not want to know, and two of the four supported use cases (intercom-only, intercom+AEC) don't have an AFE-style processor at all.
 
-### 6.2 Why the consumer list in `i2s_audio_duplex`, not in the processor
+### 6.2 Why the consumer list in `esp_audio_stack`, not in the processor
 
 Consumers want diagnostic/raw tap points and processed frames, but production MWW, VA and intercom TX must use the processed stream when a processor is configured. The transport is the only component that can expose both surfaces without leaking raw audio into processor consumers.
 
@@ -340,7 +340,7 @@ custom AEC path.
 
 Consumers register once at setup. The transport tracks them as opaque tokens in a `std::vector`, so a `stop()` followed by `start()` (as happens during an internal reconfigure) does not lose the registration. The original implementation used an atomic refcount that was zeroed on `stop()`, which silently disconnected MWW / VA / intercom after every feature toggle. The registry is the structural fix: consumers survive transport restarts by construction.
 
-### 6.7 Why the `i2s_audio_duplex` audio task is permanent
+### 6.7 Why the `esp_audio_stack` audio task is permanent
 
 Reconfigure does not destroy the audio task. The task sits on a
 `frame_spec_revision` observer loop; when the revision bumps it reinitialises
@@ -477,11 +477,11 @@ Terminal reason rules:
 
 | Question | File |
 |---|---|
-| How is a mic frame delivered to consumers? | `esphome/components/i2s_audio_duplex/i2s_audio_duplex.cpp` `audio_task_()` |
+| How is a mic frame delivered to consumers? | `esphome/components/esp_audio_stack/esp_audio_stack.cpp` `audio_task_()` |
 | How does the AFE pipeline swap config without glitches? | `esphome/components/esp_afe/esp_afe.cpp` `recreate_instance_()` + drain protocol |
 | Where is the TCP wire format defined? | `esphome/components/intercom_api/intercom_protocol.h` |
 | How is PSRAM vs internal RAM placement decided? | `esphome/components/audio_processor/ring_buffer_caps.h` |
-| How do I register a new mic consumer? | Call `I2SAudioDuplex::register_mic_consumer()` from the consumer's `setup()` |
+| How do I register a new mic consumer? | Call `ESPAudioStack::register_mic_consumer()` from the consumer's `setup()` |
 | How do I add a new processor implementation? | Subclass `AudioProcessor` in `esphome/components/audio_processor/audio_processor.h`, ship as a new component |
 | Where is the phonebook / dedup / endpoint policy? | `esphome/components/intercom_api/phonebook.h`, plus `_format_entry_unified` / `_async_build_peer_snapshot` in `custom_components/intercom_native/__init__.py` |
 | Where are HA services registered with their schemas? | `custom_components/intercom_native/__init__.py` (voluptuous, `extra=PREVENT_EXTRA`) |

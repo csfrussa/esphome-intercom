@@ -125,7 +125,7 @@ void IntercomApi::load_settings_() {
       ESP_LOGD(TAG, "Loaded volume: %.0f%%", volume * 100.0f);
     }
 
-    // Skip mic_gain when i2s_audio_duplex owns it (its own persistence).
+    // Skip mic_gain when esp_audio_stack owns it (its own persistence).
     this->mic_gain_db_ = clamp_mic_gain_db_(stored.mic_gain_db);
     if (this->mic_gain_number_ != nullptr) {
       if (this->mic_gain_db_ != 0.0f && !this->ensure_mic_processing_buffer_()) {

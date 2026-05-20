@@ -1,4 +1,4 @@
-"""I2S Audio Duplex Component - Full duplex I2S for simultaneous mic+speaker
+"""ESP Audio Stack Component - Full duplex I2S for simultaneous mic+speaker
 
 Exposes standard ESPHome microphone and speaker platforms for compatibility with
 Voice Assistant and intercom_api components.
@@ -61,10 +61,12 @@ CONF_TDM_TOTAL_SLOTS = "tdm_total_slots"
 CONF_TDM_MIC_SLOT = "tdm_mic_slot"
 CONF_TDM_MIC_SLOTS = "tdm_mic_slots"
 CONF_TDM_REF_SLOT = "tdm_ref_slot"
-CONF_I2S_AUDIO_DUPLEX_ID = "i2s_audio_duplex_id"
+CONF_ESP_AUDIO_STACK_ID = "esp_audio_stack_id"
 CONF_TASK_PRIORITY = "task_priority"
 CONF_TASK_CORE = "task_core"
 CONF_TASK_STACK_SIZE = "task_stack_size"
+CONF_DMA_DESC_NUM = "dma_desc_num"
+CONF_DMA_FRAME_NUM = "dma_frame_num"
 CONF_TX_CHANNEL = "tx_channel"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
 CONF_AEC_REF_RING_IN_PSRAM = "aec_ref_ring_in_psram"
@@ -73,7 +75,17 @@ CONF_AEC_REFERENCE_MODE = "aec_reference"
 CONF_AEC_REF_BUFFER_MS = "aec_reference_buffer_ms"
 CONF_TELEMETRY = "telemetry"
 CONF_TELEMETRY_LOG_INTERVAL_FRAMES = "telemetry_log_interval_frames"
-CONF_FIR_DECIMATOR = "fir_decimator"
+CONF_AUDIO_EFFECTS = "audio_effects"
+CONF_RATE_CVT_COMPLEXITY = "rate_cvt_complexity"
+CONF_RATE_CVT_PERF_TYPE = "rate_cvt_perf_type"
+CONF_GMF_IO = "gmf_io"
+CONF_READER = "reader"
+CONF_WRITER = "writer"
+CONF_IO_SIZE = "io_size"
+CONF_BUFFER_SIZE = "buffer_size"
+CONF_TASK_STACK_IN_PSRAM = "task_stack_in_psram"
+CONF_SPEED_MONITOR = "speed_monitor"
+CONF_TASK_TIMEOUT_MS = "task_timeout_ms"
 CONF_CODEC = "codec"
 CONF_INPUT = "input"
 CONF_OUTPUT = "output"
@@ -92,9 +104,9 @@ CONF_ON_MIC_IDLE = "on_mic_idle"
 CONF_ON_SPEAKER_START = "on_speaker_start"
 CONF_ON_SPEAKER_IDLE = "on_speaker_idle"
 
-FIR_DECIMATOR_OPTIONS = ("esp_ae_rate_cvt",)
 CODEC_INPUT_TYPES = ("es7210", "es8311")
 CODEC_OUTPUT_TYPES = ("es8311",)
+RATE_CVT_PERF_TYPES = ("speed", "memory")
 
 I2S_OPTIONAL_MCLK = cv.Any(
     cv.int_range(min=-1, max=-1),
@@ -117,10 +129,40 @@ I2S_TX_BUS_SCHEMA = cv.Schema({
     cv.Required(CONF_I2S_DOUT_PIN): pins.internal_gpio_output_pin_number,
 })
 
-i2s_audio_duplex_ns = cg.esphome_ns.namespace("i2s_audio_duplex")
-I2SAudioDuplex = i2s_audio_duplex_ns.class_("I2SAudioDuplex", cg.Component)
-StartAction = i2s_audio_duplex_ns.class_("StartAction", automation.Action)
-StopAction = i2s_audio_duplex_ns.class_("StopAction", automation.Action)
+def _validate_gmf_io_direction(config):
+    io_size = config[CONF_IO_SIZE]
+    buffer_size = config[CONF_BUFFER_SIZE]
+    task_stack_size = config[CONF_TASK_STACK_SIZE]
+    async_fields = (io_size, buffer_size, task_stack_size)
+    if any(async_fields) and not all(async_fields):
+        raise cv.Invalid(
+            "gmf_io async mode requires io_size, buffer_size and task_stack_size "
+            "to all be non-zero. Leave all three at 0 for synchronous IO."
+        )
+    return config
+
+
+GMF_IO_DIRECTION_SCHEMA = cv.All(
+    cv.Schema({
+        # Official gmf_io knobs. All defaults are Espressif's zero/default values:
+        # zero task/buffer means synchronous IO in the caller task; non-zero task
+        # and buffer settings enable GMF's async data-bus mode.
+        cv.Optional(CONF_IO_SIZE, default=0): cv.int_range(min=0, max=262144),
+        cv.Optional(CONF_BUFFER_SIZE, default=0): cv.int_range(min=0, max=1048576),
+        cv.Optional(CONF_TASK_STACK_SIZE, default=0): cv.int_range(min=0, max=32768),
+        cv.Optional(CONF_TASK_PRIORITY, default=0): cv.int_range(min=0, max=24),
+        cv.Optional(CONF_TASK_CORE, default=0): cv.int_range(min=0, max=1),
+        cv.Optional(CONF_TASK_STACK_IN_PSRAM, default=False): cv.boolean,
+        cv.Optional(CONF_SPEED_MONITOR, default=False): cv.boolean,
+        cv.Optional(CONF_TASK_TIMEOUT_MS, default=0): cv.int_range(min=0, max=60000),
+    }),
+    _validate_gmf_io_direction,
+)
+
+esp_audio_stack_ns = cg.esphome_ns.namespace("esp_audio_stack")
+ESPAudioStack = esp_audio_stack_ns.class_("ESPAudioStack", cg.Component)
+StartAction = esp_audio_stack_ns.class_("StartAction", automation.Action)
+StopAction = esp_audio_stack_ns.class_("StopAction", automation.Action)
 
 # AudioProcessor abstract interface (defined in audio_processor/audio_processor.h)
 # Both esp_aec::EspAec and esp_afe::EspAfe inherit from this adapter.
@@ -212,7 +254,7 @@ def _validate_pcm_format(config):
 
 
 def _validate_dual_bus_config(config):
-    """Validate optional RX/TX bus split without changing legacy single-bus YAML."""
+    """Validate optional RX/TX bus split."""
     has_rx_bus = CONF_RX_BUS in config
     has_tx_bus = CONF_TX_BUS in config
     if has_rx_bus != has_tx_bus:
@@ -239,7 +281,7 @@ def _validate_dual_bus_config(config):
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
-        cv.GenerateID(): cv.declare_id(I2SAudioDuplex),
+        cv.GenerateID(): cv.declare_id(ESPAudioStack),
         cv.Optional(CONF_I2S_LRCLK_PIN, default=-1): cv.Any(
             cv.int_range(min=-1, max=-1),
             pins.internal_gpio_output_pin_number,
@@ -302,6 +344,10 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_TASK_PRIORITY, default=19): cv.int_range(min=1, max=24),
         cv.Optional(CONF_TASK_CORE, default=0): cv.int_range(min=-1, max=1),
         cv.Optional(CONF_TASK_STACK_SIZE, default=8192): cv.int_range(min=4096, max=32768),
+        # Official IDF i2s_chan_config_t DMA knobs. If dma_frame_num is omitted,
+        # the component keeps the historical ~10 ms/descriptor auto sizing.
+        cv.Optional(CONF_DMA_DESC_NUM, default=6): cv.int_range(min=2, max=16),
+        cv.Optional(CONF_DMA_FRAME_NUM): cv.int_range(min=64, max=4092),
         # Use PSRAM for non-DMA audio buffers (saves ~15KB internal RAM).
         # Requires PSRAM. DMA buffers (I2S RX/TX) always use internal RAM.
         cv.Optional(CONF_BUFFERS_IN_PSRAM, default=False): cv.boolean,
@@ -326,6 +372,16 @@ CONFIG_SCHEMA = cv.All(
         # Enable per-stage cycle counting and diagnostics (debug only, adds overhead)
         cv.Optional(CONF_TELEMETRY, default=False): cv.boolean,
         cv.Optional(CONF_TELEMETRY_LOG_INTERVAL_FRAMES, default=128): cv.int_range(min=1, max=8192),
+        cv.Optional(CONF_AUDIO_EFFECTS, default={}): cv.Schema({
+            cv.Optional(CONF_RATE_CVT_COMPLEXITY, default=3): cv.int_range(min=1, max=3),
+            cv.Optional(CONF_RATE_CVT_PERF_TYPE, default="speed"): cv.one_of(
+                *RATE_CVT_PERF_TYPES, lower=True,
+            ),
+        }),
+        cv.Optional(CONF_GMF_IO, default={}): cv.Schema({
+            cv.Optional(CONF_READER, default={}): GMF_IO_DIRECTION_SCHEMA,
+            cv.Optional(CONF_WRITER, default={}): GMF_IO_DIRECTION_SCHEMA,
+        }),
         cv.Optional(CONF_CODEC): cv.Schema({
             cv.GenerateID(CONF_I2C_ID): cv.use_id(i2c.I2CBus),
             cv.Optional(CONF_INPUT): cv.Schema({
@@ -346,7 +402,7 @@ CONFIG_SCHEMA = cv.All(
             }),
         }),
         # Lifecycle hooks for board-level power policy. Use the speaker hooks
-        # for amp power gating; the generic duplex hooks also fire on mic-only
+        # for amp power gating; the generic audio-stack hooks also fire on mic-only
         # activity such as wake-word listeners.
         cv.Optional(CONF_ON_START): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_IDLE): automation.validate_automation(single=True),
@@ -357,10 +413,6 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_ON_MIC_IDLE): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_SPEAKER_START): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_SPEAKER_IDLE): automation.validate_automation(single=True),
-        # Compatibility name for the sample-rate conversion backend. Only
-        # Espressif esp_audio_effects rate conversion is supported.
-        cv.Optional(CONF_FIR_DECIMATOR, default="esp_ae_rate_cvt"):
-            cv.one_of(*FIR_DECIMATOR_OPTIONS, lower=True),
     }).extend(cv.COMPONENT_SCHEMA),
     _validate_sample_rates,
     _validate_tdm_config,
@@ -410,6 +462,15 @@ def _final_validate(config):
         raise cv.Invalid(
             f"task_core={task_core} not available on {variant} (single-core SoC)"
         )
+    gmf_io = config.get(CONF_GMF_IO, {})
+    for direction in (CONF_READER, CONF_WRITER):
+        direction_conf = gmf_io.get(direction, {})
+        gmf_task_core = direction_conf.get(CONF_TASK_CORE, 0)
+        if gmf_task_core > 0 and variant in SINGLE_CORE_VARIANTS:
+            raise cv.Invalid(
+                f"gmf_io.{direction}.task_core={gmf_task_core} not available on {variant} "
+                "(single-core SoC)"
+            )
 
     # APLL is only available on ESP32, ESP32-S2, and ESP32-P4
     APLL_VARIANTS = {VARIANT_ESP32, VARIANT_ESP32S2, VARIANT_ESP32P4}
@@ -438,13 +499,13 @@ def _final_validate(config):
 
     intercom_configs = full_config.get("intercom_api", [])
     if intercom_configs:
-        has_duplex_processor = CONF_PROCESSOR_ID in config and config.get(CONF_PROCESSOR_ID) is not None
+        has_audio_stack_processor = CONF_PROCESSOR_ID in config and config.get(CONF_PROCESSOR_ID) is not None
         for ic in (intercom_configs if isinstance(intercom_configs, list) else [intercom_configs]):
-            if isinstance(ic, dict) and ic.get("processor_id") is not None and has_duplex_processor:
+            if isinstance(ic, dict) and ic.get("processor_id") is not None and has_audio_stack_processor:
                 raise cv.Invalid(
-                    "Both i2s_audio_duplex and intercom_api have processor_id configured. "
+                    "Both esp_audio_stack and intercom_api have processor_id configured. "
                     "This causes a race condition on the audio processor. "
-                    "Use processor_id on only ONE component (i2s_audio_duplex recommended)."
+                    "Use processor_id on only ONE component (esp_audio_stack recommended)."
                 )
 
     return config
@@ -461,16 +522,29 @@ def _add_config_setters(var, config, setters):
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
 
-    add_idf_component(name="espressif/esp_audio_effects", ref="1.0.2")
-    add_idf_component(name="espressif/esp_codec_dev", ref="1.5.4")
+    # esp_audio_stack refactor policy: track Espressif registry latest by default.
+    # ESPHome requires `ref`; "*" maps to an unpinned/latest registry version.
+    # Replace it only when a concrete upstream regression is documented.
+    add_idf_component(name="espressif/esp_audio_effects", ref="*")
+    add_idf_component(name="espressif/esp_codec_dev", ref="*")
+    add_idf_component(name="espressif/gmf_audio", ref="*")
+    add_idf_component(name="espressif/gmf_io", ref="*")
     await cg.register_component(var, config)
 
-    # Define USE_I2S_AUDIO_DUPLEX so other components know it's available
-    cg.add_define("USE_I2S_AUDIO_DUPLEX")
+    # Define USE_ESP_AUDIO_STACK so other components know it's available
+    cg.add_define("USE_ESP_AUDIO_STACK")
+    cg.add_define("USE_ESP_AUDIO_STACK_GMF_BACKEND")
     if CONF_RX_BUS in config:
-        cg.add_define("USE_I2S_AUDIO_DUPLEX_DUAL_BUS")
+        cg.add_define("USE_ESP_AUDIO_STACK_DUAL_BUS")
     include_builtin_idf_component("esp_driver_i2s")
     add_idf_sdkconfig_option("CONFIG_I2S_ISR_IRAM_SAFE", True)
+    gmf_io = config[CONF_GMF_IO]
+    if (
+        config[CONF_AUDIO_STACK_IN_PSRAM]
+        or gmf_io[CONF_READER][CONF_TASK_STACK_IN_PSRAM]
+        or gmf_io[CONF_WRITER][CONF_TASK_STACK_IN_PSRAM]
+    ):
+        add_idf_sdkconfig_option("CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY", True)
 
     _add_config_setters(
         var,
@@ -590,11 +664,31 @@ async def to_code(config):
             (CONF_TASK_PRIORITY, var.set_task_priority),
             (CONF_TASK_CORE, var.set_task_core),
             (CONF_TASK_STACK_SIZE, var.set_task_stack_size),
+            (CONF_DMA_DESC_NUM, var.set_dma_desc_num),
             (CONF_BUFFERS_IN_PSRAM, var.set_buffers_in_psram),
             (CONF_AUDIO_STACK_IN_PSRAM, var.set_audio_stack_in_psram),
         ),
     )
-    cg.add(var.set_fir_decimator_backend(0))
+    if CONF_DMA_FRAME_NUM in config:
+        cg.add(var.set_dma_frame_num(config[CONF_DMA_FRAME_NUM]))
+    audio_effects = config[CONF_AUDIO_EFFECTS]
+    cg.add(var.set_rate_cvt_complexity(audio_effects[CONF_RATE_CVT_COMPLEXITY]))
+    cg.add(var.set_rate_cvt_perf_type(0 if audio_effects[CONF_RATE_CVT_PERF_TYPE] == "memory" else 1))
+    for direction, setter in (
+        (CONF_READER, var.configure_gmf_reader_io),
+        (CONF_WRITER, var.configure_gmf_writer_io),
+    ):
+        io_conf = gmf_io[direction]
+        cg.add(setter(
+            io_conf[CONF_IO_SIZE],
+            io_conf[CONF_BUFFER_SIZE],
+            io_conf[CONF_TASK_STACK_SIZE],
+            io_conf[CONF_TASK_PRIORITY],
+            io_conf[CONF_TASK_CORE],
+            io_conf[CONF_TASK_STACK_IN_PSRAM],
+            io_conf[CONF_SPEED_MONITOR],
+            io_conf[CONF_TASK_TIMEOUT_MS],
+        ))
 
     # AEC reference mode (only relevant for no-codec setups)
     cg.add(var.set_aec_reference_mode(config[CONF_AEC_REFERENCE_MODE] == "ring_buffer"))
@@ -609,7 +703,7 @@ async def to_code(config):
 
     # Telemetry: per-stage cycle counting and diagnostics
     if config[CONF_TELEMETRY]:
-        cg.add_define("USE_DUPLEX_TELEMETRY")
+        cg.add_define("USE_ESP_AUDIO_STACK_TELEMETRY")
         cg.add(var.set_telemetry_log_interval_frames(config[CONF_TELEMETRY_LOG_INTERVAL_FRAMES]))
 
     for key, trigger_getter, args in (
@@ -632,18 +726,18 @@ async def to_code(config):
 
 
 # === Actions ===
-I2S_AUDIO_DUPLEX_ACTION_SCHEMA = automation.maybe_simple_id(
-    {cv.GenerateID(): cv.use_id(I2SAudioDuplex)}
+ESP_AUDIO_STACK_ACTION_SCHEMA = automation.maybe_simple_id(
+    {cv.GenerateID(): cv.use_id(ESPAudioStack)}
 )
 
 
 @automation.register_action(
-    "i2s_audio_duplex.start", StartAction, I2S_AUDIO_DUPLEX_ACTION_SCHEMA, synchronous=True
+    "esp_audio_stack.start", StartAction, ESP_AUDIO_STACK_ACTION_SCHEMA, synchronous=True
 )
 @automation.register_action(
-    "i2s_audio_duplex.stop", StopAction, I2S_AUDIO_DUPLEX_ACTION_SCHEMA, synchronous=True
+    "esp_audio_stack.stop", StopAction, ESP_AUDIO_STACK_ACTION_SCHEMA, synchronous=True
 )
-async def i2s_audio_duplex_action_to_code(config, action_id, template_arg, args):
+async def esp_audio_stack_action_to_code(config, action_id, template_arg, args):
     var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
     return var

@@ -4,7 +4,7 @@
 # Target board: Spotpear Ball v2 (ESP32-S3 with GC9A01A 240x240 round display,
 # ES8311 mono codec, CST816 touch, GPIO0 button).
 #
-# Audio pipeline (i2s_audio_duplex @ 48 kHz, stereo AEC reference):
+# Audio pipeline (esp_audio_stack @ 48 kHz, stereo AEC reference):
 #
 #   I2S RX 48kHz stereo -> L=mic R=ref -> esp_ae_rate_cvt x3 -> esp_aec (MR AEC) -> mic_afe -> VA / Intercom TX / MWW
 #
@@ -88,9 +88,9 @@ packages:
   s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   status_led: !include ../../../../packages/led/status_spotpear_ball_v2.yaml
-  duplex_aec_controls: !include ../../../../packages/i2s_audio_duplex/aec_controls.yaml
-  duplex_controls: !include ../../../../packages/i2s_audio_duplex/controls.yaml
-  speaker_power: !include ../../../../packages/i2s_audio_duplex/speaker_power_output.yaml
+  audio_stack_aec_controls: !include ../../../../packages/esp_audio_stack/aec_controls.yaml
+  audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
   lvgl_settings_nav: !include ../../../../packages/lvgl/lvgl_settings_navigation.yaml
   lvgl_settings_sync_volumes: !include ../../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
@@ -162,7 +162,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, i2s_audio_duplex, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
 # CONNECTIVITY
@@ -245,15 +245,15 @@ esp_aec:
   mode: fd_low_cost
 
 # =============================================================================
-# I2S AUDIO DUPLEX (single bus for ES8311)
+# ESP AUDIO STACK (single bus for ES8311)
 # Full-duplex I2S: mic + speaker on same bus, managed by one FreeRTOS task.
 # Audio task defaults come from the component; this preset keeps the
 # single-bus ES8311 path simple and relies on stereo loopback reference.
 # Bus runs at 48kHz (ES8311 native rate, better DAC quality).
 # Espressif rate conversion x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
 # =============================================================================
-i2s_audio_duplex:
-  id: i2s_duplex
+esp_audio_stack:
+  id: audio_stack
   i2s_lrclk_pin: GPIO45
   i2s_bclk_pin: GPIO9
   i2s_mclk_pin: GPIO16
@@ -262,7 +262,9 @@ i2s_audio_duplex:
   sample_rate: 48000             # I2S bus rate (ES8311 native)
   output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
   processor_id: aec_processor
-  fir_decimator: esp_ae_rate_cvt
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
   num_channels: 2               # Drive DACL speaker and DACR AEC reference
   codec:
     i2c_id: i2c_bus
@@ -291,9 +293,9 @@ i2s_audio_duplex:
 # No separate unprocessed microphone path is exposed.
 # =============================================================================
 microphone:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: mic_afe
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
 
 
 # =============================================================================
@@ -301,9 +303,9 @@ microphone:
 # hw_speaker runs at 48kHz (bus rate). ResamplerSpeaker upsamples any input.
 # =============================================================================
 speaker:
-  - platform: i2s_audio_duplex
+  - platform: esp_audio_stack
     id: hw_speaker
-    i2s_audio_duplex_id: i2s_duplex
+    esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
 # =============================================================================
@@ -316,7 +318,7 @@ media_player:
     internal: false
     task_stack_in_psram: true
     # ESPHome media_player volume and board `master_volume` are cascaded by
-    # i2s_audio_duplex instead of sharing the same speaker volume slot.
+    # esp_audio_stack instead of sharing the same speaker volume slot.
     volume_initial: 100%
     volume_min: 0%
     volume_max: 100%
@@ -1691,11 +1693,11 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - i2s_audio_duplex.stop: i2s_duplex
+                  - esp_audio_stack.stop: audio_stack
                   - esp_aec.set_mode:
                       id: aec_processor
                       mode: !lambda 'return x;'
-                  - i2s_audio_duplex.start: i2s_duplex
+                  - esp_audio_stack.start: audio_stack
                   - delay: 300ms
                   - if:
                       condition:

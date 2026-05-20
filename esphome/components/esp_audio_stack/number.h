@@ -6,15 +6,15 @@
 #include "esphome/components/speaker/speaker.h"
 #include "esphome/core/component.h"
 #include "esphome/core/preferences.h"
-#include "i2s_audio_duplex.h"
+#include "esp_audio_stack.h"
 #include <cmath>
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
 class MicGainNumber : public number::Number, public Component {
  public:
-  void set_parent(I2SAudioDuplex *parent) { this->parent_ = parent; }
+  void set_parent(ESPAudioStack *parent) { this->parent_ = parent; }
   void set_min_db(float min_db) { this->min_db_ = min_db; }
   void set_max_db(float max_db) { this->max_db_ = max_db; }
 
@@ -31,7 +31,7 @@ class MicGainNumber : public number::Number, public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("i2s_duplex.mic_gain", "Mic Gain Number (post-processor dB, range %.1f..%.1f)",
+    ESP_LOGCONFIG("audio_stack.mic_gain", "Mic Gain Number (post-processor dB, range %.1f..%.1f)",
                   this->min_db_, this->max_db_);
   }
 
@@ -59,7 +59,7 @@ class MicGainNumber : public number::Number, public Component {
     }
   }
 
-  I2SAudioDuplex *parent_{nullptr};
+  ESPAudioStack *parent_{nullptr};
   ESPPreferenceObject pref_;
   float min_db_{-20.0f};
   float max_db_{30.0f};
@@ -67,7 +67,7 @@ class MicGainNumber : public number::Number, public Component {
 
 class SpeakerVolumeNumber : public number::Number, public Component {
  public:
-  void set_parent(I2SAudioDuplex *parent) { this->parent_ = parent; }
+  void set_parent(ESPAudioStack *parent) { this->parent_ = parent; }
   void set_speaker(speaker::Speaker *speaker) { this->speaker_ = speaker; }
 
   void setup() override {
@@ -85,7 +85,7 @@ class SpeakerVolumeNumber : public number::Number, public Component {
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("i2s_duplex.speaker_volume", "Master Volume Number%s",
+    ESP_LOGCONFIG("audio_stack.speaker_volume", "Master Volume Number%s",
                   this->speaker_ != nullptr ? " (speaker-backed)" : "");
   }
 
@@ -115,12 +115,12 @@ class SpeakerVolumeNumber : public number::Number, public Component {
     }
   }
 
-  I2SAudioDuplex *parent_{nullptr};
+  ESPAudioStack *parent_{nullptr};
   speaker::Speaker *speaker_{nullptr};
   ESPPreferenceObject pref_;
 };
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

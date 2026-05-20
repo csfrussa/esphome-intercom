@@ -1,6 +1,6 @@
 #include "tcp_transport.h"
 
-#ifdef USE_ESP32
+#if defined(USE_ESP32) && defined(USE_INTERCOM_TCP_TRANSPORT)
 
 #include <cerrno>
 #include <cstring>
@@ -748,4 +748,4 @@ void TcpTransport::dispatch_message_(const MessageHeader &header, const uint8_t 
 }  // namespace intercom_api
 }  // namespace esphome
 
-#endif  // USE_ESP32
+#endif  // USE_ESP32 && USE_INTERCOM_TCP_TRANSPORT

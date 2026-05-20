@@ -1,17 +1,17 @@
-"""Number platform for I2S Audio Duplex - mic gain and Master Volume"""
+"""Number platform for ESP Audio Stack - mic gain and Master Volume"""
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import number, speaker
 from esphome.const import CONF_MAX_VALUE, CONF_MIN_VALUE, ENTITY_CATEGORY_CONFIG, UNIT_PERCENT
 
-from . import i2s_audio_duplex_ns, I2SAudioDuplex, CONF_I2S_AUDIO_DUPLEX_ID
+from . import esp_audio_stack_ns, ESPAudioStack, CONF_ESP_AUDIO_STACK_ID
 CONF_MIC_GAIN = "mic_gain"
 CONF_SPEAKER_VOLUME = "speaker_volume"
 CONF_SPEAKER_ID = "speaker_id"
 
 # Number classes
-MicGainNumber = i2s_audio_duplex_ns.class_("MicGainNumber", number.Number, cg.Component)
-SpeakerVolumeNumber = i2s_audio_duplex_ns.class_("SpeakerVolumeNumber", number.Number, cg.Component)
+MicGainNumber = esp_audio_stack_ns.class_("MicGainNumber", number.Number, cg.Component)
+SpeakerVolumeNumber = esp_audio_stack_ns.class_("SpeakerVolumeNumber", number.Number, cg.Component)
 
 MIC_GAIN_SCHEMA = number.number_schema(
     MicGainNumber,
@@ -32,7 +32,7 @@ def _validate_mic_gain_range(config):
 MIC_GAIN_SCHEMA = cv.All(MIC_GAIN_SCHEMA, _validate_mic_gain_range)
 
 CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(CONF_I2S_AUDIO_DUPLEX_ID): cv.use_id(I2SAudioDuplex),
+    cv.GenerateID(CONF_ESP_AUDIO_STACK_ID): cv.use_id(ESPAudioStack),
     cv.Optional(CONF_MIC_GAIN): MIC_GAIN_SCHEMA,
     cv.Optional(CONF_SPEAKER_VOLUME): number.number_schema(
         SpeakerVolumeNumber,
@@ -61,7 +61,7 @@ async def _setup_mic_gain(config, key, parent):
 
 
 async def to_code(config):
-    parent = await cg.get_variable(config[CONF_I2S_AUDIO_DUPLEX_ID])
+    parent = await cg.get_variable(config[CONF_ESP_AUDIO_STACK_ID])
 
     await _setup_mic_gain(config, CONF_MIC_GAIN, parent)
 

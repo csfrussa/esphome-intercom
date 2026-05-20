@@ -4,12 +4,12 @@
 
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/core/component.h"
-#include "i2s_audio_duplex.h"
+#include "esp_audio_stack.h"
 
 namespace esphome {
-namespace i2s_audio_duplex {
+namespace esp_audio_stack {
 
-class TdmSlotLevelSensor : public sensor::Sensor, public PollingComponent, public Parented<I2SAudioDuplex> {
+class TdmSlotLevelSensor : public sensor::Sensor, public PollingComponent, public Parented<ESPAudioStack> {
  public:
   void set_slot(uint8_t slot) { this->slot_ = slot; }
 
@@ -20,14 +20,14 @@ class TdmSlotLevelSensor : public sensor::Sensor, public PollingComponent, publi
   }
 
   void dump_config() override {
-    ESP_LOGCONFIG("i2s_duplex.tdm_slot_sensor", "I2S Audio Duplex TDM Slot %u Level Sensor", this->slot_);
+    ESP_LOGCONFIG("audio_stack.tdm_slot_sensor", "ESP Audio Stack TDM Slot %u Level Sensor", this->slot_);
   }
 
  protected:
   uint8_t slot_{0};
 };
 
-}  // namespace i2s_audio_duplex
+}  // namespace esp_audio_stack
 }  // namespace esphome
 
 #endif  // USE_ESP32

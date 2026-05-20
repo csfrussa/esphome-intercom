@@ -122,7 +122,7 @@ Caveats:
 | WS3 / Spotpear / Korvo-2 | MIC3 / slot 2 | `tdm_ref_slot: 2` (baseline) | none |
 | Waveshare P4 Touch | MIC2 / slot 1 | `tdm_ref_slot: 1` | reset MIC2 PGA to 0 dB |
 
-If the chosen ref slot stays silent while the speaker is active, the duplex driver emits a one-shot WARN ("TDM AEC reference silent for N frames..."). See [troubleshooting](troubleshooting.md#warn-tdm-aec-reference-silent).
+If the chosen ref slot stays silent while the speaker is active, the audio stack driver emits a one-shot WARN ("TDM AEC reference silent for N frames..."). See [troubleshooting](troubleshooting.md#warn-tdm-aec-reference-silent).
 
 ### AEC engine standard: VOIP for intercom-only, SR for full-experience
 
@@ -227,8 +227,8 @@ This is **per-device** and runtime-toggleable. There is no global integration "m
   BCLK/LRCLK/DIN/LED pins away from ESP32-S3R8/S3R8V PSRAM pins.
 - **AFE + 2 mic Speech Enhancement + two concurrent HTTPS streams** (music + TTS) is
   tight on internal RAM. On S3 boards enable
-  `i2s_audio_duplex.audio_stack_in_psram: true` (see the
-  `i2s_audio_duplex/README.md` "Advanced options" section). Keep hardware
+  `esp_audio_stack.audio_stack_in_psram: true` (see the
+  `esp_audio_stack/README.md` "Advanced options" section). Keep hardware
   crypto enabled unless a current benchmark on the target board proves it
   should be changed.
 - **1-mic SR low-cost** (Spotpear Ball v2) does not stress the budget and needs
@@ -279,7 +279,7 @@ The YAMLs ship sdkconfig defaults sized for the common case. Board-specific
 overrides that the defaults do not cover:
 
 - `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`, required if you set
-  `i2s_audio_duplex.audio_stack_in_psram: true`. Already on in our
+  `esp_audio_stack.audio_stack_in_psram: true`. Already on in our
   YAMLs.
 - `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` keeps large TLS allocations out of
   internal RAM. Some S3 full-experience YAMLs also enable
