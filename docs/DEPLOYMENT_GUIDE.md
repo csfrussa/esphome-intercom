@@ -9,11 +9,9 @@ yamls/
 │   └── single-bus/    one full-duplex I2S bus (codec or per-chip ADC+DAC)
 ├── full-experience/   intercom + wake word + voice assistant
 │   └── single-bus/
-│       ├── aec/       mic pipeline = esp_aec (echo cancellation only)
 │       └── afe/       mic pipeline = esp_afe (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD)
 └── experimental/      bring-up/reference YAMLs, not release baselines
-    ├── dual-bus/      mic and speaker on separate I2S buses
-    └── single-bus/aec/ historical/device-specific AEC references
+    └── dual-bus/      mic and speaker on separate I2S buses
 ```
 
 Device-specific debug YAMLs are not part of the public release tree. Keep local
@@ -35,11 +33,14 @@ Follow the first branch that matches your hardware and intent.
    - Two (mic bus + speaker bus, independent pins) → `experimental/dual-bus/`
      (compile-only, end-to-end calls not validated yet)
 
-3. **(full-experience / single-bus only) Do you have two microphones?**
-   - Yes, and you want Speech Enhancement / noise suppression / AGC →
-     `afe/` (runs `esp_afe`, esp-sr 2-mic Speech Enhancement)
-   - One mic, or you only need echo cancellation → `aec/` (runs
-     `esp_aec`, echo cancellation only)
+3. **(full-experience / single-bus only) How many microphones do you have?**
+   - Two microphones → `afe/` with ESP-SR Speech Enhancement, AEC, NS, AGC,
+     and VAD.
+   - One microphone → `afe/` with ESP-SR single-mic AFE, AEC, NS, AGC, and
+     VAD controls where supported.
+
+   `esp_aec` remains available for intercom-only presets and custom lighter
+   builds, but maintained full-experience YAMLs use `esp_afe`.
 
 4. **Network transport: TCP (default), UDP, or both?**
    - **TCP** (default): framed PBX-lite protocol on `tcp_port` (default 6054). Start here for routed networks, VLANs, HA Container/Docker installs, Wi-Fi segments with filtering, or any deployment where predictable delivery matters more than shaving protocol overhead.
@@ -110,8 +111,8 @@ Caveats:
 | Generic S3 single-bus MEMS+amp | ESP32-S3 | 1 | intercom + duplex (TCP) | `intercom-only/single-bus/generic-s3-intercom-tcp.yaml` |
 | Generic S3 single-bus MEMS+amp (UDP) | ESP32-S3 | 1 | intercom + duplex (UDP) | `intercom-only/single-bus/generic-s3-intercom-udp.yaml` |
 | Spotpear Ball v2 intercom-only (UDP, LVGL) | ESP32-S3 | 1 | intercom + duplex (UDP) | `intercom-only/single-bus/spotpear-ball-v2-intercom-udp.yaml` |
-| Generic S3 single-bus MEMS+amp + VA/MWW | ESP32-S3 | 1 | full + aec (SR low-cost) | `full-experience/single-bus/aec/generic-s3-full-aec-tcp.yaml` |
-| Generic S3 single-bus MEMS+amp + VA/MWW (UDP) | ESP32-S3 | 1 | full + aec + udp | `full-experience/single-bus/aec/generic-s3-full-aec-udp.yaml` |
+| Generic S3 single-bus MEMS+amp + VA/MWW | ESP32-S3 | 1 | full + afe (SR low-cost) | `full-experience/single-bus/afe/generic-s3-full-afe-tcp.yaml` |
+| Generic S3 single-bus MEMS+amp + VA/MWW (UDP) | ESP32-S3 | 1 | full + afe + udp | `full-experience/single-bus/afe/generic-s3-full-afe-udp.yaml` |
 
 ### TDM ref slot per board
 

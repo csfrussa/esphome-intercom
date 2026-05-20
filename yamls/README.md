@@ -23,12 +23,10 @@ yamls/
 
   full-experience/       VA + MWW + Intercom (complete voice assistant hub)
     single-bus/
-      aec/               esp_audio_stack + esp_aec
       afe/               esp_audio_stack + esp_afe
 
   experimental/          Untested topologies (compile-only, contributions welcome)
     dual-bus/            Devices with separate I2S buses for mic and speaker
-    single-bus/aec/      Historical/device-specific AEC references
 ```
 
 Device-specific debug YAMLs are intentionally local-only and live in the

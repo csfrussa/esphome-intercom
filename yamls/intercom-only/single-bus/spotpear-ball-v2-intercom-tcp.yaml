@@ -23,7 +23,7 @@
 
 substitutions:
   # Device identity is hardware-based, not firmware-variant-based: all Spotpear Ball v2
-  # firmwares (intercom / full-aec / full-afe) share `spotpear-ball-v2` so a flash swap
+  # firmwares (intercom / full-afe) share `spotpear-ball-v2` so a flash swap
   # reuses the same HA device entity and the same .esphome/build cache.
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2

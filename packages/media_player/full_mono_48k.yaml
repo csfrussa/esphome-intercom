@@ -33,8 +33,6 @@ media_player:
       sample_rate: 48000
       format: FLAC
     files:
-      - id: timer_finished_sound
-        file: ${assets_base}assets/sounds/timer_finished.flac
       - id: intercom_ringing_sound
         file: ${assets_base}assets/sounds/ringtone.flac
     on_announcement:

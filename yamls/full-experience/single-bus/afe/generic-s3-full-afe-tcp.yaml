@@ -5,7 +5,7 @@
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
 #
 # Audio pipeline:
-#   MEMS mic → esp_audio_stack (48kHz) → esp_ae_rate_cvt x3 → esp_aec (AEC SR linear) → mic_main → VA / Intercom TX / MWW
+#   MEMS mic → esp_audio_stack (48kHz) → esp_ae_rate_cvt x3 → esp_afe (AEC+NS+AGC) → mic_main → VA / Intercom TX / MWW
 #
 #   Media       → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → class-D amp
@@ -37,10 +37,6 @@ substitutions:
 
   assets_base: "../../../../"
 
-  # Wake word sensitivity
-  wake_word_probability_cutoff: "0.60"
-  wake_word_sliding_window_size: "6"
-
   # Microphone ID for package mute switch
   mic_id: mic_main
 
@@ -63,13 +59,15 @@ packages:
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
   speaker_media_player: !include ../../../../packages/media_player/full_mono_48k.yaml
   audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../../packages/esp_audio_stack/aec_controls.yaml
+  afe_entities: !include ../../../../packages/esp_afe/single_mic_entities.yaml
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
+    # Keep 4MB S3 modules OTA-capable with the full AFE feature set.
+    board_build.partitions: ../../../../../../../partitions/esp32s3_4mb_ota_afe.csv
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -138,16 +136,36 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor]
 
 # =============================================================================
-# AEC
+# ESP AFE
 # =============================================================================
-esp_aec:
-  id: aec_processor
-  sample_rate: 16000
-  filter_length: 4
-  mode: sr_low_cost
+esp_afe:
+  id: afe_processor
+  type: sr
+  mode: low_cost
+  mic_num: 1
+  aec_enabled: true
+  aec_filter_length: 4
+  aec_nlp_level: normal
+  se_enabled: false
+  ns_enabled: true
+  vad_enabled: false
+  agc_enabled: true
+  memory_alloc_mode: more_psram
+  task_core: 1
+  task_priority: 5
+  ringbuf_size: 8
+  feed_task_core: 0
+  feed_task_priority: 5
+  feed_task_stack_size: 3072
+  fetch_task_core: 1
+  fetch_task_priority: 5
+  fetch_task_stack_size: 3072
+  feed_buf_in_psram: false
+  feed_ring_in_psram: true
+  fetch_ring_in_psram: false
 
 # =============================================================================
 # ESP Audio Stack
@@ -162,7 +180,7 @@ esp_audio_stack:
   output_sample_rate: 16000
   slot_bit_width: 32
   correct_dc_offset: true
-  processor_id: aec_processor
+  processor_id: afe_processor
   buffers_in_psram: true
 
 # =============================================================================
@@ -190,9 +208,6 @@ micro_wake_word:
   microphone: mic_main
   models:
     - model: alexa
-    - model: "${assets_base}assets/wakewords/hey_trowyayoh.json"
-      probability_cutoff: ${wake_word_probability_cutoff}
-      sliding_window_size: ${wake_word_sliding_window_size}
 
 # =============================================================================
 # Voice Assistant: Device part
@@ -230,11 +245,9 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # Full-experience standard: stay inside the esp_aec3 engine. MWW
-    # requires SR modes (the VOIP residual echo suppressor distorts the
-    # spectral features, dropping wake-word detection from 10/10 to 2/10).
-    # Both SR options share the same engine, so a runtime switch never
-    # triggers a dios_ssp tail-buffer alloc.
+    # Full-experience default: use the Espressif AFE pipeline. Generic single-mic
+    # targets stay on SR modes by default to preserve MWW spectral features while
+    # still using AFE-owned AEC/NS/AGC plumbing.
     options:
       - "sr_low_cost"
       - "sr_high_perf"
@@ -268,8 +281,8 @@ select:
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
                   - esp_audio_stack.stop: audio_stack
-                  - esp_aec.set_mode:
-                      id: aec_processor
+                  - esp_afe.set_mode:
+                      id: afe_processor
                       mode: !lambda 'return x;'
                   - esp_audio_stack.start: audio_stack
                   - delay: 300ms
@@ -280,7 +293,7 @@ select:
                         - micro_wake_word.start:
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
-          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
+          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
 
 binary_sensor:
   # BOOT button (GPIO0), multi-click

@@ -48,10 +48,6 @@ substitutions:
 
   assets_base: "../../../../"
 
-  # Wake word sensitivity (per-device tuning)
-  wake_word_probability_cutoff: "0.60"
-  wake_word_sliding_window_size: "6"
-
   # Microphone ID for package mute switch
   mic_id: mic_main
 
@@ -295,9 +291,6 @@ micro_wake_word:
   microphone: mic_main
   models:
     - model: alexa
-    - model: "${assets_base}assets/wakewords/hey_trowyayoh.json"
-      probability_cutoff: ${wake_word_probability_cutoff}
-      sliding_window_size: ${wake_word_sliding_window_size}
 
 # =============================================================================
 # Voice Assistant: Hardware config (callbacks from package)

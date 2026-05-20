@@ -962,8 +962,8 @@ sequenceDiagram
 | **Waveshare P4-Touch portrait (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
 | **Waveshare P4-Touch landscape (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-tcp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + Intercom |
 | **Waveshare P4-Touch landscape (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/afe/waveshare-p4-touch-full-afe-udp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, UDP intercom transport |
-| **Generic S3 (full AEC)** | [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/aec/generic-s3-full-aec-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` (TX-side decimated ref, see [What's New](#whats-new)) | VA + MWW + Intercom |
-| **Generic S3 (full AEC UDP)** | [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/aec/generic-s3-full-aec-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` (TX-side decimated ref) | Same full experience, UDP intercom transport |
+| **Generic S3 (full AFE)** | [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom |
+| **Generic S3 (full AFE UDP)** | [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) | Same full experience, UDP intercom transport |
 | **Generic S3 (intercom)** | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` (TX-side decimated ref) | Intercom only |
 | **Generic S3 (dual bus)** _(experimental)_ | [`generic-s3-dual-intercom.yaml`](yamls/experimental/dual-bus/intercom-only/generic-s3-dual-intercom.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | Ring-buffer reference (intercom_api) | Intercom only |
 
@@ -1180,7 +1180,16 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
 
 AEC uses Espressif's closed-source ESP-SR library. All modes have similar CPU cost per frame (~7ms out of 16ms budget). The difference is primarily in memory allocation and adaptive filter quality.
 
-**Recommended: `sr_low_cost`** for most VA + MWW setups (esp_audio_stack devices). Linear-only AEC preserves spectral features for neural wake word detection (10/10 vs 2/10 with VOIP modes). Also uses ~60% less CPU. Requires `buffers_in_psram: true` on ESP32-S3. The Waveshare P4 AFE presets are the exception: they use ESP-SR FD mode with a hardware TDM reference, matching the board's full-duplex codec topology. For dual-bus devices without esp_audio_stack, use `voip_high_perf` (AEC runs inside intercom_api).
+Maintained full-experience YAMLs use `esp_afe` by default. `esp_aec` remains
+the lighter standalone path for intercom-only presets and custom builds that
+only need echo cancellation.
+
+For custom VA + MWW builds that deliberately use standalone AEC,
+`sr_low_cost` is the recommended `esp_aec` mode. Linear-only AEC preserves
+spectral features for neural wake word detection (10/10 vs 2/10 with VOIP
+modes). It also uses less CPU than VOIP modes. Requires `buffers_in_psram: true`
+on ESP32-S3. For dual-bus intercom-only devices without esp_audio_stack, use
+`voip_high_perf` (AEC runs inside intercom_api).
 
 For devices that benefit from noise suppression and auto gain control (noisy environments, variable mic distance), use `esp_afe` instead of `esp_aec`. The AFE wraps the same AEC engine plus WebRTC NS and AGC, with runtime switches in Home Assistant.
 
@@ -1213,21 +1222,6 @@ Use `voip_low_cost` only if you don't need wake word detection and want more agg
 AEC processing is automatically gated: it only runs when the speaker had real audio within the last 250ms. When the speaker is silent (idle, no TTS, no intercom audio), AEC is bypassed and mic audio passes through unchanged.
 
 This prevents the adaptive filter from drifting during silence, which would otherwise suppress the mic signal and kill wake word detection. The gating is transparent, no configuration needed.
-
-### Custom Wake Words
-
-Two custom Micro Wake Word models trained by the author are included in the `wakewords/` directory:
-
-- **Hey Bender** (`hey_bender.json`): inspired by the Futurama character
-- **Hey Trowyayoh** (`hey_trowyayoh.json`): experimental custom wake word model included as a second sample option.
-
-These are standard `.json` + `.tflite` files compatible with ESPHome's `micro_wake_word`. To use them:
-
-```yaml
-micro_wake_word:
-  models:
-    - model: "wakewords/hey_trowyayoh.json"
-```
 
 ### LVGL Display
 
@@ -1441,18 +1435,12 @@ See [examples/dashboard.yaml](examples/dashboard.yaml) for a complete Lovelace d
 
 Working configs tested on real hardware, organized by use case. Not sure which one to pick? See the [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) for a decision tree.
 
-### Full Experience with `esp_aec` (VA + MWW + Intercom, lighter)
-
-| File | Device | Audio |
-|------|--------|-------|
-| [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/aec/generic-s3-full-aec-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-bus mono, TX-side decimated reference |
-| [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/aec/generic-s3-full-aec-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full experience, UDP intercom transport |
-Device-specific AEC full builds are kept under `yamls/experimental/` as development references. The stable Spotpear and Waveshare S3 full-experience presets use `esp_afe`; P4 full-experience presets also use `esp_afe` but remain experimental.
-
 ### Full Experience with `esp_afe` (VA + MWW + Intercom + NS/AGC/VAD, heavier)
 
 | File | Device | Audio |
 |------|--------|-------|
+| [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic AFE, single-bus mono, TX-side decimated reference |
+| [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/generic-s3-full-afe-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AFE, UDP intercom transport |
 | [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
 | [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/afe/spotpear-ball-v2-full-afe-udp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Same as TCP full AFE, UDP intercom transport |
 | [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/afe/waveshare-s3-full-afe-tcp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |

@@ -18,17 +18,17 @@ Standalone Espressif AEC (Acoustic Echo Cancellation) wrapper for ESPHome.
 
 ## Overview
 
-Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the `AudioProcessor` interface. Use it when the device only needs echo cancellation on the mic path (typical full-duplex intercom or VA setup) and does not need the wider AFE pipeline that `esp_afe` provides (noise suppression, Speech Enhancement, VAD, AGC).
+Wraps `espressif/esp-sr`'s AEC primitive and exposes it through the `AudioProcessor` interface. Use it when the device only needs echo cancellation on the mic path and does not need the wider AFE pipeline that `esp_afe` provides (noise suppression, Speech Enhancement, VAD, AGC).
 
-`esp_aec` is the default audio processor in every ready-to-flash YAML under `yamls/full-experience/single-bus/aec/` and `yamls/intercom-only/`.
+Ready-to-flash full-experience YAMLs use `esp_afe` by default. `esp_aec` remains supported for custom lighter builds and is used by the maintained `intercom-only` presets.
 
 ## When to use `esp_aec` vs `esp_afe`
 
 | Scenario | Pick |
 |----------|------|
 | Intercom only, single mic, no VA | `esp_aec` (lighter on RAM and CPU) |
-| Intercom + VA + Micro Wake Word, single mic with audible speaker echo | `esp_aec` in `fd_low_cost` mode (Espressif full-duplex AEC) |
-| Intercom + VA + Micro Wake Word, single mic with low speaker leakage | `esp_aec` in `sr_low_cost` mode (preserves spectral features for MWW) |
+| Custom lighter full build where you accept standalone AEC instead of NS/AGC/VAD | `esp_aec` |
+| Maintained full-experience presets | `esp_afe` |
 | Intercom + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
 | Standalone `intercom_api` without `esp_audio_stack` (dual-bus MEMS + amp) | `esp_aec` (the AFE feed/fetch model needs the steady frames that `esp_audio_stack` produces) |

@@ -1,12 +1,12 @@
 # =============================================================================
-# SPOTPEAR BALL V2 - VOICE ASSISTANT + INTERCOM + WAKE WORD (esp_aec pipeline)
+# SPOTPEAR BALL V2 - VOICE ASSISTANT + INTERCOM + WAKE WORD (esp_afe pipeline)
 # =============================================================================
 # Target board: Spotpear Ball v2 (ESP32-S3 with GC9A01A 240x240 round display,
 # ES8311 mono codec, CST816 touch, GPIO0 button).
 #
 # Audio pipeline (esp_audio_stack @ 48 kHz, stereo AEC reference):
 #
-#   I2S RX 48kHz stereo -> L=mic R=ref -> esp_ae_rate_cvt x3 -> esp_aec (MR AEC) -> mic_afe -> VA / Intercom TX / MWW
+#   I2S RX 48kHz stereo -> L=mic R=ref -> esp_ae_rate_cvt x3 -> esp_afe (AEC+NS+AGC) -> mic_afe -> VA / Intercom TX / MWW
 #
 #   Music/radio → media_speaker (resampler) ───────────┐
 #   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
@@ -23,7 +23,7 @@
 # =============================================================================
 
 substitutions:
-  # Hardware-shared identity: all Spotpear Ball v2 firmware variants (intercom / full-aec
+  # Hardware-shared identity: all Spotpear Ball v2 firmware variants (intercom / full-afe
   # / full-afe) share `spotpear-ball-v2` so a flash swap reuses the same HA device entity
   # and the same .esphome/build cache.
   name: spotpear-ball-v2
@@ -36,10 +36,6 @@ substitutions:
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
-
-  # Wake word sensitivity (per-device tuning)
-  wake_word_probability_cutoff: "0.60"
-  wake_word_sliding_window_size: "6"
 
   # IC layout proportions (relative to display_height)
   ic_btn_size: "25%"
@@ -88,7 +84,7 @@ packages:
   s3_base: !include ../../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../../packages/diagnostics/native.yaml
   status_led: !include ../../../../packages/led/status_spotpear_ball_v2.yaml
-  audio_stack_aec_controls: !include ../../../../packages/esp_audio_stack/aec_controls.yaml
+  afe_entities: !include ../../../../packages/esp_afe/single_mic_entities.yaml
   audio_stack_controls: !include ../../../../packages/esp_audio_stack/controls.yaml
   speaker_power: !include ../../../../packages/esp_audio_stack/speaker_power_output.yaml
   speaker_mixer: !include ../../../../packages/audio/full_mono_mixer_48k.yaml
@@ -162,7 +158,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor]
 
 # =============================================================================
 # CONNECTIVITY
@@ -234,15 +230,35 @@ i2c:
     scan: false
 
 # =============================================================================
-# ESP AEC
-# Official ESP-SR AEC path for one microphone plus one playback reference.
+# ESP AFE
+# Official Espressif AFE path for one microphone plus one playback reference.
 # Spotpear supplies that reference as the ES8311 stereo right channel.
 # =============================================================================
-esp_aec:
-  id: aec_processor
-  sample_rate: 16000
-  filter_length: 4
-  mode: fd_low_cost
+esp_afe:
+  id: afe_processor
+  type: fd
+  mode: low_cost
+  mic_num: 1
+  aec_enabled: true
+  aec_filter_length: 4
+  aec_nlp_level: normal
+  se_enabled: false
+  ns_enabled: true
+  vad_enabled: false
+  agc_enabled: true
+  memory_alloc_mode: more_psram
+  task_core: 1
+  task_priority: 5
+  ringbuf_size: 8
+  feed_task_core: 0
+  feed_task_priority: 5
+  feed_task_stack_size: 3072
+  fetch_task_core: 1
+  fetch_task_priority: 5
+  fetch_task_stack_size: 3072
+  feed_buf_in_psram: false
+  feed_ring_in_psram: true
+  fetch_ring_in_psram: false
 
 # =============================================================================
 # ESP AUDIO STACK (single bus for ES8311)
@@ -250,7 +266,7 @@ esp_aec:
 # Audio task defaults come from the component; this preset keeps the
 # single-bus ES8311 path simple and relies on stereo loopback reference.
 # Bus runs at 48kHz (ES8311 native rate, better DAC quality).
-# Espressif rate conversion x3 produces 16kHz for mic/AEC/MWW/VA/intercom.
+# Espressif rate conversion x3 produces 16kHz for mic/AFE/MWW/VA/intercom.
 # =============================================================================
 esp_audio_stack:
   id: audio_stack
@@ -261,7 +277,7 @@ esp_audio_stack:
   i2s_dout_pin: GPIO8
   sample_rate: 48000             # I2S bus rate (ES8311 native)
   output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
-  processor_id: aec_processor
+  processor_id: afe_processor
   audio_effects:
     rate_cvt_complexity: 3
     rate_cvt_perf_type: speed
@@ -333,8 +349,6 @@ media_player:
       format: FLAC
       sample_rate: 48000
     files:
-      - id: timer_finished_sound
-        file: ${assets_base}assets/sounds/timer_finished.flac
       - id: intercom_ringing_sound
         file: ${assets_base}assets/sounds/ringtone.flac
     on_announcement:
@@ -422,9 +436,6 @@ micro_wake_word:
   stop_after_detection: false
   models:
     - model: alexa
-    - model: "${assets_base}assets/wakewords/hey_trowyayoh.json"
-      probability_cutoff: ${wake_word_probability_cutoff}
-      sliding_window_size: ${wake_word_sliding_window_size}
 
 voice_assistant:
   id: va
@@ -444,9 +455,6 @@ voice_assistant:
     - script.execute: update_timer_state
   on_timer_finished:
     - switch.turn_on: timer_ringing
-    - wait_until:
-        condition:
-          media_player.is_announcing:
     - globals.set:
         id: voice_assistant_phase
         value: '${voice_assist_timer_finished_phase_id}'
@@ -1329,19 +1337,6 @@ script:
             - script.execute: update_replying_text
             - script.execute: reply_pagination_timer
 
-  # Timer alarm: play sound in a loop until timer_ringing is turned off
-  - id: timer_alarm_loop
-    mode: single
-    then:
-      - while:
-          condition:
-            switch.is_on: timer_ringing
-          then:
-            - media_player.speaker.play_on_device_media_file:
-                media_file: timer_finished_sound
-                announcement: true
-            - delay: 6s
-
   # Backlight timer
   - id: backlight_timer
     mode: restart
@@ -1640,13 +1635,9 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
     on_turn_off:
-      - script.stop: timer_alarm_loop
-      - media_player.stop:
-          announcement: true
+      - script.execute: update_status
     on_turn_on:
-      - media_player.stop:
-          announcement: true
-      - script.execute: timer_alarm_loop
+      - script.execute: update_status
       - delay: 15min
       - switch.turn_off: timer_ringing
 
@@ -1693,8 +1684,8 @@ select:
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
                   - esp_audio_stack.stop: audio_stack
-                  - esp_aec.set_mode:
-                      id: aec_processor
+                  - esp_afe.set_mode:
+                      id: afe_processor
                       mode: !lambda 'return x;'
                   - esp_audio_stack.start: audio_stack
                   - delay: 300ms
@@ -1704,7 +1695,7 @@ select:
                       then:
                         - script.execute: start_mww_when_ready
       - lambda: |-
-          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
+          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
 
 # =============================================================================
 # TEXT SENSORS
