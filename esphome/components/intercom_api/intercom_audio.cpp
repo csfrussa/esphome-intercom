@@ -158,6 +158,18 @@ void IntercomApi::send_chunk_(const uint8_t *data, size_t length) {
   this->transport_->send_audio_frame(data, length);
 }
 
+void IntercomApi::process_tx_chunk_(const uint8_t *audio_chunk) {
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
+  if (this->aec_enabled_.load(std::memory_order_relaxed) &&
+      this->aec_ != nullptr && this->aec_mic_ != nullptr) {
+    this->process_aec_chunk_(audio_chunk);
+    return;
+  }
+#endif
+
+  this->send_chunk_(audio_chunk, AUDIO_CHUNK_SIZE);
+}
+
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
 void IntercomApi::process_aec_chunk_(const uint8_t *audio_chunk) {
   // Drain a 512-sample chunk into aec_mic_ in frame_size pieces, process
@@ -218,19 +230,29 @@ void IntercomApi::tx_task_() {
       continue;
     }
 
+    size_t acquired_len = 0;
+    void *acquired = this->mic_buffer_->receive_acquire(acquired_len, AUDIO_CHUNK_SIZE, 0);
+    if (acquired != nullptr && acquired_len == AUDIO_CHUNK_SIZE) {
+      this->process_tx_chunk_(static_cast<const uint8_t *>(acquired));
+      this->mic_buffer_->receive_release(acquired);
+      delay(1);
+      continue;
+    }
+    if (acquired != nullptr) {
+      std::memcpy(audio_chunk, acquired, acquired_len);
+      this->mic_buffer_->receive_release(acquired);
+      const size_t remaining = AUDIO_CHUNK_SIZE - acquired_len;
+      if (this->mic_buffer_->read(audio_chunk + acquired_len, remaining, 0) != remaining)
+        continue;
+      this->process_tx_chunk_(audio_chunk);
+      delay(1);
+      continue;
+    }
+
     if (this->mic_buffer_->read(audio_chunk, AUDIO_CHUNK_SIZE, 0) != AUDIO_CHUNK_SIZE)
       continue;
 
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-    if (this->aec_enabled_.load(std::memory_order_relaxed) &&
-        this->aec_ != nullptr && this->aec_mic_ != nullptr) {
-      this->process_aec_chunk_(audio_chunk);
-      delay(1);  // feed the IDLE watchdog on Core 0
-      continue;
-    }
-#endif
-
-    this->send_chunk_(audio_chunk, AUDIO_CHUNK_SIZE);
+    this->process_tx_chunk_(audio_chunk);
     delay(1);
   }
 }

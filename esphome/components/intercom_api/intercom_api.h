@@ -368,6 +368,7 @@ class IntercomApi : public Component {
 
   bool is_tx_stream_ready_() const;
   void send_chunk_(const uint8_t *data, size_t length);
+  void process_tx_chunk_(const uint8_t *audio_chunk);
   void debug_log_pcm_level_(const char *label, const uint8_t *pcm, size_t bytes,
                             uint32_t &last_log_ms, uint32_t &frame_count);
 
