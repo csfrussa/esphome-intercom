@@ -243,7 +243,7 @@ i2c:
 # =============================================================================
 # ESP AFE (Audio Front End)
 # Stable P4 front-end from the smoke probe: esp-sr FD, dual-mic MMNR feed,
-# hardware TDM reference, and the custom Espressif rate converter. `input_format` is the
+# hardware TDM reference, and Espressif rate conversion. `input_format` is the
 # logical AFE frame after local staging, not the raw ES7210 slot order:
 # raw slots are mic/ref/mic/unused, then esp_afe stages them as mic/mic/unused/ref.
 # Waveshare GMF examples use RMNM in their codec stack; switching this YAML to

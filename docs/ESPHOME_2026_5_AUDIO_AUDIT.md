@@ -15,6 +15,8 @@ Scope: ESPHome 2026.5.0 audio/media/speaker/microphone componentry, checked agai
 
 `mic_attenuation` was renamed to `input_gain`, because the same control now supports both attenuation and positive gain. Attenuation uses ESPHome/esp-audio-libs Q31 gain in the hot path; positive gain remains local saturating scalar code because the official Q31 API represents attenuation/unity, not amplification above 1.0.
 
+User-facing `mic_gain` now keeps the same Q31 attenuation path for values at or below 0 dB, while positive gain uses Espressif `esp_ae_alc` from `esp_audio_effects` instead of local scalar boosting. `input_gain` remains board-level calibration before AEC/AFE and is intentionally not exposed as the normal user volume control.
+
 `frame_buffers_in_psram` was renamed to `buffers_in_psram` for `intercom_api`, matching `esp_audio_stack` terminology.
 
 `audio_stack_in_psram` was renamed to `audio_task_stack_in_psram`, because the option only moves the audio task stack, not the whole audio stack or GMF/ESP-SR scratch memory.
