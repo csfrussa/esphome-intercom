@@ -112,7 +112,7 @@ void IntercomApi::load_settings_() {
   if (this->settings_pref_.load(&stored) && stored.version == SETTINGS_VERSION) {
     this->suppress_save_ = true;
 
-    // Volume only when intercom_api owns the speaker_volume number;
+    // Volume only when intercom_api owns the master_volume number;
     // template-number setups own their own DAC + AEC sync.
     const float volume = clamp_volume_(stored.volume_pct / 100.0f);
     this->volume_.store(volume, std::memory_order_relaxed);

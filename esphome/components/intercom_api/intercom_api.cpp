@@ -30,7 +30,7 @@ bool IntercomApi::ensure_mic_processing_buffer_() {
   if (this->mic_converted_.load(std::memory_order_acquire) != nullptr)
     return true;
 
-  RAMAllocator<int16_t> alloc = this->frame_buffers_in_psram_
+  RAMAllocator<int16_t> alloc = this->buffers_in_psram_
       ? RAMAllocator<int16_t>()
       : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
   int16_t *buf = alloc.allocate(kMicConvertedSamples);
@@ -134,8 +134,8 @@ bool IntercomApi::allocate_setup_buffers_() {
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
     // Default placement (internal RAM) saves speaker/reference cycles; flip
-    // frame_buffers_in_psram_ to free internal RAM at that cost.
-    RAMAllocator<int16_t> psram_i16 = this->frame_buffers_in_psram_
+    // buffers_in_psram_ to free internal RAM at that cost.
+    RAMAllocator<int16_t> psram_i16 = this->buffers_in_psram_
         ? RAMAllocator<int16_t>()
         : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
     this->spk_ref_scaled_ = psram_i16.allocate(kSpkRefScaledSamples);
@@ -147,7 +147,7 @@ bool IntercomApi::allocate_setup_buffers_() {
 #endif
 
   // Per-iteration drain buffers; same placement policy as above.
-  RAMAllocator<uint8_t> psram_u8 = this->frame_buffers_in_psram_
+  RAMAllocator<uint8_t> psram_u8 = this->buffers_in_psram_
       ? RAMAllocator<uint8_t>()
       : RAMAllocator<uint8_t>(RAMAllocator<uint8_t>::ALLOC_INTERNAL);
   this->tx_audio_chunk_ = psram_u8.allocate(IntercomApi::kTxAudioChunkBytes);

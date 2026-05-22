@@ -13,7 +13,7 @@ from . import intercom_api_ns, IntercomApi, CONF_INTERCOM_API_ID
 DEPENDENCIES = ["intercom_api"]
 
 # Number types
-CONF_SPEAKER_VOLUME = "speaker_volume"
+CONF_MASTER_VOLUME = "master_volume"
 CONF_MIC_GAIN = "mic_gain"
 
 # C++ classes (simple - parent syncs state after boot)
@@ -46,8 +46,8 @@ def _number_schema(number_class, icon, min_val, max_val, step):
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_INTERCOM_API_ID): cv.use_id(IntercomApi),
-        # Speaker volume (0-100%), default 100%
-        cv.Optional(CONF_SPEAKER_VOLUME): _number_schema(
+        # Master volume (0-100%), default 100%
+        cv.Optional(CONF_MASTER_VOLUME): _number_schema(
             IntercomApiVolume, "mdi:volume-high", 0, 100, 5
         ),
         # Mic gain in dB (-20 to +20), default 0dB
@@ -61,8 +61,8 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     parent = await cg.get_variable(config[CONF_INTERCOM_API_ID])
 
-    if CONF_SPEAKER_VOLUME in config:
-        conf = config[CONF_SPEAKER_VOLUME]
+    if CONF_MASTER_VOLUME in config:
+        conf = config[CONF_MASTER_VOLUME]
         var = await number.new_number(
             conf,
             min_value=conf[CONF_MIN_VALUE],

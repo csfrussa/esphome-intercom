@@ -232,7 +232,7 @@ This is **per-device** and runtime-toggleable. There is no global integration "m
   Move the example BCLK/LRCLK/DIN/LED pins away from ESP32-S3R8/S3R8V PSRAM pins.
 - **AFE + 2 mic Speech Enhancement + two concurrent HTTPS streams** (music + TTS) is
   tight on internal RAM. On S3 boards enable
-  `esp_audio_stack.audio_stack_in_psram: true` (see the
+  `esp_audio_stack.audio_task_stack_in_psram: true` (see the
   `esp_audio_stack/README.md` "Advanced options" section). Keep hardware
   crypto enabled unless a current benchmark on the target board proves it
   should be changed.
@@ -284,7 +284,7 @@ The YAMLs ship sdkconfig defaults sized for the common case. Board-specific
 overrides that the defaults do not cover:
 
 - `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`, required if you set
-  `esp_audio_stack.audio_stack_in_psram: true`. Already on in our
+  `esp_audio_stack.audio_task_stack_in_psram: true`. Already on in our
   YAMLs.
 - `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` keeps large TLS allocations out of
   internal RAM. Some S3 full-experience YAMLs also enable

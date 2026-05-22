@@ -302,7 +302,7 @@ esp_audio_stack:
   use_stereo_aec_reference: true
   reference_channel: right
   buffers_in_psram: true       # All audio buffers in PSRAM; required for 512-sample AEC frames
-  audio_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
+  audio_task_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
 
 # =============================================================================
 # MICROPHONE
@@ -468,7 +468,7 @@ voice_assistant:
 # =============================================================================
 intercom_api:
   tasks_stack_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
-  frame_buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: intercom
   microphone: mic_afe
   speaker: intercom_speaker

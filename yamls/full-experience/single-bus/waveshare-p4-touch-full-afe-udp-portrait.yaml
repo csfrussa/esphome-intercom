@@ -277,7 +277,7 @@ esp_audio_stack:
   # Move the audio task's own stack to PSRAM (matches waveshare-s3-full-afe).
   # The task is not CPU-bound (per-frame AFE work lives in Espressif GMF manager tasks), so
   # PSRAM stack latency is acceptable.
-  audio_stack_in_psram: true
+  audio_task_stack_in_psram: true
   i2s_lrclk_pin: GPIO10
   i2s_bclk_pin: GPIO12
   i2s_mclk_pin: GPIO13
@@ -487,7 +487,7 @@ intercom_api:
   id: intercom
   protocol: udp
   tasks_stack_in_psram: true
-  frame_buffers_in_psram: true
+  buffers_in_psram: true
   microphone: mic_afe          # Post-AEC: no echo in transmitted audio
   speaker: intercom_speaker
   ringing_timeout: 30s

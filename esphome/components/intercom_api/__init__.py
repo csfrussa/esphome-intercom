@@ -33,7 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 CONF_INTERCOM_API_ID = "intercom_api_id"
 CONF_DC_OFFSET_REMOVAL = "dc_offset_removal"
 CONF_TASKS_STACK_IN_PSRAM = "tasks_stack_in_psram"
-CONF_FRAME_BUFFERS_IN_PSRAM = "frame_buffers_in_psram"
+CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
 CONF_AUTO_ENTITIES = "auto_entities"
 
 CONF_PROCESSOR_ID = "processor_id"
@@ -297,7 +297,7 @@ CONFIG_SCHEMA = cv.Schema(
         # Place AEC working frame buffers (mic/ref/out, ~3 KB total) in PSRAM.
         # Default false = internal RAM (~20 us/frame faster on Core 0). Set true
         # to save 3 KB internal RAM at the cost of Core 0 PSRAM traffic.
-        cv.Optional(CONF_FRAME_BUFFERS_IN_PSRAM, default=False): cv.boolean,
+        cv.Optional(CONF_BUFFERS_IN_PSRAM, default=False): cv.boolean,
         # Ringing timeout: auto-decline call if not answered within this time
         cv.Optional(CONF_RINGING_TIMEOUT): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_CALLING_TIMEOUT): cv.positive_time_period_milliseconds,
@@ -440,7 +440,7 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
 
     cg.add(var.set_dc_offset_removal(config[CONF_DC_OFFSET_REMOVAL]))
     cg.add(var.set_tasks_stack_in_psram(config[CONF_TASKS_STACK_IN_PSRAM]))
-    cg.add(var.set_frame_buffers_in_psram(config[CONF_FRAME_BUFFERS_IN_PSRAM]))
+    cg.add(var.set_buffers_in_psram(config[CONF_BUFFERS_IN_PSRAM]))
     cg.add(var.set_use_ha_as_first_contact(config[CONF_USE_HA_AS_FIRST_CONTACT]))
     cg.add(var.set_audio_debug(config[CONF_AUDIO_DEBUG]))
     if config[CONF_PROTOCOL] == PROTOCOL_UDP:

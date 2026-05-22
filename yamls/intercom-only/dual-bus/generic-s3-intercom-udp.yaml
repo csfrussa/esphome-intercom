@@ -194,7 +194,7 @@ speaker:
 # to remote_ip/remote_port below.
 intercom_api:
   id: intercom
-  frame_buffers_in_psram: true
+  buffers_in_psram: true
   protocol: udp
   remote_ip: !secret peer_intercom_ip
   microphone: mic_main

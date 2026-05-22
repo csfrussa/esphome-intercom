@@ -216,7 +216,7 @@ esp_audio_stack:
   # - GMF codec IO stays synchronous: io_codec_dev read/write run inside the
   #   audio_stack task, so they inherit the PSRAM stack without adding reader/
   #   writer tasks or data-bus latency between mic/ref and AFE.
-  audio_stack_in_psram: true
+  audio_task_stack_in_psram: true
   buffers_in_psram: true
   task_core: 0
   task_priority: 19
@@ -313,7 +313,7 @@ voice_assistant:
 # =============================================================================
 intercom_api:
   tasks_stack_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
-  frame_buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s

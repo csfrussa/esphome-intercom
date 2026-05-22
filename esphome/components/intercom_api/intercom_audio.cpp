@@ -104,7 +104,7 @@ void IntercomApi::set_aec_enabled(bool enabled) {
       const size_t ref_delay_bytes = (SAMPLE_RATE * this->aec_ref_delay_ms_ / 1000) * sizeof(int16_t);
       this->spk_ref_buffer_ = audio_processor::create_prefer_psram(
           ref_delay_bytes + RX_BUFFER_SIZE, "intercom.spk_ref");
-      RAMAllocator<int16_t> aec_alloc = this->frame_buffers_in_psram_
+      RAMAllocator<int16_t> aec_alloc = this->buffers_in_psram_
           ? RAMAllocator<int16_t>()
           : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
       this->aec_mic_ = aec_alloc.allocate(frame_samples);

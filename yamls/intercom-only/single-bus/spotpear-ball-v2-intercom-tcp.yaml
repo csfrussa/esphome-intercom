@@ -337,7 +337,7 @@ media_player:
 # =============================================================================
 intercom_api:
   tasks_stack_in_psram: true
-  frame_buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: intercom
   microphone: mic_main
   speaker: intercom_speaker

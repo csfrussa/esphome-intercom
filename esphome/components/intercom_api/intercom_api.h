@@ -110,7 +110,7 @@ class IntercomApi : public Component {
 
   void set_dc_offset_removal(bool enabled) { this->dc_offset_removal_ = enabled; }
   void set_tasks_stack_in_psram(bool enabled) { this->tasks_stack_in_psram_ = enabled; }
-  void set_frame_buffers_in_psram(bool enabled) { this->frame_buffers_in_psram_ = enabled; }
+  void set_buffers_in_psram(bool enabled) { this->buffers_in_psram_ = enabled; }
   void set_device_name(const std::string &name) { this->device_name_ = name; }
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
   // Matches the slug HA uses for the esphome.{slug}_start_call action.
@@ -682,7 +682,7 @@ class IntercomApi : public Component {
   void save_settings_();
 
   bool dc_offset_removal_{false};       // for mics with DC bias (SPH0645)
-  bool frame_buffers_in_psram_{false};
+  bool buffers_in_psram_{false};
   int32_t dc_offset_{0};
 
   // Pre-allocated to avoid task-stack VLAs.

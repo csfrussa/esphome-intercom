@@ -193,7 +193,7 @@ intercom_api:
 | `dc_offset_removal` | bool | false | Remove DC offset from mic signal |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled) |
 | `tasks_stack_in_psram` | bool | false | Place the server / tx / speaker task stacks in PSRAM (saves ~28 KB of internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it). Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM, otherwise the tasks fail to start and the component is disabled. Board YAMLs should enable it only after validating their PSRAM stack policy. |
-| `frame_buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In legacy standalone mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
+| `buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In legacy standalone mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
 
 ## Product mode
 
@@ -274,7 +274,7 @@ switch:
 number:
   - platform: intercom_api
     intercom_api_id: intercom
-    speaker_volume:
+    master_volume:
       id: master_volume
       name: "Master Volume"
       # Range: 0-100%
@@ -284,7 +284,7 @@ number:
       # Range: -20 to +20 dB
 ```
 
-> **Note**: When `esp_audio_stack` is also present, `esp_audio_stack` owns the `mic_gain` and Master Volume number entities with full dB-scale control and persistence. In the standard packages the user-facing volume id is `master_volume`; the `speaker_volume` key is only the component's technical config option. In that case, `intercom_api`'s number entities serve as **fallback only** for non-duplex setups. A `FINAL_VALIDATE_SCHEMA` at compile time prevents conflicts by detecting when both components try to own the same functionality (dual AEC, dual DC offset).
+> **Note**: When `esp_audio_stack` is also present, `esp_audio_stack` owns the `mic_gain` and `master_volume` number entities with full dB-scale control and persistence. In that case, `intercom_api`'s number entities serve as **fallback only** for standalone non-duplex setups. A `FINAL_VALIDATE_SCHEMA` at compile time prevents conflicts by detecting when both components try to own the same functionality (dual AEC, dual DC offset).
 
 ## Actions
 

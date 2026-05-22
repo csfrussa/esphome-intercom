@@ -179,7 +179,7 @@ speaker:
 # =============================================================================
 intercom_api:
   id: intercom
-  frame_buffers_in_psram: true
+  buffers_in_psram: true
   microphone: mic_main
   speaker: intercom_speaker
   dc_offset_removal: false

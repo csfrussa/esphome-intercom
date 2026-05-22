@@ -20,7 +20,7 @@ views:
             name: My Device
           - type: entities
             entities:
-              - entity: number.<your_device>_speaker_volume
+              - entity: number.<your_device>_master_volume
                 name: Volume
               - entity: number.<your_device>_mic_gain
                 name: Mic gain
@@ -41,7 +41,7 @@ views:
             name: My Intercom
           - type: entities
             entities:
-              - entity: number.<your_device>_speaker_volume
+              - entity: number.<your_device>_master_volume
                 name: Volume
               - entity: number.<your_device>_mic_gain
                 name: Mic gain

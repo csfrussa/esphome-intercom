@@ -657,7 +657,7 @@ switch:
 number:
   - platform: intercom_api
     intercom_api_id: intercom
-    speaker_volume:
+    master_volume:
       name: "Master Volume"
     mic_gain:
       name: "Mic Gain"

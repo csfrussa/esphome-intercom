@@ -402,7 +402,7 @@ il resto va spostato su componenti Espressif o deve fallire esplicitamente.
 | TDM slot split ES7210 | Manual strided slot copy | `esp_ae_deintlv_process`, poi selezione slot mic/ref | `aud_deintlv`, forse `esp_gmf_ch_sort` | Policy slot e health monitor | `tdm_mic_slot(s)`, `tdm_ref_slot` |
 | Dual mic MMR | Manual interleave mic1/mic2 | `esp_ae_intlv_process` per input AFE | `aud_intlv` o sorter GMF | Solo mapping dei due slot | `tdm_mic_slots` |
 | Rate conversion 48k -> 16k | `esp_ae_rate_cvt`, ma con staging manuale | `esp_ae_rate_cvt` con staging Espressif e fail-closed | `aud_rate_cvt` | Niente DSP nostro | `audio_effects.rate_cvt_complexity`, `audio_effects.rate_cvt_perf_type`, `output_sample_rate` |
-| Mic attenuation | Scala manuale prima del processor | Uguale | ALC non equivalente a calibrazione fissa | Si, e' board tuning | `mic_attenuation` |
+| Input gain | Scala prima del processor | Q31 esp-audio-libs per attenuazione, saturating scalar solo per boost | ALC non equivalente a calibrazione fissa | Si, e' board tuning | `input_gain` |
 | DC offset | HPF manuale | Uguale | Nessun HPF chiaro nei moduli attuali | Si, finche Espressif non offre drop-in | `correct_dc_offset` |
 | Callback mic | Fanout a MWW/VA/intercom | Uguale | GMF output bridge -> callback | Si, e' API ESPHome | Nessun cambio |
 
