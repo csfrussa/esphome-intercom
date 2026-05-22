@@ -41,7 +41,7 @@ class UdpTransport : public IntercomTransport {
 
   UdpTransport(uint16_t listen_port, std::string remote_ip, uint16_t remote_port,
                uint16_t control_port, uint16_t remote_control_port,
-               bool tasks_stack_in_psram);
+               bool task_stacks_in_psram);
   ~UdpTransport() override;
 
   // IntercomTransport
@@ -75,7 +75,7 @@ class UdpTransport : public IntercomTransport {
 
   const uint16_t listen_port_;
   const uint16_t control_port_;
-  const bool tasks_stack_in_psram_;
+  const bool task_stacks_in_psram_;
 
   // Atomics so ctrl_task can update on inbound MSG_START while tx_task
   // reads in send_audio_frame (no std::string race). Host order; the

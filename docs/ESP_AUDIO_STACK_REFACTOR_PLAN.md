@@ -397,7 +397,7 @@ il resto va spostato su componenti Espressif o deve fallire esplicitamente.
 | Blocco RX | Prima / codice nostro | Ora nel branch | Target GMF | Cosa resta nostro | Knob |
 |---|---|---|---|---|---|
 | Buffer RX DMA/frame | Prealloc nostri, shape calcolata da processor frame spec | Ancora nostri | GMF payload/ring buffer, ma dimensioni derivate dallo stesso frame spec | Bridge verso callback ESPHome e processor contract | `buffers_in_psram`, futuri GMF buffer size |
-| 32-bit -> 16-bit | Loop `sample >> 16` in RX e decimator | `esp_ae_bit_cvt` | `aud_bit_cvt` | Solo scelta bus bit-depth | `bits_per_sample`, `slot_bit_width` |
+| 32-bit -> 16-bit | Loop `sample >> 16` in RX e converter | `esp_ae_bit_cvt` | `aud_bit_cvt` | Solo scelta bus bit-depth | `bits_per_sample`, `slot_bit_width` |
 | Stereo split ES8311 | Manual channel pick | `esp_ae_deintlv_process`, poi selezione mic/ref | `aud_deintlv` + channel select/sort | Policy canale ref/mic | `use_stereo_aec_reference`, `reference_channel` |
 | TDM slot split ES7210 | Manual strided slot copy | `esp_ae_deintlv_process`, poi selezione slot mic/ref | `aud_deintlv`, forse `esp_gmf_ch_sort` | Policy slot e health monitor | `tdm_mic_slot(s)`, `tdm_ref_slot` |
 | Dual mic MMR | Manual interleave mic1/mic2 | `esp_ae_intlv_process` per input AFE | `aud_intlv` o sorter GMF | Solo mapping dei due slot | `tdm_mic_slots` |

@@ -186,13 +186,14 @@ intercom_api:
 | `use_ha_as_first_contact` | bool | `false` | After the first post-boot phonebook batch containing the learned `Name\|ha\|...` row, select the HA peer as the initial destination. Invalid with `mode: raw_udp`. |
 | `announce` | bool | `false` | Opt-in ESP-side mDNS announce. Standard HA-managed YAMLs leave this disabled; ESP-only deployments enable it through `packages/intercom/mdns_discovery.yaml`. |
 | `discovery.mdns` | bool/map | `false` | Opt-in ESP-side peer discovery. When `true`, a small background task queries `_intercom-tcp._tcp` / `_intercom-udp._udp`, reads TXT `endpoint=<Name|protocol|ip|ports>`, and merges matching peers into the phonebook. |
-| `microphone` | ID | Required | Reference to microphone component |
+| `microphone` | ID | Required, unless `microphone_source` is used | Direct ESPHome microphone component. Preferred for maintained `esp_audio_stack` profiles; must provide 16 kHz, 16-bit, mono audio. |
+| `microphone_source` | map | Optional | Compatibility path for raw/custom microphones that still need ESPHome `MicrophoneSource` channel selection, bit-depth conversion, or integer gain before `intercom_api`. Mutually exclusive with `microphone`. |
 | `speaker` | ID | Required | Reference to speaker component |
 | `processor_id` | ID | - | Legacy standalone audio only. Use `esp_aec` here only when `intercom_api` runs without `esp_audio_stack` in front of it (standalone dual-bus MEMS + amp setup). Invalid when `esp_audio_stack` is configured; put `processor_id` on `esp_audio_stack` instead. `esp_afe` needs the fixed-cadence GMF/audio-stack path and is not supported on standalone `intercom_api`. |
 | `aec_reference_delay_ms` | int | 80 | Legacy standalone AEC ring-buffer pre-fill delay (10-200ms). Ignored when `esp_audio_stack` owns AEC/AFE. |
 | `dc_offset_removal` | bool | false | Remove DC offset from mic signal |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled) |
-| `tasks_stack_in_psram` | bool | false | Place the server / tx / speaker task stacks in PSRAM (saves ~28 KB of internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it). Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM, otherwise the tasks fail to start and the component is disabled. Board YAMLs should enable it only after validating their PSRAM stack policy. |
+| `task_stacks_in_psram` | bool | false | Place the server / tx / speaker task stacks in PSRAM (saves ~28 KB of internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it). Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM, otherwise the tasks fail to start and the component is disabled. Board YAMLs should enable it only after validating their PSRAM stack policy. |
 | `buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In legacy standalone mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
 
 ## Product mode

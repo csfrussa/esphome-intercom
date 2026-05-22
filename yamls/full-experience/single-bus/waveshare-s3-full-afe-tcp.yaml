@@ -312,7 +312,7 @@ voice_assistant:
 # Intercom API: Hardware config (callbacks from package)
 # =============================================================================
 intercom_api:
-  tasks_stack_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
+  task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   microphone: mic_main
   speaker: intercom_speaker

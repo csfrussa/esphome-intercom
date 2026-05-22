@@ -170,6 +170,11 @@ bool IntercomApi::allocate_setup_buffers_() {
 
 bool IntercomApi::setup_audio_processor_() {
 #ifdef USE_MICROPHONE
+  if (this->microphone_ != nullptr) {
+    this->microphone_->add_data_callback([this](const std::vector<uint8_t> &data) {
+      this->on_microphone_data_(data.data(), data.size());
+    });
+  }
   if (this->microphone_source_ != nullptr) {
     this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
       this->on_microphone_data_(data.data(), data.size());
@@ -205,12 +210,12 @@ bool IntercomApi::setup_transport_() {
     this->transport_ = std::make_unique<UdpTransport>(
         this->listen_port_, this->remote_ip_, this->remote_port_,
         this->control_port_, this->remote_control_port_,
-        this->tasks_stack_in_psram_);
+        this->task_stacks_in_psram_);
   } else
 #endif
 #ifdef USE_INTERCOM_TCP_TRANSPORT
   if (this->protocol_ == TransportType::TCP) {
-    this->transport_ = std::make_unique<TcpTransport>(this->tcp_port_, this->tasks_stack_in_psram_);
+    this->transport_ = std::make_unique<TcpTransport>(this->tcp_port_, this->task_stacks_in_psram_);
   } else
 #endif
   {
@@ -250,7 +255,7 @@ bool IntercomApi::start_runtime_tasks_() {
   // intercom_api owns the standalone AEC path.
   if (!audio_processor::start_pinned_task(IntercomApi::tx_task, "intercom_tx",
                                            IntercomApi::kTxTaskStackWords, this, 5, 0,
-                                           this->tasks_stack_in_psram_, TAG,
+                                           this->task_stacks_in_psram_, TAG,
                                            &this->tx_task_handle_, &this->tx_task_tcb_,
                                            &this->tx_task_stack_)) {
     return false;
@@ -260,7 +265,7 @@ bool IntercomApi::start_runtime_tasks_() {
   if (use_intercom_aec) {
     if (!audio_processor::start_pinned_task(IntercomApi::speaker_task, "intercom_spk",
                                              IntercomApi::kSpeakerTaskStackWords, this, 4, 0,
-                                             this->tasks_stack_in_psram_, TAG,
+                                             this->task_stacks_in_psram_, TAG,
                                              &this->speaker_task_handle_,
                                              &this->speaker_task_tcb_,
                                              &this->speaker_task_stack_)) {
@@ -278,7 +283,7 @@ void IntercomApi::start_mdns_discovery_() {
   if (this->mdns_discovery_enabled_) {
     if (!audio_processor::start_pinned_task(IntercomApi::mdns_discovery_task, "intercom_mdns",
                                              IntercomApi::kMdnsDiscoveryTaskStackWords, this, 3, 0,
-                                             this->tasks_stack_in_psram_, TAG,
+                                             this->task_stacks_in_psram_, TAG,
                                              &this->mdns_discovery_task_handle_,
                                              &this->mdns_discovery_task_tcb_,
                                              &this->mdns_discovery_task_stack_)) {
@@ -511,7 +516,7 @@ void IntercomApi::dump_config() {
   ESP_LOGCONFIG(TAG, "  mDNS discovery: NO");
 #endif
 #ifdef USE_MICROPHONE
-  ESP_LOGCONFIG(TAG, "  Microphone: %s", this->microphone_source_ ? "configured" : "none");
+  ESP_LOGCONFIG(TAG, "  Microphone: %s", this->microphone_ ? "direct" : (this->microphone_source_ ? "source" : "none"));
 #endif
 #ifdef USE_SPEAKER
   ESP_LOGCONFIG(TAG, "  Speaker: %s", this->speaker_ ? "configured" : "none");

@@ -69,10 +69,10 @@ static void release_self_deleted_task_(TaskHandle_t *handle, StackType_t **stack
 UdpTransport::UdpTransport(uint16_t listen_port, std::string remote_ip,
                             uint16_t remote_port, uint16_t control_port,
                             uint16_t remote_control_port,
-                            bool tasks_stack_in_psram)
+                            bool task_stacks_in_psram)
     : listen_port_(listen_port),
       control_port_(control_port),
-      tasks_stack_in_psram_(tasks_stack_in_psram) {
+      task_stacks_in_psram_(task_stacks_in_psram) {
   this->remote_port_.store(remote_port, std::memory_order_release);
   this->remote_control_port_.store(
       remote_control_port != 0 ? remote_control_port : control_port,
@@ -141,7 +141,7 @@ bool UdpTransport::start() {
 
   if (!audio_processor::start_pinned_task(UdpTransport::ctrl_task_trampoline_, "intercom_udp_c",
                                            kCtrlTaskStackWords, this, 4, 1,
-                                           this->tasks_stack_in_psram_, TAG,
+                                           this->task_stacks_in_psram_, TAG,
                                            &this->ctrl_task_handle_, &this->ctrl_task_tcb_,
                                            &this->ctrl_task_stack_)) {
     this->running_.store(false, std::memory_order_release);
@@ -199,7 +199,7 @@ bool UdpTransport::start_audio_path() {
 
   if (!audio_processor::start_pinned_task(UdpTransport::recv_task_trampoline_, "intercom_udp_a",
                                            kRecvTaskStackWords, this, 5, 1,
-                                           this->tasks_stack_in_psram_, TAG,
+                                           this->task_stacks_in_psram_, TAG,
                                            &this->recv_task_handle_, &this->recv_task_tcb_,
                                            &this->recv_task_stack_)) {
     close(this->audio_socket_); this->audio_socket_ = -1;

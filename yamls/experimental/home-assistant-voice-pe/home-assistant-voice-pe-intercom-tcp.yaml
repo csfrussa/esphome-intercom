@@ -55,11 +55,11 @@ speaker:
 
 intercom_api:
   id: intercom
-  microphone:
+  microphone_source:
     microphone: i2s_mics
     channels: 0
   speaker: intercom_resampling_speaker
-  tasks_stack_in_psram: true
+  task_stacks_in_psram: true
   network_socket_headroom: 4
   ringing_timeout: 30s
   calling_timeout: 30s

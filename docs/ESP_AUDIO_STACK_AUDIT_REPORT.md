@@ -43,7 +43,7 @@ Architectural rule: do not import audio libraries from arbitrary examples or sep
 - ESPHome microphone/speaker facade;
 - software previous-frame or ring-buffer AEC reference;
 - stereo ES8311 reference and TDM ES7210 reference;
-- custom/esp-dsp FIR decimation;
+- custom/esp-dsp rate conversion;
 - lifecycle hooks, consumer registry, speaker buffer, mic gain, volume controls and telemetry/debug paths.
 
 Published `dev` had already moved several pieces toward Espressif:
@@ -105,7 +105,7 @@ Major changes:
 | Sample-rate conversion 48 kHz -> 16 kHz | `output_sample_rate`, `audio_effects.rate_cvt_*` | GMF `aud_rate_cvt` equivalent via `esp_ae_rate_cvt` | Covered |
 | Bit-width conversion 16/24/32 bus formats | TX/RX conversion path | GMF `aud_bit_cvt` equivalent via `esp_ae_bit_cvt` | Covered |
 | Interleave/deinterleave stereo/TDM layout | Mic/ref slot selection and TX slot layout | GMF data-weaver equivalent via `esp_ae_data_weaver` APIs | Covered |
-| Custom FIR / esp-dsp decimator selection | Removed public backend selector | `esp_ae_rate_cvt` only | Replaced |
+| Custom FIR / esp-dsp converter selection | Removed public backend selector | `esp_ae_rate_cvt` only | Replaced |
 | ESPHome speaker platform | `speaker: platform: esp_audio_stack` | ESPHome API glue; codec writes via GMF IO | Covered |
 | ESPHome microphone platform | `microphone: platform: esp_audio_stack` | ESPHome API glue; codec reads via GMF IO | Covered |
 | ESPHome mixer/ducking | Still uses ESPHome mixer | Intentional: Espressif mixer not imported to avoid fighting ESPHome media pipeline | Covered by existing ESPHome layer |

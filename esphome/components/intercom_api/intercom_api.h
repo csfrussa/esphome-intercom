@@ -102,6 +102,7 @@ class IntercomApi : public Component {
 
   // Configuration
 #ifdef USE_MICROPHONE
+  void set_microphone(microphone::Microphone *mic) { this->microphone_ = mic; }
   void set_microphone_source(microphone::MicrophoneSource *source) { this->microphone_source_ = source; }
 #endif
 #ifdef USE_SPEAKER
@@ -109,7 +110,7 @@ class IntercomApi : public Component {
 #endif
 
   void set_dc_offset_removal(bool enabled) { this->dc_offset_removal_ = enabled; }
-  void set_tasks_stack_in_psram(bool enabled) { this->tasks_stack_in_psram_ = enabled; }
+  void set_task_stacks_in_psram(bool enabled) { this->task_stacks_in_psram_ = enabled; }
   void set_buffers_in_psram(bool enabled) { this->buffers_in_psram_ = enabled; }
   void set_device_name(const std::string &name) { this->device_name_ = name; }
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
@@ -441,6 +442,7 @@ class IntercomApi : public Component {
 
   // Components
 #ifdef USE_MICROPHONE
+  microphone::Microphone *microphone_{nullptr};
   microphone::MicrophoneSource *microphone_source_{nullptr};
 #endif
 #ifdef USE_SPEAKER
@@ -570,7 +572,7 @@ class IntercomApi : public Component {
   uint8_t *spk_audio_chunk_{nullptr};
 #endif
 
-  // tasks_stack_in_psram_: true puts task stacks in PSRAM (saves internal
+  // task_stacks_in_psram_: true puts task stacks in PSRAM (saves internal
   // heap on S3/P4 with heavy AFE/MWW/LVGL load); false keeps them in
   // internal RAM (the only option on plain ESP32). Honoured by the
   // transport's own task too.
@@ -586,7 +588,7 @@ class IntercomApi : public Component {
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   StackType_t *speaker_task_stack_{nullptr};
 #endif
-  bool tasks_stack_in_psram_{false};
+  bool task_stacks_in_psram_{false};
 
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   // Speaker single-owner: only speaker_task_ touches speaker hardware.

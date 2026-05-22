@@ -63,8 +63,8 @@ bool wait_socket_writable(int socket, uint32_t wait_ms) {
 }
 }  // namespace
 
-TcpTransport::TcpTransport(uint16_t port, bool tasks_stack_in_psram)
-    : tcp_port_(port), tasks_stack_in_psram_(tasks_stack_in_psram) {}
+TcpTransport::TcpTransport(uint16_t port, bool task_stacks_in_psram)
+    : tcp_port_(port), task_stacks_in_psram_(task_stacks_in_psram) {}
 
 TcpTransport::~TcpTransport() {
   this->stop();
@@ -128,7 +128,7 @@ bool TcpTransport::start() {
 
   if (!audio_processor::start_pinned_task(TcpTransport::server_task_trampoline_, "intercom_srv",
                                            kServerTaskStackWords, this, 5, 1,
-                                           this->tasks_stack_in_psram_, TAG,
+                                           this->task_stacks_in_psram_, TAG,
                                            &this->server_task_handle_, &this->server_task_tcb_,
                                            &this->server_task_stack_)) {
     this->running_.store(false, std::memory_order_release);

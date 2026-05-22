@@ -337,7 +337,7 @@ media_player:
 # start() falls back to remote_ip/remote_port below.
 # =============================================================================
 intercom_api:
-  tasks_stack_in_psram: true
+  task_stacks_in_psram: true
   buffers_in_psram: true
   id: intercom
   protocol: udp

@@ -486,7 +486,7 @@ voice_assistant:
 intercom_api:
   id: intercom
   protocol: udp
-  tasks_stack_in_psram: true
+  task_stacks_in_psram: true
   buffers_in_psram: true
   microphone: mic_afe          # Post-AEC: no echo in transmitted audio
   speaker: intercom_speaker

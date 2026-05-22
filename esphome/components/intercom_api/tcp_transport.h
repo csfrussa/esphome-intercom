@@ -24,13 +24,13 @@ namespace intercom_api {
 /// safe from any task (serialised on send_mutex_). Handlers fire from
 /// server_task_ and must never block.
 ///
-/// tasks_stack_in_psram (ctor): true on S3/P4 to free internal heap;
+/// task_stacks_in_psram (ctor): true on S3/P4 to free internal heap;
 /// false on plain ESP32.
 class TcpTransport : public IntercomTransport {
  public:
   static constexpr uint32_t kServerTaskStackWords = 8192 / sizeof(StackType_t);
 
-  TcpTransport(uint16_t port, bool tasks_stack_in_psram);
+  TcpTransport(uint16_t port, bool task_stacks_in_psram);
   ~TcpTransport() override;
 
   // IntercomTransport
@@ -76,7 +76,7 @@ class TcpTransport : public IntercomTransport {
   void dispatch_message_(const MessageHeader &header, const uint8_t *data);
 
   const uint16_t tcp_port_;
-  const bool tasks_stack_in_psram_;
+  const bool task_stacks_in_psram_;
 
   int server_socket_{-1};
   ClientInfo client_;

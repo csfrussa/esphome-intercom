@@ -467,7 +467,7 @@ voice_assistant:
 # INTERCOM API (UDP-based, ports 6054/6055)
 # =============================================================================
 intercom_api:
-  tasks_stack_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
+  task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   protocol: udp
   id: intercom

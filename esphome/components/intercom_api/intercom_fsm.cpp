@@ -433,6 +433,9 @@ void IntercomApi::set_active_(bool on) {
     this->first_audio_received_.store(false, std::memory_order_release);  // re-arm ANSWER echo for new call
 
 #ifdef USE_MICROPHONE
+    if (this->microphone_) {
+      this->microphone_->start();
+    }
     if (this->microphone_source_) {
       this->microphone_source_->start();
     }
@@ -470,6 +473,9 @@ void IntercomApi::set_active_(bool on) {
 #endif
 
 #ifdef USE_MICROPHONE
+    if (this->microphone_) {
+      this->microphone_->stop();
+    }
     if (this->microphone_source_) {
       this->microphone_source_->stop();
     }

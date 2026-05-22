@@ -13,7 +13,7 @@ from esphome.const import (
     CONF_MODE,
     CONF_DISABLED_BY_DEFAULT,
 )
-from esphome.components import microphone, speaker, text_sensor
+from esphome.components import audio, microphone, speaker, text_sensor
 
 CODEOWNERS = ["@n-IA-hane"]
 DEPENDENCIES = ["esp32"]
@@ -32,9 +32,10 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_INTERCOM_API_ID = "intercom_api_id"
 CONF_DC_OFFSET_REMOVAL = "dc_offset_removal"
-CONF_TASKS_STACK_IN_PSRAM = "tasks_stack_in_psram"
+CONF_TASK_STACKS_IN_PSRAM = "task_stacks_in_psram"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
 CONF_AUTO_ENTITIES = "auto_entities"
+CONF_MICROPHONE_SOURCE = "microphone_source"
 
 CONF_PROCESSOR_ID = "processor_id"
 CONF_AEC_REF_DELAY_MS = "aec_reference_delay_ms"
@@ -274,7 +275,13 @@ CONFIG_SCHEMA = cv.Schema(
                 ),
             }
         ),
-        cv.Optional(CONF_MICROPHONE): microphone.microphone_source_schema(),
+        # Preferred path: use the native ESPHome microphone directly. Maintained
+        # esp_audio_stack profiles already expose 16 kHz / 16-bit / mono audio,
+        # so MicrophoneSource would only add an avoidable copy/conversion pass.
+        cv.Optional(CONF_MICROPHONE): cv.use_id(microphone.Microphone),
+        # Compatibility/advanced path for raw microphones that need channel,
+        # bit-depth, or integer gain conversion before intercom_api sees them.
+        cv.Optional(CONF_MICROPHONE_SOURCE): microphone.microphone_source_schema(),
         cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
         # DC offset removal for mics with significant DC bias (e.g., SPH0645)
         cv.Optional(CONF_DC_OFFSET_REMOVAL, default=False): cv.boolean,
@@ -283,7 +290,7 @@ CONFIG_SCHEMA = cv.Schema(
         # Default false: standard dynamic tasks with internal-heap stacks,
         # required on plain ESP32 boards without PSRAM. Set true on full-
         # experience S3/P4/Spotpear Ball v2 builds.
-        cv.Optional(CONF_TASKS_STACK_IN_PSRAM, default=False): cv.boolean,
+        cv.Optional(CONF_TASK_STACKS_IN_PSRAM, default=False): cv.boolean,
         # Auto-create the boilerplate switches/numbers (auto_answer, volume,
         # mic_gain, aec when processor_id is set). Default false for
         # backward compatibility with yamls that already declare them via
@@ -400,6 +407,26 @@ def _final_validate(config):
                 "(audio and control travel on separate UDP sockets)."
             )
 
+    if CONF_MICROPHONE in config and CONF_MICROPHONE_SOURCE in config:
+        raise cv.Invalid(
+            "Use only one of intercom_api.microphone or intercom_api.microphone_source."
+        )
+
+    if CONF_MICROPHONE in config:
+        audio.final_validate_audio_schema(
+            "intercom_api",
+            audio_device=CONF_MICROPHONE,
+            bits_per_sample=16,
+            channels=1,
+            sample_rate=16000,
+            audio_device_issue=True,
+        )(config)
+
+    if CONF_MICROPHONE_SOURCE in config:
+        microphone.final_validate_microphone_source_schema(
+            "intercom_api", sample_rate=16000
+        )(config[CONF_MICROPHONE_SOURCE])
+
     # Check if esp_audio_stack is also configured
     audio_stack_configs = full_config.get("esp_audio_stack", [])
 
@@ -431,7 +458,11 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
     cg.add(var.set_raw_udp_mode(is_raw_udp))
 
     if CONF_MICROPHONE in config:
-        mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE])
+        mic = await cg.get_variable(config[CONF_MICROPHONE])
+        cg.add(var.set_microphone(mic))
+
+    if CONF_MICROPHONE_SOURCE in config:
+        mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE_SOURCE])
         cg.add(var.set_microphone_source(mic_source))
 
     if CONF_SPEAKER in config:
@@ -439,7 +470,7 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
         cg.add(var.set_speaker(spk))
 
     cg.add(var.set_dc_offset_removal(config[CONF_DC_OFFSET_REMOVAL]))
-    cg.add(var.set_tasks_stack_in_psram(config[CONF_TASKS_STACK_IN_PSRAM]))
+    cg.add(var.set_task_stacks_in_psram(config[CONF_TASK_STACKS_IN_PSRAM]))
     cg.add(var.set_buffers_in_psram(config[CONF_BUFFERS_IN_PSRAM]))
     cg.add(var.set_use_ha_as_first_contact(config[CONF_USE_HA_AS_FIRST_CONTACT]))
     cg.add(var.set_audio_debug(config[CONF_AUDIO_DEBUG]))
