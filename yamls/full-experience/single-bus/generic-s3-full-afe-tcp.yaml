@@ -59,6 +59,7 @@ packages:
   led_state_full: !include ../../../packages/led/state_full_single.yaml
   speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
   speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
   audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
   afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
 
@@ -70,6 +71,7 @@ esphome:
 
 esp32:
   board: esp32-s3-devkitc-1
+  flash_size: 16MB
   variant: esp32s3
   framework:
     type: esp-idf
@@ -237,7 +239,7 @@ voice_assistant:
 # =============================================================================
 intercom_api:
   tasks_stack_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
-  frame_buffers_in_psram: true # Processor frame buffers (mic/ref/out, ~3 KB) in PSRAM
+  frame_buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s

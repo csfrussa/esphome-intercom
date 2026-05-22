@@ -427,7 +427,9 @@ void IntercomApi::set_active_(bool on) {
   this->notify_audio_tasks_();
 
   if (on) {
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
     this->speaker_stop_requested_.store(false, std::memory_order_release);
+#endif
     this->first_audio_received_.store(false, std::memory_order_release);  // re-arm ANSWER echo for new call
 
 #ifdef USE_MICROPHONE
@@ -445,6 +447,7 @@ void IntercomApi::set_active_(bool on) {
 
 #ifdef USE_SPEAKER
     if (this->speaker_) {
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
       if (this->has_intercom_processor_() && this->speaker_stopped_sem_) {
         // AEC mode: speaker_task owns the hardware. Request stop and wait
         // for the ack so server_task doesn't tear it down concurrently.
@@ -460,6 +463,9 @@ void IntercomApi::set_active_(bool on) {
         // No AEC: no speaker_task; stop directly from server_task.
         this->speaker_->stop();
       }
+#else
+      this->speaker_->stop();
+#endif
     }
 #endif
 
@@ -487,12 +493,14 @@ void IntercomApi::set_streaming_(bool on) {
     if (this->mic_buffer_) {
       this->mic_buffer_->reset();
     }
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
     if (this->speaker_buffer_) {
       this->speaker_buffer_->reset();
     }
+#endif
     this->dc_offset_ = 0;
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
     this->reset_aec_buffers_();
 #endif
 
@@ -510,9 +518,11 @@ void IntercomApi::notify_audio_tasks_() {
   if (this->tx_task_handle_ != nullptr) {
     xTaskNotifyGive(this->tx_task_handle_);
   }
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->speaker_task_handle_ != nullptr) {
     xTaskNotifyGive(this->speaker_task_handle_);
   }
+#endif
 }
 
 void IntercomApi::set_call_state_(CallState new_state) {
@@ -600,6 +610,7 @@ void IntercomApi::on_audio_received_(const uint8_t *pcm, size_t bytes) {
                                this->audio_debug_last_rx_log_ms_, this->audio_debug_rx_frames_);
   }
 #ifdef USE_SPEAKER
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->speaker_buffer_) {
     // AEC mode: stage frames; speaker_task reads and feeds the AEC ref.
     size_t written = this->speaker_buffer_->write(pcm, bytes);
@@ -613,7 +624,9 @@ void IntercomApi::on_audio_received_(const uint8_t *pcm, size_t bytes) {
                  written, bytes, this->spk_overflow_count_);
       }
     }
-  } else if (this->speaker_) {
+  } else
+#endif
+  if (this->speaker_) {
     if (this->volume_.load(std::memory_order_relaxed) > 0.001f) {
       this->speaker_->play(pcm, bytes, 0);
     }

@@ -102,6 +102,7 @@ packages:
   afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
   audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
   speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
   lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.

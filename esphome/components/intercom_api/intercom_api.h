@@ -21,7 +21,7 @@
 #include "esphome/components/number/number.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 #include "esphome/components/audio_processor/audio_processor.h"
 #endif
 
@@ -46,7 +46,9 @@
 namespace esphome {
 namespace intercom_api {
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 using audio_processor::AudioProcessor;
+#endif
 
 // Network transport selected via YAML `protocol:` (default tcp).
 enum class TransportType : uint8_t {
@@ -70,9 +72,11 @@ enum class ConnectionState : uint8_t {
 /// on port 6054) or `UdpTransport` (raw PCM datagrams + framed control,
 /// opt-in via `protocol: udp`).
 ///
-/// When `processor_id` is set, the component owns its mic/speaker path
-/// and runs AEC inline. When `esp_audio_stack` owns the processor,
-/// intercom_api stays mic/speaker-passthrough.
+/// When `processor_id` is set without `esp_audio_stack`, the component keeps
+/// its legacy standalone mic/speaker path and runs AEC inline. Maintained
+/// profiles route processing through `esp_audio_stack`; in that mode
+/// intercom_api is transport/FSM glue and does not compile the standalone AEC
+/// reference/speaker task path.
 ///
 /// Up to two FreeRTOS tasks of its own (tx + speaker) when AEC is
 /// active; the recv task is owned by the transport. See README.md.
@@ -82,7 +86,9 @@ class IntercomApi : public Component {
   // sites stay free of magic numbers. The transport task declares its own
   // stack size inside the transport class.
   static constexpr uint32_t kTxTaskStackWords = 12288 / sizeof(StackType_t);
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   static constexpr uint32_t kSpeakerTaskStackWords = 8192 / sizeof(StackType_t);
+#endif
 
   void setup() override;
   void loop() override;
@@ -161,7 +167,7 @@ class IntercomApi : public Component {
   /// `control_port` is optional for short contact rows. TCP no-op.
   void set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t control_port = 0);
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   void set_aec(AudioProcessor *aec) { this->aec_ = aec; }
   void set_aec_reference_delay_ms(uint32_t delay_ms) { this->aec_ref_delay_ms_ = delay_ms; }
   void set_aec_enabled(bool enabled);
@@ -249,7 +255,7 @@ class IntercomApi : public Component {
   void register_routing_mode_switch(switch_::Switch *sw) { this->routing_mode_switch_ = sw; }
   void register_volume_number(number::Number *num) { this->volume_number_ = num; }
   void register_mic_gain_number(number::Number *num) { this->mic_gain_number_ = num; }
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   void register_aec_switch(switch_::Switch *sw) { this->aec_switch_ = sw; }
 #endif
 
@@ -323,7 +329,7 @@ class IntercomApi : public Component {
   // True when intercom_api owns the AEC (processor_id wired here, not on
   // esp_audio_stack). False eliminates speaker_task ~34 KB internal RAM.
   bool has_intercom_processor_() const {
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
     return this->aec_ != nullptr;
 #else
     return false;
@@ -355,16 +361,18 @@ class IntercomApi : public Component {
   void debug_log_pcm_level_(const char *label, const uint8_t *pcm, size_t bytes,
                             uint32_t &last_log_ms, uint32_t &frame_count);
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   // Drain a chunk into the AEC accumulator, process complete frames, and
   // forward each result via send_chunk_(). Updates aec_mic_fill_.
   void process_aec_chunk_(const uint8_t *audio_chunk);
 #endif
 
-  // Speaker task: playback + AEC reference feed (Core 0). Only created
-  // when has_intercom_processor_().
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
+  // Speaker task: playback + AEC reference feed (Core 0). Legacy standalone
+  // path only; esp_audio_stack builds play RX through the configured speaker.
   static void speaker_task(void *param);
   void speaker_task_();
+#endif
 
   // Transport callbacks (registered in setup()).
   void on_audio_received_(const uint8_t *pcm, size_t bytes);
@@ -427,7 +435,7 @@ class IntercomApi : public Component {
                        const std::string &caller_route, const std::string &caller_name,
                        const std::string &dest_route, const std::string &dest_name);
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   void reset_aec_buffers_();
 #endif
 
@@ -486,7 +494,7 @@ class IntercomApi : public Component {
   switch_::Switch *routing_mode_switch_{nullptr};
   number::Number *volume_number_{nullptr};
   number::Number *mic_gain_number_{nullptr};
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   switch_::Switch *aec_switch_{nullptr};
 #endif
 
@@ -539,36 +547,52 @@ class IntercomApi : public Component {
 
   // Audio buffers
   audio_processor::RingBufferPtr mic_buffer_;
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   audio_processor::RingBufferPtr speaker_buffer_;
+#endif
 
   // Per-iteration drain buffers, heap-allocated at setup() so the audio
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.
   static constexpr size_t kTxAudioChunkBytes = AUDIO_CHUNK_SIZE;       // 1024
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   static constexpr size_t kSpkAudioChunkBytes = AUDIO_CHUNK_SIZE * 4;  // 4096
+#endif
   static constexpr size_t kMicConvertedSamples = AUDIO_CHUNK_SIZE / sizeof(int16_t);
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   static constexpr size_t kSpkRefScaledSamples = kSpkAudioChunkBytes / sizeof(int16_t);
+#endif
 #ifdef USE_INTERCOM_MDNS_DISCOVERY
   static constexpr uint32_t kMdnsDiscoveryTaskStackWords = 6144 / sizeof(StackType_t);
   static constexpr uint32_t kMdnsDiscoveryStartupDelayMs = 3000;
 #endif
   uint8_t *tx_audio_chunk_{nullptr};
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   uint8_t *spk_audio_chunk_{nullptr};
+#endif
 
   // tasks_stack_in_psram_: true puts task stacks in PSRAM (saves internal
   // heap on S3/P4 with heavy AFE/MWW/LVGL load); false keeps them in
   // internal RAM (the only option on plain ESP32). Honoured by the
   // transport's own task too.
   TaskHandle_t tx_task_handle_{nullptr};
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   TaskHandle_t speaker_task_handle_{nullptr};
+#endif
   StaticTask_t tx_task_tcb_{};
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   StaticTask_t speaker_task_tcb_{};
+#endif
   StackType_t *tx_task_stack_{nullptr};
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   StackType_t *speaker_task_stack_{nullptr};
+#endif
   bool tasks_stack_in_psram_{false};
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   // Speaker single-owner: only speaker_task_ touches speaker hardware.
   std::atomic<bool> speaker_stop_requested_{false};
   SemaphoreHandle_t speaker_stopped_sem_{nullptr};
+#endif
 
   std::atomic<float> volume_{1.0f};
   bool audio_debug_{false};
@@ -663,9 +687,9 @@ class IntercomApi : public Component {
 
   // Pre-allocated to avoid task-stack VLAs.
   std::atomic<int16_t *> mic_converted_{nullptr};  // 512 samples, lazy for optional mic processing
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   int16_t *spk_ref_scaled_{nullptr};    // kSpkRefScaledSamples
 
-#ifdef USE_AUDIO_PROCESSOR
   AudioProcessor *aec_{nullptr};
   std::atomic<bool> aec_enabled_{false};
   uint32_t aec_ref_delay_ms_{80};
@@ -742,7 +766,7 @@ class IntercomApiDndSwitch : public switch_::Switch, public Parented<IntercomApi
   }
 };
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 class IntercomAecSwitch : public switch_::Switch, public Parented<IntercomApi> {
  public:
   void write_state(bool state) override {

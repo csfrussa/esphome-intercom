@@ -49,48 +49,57 @@ bool IntercomApi::ensure_mic_processing_buffer_() {
 void IntercomApi::cleanup_partial_setup_() {
   // Transactional setup cleanup. force_delete is safe here only because tasks
   // were just spawned and have not entered a blocking upstream call yet.
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   audio_processor::force_delete_pinned_task(&this->speaker_task_handle_,
                                              &this->speaker_task_stack_,
                                              IntercomApi::kSpeakerTaskStackWords);
+#endif
   audio_processor::force_delete_pinned_task(&this->tx_task_handle_, &this->tx_task_stack_,
                                              IntercomApi::kTxTaskStackWords);
 
   RAMAllocator<int16_t> i16_alloc;
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->spk_ref_scaled_ != nullptr) {
     i16_alloc.deallocate(this->spk_ref_scaled_, kSpkRefScaledSamples);
     this->spk_ref_scaled_ = nullptr;
   }
+#endif
   if (int16_t *mic_converted = this->mic_converted_.exchange(nullptr, std::memory_order_acq_rel)) {
     i16_alloc.deallocate(mic_converted, kMicConvertedSamples);
   }
 
   RAMAllocator<uint8_t> u8_alloc;
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->spk_audio_chunk_ != nullptr) {
     u8_alloc.deallocate(this->spk_audio_chunk_, IntercomApi::kSpkAudioChunkBytes);
     this->spk_audio_chunk_ = nullptr;
   }
+#endif
   if (this->tx_audio_chunk_ != nullptr) {
     u8_alloc.deallocate(this->tx_audio_chunk_, IntercomApi::kTxAudioChunkBytes);
     this->tx_audio_chunk_ = nullptr;
   }
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   this->speaker_buffer_.reset();
+#endif
   this->mic_buffer_.reset();
   this->transport_.reset();
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->spk_ref_mutex_ != nullptr) {
     vSemaphoreDelete(this->spk_ref_mutex_);
     this->spk_ref_mutex_ = nullptr;
   }
-#endif
   if (this->speaker_stopped_sem_ != nullptr) {
     vSemaphoreDelete(this->speaker_stopped_sem_);
     this->speaker_stopped_sem_ = nullptr;
   }
+#endif
 }
 
 bool IntercomApi::allocate_setup_buffers_() {
   const bool use_intercom_aec = this->has_intercom_processor_();
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
     this->speaker_stopped_sem_ = xSemaphoreCreateBinary();
     if (!this->speaker_stopped_sem_) {
@@ -98,6 +107,9 @@ bool IntercomApi::allocate_setup_buffers_() {
       return false;
     }
   }
+#else
+  (void) use_intercom_aec;
+#endif
 
   this->mic_buffer_ = audio_processor::create_prefer_psram(TX_BUFFER_SIZE, "intercom.mic");
   if (!this->mic_buffer_) {
@@ -105,6 +117,7 @@ bool IntercomApi::allocate_setup_buffers_() {
     return false;
   }
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
     this->speaker_buffer_ = audio_processor::create_prefer_psram(RX_BUFFER_SIZE, "intercom.speaker");
     if (!this->speaker_buffer_) {
@@ -112,24 +125,26 @@ bool IntercomApi::allocate_setup_buffers_() {
       return false;
     }
   }
-
-  // Default placement (internal RAM) saves ~14 us/frame mic and ~54 us/iter
-  // speaker; flip frame_buffers_in_psram_ to free internal at that cost.
-  RAMAllocator<int16_t> psram_i16 = this->frame_buffers_in_psram_
-      ? RAMAllocator<int16_t>()
-      : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
+#endif
 
   if (this->dc_offset_removal_ && !this->ensure_mic_processing_buffer_()) {
     return false;
   }
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
+    // Default placement (internal RAM) saves speaker/reference cycles; flip
+    // frame_buffers_in_psram_ to free internal RAM at that cost.
+    RAMAllocator<int16_t> psram_i16 = this->frame_buffers_in_psram_
+        ? RAMAllocator<int16_t>()
+        : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
     this->spk_ref_scaled_ = psram_i16.allocate(kSpkRefScaledSamples);
     if (!this->spk_ref_scaled_) {
       ESP_LOGE(TAG, "Failed to allocate speaker ref buffer");
       return false;
     }
   }
+#endif
 
   // Per-iteration drain buffers; same placement policy as above.
   RAMAllocator<uint8_t> psram_u8 = this->frame_buffers_in_psram_
@@ -140,6 +155,7 @@ bool IntercomApi::allocate_setup_buffers_() {
     ESP_LOGE(TAG, "Failed to allocate tx audio chunk buffer");
     return false;
   }
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
     this->spk_audio_chunk_ = psram_u8.allocate(IntercomApi::kSpkAudioChunkBytes);
     if (!this->spk_audio_chunk_) {
@@ -147,6 +163,7 @@ bool IntercomApi::allocate_setup_buffers_() {
       return false;
     }
   }
+#endif
 
   return true;
 }
@@ -160,7 +177,7 @@ bool IntercomApi::setup_audio_processor_() {
   }
 #endif
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   // AEC frame buffers (~13 KB) are deferred to set_aec_enabled(true).
   if (this->aec_ != nullptr && this->aec_->is_initialized()) {
     this->aec_frame_samples_ = this->aec_->frame_spec().input_samples;
@@ -229,7 +246,8 @@ bool IntercomApi::setup_transport_() {
 
 bool IntercomApi::start_runtime_tasks_() {
   const bool use_intercom_aec = this->has_intercom_processor_();
-  // TX task always exists (drains mic_buffer); speaker_task only when AEC.
+  // TX task always exists (drains mic_buffer); legacy speaker_task only when
+  // intercom_api owns the standalone AEC path.
   if (!audio_processor::start_pinned_task(IntercomApi::tx_task, "intercom_tx",
                                            IntercomApi::kTxTaskStackWords, this, 5, 0,
                                            this->tasks_stack_in_psram_, TAG,
@@ -238,6 +256,7 @@ bool IntercomApi::start_runtime_tasks_() {
     return false;
   }
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
     if (!audio_processor::start_pinned_task(IntercomApi::speaker_task, "intercom_spk",
                                              IntercomApi::kSpeakerTaskStackWords, this, 4, 0,
@@ -248,6 +267,9 @@ bool IntercomApi::start_runtime_tasks_() {
       return false;
     }
   }
+#else
+  (void) use_intercom_aec;
+#endif
   return true;
 }
 
@@ -494,7 +516,7 @@ void IntercomApi::dump_config() {
 #ifdef USE_SPEAKER
   ESP_LOGCONFIG(TAG, "  Speaker: %s", this->speaker_ ? "configured" : "none");
 #endif
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->aec_ != nullptr) {
     ESP_LOGCONFIG(TAG, "  AEC: configured (frame_size=%d samples)", this->aec_frame_samples_);
   } else {
@@ -697,7 +719,7 @@ void IntercomApi::publish_entity_states() {
     this->routing_mode_switch_->publish_state(ha_pbx_now);
   }
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (this->aec_switch_ != nullptr) {
     auto initial = this->aec_switch_->get_initial_state_with_restore_mode();
     if (initial.has_value()) {
@@ -709,7 +731,7 @@ void IntercomApi::publish_entity_states() {
   }
 #endif
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
   ESP_LOGD(TAG, "Entity states synced (vol=%.0f%%, mic=%.1fdB, auto=%s, dnd=%s, aec=%s)",
            this->volume_.load(std::memory_order_relaxed) * 100.0f, this->mic_gain_db_,
            this->auto_answer_ ? "ON" : "OFF", this->do_not_disturb_ ? "ON" : "OFF",

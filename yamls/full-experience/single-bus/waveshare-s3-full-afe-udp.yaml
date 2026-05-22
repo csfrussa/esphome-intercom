@@ -67,6 +67,7 @@ packages:
   speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
   speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
   speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
 # =============================================================================
 # ESPHome Base
@@ -308,7 +309,7 @@ voice_assistant:
 # =============================================================================
 intercom_api:
   tasks_stack_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
-  frame_buffers_in_psram: true # Processor frame buffers (mic/ref/out, ~3 KB) in PSRAM
+  frame_buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   protocol: udp
   microphone: mic_main
   speaker: intercom_speaker

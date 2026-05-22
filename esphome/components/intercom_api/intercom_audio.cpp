@@ -18,6 +18,7 @@ namespace intercom_api {
 
 static const char *const TAG = "intercom_api.audio";
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 static inline void release_i16_buffer(RAMAllocator<int16_t> &alloc, int16_t **buffer,
                                       size_t samples) {
   if (*buffer != nullptr) {
@@ -25,6 +26,7 @@ static inline void release_i16_buffer(RAMAllocator<int16_t> &alloc, int16_t **bu
     *buffer = nullptr;
   }
 }
+#endif
 
 void IntercomApi::debug_log_pcm_level_(const char *label, const uint8_t *pcm, size_t bytes,
                                        uint32_t &last_log_ms, uint32_t &frame_count) {
@@ -55,15 +57,19 @@ void IntercomApi::debug_log_pcm_level_(const char *label, const uint8_t *pcm, si
   const float rms = std::sqrt(static_cast<float>(sum_sq) / static_cast<float>(samples));
   const float peak_db = peak > 0 ? 20.0f * std::log10(static_cast<float>(peak) / 32768.0f) : -120.0f;
   const float rms_db = rms > 0.0f ? 20.0f * std::log10(rms / 32768.0f) : -120.0f;
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
+  const char *path = this->speaker_buffer_ != nullptr ? "buffered" : "direct";
+#else
+  const char *path = "direct";
+#endif
   ESP_LOGI(TAG,
            "AudioDebug[%s]: frames=%u bytes=%u samples=%u peak=%u peak_dbfs=%.1f rms_dbfs=%.1f "
            "intercom_volume=%.3f state=%s path=%s",
            label, frame_count, (unsigned) bytes, (unsigned) samples, (unsigned) peak, peak_db, rms_db,
-           this->volume_.load(std::memory_order_relaxed), this->get_call_state_str(),
-           this->speaker_buffer_ != nullptr ? "buffered" : "direct");
+           this->volume_.load(std::memory_order_relaxed), this->get_call_state_str(), path);
 }
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 void IntercomApi::reset_aec_buffers_() {
   if (!this->aec_enabled_.load(std::memory_order_relaxed) || this->spk_ref_buffer_ == nullptr) return;
 
@@ -151,7 +157,7 @@ void IntercomApi::send_chunk_(const uint8_t *data, size_t length) {
   this->transport_->send_audio_frame(data, length);
 }
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 void IntercomApi::process_aec_chunk_(const uint8_t *audio_chunk) {
   // Drain a 512-sample chunk into aec_mic_ in frame_size pieces, process
   // each complete frame, forward via send_chunk_. aec_mic_fill_ persists
@@ -199,7 +205,7 @@ void IntercomApi::tx_task_() {
 
   while (true) {
     if (!this->is_tx_stream_ready_()) {
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
       this->aec_mic_fill_ = 0;
 #endif
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -214,7 +220,7 @@ void IntercomApi::tx_task_() {
     if (this->mic_buffer_->read(audio_chunk, AUDIO_CHUNK_SIZE, 0) != AUDIO_CHUNK_SIZE)
       continue;
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
     if (this->aec_enabled_.load(std::memory_order_relaxed) &&
         this->aec_ != nullptr && this->aec_mic_ != nullptr) {
       this->process_aec_chunk_(audio_chunk);
@@ -230,6 +236,7 @@ void IntercomApi::tx_task_() {
 
 // === Speaker Task (Core 0) - Network to Speaker ===
 
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
 void IntercomApi::speaker_task(void *param) {
   static_cast<IntercomApi *>(param)->speaker_task_();
 }
@@ -296,7 +303,7 @@ void IntercomApi::speaker_task_() {
       }
       this->speaker_->play(audio_chunk, read, 0);
 
-#ifdef USE_AUDIO_PROCESSOR
+#ifdef USE_INTERCOM_STANDALONE_AUDIO
       // Feed AEC ref with the volume-scaled signal so the AEC sees what
       // hit the driver. 2 ms cap; drop on miss, next iter catches up.
       if (this->aec_enabled_.load(std::memory_order_relaxed) && this->spk_ref_buffer_ != nullptr) {
@@ -323,6 +330,7 @@ void IntercomApi::speaker_task_() {
   }
 #endif
 }
+#endif
 
 // === Microphone Callback ===
 

@@ -1,9 +1,10 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import switch
+from esphome.core import CORE
 from esphome.const import ENTITY_CATEGORY_CONFIG
 
-from . import intercom_api_ns, IntercomApi, CONF_INTERCOM_API_ID
+from . import intercom_api_ns, IntercomApi, CONF_INTERCOM_API_ID, CONF_PROCESSOR_ID
 
 DEPENDENCIES = ["intercom_api"]
 
@@ -74,6 +75,29 @@ CONFIG_SCHEMA = cv.Schema(
         ),
     }
 )
+
+
+def _final_validate(config):
+    if CONF_AEC not in config:
+        return config
+
+    full_config = CORE.config or {}
+    intercom_configs = full_config.get("intercom_api", [])
+    if isinstance(intercom_configs, dict):
+        intercom_configs = [intercom_configs]
+    has_standalone_audio = any(
+        isinstance(intercom, dict) and CONF_PROCESSOR_ID in intercom for intercom in intercom_configs
+    )
+    if not has_standalone_audio:
+        raise cv.Invalid(
+            "intercom_api.switch.aec is only available for the legacy standalone "
+            "intercom_api processor_id path. With esp_audio_stack, put AEC/AFE on "
+            "esp_audio_stack and do not create an intercom_api AEC switch."
+        )
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate
 
 
 async def to_code(config):

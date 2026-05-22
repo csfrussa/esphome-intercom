@@ -74,6 +74,10 @@ Echo cancellation quality depends on how the speaker reference is captured:
   residual echo can remain. AEC still works and the call is intelligible,
   but the duplex setup measurably wins.
 
+The standalone path is compiled only when `intercom_api.processor_id` is set.
+Maintained profiles with `esp_audio_stack` must put AEC/AFE on `esp_audio_stack`;
+`intercom_api` then keeps only transport, signaling and call-state glue.
+
 For a "doorbell + voice assistant" composite device, prefer the duplex setup
 described in the top-level [README](../../../README.md#audio-components).
 
@@ -184,12 +188,12 @@ intercom_api:
 | `discovery.mdns` | bool/map | `false` | Opt-in ESP-side peer discovery. When `true`, a small background task queries `_intercom-tcp._tcp` / `_intercom-udp._udp`, reads TXT `endpoint=<Name|protocol|ip|ports>`, and merges matching peers into the phonebook. |
 | `microphone` | ID | Required | Reference to microphone component |
 | `speaker` | ID | Required | Reference to speaker component |
-| `processor_id` | ID | - | Reference to an audio processor. **Use `esp_aec` only** when `intercom_api` runs without `esp_audio_stack` in front of it (the standalone dual-bus MEMS + amp setup). `esp_afe` is type-compatible but its feed/fetch tasks need the fixed-cadence frames that only `esp_audio_stack` produces; pairing `esp_afe` with standalone `intercom_api` will silently fail to process audio. With `esp_audio_stack` in the chain both processors are valid. |
-| `aec_reference_delay_ms` | int | 80 | AEC ring buffer pre-fill delay (10-200ms). Tune for your hardware if echo cancellation is poor. |
+| `processor_id` | ID | - | Legacy standalone audio only. Use `esp_aec` here only when `intercom_api` runs without `esp_audio_stack` in front of it (standalone dual-bus MEMS + amp setup). Invalid when `esp_audio_stack` is configured; put `processor_id` on `esp_audio_stack` instead. `esp_afe` needs the fixed-cadence GMF/audio-stack path and is not supported on standalone `intercom_api`. |
+| `aec_reference_delay_ms` | int | 80 | Legacy standalone AEC ring-buffer pre-fill delay (10-200ms). Ignored when `esp_audio_stack` owns AEC/AFE. |
 | `dc_offset_removal` | bool | false | Remove DC offset from mic signal |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled) |
 | `tasks_stack_in_psram` | bool | false | Place the server / tx / speaker task stacks in PSRAM (saves ~28 KB of internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it). Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM, otherwise the tasks fail to start and the component is disabled. Board YAMLs should enable it only after validating their PSRAM stack policy. |
-| `frame_buffers_in_psram` | bool | false | Place the working frame buffers (`aec_mic`, `aec_ref`, `aec_out`, ~3 KB total) in PSRAM. These buffers stage every audio frame fed to whichever processor (`esp_aec` or `esp_afe`) is wired via `processor_id`. Default `false` keeps them in internal RAM, saving ~20 us/frame on Core 0 (each buffer is written and read every AEC frame). Set `true` to save 3 KB of internal RAM at the cost of Core 0 PSRAM traffic; on systems without PSRAM the allocator falls back to internal automatically. The full-experience and intercom-only YAMLs ship with this `true` to replicate the historical behaviour. |
+| `frame_buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In legacy standalone mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
 
 ## Product mode
 
@@ -767,7 +771,8 @@ The socket pool is sized automatically: `intercom_api` calls `socket.consume_soc
 
 - Verify `processor_id` is linked to `esp_aec` when `intercom_api` owns the mic/speaker path. Use `esp_afe` only behind `esp_audio_stack`.
 - Check the audio processor component is configured
-- Ensure AEC switch is ON
+- Ensure AEC switch is ON for legacy standalone builds. With `esp_audio_stack`,
+  use the stack processor controls instead of `intercom_api.switch.aec`.
 
 ### State stuck in "Ringing"
 

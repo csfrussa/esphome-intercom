@@ -404,15 +404,11 @@ def _final_validate(config):
     audio_stack_configs = full_config.get("esp_audio_stack", [])
 
     if audio_stack_configs:
-        # If esp_audio_stack exists, check for processor conflict
         if CONF_PROCESSOR_ID in config and config[CONF_PROCESSOR_ID] is not None:
-            for audio_stack in (audio_stack_configs if isinstance(audio_stack_configs, list) else [audio_stack_configs]):
-                if isinstance(audio_stack, dict) and audio_stack.get("processor_id") is not None:
-                    raise cv.Invalid(
-                        "Both intercom_api.processor_id and esp_audio_stack.processor_id are configured. "
-                        "This causes a race condition on the audio processor. "
-                        "Use the processor on only ONE component (esp_audio_stack recommended)."
-                    )
+            raise cv.Invalid(
+                "intercom_api.processor_id is standalone legacy audio and cannot be used "
+                "when esp_audio_stack is configured. Put processor_id on esp_audio_stack."
+            )
 
         # Warn about DC offset double-filtering
         if config.get(CONF_DC_OFFSET_REMOVAL, False):
@@ -519,6 +515,7 @@ async def _add_device_and_audio_processor_settings(var, config):
         cg.add(var.set_aec(aec))
         cg.add(var.set_aec_reference_delay_ms(config[CONF_AEC_REF_DELAY_MS]))
         cg.add_define("USE_AUDIO_PROCESSOR")
+        cg.add_define("USE_INTERCOM_STANDALONE_AUDIO")
 
     # Ringing timeout (auto-decline if not answered)
     if CONF_RINGING_TIMEOUT in config:

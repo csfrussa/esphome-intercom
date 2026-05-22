@@ -16,14 +16,14 @@ substitutions:
 
 esp_audio_stack:
   id: !extend audio_stack
-  on_speaker_start:
+  on_amplifier_required:
     - script.stop: audio_stack_speaker_idle_powerdown
     - if:
         condition:
           switch.is_off: speaker_mute
         then:
           - output.turn_on: speaker_enable
-  on_speaker_idle:
+  on_amplifier_idle:
     - script.execute: audio_stack_speaker_idle_powerdown
 
 script:
@@ -36,4 +36,3 @@ script:
             switch.is_off: speaker_mute
           then:
             - output.turn_off: speaker_enable
-
