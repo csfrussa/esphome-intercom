@@ -118,6 +118,7 @@ void IntercomApi::mdns_discovery_task_() {
       }
       this->mdns_discovery_pending_csv_ += csv;
       this->mdns_discovery_pending_.store(true, std::memory_order_release);
+      this->enable_loop_soon_any_context();
     }
 
     if (this->mdns_discovery_scan_requested_.load(std::memory_order_acquire)) {

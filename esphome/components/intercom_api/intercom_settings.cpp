@@ -348,6 +348,7 @@ void IntercomApi::update_contacts() {
   this->cycle_active_ = true;
   this->cycle_started_at_ = millis();
   this->seen_in_cycle_.clear();
+  this->enable_loop_soon_any_context();
 
   // HA path: read the codegen-internal homeassistant text_sensor. When ESP-side
   // mDNS discovery is enabled, this device is in ESP-only phonebook mode and

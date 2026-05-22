@@ -33,6 +33,10 @@ The previous relative include pointed at a file that is not present in this repo
 
 ESPHome 2026.5 makes component `loop()` cadence honor the configured loop interval instead of being pulled forward by unrelated scheduler activity. `esp_audio_stack` microphone/speaker wrappers now call the official `enable_loop_soon_any_context()` on start/stop/finish edges, so state transitions are not delayed until the next natural ~62 Hz tick.
 
+The microphone and speaker wrapper loops now disable themselves when stopped. They are woken only by start/stop/finish edges, matching ESPHome 2026.5's event-driven idle-loop direction and removing two steady idle loop calls from full profiles.
+
+`intercom_api.loop()` also parks itself when there is no active call, no open phonebook cycle, and no pending mDNS/endpoint work. Call-state changes, contact updates, mDNS discovery results, and IP endpoint events wake it with `enable_loop_soon_any_context()`.
+
 ## Keep / Already Aligned
 
 ### Codec Memory Options

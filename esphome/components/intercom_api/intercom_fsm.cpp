@@ -532,6 +532,9 @@ void IntercomApi::notify_audio_tasks_() {
 }
 
 void IntercomApi::set_call_state_(CallState new_state) {
+  if (new_state != CallState::IDLE) {
+    this->enable_loop_soon_any_context();
+  }
   // Atomic exchange so concurrent callers (recv-task START vs main-loop
   // ringing_timeout) can't both fire the triggers; the loser sees
   // old==new and returns.

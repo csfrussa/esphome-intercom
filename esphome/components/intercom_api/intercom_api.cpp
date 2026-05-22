@@ -468,6 +468,18 @@ void IntercomApi::loop() {
 
   this->handle_call_timeouts_(now, calling_to);
   this->handle_udp_keepalive_(now);
+
+  bool keep_loop = this->cycle_active_ ||
+                   this->call_state_.load(std::memory_order_acquire) != CallState::IDLE;
+#ifdef USE_INTERCOM_MDNS_ANNOUNCE
+  keep_loop = keep_loop || this->endpoint_publish_requested_.load(std::memory_order_acquire);
+#endif
+#ifdef USE_INTERCOM_MDNS_DISCOVERY
+  keep_loop = keep_loop || this->mdns_discovery_pending_.load(std::memory_order_acquire);
+#endif
+  if (!keep_loop) {
+    this->disable_loop();
+  }
 }
 
 void IntercomApi::fire_timeout_decline_() {
@@ -614,6 +626,7 @@ void IntercomApi::publish_endpoint_() {
 #ifdef USE_INTERCOM_MDNS_ANNOUNCE
 void IntercomApi::request_endpoint_publish_() {
   this->endpoint_publish_requested_.store(true, std::memory_order_release);
+  this->enable_loop_soon_any_context();
 }
 
 void IntercomApi::ip_event_handler_(void *arg, esp_event_base_t event_base,
