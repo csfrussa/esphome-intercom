@@ -31,16 +31,15 @@ Observed registry latest on 2026-05-20:
 | `espressif/gmf_ai_audio` | `0.8.3` | GMF AFE manager, GMF AEC element, WakeNet/AFE elements. |
 | `espressif/gmf_audio` | `0.8.3` | Audited future GMF audio processing elements: rate, bit, channel conversion, interleave/deinterleave, mixer, effects. Not an active runtime dependency in the current branch. |
 | `espressif/gmf_io` | `0.8.1` | GMF IO streams, including `io_codec_dev`. |
-| `espressif/esp-dsp` | `1.8.2` | General DSP helpers used by shared audio helpers. |
+| `espressif/esp-dsp` | `1.8.2` | Audited but not an active runtime dependency after moving hot audio gain/conversion paths to `esp-audio-libs` and `esp_audio_effects`. |
 
 Sources: ESP Component Registry pages for
 [`esp_audio_effects`](https://components.espressif.com/components/espressif/esp_audio_effects),
 [`esp_codec_dev`](https://components.espressif.com/components/espressif/esp_codec_dev),
 [`esp-sr`](https://components.espressif.com/components/espressif/esp-sr),
 [`gmf_ai_audio`](https://components.espressif.com/components/espressif/gmf_ai_audio),
-[`gmf_audio`](https://components.espressif.com/components/espressif/gmf_audio),
-[`gmf_io`](https://components.espressif.com/components/espressif/gmf_io), and
-[`esp-dsp`](https://components.espressif.com/components/espressif/esp-dsp).
+[`gmf_audio`](https://components.espressif.com/components/espressif/gmf_audio), and
+[`gmf_io`](https://components.espressif.com/components/espressif/gmf_io).
 
 ## Hard Boundaries
 
@@ -297,7 +296,7 @@ ufficiale utile, ma non path runtime.
 | 3.1 | Convertire `esp_ae_*` diretti in elementi `gmf_audio` dove GMF possiede gia il flusso | Pipeline allineata agli esempi IDF/GMF. |
 | 3.2 | Portare bit conversion, rate conversion, channel conversion, interleave/deinterleave su elementi GMF | Niente DSP custom duplicato. |
 | 3.3 | Tenere ESPHome mixer fuori da GMF mixer | Manteniamo ducking/source/pending playback gia offerti da ESPHome. |
-| 3.4 | Valutare ALC/DRC/MBC/fade/EQ solo come feature opzionali future | Non mescolare feature nuove col porting bus. |
+| 3.4 | Usare ALC dove sostituisce boost utente; lasciare DRC/MBC/fade/EQ come feature opzionali future | Evita DSP custom nel gain senza introdurre tuning/latency non richiesti nel backend base. |
 
 Decisione corrente: le conversioni sono gia su librerie ufficiali
 `esp_audio_effects` (`esp_ae_rate_cvt`, bit conversion e data weaver), quindi
@@ -367,12 +366,12 @@ il resto va spostato su componenti Espressif o deve fallire esplicitamente.
 | Modulo | Cosa offre davvero | Stato nel branch | Dove entra oggi | Cosa manca | Knob YAML |
 |---|---|---|---|---|---|
 | `esp_codec_dev` | Codec ES7210/ES8311, volume/gain/mute e data-if I2S | Gia integrato | `CodecDevBackend` crea device RX/TX e apre sample format | Nessun read/write diretto nel nostro task: IO dati passa a GMF | `codec.input`, `codec.output`, gain, ref gain, `no_dac_ref`, `use_mclk` |
-| `esp_audio_effects` | `rate_cvt`, `bit_cvt`, `ch_cvt`, data weaver, mixer, ALC, fade, EQ, DRC, MBC, sonic | Gia integrato e usato | RX/TX bit conversion, RX deinterleave, TX interleave, rate conversion | Valutare ALC/fade/DRC solo come feature opzionali, non per il backend base | `audio_effects.rate_cvt_complexity`, `audio_effects.rate_cvt_perf_type` |
+| `esp_audio_effects` | `rate_cvt`, `bit_cvt`, `ch_cvt`, data weaver, mixer, ALC, fade, EQ, DRC, MBC, sonic | Gia integrato e usato | RX/TX bit conversion, RX deinterleave, TX interleave, rate conversion, positive user `mic_gain` via ALC | DRC/MBC/EQ/howl restano feature opzionali: non servono al backend base e aggiungono tuning/latency | `audio_effects.rate_cvt_complexity`, `audio_effects.rate_cvt_perf_type` |
 | `gmf_audio` | Elementi GMF `aud_rate_cvt`, `aud_bit_cvt`, `aud_ch_cvt`, `aud_intlv`, `aud_deintlv`, `aud_mixer`, effetti | Audited, non attivo | Per ora usiamo le primitive C sottostanti da `esp_audio_effects` | Convertire la catena diretta in pipeline GMF solo se l'intero grafo potra' possedere la data path senza rompere ESPHome | Futuri task/port buffer; mixer GMF non esposto ora |
 | `gmf_io` | IO GMF, incluso `io_codec_dev` reader/writer sopra `esp_codec_dev_handle_t` | Integrato come owner RX/TX | `CodecDevBackend::read/write` usano `esp_gmf_io_acquire/release_*` | Prossimo salto: far possedere anche conversioni a elementi GMF quando il grafo sara' stabile | `gmf_io.reader.*`, `gmf_io.writer.*` |
-| `gmf_ai_audio` | `esp_gmf_afe_manager`, `esp_gmf_aec`, WakeNet GMF, AFE GMF con state machine | Parzialmente integrato | `esp_afe` usa gia `esp_gmf_afe_manager` | Audit dei knob manager; valutare `esp_gmf_aec` per standalone AEC | AFE switches/sensors gia presenti; altri knob solo se cablati |
+| `gmf_ai_audio` | `esp_gmf_afe_manager`, `esp_gmf_aec`, WakeNet GMF, AFE GMF con state machine | Integrato per AFE | `esp_afe` usa `esp_gmf_afe_manager` e l'elemento ufficiale `esp_gmf_afe` con bridge ESPHome | Valutare `esp_gmf_aec` solo se semplifica davvero `esp_aec` standalone | AFE switches/sensors gia presenti; altri knob solo se cablati |
 | `esp-sr` | AFE, AEC, VAD, NS, AGC, SE/BSS, modelli | Gia integrato via `esp_afe`/`esp_aec` | AFE manager e standalone AEC | Capire se `esp_gmf_aec` semplifica `esp_aec` | `esp_aec.mode`, `esp_afe` feature toggles |
-| `esp-dsp` | Helper DSP generici | Importato latest per audio helper | Supporto a utility DSP esistenti | Nessun porting di ownership | Nessuno diretto |
+| `esp-dsp` | Helper DSP generici | Non richiesto dal core audio attuale | Nessuno | Tenere fuori finche non serve una primitiva ufficiale specifica | Nessuno diretto |
 | `esp_board_manager` / `periph_i2s` | Pattern ufficiali per board, refcount periferiche, init/deinit I2S STD/TDM/PDM | Audited, non attivo | Nessun backend runtime; resta riferimento ufficiale | Non espone abbastanza DMA/lifecycle per il nostro YAML ESPHome | Se Espressif espone nuovi knob, rivalutare senza aggiungere fallback paralleli |
 | `esp_capture` | Pipeline capture high-level per audio/video | Non integrato | Nessuno | Non adatto ora: possiede lifecycle capture e collide con mic/speaker ESPHome | Nessuno |
 | `esp_audio_render` | Render/player high-level, decoder, mixer, output codec | Non integrato | Nessuno | Non adatto ora: ESPHome media_player/mixer devono restare API pubbliche | Nessuno |

@@ -101,6 +101,8 @@ The rate-conversion helper was renamed from `FirDecimator` / `fir_decimator.cpp`
 
 ESPHome 2026.5 added `RingBufferAudioSource`, backed by `receive_acquire()` / `receive_release()`, which avoids a copy from ring buffer to transfer buffer and preserves frame alignment across wrap boundaries.
 
+Current status: `intercom_api` already uses `receive_acquire()` / `receive_release()` for its TX mic drain. `esp_audio_stack` keeps `CapsRingBuffer` for speaker/reference storage because it needs strict placement policy and placement logs.
+
 Use it where the data path is single-consumer and read-only after acquisition:
 
 - speaker/media source bridges
@@ -159,8 +161,7 @@ ESPHome's public audio source/sink abstractions are improving, but they still do
 
 ## Follow-Up Work
 
-1. Prototype `RingBufferAudioSource` on a non-critical media/intercom RX bridge and measure copy reduction.
-2. Evaluate `speaker_source` + `audio_http` on a separate experimental YAML, not maintained profiles.
-3. Keep `ring_buffer_caps` until ESPHome exposes strict memory placement or equivalent placement diagnostics.
-4. Consider an official amplifier-needed callback surface in `esp_audio_stack`, separate from codec `pa_pin`, so board YAML can control PA timing without duplicating speaker state logic.
-5. Review remaining loop-driven state machines after runtime logs; use `enable_loop_soon_any_context()` only on real event edges, not as a continuous high-frequency loop workaround.
+1. Evaluate `speaker_source` + `audio_http` on a separate experimental YAML, not maintained profiles.
+2. Keep `ring_buffer_caps` until ESPHome exposes strict memory placement or equivalent placement diagnostics.
+3. Keep `on_amplifier_required` / `on_amplifier_idle` as the board-facing PA surface instead of codec `pa_pin`, so YAML controls PA timing and mute policy.
+4. Review remaining loop-driven state machines after runtime logs; use `enable_loop_soon_any_context()` only on real event edges, not as a continuous high-frequency loop workaround.
