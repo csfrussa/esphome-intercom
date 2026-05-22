@@ -52,10 +52,10 @@ void IntercomApi::cleanup_partial_setup_() {
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   audio_processor::force_delete_pinned_task(&this->speaker_task_handle_,
                                              &this->speaker_task_stack_,
-                                             IntercomApi::kSpeakerTaskStackWords);
+                                             IntercomApi::kSpeakerTaskStackBytes);
 #endif
   audio_processor::force_delete_pinned_task(&this->tx_task_handle_, &this->tx_task_stack_,
-                                             IntercomApi::kTxTaskStackWords);
+                                             IntercomApi::kTxTaskStackBytes);
 
   RAMAllocator<int16_t> i16_alloc;
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
@@ -258,7 +258,7 @@ bool IntercomApi::start_runtime_tasks_() {
   // TX task always exists (drains mic_buffer); legacy speaker_task only when
   // intercom_api owns the standalone AEC path.
   if (!audio_processor::start_pinned_task(IntercomApi::tx_task, "intercom_tx",
-                                           IntercomApi::kTxTaskStackWords, this, 5, 0,
+                                           IntercomApi::kTxTaskStackBytes, this, 5, 0,
                                            this->task_stacks_in_psram_, TAG,
                                            &this->tx_task_handle_, &this->tx_task_tcb_,
                                            &this->tx_task_stack_)) {
@@ -268,7 +268,7 @@ bool IntercomApi::start_runtime_tasks_() {
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
     if (!audio_processor::start_pinned_task(IntercomApi::speaker_task, "intercom_spk",
-                                             IntercomApi::kSpeakerTaskStackWords, this, 4, 0,
+                                             IntercomApi::kSpeakerTaskStackBytes, this, 4, 0,
                                              this->task_stacks_in_psram_, TAG,
                                              &this->speaker_task_handle_,
                                              &this->speaker_task_tcb_,
@@ -286,7 +286,7 @@ bool IntercomApi::start_runtime_tasks_() {
 void IntercomApi::start_mdns_discovery_() {
   if (this->mdns_discovery_enabled_) {
     if (!audio_processor::start_pinned_task(IntercomApi::mdns_discovery_task, "intercom_mdns",
-                                             IntercomApi::kMdnsDiscoveryTaskStackWords, this, 3, 0,
+                                             IntercomApi::kMdnsDiscoveryTaskStackBytes, this, 3, 0,
                                              this->task_stacks_in_psram_, TAG,
                                              &this->mdns_discovery_task_handle_,
                                              &this->mdns_discovery_task_tcb_,

@@ -42,7 +42,7 @@ static bool wait_socket_readable_(int socket, uint32_t timeout_ms) {
 }
 
 static void release_self_deleted_task_(TaskHandle_t *handle, StackType_t **stack,
-                                       uint32_t stack_words, const char *task_name) {
+                                       uint32_t stack_bytes, const char *task_name) {
   if (handle == nullptr || *handle == nullptr) return;
 
   bool deleted = false;
@@ -59,6 +59,7 @@ static void release_self_deleted_task_(TaskHandle_t *handle, StackType_t **stack
   }
 
   if (stack != nullptr && *stack != nullptr) {
+    const uint32_t stack_words = (stack_bytes + sizeof(StackType_t) - 1) / sizeof(StackType_t);
     auto alloc = audio_processor::psram_allocator<StackType_t>();
     alloc.deallocate(*stack, stack_words);
     *stack = nullptr;
@@ -140,7 +141,7 @@ bool UdpTransport::start() {
   this->running_.store(true, std::memory_order_release);
 
   if (!audio_processor::start_pinned_task(UdpTransport::ctrl_task_trampoline_, "intercom_udp_c",
-                                           kCtrlTaskStackWords, this, 4, 1,
+                                           kCtrlTaskStackBytes, this, 4, 1,
                                            this->task_stacks_in_psram_, TAG,
                                            &this->ctrl_task_handle_, &this->ctrl_task_tcb_,
                                            &this->ctrl_task_stack_)) {
@@ -198,7 +199,7 @@ bool UdpTransport::start_audio_path() {
   }
 
   if (!audio_processor::start_pinned_task(UdpTransport::recv_task_trampoline_, "intercom_udp_a",
-                                           kRecvTaskStackWords, this, 5, 1,
+                                           kRecvTaskStackBytes, this, 5, 1,
                                            this->task_stacks_in_psram_, TAG,
                                            &this->recv_task_handle_, &this->recv_task_tcb_,
                                            &this->recv_task_stack_)) {
@@ -218,7 +219,7 @@ void UdpTransport::stop_audio_path() {
   // eDeleted, then free the stack. On timeout we leak the ~8 KB stack
   // rather than risk UAF.
   release_self_deleted_task_(&this->recv_task_handle_, &this->recv_task_stack_,
-                             kRecvTaskStackWords, "recv_task");
+                             kRecvTaskStackBytes, "recv_task");
   if (this->audio_socket_ >= 0) {
     close(this->audio_socket_);
     this->audio_socket_ = -1;
@@ -235,7 +236,7 @@ void UdpTransport::stop() {
 
   // Same self-delete pattern as stop_audio_path.
   release_self_deleted_task_(&this->ctrl_task_handle_, &this->ctrl_task_stack_,
-                             kCtrlTaskStackWords, "ctrl_task");
+                             kCtrlTaskStackBytes, "ctrl_task");
 
   if (this->control_socket_ >= 0) {
     close(this->control_socket_);

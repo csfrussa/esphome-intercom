@@ -84,12 +84,12 @@ enum class ConnectionState : uint8_t {
 /// See README.md.
 class IntercomApi : public Component {
  public:
-  // FreeRTOS task stack sizes in words. Kept at class level so xTaskCreate
+  // FreeRTOS task stack sizes in bytes. Kept at class level so xTaskCreate
   // sites stay free of magic numbers. The transport task declares its own
   // stack size inside the transport class.
-  static constexpr uint32_t kTxTaskStackWords = 12288 / sizeof(StackType_t);
+  static constexpr uint32_t kTxTaskStackBytes = 12288;
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
-  static constexpr uint32_t kSpeakerTaskStackWords = 8192 / sizeof(StackType_t);
+  static constexpr uint32_t kSpeakerTaskStackBytes = 8192;
 #endif
 
   enum SchedulerId : uint32_t {
@@ -574,7 +574,7 @@ class IntercomApi : public Component {
   static constexpr size_t kSpkRefScaledSamples = kSpkAudioChunkBytes / sizeof(int16_t);
 #endif
 #ifdef USE_INTERCOM_MDNS_DISCOVERY
-  static constexpr uint32_t kMdnsDiscoveryTaskStackWords = 6144 / sizeof(StackType_t);
+  static constexpr uint32_t kMdnsDiscoveryTaskStackBytes = 6144;
   static constexpr uint32_t kMdnsDiscoveryStartupDelayMs = 3000;
 #endif
   uint8_t *tx_audio_chunk_{nullptr};

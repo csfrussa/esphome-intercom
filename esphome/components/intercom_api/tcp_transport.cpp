@@ -127,7 +127,7 @@ bool TcpTransport::start() {
   this->running_.store(true, std::memory_order_release);
 
   if (!audio_processor::start_pinned_task(TcpTransport::server_task_trampoline_, "intercom_srv",
-                                           kServerTaskStackWords, this, 5, 1,
+                                           kServerTaskStackBytes, this, 5, 1,
                                            this->task_stacks_in_psram_, TAG,
                                            &this->server_task_handle_, &this->server_task_tcb_,
                                            &this->server_task_stack_)) {
@@ -157,7 +157,7 @@ void TcpTransport::stop() {
     }
   }
   audio_processor::cleanup_pinned_task(&this->server_task_handle_,
-                                        &this->server_task_stack_, kServerTaskStackWords);
+                                        &this->server_task_stack_, kServerTaskStackBytes);
 
   this->close_client_socket_();
   this->close_server_socket_();

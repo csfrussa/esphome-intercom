@@ -36,8 +36,8 @@ class UdpTransport : public IntercomTransport {
   // 8 KB on both stacks: recv_task callback chain (RingBuffer + AEC ref
   // ScopedLock + logger) and ctrl_task's inline start_audio_path()
   // (socket + bind + xTaskCreate) both need the headroom.
-  static constexpr uint32_t kRecvTaskStackWords = 8192 / sizeof(StackType_t);
-  static constexpr uint32_t kCtrlTaskStackWords = 8192 / sizeof(StackType_t);
+  static constexpr uint32_t kRecvTaskStackBytes = 8192;
+  static constexpr uint32_t kCtrlTaskStackBytes = 8192;
 
   UdpTransport(uint16_t listen_port, std::string remote_ip, uint16_t remote_port,
                uint16_t control_port, uint16_t remote_control_port,

@@ -28,7 +28,7 @@ namespace intercom_api {
 /// false on plain ESP32.
 class TcpTransport : public IntercomTransport {
  public:
-  static constexpr uint32_t kServerTaskStackWords = 8192 / sizeof(StackType_t);
+  static constexpr uint32_t kServerTaskStackBytes = 8192;
 
   TcpTransport(uint16_t port, bool task_stacks_in_psram);
   ~TcpTransport() override;
