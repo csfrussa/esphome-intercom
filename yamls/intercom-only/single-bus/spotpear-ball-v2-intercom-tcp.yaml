@@ -913,7 +913,7 @@ font:
 
   - file:
       type: gfonts
-      family: Roboto
+      family: Figtree
       weight: 700
     id: font_title
     size: 24
@@ -926,7 +926,7 @@ font:
 
   - file:
       type: gfonts
-      family: Roboto
+      family: Figtree
       weight: 500
     id: font_state
     size: 28
@@ -936,7 +936,7 @@ font:
 
   - file:
       type: gfonts
-      family: Roboto
+      family: Figtree
       weight: 400
     id: font_info
     size: 20

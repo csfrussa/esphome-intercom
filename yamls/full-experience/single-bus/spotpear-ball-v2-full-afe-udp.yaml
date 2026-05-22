@@ -79,6 +79,7 @@ substitutions:
 
 packages:
   core: !include ../../../packages/va_intercom.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
   intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
@@ -2073,7 +2074,7 @@ font:
   # Intercom fonts
   - file:
       type: gfonts
-      family: Roboto
+      family: ${font_family}
       weight: 700
     id: font_title
     size: 24
@@ -2085,7 +2086,7 @@ font:
           - "\U000F06CB" # contacts (address book)
   - file:
       type: gfonts
-      family: Roboto
+      family: ${font_family}
       weight: 500
     id: font_state
     size: 28
@@ -2094,7 +2095,7 @@ font:
     glyphs: " ACDEGILNR"
   - file:
       type: gfonts
-      family: Roboto
+      family: ${font_family}
       weight: 400
     id: font_info
     size: 20
