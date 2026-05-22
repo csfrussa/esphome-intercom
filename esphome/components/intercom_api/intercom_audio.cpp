@@ -102,8 +102,9 @@ void IntercomApi::set_aec_enabled(bool enabled) {
     if (this->aec_mic_ == nullptr) {
       const size_t frame_samples = static_cast<size_t>(this->aec_frame_samples_);
       const size_t ref_delay_bytes = (SAMPLE_RATE * this->aec_ref_delay_ms_ / 1000) * sizeof(int16_t);
-      this->spk_ref_buffer_ = audio_processor::create_prefer_psram(
-          ref_delay_bytes + RX_BUFFER_SIZE, "intercom.spk_ref");
+      this->spk_ref_buffer_ = this->buffers_in_psram_
+          ? audio_processor::create_prefer_psram(ref_delay_bytes + RX_BUFFER_SIZE, "intercom.spk_ref")
+          : audio_processor::create_internal(ref_delay_bytes + RX_BUFFER_SIZE, "intercom.spk_ref");
       RAMAllocator<int16_t> aec_alloc = this->buffers_in_psram_
           ? RAMAllocator<int16_t>()
           : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
@@ -339,7 +340,8 @@ void IntercomApi::on_microphone_data_(const uint8_t *data, size_t len) {
     return;
   }
 
-  // MicrophoneSource delivers 16-bit regardless of mic hardware.
+  // intercom_api accepts 16-bit mono PCM at 16 kHz. Direct microphones are
+  // validated at config time; MicrophoneSource converts raw/experimental mics.
   const int16_t *src = reinterpret_cast<const int16_t *>(data);
   const size_t total_samples = len / sizeof(int16_t);
   // Skip our gain when esp_audio_stack owns the mic_gain entity (already applied upstream).

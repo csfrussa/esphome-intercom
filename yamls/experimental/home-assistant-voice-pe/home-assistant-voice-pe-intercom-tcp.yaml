@@ -19,7 +19,7 @@ substitutions:
   intercom_tcp_port: "6054"
 
 packages:
-  voice_pe_base: !include ../../../home-assistant-voice.yaml
+  voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   intercom_settings: !include ../../../packages/intercom/call_settings.yaml

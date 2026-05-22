@@ -19,6 +19,16 @@ Scope: ESPHome 2026.5.0 audio/media/speaker/microphone componentry, checked agai
 
 `audio_stack_in_psram` was renamed to `audio_task_stack_in_psram`, because the option only moves the audio task stack, not the whole audio stack or GMF/ESP-SR scratch memory.
 
+### Voice PE Package Include
+
+The experimental Voice PE profile now imports the upstream Home Assistant Voice PE package through:
+
+```yaml
+voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
+```
+
+The previous relative include pointed at a file that is not present in this repository, so `esphome config` could not validate the experimental profile at all.
+
 ### Loop Wakeups
 
 ESPHome 2026.5 makes component `loop()` cadence honor the configured loop interval instead of being pulled forward by unrelated scheduler activity. `esp_audio_stack` microphone/speaker wrappers now call the official `enable_loop_soon_any_context()` on start/stop/finish edges, so state transitions are not delayed until the next natural ~62 Hz tick.
@@ -43,6 +53,18 @@ If MP3 or Opus is added later, apply the same policy:
 - MP3: `audio.codecs.mp3.buffer_memory: psram`
 - Opus: consider `state_memory` and `pseudostack.buffer_memory` only on full PSRAM profiles
 
+### Volume Curve
+
+Hardware-codec `master_volume` is intentionally sent to Espressif's `esp_codec_dev_set_out_vol()` as the official 0..100 volume value. Espressif's documented default maps volume 1..100 to roughly -49.5 dB..0 dB, with volume 0 mapped to near-mute. Therefore 70% is not a linear 70% amplitude; it is around -15 dB and will sound much quieter than a linear UI slider.
+
+The no-codec software path follows the same class of dB curve through ESPHome 2026.5 `esp-audio-libs` Q31 gain (`-49 dB..0 dB`). This keeps codec and non-codec boards semantically aligned.
+
+If board UX needs a less aggressive slider, use official curve controls instead of a hidden custom scalar:
+
+- hardware codec: expose a board/profile option that calls `esp_codec_dev_set_vol_curve()`;
+- no-codec software path: expose the same YAML-facing minimum dB and feed it into the existing Q31 conversion;
+- keep the default at the Espressif/ESPHome curve so existing profiles do not silently change loudness.
+
 ### Speaker Media Player Format
 
 Current media player pipelines explicitly use `format: FLAC`. This is correct after 2026.5 because WAV decoding is no longer always included and `codec_support_enabled` is deprecated. There is no `codec_support_enabled` left in maintained YAMLs.
@@ -64,6 +86,8 @@ Do not replace `esp_audio_stack` microphone output with ESPHome `MicrophoneSourc
 The rate-conversion helper was renamed from `FirDecimator` / `fir_decimator.cpp` to `AudioEffectsRateConverter` / `audio_effects_rate_converter.cpp`. The old name implied a local FIR decimator, but the implementation is already an Espressif `esp-audio-libs` pipeline using `esp_ae_rate_cvt`, `esp_ae_bit_cvt`, and `esp_ae_data_weaver`.
 
 `intercom_api.task_stacks_in_psram` now matches the actual resource being moved. The previous pluralization (`tasks_stack_in_psram`) was kept only in history; maintained YAMLs and component APIs use the corrected key.
+
+`intercom_api.buffers_in_psram` now controls the standalone/staging ring buffers too. When false, intercom mic/speaker/reference rings stay internal; when true, the large staging rings prefer PSRAM. This keeps standalone builds honest and avoids always moving rings to PSRAM behind a YAML option that said otherwise.
 
 ## Candidate Migrations
 

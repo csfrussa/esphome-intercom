@@ -111,7 +111,9 @@ bool IntercomApi::allocate_setup_buffers_() {
   (void) use_intercom_aec;
 #endif
 
-  this->mic_buffer_ = audio_processor::create_prefer_psram(TX_BUFFER_SIZE, "intercom.mic");
+  this->mic_buffer_ = this->buffers_in_psram_
+      ? audio_processor::create_prefer_psram(TX_BUFFER_SIZE, "intercom.mic")
+      : audio_processor::create_internal(TX_BUFFER_SIZE, "intercom.mic");
   if (!this->mic_buffer_) {
     ESP_LOGE(TAG, "Failed to allocate mic ring buffer");
     return false;
@@ -119,7 +121,9 @@ bool IntercomApi::allocate_setup_buffers_() {
 
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   if (use_intercom_aec) {
-    this->speaker_buffer_ = audio_processor::create_prefer_psram(RX_BUFFER_SIZE, "intercom.speaker");
+    this->speaker_buffer_ = this->buffers_in_psram_
+        ? audio_processor::create_prefer_psram(RX_BUFFER_SIZE, "intercom.speaker")
+        : audio_processor::create_internal(RX_BUFFER_SIZE, "intercom.speaker");
     if (!this->speaker_buffer_) {
       ESP_LOGE(TAG, "Failed to allocate speaker ring buffer");
       return false;
