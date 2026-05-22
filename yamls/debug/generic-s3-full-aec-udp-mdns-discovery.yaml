@@ -1,0 +1,7 @@
+substitutions:
+  ext_components_source: ../../esphome/components
+  assets_base: ../../
+
+packages:
+  base: !include ../full-experience/single-bus/generic-s3-full-aec-udp.yaml
+  mdns_discovery: !include ../../packages/intercom/mdns_discovery.yaml

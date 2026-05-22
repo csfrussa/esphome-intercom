@@ -35,7 +35,7 @@ assets/images/assistant/f_off
 *-local-*.yaml
 *-test.yaml
 *-test-*.yaml
-yamls/debug/
+yamls/debug/secrets.yaml
 
 # Brand images (submitted to home-assistant/brands repo)
 brands/

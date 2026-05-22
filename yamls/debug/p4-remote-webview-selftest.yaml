@@ -1,0 +1,130 @@
+# Debug-only RemoteWebView proof for Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1.
+# This file is ignored by git. It is only for compile/runtime feasibility checks.
+
+substitutions:
+  name: waveshare-p4-remote-webview
+  friendly_name: Waveshare P4 RemoteWebView
+  ext_components_source: "../../esphome/components"
+
+packages:
+  p4_base: !include ../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../packages/board/esp32p4_c6_sdio.yaml
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    - priority: -100
+      then:
+        - light.turn_on:
+            id: display_backlight
+            brightness: 100%
+
+psram:
+  mode: hex
+  speed: 200MHz
+
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+external_components:
+  - source: ${ext_components_source}
+    components: [mipi_dsi]
+  - source: github://strange-v/RemoteWebViewClient@main
+    refresh: 0s
+    components: [remote_webview]
+
+esp32:
+  framework:
+    type: esp-idf
+    components:
+      - name: "espressif/esp_websocket_client"
+        ref: 1.5.0
+      - name: "bitbank2/jpegdec"
+        source: https://github.com/strange-v/jpegdec-esphome
+
+logger:
+  hardware_uart: UART0
+  level: INFO
+  logs:
+    component: WARN
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+api:
+
+ota:
+  - platform: esphome
+
+i2c:
+  - id: internal_i2c
+    sda: GPIO7
+    scl: GPIO8
+    scan: true
+
+esp32_hosted:
+  variant: ESP32C6
+  reset_pin: GPIO54
+  cmd_pin: GPIO19
+  clk_pin: GPIO18
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  active_high: true
+
+display:
+  - platform: mipi_dsi
+    id: main_display
+    model: WAVESHARE-10.1-DSI-TOUCH-A
+    reset_pin: 27
+    lane_bit_rate: 1500Mbps
+    vsync_back_porch: 10
+    dimensions:
+      width: 800
+      height: 1280
+    update_interval: never
+    auto_clear_enabled: false
+
+touchscreen:
+  - platform: gt911
+    id: main_touch
+    i2c_id: internal_i2c
+    address: 0x5D
+    display: main_display
+    update_interval: 50ms
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: GPIO26
+    inverted: false
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    id: display_backlight
+    name: Display Backlight
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+remote_webview:
+  id: rwv
+  display_id: main_display
+  touchscreen_id: main_touch
+  server: 192.168.1.41:8081
+  url: http://192.168.1.41:18081/test1.html
+  full_frame_tile_count: 1
+  full_frame_area_threshold: 0.0
+  every_nth_frame: 1
+  min_frame_interval: 80
+  max_bytes_per_msg: 245760
+  jpeg_quality: 75
+  rotation: 90
+  current_url_sensor:
+    name: Remote Display Current URL
