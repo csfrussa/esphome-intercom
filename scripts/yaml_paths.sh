@@ -38,7 +38,7 @@
 #   raw URL `https://github.com/OWNER/REPO/raw/BRANCH/`.
 #
 # ─── Edge cases handled ───
-# - Package keys with digits (`s3_base`, `es8311_stereo_ref`): regex uses
+# - Package keys with digits (`s3_base`, `status_led`): regex uses
 #   `[a-zA-Z_][a-zA-Z0-9_]*` (identifier shape, not just letters).
 # - Yaml depth varies (3 or 4 levels deep under `yamls/`): all paths
 #   computed dynamically via `realpath --relative-to`. No hardcoded depth.
