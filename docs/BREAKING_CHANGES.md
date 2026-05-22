@@ -25,13 +25,16 @@ there is no longer a separate "doorbell mode" versus "full intercom mode": a
 doorbell is just a phonebook with one HA/browser destination, and a room
 intercom is the same state machine with more contacts.
 
-## YAML tree: experimental dual-bus boards
+## YAML tree: dual-bus boards
 
-The never-validated generic dual-bus YAML moved out of the tested tree, with the `_NOT_READY` suffix dropped:
+The never-validated generic dual-bus YAML was replaced by maintained
+`esp_audio_stack` TCP/UDP profiles. These profiles use `rx_bus` / `tx_bus`
+instead of the old `i2s_audio` + standalone `intercom_api.processor_id` path.
 
 | Old path | New path |
 |---|---|
-| `yamls/intercom-only/dual-bus/generic-s3-dual-intercom_NOT_READY.yaml` | `yamls/experimental/dual-bus/intercom-only/generic-s3-dual-intercom.yaml` |
+| `yamls/intercom-only/dual-bus/generic-s3-dual-intercom_NOT_READY.yaml` | `yamls/intercom-only/dual-bus/generic-s3-intercom-tcp.yaml` or `yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml` |
+| `yamls/experimental/dual-bus/intercom-only/generic-s3-dual-intercom.yaml` | `yamls/intercom-only/dual-bus/generic-s3-intercom-tcp.yaml` or `yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml` |
 
 Update any local fork or symlink that pointed at the old paths.
 

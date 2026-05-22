@@ -17,7 +17,7 @@ upstream state machine to report real VAD transitions.
 
 ## Why a custom `esp_audio_stack` component instead of stock `i2s_audio`
 
-**The stock split**: ESPHome's `i2s_audio` instantiates a separate I2S controller for `microphone` and for `speaker`. On a board where mic and speaker live on different I2S buses (MEMS mic on one bus, I2S amp on another), this works fine.
+**The stock split**: ESPHome's `i2s_audio` instantiates a separate I2S controller for `microphone` and for `speaker`. On a board where mic and speaker live on different I2S buses (MEMS mic on one bus, I2S amp on another), that is fine for simple capture/playback.
 
 **Where it breaks**: Audio codecs like ES8311, ES8388, WM8960 expose mic and speaker on the **same I2S bus**, sharing pin lines and a clock. Two `i2s_audio` instances cannot bind the same I2S controller; they collide on the driver layer and the second one silently fails or produces glitches. The dual-instance setup also cannot do AEC properly: there is no shared frame cadence between the two paths, so the reference and mic streams are not phase-coherent.
 
@@ -30,7 +30,7 @@ upstream state machine to report real VAD transitions.
 - **Multi-rate operation**: I2S bus at 48 kHz (for high-quality DAC), mic/AEC/VA at 16 kHz via Espressif `esp_ae_rate_cvt`. Not expressible in stock `i2s_audio`.
 - **Cross-component validation**: A `FINAL_VALIDATE_SCHEMA` rejects configurations that would create dual processors or dual DC-offset removal between `esp_audio_stack` and `intercom_api`. Catches errors at compile time instead of as runtime audio garbage.
 
-**When stock `i2s_audio` is still the right choice**: Generic boards with truly separate mic and speaker buses. For those, `intercom_api`'s standalone path runs on top of the stock components and does its own AEC via a software ring-buffer reference. Quality is lower than the duplex setup (see [`intercom_api` README, AEC quality section](../esphome/components/intercom_api/README.md#aec-quality-standalone-vs-esp_audio_stack)) but acceptable for non-composite use cases.
+**When stock `i2s_audio` is still the right choice**: Simple one-way capture or playback where no shared AEC reference, media/intercom coexistence or full-duplex lifecycle is required. For maintained intercom profiles, even true dual-bus MEMS+amp hardware now uses `esp_audio_stack` with separate `rx_bus` / `tx_bus` so AEC cadence, speaker reference, ESPHome microphone/speaker facades and runtime hooks stay under one owner. `intercom_api`'s standalone AEC path remains as a compatibility/bring-up mode, not the preferred product architecture.
 
 ## Codec baseline vs board-specific override
 

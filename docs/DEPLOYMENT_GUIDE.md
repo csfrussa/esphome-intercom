@@ -6,16 +6,15 @@ a new device without reading every file.
 ```
 yamls/
 ├── intercom-only/     no wake word, no voice assistant
-│   └── single-bus/    one full-duplex I2S bus (codec or per-chip ADC+DAC)
+│   ├── single-bus/    one full-duplex I2S bus (codec or per-chip ADC+DAC)
+│   └── dual-bus/      mic and speaker on separate I2S controllers
 ├── full-experience/   intercom + wake word + voice assistant
-│   └── single-bus/
-│       └── afe/       mic pipeline = esp_afe (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD)
+│   └── single-bus/    esp_audio_stack + esp_aec or esp_afe
 └── experimental/      bring-up/reference YAMLs, not release baselines
-    └── dual-bus/      mic and speaker on separate I2S buses
 ```
 
-Device-specific debug YAMLs are not part of the public release tree. Keep local
-targets under the gitignored `yamls/debug/`; reusable debug overlays live under
+Reusable lab/debug YAMLs live under `yamls/debug/`. Only
+`yamls/debug/secrets.yaml` stays local-only; reusable debug overlays live under
 `packages/debug/`.
 
 ## Decision tree
@@ -30,8 +29,8 @@ Follow the first branch that matches your hardware and intent.
 2. **How many I2S buses does your hardware expose?**
    - One full-duplex bus (codec does both, or a shared bus with TDM) →
      `single-bus/`
-   - Two (mic bus + speaker bus, independent pins) → `experimental/dual-bus/`
-     (compile-only, end-to-end calls not validated yet)
+   - Two (mic bus + speaker bus, independent pins) → `intercom-only/dual-bus/`
+     for the maintained intercom profiles.
 
 3. **(full-experience / single-bus only) Which processor profile fits?**
    - Codec/TDM boards and dual-mic targets → `esp_afe` presets with ESP-SR AFE,
@@ -106,6 +105,7 @@ Caveats:
 | Spotpear Ball v2 | ESP32-S3 | 1 (ES8311 ADC) | full + afe (SR low-cost) | `full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml` |
 | Spotpear Ball v2 (UDP) | ESP32-S3 | 1 (ES8311 ADC) | full + afe + udp | `full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml` |
 | Spotpear Ball v2 intercom-only | ESP32-S3 | 1 | intercom + single | `intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml` |
+| Generic S3 speaker + MEMS dual-bus (TCP) | ESP32-S3 | 1 | intercom + dual + previous-frame ref | `intercom-only/dual-bus/generic-s3-intercom-tcp.yaml` |
 | Generic S3 speaker + MEMS dual-bus (UDP) | ESP32-S3 | 1 | intercom + dual + previous-frame ref | `intercom-only/dual-bus/generic-s3-intercom-udp.yaml` |
 | Generic S3 single-bus MEMS+amp | ESP32-S3 | 1 | intercom + duplex (TCP) | `intercom-only/single-bus/generic-s3-intercom-tcp.yaml` |
 | Generic S3 single-bus MEMS+amp (UDP) | ESP32-S3 | 1 | intercom + duplex (UDP) | `intercom-only/single-bus/generic-s3-intercom-udp.yaml` |

@@ -20,17 +20,17 @@ experimental hardware-specific targets.
 yamls/
   intercom-only/         Intercom without Voice Assistant or Wake Word
     single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)
+    dual-bus/            Devices using esp_audio_stack rx_bus + tx_bus
 
   full-experience/       VA + MWW + Intercom (complete voice assistant hub)
     single-bus/          esp_audio_stack full profiles
 
   experimental/          Untested topologies (compile-only, contributions welcome)
-    dual-bus/            Devices with separate I2S buses for mic and speaker
 ```
 
-Device-specific debug YAMLs are intentionally local-only and live in the
-gitignored `yamls/debug/` directory during target-specific debug. Reusable debug
-building blocks are public packages under `packages/debug/`.
+Device-specific debug YAMLs live in `yamls/debug/` and are tracked when they are
+reusable lab targets. Only `yamls/debug/secrets.yaml` stays local-only. Reusable
+debug building blocks are public packages under `packages/debug/`.
 
 ## Single-bus vs Dual-bus
 
