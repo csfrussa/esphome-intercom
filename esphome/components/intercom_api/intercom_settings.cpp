@@ -149,7 +149,7 @@ void IntercomApi::schedule_save_settings_() {
   }
   this->save_scheduled_ = true;
   // 250 ms debounce against slider drag.
-  this->set_timeout(250, [this]() {
+  this->set_timeout(SCHED_SAVE_SETTINGS, 250, [this]() {
     this->save_scheduled_ = false;
     this->save_settings_();
   });

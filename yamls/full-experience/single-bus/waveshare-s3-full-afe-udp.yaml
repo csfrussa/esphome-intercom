@@ -218,6 +218,9 @@ esp_audio_stack:
   #   writer tasks or data-bus latency between mic/ref and AFE.
   audio_task_stack_in_psram: true
   buffers_in_psram: true
+  # WS3 ES8311/NS4150 path drops perceived loudness too aggressively with the
+  # codec-dev default ~-50 dB floor. Keep 0% as mute, but make 70% usable.
+  master_volume_min_db: -30.0
   task_core: 0
   task_priority: 19
   task_stack_size: 8192

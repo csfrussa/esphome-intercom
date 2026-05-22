@@ -78,8 +78,10 @@ enum class ConnectionState : uint8_t {
 /// intercom_api is transport/FSM glue and does not compile the standalone AEC
 /// reference/speaker task path.
 ///
-/// Up to two FreeRTOS tasks of its own (tx + speaker) when AEC is
-/// active; the recv task is owned by the transport. See README.md.
+/// One TX FreeRTOS task in maintained esp_audio_stack profiles; the legacy
+/// standalone speaker/reference task is compile-time gated behind
+/// USE_INTERCOM_STANDALONE_AUDIO. The recv task is owned by the transport.
+/// See README.md.
 class IntercomApi : public Component {
  public:
   // FreeRTOS task stack sizes in words. Kept at class level so xTaskCreate
@@ -89,6 +91,13 @@ class IntercomApi : public Component {
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
   static constexpr uint32_t kSpeakerTaskStackWords = 8192 / sizeof(StackType_t);
 #endif
+
+  enum SchedulerId : uint32_t {
+    SCHED_MDNS_STARTUP_SCAN = 1,
+    SCHED_MDNS_PERIODIC_SCAN = 2,
+    SCHED_PUBLISH_INITIAL_STATE = 3,
+    SCHED_SAVE_SETTINGS = 4,
+  };
 
   void setup() override;
   void loop() override;

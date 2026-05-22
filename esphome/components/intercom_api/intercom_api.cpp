@@ -295,12 +295,12 @@ void IntercomApi::start_mdns_discovery_() {
       this->mdns_discovery_enabled_ = false;
     } else {
       if (this->mdns_discovery_startup_scan_) {
-        this->set_timeout(kMdnsDiscoveryStartupDelayMs, [this]() {
+        this->set_timeout(SCHED_MDNS_STARTUP_SCAN, kMdnsDiscoveryStartupDelayMs, [this]() {
           this->request_mdns_discovery_scan_();
         });
       }
       if (this->mdns_discovery_interval_ms_ > 0) {
-        this->set_interval(this->mdns_discovery_interval_ms_, [this]() {
+        this->set_interval(SCHED_MDNS_PERIODIC_SCAN, this->mdns_discovery_interval_ms_, [this]() {
           this->request_mdns_discovery_scan_();
         });
       }
@@ -311,7 +311,7 @@ void IntercomApi::start_mdns_discovery_() {
 
 void IntercomApi::publish_initial_state_later_() {
   // Deferred so sensors are fully wired before the first publish.
-  this->set_timeout(250, [this]() {
+  this->set_timeout(SCHED_PUBLISH_INITIAL_STATE, 250, [this]() {
     this->publish_state_();
     this->publish_destination_();
     this->publish_transport_();
