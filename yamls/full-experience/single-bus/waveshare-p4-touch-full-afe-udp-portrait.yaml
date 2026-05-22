@@ -385,6 +385,8 @@ media_player:
       format: FLAC
       sample_rate: 48000
     files:
+      - id: timer_finished_sound
+        file: ${assets_base}assets/sounds/timer_finished.flac
       - id: intercom_ringing_sound
         file: ${assets_base}assets/sounds/ringtone.flac
     on_announcement:
@@ -2843,6 +2845,19 @@ script:
                       id: voice_assistant_phase
                       value: '${voice_assist_idle_phase_id}'
 
+  # Timer alarm: play sound in a loop until timer_ringing is turned off
+  - id: timer_alarm_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: timer_ringing
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                media_file: timer_finished_sound
+                announcement: true
+            - delay: 6s
+
   # Backlight auto-off timer
   - id: backlight_timer
     mode: restart
@@ -2981,8 +2996,14 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
     on_turn_off:
+      - script.stop: timer_alarm_loop
+      - media_player.stop:
+          announcement: true
       - script.execute: update_status
     on_turn_on:
+      - media_player.stop:
+          announcement: true
+      - script.execute: timer_alarm_loop
       - script.execute: update_status
       - delay: 15min
       - switch.turn_off: timer_ringing

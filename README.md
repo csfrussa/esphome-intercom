@@ -981,13 +981,14 @@ sequenceDiagram
 
 Generic full-experience S3 now has two maintained presets. Use
 `generic-s3-full-aec-*` for the lighter 4 MB-oriented build: it keeps VA, MWW,
-media, mixer and intercom but uses standalone `esp_aec` with the lightweight
-`previous_frame` reference. Use `generic-s3-full-afe-*` when you want the full
-Espressif AFE pipeline with NS/AGC/VAD and the canonical TYPE2-style software
-reference; that profile needs an app slot larger than the default 4 MB OTA slot,
-so 8 MB or 16 MB flash is recommended. The example GPIOs are placeholders: on
-ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so move BCLK/LRCLK/DIN/LED to
-board-safe pins before flashing.
+media, mixer and intercom but omits the timer alarm sound asset and uses
+standalone `esp_aec` with the lightweight `previous_frame` reference. Use
+`generic-s3-full-afe-*` when you want the full Espressif AFE pipeline with
+NS/AGC/VAD, the canonical TYPE2-style software reference and the full timer
+alarm behavior; that profile needs an app slot larger than the default 4 MB OTA
+slot, so 8 MB or 16 MB flash is recommended. The example GPIOs are placeholders:
+on ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so move
+BCLK/LRCLK/DIN/LED to board-safe pins before flashing.
 
 The P4 YAMLs are experimental hardware targets. They are useful for ongoing
 ESP32-P4/LVGL/hosted-Wi-Fi work, but the stable release reference devices are

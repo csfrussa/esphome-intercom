@@ -24,10 +24,10 @@ Primary sources checked:
 Conclusion: the correct Espressif-native layering is not "one GMF graph owns everything" yet. It is also not a grab bag of unrelated IDF examples. The practical stack must stay inside the ESP-IDF/ESP-GMF audio ecosystem:
 
 1. `esp_driver_i2s` for official I2S channel ownership, DMA policy, STD/TDM setup and full-duplex TX/RX handles.
-2. `esp_codec_dev` for codec/no-codec data devices and codec volume/gain/mute; this is also the codec layer used by GMF IO.
+2. `esp_codec_dev` for codec-backed data devices and codec volume/gain/mute; this is also the codec layer used by GMF IO.
 3. `gmf_io/io_codec_dev` for codec read/write IO abstraction, matching `CODEC_DEV_RX` / `CODEC_DEV_TX` in GMF examples.
-4. `gmf_audio` as the GMF audio element family; its rate/bit/channel/data-weaver elements are backed by `esp_audio_effects`.
-5. `esp_audio_effects` C APIs only where ESPHome still owns the loop and a full GMF element graph would add copies. This is not an external replacement library; it is the official implementation layer behind GMF audio effects.
+4. `esp_audio_effects` C APIs where ESPHome still owns the loop and a full GMF element graph would add copies. This is not an external replacement library; it is the official implementation layer behind GMF audio effects.
+5. `gmf_audio` remains a future GMF element-graph option; it is not an active runtime dependency in this branch.
 6. `gmf_ai_audio/esp_gmf_afe_manager` for AFE feed/fetch scheduling and runtime feature control.
 7. ESPHome compatibility glue for microphone, speaker, mixer, VA, MWW and intercom fanout.
 
@@ -96,7 +96,7 @@ Major changes:
 | --- | --- | --- | --- |
 | Single-bus full duplex I2S | `esp_audio_stack` same public behavior | official `esp_driver_i2s` channel pair | Covered |
 | Dual I2S bus RX/TX | `rx_bus` + `tx_bus`, different I2S ports, compile gated | official `esp_driver_i2s` simplex channels per port | Covered |
-| Codec-less MEMS mic + I2S amp | Same YAML knobs, same ESPHome mic/speaker API | `esp_driver_i2s` + `esp_codec_dev` with `codec_if = NULL`; software reference bridge remains ESPHome glue | Covered |
+| Codec-less MEMS mic + I2S amp | Same YAML knobs, same ESPHome mic/speaker API | direct `esp_driver_i2s` read/write; software reference bridge remains ESPHome glue | Covered |
 | ES8311 playback/record codec | `codec.output` / `codec.input` ES8311 support | `esp_codec_dev` + `gmf_io/io_codec_dev` | Covered |
 | ES7210 TDM dual mic | `tdm_mic_slots`, `codec.input.type: es7210` | `esp_driver_i2s` TDM config + `esp_codec_dev` | Covered |
 | Hardware AEC reference from ES8311 stereo feedback | `use_stereo_aec_reference`, `reference_channel` | `esp_codec_dev` data path + `esp_ae_deintlv_process` | Covered |
@@ -157,7 +157,7 @@ Still custom, by design:
 - `git fetch origin --prune` completed.
 - Compared `origin/main..origin/dev`.
 - Compared current working tree against `origin/dev`.
-- Searched active repo for old public names: no matches for `i2s_audio_duplex`, `i2s_duplex`, `I2SAudioDuplex`, `USE_I2S_AUDIO_DUPLEX`, `duplex_microphone`, `duplex_speaker`, or `debug_probe`.
+- Searched maintained code and public YAML/package paths for old public names: no matches for `i2s_audio_duplex`, `i2s_duplex`, `I2SAudioDuplex`, `USE_I2S_AUDIO_DUPLEX`, `duplex_microphone`, `duplex_speaker`, or `debug_probe`.
 - Searched active code for stale board-manager/periph strings and GMF delay macros; active code has no `board_manager`, `periph_i2s`, `ESP_BOARD_*` or `ESP_GMF_MAX_DELAY` references.
 - Searched active code for direct I2S channel data-path calls. The active stack uses `esp_driver_i2s` for channel ownership; codec read/write goes through GMF IO.
 - `python -m py_compile` passed for `esp_audio_stack`, `esp_afe`, `esp_aec`.

@@ -203,6 +203,13 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
 
+# Generic AFE targets are intended for 8 MB or larger flash layouts, so keep
+# the full VA timer alarm that the 4 MB AEC-light profile omits.
+media_player:
+  - id: !extend speaker_media_player
+    files:
+      - id: timer_finished_sound
+        file: ${assets_base}assets/sounds/timer_finished.flac
 
 # =============================================================================
 # Micro Wake Word: Device part
@@ -222,6 +229,8 @@ voice_assistant:
   noise_suppression_level: 2
   auto_gain: 31dBFS
   volume_multiplier: 2.0
+  on_timer_finished:
+    - switch.turn_on: timer_ringing
 
 # =============================================================================
 # Intercom API: Device part
@@ -236,9 +245,40 @@ intercom_api:
     updates_number: 5
 
 # =============================================================================
+# Timer alarm (Generic AFE 8 MB+ only)
+# =============================================================================
+script:
+  - id: timer_alarm_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: timer_ringing
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                media_file: timer_finished_sound
+                announcement: true
+            - delay: 6s
+
+# =============================================================================
 # Switches (device-specific)
 # =============================================================================
 switch:
+  - platform: template
+    id: timer_ringing
+    optimistic: true
+    internal: true
+    restore_mode: ALWAYS_OFF
+    on_turn_off:
+      - script.stop: timer_alarm_loop
+      - media_player.stop:
+          announcement: true
+    on_turn_on:
+      - media_player.stop:
+          announcement: true
+      - script.execute: timer_alarm_loop
+      - delay: 15min
+      - switch.turn_off: timer_ringing
 
 # =============================================================================
 # AEC Mode Select
@@ -317,18 +357,24 @@ binary_sensor:
         then:
           - if:
               condition:
-                not:
-                  - intercom_api.is_idle: intercom
+                switch.is_on: timer_ringing
               then:
-                - intercom_api.call_toggle: intercom
+                - switch.turn_off: timer_ringing
               else:
                 - if:
                     condition:
-                      voice_assistant.is_running:
+                      not:
+                        - intercom_api.is_idle: intercom
                     then:
-                      - voice_assistant.stop:
+                      - intercom_api.call_toggle: intercom
                     else:
-                      - voice_assistant.start:
+                      - if:
+                          condition:
+                            voice_assistant.is_running:
+                          then:
+                            - voice_assistant.stop:
+                          else:
+                            - voice_assistant.start:
       # Double click: next contact
       - timing:
           - ON for 50ms to 500ms

@@ -22,8 +22,7 @@ yamls/
     single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)
 
   full-experience/       VA + MWW + Intercom (complete voice assistant hub)
-    single-bus/
-      afe/               esp_audio_stack + esp_afe
+    single-bus/          esp_audio_stack full profiles
 
   experimental/          Untested topologies (compile-only, contributions welcome)
     dual-bus/            Devices with separate I2S buses for mic and speaker
@@ -37,12 +36,19 @@ building blocks are public packages under `packages/debug/`.
 
 - **Single-bus**: mic and speaker share one I2S peripheral via `esp_audio_stack`. Used by devices with audio codecs (ES8311, ES7210+ES8311). Enables stereo AEC reference, TDM multi-mic, and 48kHz bus rate with Espressif `esp_ae_rate_cvt` conversion to 16kHz.
 
-- **Dual-bus**: mic and speaker on separate I2S peripherals using standard ESPHome `i2s_audio`. Simpler setup for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
+- **Dual-bus**: mic and speaker on separate I2S peripherals using `esp_audio_stack`
+  `rx_bus` and `tx_bus` with official ESP-IDF I2S simplex channels. Simpler setup
+  for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
 
 ## Audio processor: esp_aec vs esp_afe
 
-- **esp_aec**: Lightweight echo cancellation only (~40 KB). Recommended for intercom-only and single-mic setups.
-- **esp_afe**: Full Espressif AFE pipeline (AEC + NS + VAD + AGC + optional dual-mic Speech Enhancement). Higher RAM cost, but adds the full frontend and runtime diagnostics. See the [esp_afe component README](../esphome/components/esp_afe/README.md) for details.
+- **esp_aec**: Lightweight echo cancellation only. Recommended for intercom-only
+  and Generic full-experience 4 MB targets.
+- **esp_afe**: Full Espressif AFE pipeline (AEC + NS + VAD + AGC + optional
+  dual-mic Speech Enhancement). Higher flash/RAM cost, but adds the full
+  frontend and runtime diagnostics. Generic full AFE is intended for app slots
+  larger than the default 4 MB OTA layout, so 8 MB or 16 MB flash is the
+  practical target. See the [esp_afe component README](../esphome/components/esp_afe/README.md) for details.
 
 ## Product mode
 
