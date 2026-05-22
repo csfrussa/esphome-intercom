@@ -13,7 +13,6 @@
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 #include "../audio_processor/log_utils.h"
-#include "../audio_processor/ring_buffer_caps.h"
 #include "../audio_processor/scoped_lock.h"
 #include "../audio_processor/task_utils.h"
 
