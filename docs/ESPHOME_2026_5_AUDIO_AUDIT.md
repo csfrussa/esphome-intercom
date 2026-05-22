@@ -13,7 +13,7 @@ Scope: ESPHome 2026.5.0 audio/media/speaker/microphone componentry, checked agai
 - ESPHome media-player/source volume, which remains the native `speaker::Speaker` volume layer.
 - Board/master output volume, which is our extra hardware/software board control.
 
-`mic_attenuation` was renamed to `input_gain`, because the same control now supports both attenuation and positive gain. Attenuation uses ESPHome/esp-audio-libs Q31 gain in the hot path; positive gain remains local saturating scalar code because the official Q31 API represents attenuation/unity, not amplification above 1.0.
+`mic_attenuation` was renamed to `input_gain`, because the same board-level calibration control now supports both attenuation and positive gain before AEC/AFE. Attenuation uses ESPHome/esp-audio-libs Q31 gain in the hot path; positive pre-processor calibration remains a local saturating scalar because the official Q31 API represents attenuation/unity, not amplification above 1.0.
 
 User-facing `mic_gain` now keeps the same Q31 attenuation path for values at or below 0 dB, while positive gain uses Espressif `esp_ae_alc` from `esp_audio_effects` instead of local scalar boosting. `input_gain` remains board-level calibration before AEC/AFE and is intentionally not exposed as the normal user volume control.
 
