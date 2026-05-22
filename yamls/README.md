@@ -28,9 +28,9 @@ yamls/
   experimental/          Untested topologies (compile-only, contributions welcome)
 ```
 
-Device-specific debug YAMLs live in `yamls/debug/` and are tracked when they are
-reusable lab targets. Only `yamls/debug/secrets.yaml` stays local-only. Reusable
-debug building blocks are public packages under `packages/debug/`.
+Device-specific debug YAMLs live in local-only `yamls/debug/` and are not
+published. Reusable debug building blocks are public packages under
+`packages/debug/`.
 
 ## Single-bus vs Dual-bus
 

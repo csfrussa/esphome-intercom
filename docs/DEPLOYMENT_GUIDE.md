@@ -13,9 +13,8 @@ yamls/
 └── experimental/      bring-up/reference YAMLs, not release baselines
 ```
 
-Reusable lab/debug YAMLs live under `yamls/debug/`. Only
-`yamls/debug/secrets.yaml` stays local-only; reusable debug overlays live under
-`packages/debug/`.
+Device-specific lab/debug YAMLs live under local-only `yamls/debug/`.
+Reusable debug overlays live under `packages/debug/`.
 
 ## Decision tree
 

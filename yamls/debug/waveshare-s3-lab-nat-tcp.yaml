@@ -1,7 +1,0 @@
-packages:
-  base: !include ../full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml
-
-wifi:
-  ssid: !secret debug_lab_wifi_ssid
-  password: !secret debug_lab_wifi_password
-  power_save_mode: NONE
