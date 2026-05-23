@@ -197,12 +197,13 @@ esp_afe:
   # under playback, but on this target it causes TTS/media stutter and any
   # runtime toggle requires a full AFE rebuild.
   agc_enabled: false
-  # Worst-case HTTPS media/TTS + intercom needs contiguous internal/DMA heap for
-  # TLS and I2S. Keep only the large staging ring in PSRAM; the per-frame
-  # scratch and fetch output ring stay internal to avoid PSRAM jitter.
-  feed_buf_in_psram: false      # ~3 KB hot scratch
+  # Worst-case HTTPS media/TTS + intercom needs contiguous internal heap for
+  # ESPHome API frame reads, TLS and I2S. Keep AFE bridge buffers in PSRAM on
+  # this full profile; the small PSRAM latency cost is preferable to API
+  # bad_alloc crashes during Assist/TTS responses.
+  feed_buf_in_psram: true       # ~6 KB hot scratch on 2-mic + ref FD
   feed_ring_in_psram: true      # ~24 KB staging ring on 2-mic + ref FD
-  fetch_ring_in_psram: false    # ~8 KB hot output ring
+  fetch_ring_in_psram: true     # ~8 KB output ring
 
 esp_audio_stack:
   id: audio_stack
