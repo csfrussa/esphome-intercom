@@ -1,5 +1,85 @@
 # Breaking changes
 
+## 2026.5.1: audio stack / GMF migration
+
+`2026.5.1` continues the `2026.5.0` migration and changes the maintained audio
+backend. The supported full-experience profiles and current maintained
+intercom-only profiles are now based on `esp_audio_stack`, not the old
+`i2s_audio_duplex` backend.
+
+If you are already on a late `2026.5.0` test build from `dev`, most changes are
+YAML/package-level. If you are upgrading from `4.x`, read this section and then
+the `2026.5.0` section below.
+
+### YAML tree: maintained audio profiles
+
+Use the maintained YAMLs under `yamls/full-experience/` and
+`yamls/intercom-only/`. Local configs that still include old
+`i2s_audio_duplex` packages should be migrated to the matching
+`esp_audio_stack` profile.
+
+| Old assumption | New behavior |
+|---|---|
+| `i2s_audio_duplex` owns the supported audio path | `esp_audio_stack` owns supported maintained profiles |
+| `intercom_api` can be the standalone full-duplex audio backend for maintained profiles | `intercom_api` should consume/provide call logic through the shared audio stack on maintained profiles |
+| Codec setup is local/manual package glue | Codec boards use `esp_codec_dev` through the audio stack |
+| No-codec boards share the same codec-oriented assumptions | No-codec boards use direct `esp_driver_i2s` read/write through `esp_audio_stack` |
+
+### YAML: Generic profiles split by flash size
+
+Generic S3 profiles are intentionally split:
+
+| Profile | Intended target | Notes |
+|---|---|---|
+| `generic-s3-full-aec-*` | 4 MB devices | Lightweight AEC path. No full AFE/timer sound payload assumptions. |
+| `generic-s3-full-afe-*` | boards with app slot larger than 4 MB | Full AFE path with the richer feature set. Prefer 8 MB or 16 MB flash layouts. |
+
+Do not replace a 4 MB Generic AEC device with the Generic AFE profile unless the
+partition layout actually has enough app-slot headroom.
+
+### YAML: dual-mic AFE boards
+
+Waveshare S3 and P4 dual-mic AFE profiles now expose an AEC-off output policy.
+When AEC is disabled, the profile selects a raw ESP-SR output channel so the
+device really returns a non-AEC mic stream instead of a still-processed BSS/AEC
+output.
+
+If you maintain a custom dual-mic YAML, check the `esp_afe:` block and carry
+over the `aec_off_output` setting from the closest maintained profile.
+
+### YAML: P4 Touch mic gain range
+
+P4 Touch profiles now expose post-AFE `mic_gain` as `-20..30 dB` instead of
+`-20..0 dB`. The ES7210 hardware gain remains configured in the codec block;
+the Home Assistant/LVGL Mic Gain control is the runtime user trim.
+
+### OTA behavior on full LVGL/audio devices
+
+Full LVGL/audio profiles enter an OTA maintenance mode before flashing: media,
+Voice Assistant, Micro Wake Word, intercom, audio stack and LVGL are paused or
+stopped before the OTA write begins. If you copied only pieces of the full YAML,
+make sure your local package set includes the OTA maintenance package used by
+the maintained profiles.
+
+### Home Assistant card/events
+
+The Home Assistant integration/card now expects the unified
+`intercom_native.call_event` model introduced during `2026.5.0`. Legacy event
+names are not kept as a compatibility layer. Update automations to the unified
+event if you skipped the `2026.5.0` migration.
+
+### Build cache
+
+After moving to `2026.5.1`, clear ESPHome build caches once before compiling.
+This matters because the audio backend, IDF managed components and generated
+sdkconfig can change at the same time.
+
+```bash
+find . -type d -name .esphome -prune -exec rm -rf {} +
+```
+
+## 2026.5.0: PBX-lite protocol migration
+
 `2026.5.0` is a major upgrade from the `4.x` line. The project moved from
 "PBX-like" wiring to a real **PBX-lite** protocol: still deliberately small, but
 with the pieces an intercom system needs in practice: endpoint-aware phonebook
