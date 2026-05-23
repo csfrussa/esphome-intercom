@@ -5,9 +5,13 @@
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue)](https://www.home-assistant.io)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## BREAKING CHANGES for 2026.5.0
+## BREAKING CHANGES for 2026.5.1
 
-Upgrading from `4.x`? Read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md) before flashing ESP firmware or restarting Home Assistant.
+Big audio changes are landing in `2026.5.1`: maintained profiles are moving to
+the new `esp_audio_stack` backend built around Espressif's GMF, `esp_driver_i2s`,
+`esp_codec_dev`, `gmf_io` and ESP-SR/AFE paths. If you are upgrading from `4.x`
+or an early `2026.5.0` test build, read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md)
+before flashing ESP firmware or restarting Home Assistant.
 
 ---
 
@@ -62,23 +66,33 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.5.0 - From PBX-like to PBX-lite
+### 2026.5.1 - Espressif GMF audio stack migration
 
-This release turns the intercom layer into a small PBX-lite model: ESPs are independent extensions, Home Assistant can join as a peer, the browser card can act as a softphone, and HA can bridge calls across TCP and UDP when needed.
+This release finishes the first maintained port away from the old
+`i2s_audio_duplex` backend. The supported full-experience and current
+intercom-only profiles now use `esp_audio_stack`, a repo-native ESPHome
+component that keeps the ESPHome microphone/speaker/media-player facade while
+moving the low-level audio work onto Espressif's current stack.
 
-The simple case still stays simple. For a one-button full-duplex doorbell or intercom, start from `yamls/intercom-only/`, adapt the board configuration, install `intercom_native`, and call Home Assistant or another ESP by name. PBX-lite is the model underneath, not a requirement to design a phone system.
+The goal is practical: less custom bus ownership code, fewer local audio
+workarounds, and a backend that can follow ESP-IDF and Espressif audio libraries
+instead of fighting them. Profiles with codec hardware use `esp_codec_dev` and
+GMF codec IO; no-codec profiles use `esp_driver_i2s` directly. Full AFE profiles
+use ESP-SR/GMF AFE paths, including dual-mic raw output selection for boards
+such as Waveshare S3/P4 when AEC is disabled.
 
 Highlights:
 
-- ESP-to-ESP calls, ESP-to-Home Assistant calls, browser softphone calls and HA-bridged calls share the same state model.
-- Ringing, answer, decline, hangup, busy and error reasons are propagated through ESP sensors, the Lovelace card and HA events.
-- Actionable mobile notifications can answer or decline an ESP doorbell call from the Home Assistant app. Answer opens the card and starts the real browser/app audio path; Decline sends a PBX-lite decline back to the ESP.
-- TCP and UDP variants are both provided. TCP is the safer starting point for routed networks and containers; UDP is useful on simple LANs where latency is the priority.
-- Full voice devices can keep media playback, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP.
-- The audio engine was reworked around earlier stack and buffer allocation, cleaner I2S lifecycle, better ducking, AEC reference handling and socket accounting.
-- Media playback can be paused from Home Assistant and resumed later on the ESP.
+- Maintained profiles now run on `esp_audio_stack`; `i2s_audio_duplex` is no longer the backend for the supported YAMLs.
+- I2S ownership is handled through official `esp_driver_i2s` APIs, with codec boards routed through `esp_codec_dev`.
+- Full AFE devices can use Espressif GMF/AFE processing while still exposing normal ESPHome microphone, speaker, media player, mixer and Voice Assistant entities.
+- Codec audio buffers use ESPHome's 2026.5 audio codec PSRAM placement on full profiles, reducing internal RAM pressure.
+- Generic AEC stays lightweight for 4 MB devices; Generic AFE is the full-feature path for larger flash layouts.
+- WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC really returns a non-AEC mic stream instead of a processed BSS/AEC output.
+- Full LVGL/audio devices enter an OTA maintenance mode that stops audio, intercom and UI activity before flashing.
+- The Home Assistant card/integration moved to the unified `intercom_native.call_event` model and shows clearer unavailable-device state.
 
-Read the full release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).
+Read the previous PBX-lite release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).
 
 ---
 
