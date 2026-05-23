@@ -285,8 +285,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
         # DC offset removal for mics with significant DC bias (e.g., SPH0645)
         cv.Optional(CONF_DC_OFFSET_REMOVAL, default=False): cv.boolean,
-        # Place the server / tx / speaker task stacks in PSRAM (saves ~28KB
-        # internal heap on S3/P4 builds where AFE/MWW/LVGL compete for it).
+        # Place intercom network task stacks in PSRAM. Maintained
+        # esp_audio_stack builds only create server/control and TX tasks here;
+        # the standalone speaker task exists only when intercom_api owns audio.
         # Default false: standard dynamic tasks with internal-heap stacks,
         # required on plain ESP32 boards without PSRAM. Set true on full-
         # experience S3/P4/Spotpear Ball v2 builds.
