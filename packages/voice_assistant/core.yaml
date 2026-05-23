@@ -18,6 +18,12 @@
 #   - id `mute`                  : mic mute switch
 # =============================================================================
 
+globals:
+  - id: g_ota_in_progress
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
 voice_assistant:
   id: va
   on_listening:
@@ -105,22 +111,26 @@ voice_assistant:
     - script.execute: update_status
     - script.execute: start_mww_when_ready
   on_client_disconnected:
-    - globals.set:
-        id: g_va_state
-        value: "0"
-    - globals.set:
-        id: g_barge_in_pending
-        value: "0"
-    - globals.set:
-        id: g_mww_recent
-        value: "0"
-    - globals.set:
-        id: g_applied_led
-        value: "-1"
-    - script.stop: mww_failsafe
-    - script.stop: barge_failsafe
-    - micro_wake_word.stop:
-    - script.execute: update_status
+    - if:
+        condition:
+          lambda: return !id(g_ota_in_progress);
+        then:
+          - globals.set:
+              id: g_va_state
+              value: "0"
+          - globals.set:
+              id: g_barge_in_pending
+              value: "0"
+          - globals.set:
+              id: g_mww_recent
+              value: "0"
+          - globals.set:
+              id: g_applied_led
+              value: "-1"
+          - script.stop: mww_failsafe
+          - script.stop: barge_failsafe
+          - micro_wake_word.stop:
+          - script.execute: update_status
 
 micro_wake_word:
   id: mww

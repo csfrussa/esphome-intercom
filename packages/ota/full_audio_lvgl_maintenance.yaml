@@ -16,10 +16,14 @@
 ota:
   - platform: esphome
     on_begin:
+      - esp_audio_stack.suspend_ota_watchdog: audio_stack
       - logger.log:
           level: INFO
           tag: ota
-          format: "OTA begin: pausing full audio runtime and LVGL"
+          format: "OTA begin: loop watchdog suspended, pausing full audio runtime and LVGL"
+      - globals.set:
+          id: g_ota_in_progress
+          value: "true"
       - script.stop: ai_animation_loop
       - script.stop: reply_pagination_timer
       - script.stop: timer_alarm_loop
@@ -37,6 +41,8 @@ ota:
       - script.execute: ota_full_audio_lvgl_restore
     on_error:
       - script.execute: ota_full_audio_lvgl_restore
+    on_end:
+      - esp_audio_stack.restore_ota_watchdog: audio_stack
 
 script:
   - id: ota_full_audio_lvgl_restore
@@ -46,8 +52,12 @@ script:
           level: WARN
           tag: ota
           format: "OTA aborted/failed: restoring full audio runtime and LVGL"
+      - globals.set:
+          id: g_ota_in_progress
+          value: "false"
       - lvgl.resume:
       - esp_audio_stack.start: audio_stack
       - intercom_api.start: intercom
       - script.execute: start_mww_when_ready
       - script.execute: draw_display
+      - esp_audio_stack.restore_ota_watchdog: audio_stack
