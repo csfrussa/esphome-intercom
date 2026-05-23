@@ -24,8 +24,6 @@ from .const import (
 from .transport_base import IntercomTransport
 from . import protocol
 
-DRAIN_INTERVAL = 10  # drain every N audio packets, not every one
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -63,6 +61,7 @@ class IntercomTcpClient(IntercomTransport):
         self._writer: Optional[asyncio.StreamWriter] = None
         self._receive_task: Optional[asyncio.Task] = None
         self._ping_task: Optional[asyncio.Task] = None
+        self._disconnecting = False
 
         _LOGGER.debug("[TCP#%d] Created for %s:%d", self._instance_id, host, port)
 
@@ -111,45 +110,48 @@ class IntercomTcpClient(IntercomTransport):
         )
 
     async def disconnect(self) -> None:
+        if self._disconnecting:
+            return
+        self._disconnecting = True
         _LOGGER.debug("[TCP#%d] Disconnecting", self._instance_id)
 
-        self._set_connected(False, "tcp_disconnect")
-        self._set_streaming(False, "tcp_disconnect")
-        self._set_ringing(False, "tcp_disconnect")
+        try:
+            self._set_connected(False, "tcp_disconnect")
+            self._set_streaming(False, "tcp_disconnect")
+            self._set_ringing(False, "tcp_disconnect")
 
-        self._awaiting_answer_ack = False
-
-        if self._receive_task:
-            self._receive_task.cancel()
-            try:
-                await asyncio.wait_for(self._receive_task, timeout=1.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
-            self._receive_task = None
-
-        if self._ping_task:
-            self._ping_task.cancel()
-            try:
-                await asyncio.wait_for(self._ping_task, timeout=1.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
-            self._ping_task = None
-
-        if self._writer:
-            try:
-                self._writer.close()
-                await asyncio.wait_for(self._writer.wait_closed(), timeout=1.0)
-            except Exception:
-                pass
-            self._writer = None
-            self._reader = None
-
-        if not self._disconnect_notified and self._on_disconnected:
+            self._awaiting_answer_ack = False
             self._disconnect_notified = True
-            self._on_disconnected()
 
-        _LOGGER.debug("[TCP#%d] Disconnected (sent=%d recv=%d)",
-                      self._instance_id, self._audio_sent, self._audio_recv)
+            if self._receive_task:
+                self._receive_task.cancel()
+                try:
+                    await asyncio.wait_for(self._receive_task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                self._receive_task = None
+
+            if self._ping_task:
+                self._ping_task.cancel()
+                try:
+                    await asyncio.wait_for(self._ping_task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                self._ping_task = None
+
+            if self._writer:
+                try:
+                    self._writer.close()
+                    await asyncio.wait_for(self._writer.wait_closed(), timeout=1.0)
+                except Exception:
+                    pass
+                self._writer = None
+                self._reader = None
+
+            _LOGGER.debug("[TCP#%d] Disconnected (sent=%d recv=%d)",
+                          self._instance_id, self._audio_sent, self._audio_recv)
+        finally:
+            self._disconnecting = False
 
     async def start_stream(self, caller_name: str = "") -> str:
         _LOGGER.debug("[TCP#%d] start_stream(caller=%s)",
@@ -269,13 +271,11 @@ class IntercomTcpClient(IntercomTransport):
 
         try:
             self._writer.write(protocol.build_frame(MSG_AUDIO, data))
-
-            if self._audio_sent % DRAIN_INTERVAL == 0:
-                try:
-                    await asyncio.wait_for(self._writer.drain(), timeout=0.1)
-                except asyncio.TimeoutError:
-                    pass  # congestion: skip and push next
+            await asyncio.wait_for(self._writer.drain(), timeout=0.1)
             return True
+        except asyncio.TimeoutError:
+            self._track_audio_drop("drain_timeout", len(data))
+            return False
         except Exception as err:
             _LOGGER.error("[TCP#%d] Audio send error: %s", self._instance_id, err)
             self._track_audio_drop("send_failed", len(data))
@@ -347,7 +347,7 @@ class IntercomTcpClient(IntercomTransport):
         finally:
             self._set_connected(False, "receive_loop_exit")
             self._set_streaming(False, "receive_loop_exit")
-            if not self._disconnect_notified and self._on_disconnected:
+            if not self._disconnecting and not self._disconnect_notified and self._on_disconnected:
                 self._disconnect_notified = True
                 self._on_disconnected()
 

@@ -258,6 +258,12 @@ class IntercomSession:
         if self._active:
             return "streaming"
 
+        while not self._tx_queue.empty():
+            try:
+                self._tx_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
         self._transport = self._create_transport()
 
         if not await self._transport.connect():
@@ -290,6 +296,11 @@ class IntercomSession:
         silent here so the card keeps that reason."""
         self._active = False
         self._ringing = False
+        while not self._tx_queue.empty():
+            try:
+                self._tx_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
         if send_signaling:
             self._fire_terminal_state(
