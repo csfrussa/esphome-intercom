@@ -59,10 +59,9 @@ substitutions:
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
 
-  # P4 uses ES7210 input gain plus the AFE dual-mic profile for capture level.
-  # The user-facing Mic Gain entity is post-AFE trim, so keep it attenuation/unity only.
+  # P4 uses ES7210 hardware gain plus this post-AFE user trim for capture level.
   mic_gain_min: "-20"
-  mic_gain_max: "0"
+  mic_gain_max: "30"
 
   # Home Assistant weather entity used by the P4 dashboard page.
   weather_entity_id: weather.casa
@@ -2011,7 +2010,7 @@ lvgl:
     # that conflicts with the main_page tileview.
     #
     # Bound entities (must exist in the device YAML):
-    #   numbers : master_volume, mic_gain (-20..0 dB post-AFE trim)
+    #   numbers : master_volume, mic_gain (-20..30 dB post-AFE gain)
     #   switches: speaker_mute, mute (mic), auto_answer_switch
     #             dnd_switch, aec_switch, vad_switch
     #             wake_word_switch
