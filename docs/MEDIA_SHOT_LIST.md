@@ -60,7 +60,7 @@ replace individual photos or GIFs if the UI changes before release.
 | `docs/images/pbx-lite-topology.png` | Diagram | Simple mental model | Created: ESP extensions, HA peer, browser card, direct and bridged calls |
 | `docs/images/phonebook-endpoint.png` | Diagram | Endpoint-first phonebook | Created: `Name|protocol|ip|ports`, HA row, subscribers |
 | `docs/images/tcp-udp-choice.png` | Diagram | Transport guidance | Created: TCP for routed/filtered networks, UDP for simple LAN latency |
-| `docs/images/audio-stack.png` | Diagram | Audio components | Created: `intercom_api`, optional `esp_audio_stack`, `esp_aec`, `esp_afe`, media player |
+| `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |
 
 ## Capture order for live demo
 
