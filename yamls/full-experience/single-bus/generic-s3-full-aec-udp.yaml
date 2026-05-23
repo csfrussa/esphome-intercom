@@ -262,7 +262,7 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - esp_audio_stack.stop: audio_stack
+                  - esp_audio_stack.stop_and_wait: audio_stack
                   - esp_aec.set_mode:
                       id: aec_processor
                       mode: !lambda 'return x;'

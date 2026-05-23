@@ -30,7 +30,7 @@ ota:
       - voice_assistant.stop:
       - micro_wake_word.stop:
       - intercom_api.stop: intercom
-      - esp_audio_stack.stop: audio_stack
+      - esp_audio_stack.stop_and_wait: audio_stack
       - lvgl.pause:
           show_snow: false
     on_abort:

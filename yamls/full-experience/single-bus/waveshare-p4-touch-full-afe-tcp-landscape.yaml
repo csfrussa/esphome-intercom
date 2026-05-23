@@ -264,12 +264,11 @@ esp_afe:
   ns_enabled: true              # SE/BSS is structural; keep the dual-mic profile aligned with WS3.
   vad_enabled: false           # MWW covers wake detection; AFE VAD can be enabled for tests.
   agc_enabled: false
-  # Same hybrid placement as WS3 dual-mic AFE: keep per-frame scratch/output
-  # internal for latency, move the larger feed staging ring to PSRAM to preserve
-  # contiguous internal/DMA heap under HTTPS media + TTS + intercom load.
-  feed_buf_in_psram: false
+  # P4 has enough PSRAM bandwidth; keep internal/DMA heap for Hosted SDIO, MIPI
+  # and codec DMA rather than AFE staging.
+  feed_buf_in_psram: true
   feed_ring_in_psram: true
-  fetch_ring_in_psram: false
+  fetch_ring_in_psram: true
 
 esp_audio_stack:
   id: audio_stack
@@ -288,7 +287,7 @@ esp_audio_stack:
   processor_id: afe_processor
   audio_effects:
     rate_cvt_complexity: 3
-    rate_cvt_perf_type: speed
+    rate_cvt_perf_type: memory
   codec:
     i2c_id: internal_i2c
     input:
@@ -3183,7 +3182,7 @@ select:
                       format: "Switching AEC mode to %s"
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
-                  - esp_audio_stack.stop: audio_stack
+                  - esp_audio_stack.stop_and_wait: audio_stack
                   - wait_until:
                       condition:
                         esp_audio_stack.is_idle: audio_stack
