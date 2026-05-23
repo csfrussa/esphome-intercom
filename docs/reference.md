@@ -607,11 +607,14 @@ mode: single
 
 ## Events
 
-All events follow the `<domain>_<event>` HA naming convention.
+Home Assistant uses one unified call event for session, bridge and forward
+updates. Existing ESPHome state sensors are unchanged.
 
 | Event | Payload | When |
 |-------|---------|------|
 | `esphome.intercom_call` | `caller`, `device_id` | ESP calls Home Assistant. |
-| `intercom_native_state_changed` | session-level fields | Session state changes. |
-| `intercom_native_bridge_state_changed` | `bridge_id`, `source_device_id`, `dest_device_id`, `state` | Bridge state changes. |
-| `intercom_native_forward_state_changed` | `bridge_id`, `source_name`, `new_dest_name`, `state` | Call forwarded (forwarding / ringing / connected / failed). |
+| `intercom_native.call_event` | `scope`, `type`, `state`, device/bridge fields, optional `reason` | Session, bridge and forward call updates. |
+
+`type` is the automation-friendly summary (`outgoing`, `ringing`, `answered`,
+`ended`, `missed`, `failed`). `state` keeps the more specific internal state
+such as `calling`, `streaming`, `disconnected` or `declined`.

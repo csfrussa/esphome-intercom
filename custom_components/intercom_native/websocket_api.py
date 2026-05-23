@@ -40,6 +40,8 @@ _bridges: Dict[str, "BridgeSession"] = {}
 # bypassing the event bus (which would require admin privileges).
 _audio_subscribers: Dict[str, set] = {}
 
+CALL_EVENT = "intercom_native.call_event"
+
 
 def _put_latest(queue: asyncio.Queue, data: bytes) -> None:
     """Non-blocking latest-wins enqueue for realtime audio frames."""
@@ -58,6 +60,31 @@ def _put_latest(queue: asyncio.Queue, data: bytes) -> None:
         queue.put_nowait(data)
     except asyncio.QueueFull:
         pass
+
+
+def _call_event_type(state: str, reason: str | None = None) -> str:
+    state_l = (state or "").lower()
+    reason_l = (reason or "").lower()
+    if state_l == "ringing":
+        return "ringing"
+    if state_l in ("calling", "outgoing", "forwarding"):
+        return "outgoing"
+    if state_l in ("connected", "streaming"):
+        return "answered"
+    if state_l in ("error", "failed"):
+        return "failed"
+    if state_l in ("idle", "disconnected", "declined", "ended"):
+        return "missed" if reason_l == TerminalReason.TIMEOUT.value else "ended"
+    return state_l or "state"
+
+
+def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -> None:
+    event = dict(payload)
+    state = str(event.get("state") or "")
+    reason = event.get("reason")
+    event["scope"] = scope
+    event["type"] = _call_event_type(state, str(reason) if reason is not None else None)
+    hass.bus.async_fire(CALL_EVENT, event)
 
 
 from .transport_helpers import (
@@ -129,7 +156,7 @@ class IntercomSession:
         self._terminal_fired = True
         payload = {"device_id": self.device_id, "state": state}
         payload.update(extra)
-        self.hass.bus.async_fire("intercom_native_state_changed", payload)
+        _fire_call_event(self.hass, payload, "session")
 
     def _on_disconnected(self) -> None:
         self._active = False
@@ -145,10 +172,7 @@ class IntercomSession:
     def _on_ringing(self) -> None:
         """ESP is ringing, waiting for local answer."""
         self._ringing = True
-        self.hass.bus.async_fire(
-            "intercom_native_state_changed",
-            {"device_id": self.device_id, "state": "ringing"}
-        )
+        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "ringing"}, "session")
 
     def _on_answered(self) -> None:
         """ESP answered the call, streaming started."""
@@ -159,10 +183,7 @@ class IntercomSession:
         # the was_active check we'd leak a TX task per re-fire.
         if not was_active and (self._tx_task is None or self._tx_task.done()):
             self._tx_task = self.hass.async_create_task(self._tx_sender())
-        self.hass.bus.async_fire(
-            "intercom_native_state_changed",
-            {"device_id": self.device_id, "state": "streaming"}
-        )
+        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "streaming"}, "session")
 
     def _on_stop_received(self) -> None:
         """ESP sent HANGUP from its side."""
@@ -269,10 +290,7 @@ class IntercomSession:
         if not await self._transport.connect():
             return "error"
 
-        self.hass.bus.async_fire(
-            "intercom_native_state_changed",
-            {"device_id": self.device_id, "state": "calling"},
-        )
+        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "calling"}, "session")
 
         caller_name = (self.hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
         result = await self._transport.start_stream(caller_name=caller_name)
@@ -354,13 +372,14 @@ class IntercomSession:
             await self._transport.disconnect()
             return False
         self._ringing = True
-        self.hass.bus.async_fire(
-            "intercom_native_state_changed",
+        _fire_call_event(
+            self.hass,
             {
                 "device_id": self.device_id,
                 "state": "ringing",
                 "caller": caller_name,
             },
+            "session",
         )
         return True
 
@@ -796,7 +815,7 @@ class BridgeSession:
     def _fire_state_event(
         self, state: str, reason: str | None = None, origin: str | None = None,
     ) -> None:
-        """Fire intercom_native_bridge_state_changed.
+        """Fire the unified intercom_native.call_event bridge event.
 
         `origin` ("source"/"dest") lets the card label which leg
         produced the terminal signal; `reason` is the literal protocol
@@ -814,7 +833,7 @@ class BridgeSession:
             payload["reason"] = reason
         if origin is not None:
             payload["origin"] = origin
-        self.hass.bus.async_fire("intercom_native_bridge_state_changed", payload)
+        _fire_call_event(self.hass, payload, "bridge")
 
     def _localized_terminal_reason(
         self, role: str, reason: str | None, origin: str | None,
@@ -851,7 +870,7 @@ class BridgeSession:
             if origin in ("source", "dest"):
                 payload["origin"] = "self" if role == origin else "remote"
                 payload["bridge_origin"] = origin
-            self.hass.bus.async_fire("intercom_native_state_changed", payload)
+            _fire_call_event(self.hass, payload, "session")
 
     def _fire_terminal_event(
         self, state: str, reason: str | None = None, origin: str | None = None,
@@ -884,14 +903,14 @@ class BridgeSession:
     ) -> None:
         payload: dict[str, Any] = {
             "bridge_id": self.bridge_id,
+            "source_device_id": self.source_device_id,
             "source_name": self.source_name,
             "new_dest_name": new_dest_name or self.dest_name,
             "state": state,
         }
         if old_dest_name is not None:
-            payload["source_device_id"] = self.source_device_id
             payload["old_dest_name"] = old_dest_name
-        self.hass.bus.async_fire("intercom_native_forward_state_changed", payload)
+        _fire_call_event(self.hass, payload, "forward")
 
     def _forward_dest_answered(self) -> None:
         _LOGGER.debug("Bridge new dest answered: %s", self.bridge_id)

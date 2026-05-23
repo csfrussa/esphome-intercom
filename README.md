@@ -1,7 +1,7 @@
 # ESPHome Intercom and Full-Duplex Voice for ESP32
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20ESP32--P4-blue)](#hardware-support)
-[![Release](https://img.shields.io/badge/release-2026.5.0-%23008cd0)](custom_components/intercom_native/manifest.json)
+[![Release](https://img.shields.io/badge/release-2026.5.1-%23008cd0)](custom_components/intercom_native/manifest.json)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue)](https://www.home-assistant.io)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 

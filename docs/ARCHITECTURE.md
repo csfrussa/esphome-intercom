@@ -446,7 +446,7 @@ Key points:
 - **Routing policy is per-device, runtime**: `device_independent` dials phonebook peers directly; `ha_pbx` always dials the HA entry and lets HA bridge. `dest_name` is preserved in the payload so HA knows where to forward.
 - **HA peer name is `hass.config.location_name`**: learned from the HA row in `sensor.intercom_phonebook`, or set manually with `esphome.<slug>_set_ha_peer_name` in custom YAML. ESP default is empty; `ha_pbx` with no name logs an ERROR rather than guessing.
 - **Reasons are protocol payload**: `DECLINE(reason)` and terminal reasons (`busy`, `DND`, `remote_device_lost`, etc.) must transit end-to-end. HA bridge forwards them and preserves local/remote perspective instead of replacing them with generic disconnects.
-- **Bus events** (`<domain>_<event>` HA convention): `intercom_native_state_changed` (session), `intercom_native_bridge_state_changed` (bridge), `intercom_native_forward_state_changed` (forward).
+- **Bus events**: HA emits one unified `intercom_native.call_event` with `scope` (`session`, `bridge`, `forward`), automation-friendly `type` (`outgoing`, `ringing`, `answered`, `ended`, `missed`, `failed`) and the original `state`/reason fields.
 
 ### 9.1 Call-state and reason flow
 

@@ -40,15 +40,18 @@ Update any local fork or symlink that pointed at the old paths.
 
 ## Home Assistant: bus events
 
-The three bus events fired by `intercom_native` were renamed to follow the standard `<domain>_<event>` HA convention. If you have automations or scripts triggering on these, update the trigger:
+The separate HA bus events were replaced by one unified call event. If you have
+automations or scripts triggering on these, update the trigger:
 
 | Was | Is |
 |---|---|
-| `intercom_state` | `intercom_native_state_changed` |
-| `intercom_bridge_state` | `intercom_native_bridge_state_changed` |
-| `intercom_forward_state` | `intercom_native_forward_state_changed` |
+| `intercom_state` / `intercom_native_state_changed` | `intercom_native.call_event` with `scope: session` |
+| `intercom_bridge_state` / `intercom_native_bridge_state_changed` | `intercom_native.call_event` with `scope: bridge` |
+| `intercom_forward_state` / `intercom_native_forward_state_changed` | `intercom_native.call_event` with `scope: forward` |
 
-The state-text ESPHome sensor (`sensor.<name>_intercom_state`) is unchanged. Only the HA bus events were renamed.
+Use `type` for automations (`outgoing`, `ringing`, `answered`, `ended`,
+`missed`, `failed`) and `state` when you need the exact internal state. The
+state-text ESPHome sensor (`sensor.<name>_intercom_state`) is unchanged.
 
 ## Home Assistant: phonebook and HA peer name
 

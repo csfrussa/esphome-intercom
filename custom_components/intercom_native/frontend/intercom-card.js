@@ -83,16 +83,14 @@ class IntercomCard extends HTMLElement {
     this._autoAnswering = false;  // Prevents re-entry during auto-answer
     this._deepLinkAnswerConsumed = false;
 
-    // Remote-end progress / ended-call surface. Both come from HA bus
-    // events fired by the bridge (`intercom_native_bridge_state_changed`)
-    // and the session (`intercom_native_state_changed`); we mirror them
-    // here so _render() can switch the outgoing label to "X is ringing..."
+    // Remote-end progress / ended-call surface comes from the unified HA
+    // `intercom_native.call_event` bus event. We mirror it here so _render()
+    // can switch the outgoing label to "X is ringing..."
     // and pop a brief "Call ended. Reason: ..." panel without polling.
     this._destRinging = false;
     this._lastEndInfo = null;          // {peer, reason, until_ms} | null
     this._lastEndClearTimer = null;
-    this._unsubBridgeEvents = null;
-    this._unsubStateEvents = null;
+    this._unsubCallEvents = null;
 
     // Static skeleton: built once per mode, then mutated via textContent/
     // hidden/className. Eliminates innerHTML interpolation of untrusted
@@ -106,13 +104,9 @@ class IntercomCard extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._unsubBridgeEvents) {
-      this._unsubBridgeEvents();
-      this._unsubBridgeEvents = null;
-    }
-    if (this._unsubStateEvents) {
-      this._unsubStateEvents();
-      this._unsubStateEvents = null;
+    if (this._unsubCallEvents) {
+      this._unsubCallEvents();
+      this._unsubCallEvents = null;
     }
     if (this._lastEndClearTimer) {
       clearTimeout(this._lastEndClearTimer);
@@ -126,22 +120,14 @@ class IntercomCard extends HTMLElement {
   }
 
   async _subscribeBusEvents() {
-    if (!this._hass?.connection || this._unsubBridgeEvents) return;
+    if (!this._hass?.connection || this._unsubCallEvents) return;
     try {
-      this._unsubBridgeEvents = await this._hass.connection.subscribeEvents(
-        (e) => this._onBridgeStateEvent(e),
-        "intercom_native_bridge_state_changed",
+      this._unsubCallEvents = await this._hass.connection.subscribeEvents(
+        (e) => this._onCallEvent(e),
+        "intercom_native.call_event",
       );
     } catch (err) {
-      console.warn("intercom-card: failed to subscribe intercom_native_bridge_state_changed", err);
-    }
-    try {
-      this._unsubStateEvents = await this._hass.connection.subscribeEvents(
-        (e) => this._onSessionStateEvent(e),
-        "intercom_native_state_changed",
-      );
-    } catch (err) {
-      console.warn("intercom-card: failed to subscribe intercom_native_state_changed", err);
+      console.warn("intercom-card: failed to subscribe intercom_native.call_event", err);
     }
   }
 
@@ -151,6 +137,34 @@ class IntercomCard extends HTMLElement {
     return payload.source_device_id === myId
         || payload.dest_device_id === myId
         || payload.device_id === myId;
+  }
+
+  _onCallEvent(event) {
+    const scope = (event?.data?.scope || "").toLowerCase();
+    if (scope === "bridge") {
+      this._onBridgeStateEvent(event);
+    } else if (scope === "session") {
+      this._onSessionStateEvent(event);
+    } else if (scope === "forward") {
+      this._onForwardStateEvent(event);
+    }
+  }
+
+  _onForwardStateEvent(event) {
+    const data = event?.data;
+    if (!this._eventConcernsThisCard(data)) return;
+    const st = (data.state || "").toLowerCase();
+    const peer = data.new_dest_name || data.old_dest_name || data.peer_name || "";
+    if (st === "ringing") {
+      this._destRinging = true;
+    } else if (st === "connected") {
+      this._destRinging = false;
+      this._clearEndReason(false);
+    } else if (st === "failed") {
+      this._destRinging = false;
+      this._captureEndReason("error", data.reason || "forward_failed", "remote", peer);
+    }
+    this._render();
   }
 
   _onBridgeStateEvent(event) {
@@ -370,7 +384,7 @@ class IntercomCard extends HTMLElement {
     }
 
     // Subscribe to HA bus events once we have a hass.connection
-    if (hass && !this._unsubBridgeEvents && hass.connection) {
+    if (hass && !this._unsubCallEvents && hass.connection) {
       this._subscribeBusEvents();
     }
 
@@ -520,6 +534,27 @@ class IntercomCard extends HTMLElement {
     return entity?.state || "unknown";
   }
 
+  _isEspUnavailable() {
+    if (!this._hass) return false;
+
+    const configuredDevice = this._availableDevices.find(d => this._deviceMatchesConfig(d));
+    const stateEntityId =
+      this._intercomStateEntityId ||
+      configuredDevice?.entities?.intercom_state;
+    if (stateEntityId) {
+      const state = (this._hass.states[stateEntityId]?.state || "").toLowerCase();
+      return state === "unavailable";
+    }
+
+    const endpointEntityId = configuredDevice?.entities?.intercom_endpoint;
+    if (endpointEntityId) {
+      const state = (this._hass.states[endpointEntityId]?.state || "").toLowerCase();
+      return state === "unavailable";
+    }
+
+    return false;
+  }
+
   // Get caller name from entity
   _getCallerName() {
     if (!this._hass || !this._callerEntityId) return "";
@@ -658,10 +693,12 @@ class IntercomCard extends HTMLElement {
     if (!this._hass) return;
 
     const deviceInfo = await this._getDeviceInfo();
-    if (!deviceInfo?.device_id) return;
+    const configDeviceId = this._getConfigDeviceId();
+    const targetDeviceId = deviceInfo?.device_id || configDeviceId;
+    if (!targetDeviceId) return;
 
     // Use entities mapping from backend
-    if (deviceInfo.entities && typeof deviceInfo.entities === "object") {
+    if (deviceInfo?.entities && typeof deviceInfo.entities === "object") {
       const e = deviceInfo.entities;
       this._intercomStateEntityId = e.intercom_state || null;
       this._transportEntityId = e.intercom_transport || null;
@@ -684,7 +721,7 @@ class IntercomCard extends HTMLElement {
       if (!registry) return;
 
       for (const entity of registry) {
-        if (entity.device_id !== deviceInfo.device_id) continue;
+        if (entity.device_id !== targetDeviceId) continue;
         const id = entity.entity_id;
         if (id.includes("intercom_state")) this._intercomStateEntityId = id;
         else if (id.includes("intercom_transport")) this._transportEntityId = id;
@@ -758,6 +795,7 @@ class IntercomCard extends HTMLElement {
       this._buildSkeletonMain();
       this._skeletonMode = "main";
     }
+    const els = this._els;
 
     const espState = this._getEspState();
     const destination = this._getDestination();
@@ -780,6 +818,26 @@ class IntercomCard extends HTMLElement {
     }
     const displayName = customName || espDeviceName || name;
     espDeviceName = espDeviceName || displayName;
+
+    if (this._isEspUnavailable()) {
+      els.headerName.textContent = this._formatHeaderTitle(displayName);
+      els.destRow.hidden = true;
+      els.offlinePanel.hidden = false;
+      els.answerBtn.hidden = true;
+      els.declineBtn.hidden = true;
+      els.hangupBtn.hidden = true;
+      els.callBtn.hidden = true;
+      els.placeholderBtn.hidden = true;
+      els.autoAnswerRow.hidden = true;
+      els.statusIndicator.className = "status-indicator unavailable";
+      els.statusText.textContent = "ESP unavailable";
+      els.statusReason.textContent = "Device is offline";
+      els.statusReason.hidden = false;
+      els.stats.textContent = "";
+      els.err.textContent = "";
+      return;
+    }
+    els.offlinePanel.hidden = true;
 
     switch (espState.toLowerCase()) {
       case "idle":
@@ -830,8 +888,6 @@ class IntercomCard extends HTMLElement {
 
     if (this._starting) statusText = "Connecting...";
     if (this._stopping) statusText = "Ending call...";
-
-    const els = this._els;
 
     els.headerName.textContent = this._formatHeaderTitle(displayName);
 
@@ -927,6 +983,14 @@ class IntercomCard extends HTMLElement {
       }
 
       .button-container { display: flex; justify-content: center; gap: 20px; margin-bottom: 16px; }
+      .offline-panel {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 8px; min-height: 132px; margin-bottom: 14px;
+        color: var(--error-color, #f44336);
+      }
+      .offline-panel[hidden] { display: none; }
+      .offline-icon ha-icon { --mdc-icon-size: 64px; }
+      .offline-title { font-size: 1.1em; font-weight: 600; color: var(--primary-text-color); }
       .intercom-button {
         width: 100px; height: 100px; border-radius: 50%; border: none; cursor: pointer;
         font-size: 1em; font-weight: bold; transition: all 0.2s ease;
@@ -947,6 +1011,7 @@ class IntercomCard extends HTMLElement {
       .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
       .status-indicator.connected { background: #4caf50; }
       .status-indicator.disconnected { background: #9e9e9e; }
+      .status-indicator.unavailable { background: #f44336; }
       .status-indicator.transitioning { background: #ff9800; animation: blink 0.5s infinite; }
       .status-indicator.ringing { background: #ff9800; animation: blink 0.5s infinite; }
       @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
@@ -996,6 +1061,21 @@ class IntercomCard extends HTMLElement {
     destRow.appendChild(destValueWrap);
     destRow.appendChild(nextBtn);
     card.appendChild(destRow);
+
+    const offlinePanel = document.createElement("div");
+    offlinePanel.className = "offline-panel";
+    offlinePanel.hidden = true;
+    const offlineIcon = document.createElement("div");
+    offlineIcon.className = "offline-icon";
+    const offlineHaIcon = document.createElement("ha-icon");
+    offlineHaIcon.setAttribute("icon", "mdi:phone-off");
+    offlineIcon.appendChild(offlineHaIcon);
+    const offlineTitle = document.createElement("div");
+    offlineTitle.className = "offline-title";
+    offlineTitle.textContent = "ESP unavailable";
+    offlinePanel.appendChild(offlineIcon);
+    offlinePanel.appendChild(offlineTitle);
+    card.appendChild(offlinePanel);
 
     // Button container with all four action buttons + a placeholder.
     // Visibility toggled in _render via [hidden].
@@ -1070,7 +1150,7 @@ class IntercomCard extends HTMLElement {
 
     this._els = {
       headerName,
-      destRow, destValue, prevBtn, nextBtn,
+      destRow, destValue, prevBtn, nextBtn, offlinePanel,
       answerBtn, declineBtn, hangupBtn, callBtn, placeholderBtn,
       statusIndicator, statusText, statusReason,
       autoAnswerRow, autoAnswerCheckbox,
