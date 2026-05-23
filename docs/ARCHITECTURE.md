@@ -90,25 +90,25 @@ All audio components share three conventions:
 | Task | Component | Core | Priority | Stack | Role |
 |------|-----------|:---:|:-------:|:-----:|------|
 | `i2s_audio_task` | `esp_audio_stack` | 0 | 19 | 8 KB PSRAM | I²S read/write, Espressif rate conversion, callbacks |
-| `afe_feed` | `esp_gmf_afe_manager` | 0 | 5 | 3 KB | Pulls frames from ESPHome read callback, calls esp-sr `feed()` |
-| `afe_fetch` | `esp_gmf_afe_manager` | 1 | 5 | 3 KB | Blocks on esp-sr `fetch()`, invokes ESPHome result callback |
+| `afe_feed` | GMF AFE manager under `esp_gmf_afe` | 0 | 5 | 3 KB | Pulls frames from the ESPHome bridge port, calls esp-sr `feed()` |
+| `afe_fetch` | GMF AFE manager under `esp_gmf_afe` | 1 | 5 | 3 KB | Blocks on esp-sr `fetch()`, writes processed frames to the bridge port |
 | `intercom_srv` | `intercom_api` | 1 | 5 | PSRAM static | Transport RX/control and call FSM handoff |
-| `intercom_tx` | `intercom_api` | 0 | 5 | PSRAM static | Mic capture → AEC → network (AEC-own mode) |
-| `intercom_spk` | `intercom_api` | 0 | 4 | PSRAM static | Speaker playback + AEC reference |
+| `intercom_tx` | `intercom_api` | 0 | 5 | PSRAM static | Processed mic frames → network |
+| `intercom_spk` | `intercom_api` standalone only | 0 | 4 | PSRAM static | Speaker playback + AEC reference when `intercom_api.processor_id` owns audio |
 | WiFi / lwIP / TCP-IP | ESP-IDF | 0/1 | 18/23 | n/a | System |
 | MWW inference | `micro_wake_word` | 1 | 1 | n/a | TFLite inference |
 | LVGL | `display` | 1 | 1 | n/a | UI render |
 
 Why the priority choices:
 - **I²S at 19** is between lwIP (18) and WiFi (23): high enough that network can't starve audio, low enough that WiFi stays responsive.
-- **GMF AFE tasks at 5** follow Espressif's `esp_gmf_afe_manager` defaults. The realtime I²S task only stages frames into a bounded bridge; esp-sr feed/fetch run in the manager tasks.
+- **GMF AFE tasks at 5** follow Espressif's `esp_gmf_afe_manager` defaults under the official `esp_gmf_afe` element. The realtime I²S task only stages frames into bounded bridge ports; esp-sr feed/fetch run in the manager tasks.
 - **speaker/MWW/LVGL at 1** is the ESPHome convention for non-realtime work that can tolerate starvation under I/O pressure.
 
 Core affinity:
 - Core 0 is the canonical Espressif AEC core (voice pipeline + ES7210 DMA).
 - Core 1 is reserved for inference (MWW), UI (LVGL) and the GMF AFE fetch side. The GMF feed task follows Espressif's default core 0 placement.
 
-The 2-mic feed path runs through Espressif's GMF AFE manager, not inline in the audio task. Speech Enhancement processing can take longer than one frame under load; if `feed()` were called inline, the audio task would block on the esp-sr internal ring and drop frames.
+The 2-mic feed path runs through Espressif's GMF AFE element/manager, not inline in the audio task. Speech Enhancement processing can take longer than one frame under load; if `feed()` were called inline, the audio task would block on the esp-sr internal ring and drop frames.
 
 ---
 
@@ -323,13 +323,14 @@ bringing up DMA, which makes consumers unit-testable.
 
 PSRAM stacks on S3/PSRAM builds are the ESPHome-blessed pattern for large network/transport tasks where the stack peak is known. Internal RAM stays free for the Speech Enhancement worker and MWW inference. Board YAMLs should opt in only after validating PSRAM stack support for their target. See `esphome/components/intercom_api/intercom_api.h` for the per-task sizing rationale in code comments.
 
-### 6.5 Why `esp_afe` uses the GMF AFE manager tasks
+### 6.5 Why `esp_afe` uses the GMF AFE element
 
-The feed/fetch lifetime is delegated to Espressif's `esp_gmf_afe_manager`.
-It creates the canonical feed and fetch tasks once per AFE instance, suspends
-them with an event bit while idle, and resumes them when ESPHome provides a
-read callback. This removes our previous FreeRTOS task churn while keeping the
-realtime I2S task decoupled from potentially blocking esp-sr `feed()` work.
+The feed/fetch lifetime is delegated to Espressif's `esp_gmf_afe` element and
+its `esp_gmf_afe_manager`. The element runs inside a GMF pipeline/task and the
+manager creates the canonical feed/fetch workers once per AFE instance. ESPHome
+keeps only bounded bridge ports around `process()`, so the realtime I2S task is
+decoupled from potentially blocking esp-sr `feed()` work while WakeNet/command
+state remains owned by ESPHome's normal VA/MWW components.
 
 Single-mic AEC-only targets are intentionally handled by `esp_aec` instead of
 forcing them through this manager. That keeps the topology on Espressif's

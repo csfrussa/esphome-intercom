@@ -68,7 +68,7 @@ The HA peer name in every phonebook is `hass.config.location_name` (NEVER hardco
 | `processor_id` | ID | - | Reference to an `esp_aec` component. Must be `esp_aec`, not `esp_afe`: when `intercom_api` drives its own mic (no `esp_audio_stack` in front), the AFE feed/fetch pipeline cannot be fed correctly. Accepts any `AudioProcessor` implementation at the type level, but only `esp_aec` is supported in practice. |
 | `dc_offset_removal` | bool | false | Remove DC offset (for mics like SPH0645). |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled). |
-| `task_stacks_in_psram` | bool | false | Place the three internal task stacks in PSRAM. Saves ~28 KB internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it. Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Default false keeps `intercom_api` working on plain ESP32 boards without PSRAM; board YAMLs should enable it only after validating their PSRAM stack policy. |
+| `task_stacks_in_psram` | bool | false | Place intercom task stacks in PSRAM: TCP server or UDP recv/control, plus TX. The legacy standalone speaker task exists only when `intercom_api.processor_id` is used without `esp_audio_stack`. Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Default false keeps plain ESP32 builds valid. |
 
 ## Event callbacks
 

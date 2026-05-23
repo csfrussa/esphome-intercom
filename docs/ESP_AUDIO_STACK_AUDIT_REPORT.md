@@ -16,7 +16,7 @@ Primary sources checked:
 - ESP-IDF performance guidance: Wi-Fi runs at priority 23 on Core 0 by default, lwIP TCP/IP at priority 18, and priority 19 on Core 0 is acceptable for time-critical tasks that do not do network operations. Source: <https://docs.espressif.com/projects/esp-idf/en/v5.1/esp32/api-guides/performance/speed.html#task-priorities>
 - `esp_audio_effects`: official modules cover sample-rate conversion, bit conversion, channel conversion, data weaving, mixer, ALC, DRC, MBC, EQ, fade, sonic and howling suppression. Source: <https://components.espressif.com/components/espressif/esp_audio_effects>
 - `esp_codec_dev`: official codec abstraction supports unified playback/record APIs and devices including ES8311 and ES7210. Source: <https://components.espressif.com/components/espressif/esp_codec_dev>
-- `gmf_ai_audio`: official AFE manager owns feed/fetch tasks, dynamic feature toggles and suspend/resume. Source: <https://components.espressif.com/components/espressif/gmf_ai_audio>
+- `gmf_ai_audio`: official `esp_gmf_afe` element plus AFE manager own feed/fetch tasks, dynamic feature toggles and suspend/resume. Source: <https://components.espressif.com/components/espressif/gmf_ai_audio>
 - ESP-GMF `aec_rec` example: playback pipeline uses `CODEC_DEV_TX`, capture pipeline uses `CODEC_DEV_RX -> Rate_cvt -> AEC`. Source: <https://components.espressif.com/components/espressif/gmf_ai_audio/versions/0.8.1/examples/aec_rec>
 - ESP-GMF `wwe` example: wake/AFE pipeline uses `CODEC_DEV_RX -> GMF_AFE -> GMF_PORT`; troubleshooting requires AFE feed/fetch tasks on different CPU cores. Source: <https://components.espressif.com/components/espressif/gmf_ai_audio/versions/0.8.1/examples/wwe>
 - ESP-GMF source defaults: `ESP_AFE_MANAGER_FEED_TASK_CORE=0`, `FETCH_TASK_CORE=1`, both priority 5, stack 3072. Source: <https://github.com/espressif/esp-gmf/blob/main/elements/gmf_ai_audio/include/esp_gmf_afe_manager.h>
@@ -28,7 +28,7 @@ Conclusion: the correct Espressif-native layering is not "one GMF graph owns eve
 3. `gmf_io/io_codec_dev` for codec read/write IO abstraction, matching `CODEC_DEV_RX` / `CODEC_DEV_TX` in GMF examples.
 4. `esp_audio_effects` C APIs where ESPHome still owns the loop and a full GMF element graph would add copies. This is not an external replacement library; it is the official implementation layer behind GMF audio effects.
 5. `gmf_audio` remains a future GMF element-graph option; it is not an active runtime dependency in this branch.
-6. `gmf_ai_audio/esp_gmf_afe_manager` for AFE feed/fetch scheduling and runtime feature control.
+6. `gmf_ai_audio/esp_gmf_afe` plus `esp_gmf_afe_manager` for AFE pipeline ownership, feed/fetch scheduling and runtime feature control.
 7. ESPHome compatibility glue for microphone, speaker, mixer, VA, MWW and intercom fanout.
 
 `esp_board_manager/periph_i2s` was audited and rejected for the runtime backend for now. It is official Espressif code, but its current adapter hardcodes the IDF default channel config (`dma_desc_num=6`, `dma_frame_num=240`) and enables channels during peripheral ref. That loses the existing 10 ms DMA policy and the cleaner ESPHome prepare/open/close lifecycle. Using `esp_driver_i2s` directly is still an Espressif-native path; it is the official lower layer that `periph_i2s` uses internally, not a legacy fallback.
@@ -111,7 +111,7 @@ Major changes:
 | ESPHome mixer/ducking | Still uses ESPHome mixer | Intentional: Espressif mixer not imported to avoid fighting ESPHome media pipeline | Covered by existing ESPHome layer |
 | MWW / VA / intercom fanout | Mic callbacks and consumer registry preserved | ESPHome compatibility glue | Covered |
 | AEC standalone | `esp_aec` remains | `esp-sr` low-level AEC | Covered |
-| Full AFE AEC/NS/AGC/VAD/SE | `esp_afe` remains | `gmf_ai_audio/esp_gmf_afe_manager` + `esp-sr` | Covered |
+| Full AFE AEC/NS/AGC/VAD/SE | `esp_afe` remains | `gmf_ai_audio/esp_gmf_afe` + `esp_gmf_afe_manager` + `esp-sr` | Covered |
 | AFE feed/fetch scheduling | New YAML knobs and validation | official GMF AFE manager task settings | Covered |
 | AFE suspend/resume when no consumers | `esp_afe` active/idle manager control | `esp_gmf_afe_manager_suspend` + read callback install/remove | Covered |
 | Task priority/core tuning | `esp_audio_stack`, `esp_afe`, `gmf_io` knobs | ESP-IDF/GMF task settings | Covered |
@@ -132,7 +132,7 @@ Aligned:
 - `esp_board_manager/periph_i2s` was evaluated as the higher-level official adapter, but the current component stays on `esp_driver_i2s` because that preserves DMA sizing, dual-bus, STD/TDM asymmetry and lifecycle control without leaving the Espressif stack.
 - Codec read/write is now GMF IO wrapped over `esp_codec_dev`, matching the `CODEC_DEV_RX` / `CODEC_DEV_TX` direction of Espressif examples.
 - Format conversion uses the same official `esp_audio_effects` implementation family that GMF `gmf_audio` elements wrap.
-- AFE scheduling uses GMF AFE manager feed/fetch tasks, with exposed task core/priority/stack knobs.
+- AFE scheduling uses the official GMF AFE element and manager feed/fetch tasks, with exposed task core/priority/stack knobs.
 - WS3 heavy profile keeps feed/fetch manager tasks split across cores and keeps `audio_stack` at Core 0 priority 19: below Wi-Fi 23, above lwIP 18, no TCP/IP work inside that task.
 - Registry dependencies are not pinned.
 - ESPHome mixer remains the user-facing mixer, because it already handles media player, ducking and ESPHome API expectations.

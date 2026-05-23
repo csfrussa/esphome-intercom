@@ -193,7 +193,7 @@ intercom_api:
 | `aec_reference_delay_ms` | int | 80 | Legacy standalone AEC ring-buffer pre-fill delay (10-200ms). Ignored when `esp_audio_stack` owns AEC/AFE. |
 | `dc_offset_removal` | bool | false | Remove DC offset from mic signal |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled) |
-| `task_stacks_in_psram` | bool | false | Place the server / tx / speaker task stacks in PSRAM (saves ~28 KB of internal heap on S3/PSRAM builds where AFE/MWW/LVGL compete for it). Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM, otherwise the tasks fail to start and the component is disabled. Board YAMLs should enable it only after validating their PSRAM stack policy. |
+| `task_stacks_in_psram` | bool | false | Place intercom task stacks in PSRAM: TCP server or UDP recv/control, plus the TX task. The standalone speaker task is only compiled when `processor_id` is set on `intercom_api`; maintained `esp_audio_stack` profiles do not include it. Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM. |
 | `buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In legacy standalone mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
 
 ## Product mode
