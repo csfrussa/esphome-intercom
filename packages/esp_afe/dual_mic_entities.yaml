@@ -17,6 +17,7 @@
 substitutions:
   afe_aec_restore_mode: RESTORE_DEFAULT_OFF
   afe_vad_restore_mode: ALWAYS_OFF
+  afe_aec_off_output_initial: official
 
 binary_sensor:
   - platform: esp_afe
@@ -38,3 +39,21 @@ switch:
       name: Voice Activity Detector
       icon: mdi:account-voice
       restore_mode: ${afe_vad_restore_mode}
+
+select:
+  - platform: template
+    name: AEC Off Output
+    id: afe_aec_off_output_select
+    icon: mdi:source-branch
+    options:
+      - "official"
+      - "raw_0"
+      - "raw_1"
+    initial_option: ${afe_aec_off_output_initial}
+    restore_value: true
+    optimistic: false
+    entity_category: diagnostic
+    set_action:
+      - lambda: |-
+          id(afe_processor).set_aec_off_output_name(x.c_str());
+          id(afe_aec_off_output_select).publish_state(id(afe_processor).get_aec_off_output_name());
