@@ -20,8 +20,6 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - **Troubleshooting**: [troubleshooting.md](troubleshooting.md) lists common symptoms (no devices found, no audio, echo, latency, ringing without connect, phonebook/discovery issues) with concrete checks.
 
-- **Findings and known issues**: [findings.md](findings.md) covers upstream limitations we depend on (esp-sr VAD without WakeNet) and design decisions worth pinning (why a custom `esp_audio_stack` instead of stock `i2s_audio`).
-
 ## Per-component docs
 
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:

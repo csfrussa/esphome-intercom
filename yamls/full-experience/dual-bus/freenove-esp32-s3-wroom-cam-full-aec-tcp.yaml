@@ -57,6 +57,7 @@ substitutions:
 
 packages:
   core: !include ../../../packages/va_intercom.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
@@ -101,6 +102,7 @@ api:
 
 ota:
   - platform: esphome
+    id: ota_esphome
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
@@ -257,3 +259,49 @@ select:
                         - micro_wake_word.start:
       - lambda: |-
           id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
+
+binary_sensor:
+  # BOOT button (GPIO0), multi-click
+  - platform: gpio
+    name: Boot Button
+    id: boot_button
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+      # Single click: call toggle if intercom active, otherwise VA start/stop
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                not:
+                  - intercom_api.is_idle: intercom
+              then:
+                - intercom_api.call_toggle: intercom
+              else:
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      - voice_assistant.stop:
+                    else:
+                      - voice_assistant.start:
+      # Double click: next contact
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for at most 300ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - intercom_api.next_contact: intercom
+      # Long press (1-3s): toggle mute
+      - timing:
+          - ON for 1s to 3s
+          - OFF for at least 300ms
+        then:
+          - switch.toggle: mute

@@ -4,8 +4,8 @@
 
 `2026.5.1` continues the `2026.5.0` migration and changes the maintained audio
 backend. The supported full-experience profiles and current maintained
-intercom-only profiles are now based on `esp_audio_stack`, not the old
-`i2s_audio_duplex` backend.
+intercom-only profiles are now based on `esp_audio_stack`, the new shared audio
+backend built around ESP-IDF/Espressif audio libraries.
 
 If you are already on a late `2026.5.0` test build from `dev`, most changes are
 YAML/package-level. If you are upgrading from `4.x`, read this section and then
@@ -14,13 +14,12 @@ the `2026.5.0` section below.
 ### YAML tree: maintained audio profiles
 
 Use the maintained YAMLs under `yamls/full-experience/` and
-`yamls/intercom-only/`. Local configs that still include old
-`i2s_audio_duplex` packages should be migrated to the matching
-`esp_audio_stack` profile.
+`yamls/intercom-only/`. Local configs that still include pre-2026.5.1 audio
+packages should be migrated to the matching `esp_audio_stack` profile.
 
 | Old assumption | New behavior |
 |---|---|
-| `i2s_audio_duplex` owns the supported audio path | `esp_audio_stack` owns supported maintained profiles |
+| A board-local duplex audio component owns the supported audio path | `esp_audio_stack` owns supported maintained profiles |
 | `intercom_api` can be the standalone full-duplex audio backend for maintained profiles | `intercom_api` should consume/provide call logic through the shared audio stack on maintained profiles |
 | Codec setup is local/manual package glue | Codec boards use `esp_codec_dev` through the audio stack |
 | No-codec boards share the same codec-oriented assumptions | No-codec boards use direct `esp_driver_i2s` read/write through `esp_audio_stack` |

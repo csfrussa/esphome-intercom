@@ -336,8 +336,8 @@ The feed/fetch lifetime is delegated to Espressif's `esp_gmf_afe` element and
 its `esp_gmf_afe_manager`. The element runs inside a GMF pipeline/task and the
 manager creates the canonical feed/fetch workers once per AFE instance. ESPHome
 keeps only bounded bridge ports around `process()`, so the realtime I2S task is
-decoupled from potentially blocking esp-sr `feed()` work while WakeNet/command
-state remains owned by ESPHome's normal VA/MWW components.
+decoupled from potentially blocking esp-sr `feed()` work while wake-word and
+assistant state remain owned by ESPHome's normal VA/MWW components.
 
 Single-mic AEC-only targets are intentionally handled by `esp_aec` instead of
 forcing them through this manager. That keeps the topology on Espressif's

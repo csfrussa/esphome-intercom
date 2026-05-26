@@ -68,8 +68,8 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ### 2026.5.1 - Espressif GMF audio stack migration
 
-This release finishes the first maintained port away from the old
-`i2s_audio_duplex` backend. The supported full-experience and current
+This release finishes the first maintained port away from the previous custom
+duplex backend. The supported full-experience and current
 intercom-only profiles now use `esp_audio_stack`, a repo-native ESPHome
 component that keeps the ESPHome microphone/speaker/media-player facade while
 moving the low-level audio work onto Espressif's current stack.
@@ -83,7 +83,7 @@ such as Waveshare S3/P4 when AEC is disabled.
 
 Highlights:
 
-- Maintained profiles now run on `esp_audio_stack`; `i2s_audio_duplex` is no longer the backend for the supported YAMLs.
+- Maintained profiles now run on `esp_audio_stack`; the previous custom duplex backend is no longer used by supported YAMLs.
 - I2S ownership is handled through official `esp_driver_i2s` APIs, with codec boards routed through `esp_codec_dev`.
 - Full AFE devices can use Espressif GMF/AFE processing while still exposing normal ESPHome microphone, speaker, media player, mixer and Voice Assistant entities.
 - Codec audio buffers use ESPHome's 2026.5 audio codec PSRAM placement on full profiles, reducing internal RAM pressure.
@@ -1122,7 +1122,7 @@ Full ESP-SR audio front-end. Chains AEC, optional spatial source separation, noi
 - **AEC** (Acoustic Echo Cancellation) - removes the speaker signal from the mic input. Same engine as `esp_aec`. Required by everything downstream and by wake word detection during a call.
 - **Speech Enhancement** (dual-mic only; ESP-SR BSS internally) - uses the spatial difference between two microphones to isolate the speaker's voice and suppress directional noise (TV, kitchen fan, neighbour talking). Active when `se_enabled: true` and `mic_num: 2`. While Speech Enhancement is on, esp-sr replaces NS and AGC in the pipeline; their toggles become noops until Speech Enhancement is turned off.
 - **NS** (Noise Suppression, single-mic mode) - WebRTC-style spectral noise reduction for stationary background (HVAC hum, fan whir). Less surgical than dual-mic Speech Enhancement but the only option on single-mic boards where spatial separation is impossible.
-- **VAD** (Voice Activity Detection) - marks frames as speech vs noise when the upstream esp-sr VAD state machine is active. In current esp-sr 2.4.x builds the reading is reliable only when WakeNet/micro-wake-word is also initialized against the same AFE. Treat the `voice_present` sensor and `vad_enabled` switch as experimental on VAD-only pipelines.
+- **VAD** (Voice Activity Detection) - marks frames as speech vs noise when the upstream ESP-SR VAD state machine is active. Treat the `voice_present` sensor and `vad_enabled` switch as experimental until validated on your target AFE profile; Micro Wake Word remains ESPHome/TFLite and separate from ESP-SR app-level wake handling.
 - **AGC** (Automatic Gain Control, single-mic mode) - WebRTC-style level normalization that pulls quiet speech up and limits loud peaks. Useful on boards where mic distance varies (room scale).
 
 **Configuration shape**
