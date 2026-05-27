@@ -1387,7 +1387,7 @@ lights, play chimes, or any other automation.
 
 The mobile notification can expose real **Answer** and **Decline** actions:
 
-- The example uses `/dashboard-citofono/0`; replace it with the real dashboard
+- The example uses `/dashboard-intercom/0`; replace it with the real dashboard
   view that contains your `intercom-card`, for example
   `/your-dashboard/your-view`. If Home Assistant generated a URL ending in
   `/0`, that just means the first Lovelace view has no custom path.
@@ -1418,8 +1418,8 @@ actions:
       message: "📞 {{ trigger.event.data.caller }} is calling..."
       data:
         tag: intercom_call
-        clickAction: /dashboard-citofono/0
-        url: /dashboard-citofono/0
+        clickAction: /dashboard-intercom/0
+        url: /dashboard-intercom/0
         channel: doorbell
         importance: high
         ttl: 0
@@ -1427,7 +1427,7 @@ actions:
         actions:
           - action: URI
             title: "✅ Answer"
-            uri: /dashboard-citofono/0?intercom_answer=1
+            uri: /dashboard-intercom/0?intercom_answer=1
           - action: DECLINE_INTERCOM
             title: "❌ Decline"
   - action: persistent_notification.create
