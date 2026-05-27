@@ -85,7 +85,8 @@ I2S amplifier live on separate ESP-IDF I2S controllers. That opens the door to
 shared-bus codecs, dual I2S MEMS/amp builds, TDM reference boards, stereo
 speaker output, configurable software AEC reference, and custom
 VA/intercom/media combinations without rewriting the audio backend for each
-board.
+board. The component-level documentation is in
+[`esp_audio_stack`](esphome/components/esp_audio_stack/README.md).
 
 Highlights:
 
