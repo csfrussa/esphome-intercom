@@ -68,29 +68,45 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ### 2026.5.1 - Espressif GMF audio stack migration
 
-This release finishes the first maintained port away from the previous custom
-duplex backend. The supported full-experience and current
-intercom-only profiles now use `esp_audio_stack`, a repo-native ESPHome
-component that keeps the ESPHome microphone/speaker/media-player facade while
-moving the low-level audio work onto Espressif's current stack.
+`2026.5.1` is the audio-stack release. Maintained full-experience profiles and
+the current intercom-only profiles have moved onto `esp_audio_stack`, a
+repo-native ESPHome backend that keeps the normal ESPHome microphone, speaker,
+media player, mixer, Voice Assistant and Micro Wake Word facade while using the
+current ESP-IDF/Espressif audio building blocks underneath.
 
-The goal is practical: less custom bus ownership code, fewer local audio
-workarounds, and a backend that can follow ESP-IDF and Espressif audio libraries
-instead of fighting them. Profiles with codec hardware use `esp_codec_dev` and
-GMF codec IO; no-codec profiles use `esp_driver_i2s` directly. Full AFE profiles
-use ESP-SR/GMF AFE paths, including dual-mic raw output selection for boards
-such as Waveshare S3/P4 when AEC is disabled.
+In practice this gives the project one real audio framework instead of a set of
+board-specific workarounds. Codec profiles use `esp_codec_dev` and GMF codec IO,
+no-codec profiles use official `esp_driver_i2s` channels directly, conversion
+and layout work is handled by `esp_audio_effects`, and full AFE profiles can run
+through ESP-SR/GMF AFE while still looking like normal ESPHome devices above the
+stack. It now covers both **single-bus** audio devices, where mic and speaker
+share the same I2S bus or codec, and **dual-bus** devices, where a MEMS mic and
+I2S amplifier live on separate ESP-IDF I2S controllers. That opens the door to
+shared-bus codecs, dual I2S MEMS/amp builds, TDM reference boards, stereo
+speaker output, configurable software AEC reference, and custom
+VA/intercom/media combinations without rewriting the audio backend for each
+board.
 
 Highlights:
 
-- Maintained profiles now run on `esp_audio_stack`; the previous custom duplex backend is no longer used by supported YAMLs.
-- I2S ownership is handled through official `esp_driver_i2s` APIs, with codec boards routed through `esp_codec_dev`.
-- Full AFE devices can use Espressif GMF/AFE processing while still exposing normal ESPHome microphone, speaker, media player, mixer and Voice Assistant entities.
-- Codec audio buffers use ESPHome's 2026.5 audio codec PSRAM placement on full profiles, reducing internal RAM pressure.
-- Generic AEC stays lightweight for 4 MB devices; Generic AFE is the full-feature path for larger flash layouts.
-- WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC really returns a non-AEC mic stream instead of a processed BSS/AEC output.
-- Full LVGL/audio devices enter an OTA maintenance mode that stops audio, intercom and UI activity before flashing.
-- The Home Assistant card/integration moved to the unified `intercom_native.call_event` model and shows clearer unavailable-device state.
+- Maintained YAMLs now use `esp_audio_stack`; the previous custom duplex backend is no longer the supported path.
+- Single-bus and dual-bus audio are both first-class supported shapes in the stack.
+- The stack exposes knobs for codec selection, dual-bus RX/TX, stereo mic slot selection, TDM slots, stereo speaker output, PSRAM placement, GMF IO tasks, rate-converter quality and AEC reference policy.
+- Full AFE devices use Espressif GMF/AFE processing behind normal ESPHome microphone/speaker/media entities. Wake word remains ESPHome Micro Wake Word.
+- Codec audio buffers use ESPHome 2026.5 codec PSRAM placement on full profiles, reducing internal RAM pressure.
+- Generic AEC stays lightweight for 4 MB devices; Generic AFE remains the full-feature path for larger flash layouts.
+- WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC really returns a non-AEC mic stream instead of a still-processed BSS/AEC output.
+- Generic dual-bus AEC now supports INMP441-style stereo RX slot selection (`rx_slot_mode: stereo`) while still feeding a mono AEC processor.
+- Full LVGL/audio devices enter OTA maintenance mode before flashing: media, VA, MWW, intercom, audio stack and LVGL are paused/stopped.
+- The Home Assistant integration/card moved to one `intercom_native.call_event` model, improved unavailable-device presentation, and fixed fast re-call cleanup so the card does not tear down browser audio while a new call is starting.
+
+Home Assistant / card changes since the PBX-lite release:
+
+- One automation event: `intercom_native.call_event` carries session, bridge and forward updates with `scope`, `type`, state and reason fields.
+- The card handles unavailable ESP devices explicitly instead of rendering a normal destination row with stale controls.
+- Fast hangup/redial is safer: browser audio cleanup is skipped while a new call is already starting, avoiding muted second calls from the card side.
+- The card keeps the "open device" and integration reload style actions focused on recovery; legacy per-event compatibility shims are not kept.
+- HA services remain explicit and schema-validated: answer, decline with reason, hangup, call, forward and purge devices.
 
 Read the previous PBX-lite release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).
 
@@ -1107,7 +1123,17 @@ for the trade-off in detail.
 
 ### [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
 
-Full-duplex I2S driver that lets mic and speaker share one I2S bus (ES8311, ES8388, WM8960, or MEMS + I2S amp). Runs the codec bus at 48 kHz and converts mic/ref streams to 16 kHz with Espressif `esp_ae_rate_cvt`. Three zero-config AEC reference modes (direct TX, ES8311 stereo loopback, ES7210 TDM), post-processor mic output for MWW/VA/intercom, runtime AEC mode switching from Home Assistant, and optional PSRAM buffer placement.
+Full-duplex audio backend for shared codec buses and no-codec MEMS/amp boards.
+It owns I2S/codec IO, rate conversion, channel layout, software/hardware AEC
+reference capture, speaker buffering and mic consumer fan-out, then exposes
+normal ESPHome `microphone` and `speaker` platforms above that.
+
+The stack can be used without intercom. For custom devices it covers:
+single-bus codecs, dual I2S RX/TX, 32-bit MEMS microphones, stereo RX slot
+selection, ES8311 digital feedback, ES7210 TDM reference, stereo speaker output,
+48 kHz speaker bus with 16 kHz mic/AEC output, PSRAM buffer placement and
+optional GMF codec IO tasks. See the component README for the option table and
+topology examples.
 
 ### [`esp_aec`](esphome/components/esp_aec/README.md)
 
@@ -1361,11 +1387,10 @@ lights, play chimes, or any other automation.
 
 The mobile notification can expose real **Answer** and **Decline** actions:
 
-- Replace every `/lovelace/intercom` below with the real dashboard view that
-  contains your `intercom-card`, for example `/your-dashboard/your-view`. The
-  word `intercom` is not special and no dashboard with that name is required.
-  If Home Assistant generated a URL ending in `/0`, that just means the first
-  Lovelace view has no custom path.
+- The example uses `/dashboard-citofono/0`; replace it with the real dashboard
+  view that contains your `intercom-card`, for example
+  `/your-dashboard/your-view`. If Home Assistant generated a URL ending in
+  `/0`, that just means the first Lovelace view has no custom path.
 - **Answer** must be a `URI` action that opens the dashboard with
   `?intercom_answer=1`. The card is the only place that can request microphone
   permission and create the full-duplex browser or app audio stream.
@@ -1381,7 +1406,7 @@ Assistant, the notification opens the intercom dashboard with
 
 ```yaml
 alias: Doorbell Notification
-description: Send push notification when an ESP calls Home Assistant
+description: Send push notification when doorbell rings
 triggers:
   - trigger: event
     event_type: esphome.intercom_call
@@ -1389,26 +1414,26 @@ conditions: []
 actions:
   - action: notify.mobile_app_your_phone
     data:
-      title: "Incoming Call"
-      message: "{{ trigger.event.data.caller }} is calling..."
+      title: "🔔 Incoming Call"
+      message: "📞 {{ trigger.event.data.caller }} is calling..."
       data:
         tag: intercom_call
-        url: /lovelace/intercom
-        clickAction: /lovelace/intercom
+        clickAction: /dashboard-citofono/0
+        url: /dashboard-citofono/0
         channel: doorbell
         importance: high
         ttl: 0
         priority: high
         actions:
           - action: URI
-            title: "Answer"
-            uri: /lovelace/intercom?intercom_answer=1
+            title: "✅ Answer"
+            uri: /dashboard-citofono/0?intercom_answer=1
           - action: DECLINE_INTERCOM
-            title: "Decline"
+            title: "❌ Decline"
   - action: persistent_notification.create
     data:
-      title: "Incoming Call"
-      message: "{{ trigger.event.data.caller }} is calling..."
+      title: "🔔 Incoming Call"
+      message: "📞 {{ trigger.event.data.caller }} is calling..."
       notification_id: intercom_call
   - wait_for_trigger:
       - trigger: event

@@ -1,8 +1,12 @@
 # =============================================================================
-# FREENOVE ESP32-S3-WROOM CAM FULL AEC TCP - Dual I2S bus, no codec
+# GENERIC ESP32-S3 FULL AEC TCP - Dual I2S bus, no codec
 # =============================================================================
-# Board: Freenove ESP32-S3-WROOM CAM / FNK0085, camera module removed.
-# Chip: ESP32-S3 N8R8, 8 MB flash, 8 MB OPI PSRAM.
+# Generic target: ESP32-S3 board with PSRAM, one INMP441 microphone and one
+# MAX98357A amplifier on separate I2S buses.
+#
+# Tested hardware: Freenove ESP32-S3-WROOM CAM / FNK0085, camera module removed.
+# Tested chip/memory: ESP32-S3 N8R8, 8 MB flash, 8 MB OPI PSRAM.
+# Tested modules: INMP441 digital MEMS microphone, MAX98357A I2S amplifier.
 #
 # Audio pipeline:
 #   INMP441 -> RX I2S bus -> esp_audio_stack (48 kHz) -> esp_ae_rate_cvt -> esp_aec -> VA / Intercom / MWW
@@ -42,8 +46,8 @@
 # =============================================================================
 
 substitutions:
-  name: freenove-s3-cam
-  friendly_name: Freenove S3 CAM
+  name: generic-s3-dual-aec-tcp
+  friendly_name: Generic S3 Dual AEC TCP
 
   ext_components_source: "../../../esphome/components"
   assets_base: "../../../"
@@ -171,6 +175,7 @@ esp_audio_stack:
   slot_bit_width: 32
   correct_dc_offset: true
   mic_channel: right
+  rx_slot_mode: stereo
   processor_id: aec_processor
   aec_reference: ring_buffer
   aec_reference_buffer_ms: 80

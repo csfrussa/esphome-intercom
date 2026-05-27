@@ -53,7 +53,6 @@ class IntercomCard extends HTMLElement {
     this._unsubscribeAudio = null;
     this._chunksSent = 0;
     this._chunksReceived = 0;
-    this._cleanupPromise = null;
 
     // Device info
     this._activeDeviceInfo = null;
@@ -458,7 +457,7 @@ class IntercomCard extends HTMLElement {
 
       // CRITICAL: Cleanup audio when ESP goes to Idle
       if (espStateChanged && newEspState === "idle") {
-        if (this._audioStreaming) {
+        if (this._audioStreaming && !this._starting) {
           this._cleanup();
         }
         this._errorMsg = "";
@@ -1229,15 +1228,12 @@ class IntercomCard extends HTMLElement {
   }
 
   async _startCall() {
-    if (this._starting || this._stopping) return;
     const deviceInfo = await this._getDeviceInfo();
     if (!deviceInfo?.host) {
       this._showError("Device not available");
       return;
     }
 
-    this._clearEndReason(false);
-    await this._cleanup();
     this._activeDeviceInfo = deviceInfo;
     this._starting = true;
     this._errorMsg = "";
@@ -1352,15 +1348,12 @@ class IntercomCard extends HTMLElement {
   }
 
   async _answer() {
-    if (this._starting || this._stopping) return;
     const deviceInfo = await this._getDeviceInfo();
     if (!deviceInfo?.device_id) {
       this._showError("Device not found");
       return;
     }
 
-    this._clearEndReason(false);
-    await this._cleanup();
     this._starting = true;
     this._activeDeviceInfo = deviceInfo;
     this._errorMsg = "";
@@ -1466,25 +1459,17 @@ class IntercomCard extends HTMLElement {
   }
 
   async _cleanup() {
-    if (this._cleanupPromise) return this._cleanupPromise;
-    this._cleanupPromise = (async () => {
-      if (this._unsubscribeAudio) { this._unsubscribeAudio(); this._unsubscribeAudio = null; }
-      if (this._mediaStream) { this._mediaStream.getTracks().forEach(t => t.stop()); this._mediaStream = null; }
-      if (this._workletNode) { this._workletNode.disconnect(); this._workletNode = null; }
-      if (this._source) { this._source.disconnect(); this._source = null; }
-      if (this._audioContext) { await this._audioContext.close().catch(() => {}); this._audioContext = null; }
-      if (this._playbackContext) { await this._playbackContext.close().catch(() => {}); this._playbackContext = null; }
-      this._gainNode = null;
-      this._nextPlayTime = 0;
-      this._activeDeviceInfo = null;
-      this._callMode = null;
-      this._audioStreaming = false;
-    })();
-    try {
-      await this._cleanupPromise;
-    } finally {
-      this._cleanupPromise = null;
-    }
+    if (this._unsubscribeAudio) { this._unsubscribeAudio(); this._unsubscribeAudio = null; }
+    if (this._mediaStream) { this._mediaStream.getTracks().forEach(t => t.stop()); this._mediaStream = null; }
+    if (this._workletNode) { this._workletNode.disconnect(); this._workletNode = null; }
+    if (this._source) { this._source.disconnect(); this._source = null; }
+    if (this._audioContext) { await this._audioContext.close().catch(() => {}); this._audioContext = null; }
+    if (this._playbackContext) { await this._playbackContext.close().catch(() => {}); this._playbackContext = null; }
+    this._gainNode = null;
+    this._nextPlayTime = 0;
+    this._activeDeviceInfo = null;
+    this._callMode = null;
+    this._audioStreaming = false;
   }
 
   async _tryAutoAnswer(options = {}) {

@@ -277,10 +277,10 @@ void IntercomApi::stop() {
   // mode: raw_udp - local close only, no peer signaling.
   if (this->raw_udp_mode_) {
     ESP_LOGI(TAG, "%s: raw_udp stream close", this->device_name_.c_str());
+    this->end_call_(CallEndReason::LOCAL_HANGUP);
+    this->set_active_(false);
     // set_streaming_(false) closes the UDP audio_socket_.
     this->set_streaming_(false);
-    this->set_active_(false);
-    this->end_call_(CallEndReason::LOCAL_HANGUP);
     if (this->transport_) this->transport_->disconnect();
     return;
   }
@@ -298,6 +298,9 @@ void IntercomApi::stop() {
   //   RINGING   -> MSG_DECLINE empty (callee silently dismisses)
   // Peer interprets empty DECLINE as remote_hangup so on_hangup fires
   // instead of on_call_failed.
+  // Mark the terminal reason before signaling or blocking audio teardown.
+  // Otherwise a fast bridge echo can race in and mask a local cancel as remote.
+  this->end_call_(CallEndReason::LOCAL_HANGUP);
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
     if (state == CallState::STREAMING) {
       this->send_pbx_simple_(MessageType::HANGUP, call_id);
@@ -308,7 +311,6 @@ void IntercomApi::stop() {
   this->set_active_(false);
   // set_streaming_(false) closes the UDP audio_socket_.
   this->set_streaming_(false);
-  this->end_call_(CallEndReason::LOCAL_HANGUP);
   if (this->transport_) this->transport_->disconnect();
 }
 
@@ -365,14 +367,14 @@ void IntercomApi::decline_call(const std::string &reason) {
   // DECLINE instead of being seen as a fresh ring.
   this->set_terminal_decline_(call_id, reason);
 
+  this->end_call_(
+      reason.empty() ? CallEndReason::LOCAL_HANGUP : CallEndReason::DECLINED,
+      reason);
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
     this->send_pbx_decline_(call_id, reason);
   }
   this->set_active_(false);
   this->streaming_.store(false, std::memory_order_release);
-  this->end_call_(
-      reason.empty() ? CallEndReason::LOCAL_HANGUP : CallEndReason::DECLINED,
-      reason);
 
   // Disconnect after end_call_ so on_connection_change_(false) sees IDLE
   // and skips the REMOTE_HANGUP path that would mask our trigger.
@@ -876,9 +878,11 @@ handle_incoming_start_in_idle:
                this->device_name_.c_str(),
                in_call_id.c_str());
       this->publish_caller_("");
+      // Order matters: publish the terminal reason before disconnect() can
+      // fire on_connection_change(false) and mask it as REMOTE_HANGUP.
+      this->end_call_(CallEndReason::REMOTE_HANGUP);
       this->set_streaming_(false);
       this->set_active_(false);
-      this->end_call_(CallEndReason::REMOTE_HANGUP);
       if (this->transport_) this->transport_->disconnect();
       break;
     }
@@ -939,17 +943,15 @@ handle_incoming_start_in_idle:
         ESP_LOGI(TAG, "%s: remote declined (no reason) - treating as hangup (call_id=%s)",
                  this->device_name_.c_str(),
                  in_call_id.c_str());
-        this->set_active_(false);
-        this->streaming_.store(false, std::memory_order_release);
         this->end_call_(CallEndReason::REMOTE_HANGUP);
+        this->set_active_(false);
         if (this->transport_) this->transport_->disconnect();
       } else {
         ESP_LOGI(TAG, "%s: remote declined call (%s) (call_id=%s)",
                  this->device_name_.c_str(), in_reason.c_str(),
                  in_call_id.c_str());
-        this->set_active_(false);
-        this->streaming_.store(false, std::memory_order_release);
         this->end_call_(CallEndReason::DECLINED, in_reason);
+        this->set_active_(false);
         if (this->transport_) this->transport_->disconnect();
       }
       break;
@@ -961,9 +963,8 @@ handle_incoming_start_in_idle:
       // Reserved for technical faults. Busy is signalled as DECLINE("busy").
       ESP_LOGE(TAG, "Received ERROR code=%u detail=%s", in_error_code,
                in_error_detail.empty() ? "(none)" : in_error_detail.c_str());
-      this->set_active_(false);
-      this->streaming_.store(false, std::memory_order_release);
       this->end_call_(CallEndReason::PROTOCOL_ERROR, in_error_detail);
+      this->set_active_(false);
       if (this->transport_) this->transport_->disconnect();
       break;
     }

@@ -5,7 +5,10 @@
 `2026.5.1` continues the `2026.5.0` migration and changes the maintained audio
 backend. The supported full-experience profiles and current maintained
 intercom-only profiles are now based on `esp_audio_stack`, the new shared audio
-backend built around ESP-IDF/Espressif audio libraries.
+backend built around ESP-IDF/Espressif audio libraries. This is a backend
+migration, not just a YAML rename: I2S ownership, codec IO, AEC reference
+handling, rate conversion and microphone/speaker lifecycle now live behind the
+audio stack facade.
 
 If you are already on a late `2026.5.0` test build from `dev`, most changes are
 YAML/package-level. If you are upgrading from `4.x`, read this section and then
@@ -23,6 +26,23 @@ packages should be migrated to the matching `esp_audio_stack` profile.
 | `intercom_api` can be the standalone full-duplex audio backend for maintained profiles | `intercom_api` should consume/provide call logic through the shared audio stack on maintained profiles |
 | Codec setup is local/manual package glue | Codec boards use `esp_codec_dev` through the audio stack |
 | No-codec boards share the same codec-oriented assumptions | No-codec boards use direct `esp_driver_i2s` read/write through `esp_audio_stack` |
+
+The user-facing YAML surface is more explicit than before. Custom profiles may
+need to carry over these options from the nearest maintained preset:
+
+| Area | New / important options |
+|---|---|
+| Dual-bus no-codec | `rx_bus`, `tx_bus`, `rx_slot_mode`, `mic_channel`, `slot_bit_width` |
+| Codec devices | `codec.input`, `codec.output`, `use_stereo_aec_reference`, `reference_channel` |
+| TDM boards | `tdm_mic_slots`, `tdm_ref_slot`, `tdm_tx_slot`, `use_tdm_reference` |
+| Speaker output | `num_channels`, `speaker_channels`, `tx_channel` |
+| AEC reference | `aec_reference`, `aec_reference_buffer_ms`, `aec_ref_ring_in_psram` |
+| Runtime resources | `buffers_in_psram`, `audio_task_stack_in_psram`, `gmf_io.reader.*`, `gmf_io.writer.*` |
+
+For INMP441-style modules strapped to one STD stereo slot, use
+`rx_slot_mode: stereo` plus `mic_channel: left/right`. `rx_slot_mode: stereo`
+does not mean stereo microphone output; it means "read both wire slots and
+select the configured mono mic slot in software".
 
 ### YAML: Generic profiles split by flash size
 
@@ -66,6 +86,10 @@ The Home Assistant integration/card now expects the unified
 `intercom_native.call_event` model introduced during `2026.5.0`. Legacy event
 names are not kept as a compatibility layer. Update automations to the unified
 event if you skipped the `2026.5.0` migration.
+
+The card state model also changed around unavailable devices and rapid call
+cleanup. Dashboards should use the current bundled card; old copied card files
+can keep stale `unavailable` handling or browser-audio teardown behavior.
 
 ### Build cache
 

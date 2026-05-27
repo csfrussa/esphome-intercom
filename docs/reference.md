@@ -506,13 +506,13 @@ actions:
               title: "Doorbell"
               message: "{{ trigger.event.data.caller }} is calling"
               data:
-                clickAction: /lovelace/intercom
+                clickAction: /dashboard-citofono/0
                 importance: high
                 channel: doorbell
                 actions:
                   - action: URI
                     title: "Open Intercom"
-                    uri: /lovelace/intercom
+                    uri: /dashboard-citofono/0
 mode: single
 ```
 
@@ -539,9 +539,9 @@ mode: single
 Send a push notification with Answer and Decline actions. If the user taps Decline, the call is ended.
 Answer opens the Lovelace card with `intercom_answer=1`; the card must create the
 phone audio stream, so Answer cannot be a backend-only service call.
-Replace `/lovelace/intercom` with the dashboard view that contains your
-`intercom-card`; the path name is not special. If Home Assistant generated a URL
-ending in `/0`, that simply means the first Lovelace view has no custom path.
+The example uses `/dashboard-citofono/0`; replace it with the dashboard view
+that contains your `intercom-card`. If Home Assistant generated a URL ending in
+`/0`, that simply means the first Lovelace view has no custom path.
 
 ```yaml
 alias: Doorbell notification with actions
@@ -557,11 +557,11 @@ actions:
         tag: intercom
         channel: doorbell
         importance: high
-        clickAction: /lovelace/intercom
+        clickAction: /dashboard-citofono/0
         actions:
           - action: URI
             title: "Answer"
-            uri: /lovelace/intercom?intercom_answer=1
+            uri: /dashboard-citofono/0?intercom_answer=1
           - action: DECLINE_INTERCOM
             title: "Decline"
   - wait_for_trigger:

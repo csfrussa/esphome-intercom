@@ -8,7 +8,10 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - **Quick start examples**: the top-level [README](../README.md#quick-start-examples) now includes practical doorbell, room-to-room intercom, and manual boot phonebook examples.
 
-- **Release 2026.5.0**: [RELEASE_2026_5_0.md](RELEASE_2026_5_0.md) contains the full "From PBX-like to PBX-lite" release note, while [BREAKING_CHANGES.md](BREAKING_CHANGES.md) keeps upgrade risks out of the main README.
+- **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
+  starts with the `2026.5.1` audio-stack/GMF migration notes and keeps upgrade
+  risks out of the main README. [RELEASE_2026_5_0.md](RELEASE_2026_5_0.md)
+  contains the earlier "From PBX-like to PBX-lite" release note.
 
 - **Media refresh plan**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists the screenshots, photos, GIFs and demo scenes that should replace the obsolete README media.
 
@@ -25,7 +28,10 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:
 
 - [`intercom_api`](../esphome/components/intercom_api/README.md), the PBX-lite TCP/UDP transport, call state machine and Home Assistant bridge.
-- [`esp_audio_stack`](../esphome/components/esp_audio_stack/README.md), a full-duplex I²S driver with Espressif rate conversion, AEC reference capture and post-processor mic output.
+- [`esp_audio_stack`](../esphome/components/esp_audio_stack/README.md), the
+  full-duplex audio backend/wiki for shared codec buses, dual I2S MEMS/amp
+  boards, Espressif rate/layout conversion, AEC reference capture, PSRAM
+  placement and post-processor mic output.
 - [`esp_aec`](../esphome/components/esp_aec/README.md), standalone ESP-SR echo cancellation.
 - [`esp_afe`](../esphome/components/esp_afe/README.md), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
 - [`audio_processor`](../esphome/components/audio_processor/README.md), the abstract processor interface that `esp_aec` and `esp_afe` implement.
