@@ -556,7 +556,7 @@ Add the external component to your ESPHome device configuration:
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, intercom_api, esp_aec]
+    components: [audio_processor, intercom_api, esp_audio_stack, esp_aec]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
@@ -565,7 +565,7 @@ external_components:
     components: [audio_processor, intercom_api, esp_afe, esp_audio_stack]
 ```
 
-> **Note**: `audio_processor` must be listed because it provides the shared `AudioProcessor` interface used by both `esp_aec` and `esp_afe`. Use `esp_aec` for lightweight single-mic setups, `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below).
+> **Note**: `audio_processor` must be listed because it provides the shared `AudioProcessor` interface used by both `esp_aec` and `esp_afe`. Use `esp_aec` for lightweight single-mic setups, `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below). Maintained profiles route audio through `esp_audio_stack`; `intercom_api.processor_id` is only for advanced standalone intercom builds without the stack.
 
 #### After ESP Firmware Package Upgrades: Clear ESPHome Build Cache
 
@@ -597,47 +597,50 @@ esp32:
   framework:
     type: esp-idf
 
-# I2S Audio (example with separate mic/speaker)
-i2s_audio:
-  - id: i2s_mic_bus
-    i2s_lrclk_pin: GPIO3
-    i2s_bclk_pin: GPIO2
-  - id: i2s_spk_bus
-    i2s_lrclk_pin: GPIO6
-    i2s_bclk_pin: GPIO7
-
-microphone:
-  - platform: i2s_audio
-    id: mic_component
-    i2s_audio_id: i2s_mic_bus
-    i2s_din_pin: GPIO4
-    adc_type: external
-    pdm: false
-    bits_per_sample: 32bit
-    sample_rate: 16000
-
-speaker:
-  - platform: i2s_audio
-    id: spk_component
-    i2s_audio_id: i2s_spk_bus
-    i2s_dout_pin: GPIO8
-    dac_type: external
-    sample_rate: 16000
-    bits_per_sample: 16bit
-
-# Echo Cancellation (recommended)
+# Echo Cancellation
 esp_aec:
   id: aec_processor
   sample_rate: 16000
-  filter_length: 4       # 64ms tail length
-  mode: voip_low_cost    # Optimized for intercom-only
+  filter_length: 8
+  mode: voip_high_perf   # Intercom-only no-codec default
+
+# ESP audio stack: one owner for I2S, rate conversion, AEC reference and buffers
+esp_audio_stack:
+  id: audio_stack
+  i2s_lrclk_pin: GPIO37
+  i2s_bclk_pin: GPIO36
+  i2s_din_pin: GPIO35
+  i2s_dout_pin: GPIO7
+  sample_rate: 48000
+  output_sample_rate: 16000
+  slot_bit_width: 32
+  correct_dc_offset: true
+  processor_id: aec_processor
+  aec_reference: previous_frame
+  buffers_in_psram: true
+
+microphone:
+  - platform: esp_audio_stack
+    id: mic_component
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: hw_speaker
+    esp_audio_stack_id: audio_stack
+    sample_rate: 48000
+
+  - platform: resampler
+    id: spk_component
+    output_speaker: hw_speaker
+    bits_per_sample: 16
 
 # Intercom API - PBX-lite (no mode: needed)
 intercom_api:
   id: intercom
   microphone: mic_component
   speaker: spk_component
-  processor_id: aec_processor
+  buffers_in_psram: true
 ```
 
 #### Complete Configuration (with HA-managed phonebook)
@@ -649,7 +652,7 @@ intercom_api:
   # is the default; flip to ha_pbx if you want HA to bridge every call.
   microphone: mic_component
   speaker: spk_component
-  processor_id: aec_processor
+  buffers_in_psram: true
   ringing_timeout: 30s        # Auto-decline unanswered calls
 
   # FSM event callbacks
@@ -680,16 +683,20 @@ switch:
     auto_answer:
       name: "Auto Answer"
       restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
     aec:
       name: "Echo Cancellation"
       restore_mode: RESTORE_DEFAULT_ON
 
 # Volume controls
 number:
-  - platform: intercom_api
-    intercom_api_id: intercom
+  - platform: esp_audio_stack
+    esp_audio_stack_id: audio_stack
     master_volume:
       name: "Master Volume"
+      speaker_id: hw_speaker
     mic_gain:
       name: "Mic Gain"
 

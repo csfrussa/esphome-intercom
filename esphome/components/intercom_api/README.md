@@ -194,7 +194,7 @@ intercom_api:
 | `dc_offset_removal` | bool | false | Remove DC offset from mic signal |
 | `ringing_timeout` | time | 0s | Auto-decline after timeout (0 = disabled) |
 | `task_stacks_in_psram` | bool | false | Place intercom task stacks in PSRAM: TCP server or UDP recv/control, plus the TX task. The standalone speaker task is only compiled when `processor_id` is set on `intercom_api`; maintained `esp_audio_stack` profiles do not include it. Requires PSRAM and `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY: "y"`. Leave default `false` on plain ESP32 boards without PSRAM. |
-| `buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In legacy standalone mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
+| `buffers_in_psram` | bool | false | Place intercom staging buffers in PSRAM. In maintained `esp_audio_stack` profiles this covers the network TX chunk and optional mic-conversion scratch only; AEC/AFE buffers live in `esp_audio_stack`. In standalone direct mode it also places `aec_mic`, `aec_ref`, `aec_out` and speaker-reference scratch. |
 
 ## Product mode
 
@@ -772,7 +772,7 @@ The socket pool is sized automatically: `intercom_api` calls `socket.consume_soc
 
 - Verify `processor_id` is linked to `esp_aec` when `intercom_api` owns the mic/speaker path. Use `esp_afe` only behind `esp_audio_stack`.
 - Check the audio processor component is configured
-- Ensure AEC switch is ON for legacy standalone builds. With `esp_audio_stack`,
+- Ensure AEC switch is ON for standalone direct builds. With `esp_audio_stack`,
   use the stack processor controls instead of `intercom_api.switch.aec`.
 
 ### State stuck in "Ringing"

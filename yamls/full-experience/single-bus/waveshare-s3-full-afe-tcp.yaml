@@ -51,7 +51,6 @@ substitutions:
   # Microphone ID for package mute switch
   mic_id: mic_main
   afe_aec_off_output_initial: raw_1
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
 
 # =============================================================================
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons

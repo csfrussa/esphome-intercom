@@ -39,13 +39,12 @@ substitutions:
   assets_base: "../../../"
 
   # Microphone ID for package mute switch
-  mic_id: mic_main
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
-
   # Non-default ports used by the integration test matrix to prove that mDNS,
   # HA phonebook generation, and UDP bridge dialing do not assume 6054/6055.
   intercom_udp_audio_port: "6156"
   intercom_udp_control_port: "6157"
+  mic_id: mic_main
+
 
 # =============================================================================
 # Package: shared VA + Intercom state machine
@@ -243,7 +242,6 @@ voice_assistant:
 intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
-  protocol: udp
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s

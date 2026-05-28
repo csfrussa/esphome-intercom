@@ -10,7 +10,7 @@
 # Board-agnostic baseline. The reference gain pokes here follow the
 # Espressif Korvo-2 AEC design: MIC3 is the DAC/AEC reference input and
 # uses 30 dB PGA gain. Boards may expose MIC3 on different TDM slot indexes;
-# validate slot order with a raw TDM slot probe before overriding PGA gain.
+# validate slot order with a raw TDM slot-map test before overriding PGA gain.
 #
 # Required IDs provided by the consumer:
 #   id: es7210_adc   - the i2c_device block for the ES7210 ADC (I2C 0x40)

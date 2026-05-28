@@ -304,7 +304,7 @@ class IntercomCard extends HTMLElement {
       if (reason === "local_hangup")  return "Local hangup";
       if (reason === "remote_hangup") return who ? `${who} hung up` : "Remote hangup";
       if (reason === "remote_device_lost") return who ? `${who} lost` : "Remote device lost";
-      return "Disconnected";
+      return reason || "Disconnected";
     }
     if (kind === "declined") {
       if (isSelf) return reason ? `Local decline: "${reason}"` : "Local decline";
@@ -462,9 +462,9 @@ class IntercomCard extends HTMLElement {
         }
         this._errorMsg = "";
         this._autoAnswering = false;
-        this._captureMirroredLastReason();
+        if (!this._lastEndInfo) this._captureMirroredLastReason();
       } else if (lastReasonChanged && this._getEspState().toLowerCase() === "idle") {
-        this._captureMirroredLastReason();
+        if (!this._lastEndInfo) this._captureMirroredLastReason();
       }
 
       // Card auto_answer fires only when the ESP is dialling HA itself.
@@ -682,6 +682,8 @@ class IntercomCard extends HTMLElement {
       reasonKey === "local_hangup" ||
       reasonKey === "remote_hangup" ||
       reasonKey === "remote_device_lost";
+    // Mirror mode shows the ESP terminal reason as-is. If the card is a
+    // HA/browser softphone, terminal direction comes from call_event instead.
     this._captureEndReason(
       isHangup ? "disconnected" : "declined",
       reason,

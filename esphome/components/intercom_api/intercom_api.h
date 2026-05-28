@@ -73,12 +73,12 @@ enum class ConnectionState : uint8_t {
 /// opt-in via `protocol: udp`).
 ///
 /// When `processor_id` is set without `esp_audio_stack`, the component keeps
-/// its legacy standalone mic/speaker path and runs AEC inline. Maintained
+/// its standalone direct mic/speaker path and runs AEC inline. Maintained
 /// profiles route processing through `esp_audio_stack`; in that mode
 /// intercom_api is transport/FSM glue and does not compile the standalone AEC
 /// reference/speaker task path.
 ///
-/// One TX FreeRTOS task in maintained esp_audio_stack profiles; the legacy
+/// One TX FreeRTOS task in maintained esp_audio_stack profiles; the standalone
 /// standalone speaker/reference task is compile-time gated behind
 /// USE_INTERCOM_STANDALONE_AUDIO. The recv task is owned by the transport.
 /// See README.md.
@@ -379,7 +379,7 @@ class IntercomApi : public Component {
 #endif
 
 #ifdef USE_INTERCOM_STANDALONE_AUDIO
-  // Speaker task: playback + AEC reference feed (Core 0). Legacy standalone
+  // Speaker task: playback + AEC reference feed (Core 0). Standalone direct
   // path only; esp_audio_stack builds play RX through the configured speaker.
   static void speaker_task(void *param);
   void speaker_task_();

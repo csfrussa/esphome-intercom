@@ -255,7 +255,7 @@ bool IntercomApi::setup_transport_() {
 
 bool IntercomApi::start_runtime_tasks_() {
   const bool use_intercom_aec = this->has_intercom_processor_();
-  // TX task always exists (drains mic_buffer); legacy speaker_task only when
+  // TX task always exists (drains mic_buffer); standalone speaker_task only when
   // intercom_api owns the standalone AEC path.
   if (!audio_processor::start_pinned_task(IntercomApi::tx_task, "intercom_tx",
                                            IntercomApi::kTxTaskStackBytes, this, 5, 0,

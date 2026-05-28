@@ -54,6 +54,17 @@ audio:
 
 This matches ESPHome 2026.5 codec memory controls. Keep Generic AEC light without FLAC/timer assets.
 
+### AFE VAD Lifecycle
+
+`esp_afe` keeps the ESP-SR VAD block structurally initialized and toggles the
+runtime state through Espressif's GMF AFE manager. This avoids rebuilding the
+AFE graph while `esp_audio_stack` has active microphone consumers, and lets
+full AFE profiles expose `Voice Detected` in standby through
+`continuous_vad: true`.
+
+Public full AFE packages use `RESTORE_DEFAULT_OFF` for the VAD switch: first
+boot is quiet, then the user's Home Assistant switch state is preserved.
+
 If MP3 or Opus is added later, apply the same policy:
 
 - MP3: `audio.codecs.mp3.buffer_memory: psram`

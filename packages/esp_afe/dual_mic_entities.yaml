@@ -16,7 +16,7 @@
 
 substitutions:
   afe_aec_restore_mode: RESTORE_DEFAULT_OFF
-  afe_vad_restore_mode: ALWAYS_OFF
+  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
   afe_aec_off_output_initial: official
 
 binary_sensor:

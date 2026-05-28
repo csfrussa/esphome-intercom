@@ -51,7 +51,6 @@ substitutions:
   # Microphone ID for package mute switch
   mic_id: mic_main
   afe_aec_off_output_initial: raw_1
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
 
 # =============================================================================
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
@@ -204,12 +203,13 @@ esp_afe:
   # under playback, but on this target it causes TTS/media stutter and any
   # runtime toggle requires a full AFE rebuild.
   agc_enabled: false
-  # Worst-case HTTPS media/TTS + intercom needs contiguous internal/DMA heap for
-  # TLS and I2S. Keep only the large staging ring in PSRAM; the per-frame
-  # scratch and fetch output ring stay internal to avoid PSRAM jitter.
-  feed_buf_in_psram: false      # ~3 KB hot scratch
+  # Worst-case HTTPS media/TTS + intercom needs contiguous internal heap for
+  # ESPHome API frame reads, TLS and I2S. Keep AFE bridge buffers in PSRAM on
+  # this full profile; the small PSRAM latency cost is preferable to API
+  # bad_alloc crashes during Assist/TTS responses.
+  feed_buf_in_psram: true       # ~6 KB hot scratch on 2-mic + ref FD
   feed_ring_in_psram: true      # ~24 KB staging ring on 2-mic + ref FD
-  fetch_ring_in_psram: false    # ~8 KB hot output ring
+  fetch_ring_in_psram: true     # ~8 KB output ring
 
 esp_audio_stack:
   id: audio_stack
@@ -231,6 +231,10 @@ esp_audio_stack:
   task_core: 0
   task_priority: 19
   task_stack_size: 8192
+  # Official IDF i2s_chan_config_t knob. 240 frames is the IDF/periph_i2s
+  # default and halves the WS3 full-duplex TDM DMA reservation vs the previous
+  # 10ms auto value (~480 frames), recovering ~23 KB contiguous internal heap.
+  dma_frame_num: 240
   gmf_io:
     reader:
       io_size: 0
@@ -320,7 +324,6 @@ voice_assistant:
 intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
-  protocol: udp
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s

@@ -434,7 +434,7 @@ def _final_validate(config):
     if audio_stack_configs:
         if CONF_PROCESSOR_ID in config and config[CONF_PROCESSOR_ID] is not None:
             raise cv.Invalid(
-                "intercom_api.processor_id is standalone legacy audio and cannot be used "
+                "intercom_api.processor_id is standalone direct audio and cannot be used "
                 "when esp_audio_stack is configured. Put processor_id on esp_audio_stack."
             )
 

@@ -90,7 +90,7 @@ def _final_validate(config):
     )
     if not has_standalone_audio:
         raise cv.Invalid(
-            "intercom_api.switch.aec is only available for the legacy standalone "
+            "intercom_api.switch.aec is only available for the standalone direct "
             "intercom_api processor_id path. With esp_audio_stack, put AEC/AFE on "
             "esp_audio_stack and do not create an intercom_api AEC switch."
         )

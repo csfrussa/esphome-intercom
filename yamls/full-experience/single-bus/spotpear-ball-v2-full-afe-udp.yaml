@@ -68,7 +68,6 @@ substitutions:
   voice_assist_error_phase_id: "11"
   voice_assist_muted_phase_id: "12"
   voice_assist_timer_finished_phase_id: "20"
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
 
   # Font configuration
   font_glyphsets: "GF_Latin_Core"
@@ -467,12 +466,11 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# INTERCOM API (UDP-based, ports 6054/6055)
+# INTERCOM API (UDP-based, port 6054)
 # =============================================================================
 intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
-  protocol: udp
   id: intercom
   microphone: mic_afe
   speaker: intercom_speaker

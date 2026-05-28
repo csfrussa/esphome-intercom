@@ -68,7 +68,6 @@ substitutions:
   voice_assist_error_phase_id: "11"
   voice_assist_muted_phase_id: "12"
   voice_assist_timer_finished_phase_id: "20"
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
 
   # Font configuration
   font_glyphsets: "GF_Latin_Core"
