@@ -40,6 +40,7 @@ substitutions:
 
   # Microphone ID for package mute switch
   mic_id: mic_main
+  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
 
   # Non-default port used by the integration test matrix to prove that mDNS,
   # HA phonebook generation, and TCP bridge dialing do not assume 6054.
@@ -153,6 +154,7 @@ esp_afe:
   se_enabled: false
   ns_enabled: true
   vad_enabled: false
+  continuous_vad: true
   agc_enabled: true
   memory_alloc_mode: more_psram
   task_core: 1

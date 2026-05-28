@@ -152,6 +152,7 @@ widgets:
               checked: !lambda 'return id(speaker_mute).state;'
             on_value:
               - lambda: |-
+                  if (x == id(speaker_mute).state) return;
                   if (x) id(speaker_mute).turn_on();
                   else id(speaker_mute).turn_off();
         - label:
@@ -168,6 +169,7 @@ widgets:
               checked: !lambda 'return id(mute).state;'
             on_value:
               - lambda: |-
+                  if (x == id(mute).state) return;
                   if (x) id(mute).turn_on();
                   else id(mute).turn_off();
         - label:
@@ -184,6 +186,7 @@ widgets:
               checked: !lambda 'return id(auto_answer_switch).state;'
             on_value:
               - lambda: |-
+                  if (x == id(auto_answer_switch).state) return;
                   if (x) id(auto_answer_switch).turn_on();
                   else id(auto_answer_switch).turn_off();
         - label:
@@ -200,6 +203,7 @@ widgets:
               checked: !lambda 'return id(dnd_switch).state;'
             on_value:
               - lambda: |-
+                  if (x == id(dnd_switch).state) return;
                   if (x) id(dnd_switch).turn_on();
                   else id(dnd_switch).turn_off();
 
@@ -267,7 +271,6 @@ widgets:
               checked: !lambda 'return id(vad_switch).state;'
             on_value:
               - lambda: |-
-                  if (x == id(vad_switch).state) return;
                   if (x) id(vad_switch).turn_on();
                   else id(vad_switch).turn_off();
 
@@ -300,5 +303,6 @@ widgets:
               checked: !lambda 'return id(wake_word_switch).state;'
             on_value:
               - lambda: |-
+                  if (x == id(wake_word_switch).state) return;
                   if (x) id(wake_word_switch).turn_on();
                   else id(wake_word_switch).turn_off();

@@ -87,9 +87,11 @@ substitutions:
   ic_settings_switch_height: "36"
   ic_settings_label_font: font_body
 
-  # P4 dual-mic profile: SE/BSS is structural; AEC starts off and can be
-  # enabled manually for controlled tests.
-  afe_aec_restore_mode: RESTORE_DEFAULT_OFF
+  # P4 AFE profile: dual mic keeps SE/BSS structural. AEC remains runtime
+  # togglable, but defaults ON because this ES7210/ES8311 path degrades
+  # audibly when AEC is disabled.
+  afe_aec_restore_mode: RESTORE_DEFAULT_ON
+  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
   afe_aec_off_output_initial: raw_1
 
 packages:
@@ -267,6 +269,7 @@ esp_afe:
   se_enabled: true             # Structural dual-mic SE/BSS; no runtime SE toggle.
   ns_enabled: true              # SE/BSS is structural; keep the dual-mic profile aligned with WS3.
   vad_enabled: false           # MWW covers wake detection; AFE VAD can be enabled for tests.
+  continuous_vad: true         # Keep Voice Detected alive in standby when VAD is enabled.
   agc_enabled: false
   # Same hybrid placement as WS3 dual-mic AFE: keep per-frame scratch/output
   # internal for latency, move the larger feed staging ring to PSRAM to preserve
@@ -2156,6 +2159,7 @@ lvgl:
                     checked: !lambda 'return id(speaker_mute).state;'
                   on_value:
                     - lambda: |-
+                        if (x == id(speaker_mute).state) return;
                         if (x) id(speaker_mute).turn_on();
                         else id(speaker_mute).turn_off();
               - label:
@@ -2172,6 +2176,7 @@ lvgl:
                     checked: !lambda 'return id(mute).state;'
                   on_value:
                     - lambda: |-
+                        if (x == id(mute).state) return;
                         if (x) id(mute).turn_on();
                         else id(mute).turn_off();
               - label:
@@ -2188,6 +2193,7 @@ lvgl:
                     checked: !lambda 'return id(auto_answer_switch).state;'
                   on_value:
                     - lambda: |-
+                        if (x == id(auto_answer_switch).state) return;
                         if (x) id(auto_answer_switch).turn_on();
                         else id(auto_answer_switch).turn_off();
               - label:
@@ -2204,6 +2210,7 @@ lvgl:
                     checked: !lambda 'return id(dnd_switch).state;'
                   on_value:
                     - lambda: |-
+                        if (x == id(dnd_switch).state) return;
                         if (x) id(dnd_switch).turn_on();
                         else id(dnd_switch).turn_off();
 
@@ -2318,6 +2325,7 @@ lvgl:
                     checked: !lambda 'return id(wake_word_switch).state;'
                   on_value:
                     - lambda: |-
+                        if (x == id(wake_word_switch).state) return;
                         if (x) id(wake_word_switch).turn_on();
                         else id(wake_word_switch).turn_off();
 
@@ -2610,6 +2618,8 @@ script:
           auto stop_anim = [&]() {
             id(ai_animation_loop).stop();
             lv_anim_del(id(idle_animation), nullptr);
+            lv_animimg_start(id(idle_animation));
+            lv_anim_del(id(idle_animation), nullptr);
           };
 
           // Overlay pages (full-screen, cover everything)
@@ -2724,7 +2734,10 @@ script:
                   - script.execute: ai_animation_loop
           else:
             - script.stop: ai_animation_loop
-            - lambda: lv_anim_del(id(idle_animation), nullptr);
+            - lambda: |-
+                lv_anim_del(id(idle_animation), nullptr);
+                lv_animimg_start(id(idle_animation));
+                lv_anim_del(id(idle_animation), nullptr);
       # Self-heal: ensure MWW is active when idle
       - if:
           condition:
@@ -2751,6 +2764,8 @@ script:
       - lambda: |-
           lv_anim_del(id(idle_animation), nullptr);
           lv_animimg_set_repeat_count(id(idle_animation), 0);
+          lv_animimg_start(id(idle_animation));
+          lv_anim_del(id(idle_animation), nullptr);
       - while:
           condition:
             lambda: return true;
