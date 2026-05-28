@@ -267,6 +267,7 @@ widgets:
               checked: !lambda 'return id(vad_switch).state;'
             on_value:
               - lambda: |-
+                  if (x == id(vad_switch).state) return;
                   if (x) id(vad_switch).turn_on();
                   else id(vad_switch).turn_off();
 
