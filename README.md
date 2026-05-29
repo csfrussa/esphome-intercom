@@ -1395,9 +1395,9 @@ lights, play chimes, or any other automation.
 
 The mobile notification can expose real **Answer** and **Decline** actions:
 
-- The example uses `/dashboard-intercom/0`; replace it with the real dashboard
-  view that contains your `intercom-card`, for example
-  `/your-dashboard/your-view`. If Home Assistant generated a URL ending in
+- Replace `/dashboard-intercom/0` below with the real dashboard view that
+  contains your `intercom-card`, for example `/your-dashboard/your-view`. The
+  word `intercom` is not special. If Home Assistant generated a URL ending in
   `/0`, that just means the first Lovelace view has no custom path.
 - **Answer** must be a `URI` action that opens the dashboard with
   `?intercom_answer=1`. The card is the only place that can request microphone
@@ -1414,7 +1414,7 @@ Assistant, the notification opens the intercom dashboard with
 
 ```yaml
 alias: Doorbell Notification
-description: Send push notification when doorbell rings
+description: Send push notification when an ESP calls Home Assistant
 triggers:
   - trigger: event
     event_type: esphome.intercom_call
