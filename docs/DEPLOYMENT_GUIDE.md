@@ -16,6 +16,12 @@ yamls/
 Device-specific lab/debug YAMLs live under local-only `yamls/debug/`.
 Reusable debug overlays live under `packages/debug/`.
 
+## Minimum versions
+
+- ESPHome `2026.5.x` or newer is required for the maintained YAMLs.
+- Home Assistant Core `2026.5.0` or newer is required for the bundled
+  `intercom_native` integration/card.
+
 ## Decision tree
 
 Follow the first branch that matches your hardware and intent.

@@ -14,6 +14,14 @@ If you are already on a late `2026.5.0` test build from `dev`, most changes are
 YAML/package-level. If you are upgrading from `4.x`, read this section and then
 the `2026.5.0` section below.
 
+### Minimum versions
+
+- ESPHome `2026.5.x` or newer is required for the maintained YAMLs.
+- Home Assistant Core `2026.5.0` or newer is required for the bundled
+  `intercom_native` integration/card.
+- HACS metadata now declares the same Home Assistant minimum instead of the old
+  permissive `2024.4.0` value.
+
 ### YAML tree: maintained audio profiles
 
 Use the maintained YAMLs under `yamls/full-experience/` and

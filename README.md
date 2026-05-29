@@ -13,6 +13,13 @@ the new `esp_audio_stack` backend built around Espressif's GMF, `esp_driver_i2s`
 or an early `2026.5.0` test build, read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md)
 before flashing ESP firmware or restarting Home Assistant.
 
+Minimum versions for this release:
+
+- **ESPHome**: `2026.5.x` or newer. The maintained YAMLs use ESPHome 2026.5
+  audio/media APIs and IDF component resolution behavior.
+- **Home Assistant Core**: `2026.5.0` or newer for the bundled
+  `intercom_native` integration and Lovelace card.
+
 ---
 
 From a single ESPHome full-duplex doorbell to a multi-device intercom over Home Assistant, all the way to a complete Voice Assistant setup with wake word detection, echo cancellation and an LVGL touchscreen UI.
@@ -540,6 +547,7 @@ The integration will:
 
 #### Network requirements
 
+- **Minimum Home Assistant Core**: 2026.5.0.
 - **Tested on**: Home Assistant OS 17.3 with Home Assistant Core 2026.5.1.
 - **HA OS / Supervised**: container is `--network=host` by default. Works.
 - **HA Container (Docker)**: must be started with `--network=host` (also recommended by official HA docs). Bridge mode would need manual port forwarding plus an mDNS reflector and a `network: announced_addresses` override (not recommended).
@@ -550,6 +558,9 @@ If `network.async_get_announce_addresses(hass)` returns empty, the integration l
 ### 2. ESPHome Component
 
 Add the external component to your ESPHome device configuration:
+
+Minimum ESPHome version: **2026.5.x**. Older ESPHome releases are not supported
+by the maintained `esp_audio_stack` YAMLs.
 
 ```yaml
 # Lightweight (single-mic, echo cancellation only):
