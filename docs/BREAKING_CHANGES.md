@@ -1,8 +1,8 @@
 # Breaking changes
 
-## 2026.5.1: audio stack / GMF migration
+## 2026.6.0: audio stack / GMF migration
 
-`2026.5.1` continues the `2026.5.0` migration and changes the maintained audio
+`2026.6.0` continues the `2026.5.0` migration and changes the maintained audio
 backend. The supported full-experience profiles and current maintained
 intercom-only profiles are now based on `esp_audio_stack`, the new shared audio
 backend built around ESP-IDF/Espressif audio libraries. This is a backend
@@ -25,7 +25,7 @@ the `2026.5.0` section below.
 ### YAML tree: maintained audio profiles
 
 Use the maintained YAMLs under `yamls/full-experience/` and
-`yamls/intercom-only/`. Local configs that still include pre-2026.5.1 audio
+`yamls/intercom-only/`. Local configs that still include pre-2026.6.0 audio
 packages should be migrated to the matching `esp_audio_stack` profile.
 
 | Old assumption | New behavior |
@@ -101,7 +101,7 @@ can keep stale `unavailable` handling or browser-audio teardown behavior.
 
 ### Build cache
 
-After moving to `2026.5.1`, clear ESPHome build caches once before compiling.
+After moving to `2026.6.0`, clear ESPHome build caches once before compiling.
 This matters because the audio backend, IDF managed components and generated
 sdkconfig can change at the same time.
 

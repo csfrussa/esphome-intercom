@@ -1,13 +1,13 @@
 # ESPHome Intercom and Full-Duplex Voice for ESP32
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20ESP32--P4-blue)](#hardware-support)
-[![Release](https://img.shields.io/badge/release-2026.5.1-%23008cd0)](custom_components/intercom_native/manifest.json)
+[![Release](https://img.shields.io/badge/release-2026.6.0-%23008cd0)](custom_components/intercom_native/manifest.json)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue)](https://www.home-assistant.io)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## BREAKING CHANGES for 2026.5.1
+## BREAKING CHANGES for 2026.6.0
 
-Big audio changes are landing in `2026.5.1`: maintained profiles are moving to
+Big audio changes are landing in `2026.6.0`: maintained profiles are moving to
 the new `esp_audio_stack` backend built around Espressif's GMF, `esp_driver_i2s`,
 `esp_codec_dev`, `gmf_io` and ESP-SR/AFE paths. If you are upgrading from `4.x`
 or an early `2026.5.0` test build, read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md)
@@ -73,9 +73,9 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.5.1 - Espressif GMF audio stack migration
+### 2026.6.0 - Espressif GMF audio stack migration
 
-`2026.5.1` is the audio-stack release. Maintained full-experience profiles and
+`2026.6.0` is the audio-stack release. Maintained full-experience profiles and
 the current intercom-only profiles have moved onto `esp_audio_stack`, a
 repo-native ESPHome backend that keeps the normal ESPHome microphone, speaker,
 media player, mixer, Voice Assistant and Micro Wake Word facade while using the
