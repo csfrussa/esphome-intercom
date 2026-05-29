@@ -10,7 +10,7 @@
 #     p4_base:
 #       url: https://github.com/n-IA-hane/esphome-intercom
 #       file: packages/platform/esp32p4_base.yaml
-#       ref: audio-core-v2
+#       ref: main
 # =============================================================================
 
 esp32:

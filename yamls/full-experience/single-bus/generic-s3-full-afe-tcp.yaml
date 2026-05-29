@@ -34,9 +34,9 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -49,19 +49,19 @@ substitutions:
 # Package: shared VA + Intercom state machine
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_intercom.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_single.yaml
-  led_state_full: !include ../../../packages/led/state_full_single.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@main
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@main
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@main
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@main
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@main
+  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_single.yaml@main
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k.yaml@main
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k.yaml@main
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@main
 
 esphome:
   name: ${name}

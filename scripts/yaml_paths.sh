@@ -185,9 +185,29 @@ to_remote() {
 
   # 3) packages.
   # If a YAML is already remote, retarget existing github:// package entries
-  # first. This is the release case: dev -> main should not require a
-  # local-mode roundtrip just to change the branch suffix.
-  sed -i -E "s|^([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*github://[^/]+/[^/]+/[^@[:space:]]+)@[^[:space:]]+|\1@${branch}|" "$f"
+  # that point to this repo first. This is the release case: dev -> main
+  # should not require a local-mode roundtrip just to change the branch suffix.
+  #
+  # Keep third-party github:// packages untouched. Some upstream release YAMLs
+  # deliberately live on a non-main branch, and rewriting those would create a
+  # broken preset even though our own packages/components are correctly remote.
+  local remote_lines
+  remote_lines=$(grep -nE '^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*github://' "$f" || true)
+  if [[ -n "$remote_lines" ]]; then
+    while IFS= read -r line_info; do
+      local lineno orig prefix value inner new
+      lineno=$(echo "$line_info" | cut -d: -f1)
+      orig=$(sed -n "${lineno}p" "$f")
+      prefix=$(echo "$orig" | sed -E 's|^([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*).*|\1|')
+      value=$(echo "$orig" | sed -E 's|^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*([^[:space:]]+).*$|\1|')
+      if [[ "$value" == "$url/"*@* ]]; then
+        inner="${value#"$url/"}"
+        inner="${inner%@*}"
+        new="${prefix}${url}/${inner}@${branch}"
+        awk -v ln="$lineno" -v repl="$new" 'NR==ln{print repl; next}{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+      fi
+    done <<< "$remote_lines"
+  fi
 
   # Then convert local includes:
   # each "<key>: !include <relpath>" -> "<key>: github://OWNER/REPO/INNER@BRANCH"

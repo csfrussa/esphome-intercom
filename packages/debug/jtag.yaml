@@ -15,7 +15,7 @@
 #     jtag:
 #       url: https://github.com/n-IA-hane/esphome-intercom
 #       file: packages/debug/jtag.yaml
-#       ref: audio-core-v2
+#       ref: main
 # =============================================================================
 
 esp32:

@@ -12,7 +12,7 @@
 #     s3_base:
 #       url: https://github.com/n-IA-hane/esphome-intercom
 #       file: packages/platform/esp32s3_base.yaml
-#       ref: audio-core-v2
+#       ref: main
 # =============================================================================
 
 esp32:
