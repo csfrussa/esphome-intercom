@@ -180,9 +180,7 @@ script:
                   micro_wake_word.is_running:
               - not:
                   media_player.is_announcing:
-              - lambda: |-
-                  std::string ic_state = id(intercom).get_state_str();
-                  return ic_state == "Idle" || ic_state.empty();
+              - intercom_api.is_idle: intercom
           then:
             - logger.log:
                 tag: mww
@@ -194,6 +192,19 @@ script:
                 if (mww_task) {
                   vTaskPrioritySet(mww_task, 8);
                 }
+          else:
+            - logger.log:
+                level: INFO
+                tag: mww
+                format: "MWW: safe start skipped init=%d enabled=%d mute=%d va=%d mww=%d announcing=%d intercom_idle=%d"
+                args:
+                  - id(init_in_progress)
+                  - id(g_wake_word_enabled)
+                  - id(mute).state
+                  - id(va).is_running()
+                  - id(mww).is_running()
+                  - id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING
+                  - id(intercom).is_idle()
 
   # Core scripts
   - id: va_end_handler
