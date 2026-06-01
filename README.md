@@ -134,47 +134,6 @@ Changes since `2026.6.0`:
 - The Lovelace card config key is now `show_extended_info`. The old
   `show_protocol` key is not kept as a compatibility alias.
 
-### 2026.6.0 - Espressif GMF audio stack migration
-
-`2026.6.0` is the audio-stack release. Maintained full-experience profiles and
-the current intercom-only profiles moved onto `esp_audio_stack`, a repo-native
-ESPHome backend that keeps the normal ESPHome microphone, speaker, media player,
-mixer, Voice Assistant and Micro Wake Word facade while using the current
-ESP-IDF/Espressif audio building blocks underneath.
-
-In practice this gives the project one real audio framework instead of a set of
-board-specific workarounds. Codec profiles use `esp_codec_dev` and GMF codec IO,
-no-codec profiles use official `esp_driver_i2s` channels directly, conversion
-and layout work is handled by `esp_audio_effects`, and full AFE profiles can run
-through ESP-SR/GMF AFE while still looking like normal ESPHome devices above the
-stack. It covers both **single-bus** audio devices, where mic and speaker share
-the same I2S bus or codec, and **dual-bus** devices, where a MEMS mic and I2S
-amplifier live on separate ESP-IDF I2S controllers. The component-level
-documentation is in [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md).
-
-Highlights from `2026.6.0`:
-
-- Maintained YAMLs use `esp_audio_stack`; the previous custom duplex backend is
-  no longer the supported path.
-- Single-bus and dual-bus audio are both first-class supported shapes in the
-  stack.
-- The stack exposes knobs for codec selection, dual-bus RX/TX, stereo mic slot
-  selection, TDM slots, stereo speaker output, PSRAM placement, GMF IO tasks,
-  rate-converter quality and AEC reference policy.
-- Full AFE devices use Espressif GMF/AFE processing behind normal ESPHome
-  microphone/speaker/media entities. Wake word remains ESPHome Micro Wake Word.
-- Codec audio buffers use ESPHome 2026.5 codec PSRAM placement on full profiles,
-  reducing internal RAM pressure.
-- Generic AEC stays lightweight for 4 MB devices; Generic AFE remains the
-  full-feature path for larger flash layouts.
-- WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC
-  really returns a non-AEC mic stream instead of a still-processed BSS/AEC
-  output.
-- Generic dual-bus AEC supports INMP441-style stereo RX slot selection
-  (`rx_slot_mode: stereo`) while still feeding a mono AEC processor.
-- Full LVGL/audio devices enter OTA maintenance mode before flashing: media, VA,
-  MWW, intercom, audio stack and LVGL are paused/stopped.
-
 Read the previous PBX-lite release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).
 
 ---
