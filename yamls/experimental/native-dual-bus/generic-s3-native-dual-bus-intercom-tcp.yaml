@@ -57,6 +57,7 @@ packages:
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   ha_api: !include ../../../packages/intercom/ha_api.yaml
+  intercom_buttons: !include ../../../packages/intercom/buttons_base.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
 
@@ -145,15 +146,17 @@ i2s_audio:
     i2s_bclk_pin: GPIO12
     i2s_lrclk_pin: GPIO13
 
-# Native ESPHome microphone. INMP441 is strapped to the right slot; ESPHome
-# exposes that as one mono channel.
+# Native ESPHome microphone. INMP441 is strapped to the right slot. Keep the
+# wire as stereo and let MicrophoneSource select channel 1; this matches the
+# stable esp_audio_stack path and avoids mono-slot silence on some IDF/board
+# combinations.
 microphone:
   - platform: i2s_audio
     id: native_mic_raw
     adc_type: external
     i2s_audio_id: rx_i2s
     i2s_din_pin: GPIO11
-    channel: right
+    channel: stereo
     sample_rate: 16000
     bits_per_sample: 32bit
     correct_dc_offset: true
@@ -179,7 +182,7 @@ intercom_api:
   microphone_source:
     microphone: native_mic_raw
     bits_per_sample: 16
-    channels: [0]
+    channels: [1]
     gain_factor: 1
   speaker: intercom_speaker
   dc_offset_removal: false

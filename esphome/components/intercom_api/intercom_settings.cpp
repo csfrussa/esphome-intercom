@@ -42,8 +42,9 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
   //   HA Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
   // Phonebook::ContactEntry only stores one primary port, so keep the UDP
   // audio port beside the parsed slot for local transport shaping.
-  if (parts.size() == 6 && Phonebook::parse_protocol(Phonebook::trim(parts[1]), &protocol) &&
-      protocol == ContactProtocol::HA) {
+  if (parts.size() >= 2 &&
+      Phonebook::parse_protocol(Phonebook::trim(parts[1]), &protocol) &&
+      protocol == ContactProtocol::HA && parts.size() == 6) {
     ContactEntry entry;
     entry.name = Phonebook::trim(parts[0]);
     entry.protocol = ContactProtocol::HA;
