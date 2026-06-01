@@ -1,0 +1,18 @@
+{
+  "type": "micro",
+  "wake_word": "ehi troiaio",
+  "author": "n-IA-hane",
+  "website": "https://github.com/niahane",
+  "model": "ehi_troiaio.tflite",
+  "trained_languages": [
+    "it"
+  ],
+  "version": 2,
+  "micro": {
+    "probability_cutoff": 0.95,
+    "sliding_window_size": 1,
+    "feature_step_size": 10,
+    "tensor_arena_size": 45000,
+    "minimum_esphome_version": "2024.7.0"
+  }
+}
