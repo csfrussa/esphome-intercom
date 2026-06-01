@@ -133,12 +133,6 @@ Changes since `2026.6.0`:
   devices.
 - The Lovelace card config key is now `show_extended_info`. The old
   `show_protocol` key is not kept as a compatibility alias.
-- The card handles unavailable ESP devices explicitly instead of rendering a
-  normal destination row with stale controls.
-- Fast hangup/redial is safer: browser audio cleanup is skipped while a new call
-  is already starting, avoiding muted second calls from the card side.
-- HA services remain explicit and schema-validated: answer, decline with reason,
-  hangup, call, forward and purge devices.
 
 ### 2026.6.0 - Espressif GMF audio stack migration
 
