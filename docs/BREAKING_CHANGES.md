@@ -1,14 +1,21 @@
 # Breaking changes
 
-## 2026.6.1: audio stack / GMF migration
+## 2026.6.1: routing, phonebook and native-audio cleanup
 
-`2026.6.1` continues the `2026.5.0` migration and changes the maintained audio
-backend. The supported full-experience profiles and current maintained
-intercom-only profiles are now based on `esp_audio_stack`, the new shared audio
-backend built around ESP-IDF/Espressif audio libraries. This is a backend
-migration, not just a YAML rename: I2S ownership, codec IO, AEC reference
-handling, rate conversion and microphone/speaker lifecycle now live behind the
-audio stack facade.
+`2026.6.1` is the first stabilization release after the `2026.5.0` /
+`2026.6.0-dev` audio-stack migration. It keeps the maintained full-experience
+profiles on `esp_audio_stack`, but the breaking changes users must notice are
+mostly around Home Assistant integration semantics and standalone intercom audio:
+the phonebook moved out of the sensor state into an attribute, routed/NAT
+topologies are handled more deliberately, and `intercom_api` can again be used
+cleanly with native ESPHome microphone/speaker components when hardware already
+does the audio processing.
+
+The supported full-experience profiles and current maintained intercom-only
+profiles still use `esp_audio_stack`, the shared audio backend built around
+ESP-IDF/Espressif audio libraries. I2S ownership, codec IO, software AEC
+reference handling, rate conversion and microphone/speaker lifecycle live behind
+the audio stack facade.
 
 If you are already on a late `2026.5.0` test build from `dev`, most changes are
 YAML/package-level. If you are upgrading from `4.x`, read this section and then
@@ -161,6 +168,12 @@ tested with an INMP441-style microphone plus MAX98357A-style I2S amplifier on
 separate I2S buses. They should also be useful for XMOS / Voice PE-like hardware
 where the front-end already provides processed microphone audio, but that exact
 hardware path still needs user feedback.
+
+The generic native full-experience YAML is not a drop-in Voice PE profile. It is
+the native-audio base for devices where ESPHome already exposes the correct
+microphone/speaker components and the hardware, for example an XMOS front-end,
+does its own echo cancellation. If the ESP must do software echo cancellation,
+use a full `esp_audio_stack` profile instead.
 
 ### Home Assistant: routed subnet and mixed-protocol calls
 

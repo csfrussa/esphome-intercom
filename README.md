@@ -73,56 +73,74 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.6.1 - Espressif GMF audio stack migration
+### 2026.6.1 - Intercom routing, phonebook and native-audio stabilization
 
-`2026.6.1` is the audio-stack release. Maintained full-experience profiles and
-the current intercom-only profiles have moved onto `esp_audio_stack`, a
-repo-native ESPHome backend that keeps the normal ESPHome microphone, speaker,
-media player, mixer, Voice Assistant and Micro Wake Word facade while using the
-current ESP-IDF/Espressif audio building blocks underneath.
+`2026.6.1` is the stabilization release after the GMF audio-stack migration. It
+keeps the new `esp_audio_stack` backend for maintained full-experience profiles,
+but the main work in this release is around real-world intercom behavior:
+larger phonebooks, routed subnets, NAT paths, mixed TCP/UDP setups, HA restarts
+and standalone ESPHome-native audio devices.
 
-In practice this gives the project one real audio framework instead of a set of
-board-specific workarounds. Codec profiles use `esp_codec_dev` and GMF codec IO,
-no-codec profiles use official `esp_driver_i2s` channels directly, conversion
-and layout work is handled by `esp_audio_effects`, and full AFE profiles can run
-through ESP-SR/GMF AFE while still looking like normal ESPHome devices above the
-stack. It now covers both **single-bus** audio devices, where mic and speaker
-share the same I2S bus or codec, and **dual-bus** devices, where a MEMS mic and
-I2S amplifier live on separate ESP-IDF I2S controllers. That opens the door to
-shared-bus codecs, dual I2S MEMS/amp builds, TDM reference boards, stereo
-speaker output, configurable software AEC reference, and custom
-VA/intercom/media combinations without rewriting the audio backend for each
-board. The component-level documentation is in
+The audio-stack direction remains the same: maintained full-experience profiles
+use a repo-native ESPHome backend that exposes normal ESPHome microphone,
+speaker, media player, mixer, Voice Assistant and Micro Wake Word surfaces while
+using ESP-IDF/Espressif audio building blocks underneath. Codec profiles use
+`esp_codec_dev` and GMF codec IO, no-codec profiles use official
+`esp_driver_i2s` channels directly, conversion and layout work is handled by
+`esp_audio_effects`, and full AFE profiles can run through ESP-SR/GMF AFE while
+still looking like normal ESPHome devices above the stack. The stack covers both
+**single-bus** audio devices, where mic and speaker share the same I2S bus or
+codec, and **dual-bus** devices, where a MEMS mic and I2S amplifier live on
+separate ESP-IDF I2S controllers.
+
+For devices that already do echo cancellation in hardware, such as XMOS
+front-ends and similar Voice PE-style audio paths, `2026.6.1` also restores a
+clean standalone path: `intercom_api` can bind directly to native ESPHome
+`microphone` and `speaker` components without pulling in `esp_audio_stack`.
+Software AEC/AFE remains the job of `esp_audio_stack`; hardware-processed audio
+can stay native. The component-level audio-stack documentation is in
 [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md).
 
 Highlights:
 
-- Maintained YAMLs now use `esp_audio_stack`; the previous custom duplex backend is no longer the supported path.
-- Single-bus and dual-bus audio are both first-class supported shapes in the stack.
-- The stack exposes knobs for codec selection, dual-bus RX/TX, stereo mic slot selection, TDM slots, stereo speaker output, PSRAM placement, GMF IO tasks, rate-converter quality and AEC reference policy.
-- Full AFE devices use Espressif GMF/AFE processing behind normal ESPHome microphone/speaker/media entities. Wake word remains ESPHome Micro Wake Word.
-- Native ESPHome full-experience examples were added for hardware that already
-  performs echo cancellation before ESPHome, such as XMOS audio front-ends. In
-  that case `esp_audio_stack` is not required: the ESP can run VA, MWW, media
-  player and intercom directly on native ESPHome `microphone`/`speaker`
-  components.
+- Phonebook sync now uses the `phonebook` attribute of
+  `sensor.intercom_phonebook` instead of putting the whole CSV in the sensor
+  state. This avoids Home Assistant's 255-character state limit and makes large
+  installs, apartment panels and multi-device rosters viable.
+- Intercom routing was hardened for real networks: HA peer recognition, direct
+  ESP calls and HA bridging were tested across multiple subnets, TCP/UDP mixes,
+  HA PBX on/off, routed return paths and NAT return paths.
+- `intercom_api` now supports native one-way endpoints: `mic_only` for ambient
+  listening / monitor-style devices, `speaker_only` for announcement endpoints,
+  and `full_duplex` for normal calls. These modes are inferred from the declared
+  audio components; users do not need a separate mode flag.
+- New ESPHome-native YAMLs provide full-duplex, mic-only and speaker-only
+  examples without `esp_audio_stack`. They are intended for native ESPHome audio
+  components and hardware/DSP AEC devices such as XMOS front-ends. The tested
+  generic example uses INMP441 + MAX98357A on separate I2S buses; hardware with
+  its own processed mic path should adapt from the same examples.
+- The native full-experience YAML is not a ready-made Voice PE profile, but it
+  sets the architecture for that class of device: use ESPHome-native mic/speaker
+  when the hardware already gives processed microphone audio, and use
+  `esp_audio_stack` only when the ESP must provide software AEC/AFE. Feedback
+  from XMOS / Voice PE-style hardware is welcome.
+- Full audio/LVGL devices no longer run HA disconnect cleanup actions that could
+  destabilize the device during Home Assistant restarts.
+- Maintained full-experience YAMLs use `esp_audio_stack`; the previous custom
+  duplex backend is no longer the supported path.
+- Single-bus and dual-bus audio are both first-class supported shapes in the
+  stack.
+- The stack exposes knobs for codec selection, dual-bus RX/TX, stereo mic slot
+  selection, TDM slots, stereo speaker output, PSRAM placement, GMF IO tasks,
+  rate-converter quality and AEC reference policy.
+- Full AFE devices use Espressif GMF/AFE processing behind normal ESPHome
+  microphone/speaker/media entities. Wake word remains ESPHome Micro Wake Word.
 - Codec audio buffers use ESPHome 2026.5 codec PSRAM placement on full profiles, reducing internal RAM pressure.
 - Generic AEC stays lightweight for 4 MB devices; Generic AFE remains the full-feature path for larger flash layouts.
 - WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC really returns a non-AEC mic stream instead of a still-processed BSS/AEC output.
 - Generic dual-bus AEC now supports INMP441-style stereo RX slot selection (`rx_slot_mode: stereo`) while still feeding a mono AEC processor.
 - Full LVGL/audio devices enter OTA maintenance mode before flashing: media, VA, MWW, intercom, audio stack and LVGL are paused/stopped.
 - The Home Assistant integration/card moved to one `intercom_native.call_event` model, improved unavailable-device presentation, and fixed fast re-call cleanup so the card does not tear down browser audio while a new call is starting.
-- Phonebook sync now uses the `phonebook` attribute of
-  `sensor.intercom_phonebook` instead of putting the whole CSV in the sensor
-  state. This avoids Home Assistant's 255-character state limit and makes large
-  installs, apartment panels and multi-device rosters viable.
-- Intercom routing is more robust across real networks: HA peer recognition,
-  direct ESP calls and HA bridging have been exercised across multiple subnets,
-  TCP/UDP mixes, HA PBX on/off and NAT/routed return paths.
-- `intercom_api` now supports native one-way endpoints: `mic_only` for ambient
-  listening / monitor-style devices, `speaker_only` for announcement endpoints,
-  and `full_duplex` for normal calls. These modes are inferred from the declared
-  audio components; users do not need a separate mode flag.
 
 Home Assistant / card changes since the PBX-lite release:
 
