@@ -7,11 +7,34 @@
 
 ## BREAKING CHANGES for 2026.6.1
 
-Big audio changes are landing in `2026.6.1`: maintained profiles are moving to
-the new `esp_audio_stack` backend built around Espressif's GMF, `esp_driver_i2s`,
-`esp_codec_dev`, `gmf_io` and ESP-SR/AFE paths. If you are upgrading from `4.x`
-or an early `2026.5.0` test build, read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md)
-before flashing ESP firmware or restarting Home Assistant.
+`2026.6.1` is a compatibility and stabilization update on top of `2026.6.0`.
+If you already upgraded to the GMF/`esp_audio_stack` backend, the important
+changes are not another audio-backend migration: they are the new Home Assistant
+phonebook format, better routed-subnet/NAT handling, and restored standalone
+`intercom_api` support for native ESPHome microphone/speaker devices.
+
+Read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md) before
+flashing ESP firmware or restarting Home Assistant if you use custom YAMLs,
+custom automations, routed subnets/VLANs/VPNs, or copied Lovelace card YAML.
+
+Main changes since `2026.6.0`:
+
+- `sensor.intercom_phonebook` now stores the full CSV roster in the `phonebook`
+  attribute. The entity state is only a short summary such as `6 entries`.
+- ESP YAMLs must subscribe to `sensor.intercom_phonebook` with
+  `attribute: phonebook`; maintained YAMLs already do this.
+- `intercom_api` supports native `full_duplex`, `mic_only` and `speaker_only`
+  endpoints with standard ESPHome audio components, without `esp_audio_stack`.
+- The new ESPHome-native YAMLs are intended for native audio and hardware/DSP
+  AEC paths such as XMOS-style front-ends. They are not a ready-made Voice PE
+  profile yet, but they are the base for that class of hardware.
+- Software AEC/AFE remains in the full `esp_audio_stack` profiles.
+- HA call routing was tested and hardened across routed subnets, NAT return
+  paths, TCP/UDP mixes and HA PBX on/off modes.
+- Full audio/LVGL profiles no longer use HA disconnect cleanup actions that
+  could destabilize devices during a Home Assistant restart.
+- Lovelace card YAML uses `show_extended_info`; the old `show_protocol` key is
+  not kept as a compatibility alias.
 
 Minimum versions for this release:
 
