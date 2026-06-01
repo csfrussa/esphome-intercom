@@ -1,9 +1,13 @@
-"""Single shared UDP socket pair (audio + control), demuxed by source IP.
+"""Single shared UDP socket pair (audio + control), demuxed by peer IP.
 
 One bind per HA instance: a per-session pair would collide with EADDRINUSE
 on a UDP<->UDP bridge, and ESP-initiated calls need the control socket
 bound before any session exists. The manager is pure transport-level
 demux + sendto; FSM lives in IntercomSession / IntercomUdpClient.
+
+Endpoint sensors remain the canonical identity. If a routed/NAT install
+rewrites the packet source address, the manager learns that observed address
+as the return path for the canonical endpoint.
 """
 
 from __future__ import annotations
@@ -91,6 +95,11 @@ class IntercomUdpSocketManager:
         # truth and packet source ports update the cache during calls.
         self._udp_peers: set[str] = set()
         self._udp_peer_ports_by_ip: dict[str, tuple[int, int]] = {}
+        # observed_ip -> canonical endpoint IP. Used when a router/NAT rewrites
+        # the source address of UDP packets before they reach HA.
+        self._aliases: dict[str, str] = {}
+        # canonical endpoint IP -> observed return-path IP.
+        self._send_hosts_by_ip: dict[str, str] = {}
 
     # === Lifecycle ===
 
@@ -126,6 +135,8 @@ class IntercomUdpSocketManager:
         """Close both sockets and drop all consumers. Idempotent."""
         self._udp_peers.clear()
         self._udp_peer_ports_by_ip.clear()
+        self._aliases.clear()
+        self._send_hosts_by_ip.clear()
         if self._audio_transport is not None:
             self._audio_transport.close()
             self._audio_transport = None
@@ -139,6 +150,67 @@ class IntercomUdpSocketManager:
     def peer_ports(self, host: str) -> tuple[int, int]:
         """Return peer UDP (audio, control) ports, falling back to HA defaults."""
         return self._udp_peer_ports_by_ip.get(host, (self.audio_port, self.control_port))
+
+    def alias_peer(
+        self,
+        observed_host: str,
+        canonical_host: str,
+        *,
+        audio_port: int | None = None,
+        control_port: int | None = None,
+    ) -> None:
+        """Map an observed UDP source address to the endpoint address.
+
+        Flat LANs do not use this path. It is only needed when the packet
+        source seen by HA differs from the phonebook endpoint, for example an
+        ESP behind a masquerading router.
+        """
+        observed = (observed_host or "").strip()
+        canonical = (canonical_host or "").strip()
+        if not observed or not canonical:
+            return
+        self._learn_peer_ports(observed, audio_port=audio_port, control_port=control_port)
+        audio, control = self.peer_ports(observed)
+        self._learn_peer_ports(canonical, audio_port=audio, control_port=control)
+        if observed == canonical:
+            return
+        previous = self._aliases.get(observed)
+        self._aliases[observed] = canonical
+        self._send_hosts_by_ip[canonical] = observed
+        if previous != canonical:
+            _LOGGER.info(
+                "UdpSocketManager: using observed UDP peer %s as return path for %s",
+                observed,
+                canonical,
+            )
+
+    def _canonical_host(self, host: str) -> str:
+        return self._aliases.get(host, host)
+
+    def _send_host(self, host: str) -> str:
+        return self._send_hosts_by_ip.get(host, host)
+
+    def _consumer_for_host(self, host: str) -> _Consumer | None:
+        return self._consumers.get(self._canonical_host(host))
+
+    def _bind_unknown_reply_to_single_consumer(
+        self,
+        observed_host: str,
+        *,
+        audio_port: int | None = None,
+        control_port: int | None = None,
+    ) -> _Consumer | None:
+        """Bind a NAT-rewritten reply to the only active UDP setup consumer."""
+        if len(self._consumers) != 1:
+            return None
+        canonical = next(iter(self._consumers))
+        self.alias_peer(
+            observed_host,
+            canonical,
+            audio_port=audio_port,
+            control_port=control_port,
+        )
+        return self._consumers.get(canonical)
 
     def set_peer_ports(
         self,
@@ -202,6 +274,10 @@ class IntercomUdpSocketManager:
             )
             return
         self._consumers.pop(host, None)
+        self._send_hosts_by_ip.pop(host, None)
+        stale_aliases = [observed for observed, canonical in self._aliases.items() if canonical == host]
+        for observed in stale_aliases:
+            self._aliases.pop(observed, None)
 
     def has_consumer(self, host: str) -> bool:
         return host in self._consumers
@@ -210,8 +286,9 @@ class IntercomUdpSocketManager:
         if self._audio_transport is None:
             return False
         try:
-            audio_port, _ = self.peer_ports(host)
-            self._audio_transport.sendto(data, (host, audio_port))
+            send_host = self._send_host(host)
+            audio_port, _ = self.peer_ports(send_host)
+            self._audio_transport.sendto(data, (send_host, audio_port))
             return True
         except Exception as err:
             _LOGGER.debug("send_audio to %s failed: %s", host, err)
@@ -221,8 +298,9 @@ class IntercomUdpSocketManager:
         if self._control_transport is None:
             return False
         try:
-            _, control_port = self.peer_ports(host)
-            self._control_transport.sendto(packet, (host, control_port))
+            send_host = self._send_host(host)
+            _, control_port = self.peer_ports(send_host)
+            self._control_transport.sendto(packet, (send_host, control_port))
             return True
         except Exception as err:
             _LOGGER.debug("send_control to %s failed: %s", host, err)
@@ -235,7 +313,9 @@ class IntercomUdpSocketManager:
     def _on_audio_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         self._audio_recv += 1
         self._learn_peer_ports(addr[0], audio_port=addr[1])
-        c = self._consumers.get(addr[0])
+        c = self._consumer_for_host(addr[0])
+        if c is None:
+            c = self._bind_unknown_reply_to_single_consumer(addr[0], audio_port=addr[1])
         if c is None:
             return  # leftover from a previous session, drop silently
         try:
@@ -260,7 +340,9 @@ class IntercomUdpSocketManager:
             return
         self._learn_peer_ports(addr[0], control_port=addr[1])
 
-        c = self._consumers.get(addr[0])
+        c = self._consumer_for_host(addr[0])
+        if c is None and msg_type != MSG_START:
+            c = self._bind_unknown_reply_to_single_consumer(addr[0], control_port=addr[1])
         if c is not None:
             try:
                 c.on_control(msg_type, payload)

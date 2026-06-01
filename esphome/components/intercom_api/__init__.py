@@ -722,7 +722,7 @@ async def _build_intercom_auto_entities(var, config):
             CONF_NAME: "Auto Answer",
             CONF_ICON: "mdi:phone-in-talk",
             CONF_DISABLED_BY_DEFAULT: False,
-            CONF_RESTORE_MODE: "RESTORE_DEFAULT_ON",
+            CONF_RESTORE_MODE: switch_module.RESTORE_MODES["RESTORE_DEFAULT_ON"],
             CONF_ENTITY_CATEGORY: "config",
         })
         cg.add(aa.set_parent(var))
@@ -734,7 +734,7 @@ async def _build_intercom_auto_entities(var, config):
             CONF_NAME: "Do Not Disturb",
             CONF_ICON: "mdi:minus-circle",
             CONF_DISABLED_BY_DEFAULT: False,
-            CONF_RESTORE_MODE: "RESTORE_DEFAULT_OFF",
+            CONF_RESTORE_MODE: switch_module.RESTORE_MODES["RESTORE_DEFAULT_OFF"],
             CONF_ENTITY_CATEGORY: "config",
         })
         cg.add(dnd.set_parent(var))
@@ -748,7 +748,7 @@ async def _build_intercom_auto_entities(var, config):
                     CONF_NAME: "Master Volume",
                     CONF_ICON: "mdi:volume-high",
                     CONF_DISABLED_BY_DEFAULT: False,
-                    CONF_MODE: "SLIDER",
+                    CONF_MODE: number_module.NUMBER_MODES["SLIDER"],
                 },
                 min_value=0,
                 max_value=100,
@@ -765,7 +765,7 @@ async def _build_intercom_auto_entities(var, config):
                     CONF_NAME: "Mic Gain",
                     CONF_ICON: "mdi:microphone",
                     CONF_DISABLED_BY_DEFAULT: False,
-                    CONF_MODE: "SLIDER",
+                    CONF_MODE: number_module.NUMBER_MODES["SLIDER"],
                 },
                 min_value=-20,
                 max_value=20,
@@ -787,7 +787,7 @@ async def _build_intercom_auto_entities(var, config):
             CONF_NAME: "HA PBX Mode",
             CONF_ICON: "mdi:phone-forward",
             CONF_DISABLED_BY_DEFAULT: False,
-            CONF_RESTORE_MODE: "RESTORE_DEFAULT_OFF",
+            CONF_RESTORE_MODE: switch_module.RESTORE_MODES["RESTORE_DEFAULT_OFF"],
             CONF_ENTITY_CATEGORY: "config",
         })
         cg.add(rm_sw.set_parent(var))

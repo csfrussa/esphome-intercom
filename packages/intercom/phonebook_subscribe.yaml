@@ -18,6 +18,7 @@ text_sensor:
   - platform: homeassistant
     id: ha_phonebook_subscribe
     entity_id: sensor.intercom_phonebook
+    attribute: phonebook
     internal: true
     on_value:
       - script.execute: ha_phonebook_update_from_ha

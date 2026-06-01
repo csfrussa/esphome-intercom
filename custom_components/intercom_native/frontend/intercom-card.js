@@ -1805,7 +1805,7 @@ class IntercomCardEditor extends HTMLElement {
 
     this.appendChild(wrap);
 
-    select.onchange = (e) => this._valueChanged("entity_id", e.target.value);
+    select.onchange = (e) => this._valueChanged("device_id", e.target.value);
     nameInput.onchange = (e) => this._valueChanged("name", e.target.value);
     protocolInput.onchange = (e) => this._boolChanged("show_protocol", e.target.checked);
 
@@ -1826,7 +1826,7 @@ class IntercomCardEditor extends HTMLElement {
       const opt = document.createElement("option");
       opt.value = d.device_id;
       opt.textContent = `${d.name} (${this._audioModeLabel(d.audio_mode)})`;
-      if (this._config.entity_id === d.device_id) opt.selected = true;
+      if ((this._config.device_id || this._config.entity_id) === d.device_id) opt.selected = true;
       newOptions.push(opt);
     }
     els.select.replaceChildren(...newOptions);
@@ -1836,7 +1836,7 @@ class IntercomCardEditor extends HTMLElement {
     } else if (this._devices.length === 0) {
       els.deviceInfo.textContent = "No devices found";
     } else {
-      const selected = this._devices.find(d => d.device_id === this._config.entity_id);
+      const selected = this._devices.find(d => d.device_id === (this._config.device_id || this._config.entity_id));
       els.deviceInfo.textContent = selected
         ? `Audio: ${this._normaliseAudioMode(selected.audio_mode).replace("_", " ")}`
         : "Select device";

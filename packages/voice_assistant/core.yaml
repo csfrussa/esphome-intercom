@@ -115,22 +115,10 @@ voice_assistant:
         condition:
           lambda: return !id(g_ota_in_progress);
         then:
-          - globals.set:
-              id: g_va_state
-              value: "0"
-          - globals.set:
-              id: g_barge_in_pending
-              value: "0"
-          - globals.set:
-              id: g_mww_recent
-              value: "0"
-          - globals.set:
-              id: g_applied_led
-              value: "-1"
-          - script.stop: mww_failsafe
-          - script.stop: barge_failsafe
-          - micro_wake_word.stop:
-          - script.execute: update_status
+          - logger.log:
+              level: INFO
+              tag: va
+              format: "VA: client disconnected; keeping local audio runtime active"
 
 micro_wake_word:
   id: mww

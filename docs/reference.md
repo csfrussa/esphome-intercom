@@ -453,10 +453,14 @@ Optional card config:
 
 ```yaml
 type: custom:intercom-card
-entity_id: <device_id>
+device_id: <device_id_or_friendly_name>
 name: Kitchen Intercom
 show_protocol: true
 ```
+
+The visual editor stores the stable HA `device_id`. Hand-written YAML can use
+the ESP friendly name published in `intercom_endpoint`, matching the names used
+by ESP-to-ESP phonebook calls.
 
 With `show_protocol: true`, the title appends the selected ESP transport (`Kitchen Intercom - TCP` / `- UDP`). The mode line uses:
 

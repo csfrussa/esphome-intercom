@@ -2,13 +2,15 @@ answer:
   name: Answer Call
   description: Answer an incoming intercom call on the selected device.
   target:
-    entity: {}
+    device:
+      integration: esphome
 
 decline:
   name: Decline Call
   description: Decline an incoming intercom call on the selected device.
   target:
-    entity: {}
+    device:
+      integration: esphome
   fields:
     reason:
       name: Reason
@@ -25,13 +27,15 @@ hangup:
   name: Hangup
   description: End the active intercom call on the selected device.
   target:
-    entity: {}
+    device:
+      integration: esphome
 
 call:
   name: Call
   description: Start an intercom call to the selected device (ESP-to-ESP bridge via HA).
   target:
-    entity: {}
+    device:
+      integration: esphome
   fields:
     source:
       name: Source Device
@@ -45,7 +49,8 @@ forward:
   name: Forward Call
   description: Forward an active or ringing call to another device. Target is the caller device.
   target:
-    entity: {}
+    device:
+      integration: esphome
   fields:
     forward_to:
       name: Forward To
@@ -66,7 +71,8 @@ purge_devices:
     the selected device is removed unconditionally. Devices that come back
     online will re-register themselves automatically.
   target:
-    entity: {}
+    device:
+      integration: esphome
   fields:
     min_unavailable_hours:
       name: Minimum Hours Unavailable

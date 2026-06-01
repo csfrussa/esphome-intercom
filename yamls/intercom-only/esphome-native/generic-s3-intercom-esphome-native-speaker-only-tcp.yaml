@@ -1,7 +1,7 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM TCP - native ESPHome dual I2S buses
+# GENERIC ESP32-S3 INTERCOM SPEAKER-ONLY TCP - native ESPHome audio
 # =============================================================================
-# Experimental regression profile for intercom_api standalone mode.
+# Standalone speaker-only intercom profile for native ESPHome audio.
 #
 # Purpose:
 #   - No esp_audio_stack.
@@ -10,27 +10,18 @@
 #   - Useful for hardware that already outputs processed audio, e.g. XMOS AEC
 #     boards, and for testing mic-only / speaker-only / full-duplex code paths.
 #
-# Default test mode: full duplex.
-#   - To test mic-only: comment the speaker: block and the intercom_api.speaker
-#     line.
-#   - To test speaker-only: comment the microphone: block and the
-#     intercom_api.microphone_source block.
+# Endpoint mode: speaker_only. This profile publishes a speaker and no
+# microphone source, so it can play remote audio but cannot send mic audio.
 #
-# Hardware base copied from the generic dual-bus full AEC profile:
+# Tested hardware example:
 #   - Generic ESP32-S3 with PSRAM.
-#   - INMP441 microphone on one I2S controller.
-#   - MAX98357A amplifier on a second I2S controller.
+#   - MAX98357A amplifier on one I2S controller.
+# This is only the tested wiring example; native ESPHome audio can also be
+# adapted to hardware that exposes a speaker through another ESPHome speaker
+# platform.
 #
 # Tested wiring target: Freenove ESP32-S3-WROOM CAM / FNK0085, camera removed.
 # Change pins for your board.
-#
-# INMP441:
-#   SCK/BCLK -> GPIO9
-#   WS/LRCLK -> GPIO10
-#   SD/DOUT  -> GPIO11
-#   L/R      -> 3V3, tied locally with VDD so the mic outputs right channel
-#   VDD      -> 3V3
-#   GND      -> GND
 #
 # MAX98357A:
 #   BCLK     -> GPIO12
@@ -42,8 +33,8 @@
 # =============================================================================
 
 substitutions:
-  name: generic-s3-native-intercom-tcp
-  friendly_name: Generic S3 Native Dual Intercom TCP
+  name: generic-native-int-spk-tcp
+  friendly_name: Generic S3 Native Intercom Speaker Only TCP
 
   ext_components_source: "../../../esphome/components"
   intercom_tcp_port: "6054"
@@ -57,6 +48,7 @@ packages:
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   ha_api: !include ../../../packages/intercom/ha_api.yaml
+  intercom_auto_entities: !include ../../../packages/intercom/auto_entities.yaml
   intercom_buttons: !include ../../../packages/intercom/buttons_base.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
@@ -111,10 +103,8 @@ logger:
     api.connection: WARN
     component: WARN
     i2s_audio: INFO
-    microphone: INFO
     speaker: INFO
     intercom_api: INFO
-    audio_processor: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -138,28 +128,9 @@ switch:
     restore_mode: RESTORE_DEFAULT_ON
 
 i2s_audio:
-  - id: rx_i2s
-    i2s_bclk_pin: GPIO9
-    i2s_lrclk_pin: GPIO10
-
   - id: tx_i2s
     i2s_bclk_pin: GPIO12
     i2s_lrclk_pin: GPIO13
-
-# Native ESPHome microphone. INMP441 is strapped to the right slot. Keep the
-# wire as stereo and let MicrophoneSource select channel 1; this matches the
-# stable esp_audio_stack path and avoids mono-slot silence on some IDF/board
-# combinations.
-microphone:
-  - platform: i2s_audio
-    id: native_mic_raw
-    adc_type: external
-    i2s_audio_id: rx_i2s
-    i2s_din_pin: GPIO11
-    channel: stereo
-    sample_rate: 16000
-    bits_per_sample: 32bit
-    correct_dc_offset: true
 
 # Native ESPHome speaker. Keep it at intercom's wire format to avoid a
 # resampler in this regression profile.
@@ -179,11 +150,6 @@ intercom_api:
   id: intercom
   task_stacks_in_psram: true
   buffers_in_psram: true
-  microphone_source:
-    microphone: native_mic_raw
-    bits_per_sample: 16
-    channels: [1]
-    gain_factor: 1
   speaker: intercom_speaker
   dc_offset_removal: false
   ringing_timeout: 30s

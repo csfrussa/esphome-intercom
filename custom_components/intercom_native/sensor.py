@@ -50,10 +50,19 @@ class IntercomPhonebookSensor(SensorEntity):
         self._attr_unique_id = "intercom_native_phonebook"
         self._attr_name = "Intercom Phonebook"
         self.entity_id = "sensor.intercom_phonebook"
-        self._attr_native_value = ""
+        self._attr_native_value = "0 entries"
+        self._phonebook = ""
+        self._count = 0
         self._tracked_entities: set[str] = set()
         self._unsub_state = None
         self._unsub_registry = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return {
+            "phonebook": self._phonebook,
+            "count": self._count,
+        }
 
     async def async_added_to_hass(self) -> None:
         @callback
@@ -123,9 +132,12 @@ class IntercomPhonebookSensor(SensorEntity):
 
         peers = await _async_build_peer_snapshot(self.hass)
         entries = [_format_entry_unified(p) for p in peers]
-        new_value = ",".join(entries)
-        if new_value != self._attr_native_value:
+        phonebook = ",".join(entries)
+        new_value = f"{len(entries)} entry" if len(entries) == 1 else f"{len(entries)} entries"
+        if new_value != self._attr_native_value or phonebook != self._phonebook:
             self._attr_native_value = new_value
+            self._phonebook = phonebook
+            self._count = len(entries)
             _LOGGER.debug(
                 "Phonebook recomputed (%d entries)", len(entries)
             )

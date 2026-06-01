@@ -61,6 +61,7 @@ class InboundStart:
     dest_name: str
     dest_route: str
     call_id: str
+    port: int = 0
     transport: object | None = None  # set by TCP listener (adopted leg)
 
 _LOGGER = logging.getLogger(__name__)
@@ -167,11 +168,7 @@ def _resolve_esphome_service_slug(
         if not service.endswith(suffix):
             continue
         candidate = service[:-len(suffix)]
-        if (
-            candidate == route_slug
-            or candidate.startswith(f"{route_slug}_")
-            or route_slug.startswith(f"{candidate}_")
-        ):
+        if candidate == route_slug or candidate.startswith(f"{route_slug}_"):
             candidates.append(candidate)
 
     if not candidates:
@@ -276,7 +273,7 @@ async def _decline_inbound_start(
         transport = build_transport(
             hass,
             inbound.host,
-            _select_transport_type(hass, inbound.host),
+            "udp",
             callbacks,
         )
     else:
@@ -885,6 +882,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     target_fields = {
         vol.Optional("device_id"): vol.Any(cv.string, [cv.string]),
         vol.Optional("entity_id"): vol.Any(cv.entity_id, [cv.entity_id]),
+        vol.Optional("name"): cv.string,
+        vol.Optional("friendly_name"): cv.string,
     }
     no_data_schema = vol.Schema(target_fields, extra=vol.PREVENT_EXTRA)
     decline_schema = vol.Schema(
@@ -1034,6 +1033,7 @@ async def _async_start_udp_socket_manager(hass: HomeAssistant) -> bool:
                 dest_name=dest_name,
                 dest_route=dest_route,
                 call_id=call_id,
+                port=port,
                 transport=None,
             ),
         )
@@ -1145,7 +1145,8 @@ async def _bridge_inbound_call_pbx_lite(
     dest_device: dict,
 ) -> None:
     """Bridge an unsolicited START from one ESP to another ESP."""
-    host = inbound.host
+    observed_host = inbound.host
+    source_host = source_device.get("host") or observed_host
     caller_name = inbound.caller_name
     call_id = inbound.call_id
     inbound_transport = inbound.transport
@@ -1161,7 +1162,7 @@ async def _bridge_inbound_call_pbx_lite(
     if _device_has_ha_call(source_device_id):
         _LOGGER.info(
             "Unsolicited MSG_START from %s rejected: source %s already has an HA call",
-            host,
+            observed_host,
             source_device["name"],
         )
         await _decline_inbound_start(hass, inbound, "busy")
@@ -1171,7 +1172,7 @@ async def _bridge_inbound_call_pbx_lite(
     if busy_reason is not None:
         _LOGGER.info(
             "Unsolicited MSG_START from %s (%s) rejected: dest %s is busy (%s)",
-            host,
+            observed_host,
             caller_name or "unknown",
             dest_device["name"],
             busy_reason,
@@ -1180,19 +1181,19 @@ async def _bridge_inbound_call_pbx_lite(
         return
 
     _LOGGER.info(
-        "Unsolicited MSG_START from %s (caller=%s) -> bridging to %s (call_id=%s)",
-        host, caller_name or "unknown", dest_device["name"], bridge_id,
+        "Unsolicited MSG_START from %s as %s (caller=%s) -> bridging to %s (call_id=%s)",
+        observed_host, source_host, caller_name or "unknown", dest_device["name"], bridge_id,
     )
     bridge = BridgeSession(
         hass=hass,
         bridge_id=bridge_id,
         source_device_id=source_device_id,
-        source_host=host,
+        source_host=source_host,
         source_name=source_device["name"],
         dest_device_id=dest_device_id,
         dest_host=dest_device["host"],
         dest_name=dest_device["name"],
-        source_transport_type=_select_transport_type(hass, host),
+        source_transport_type="tcp" if inbound_transport is not None else _device_transport(hass, source_device),
         dest_transport_type=_select_transport_type(hass, dest_device["host"]),
         source_transport=inbound_transport,
         source_call_id=call_id,
@@ -1215,7 +1216,8 @@ async def _ring_ha_for_inbound_call(
     source_device: dict,
 ) -> None:
     """Route an unsolicited START to the HA softphone/card."""
-    host = inbound.host
+    observed_host = inbound.host
+    source_host = source_device.get("host") or observed_host
     caller_name = inbound.caller_name
     call_id = inbound.call_id
     inbound_transport = inbound.transport
@@ -1224,7 +1226,7 @@ async def _ring_ha_for_inbound_call(
     if _device_has_ha_call(source_device_id):
         _LOGGER.info(
             "Unsolicited MSG_START from %s rejected: source %s already has an HA call",
-            host,
+            observed_host,
             source_device["name"],
         )
         await _decline_inbound_start(hass, inbound, "busy")
@@ -1233,20 +1235,20 @@ async def _ring_ha_for_inbound_call(
     if _sessions:
         _LOGGER.info(
             "Unsolicited MSG_START from %s rejected: HA softphone already has a session",
-            host,
+            observed_host,
         )
         await _decline_inbound_start(hass, inbound, "busy")
         return
 
     _LOGGER.info(
-        "Unsolicited MSG_START from %s (caller=%s, call_id=%s) - ringing on HA card as %s",
-        host, caller_name or "unknown", call_id or "-", source_device_id,
+        "Unsolicited MSG_START from %s as %s (caller=%s, call_id=%s) - ringing on HA card as %s",
+        observed_host, source_host, caller_name or "unknown", call_id or "-", source_device_id,
     )
-    transport_type = "tcp" if inbound_transport is not None else "udp"
+    transport_type = "tcp" if inbound_transport is not None else _device_transport(hass, source_device)
     session = IntercomSession(
         hass=hass,
         device_id=source_device_id,
-        host=host,
+        host=source_host,
         transport_type=transport_type,
         transport=inbound_transport,
         call_id=call_id,
@@ -1257,7 +1259,7 @@ async def _ring_ha_for_inbound_call(
         _sessions[source_device_id] = session
         return
 
-    _LOGGER.error("Unsolicited start_ringing failed for %s", host)
+    _LOGGER.error("Unsolicited start_ringing failed for %s", observed_host)
     if inbound_transport is not None:
         try:
             await inbound_transport.disconnect()
@@ -1306,6 +1308,15 @@ async def _route_inbound_call_pbx_lite(
             inbound.caller_route or "-",
             inbound.caller_name or "-",
         )
+    if inbound.transport is None and source_device.get("transport") == "udp":
+        manager = hass.data.get(DOMAIN, {}).get("udp_manager")
+        if manager is not None:
+            manager.alias_peer(
+                host,
+                source_device.get("host") or host,
+                audio_port=source_device.get("udp_audio_port"),
+                control_port=getattr(inbound, "port", None),
+            )
 
     if not _is_ha_inbound_destination(hass, dest_name):
         dest_clean = (dest_name or "").strip()
@@ -1354,6 +1365,7 @@ async def _async_start_tcp_socket_manager(hass: HomeAssistant) -> bool:
                 dest_name=dest_name,
                 dest_route=dest_route,
                 call_id=call_id,
+                port=0,
                 transport=transport,
             ),
         )

@@ -1,0 +1,151 @@
+# =============================================================================
+# GENERIC ESP32-S3 INTERCOM MIC-ONLY UDP - native ESPHome audio
+# =============================================================================
+# Standalone mic-only intercom profile for native ESPHome audio.
+#
+# Purpose:
+#   - No esp_audio_stack.
+#   - No esp_aec / esp_afe software processing.
+#   - intercom_api talks directly to standard ESPHome microphone/speaker.
+#   - Useful for hardware that already outputs processed audio, e.g. XMOS AEC
+#     boards, and for testing mic-only / speaker-only / full-duplex code paths.
+#
+# Endpoint mode: mic_only. This profile publishes a microphone source and no
+# speaker, so it can send audio but cannot play remote audio.
+#
+# Tested hardware example:
+#   - Generic ESP32-S3 with PSRAM.
+#   - INMP441 microphone on one I2S controller.
+# This is only the tested wiring example; native ESPHome audio can also be
+# adapted to hardware that exposes a processed microphone through another
+# ESPHome microphone platform.
+#
+# Tested wiring target: Freenove ESP32-S3-WROOM CAM / FNK0085, camera removed.
+# Change pins for your board.
+#
+# INMP441:
+#   SCK/BCLK -> GPIO9
+#   WS/LRCLK -> GPIO10
+#   SD/DOUT  -> GPIO11
+#   L/R      -> 3V3, tied locally with VDD so the mic outputs right channel
+#   VDD      -> 3V3
+#   GND      -> GND
+#
+# =============================================================================
+
+substitutions:
+  name: generic-native-int-mic-udp
+  friendly_name: Generic S3 Native Intercom Mic Only UDP
+
+  ext_components_source: "../../../esphome/components"
+  intercom_udp_audio_port: "6254"
+  intercom_udp_control_port: "6255"
+
+  status_led_pin: GPIO48
+  status_led_chipset: WS2812
+  status_led_rgb_order: GRB
+
+packages:
+  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  ha_api: !include ../../../packages/intercom/ha_api.yaml
+  intercom_auto_entities: !include ../../../packages/intercom/auto_entities.yaml
+  intercom_buttons: !include ../../../packages/intercom/buttons_base.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: freenove_esp32_s3_wroom
+  variant: esp32s3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    advanced:
+      compiler_optimization: PERF
+    sdkconfig_options:
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+      CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: "y"
+      CONFIG_ESP_CONSOLE_SECONDARY_NONE: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+preferences:
+  flash_write_interval: 5min
+
+api:
+  on_client_connected:
+    - lambda: |-
+        static bool published = false;
+        if (!published) {
+          published = true;
+          id(intercom).publish_entity_states();
+        }
+
+ota:
+  - platform: esphome
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: INFO
+  logs:
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+    switch: WARN
+    number: WARN
+    button: WARN
+    api: WARN
+    api.connection: WARN
+    component: WARN
+    i2s_audio: INFO
+    microphone: INFO
+    intercom_api: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: NONE
+
+external_components:
+  - source: ${ext_components_source}
+    components: [intercom_api, audio_processor]
+
+i2s_audio:
+  - id: rx_i2s
+    i2s_bclk_pin: GPIO9
+    i2s_lrclk_pin: GPIO10
+
+# Native ESPHome microphone. INMP441 is strapped to the right slot. Keep the
+# wire as stereo and let MicrophoneSource select channel 1; this matches the
+# stable esp_audio_stack path and avoids mono-slot silence on some IDF/board
+# combinations.
+microphone:
+  - platform: i2s_audio
+    id: native_mic_raw
+    adc_type: external
+    i2s_audio_id: rx_i2s
+    i2s_din_pin: GPIO11
+    channel: stereo
+    sample_rate: 16000
+    bits_per_sample: 32bit
+    correct_dc_offset: true
+
+intercom_api:
+  id: intercom
+  task_stacks_in_psram: true
+  buffers_in_psram: true
+  microphone_source:
+    microphone: native_mic_raw
+    bits_per_sample: 16
+    channels: [1]
+    gain_factor: 1
+  dc_offset_removal: false
+  ringing_timeout: 30s
+  delete_contact_missing_from:
+    updates_number: 5

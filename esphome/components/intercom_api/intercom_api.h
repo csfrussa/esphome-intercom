@@ -352,8 +352,8 @@ class IntercomApi : public Component {
   void handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_ms);
   void handle_udp_keepalive_(uint32_t now_ms);
 
-  // TX task: mic capture + send (Core 0). Always created so non-AEC builds
-  // also have a dedicated drain task (recv lives in the transport).
+  // TX task: mic capture + send (Core 0). Created only when a microphone is
+  // configured; recv/control live in the transport task.
   static void tx_task(void *param);
   void tx_task_();
 

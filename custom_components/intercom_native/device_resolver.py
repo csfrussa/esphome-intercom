@@ -43,6 +43,24 @@ def _valid_audio_mode(value: str | None) -> str:
     return "full_duplex"
 
 
+def _match_name(value: str | None, *candidates: str | None) -> bool:
+    wanted = (value or "").strip()
+    if not wanted:
+        return False
+    wanted_slug = slugify_route_id(wanted).replace("_", "-")
+    for candidate in candidates:
+        text = (candidate or "").strip()
+        if not text:
+            continue
+        if text == wanted:
+            return True
+        if text.lower() == wanted.lower():
+            return True
+        if slugify_route_id(text).replace("_", "-") == wanted_slug:
+            return True
+    return False
+
+
 def parse_intercom_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP intercom_api.
 
@@ -225,6 +243,7 @@ class IntercomDeviceResolver:
     async def resolve_target(self, call: ServiceCall) -> Optional[dict]:
         """Match a service call's target selector to one of our devices."""
         device_ids: set[str] = set()
+        names: list[str] = []
         entity_registry = er.async_get(self.hass)
         for source in [call.data, getattr(call, "target", None) or {}]:
             ids = source.get("device_id")
@@ -240,10 +259,15 @@ class IntercomDeviceResolver:
                     entry = entity_registry.async_get(eid)
                     if entry and entry.device_id:
                         device_ids.add(entry.device_id)
-        if not device_ids:
+            name = source.get("name") or source.get("friendly_name")
+            if isinstance(name, str):
+                names.append(name)
+        if not device_ids and not names:
             return None
         for dev in await self.list_devices():
             if dev["device_id"] in device_ids:
+                return dev
+            if any(_match_name(name, dev.get("name"), dev.get("esphome_id"), dev.get("route_id")) for name in names):
                 return dev
         return None
 
