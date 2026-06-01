@@ -169,9 +169,6 @@ external_components:
 api:
   on_client_connected:
     - script.execute: draw_display
-  on_client_disconnected:
-    - script.execute: draw_display
-
 ota:
   - platform: esphome
     id: ota_esphome

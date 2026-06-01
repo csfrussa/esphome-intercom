@@ -110,16 +110,6 @@ voice_assistant:
     - intercom_api.publish_entity_states: intercom
     - script.execute: update_status
     - script.execute: start_mww_when_ready
-  on_client_disconnected:
-    - if:
-        condition:
-          lambda: return !id(g_ota_in_progress);
-        then:
-          - logger.log:
-              level: INFO
-              tag: va
-              format: "VA: client disconnected; keeping local audio runtime active"
-
 micro_wake_word:
   id: mww
   stop_after_detection: false

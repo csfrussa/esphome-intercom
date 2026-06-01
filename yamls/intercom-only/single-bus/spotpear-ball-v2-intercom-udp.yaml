@@ -130,10 +130,6 @@ api:
         id: draw_display_pending
         value: "true"
     - lambda: 'id(intercom).publish_entity_states();'
-  on_client_disconnected:
-    - globals.set:
-        id: draw_display_pending
-        value: "true"
   # `start_call(dest)` / `decline_call(reason)` actions are provided by
   # `packages/intercom_only.yaml` (included via `packages.core` above). Contact
   # mutation stays inside intercom_api actions and the phonebook batch packages.

@@ -186,9 +186,6 @@ api:
     - script.execute: draw_display
     - delay: 5s
     - script.execute: fetch_forecast
-  on_client_disconnected:
-    - script.execute: draw_display
-
 ota:
   - platform: esphome
 
