@@ -345,7 +345,7 @@ intercom_api:
   speaker: intercom_speaker
   ringing_timeout: 30s
   delete_contact_missing_from:
-    updates_number: 5
+    updates_number: 1
   on_update_contacts:
     - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
     - script.execute: update_ic_idle_labels

@@ -148,4 +148,4 @@ intercom_api:
   dc_offset_removal: false
   ringing_timeout: 30s
   delete_contact_missing_from:
-    updates_number: 5
+    updates_number: 1

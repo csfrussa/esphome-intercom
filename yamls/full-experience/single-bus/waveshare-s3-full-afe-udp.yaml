@@ -330,7 +330,7 @@ intercom_api:
   # routing_mode default = device_independent (P2P). Override at runtime
   # via the "HA PBX Mode" switch in the device-specific switch block below.
   delete_contact_missing_from:
-    updates_number: 5
+    updates_number: 1
 
 # =============================================================================
 # Physical Buttons
