@@ -101,6 +101,11 @@ Highlights:
 - Single-bus and dual-bus audio are both first-class supported shapes in the stack.
 - The stack exposes knobs for codec selection, dual-bus RX/TX, stereo mic slot selection, TDM slots, stereo speaker output, PSRAM placement, GMF IO tasks, rate-converter quality and AEC reference policy.
 - Full AFE devices use Espressif GMF/AFE processing behind normal ESPHome microphone/speaker/media entities. Wake word remains ESPHome Micro Wake Word.
+- Native ESPHome full-experience examples were added for hardware that already
+  performs echo cancellation before ESPHome, such as XMOS audio front-ends. In
+  that case `esp_audio_stack` is not required: the ESP can run VA, MWW, media
+  player and intercom directly on native ESPHome `microphone`/`speaker`
+  components.
 - Codec audio buffers use ESPHome 2026.5 codec PSRAM placement on full profiles, reducing internal RAM pressure.
 - Generic AEC stays lightweight for 4 MB devices; Generic AFE remains the full-feature path for larger flash layouts.
 - WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC really returns a non-AEC mic stream instead of a still-processed BSS/AEC output.
@@ -136,6 +141,7 @@ and display-driven voice devices.
 | One ESP as a full-duplex citofono/intercom with Home Assistant | [`yamls/intercom-only/`](yamls/intercom-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
 | Room-to-room ESP intercom | One intercom-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP. |
+| Full voice device with hardware/DSP echo cancellation | [`generic-s3-full-esphome-native-dual-bus-tcp.yaml`](yamls/full-experience/dual-bus/generic-s3-full-esphome-native-dual-bus-tcp.yaml) or [`generic-s3-full-esphome-native-dual-bus-udp.yaml`](yamls/full-experience/dual-bus/generic-s3-full-esphome-native-dual-bus-udp.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and audio lifecycle support without requiring intercom. |
 
 For the normal intercom use case, do not start by designing a PBX. Pick the
@@ -1018,6 +1024,8 @@ sequenceDiagram
 | **Generic S3 (full AEC light UDP)** | [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | Same full AEC light experience, UDP intercom transport |
 | **Generic S3 (full AFE)** | [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
 | **Generic S3 (full AFE UDP)** | [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | Same full AFE experience, UDP intercom transport, requires >4 MB app slot |
+| **Generic S3 (full native TCP)** | [`generic-s3-full-esphome-native-dual-bus-tcp.yaml`](yamls/full-experience/dual-bus/generic-s3-full-esphome-native-dual-bus-tcp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Example dual bus | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends or native audio testing |
+| **Generic S3 (full native UDP)** | [`generic-s3-full-esphome-native-dual-bus-udp.yaml`](yamls/full-experience/dual-bus/generic-s3-full-esphome-native-dual-bus-udp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Example dual bus | Native ESPHome `microphone`/`speaker`, no software AEC | Same full native experience, UDP intercom transport |
 | **Generic S3 (intercom)** | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | Intercom only |
 | **Generic S3 dual bus (intercom UDP)** | [`generic-s3-intercom-udp.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | Intercom only |
 
@@ -1129,10 +1137,26 @@ Plain intercom does **not** require `esp_audio_stack`: `intercom_api` can run
 on ESPHome's normal `microphone` and/or `speaker` components. This is the right
 fit for hardware/DSP-processed audio such as XMOS front-ends, or for simple
 native I2S tests. It supports full-duplex, mic-only and speaker-only endpoints.
+For mic-only or speaker-only intercom endpoints, keep the native ESPHome path:
+`esp_audio_stack` is intentionally a heavier audio backend for full audio
+devices and software AEC/reference handling.
+The full native examples under `yamls/full-experience/dual-bus/` extend that
+idea to VA, MWW, media player and intercom on native ESPHome audio components.
+They are also structured so builders can comment out the microphone-side or
+speaker-side YAML blocks when they intentionally want a mic-only or speaker-only
+intercom endpoint.
+
+Native ESPHome audio does not add software echo cancellation by itself. If your
+microphone path is already processed by hardware or firmware, for example an
+XMOS front-end that outputs echo-cancelled PCM, the native full profiles are a
+good starting point and avoid unnecessary `esp_audio_stack` complexity. If your
+hardware is a plain INMP441 plus MAX98357A, or any other normal mic/amp pair
+without its own AEC, use an `esp_audio_stack` AEC/AFE profile instead.
 
 Use `esp_audio_stack` when a board has one shared I2S bus, when you need a
-phase-coherent speaker reference for AEC, or when the same ESP also runs media
-player, Piper TTS, Micro Wake Word and Voice Assistant. It can also be useful
+phase-coherent speaker reference for software AEC, or when the same ESP also
+runs media player, Piper TTS, Micro Wake Word and Voice Assistant on raw
+mic/speaker hardware without hardware echo cancellation. It can also be useful
 outside intercom projects: an ESPHome Voice Assistant device can use it as the
 shared mic/speaker transport and AEC reference path.
 
