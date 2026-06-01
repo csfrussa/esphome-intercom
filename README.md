@@ -98,33 +98,11 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ### 2026.6.1 - Intercom routing, phonebook and native-audio stabilization
 
-`2026.6.1` is the stabilization release after the GMF audio-stack migration. It
-keeps the new `esp_audio_stack` backend for maintained full-experience profiles,
-but the main work in this release is around real-world intercom behavior:
-larger phonebooks, routed subnets, NAT paths, mixed TCP/UDP setups, HA restarts
-and standalone ESPHome-native audio devices.
+`2026.6.1` is not another audio-stack migration. It is the compatibility and
+stability release on top of `2026.6.0`, focused on Home Assistant phonebooks,
+routed networks, standalone native ESPHome audio and HA restart behavior.
 
-The audio-stack direction remains the same: maintained full-experience profiles
-use a repo-native ESPHome backend that exposes normal ESPHome microphone,
-speaker, media player, mixer, Voice Assistant and Micro Wake Word surfaces while
-using ESP-IDF/Espressif audio building blocks underneath. Codec profiles use
-`esp_codec_dev` and GMF codec IO, no-codec profiles use official
-`esp_driver_i2s` channels directly, conversion and layout work is handled by
-`esp_audio_effects`, and full AFE profiles can run through ESP-SR/GMF AFE while
-still looking like normal ESPHome devices above the stack. The stack covers both
-**single-bus** audio devices, where mic and speaker share the same I2S bus or
-codec, and **dual-bus** devices, where a MEMS mic and I2S amplifier live on
-separate ESP-IDF I2S controllers.
-
-For devices that already do echo cancellation in hardware, such as XMOS
-front-ends and similar Voice PE-style audio paths, `2026.6.1` also restores a
-clean standalone path: `intercom_api` can bind directly to native ESPHome
-`microphone` and `speaker` components without pulling in `esp_audio_stack`.
-Software AEC/AFE remains the job of `esp_audio_stack`; hardware-processed audio
-can stay native. The component-level audio-stack documentation is in
-[`esp_audio_stack`](esphome/components/esp_audio_stack/README.md).
-
-Highlights:
+Changes since `2026.6.0`:
 
 - Phonebook sync now uses the `phonebook` attribute of
   `sensor.intercom_phonebook` instead of putting the whole CSV in the sensor
@@ -149,8 +127,41 @@ Highlights:
   from XMOS / Voice PE-style hardware is welcome.
 - Full audio/LVGL devices no longer run HA disconnect cleanup actions that could
   destabilize the device during Home Assistant restarts.
-- Maintained full-experience YAMLs use `esp_audio_stack`; the previous custom
-  duplex backend is no longer the supported path.
+- ESP endpoints publish their audio capability (`full_duplex`, `mic_only`,
+  `speaker_only`, `control_only`). HA and the card use it to avoid impossible
+  audio directions and to support standalone mic-only/speaker-only intercom
+  devices.
+- The Lovelace card config key is now `show_extended_info`. The old
+  `show_protocol` key is not kept as a compatibility alias.
+- The card handles unavailable ESP devices explicitly instead of rendering a
+  normal destination row with stale controls.
+- Fast hangup/redial is safer: browser audio cleanup is skipped while a new call
+  is already starting, avoiding muted second calls from the card side.
+- HA services remain explicit and schema-validated: answer, decline with reason,
+  hangup, call, forward and purge devices.
+
+### 2026.6.0 - Espressif GMF audio stack migration
+
+`2026.6.0` is the audio-stack release. Maintained full-experience profiles and
+the current intercom-only profiles moved onto `esp_audio_stack`, a repo-native
+ESPHome backend that keeps the normal ESPHome microphone, speaker, media player,
+mixer, Voice Assistant and Micro Wake Word facade while using the current
+ESP-IDF/Espressif audio building blocks underneath.
+
+In practice this gives the project one real audio framework instead of a set of
+board-specific workarounds. Codec profiles use `esp_codec_dev` and GMF codec IO,
+no-codec profiles use official `esp_driver_i2s` channels directly, conversion
+and layout work is handled by `esp_audio_effects`, and full AFE profiles can run
+through ESP-SR/GMF AFE while still looking like normal ESPHome devices above the
+stack. It covers both **single-bus** audio devices, where mic and speaker share
+the same I2S bus or codec, and **dual-bus** devices, where a MEMS mic and I2S
+amplifier live on separate ESP-IDF I2S controllers. The component-level
+documentation is in [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md).
+
+Highlights from `2026.6.0`:
+
+- Maintained YAMLs use `esp_audio_stack`; the previous custom duplex backend is
+  no longer the supported path.
 - Single-bus and dual-bus audio are both first-class supported shapes in the
   stack.
 - The stack exposes knobs for codec selection, dual-bus RX/TX, stereo mic slot
@@ -158,25 +169,17 @@ Highlights:
   rate-converter quality and AEC reference policy.
 - Full AFE devices use Espressif GMF/AFE processing behind normal ESPHome
   microphone/speaker/media entities. Wake word remains ESPHome Micro Wake Word.
-- Codec audio buffers use ESPHome 2026.5 codec PSRAM placement on full profiles, reducing internal RAM pressure.
-- Generic AEC stays lightweight for 4 MB devices; Generic AFE remains the full-feature path for larger flash layouts.
-- WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC really returns a non-AEC mic stream instead of a still-processed BSS/AEC output.
-- Generic dual-bus AEC now supports INMP441-style stereo RX slot selection (`rx_slot_mode: stereo`) while still feeding a mono AEC processor.
-- Full LVGL/audio devices enter OTA maintenance mode before flashing: media, VA, MWW, intercom, audio stack and LVGL are paused/stopped.
-- The Home Assistant integration/card moved to one `intercom_native.call_event` model, improved unavailable-device presentation, and fixed fast re-call cleanup so the card does not tear down browser audio while a new call is starting.
-
-Home Assistant / card changes since the PBX-lite release:
-
-- One automation event: `intercom_native.call_event` carries session, bridge and forward updates with `scope`, `type`, state and reason fields.
-- The card handles unavailable ESP devices explicitly instead of rendering a normal destination row with stale controls.
-- ESP endpoints now publish their audio capability (`full_duplex`, `mic_only`, `speaker_only`, `control_only`). HA and the card use it to avoid impossible audio directions and to support standalone mic-only/speaker-only intercom devices.
-- `intercom_api` still works standalone with native ESPHome `microphone`/`speaker` components, but its old internal AEC path is gone. Hardware/DSP-processed devices can bind directly; software AEC/AFE belongs behind `esp_audio_stack`.
-- Inbound TCP/UDP calls from routed subnets and NAT paths are matched by
-  PBX-lite caller identity / observed return path when the socket source IP
-  differs from the published endpoint host.
-- Fast hangup/redial is safer: browser audio cleanup is skipped while a new call is already starting, avoiding muted second calls from the card side.
-- The card keeps the "open device" and integration reload style actions focused on recovery; legacy per-event compatibility shims are not kept.
-- HA services remain explicit and schema-validated: answer, decline with reason, hangup, call, forward and purge devices.
+- Codec audio buffers use ESPHome 2026.5 codec PSRAM placement on full profiles,
+  reducing internal RAM pressure.
+- Generic AEC stays lightweight for 4 MB devices; Generic AFE remains the
+  full-feature path for larger flash layouts.
+- WS3/P4 dual-mic profiles expose the AEC-off raw output path so disabling AEC
+  really returns a non-AEC mic stream instead of a still-processed BSS/AEC
+  output.
+- Generic dual-bus AEC supports INMP441-style stereo RX slot selection
+  (`rx_slot_mode: stereo`) while still feeding a mono AEC processor.
+- Full LVGL/audio devices enter OTA maintenance mode before flashing: media, VA,
+  MWW, intercom, audio stack and LVGL are paused/stopped.
 
 Read the previous PBX-lite release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).
 
