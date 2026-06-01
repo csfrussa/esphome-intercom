@@ -1,17 +1,26 @@
 answer:
   name: Answer Call
   description: Answer an incoming intercom call on the selected device.
-  target:
-    device:
-      integration: esphome
+  fields:
+    device_id:
+      name: Device
+      description: Intercom ESPHome device to answer.
+      required: true
+      selector:
+        device:
+          integration: esphome
 
 decline:
   name: Decline Call
   description: Decline an incoming intercom call on the selected device.
-  target:
-    device:
-      integration: esphome
   fields:
+    device_id:
+      name: Device
+      description: Intercom ESPHome device to decline.
+      required: true
+      selector:
+        device:
+          integration: esphome
     reason:
       name: Reason
       description: >-
@@ -26,17 +35,26 @@ decline:
 hangup:
   name: Hangup
   description: End the active intercom call on the selected device.
-  target:
-    device:
-      integration: esphome
+  fields:
+    device_id:
+      name: Device
+      description: Intercom ESPHome device to hang up.
+      required: true
+      selector:
+        device:
+          integration: esphome
 
 call:
   name: Call
   description: Start an intercom call to the selected device (ESP-to-ESP bridge via HA).
-  target:
-    device:
-      integration: esphome
   fields:
+    device_id:
+      name: Destination Device
+      description: Intercom ESPHome device to call.
+      required: true
+      selector:
+        device:
+          integration: esphome
     source:
       name: Source Device
       description: The device that initiates the call. If omitted, calls from HA (browser P2P).
@@ -48,10 +66,14 @@ call:
 forward:
   name: Forward Call
   description: Forward an active or ringing call to another device. Target is the caller device.
-  target:
-    device:
-      integration: esphome
   fields:
+    device_id:
+      name: Source Device
+      description: Intercom ESPHome device whose active call should be forwarded.
+      required: true
+      selector:
+        device:
+          integration: esphome
     forward_to:
       name: Forward To
       description: The device to forward the call to.
@@ -70,10 +92,14 @@ purge_devices:
     'unavailable' for at least min_unavailable_hours is removed. With a target,
     the selected device is removed unconditionally. Devices that come back
     online will re-register themselves automatically.
-  target:
-    device:
-      integration: esphome
   fields:
+    device_id:
+      name: Device
+      description: Optional specific intercom ESPHome device to purge immediately.
+      required: false
+      selector:
+        device:
+          integration: esphome
     min_unavailable_hours:
       name: Minimum Hours Unavailable
       description: >-
