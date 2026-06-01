@@ -56,8 +56,8 @@ A deployment with some ESPs on TCP firmware and some on UDP firmware bridges acr
 
 In standard HA-managed packages, ESP firmware does not advertise or discover
 peers over mDNS. Each ESP publishes `sensor.<device>_intercom_endpoint` through
-the native ESPHome API, HA builds `sensor.intercom_phonebook`, and firmware
-subscribes to that single roster.
+the native ESPHome API, HA builds the `phonebook` attribute of
+`sensor.intercom_phonebook`, and firmware subscribes to that attribute.
 
 For ESP-only deployments without HA, include
 `packages/intercom/mdns_discovery.yaml`. That package advertises and discovers
@@ -191,9 +191,10 @@ If you skip the standard packages and set up the phonebook purely from a YAML sc
 
 ## Loading contacts from YAML
 
-Public packages normally subscribe to `sensor.intercom_phonebook`; that is the
-standard contact source. If you intentionally bypass that path, populate the
-phonebook from ESPHome YAML with the native `intercom_api` actions:
+Public packages normally subscribe to the `phonebook` attribute of
+`sensor.intercom_phonebook`; that is the standard contact source. If you
+intentionally bypass that path, populate the phonebook from ESPHome YAML with
+the native `intercom_api` actions:
 
 ```yaml
 script:

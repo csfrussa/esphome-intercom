@@ -447,7 +447,7 @@ ESP (intercom_api)                          HA (intercom_native)
 
 Key points:
 
-- **Phonebook is the contract**: dedup by friendly name, last-writer-wins on endpoint conflict, empty at boot is normal. Each ESP publishes `intercom_endpoint`; HA publishes the central `sensor.intercom_phonebook`; ESP packages subscribe to it and `intercom_api` shapes each protocol-aware row into the local TCP/UDP dial plan.
+- **Phonebook is the contract**: dedup by friendly name, last-writer-wins on endpoint conflict, empty at boot is normal. Each ESP publishes `intercom_endpoint`; HA publishes the central `sensor.intercom_phonebook` with the full CSV in its `phonebook` attribute; ESP packages subscribe to that attribute and `intercom_api` shapes each protocol-aware row into the local TCP/UDP dial plan.
 - **Slot model is protocol-aware**: target rows are `Name|tcp|ip|port`, `Name|udp|ip|audio|control`, or `Name|ha|ip|tcp_port|udp_audio|udp_control`. Short manual rows remain accepted for YAML scripts.
 - **mDNS is opt-in on ESP firmware**: standard HA-managed YAMLs do not run ESP-side mDNS announce/discovery. `packages/intercom/mdns_discovery.yaml` enables ESP-only announce/discovery using TXT `endpoint=<Name|protocol|ip|ports>`. HA advertises its own `ha` endpoint on TCP and UDP when those listeners are enabled.
 - **Routing policy is per-device, runtime**: `device_independent` dials phonebook peers directly; `ha_pbx` always dials the HA entry and lets HA bridge. `dest_name` is preserved in the payload so HA knows where to forward.

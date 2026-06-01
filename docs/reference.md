@@ -330,16 +330,16 @@ HA publishes one roster sensor:
 
 | Entity | Purpose |
 |---|---|
-| `sensor.intercom_phonebook` | Protocol-aware logical roster: `Name|tcp|...`, `Name|udp|...`, `Name|ha|...`. |
+| `sensor.intercom_phonebook` | Short state summary such as `4 entries`; the protocol-aware CSV roster is in the `phonebook` attribute. |
 
-Current YAML packages subscribe to `sensor.intercom_phonebook` and call the native `intercom_api.update_contacts` action after debounce. Protocol is an explicit field in each phonebook row, so one roster covers TCP, UDP and HA.
+Current YAML packages subscribe to `state_attr('sensor.intercom_phonebook', 'phonebook')` through ESPHome's `attribute: phonebook` support and call the native `intercom_api.update_contacts` action after debounce. Protocol is an explicit field in each phonebook row, so one roster covers TCP, UDP and HA.
 
 ### Endpoint and mDNS model
 
 | Side | Service | Carries |
 |---|---|---|
 | Standard ESP firmware | native ESPHome API | `sensor.<device>_intercom_endpoint` = `Name|protocol|ip|ports` |
-| HA phonebook publisher | HA state | `sensor.intercom_phonebook` = canonical CSV roster |
+| HA phonebook publisher | HA state + attribute | `sensor.intercom_phonebook` state = `N entries`; `phonebook` attribute = canonical CSV roster |
 | ESP-only mDNS package | `_intercom-tcp._tcp` / `_intercom-udp._udp` | TXT `endpoint=<Name|protocol|ip|ports>` |
 | HA when `use_tcp` / `use_udp` is enabled | `_intercom-tcp._tcp` / `_intercom-udp._udp` | TXT `endpoint=<Name|ha|ip|tcp|udp_audio|udp_control>` |
 
@@ -455,14 +455,14 @@ Optional card config:
 type: custom:intercom-card
 device_id: <device_id_or_friendly_name>
 name: Kitchen Intercom
-show_protocol: true
+show_extended_info: true
 ```
 
 The visual editor stores the stable HA `device_id`. Hand-written YAML can use
 the ESP friendly name published in `intercom_endpoint`, matching the names used
 by ESP-to-ESP phonebook calls.
 
-With `show_protocol: true`, the title appends the selected ESP transport (`Kitchen Intercom - TCP` / `- UDP`). The mode line uses:
+With `show_extended_info: true`, the card shows extended routing details and the title appends the selected ESP transport (`Kitchen Intercom - TCP` / `- UDP`). The mode line uses:
 
 | Situation | Label |
 |---|---|

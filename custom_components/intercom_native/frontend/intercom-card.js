@@ -423,7 +423,7 @@ class IntercomCard extends HTMLElement {
         }
       }
 
-      if (this.config?.show_protocol) {
+      if (this.config?.show_extended_info) {
         for (const device of this._availableDevices) {
           const transportEntityId = device?.entities?.intercom_transport;
           if (!transportEntityId) continue;
@@ -649,7 +649,7 @@ class IntercomCard extends HTMLElement {
 
   _formatHeaderTitle(baseName) {
     const name = baseName || "Intercom";
-    if (!this.config?.show_protocol) return name;
+    if (!this.config?.show_extended_info) return name;
     const transport = this._getOwnTransport();
     const mode = this._audioModeLabel(this._getOwnAudioMode());
     return transport ? `${name} - ${transport}/${mode}` : `${name} - ${mode}`;
@@ -657,7 +657,7 @@ class IntercomCard extends HTMLElement {
 
   _formatModeLabel(destination) {
     if (this._isHaName(destination)) return "Home Assistant - ESP";
-    if (!this.config?.show_protocol) return "ESP - ESP";
+    if (!this.config?.show_extended_info) return "ESP - ESP";
 
     const sourceTransport = this._getOwnTransport();
     const destTransport = this._getDestinationTransport(destination);
@@ -1792,24 +1792,24 @@ class IntercomCardEditor extends HTMLElement {
     nameGroup.appendChild(nameInput);
     wrap.appendChild(nameGroup);
 
-    const protocolGroup = document.createElement("div");
-    protocolGroup.className = "form-group checkbox-group";
-    const protocolLabel = document.createElement("label");
-    const protocolInput = document.createElement("input");
-    protocolInput.type = "checkbox";
-    protocolInput.id = "show-protocol-input";
-    protocolLabel.appendChild(protocolInput);
-    protocolLabel.appendChild(document.createTextNode(" Show protocol"));
-    protocolGroup.appendChild(protocolLabel);
-    wrap.appendChild(protocolGroup);
+    const extendedInfoGroup = document.createElement("div");
+    extendedInfoGroup.className = "form-group checkbox-group";
+    const extendedInfoLabel = document.createElement("label");
+    const extendedInfoInput = document.createElement("input");
+    extendedInfoInput.type = "checkbox";
+    extendedInfoInput.id = "show-extended-info-input";
+    extendedInfoLabel.appendChild(extendedInfoInput);
+    extendedInfoLabel.appendChild(document.createTextNode(" Extended information"));
+    extendedInfoGroup.appendChild(extendedInfoLabel);
+    wrap.appendChild(extendedInfoGroup);
 
     this.appendChild(wrap);
 
     select.onchange = (e) => this._valueChanged("device_id", e.target.value);
     nameInput.onchange = (e) => this._valueChanged("name", e.target.value);
-    protocolInput.onchange = (e) => this._boolChanged("show_protocol", e.target.checked);
+    extendedInfoInput.onchange = (e) => this._boolChanged("show_extended_info", e.target.checked);
 
-    this._els = { select, deviceInfo, nameInput, protocolInput };
+    this._els = { select, deviceInfo, nameInput, extendedInfoInput };
   }
 
   _render() {
@@ -1843,7 +1843,7 @@ class IntercomCardEditor extends HTMLElement {
     }
 
     els.nameInput.value = this._config.name || "";
-    els.protocolInput.checked = !!this._config.show_protocol;
+    els.extendedInfoInput.checked = !!this._config.show_extended_info;
   }
 
   _valueChanged(key, value) {

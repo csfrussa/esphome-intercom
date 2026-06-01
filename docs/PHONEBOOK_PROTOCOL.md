@@ -9,9 +9,10 @@ The standard HA-managed firmware flow is endpoint-first:
    `intercom_endpoint` text sensor.
 2. Home Assistant builds the central roster from those endpoint rows and its
    own HA peer row.
-3. HA publishes that roster through `sensor.intercom_phonebook`.
-4. ESP firmware subscribes to `sensor.intercom_phonebook` and shapes the rows
-   for its active transport.
+3. HA publishes a short `sensor.intercom_phonebook` state and puts the full CSV
+   roster in that sensor's `phonebook` attribute.
+4. ESP firmware subscribes to the `phonebook` attribute and shapes the rows for
+   its active transport.
 
 ## Goals
 
@@ -86,11 +87,12 @@ roster.
 - HA exposes that roster through one authoritative entity.
 
 ```text
-sensor.intercom_phonebook      # protocol-aware logical roster
+sensor.intercom_phonebook                       # short state: "N entries"
+sensor.intercom_phonebook.attributes.phonebook  # protocol-aware CSV roster
 ```
 
-Firmware packages subscribe to `sensor.intercom_phonebook`. `intercom_api`
-normalizes that roster locally:
+Firmware packages subscribe to the `phonebook` attribute, not to the short sensor
+state. `intercom_api` normalizes that roster locally:
 
 - TCP firmware keeps TCP peers direct and shapes UDP peers to the HA TCP bridge.
 - UDP firmware keeps UDP peers direct and shapes TCP peers to the HA UDP bridge.
@@ -188,13 +190,14 @@ the central phonebook.
 
 Use this rule when choosing a discovery path:
 
-- With HA installed: use `sensor.intercom_phonebook`.
+- With HA installed: use the `phonebook` attribute of
+  `sensor.intercom_phonebook`.
 - Without HA as phonebook authority: optionally use ESP-side mDNS discovery.
 
 Do not combine ESP-side mDNS discovery with the standard HA-managed packages as
 a way to solve routing. In VPN, VLAN or routed subnet deployments, the fix is
 correct address advertisement and bidirectional reachability for the endpoints
-inside `sensor.intercom_phonebook`.
+inside `sensor.intercom_phonebook`'s `phonebook` attribute.
 
 For ESP-only deployments, include `packages/intercom/mdns_discovery.yaml`.
 That package enables both:

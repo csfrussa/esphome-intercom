@@ -1,13 +1,13 @@
 # ESPHome Intercom and Full-Duplex Voice for ESP32
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20ESP32--P4-blue)](#hardware-support)
-[![Release](https://img.shields.io/badge/release-2026.6.0-%23008cd0)](custom_components/intercom_native/manifest.json)
+[![Release](https://img.shields.io/badge/release-2026.6.1-%23008cd0)](custom_components/intercom_native/manifest.json)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue)](https://www.home-assistant.io)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## BREAKING CHANGES for 2026.6.0
+## BREAKING CHANGES for 2026.6.1
 
-Big audio changes are landing in `2026.6.0`: maintained profiles are moving to
+Big audio changes are landing in `2026.6.1`: maintained profiles are moving to
 the new `esp_audio_stack` backend built around Espressif's GMF, `esp_driver_i2s`,
 `esp_codec_dev`, `gmf_io` and ESP-SR/AFE paths. If you are upgrading from `4.x`
 or an early `2026.5.0` test build, read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md)
@@ -73,9 +73,9 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.6.0 - Espressif GMF audio stack migration
+### 2026.6.1 - Espressif GMF audio stack migration
 
-`2026.6.0` is the audio-stack release. Maintained full-experience profiles and
+`2026.6.1` is the audio-stack release. Maintained full-experience profiles and
 the current intercom-only profiles have moved onto `esp_audio_stack`, a
 repo-native ESPHome backend that keeps the normal ESPHome microphone, speaker,
 media player, mixer, Voice Assistant and Micro Wake Word facade while using the
@@ -112,6 +112,17 @@ Highlights:
 - Generic dual-bus AEC now supports INMP441-style stereo RX slot selection (`rx_slot_mode: stereo`) while still feeding a mono AEC processor.
 - Full LVGL/audio devices enter OTA maintenance mode before flashing: media, VA, MWW, intercom, audio stack and LVGL are paused/stopped.
 - The Home Assistant integration/card moved to one `intercom_native.call_event` model, improved unavailable-device presentation, and fixed fast re-call cleanup so the card does not tear down browser audio while a new call is starting.
+- Phonebook sync now uses the `phonebook` attribute of
+  `sensor.intercom_phonebook` instead of putting the whole CSV in the sensor
+  state. This avoids Home Assistant's 255-character state limit and makes large
+  installs, apartment panels and multi-device rosters viable.
+- Intercom routing is more robust across real networks: HA peer recognition,
+  direct ESP calls and HA bridging have been exercised across multiple subnets,
+  TCP/UDP mixes, HA PBX on/off and NAT/routed return paths.
+- `intercom_api` now supports native one-way endpoints: `mic_only` for ambient
+  listening / monitor-style devices, `speaker_only` for announcement endpoints,
+  and `full_duplex` for normal calls. These modes are inferred from the declared
+  audio components; users do not need a separate mode flag.
 
 Home Assistant / card changes since the PBX-lite release:
 
@@ -119,7 +130,9 @@ Home Assistant / card changes since the PBX-lite release:
 - The card handles unavailable ESP devices explicitly instead of rendering a normal destination row with stale controls.
 - ESP endpoints now publish their audio capability (`full_duplex`, `mic_only`, `speaker_only`, `control_only`). HA and the card use it to avoid impossible audio directions and to support standalone mic-only/speaker-only intercom devices.
 - `intercom_api` still works standalone with native ESPHome `microphone`/`speaker` components, but its old internal AEC path is gone. Hardware/DSP-processed devices can bind directly; software AEC/AFE belongs behind `esp_audio_stack`.
-- Inbound TCP calls from routed subnets are matched by PBX-lite caller identity when the socket source IP differs from the published endpoint host.
+- Inbound TCP/UDP calls from routed subnets and NAT paths are matched by
+  PBX-lite caller identity / observed return path when the socket source IP
+  differs from the published endpoint host.
 - Fast hangup/redial is safer: browser audio cleanup is skipped while a new call is already starting, avoiding muted second calls from the card side.
 - The card keeps the "open device" and integration reload style actions focused on recovery; legacy per-event compatibility shims are not kept.
 - HA services remain explicit and schema-validated: answer, decline with reason, hangup, call, forward and purge devices.
@@ -155,7 +168,9 @@ button, LVGL button, automation, service call or Lovelace card.
 
 If Home Assistant is part of the setup, use the standard HA-managed phonebook:
 each ESP publishes its `intercom_endpoint` through the native ESPHome API, and
-HA publishes the combined roster as `sensor.intercom_phonebook`.
+HA publishes the combined roster through `sensor.intercom_phonebook`: the sensor
+state is a short summary (`N entries`) and the full CSV roster lives in the
+`phonebook` attribute, which the standard ESP YAMLs subscribe to.
 
 Do **not** enable ESP-side mDNS discovery for normal HA installs. The optional
 `packages/intercom/mdns_discovery.yaml` package is for ESP-only deployments
@@ -459,7 +474,7 @@ _Every callable peer becomes a canonical endpoint row. HA merges rows into the r
 | Side | Service | Carries |
 |---|---|---|
 | Standard ESP firmware | native ESPHome API | `sensor.<device>_intercom_endpoint` = `Name|protocol|ip|ports` |
-| HA phonebook publisher | HA state | `sensor.intercom_phonebook` = canonical CSV roster |
+| HA phonebook publisher | HA state + attribute | `sensor.intercom_phonebook` state = `N entries`; `phonebook` attribute = canonical CSV roster |
 | ESP-only mDNS package | `_intercom-tcp._tcp` / `_intercom-udp._udp` | TXT `endpoint=<Name|protocol|ip|ports>` |
 | HA when `use_tcp` / `use_udp` | `_intercom-tcp._tcp` / `_intercom-udp._udp` | TXT `endpoint=<Name|ha|ip|tcp|udp_audio|udp_control>` |
 
@@ -756,10 +771,11 @@ button:
 Current public YAMLs use shared phonebook subscription packages. HA publishes:
 
 ```text
-sensor.intercom_phonebook      # protocol-aware logical roster
+sensor.intercom_phonebook                       # short state: "N entries"
+sensor.intercom_phonebook.attributes.phonebook  # protocol-aware CSV roster
 ```
 
-The ESP-side package subscribes to `sensor.intercom_phonebook` and calls `intercom_api.update_contacts` after a debounce. The HA row (`Name|ha|...`) teaches firmware the HA peer name for `routing_mode: ha_pbx` through the HA-published phonebook. For manual/local automations you can still use the remaining call-control ESPHome actions:
+The ESP-side package subscribes to the `phonebook` attribute and calls `intercom_api.update_contacts` after a debounce. The HA row (`Name|ha|...`) teaches firmware the HA peer name for `routing_mode: ha_pbx` through the HA-published phonebook. For manual/local automations you can still use the remaining call-control ESPHome actions:
 
 ```yaml
 action: esphome.<slug>_set_ha_peer_name
@@ -815,10 +831,10 @@ Alternatively, you can add it manually via YAML:
 type: custom:intercom-card
 device_id: <your_esp_device_id_or_friendly_name>
 name: Kitchen Intercom
-show_protocol: true
+show_extended_info: true
 ```
 
-The card automatically discovers ESPHome devices with the `intercom_api` component through their `intercom_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_protocol: true`, the header appends `- TCP` / `- UDP`; the mode line shows `Home Assistant - ESP`, `ESP - ESP`, or `Inter-protocol TCP-UDP` / `Inter-protocol UDP-TCP`.
+The card automatically discovers ESPHome devices with the `intercom_api` component through their `intercom_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- TCP` / `- UDP`; the mode line shows `Home Assistant - ESP`, `ESP - ESP`, or `Inter-protocol TCP-UDP` / `Inter-protocol UDP-TCP`.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.intercom_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
 

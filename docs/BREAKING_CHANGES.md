@@ -1,8 +1,8 @@
 # Breaking changes
 
-## 2026.6.0: audio stack / GMF migration
+## 2026.6.1: audio stack / GMF migration
 
-`2026.6.0` continues the `2026.5.0` migration and changes the maintained audio
+`2026.6.1` continues the `2026.5.0` migration and changes the maintained audio
 backend. The supported full-experience profiles and current maintained
 intercom-only profiles are now based on `esp_audio_stack`, the new shared audio
 backend built around ESP-IDF/Espressif audio libraries. This is a backend
@@ -99,6 +99,33 @@ The card state model also changed around unavailable devices and rapid call
 cleanup. Dashboards should use the current bundled card; old copied card files
 can keep stale `unavailable` handling or browser-audio teardown behavior.
 
+### Home Assistant: phonebook sensor state moved to an attribute
+
+`sensor.intercom_phonebook` no longer stores the full CSV roster in its state.
+The state is now a short summary such as `4 entries`; the authoritative CSV
+roster is in the `phonebook` attribute.
+
+This avoids Home Assistant's 255-character entity-state limit. Large rosters
+such as apartment panels, mixed TCP/UDP installs and multi-subnet deployments
+would otherwise overflow the state field quickly.
+
+| Was | Is |
+|---|---|
+| `states('sensor.intercom_phonebook')` returns the CSV roster | `states('sensor.intercom_phonebook')` returns `N entries` |
+| ESP YAML subscribes to the sensor state | ESP YAML subscribes to `attribute: phonebook` |
+| Automations parse the sensor state | Automations should read `state_attr('sensor.intercom_phonebook', 'phonebook')` |
+
+All maintained YAMLs use `packages/intercom/phonebook_subscribe.yaml`, which
+already subscribes to the `phonebook` attribute. Custom YAMLs that declared their
+own Home Assistant text sensor must add:
+
+```yaml
+text_sensor:
+  - platform: homeassistant
+    entity_id: sensor.intercom_phonebook
+    attribute: phonebook
+```
+
 ### YAML: standalone `intercom_api` audio
 
 `intercom_api` remains usable without `esp_audio_stack`, but only as the
@@ -122,19 +149,37 @@ This is intended for devices with hardware/DSP-processed audio such as XMOS
 front-ends, and for simple native ESPHome I2S tests. If you need software echo
 cancellation, use an `esp_audio_stack` profile.
 
-### Home Assistant: routed subnet TCP calls
+New ESPHome-native example YAMLs are provided for this path:
 
-Inbound TCP calls from ESPs on routed subnets/VPN/NAT are matched by PBX-lite
-caller identity when the socket source address does not equal the published
-endpoint host. HA still publishes the endpoint IP that peers should dial; the
-new fallback only affects how HA recognises an already-connected caller.
+- `yamls/full-experience/esphome-native/generic-s3-full-esphome-native-tcp.yaml`
+- `yamls/full-experience/esphome-native/generic-s3-full-esphome-native-udp.yaml`
+- `yamls/intercom-only/esphome-native/` for full-duplex, mic-only and
+  speaker-only intercom-only variants.
+
+These examples are a starting point for native ESPHome audio hardware. They were
+tested with an INMP441-style microphone plus MAX98357A-style I2S amplifier on
+separate I2S buses. They should also be useful for XMOS / Voice PE-like hardware
+where the front-end already provides processed microphone audio, but that exact
+hardware path still needs user feedback.
+
+### Home Assistant: routed subnet and mixed-protocol calls
+
+Inbound calls from ESPs on routed subnets/VPN/NAT are matched by PBX-lite caller
+identity when the socket source address does not equal the published endpoint
+host. UDP additionally tracks the observed packet source as the return path
+without rewriting the phonebook. HA still publishes the endpoint IP that peers
+should dial; the fallback only affects how HA recognises and answers an already
+connected or observed caller.
+
+This was tested across multiple subnets, TCP/UDP combinations, HA PBX on/off and
+NAT/routed return paths.
 
 The optional HA `advertise_host` config-flow field is only for cases where HA's
 automatically announced address is not reachable by ESP devices.
 
 ### Build cache
 
-After moving to `2026.6.0`, clear ESPHome build caches once before compiling.
+After moving to `2026.6.1`, clear ESPHome build caches once before compiling.
 This matters because the audio backend, IDF managed components and generated
 sdkconfig can change at the same time.
 
@@ -200,9 +245,9 @@ state-text ESPHome sensor (`sensor.<name>_intercom_state`) is unchanged.
 ## Home Assistant: phonebook and HA peer name
 
 The phonebook is now endpoint-first. ESPs publish
-`sensor.<device>_intercom_endpoint` as `Name|protocol|ip|ports`, HA builds the
-canonical `sensor.intercom_phonebook`, and firmware packages subscribe to that
-single roster.
+`sensor.<device>_intercom_endpoint` as `Name|protocol|ip|ports`, HA builds
+`sensor.intercom_phonebook`, and firmware packages subscribe to its `phonebook`
+attribute.
 
 Do not rely on a hardcoded `"Home Assistant"` contact anymore. The HA peer name
 is `hass.config.location_name`, so the contact can be `"Home"`, `"Office"`,
