@@ -128,8 +128,8 @@ logger:
     audio_processor: INFO
 
 wifi:
-  ssid: !secret test_ssid
-  password: !secret test_password
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
   power_save_mode: NONE
 
 external_components:
