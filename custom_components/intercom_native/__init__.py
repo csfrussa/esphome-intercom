@@ -226,6 +226,24 @@ def _device_entity_state(hass: HomeAssistant, device: dict, key: str) -> str:
     return "" if value.lower() in ("unknown", "unavailable") else value
 
 
+def _device_is_phonebook_available(hass: HomeAssistant, device: dict) -> bool:
+    """True when the ESP should be advertised to other intercom peers."""
+    entities = device.get("entities") or {}
+    endpoint_entity = entities.get("intercom_endpoint")
+    if not endpoint_entity:
+        return False
+    endpoint_state = hass.states.get(endpoint_entity)
+    if endpoint_state is None or str(endpoint_state.state).strip().lower() in ("", "unknown", "unavailable"):
+        return False
+
+    state_entity = entities.get("intercom_state")
+    if state_entity:
+        state = hass.states.get(state_entity)
+        if state is None or str(state.state).strip().lower() in ("unknown", "unavailable"):
+            return False
+    return True
+
+
 def _device_has_direct_esp_incoming(hass: HomeAssistant, device: dict) -> bool:
     state = _device_entity_state(hass, device, "intercom_state").lower()
     if state not in ("ringing", "incoming"):
@@ -359,6 +377,9 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
         name = d.get("name") or ""
         host = d.get("host") or ""
         if not name or not host:
+            continue
+        if not _device_is_phonebook_available(hass, d):
+            _LOGGER.debug("Skipping offline intercom peer from phonebook: %s", name or host)
             continue
         transport = _device_transport(hass, d)
         udp_audio_port, udp_control_port = _udp_peer_ports(hass, host, cfg)
