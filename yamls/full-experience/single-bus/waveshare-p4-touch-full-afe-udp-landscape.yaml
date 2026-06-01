@@ -2611,8 +2611,10 @@ script:
           const int ic_rule_y = 56;
           const int ic_status_y = 82;
           const int ic_peer_y = 118;
-          const int ic_contacts_y = 172;
-          const int ic_hint_y = 212;
+          int ic_hint_y = intercom_h - 142;
+          if (ic_hint_y < 250) ic_hint_y = 250;
+          int ic_contacts_y = ic_hint_y - 34;
+          if (ic_contacts_y < 214) ic_contacts_y = 214;
           const int ic_swipe_y = 80;
           const int ic_swipe_h = 170;
           int ic_button_side_w = (right_w * 23) / 100;
