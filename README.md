@@ -8,33 +8,25 @@
 ## BREAKING CHANGES for 2026.6.1
 
 `2026.6.1` is a compatibility and stabilization update on top of `2026.6.0`.
-If you already upgraded to the GMF/`esp_audio_stack` backend, the important
-changes are not another audio-backend migration: they are the new Home Assistant
-phonebook format, better routed-subnet/NAT handling, and restored standalone
-`intercom_api` support for native ESPHome microphone/speaker devices.
+If you already upgraded to the GMF/`esp_audio_stack` backend, this release does
+not require another audio-backend migration.
 
 Read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md) before
 flashing ESP firmware or restarting Home Assistant if you use custom YAMLs,
 custom automations, routed subnets/VLANs/VPNs, or copied Lovelace card YAML.
 
-Main changes since `2026.6.0`:
+Action required:
 
-- `sensor.intercom_phonebook` now stores the full CSV roster in the `phonebook`
-  attribute. The entity state is only a short summary such as `6 entries`.
-- ESP YAMLs must subscribe to `sensor.intercom_phonebook` with
-  `attribute: phonebook`; maintained YAMLs already do this.
-- `intercom_api` supports native `full_duplex`, `mic_only` and `speaker_only`
-  endpoints with standard ESPHome audio components, without `esp_audio_stack`.
-- The new ESPHome-native YAMLs are intended for native audio and hardware/DSP
-  AEC paths such as XMOS-style front-ends. They are not a ready-made Voice PE
-  profile yet, but they are the base for that class of hardware.
-- Software AEC/AFE remains in the full `esp_audio_stack` profiles.
-- HA call routing was tested and hardened across routed subnets, NAT return
-  paths, TCP/UDP mixes and HA PBX on/off modes.
-- Full audio/LVGL profiles no longer use HA disconnect cleanup actions that
-  could destabilize devices during a Home Assistant restart.
-- Lovelace card YAML uses `show_extended_info`; the old `show_protocol` key is
-  not kept as a compatibility alias.
+- Custom ESP YAMLs that subscribe to `sensor.intercom_phonebook` must read the
+  `phonebook` attribute, not the entity state. Maintained YAMLs already include
+  the fixed package.
+- Custom automations/templates that parse `states('sensor.intercom_phonebook')`
+  must switch to `state_attr('sensor.intercom_phonebook', 'phonebook')`.
+- Copied Lovelace card YAML must rename `show_protocol` to
+  `show_extended_info`; the old key is not kept as a compatibility alias.
+- Custom standalone `intercom_api` YAMLs must use native ESPHome
+  `microphone`/`speaker` bindings, or move software AEC/AFE to
+  `esp_audio_stack`. The old internal standalone AEC path is not restored.
 
 Minimum versions for this release:
 
