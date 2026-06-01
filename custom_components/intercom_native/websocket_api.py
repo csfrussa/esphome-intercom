@@ -87,6 +87,26 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
     hass.bus.async_fire(CALL_EVENT, event)
 
 
+def _audio_mode(value: str | None) -> str:
+    mode = (value or "full_duplex").strip().lower()
+    return mode if mode in {"full_duplex", "mic_only", "speaker_only", "control_only"} else "full_duplex"
+
+
+def _has_mic(mode: str | None) -> bool:
+    return _audio_mode(mode) in {"full_duplex", "mic_only"}
+
+
+def _has_speaker(mode: str | None) -> bool:
+    return _audio_mode(mode) in {"full_duplex", "speaker_only"}
+
+
+async def _device_audio_mode(hass: HomeAssistant, device_id: str) -> str:
+    for device in await _get_intercom_devices(hass):
+        if device.get("device_id") == device_id:
+            return _audio_mode(device.get("audio_mode"))
+    return "full_duplex"
+
+
 from .transport_helpers import (
     TransportCallbacks,
     build_transport as _build_transport_impl,
@@ -108,6 +128,7 @@ class IntercomSession:
         transport: IntercomTransport | None = None,
         call_id: str = "",
         caller_name: str = "",
+        audio_mode: str = "full_duplex",
     ):
         """Initialize session."""
         self.hass = hass
@@ -116,6 +137,7 @@ class IntercomSession:
         self.transport_type = transport_type or configured_transport_type(hass, host)
         self._initial_call_id = call_id
         self._initial_caller_name = caller_name
+        self.audio_mode = _audio_mode(audio_mode)
 
         self._transport: Optional[IntercomTransport] = transport
         self._active = False
@@ -137,7 +159,7 @@ class IntercomSession:
 
     def _on_audio(self, data: bytes) -> None:
         """Handle audio from ESP - push to subscribed WS connections."""
-        if not self._active:
+        if not self._active or not _has_mic(self.audio_mode):
             return
         subs = _audio_subscribers.get(self.device_id)
         if not subs:
@@ -181,7 +203,7 @@ class IntercomSession:
         self._active = True
         # Guard: start() and answer_esp_call() can both reach here; without
         # the was_active check we'd leak a TX task per re-fire.
-        if not was_active and (self._tx_task is None or self._tx_task.done()):
+        if _has_speaker(self.audio_mode) and not was_active and (self._tx_task is None or self._tx_task.done()):
             self._tx_task = self.hass.async_create_task(self._tx_sender())
         _fire_call_event(self.hass, {"device_id": self.device_id, "state": "streaming"}, "session")
 
@@ -297,7 +319,7 @@ class IntercomSession:
 
         if result == "streaming":
             self._active = True
-            if self._tx_task is None or self._tx_task.done():
+            if _has_speaker(self.audio_mode) and (self._tx_task is None or self._tx_task.done()):
                 self._tx_task = self.hass.async_create_task(self._tx_sender())
             return "streaming"
         elif result == "ringing":
@@ -410,7 +432,7 @@ class IntercomSession:
 
     def queue_audio(self, data: bytes) -> None:
         """Non-blocking enqueue; drops oldest on full to keep latency bounded."""
-        if not self._active:
+        if not self._active or not _has_speaker(self.audio_mode):
             return
         _put_latest(self._tx_queue, data)
 
@@ -436,6 +458,8 @@ class BridgeSession:
         dest_transport_type: str | None = None,
         source_transport: IntercomTransport | None = None,
         source_call_id: str = "",
+        source_audio_mode: str = "full_duplex",
+        dest_audio_mode: str = "full_duplex",
     ):
         """`source_transport` is set when the TCP listener already
         accepted the source leg; otherwise start() builds it."""
@@ -450,6 +474,8 @@ class BridgeSession:
         self.source_transport_type = source_transport_type or configured_transport_type(hass, source_host)
         self.dest_transport_type = dest_transport_type or configured_transport_type(hass, dest_host)
         self.source_call_id = source_call_id or bridge_id
+        self.source_audio_mode = _audio_mode(source_audio_mode)
+        self.dest_audio_mode = _audio_mode(dest_audio_mode)
 
         self._source_client: Optional[IntercomTransport] = source_transport
         self._dest_client: Optional[IntercomTransport] = None
@@ -572,11 +598,11 @@ class BridgeSession:
             _LOGGER.debug("Bridge sender %s stopped", direction)
 
     def _source_audio(self, data: bytes) -> None:
-        if self._active:
+        if self._active and _has_mic(self.source_audio_mode) and _has_speaker(self.dest_audio_mode):
             self._push_audio(self._q_source_to_dest, data)
 
     def _dest_audio(self, data: bytes) -> None:
-        if self._active:
+        if self._active and _has_mic(self.dest_audio_mode) and _has_speaker(self.source_audio_mode):
             self._push_audio(self._q_dest_to_source, data)
 
     def _source_disconnected(self) -> None:
@@ -784,11 +810,17 @@ class BridgeSession:
 
     def _start_sender_tasks(self) -> None:
         """Start the audio sender tasks."""
-        if self._sender_s2d is None and self._dest_client:
+        if (
+            _has_mic(self.source_audio_mode) and _has_speaker(self.dest_audio_mode)
+            and self._sender_s2d is None and self._dest_client
+        ):
             self._sender_s2d = self.hass.async_create_task(
                 self._sender_loop(self._q_source_to_dest, self._dest_client, "s2d")
             )
-        if self._sender_d2s is None and self._source_client:
+        if (
+            _has_mic(self.dest_audio_mode) and _has_speaker(self.source_audio_mode)
+            and self._sender_d2s is None and self._source_client
+        ):
             self._sender_d2s = self.hass.async_create_task(
                 self._sender_loop(self._q_dest_to_source, self._source_client, "d2s")
             )
@@ -982,6 +1014,7 @@ class BridgeSession:
         new_dest_host: str,
         new_dest_name: str,
         new_dest_transport_type: str | None = None,
+        new_dest_audio_mode: str = "full_duplex",
     ) -> str:
         """Replace the dest leg in place. Returns "connected"/"ringing"/"error"."""
         async with self._stop_lock:
@@ -1009,6 +1042,7 @@ class BridgeSession:
             self.dest_host = new_dest_host
             self.dest_name = new_dest_name
             self.dest_transport_type = new_dest_transport_type or self.dest_transport_type
+            self.dest_audio_mode = _audio_mode(new_dest_audio_mode)
 
             self._dest_client = _build_transport_impl(
                 self.hass,
@@ -1140,6 +1174,7 @@ async def websocket_start(
             device_id=device_id,
             host=host,
             transport_type=configured_transport_type(hass, host),
+            audio_mode=await _device_audio_mode(hass, device_id),
         )
         result = await session.start()
 
@@ -1475,6 +1510,7 @@ async def websocket_answer_esp_call(
             device_id=device_id,
             host=host,
             transport_type=configured_transport_type(hass, host),
+            audio_mode=await _device_audio_mode(hass, device_id),
         )
         result = await session.answer_esp_call()
 

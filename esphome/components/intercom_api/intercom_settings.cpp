@@ -117,7 +117,7 @@ void IntercomApi::load_settings_() {
     const float volume = clamp_volume_(stored.volume_pct / 100.0f);
     this->volume_.store(volume, std::memory_order_relaxed);
     if (this->volume_number_ != nullptr) {
-#ifdef USE_SPEAKER
+#ifdef USE_INTERCOM_API_SPEAKER
       if (this->speaker_ != nullptr) {
         this->speaker_->set_volume(volume);
       }
@@ -127,7 +127,7 @@ void IntercomApi::load_settings_() {
 
     // Skip mic_gain when esp_audio_stack owns it (its own persistence).
     this->mic_gain_db_ = clamp_mic_gain_db_(stored.mic_gain_db);
-    if (this->mic_gain_number_ != nullptr) {
+    if (this->mic_gain_number_ != nullptr && this->has_microphone_()) {
       if (this->mic_gain_db_ != 0.0f && !this->ensure_mic_processing_buffer_()) {
         ESP_LOGE(TAG, "Stored mic_gain %.1fdB ignored: processing buffer unavailable", this->mic_gain_db_);
         this->mic_gain_db_ = 0.0f;
@@ -173,7 +173,7 @@ void IntercomApi::save_settings_() {
 void IntercomApi::set_volume(float volume) {
   volume = clamp_volume_(volume);
   this->volume_.store(volume, std::memory_order_relaxed);
-#ifdef USE_SPEAKER
+#ifdef USE_INTERCOM_API_SPEAKER
   if (this->speaker_ != nullptr) {
     this->speaker_->set_volume(volume);
   }
@@ -194,6 +194,10 @@ void IntercomApi::set_do_not_disturb(bool enabled) {
 }
 
 void IntercomApi::set_mic_gain_db(float db) {
+  if (!this->has_microphone_()) {
+    ESP_LOGW(TAG, "Ignoring mic_gain: this intercom endpoint has no microphone");
+    return;
+  }
   // gain = 10^(dB/20); clamp to -20..+20 dB.
   db = clamp_mic_gain_db_(db);
   if (db != 0.0f && !this->ensure_mic_processing_buffer_()) {

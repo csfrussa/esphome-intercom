@@ -37,6 +37,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
             "tcp_port": existing.get("tcp_port", INTERCOM_PORT),
             "udp_audio_port": existing.get("udp_audio_port", INTERCOM_UDP_AUDIO_PORT),
             "udp_control_port": existing.get("udp_control_port", INTERCOM_UDP_CONTROL_PORT),
+            "advertise_host": existing.get("advertise_host", ""),
         }
         schema = vol.Schema(
             {
@@ -45,6 +46,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required("use_udp", default=defaults["use_udp"]): BooleanSelector(),
                 vol.Required("udp_audio_port", default=defaults["udp_audio_port"]): _port_selector(),
                 vol.Required("udp_control_port", default=defaults["udp_control_port"]): _port_selector(),
+                vol.Optional("advertise_host", default=defaults["advertise_host"]): str,
             }
         )
         errors: dict[str, str] = {}
@@ -53,6 +55,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
             # Number selectors hand floats; coerce to int once on the boundary.
             for k in ("tcp_port", "udp_audio_port", "udp_control_port"):
                 user_input[k] = int(user_input[k])
+            user_input["advertise_host"] = (user_input.get("advertise_host") or "").strip()
 
             if not user_input["use_tcp"] and not user_input["use_udp"]:
                 errors["base"] = "at_least_one_transport"

@@ -99,6 +99,39 @@ The card state model also changed around unavailable devices and rapid call
 cleanup. Dashboards should use the current bundled card; old copied card files
 can keep stale `unavailable` handling or browser-audio teardown behavior.
 
+### YAML: standalone `intercom_api` audio
+
+`intercom_api` remains usable without `esp_audio_stack`, but only as the
+transport/FSM layer over standard ESPHome audio components. It no longer owns a
+standalone software AEC path.
+
+| Removed | Replacement |
+|---|---|
+| `intercom_api.processor_id` | Use native ESPHome `microphone`/`speaker` directly, or put `processor_id` on `esp_audio_stack` for software AEC/AFE. |
+| `intercom_api.aec_reference_delay_ms` | Configure reference buffering on `esp_audio_stack`. |
+| `switch: - platform: intercom_api, aec:` | Use the controls exposed by `esp_audio_stack`, `esp_aec` or `esp_afe`. |
+
+Speaker-only, mic-only and full-duplex standalone intercom are supported by the
+same YAML keys:
+
+- only `speaker:` -> `speaker_only`
+- only `microphone:` or `microphone_source:` -> `mic_only`
+- both directions -> `full_duplex`
+
+This is intended for devices with hardware/DSP-processed audio such as XMOS
+front-ends, and for simple native ESPHome I2S tests. If you need software echo
+cancellation, use an `esp_audio_stack` profile.
+
+### Home Assistant: routed subnet TCP calls
+
+Inbound TCP calls from ESPs on routed subnets/VPN/NAT are matched by PBX-lite
+caller identity when the socket source address does not equal the published
+endpoint host. HA still publishes the endpoint IP that peers should dial; the
+new fallback only affects how HA recognises an already-connected caller.
+
+The optional HA `advertise_host` config-flow field is only for cases where HA's
+automatically announced address is not reachable by ESP devices.
+
 ### Build cache
 
 After moving to `2026.6.0`, clear ESPHome build caches once before compiling.

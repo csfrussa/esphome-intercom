@@ -49,131 +49,56 @@ bool IntercomApi::ensure_mic_processing_buffer_() {
 void IntercomApi::cleanup_partial_setup_() {
   // Transactional setup cleanup. force_delete is safe here only because tasks
   // were just spawned and have not entered a blocking upstream call yet.
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  audio_processor::force_delete_pinned_task(&this->speaker_task_handle_,
-                                             &this->speaker_task_stack_,
-                                             IntercomApi::kSpeakerTaskStackBytes);
-#endif
   audio_processor::force_delete_pinned_task(&this->tx_task_handle_, &this->tx_task_stack_,
                                              IntercomApi::kTxTaskStackBytes);
 
   RAMAllocator<int16_t> i16_alloc;
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (this->spk_ref_scaled_ != nullptr) {
-    i16_alloc.deallocate(this->spk_ref_scaled_, kSpkRefScaledSamples);
-    this->spk_ref_scaled_ = nullptr;
-  }
-#endif
   if (int16_t *mic_converted = this->mic_converted_.exchange(nullptr, std::memory_order_acq_rel)) {
     i16_alloc.deallocate(mic_converted, kMicConvertedSamples);
   }
 
   RAMAllocator<uint8_t> u8_alloc;
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (this->spk_audio_chunk_ != nullptr) {
-    u8_alloc.deallocate(this->spk_audio_chunk_, IntercomApi::kSpkAudioChunkBytes);
-    this->spk_audio_chunk_ = nullptr;
-  }
-#endif
   if (this->tx_audio_chunk_ != nullptr) {
     u8_alloc.deallocate(this->tx_audio_chunk_, IntercomApi::kTxAudioChunkBytes);
     this->tx_audio_chunk_ = nullptr;
   }
 
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  this->speaker_buffer_.reset();
-#endif
   this->mic_buffer_.reset();
   this->transport_.reset();
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (this->spk_ref_mutex_ != nullptr) {
-    vSemaphoreDelete(this->spk_ref_mutex_);
-    this->spk_ref_mutex_ = nullptr;
-  }
-  if (this->speaker_stopped_sem_ != nullptr) {
-    vSemaphoreDelete(this->speaker_stopped_sem_);
-    this->speaker_stopped_sem_ = nullptr;
-  }
-#endif
 }
 
 bool IntercomApi::allocate_setup_buffers_() {
-  const bool use_intercom_aec = this->has_intercom_processor_();
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (use_intercom_aec) {
-    this->speaker_stopped_sem_ = xSemaphoreCreateBinary();
-    if (!this->speaker_stopped_sem_) {
-      ESP_LOGE(TAG, "Failed to create speaker semaphore");
+  if (this->has_microphone_()) {
+    this->mic_buffer_ = this->buffers_in_psram_
+        ? audio_processor::create_prefer_psram(TX_BUFFER_SIZE, "intercom.mic")
+        : audio_processor::create_internal(TX_BUFFER_SIZE, "intercom.mic");
+    if (!this->mic_buffer_) {
+      ESP_LOGE(TAG, "Failed to allocate mic ring buffer");
       return false;
     }
   }
-#else
-  (void) use_intercom_aec;
-#endif
 
-  this->mic_buffer_ = this->buffers_in_psram_
-      ? audio_processor::create_prefer_psram(TX_BUFFER_SIZE, "intercom.mic")
-      : audio_processor::create_internal(TX_BUFFER_SIZE, "intercom.mic");
-  if (!this->mic_buffer_) {
-    ESP_LOGE(TAG, "Failed to allocate mic ring buffer");
+  if (this->has_microphone_() && this->dc_offset_removal_ && !this->ensure_mic_processing_buffer_()) {
     return false;
   }
-
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (use_intercom_aec) {
-    this->speaker_buffer_ = this->buffers_in_psram_
-        ? audio_processor::create_prefer_psram(RX_BUFFER_SIZE, "intercom.speaker")
-        : audio_processor::create_internal(RX_BUFFER_SIZE, "intercom.speaker");
-    if (!this->speaker_buffer_) {
-      ESP_LOGE(TAG, "Failed to allocate speaker ring buffer");
-      return false;
-    }
-  }
-#endif
-
-  if (this->dc_offset_removal_ && !this->ensure_mic_processing_buffer_()) {
-    return false;
-  }
-
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (use_intercom_aec) {
-    // Default placement (internal RAM) saves speaker/reference cycles; flip
-    // buffers_in_psram_ to free internal RAM at that cost.
-    RAMAllocator<int16_t> psram_i16 = this->buffers_in_psram_
-        ? RAMAllocator<int16_t>()
-        : RAMAllocator<int16_t>(RAMAllocator<int16_t>::ALLOC_INTERNAL);
-    this->spk_ref_scaled_ = psram_i16.allocate(kSpkRefScaledSamples);
-    if (!this->spk_ref_scaled_) {
-      ESP_LOGE(TAG, "Failed to allocate speaker ref buffer");
-      return false;
-    }
-  }
-#endif
 
   // Per-iteration drain buffers; same placement policy as above.
   RAMAllocator<uint8_t> psram_u8 = this->buffers_in_psram_
       ? RAMAllocator<uint8_t>()
       : RAMAllocator<uint8_t>(RAMAllocator<uint8_t>::ALLOC_INTERNAL);
-  this->tx_audio_chunk_ = psram_u8.allocate(IntercomApi::kTxAudioChunkBytes);
-  if (!this->tx_audio_chunk_) {
-    ESP_LOGE(TAG, "Failed to allocate tx audio chunk buffer");
-    return false;
-  }
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (use_intercom_aec) {
-    this->spk_audio_chunk_ = psram_u8.allocate(IntercomApi::kSpkAudioChunkBytes);
-    if (!this->spk_audio_chunk_) {
-      ESP_LOGE(TAG, "Failed to allocate spk audio chunk buffer");
+  if (this->has_microphone_()) {
+    this->tx_audio_chunk_ = psram_u8.allocate(IntercomApi::kTxAudioChunkBytes);
+    if (!this->tx_audio_chunk_) {
+      ESP_LOGE(TAG, "Failed to allocate tx audio chunk buffer");
       return false;
     }
   }
-#endif
 
   return true;
 }
 
 bool IntercomApi::setup_audio_processor_() {
-#ifdef USE_MICROPHONE
+#ifdef USE_INTERCOM_API_MIC
   if (this->microphone_ != nullptr) {
     this->microphone_->add_data_callback([this](const std::vector<uint8_t> &data) {
       this->on_microphone_data_(data.data(), data.size());
@@ -184,26 +109,6 @@ bool IntercomApi::setup_audio_processor_() {
       this->on_microphone_data_(data.data(), data.size());
     });
   }
-#endif
-
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  // AEC frame buffers (~13 KB) are deferred to set_aec_enabled(true).
-  if (this->aec_ != nullptr && this->aec_->is_initialized()) {
-    this->aec_frame_samples_ = this->aec_->frame_spec().input_samples;
-    if (this->aec_frame_samples_ <= 0 || this->aec_frame_samples_ > 1024) {
-      ESP_LOGW(TAG, "AEC frame_size invalid (%d)", this->aec_frame_samples_);
-    } else {
-      this->spk_ref_mutex_ = xSemaphoreCreateMutex();
-      if (this->spk_ref_mutex_ == nullptr) {
-        ESP_LOGE(TAG, "Failed to create AEC reference mutex");
-        return false;
-      }
-      ESP_LOGI(TAG, "AEC validated: frame_size=%d samples (%dms) - enable via switch",
-               this->aec_frame_samples_,
-               this->aec_frame_samples_ * 1000 / SAMPLE_RATE);
-    }
-  }
-  this->aec_enabled_.store(false, std::memory_order_relaxed);
 #endif
   return true;
 }
@@ -254,31 +159,17 @@ bool IntercomApi::setup_transport_() {
 }
 
 bool IntercomApi::start_runtime_tasks_() {
-  const bool use_intercom_aec = this->has_intercom_processor_();
-  // TX task always exists (drains mic_buffer); standalone speaker_task only when
-  // intercom_api owns the standalone AEC path.
-  if (!audio_processor::start_pinned_task(IntercomApi::tx_task, "intercom_tx",
-                                           IntercomApi::kTxTaskStackBytes, this, 5, 0,
-                                           this->task_stacks_in_psram_, TAG,
-                                           &this->tx_task_handle_, &this->tx_task_tcb_,
-                                           &this->tx_task_stack_)) {
-    return false;
-  }
-
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (use_intercom_aec) {
-    if (!audio_processor::start_pinned_task(IntercomApi::speaker_task, "intercom_spk",
-                                             IntercomApi::kSpeakerTaskStackBytes, this, 4, 0,
+  // TX task exists only when a microphone is configured. Speaker-only peers
+  // still accept calls and play incoming audio through the transport recv task.
+  if (this->has_microphone_()) {
+    if (!audio_processor::start_pinned_task(IntercomApi::tx_task, "intercom_tx",
+                                             IntercomApi::kTxTaskStackBytes, this, 5, 0,
                                              this->task_stacks_in_psram_, TAG,
-                                             &this->speaker_task_handle_,
-                                             &this->speaker_task_tcb_,
-                                             &this->speaker_task_stack_)) {
+                                             &this->tx_task_handle_, &this->tx_task_tcb_,
+                                             &this->tx_task_stack_)) {
       return false;
     }
   }
-#else
-  (void) use_intercom_aec;
-#endif
   return true;
 }
 
@@ -327,11 +218,10 @@ void IntercomApi::fail_setup_() {
 void IntercomApi::setup() {
   ESP_LOGI(TAG, "Setting up Intercom API...");
 
-  const bool use_intercom_aec = this->has_intercom_processor_();
-  ESP_LOGI(TAG, "Intercom Processor: %s (transport: %s, tasks: %s)",
-           use_intercom_aec ? "YES" : "NO",
+  ESP_LOGI(TAG, "Audio capability: %s (transport: %s, tasks: %s)",
+           this->audio_capability_(),
            this->protocol_ == TransportType::UDP ? "udp" : "tcp",
-           use_intercom_aec ? "tx+aec+speaker" : "tx");
+           this->has_microphone_() ? "tx+rx/control" : "rx/control");
 
   if (!this->allocate_setup_buffers_()) {
     this->fail_setup_();
@@ -519,6 +409,7 @@ void IntercomApi::dump_config() {
                     ? "HA_PBX"
                     : "DEVICE_INDEPENDENT");
   ESP_LOGCONFIG(TAG, "  HA peer name: %s", this->ha_peer_name_.c_str());
+  ESP_LOGCONFIG(TAG, "  Audio capability: %s", this->audio_capability_());
   ESP_LOGCONFIG(TAG, "  HA as first contact: %s", YESNO(this->use_ha_as_first_contact_));
 #ifdef USE_INTERCOM_MDNS_DISCOVERY
   ESP_LOGCONFIG(TAG, "  mDNS discovery: %s%s%s interval=%u ms timeout=%u ms max=%u",
@@ -531,21 +422,13 @@ void IntercomApi::dump_config() {
 #else
   ESP_LOGCONFIG(TAG, "  mDNS discovery: NO");
 #endif
-#ifdef USE_MICROPHONE
+#ifdef USE_INTERCOM_API_MIC
   ESP_LOGCONFIG(TAG, "  Microphone: %s", this->microphone_ ? "direct" : (this->microphone_source_ ? "source" : "none"));
 #endif
-#ifdef USE_SPEAKER
+#ifdef USE_INTERCOM_API_SPEAKER
   ESP_LOGCONFIG(TAG, "  Speaker: %s", this->speaker_ ? "configured" : "none");
 #endif
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (this->aec_ != nullptr) {
-    ESP_LOGCONFIG(TAG, "  AEC: configured (frame_size=%d samples)", this->aec_frame_samples_);
-  } else {
-    ESP_LOGCONFIG(TAG, "  AEC: none");
-  }
-#endif
-  ESP_LOGCONFIG(TAG, "  Tasks: %s", this->has_intercom_processor_() ?
-                "tx+speaker" : "tx only");
+  ESP_LOGCONFIG(TAG, "  Tasks: %s", this->has_microphone_() ? "tx+rx/control" : "rx/control only");
   ESP_LOGCONFIG(TAG, "  Device Name: %s",
                 this->device_name_.empty() ? "(unset)" : this->device_name_.c_str());
   if (this->ringing_timeout_ms_ > 0) {
@@ -605,11 +488,12 @@ std::string IntercomApi::build_endpoint_string_() const {
 
   char buf[192];
   if (this->protocol_ == TransportType::UDP) {
-    snprintf(buf, sizeof(buf), "%s|udp|%s|%u|%u", name.c_str(), ip.c_str(),
-             (unsigned) this->listen_port_, (unsigned) this->control_port_);
+    snprintf(buf, sizeof(buf), "%s|udp|%s|%u|%u|%s", name.c_str(), ip.c_str(),
+             (unsigned) this->listen_port_, (unsigned) this->control_port_,
+             this->audio_capability_());
   } else {
-    snprintf(buf, sizeof(buf), "%s|tcp|%s|%u", name.c_str(), ip.c_str(),
-             (unsigned) this->tcp_port_);
+    snprintf(buf, sizeof(buf), "%s|tcp|%s|%u|%s", name.c_str(), ip.c_str(),
+             (unsigned) this->tcp_port_, this->audio_capability_());
   }
   return buf;
 }
@@ -741,28 +625,9 @@ void IntercomApi::publish_entity_states() {
     this->routing_mode_switch_->publish_state(ha_pbx_now);
   }
 
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  if (this->aec_switch_ != nullptr) {
-    auto initial = this->aec_switch_->get_initial_state_with_restore_mode();
-    if (initial.has_value()) {
-      if (*initial) {
-        this->set_aec_enabled(true);
-      }
-      this->aec_switch_->publish_state(this->aec_enabled_.load(std::memory_order_relaxed));
-    }
-  }
-#endif
-
-#ifdef USE_INTERCOM_STANDALONE_AUDIO
-  ESP_LOGD(TAG, "Entity states synced (vol=%.0f%%, mic=%.1fdB, auto=%s, dnd=%s, aec=%s)",
-           this->volume_.load(std::memory_order_relaxed) * 100.0f, this->mic_gain_db_,
-           this->auto_answer_ ? "ON" : "OFF", this->do_not_disturb_ ? "ON" : "OFF",
-           this->aec_enabled_.load(std::memory_order_relaxed) ? "ON" : "OFF");
-#else
   ESP_LOGD(TAG, "Entity states synced (vol=%.0f%%, mic=%.1fdB, auto=%s, dnd=%s)",
            this->volume_.load(std::memory_order_relaxed) * 100.0f, this->mic_gain_db_,
            this->auto_answer_ ? "ON" : "OFF", this->do_not_disturb_ ? "ON" : "OFF");
-#endif
 
   if (this->volume_number_ != nullptr) {
     this->volume_number_->publish_state(this->volume_.load(std::memory_order_relaxed) * 100.0f);

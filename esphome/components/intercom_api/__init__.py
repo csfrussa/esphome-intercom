@@ -20,7 +20,9 @@ DEPENDENCIES = ["esp32"]
 
 
 def AUTO_LOAD(config):
-    base = ["audio_processor", "switch", "number", "text_sensor"]
+    # audio_processor is still an internal helper provider for task/ring-buffer
+    # utilities used by the transport. It is not an intercom DSP mode.
+    base = ["audio_processor", "button", "switch", "number", "text_sensor"]
     discovery = (config or {}).get("discovery") or {}
     if (config or {}).get("announce", False) or (
         isinstance(discovery, dict) and discovery.get("mdns", False)
@@ -140,9 +142,6 @@ IntercomApiAutoAnswerCls = intercom_api_ns.class_(
 IntercomApiDndSwitchCls = intercom_api_ns.class_(
     "IntercomApiDndSwitch", _switch_ns.Switch, cg.Parented.template(IntercomApi)
 )
-IntercomAecSwitchCls = intercom_api_ns.class_(
-    "IntercomAecSwitch", _switch_ns.Switch, cg.Parented.template(IntercomApi)
-)
 IntercomRoutingModeSwitchCls = intercom_api_ns.class_(
     "IntercomRoutingModeSwitch", _switch_ns.Switch, cg.Parented.template(IntercomApi)
 )
@@ -152,8 +151,6 @@ IntercomApiVolumeCls = intercom_api_ns.class_(
 IntercomApiMicGainCls = intercom_api_ns.class_(
     "IntercomApiMicGain", _number_ns.Number, cg.Parented.template(IntercomApi)
 )
-
-AudioProcessor = cg.esphome_ns.namespace("audio_processor").class_("AudioProcessor")
 
 MDNS_DISCOVERY_DEFAULTS = {
     CONF_ENABLED: True,
@@ -199,13 +196,6 @@ def _mdns_discovery_config(config):
         protocols = [config.get(CONF_PROTOCOL, PROTOCOL_TCP)]
     out[CONF_PROTOCOLS] = protocols
     return out
-
-
-def _processor_schema(value):
-    """Validate processor_id: accepts any AudioProcessor (EspAec or EspAfe)."""
-    if value is None:
-        return value
-    return cv.use_id(AudioProcessor)(value)
 
 
 CONFIG_SCHEMA = cv.Schema(
@@ -285,26 +275,32 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
         # DC offset removal for mics with significant DC bias (e.g., SPH0645)
         cv.Optional(CONF_DC_OFFSET_REMOVAL, default=False): cv.boolean,
-        # Place intercom network task stacks in PSRAM. Maintained
-        # esp_audio_stack builds only create server/control and TX tasks here;
-        # the standalone speaker task exists only when intercom_api owns audio.
-        # Default false: standard dynamic tasks with internal-heap stacks,
-        # required on plain ESP32 boards without PSRAM. Set true on full-
-        # experience S3/P4/Spotpear Ball v2 builds.
+        # Place intercom network task stacks in PSRAM. The TX task exists only
+        # when a microphone is configured; transport/control tasks are owned by
+        # the selected transport. Default false keeps stacks in internal RAM,
+        # required on plain ESP32 boards without PSRAM. Set true on heavy S3/P4
+        # builds when PSRAM stacks are enabled in sdkconfig.
         cv.Optional(CONF_TASK_STACKS_IN_PSRAM, default=False): cv.boolean,
         # Auto-create the boilerplate switches/numbers (auto_answer, volume,
-        # mic_gain, aec when processor_id is set). Default false for
-        # backward compatibility with yamls that already declare them via
-        # `switch:`/`number: - platform: intercom_api`. Set to true on a
-        # minimal new yaml to skip that boilerplate.
+        # mic_gain). Default false for backward compatibility with yamls that
+        # already declare them via `switch:`/`number: - platform: intercom_api`.
+        # Set to true on a minimal new yaml to skip that boilerplate.
         cv.Optional(CONF_AUTO_ENTITIES, default=False): cv.boolean,
-        # Optional AEC (Acoustic Echo Cancellation) component
-        cv.Optional(CONF_PROCESSOR_ID): _processor_schema,
-        # AEC reference delay in ms (ring buffer pre-fill, typically 60-100ms)
-        cv.Optional(CONF_AEC_REF_DELAY_MS, default=80): cv.int_range(min=10, max=200),
-        # Place AEC working frame buffers (mic/ref/out, ~3 KB total) in PSRAM.
-        # Default false = internal RAM (~20 us/frame faster on Core 0). Set true
-        # to save 3 KB internal RAM at the cost of Core 0 PSRAM traffic.
+        # Standalone intercom DSP/AEC was removed. Use native ESPHome mic/speaker
+        # directly, or put software AEC/AFE on esp_audio_stack and pass its
+        # microphone/speaker facade here.
+        cv.Optional(CONF_PROCESSOR_ID): cv.invalid(
+            "intercom_api.processor_id was removed. Use native ESPHome "
+            "microphone/speaker directly, or put processor_id on esp_audio_stack "
+            "for software AEC/AFE."
+        ),
+        cv.Optional(CONF_AEC_REF_DELAY_MS): cv.invalid(
+            "intercom_api.aec_reference_delay_ms was removed with standalone "
+            "intercom AEC. Configure AEC on esp_audio_stack instead."
+        ),
+        # Place intercom staging buffers in PSRAM. This applies only to buffers
+        # still owned by intercom_api: the optional mic ring, TX chunk, and mic
+        # processing scratch. Software AEC/AFE buffers belong to esp_audio_stack.
         cv.Optional(CONF_BUFFERS_IN_PSRAM, default=False): cv.boolean,
         # Ringing timeout: auto-decline call if not answered within this time
         cv.Optional(CONF_RINGING_TIMEOUT): cv.positive_time_period_milliseconds,
@@ -414,30 +410,50 @@ def _final_validate(config):
         )
 
     if CONF_MICROPHONE in config:
-        audio.final_validate_audio_schema(
-            "intercom_api",
-            audio_device=CONF_MICROPHONE,
-            bits_per_sample=16,
-            channels=1,
-            sample_rate=16000,
-            audio_device_issue=True,
-        )(config)
+        try:
+            audio.final_validate_audio_schema(
+                "intercom_api",
+                audio_device=CONF_MICROPHONE,
+                bits_per_sample=16,
+                channels=1,
+                sample_rate=16000,
+                audio_device_issue=True,
+            )(config)
+        except AssertionError:
+            _LOGGER.warning(
+                "intercom_api could not validate the referenced microphone audio "
+                "format because that microphone component does not publish ESPHome "
+                "audio stream limits. Continuing for external/native microphone "
+                "components; the runtime expects 16 kHz, 16-bit, mono PCM."
+            )
 
     if CONF_MICROPHONE_SOURCE in config:
         microphone.final_validate_microphone_source_schema(
             "intercom_api", sample_rate=16000
         )(config[CONF_MICROPHONE_SOURCE])
 
+    if CONF_SPEAKER in config:
+        try:
+            audio.final_validate_audio_schema(
+                "intercom_api",
+                audio_device=CONF_SPEAKER,
+                bits_per_sample=16,
+                channels=1,
+                sample_rate=16000,
+                audio_device_issue=True,
+            )(config)
+        except AssertionError:
+            _LOGGER.warning(
+                "intercom_api speaker format was not declared by the referenced "
+                "speaker component, so ESPHome cannot check it at compile time. "
+                "Continuing anyway; intercom_api will send 16 kHz, 16-bit, mono "
+                "PCM to that speaker."
+            )
+
     # Check if esp_audio_stack is also configured
     audio_stack_configs = full_config.get("esp_audio_stack", [])
 
     if audio_stack_configs:
-        if CONF_PROCESSOR_ID in config and config[CONF_PROCESSOR_ID] is not None:
-            raise cv.Invalid(
-                "intercom_api.processor_id is standalone direct audio and cannot be used "
-                "when esp_audio_stack is configured. Put processor_id on esp_audio_stack."
-            )
-
         # Warn about DC offset double-filtering
         if config.get(CONF_DC_OFFSET_REMOVAL, False):
             for audio_stack in (audio_stack_configs if isinstance(audio_stack_configs, list) else [audio_stack_configs]):
@@ -459,14 +475,17 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
     cg.add(var.set_raw_udp_mode(is_raw_udp))
 
     if CONF_MICROPHONE in config:
+        cg.add_define("USE_INTERCOM_API_MIC")
         mic = await cg.get_variable(config[CONF_MICROPHONE])
         cg.add(var.set_microphone(mic))
 
     if CONF_MICROPHONE_SOURCE in config:
+        cg.add_define("USE_INTERCOM_API_MIC")
         mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE_SOURCE])
         cg.add(var.set_microphone_source(mic_source))
 
     if CONF_SPEAKER in config:
+        cg.add_define("USE_INTERCOM_API_SPEAKER")
         spk = await cg.get_variable(config[CONF_SPEAKER])
         cg.add(var.set_speaker(spk))
 
@@ -541,13 +560,6 @@ async def _add_device_and_audio_processor_settings(var, config):
     # as caller_route_id in MSG_START payloads and matches the slug HA uses
     # for the esphome.{slug}_start_call action registration.
     cg.add(var.set_device_route_id(CORE.name))
-
-    if CONF_PROCESSOR_ID in config and config[CONF_PROCESSOR_ID] is not None:
-        aec = await cg.get_variable(config[CONF_PROCESSOR_ID])
-        cg.add(var.set_aec(aec))
-        cg.add(var.set_aec_reference_delay_ms(config[CONF_AEC_REF_DELAY_MS]))
-        cg.add_define("USE_AUDIO_PROCESSOR")
-        cg.add_define("USE_INTERCOM_STANDALONE_AUDIO")
 
     # Ringing timeout (auto-decline if not answered)
     if CONF_RINGING_TIMEOUT in config:
@@ -728,52 +740,39 @@ async def _build_intercom_auto_entities(var, config):
         cg.add(dnd.set_parent(var))
         cg.add(var.register_dnd_switch(dnd))
 
-        vol_id = cv.declare_id(IntercomApiVolumeCls)(f"{config[CONF_ID].id}_volume")
-        vol = await number_module.new_number(
-            {
-                CONF_ID: vol_id,
-                CONF_NAME: "Master Volume",
-                CONF_ICON: "mdi:volume-high",
-                CONF_DISABLED_BY_DEFAULT: False,
-                CONF_MODE: "SLIDER",
-            },
-            min_value=0,
-            max_value=100,
-            step=5,
-        )
-        cg.add(vol.set_parent(var))
-        cg.add(var.register_volume_number(vol))
+        if CONF_SPEAKER in config:
+            vol_id = cv.declare_id(IntercomApiVolumeCls)(f"{config[CONF_ID].id}_volume")
+            vol = await number_module.new_number(
+                {
+                    CONF_ID: vol_id,
+                    CONF_NAME: "Master Volume",
+                    CONF_ICON: "mdi:volume-high",
+                    CONF_DISABLED_BY_DEFAULT: False,
+                    CONF_MODE: "SLIDER",
+                },
+                min_value=0,
+                max_value=100,
+                step=5,
+            )
+            cg.add(vol.set_parent(var))
+            cg.add(var.register_volume_number(vol))
 
-        mg_id = cv.declare_id(IntercomApiMicGainCls)(f"{config[CONF_ID].id}_mic_gain")
-        mg = await number_module.new_number(
-            {
-                CONF_ID: mg_id,
-                CONF_NAME: "Mic Gain",
-                CONF_ICON: "mdi:microphone",
-                CONF_DISABLED_BY_DEFAULT: False,
-                CONF_MODE: "SLIDER",
-            },
-            min_value=-20,
-            max_value=20,
-            step=1,
-        )
-        cg.add(mg.set_parent(var))
-        cg.add(var.register_mic_gain_number(mg))
-
-        # AEC switch only when the user wired an audio processor, otherwise
-        # the toggle has nothing to drive.
-        if CONF_PROCESSOR_ID in config:
-            aec_id = cv.declare_id(IntercomAecSwitchCls)(f"{config[CONF_ID].id}_aec")
-            aec_sw = await switch_module.new_switch({
-                CONF_ID: aec_id,
-                CONF_NAME: "AEC",
-                CONF_ICON: "mdi:ear-hearing",
-                CONF_DISABLED_BY_DEFAULT: False,
-                CONF_RESTORE_MODE: "RESTORE_DEFAULT_OFF",
-                CONF_ENTITY_CATEGORY: "config",
-            })
-            cg.add(aec_sw.set_parent(var))
-            cg.add(var.register_aec_switch(aec_sw))
+        if CONF_MICROPHONE in config or CONF_MICROPHONE_SOURCE in config:
+            mg_id = cv.declare_id(IntercomApiMicGainCls)(f"{config[CONF_ID].id}_mic_gain")
+            mg = await number_module.new_number(
+                {
+                    CONF_ID: mg_id,
+                    CONF_NAME: "Mic Gain",
+                    CONF_ICON: "mdi:microphone",
+                    CONF_DISABLED_BY_DEFAULT: False,
+                    CONF_MODE: "SLIDER",
+                },
+                min_value=-20,
+                max_value=20,
+                step=1,
+            )
+            cg.add(mg.set_parent(var))
+            cg.add(var.register_mic_gain_number(mg))
 
         # Runtime routing-mode toggle. RESTORE_DEFAULT_OFF means a fresh
         # device starts in device_independent unless the user overrode it

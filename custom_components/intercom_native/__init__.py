@@ -87,6 +87,7 @@ def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
         "tcp_port": int(data.get("tcp_port", INTERCOM_PORT)),
         "udp_audio_port": int(data.get("udp_audio_port", INTERCOM_UDP_AUDIO_PORT)),
         "udp_control_port": int(data.get("udp_control_port", INTERCOM_UDP_CONTROL_PORT)),
+        "advertise_host": (data.get("advertise_host") or "").strip(),
     }
 
 
@@ -100,8 +101,24 @@ def _get_transport_config(hass: HomeAssistant) -> dict:
             "tcp_port": INTERCOM_PORT,
             "udp_audio_port": INTERCOM_UDP_AUDIO_PORT,
             "udp_control_port": INTERCOM_UDP_CONTROL_PORT,
+            "advertise_host": "",
         },
     )
+
+
+async def _ha_advertise_host(hass: HomeAssistant) -> str:
+    """Return the IP/host HA should publish to ESP phonebooks.
+
+    `network.async_get_announce_addresses()` is fine on a flat LAN, but it can
+    pick the wrong interface in routed/LXC/NAT installs. The config-flow
+    override is authoritative when set.
+    """
+    cfg = _get_transport_config(hass)
+    configured = (cfg.get("advertise_host") or "").strip()
+    if configured:
+        return configured
+    addresses = await network.async_get_announce_addresses(hass)
+    return addresses[0] if addresses else ""
 
 
 def _select_transport_type(hass: HomeAssistant, host: str | None = None) -> str:
@@ -357,18 +374,20 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             tcp_port=_tcp_peer_port(hass, host, cfg),
             udp_audio_port=udp_audio_port,
             udp_control_port=udp_control_port,
+            audio_mode=d.get("audio_mode", "full_duplex"),
         ))
-    ha_ips = await network.async_get_announce_addresses(hass)
-    if ha_ips:
+    ha_host = await _ha_advertise_host(hass)
+    if ha_host:
         out.append(Peer(
             kind="ha",
             device=None,
             name=_ha_peer_name(hass),
-            host=ha_ips[0],
+            host=ha_host,
             transport="tcp",
             tcp_port=cfg["tcp_port"],
             udp_audio_port=cfg["udp_audio_port"],
             udp_control_port=cfg["udp_control_port"],
+            audio_mode="full_duplex",
         ))
     else:
         # No announce IP -> HA can't be in the phonebook, ha_pbx will fail.
@@ -396,8 +415,11 @@ def _format_entry_unified(peer: Peer) -> str:
             f"{peer.udp_audio_port}|{peer.udp_control_port}"
         )
     if peer.transport == "udp":
-        return f"{name}|udp|{peer_ip}|{peer.udp_audio_port}|{peer.udp_control_port}"
-    return f"{name}|tcp|{peer_ip}|{peer.tcp_port}"
+        return (
+            f"{name}|udp|{peer_ip}|{peer.udp_audio_port}|"
+            f"{peer.udp_control_port}|{peer.audio_mode}"
+        )
+    return f"{name}|tcp|{peer_ip}|{peer.tcp_port}|{peer.audio_mode}"
 
 
 async def _async_build_service_info(
@@ -413,6 +435,7 @@ async def _async_build_service_info(
     location_name = _ha_peer_name(hass)
     hostname = f"{slugify(location_name) or 'intercom-native'}.local."
     addresses = await network.async_get_announce_addresses(hass)
+    advertise_host = await _ha_advertise_host(hass)
     properties = {
         "audio_port": str(cfg["udp_audio_port"]),
         "control_port": str(cfg["udp_control_port"]),
@@ -427,9 +450,9 @@ async def _async_build_service_info(
     else:
         service_type = _INTERCOM_UDP_SERVICE_TYPE
         port = cfg["udp_audio_port"]
-    if addresses:
+    if advertise_host:
         properties["endpoint"] = (
-            f"{location_name}|ha|{addresses[0]}|{cfg['tcp_port']}|"
+            f"{location_name}|ha|{advertise_host}|{cfg['tcp_port']}|"
             f"{cfg['udp_audio_port']}|{cfg['udp_control_port']}"
         )
     return AsyncServiceInfo(
@@ -550,6 +573,7 @@ async def _handle_answer_service(call: ServiceCall, device: dict) -> None:
         device_id=device_id,
         host=host,
         transport_type=_select_transport_type(hass, host),
+        audio_mode=device.get("audio_mode", "full_duplex"),
     )
     result = await session.answer_esp_call()
     if result == "streaming":
@@ -702,6 +726,7 @@ async def _handle_call_service(call: ServiceCall, dest_device: dict) -> None:
         device_id=device_id,
         host=dest_host,
         transport_type=_select_transport_type(hass, dest_host),
+        audio_mode=dest_device.get("audio_mode", "full_duplex"),
     )
     result = await session.start()
 
@@ -748,6 +773,7 @@ async def _handle_forward_service(call: ServiceCall, source_device: dict) -> Non
             dest_device["host"],
             dest_device["name"],
             _select_transport_type(hass, dest_device["host"]),
+            dest_device.get("audio_mode", "full_duplex"),
         )
         _LOGGER.info(
             "Forward via service: %s -> %s (%s)",
@@ -771,6 +797,8 @@ async def _handle_forward_service(call: ServiceCall, source_device: dict) -> Non
         dest_name=dest_device["name"],
         source_transport_type=_select_transport_type(hass, source_device["host"]),
         dest_transport_type=_select_transport_type(hass, dest_device["host"]),
+        source_audio_mode=source_device.get("audio_mode", "full_duplex"),
+        dest_audio_mode=dest_device.get("audio_mode", "full_duplex"),
     )
     _bridges[bridge_id] = new_bridge
     result = await new_bridge.start()
@@ -1057,6 +1085,46 @@ def _find_inbound_dest_device(
     return dest_device
 
 
+def _find_inbound_source_device(
+    devices: list[dict],
+    host: str,
+    caller_name: str,
+    caller_route: str,
+) -> tuple[dict | None, str]:
+    """Resolve an inbound caller.
+
+    The socket peer IP is the strongest match on flat LANs, but routed/VPN/NAT
+    installs can expose a different source address to HA. PBX-lite START already
+    carries the caller route/name, so use those as identity fallbacks instead of
+    rejecting a valid call as unregistered.
+    """
+    host_key = (host or "").strip()
+    if host_key:
+        device = next((d for d in devices if d.get("host") == host_key), None)
+        if device is not None:
+            return device, "host"
+
+    route_key = (caller_route or "").strip().lower()
+    if route_key:
+        device = next(
+            (d for d in devices if (d.get("route_id") or "").strip().lower() == route_key),
+            None,
+        )
+        if device is not None:
+            return device, "caller_route"
+
+    name_key = (caller_name or "").strip().lower()
+    if name_key:
+        device = next(
+            (d for d in devices if (d.get("name") or "").strip().lower() == name_key),
+            None,
+        )
+        if device is not None:
+            return device, "caller_name"
+
+    return None, ""
+
+
 def _destination_busy_reason(hass: HomeAssistant, dest_device: dict) -> str | None:
     """Return a log-friendly busy reason for a bridge destination."""
     dest_device_id = dest_device["device_id"]
@@ -1128,6 +1196,8 @@ async def _bridge_inbound_call_pbx_lite(
         dest_transport_type=_select_transport_type(hass, dest_device["host"]),
         source_transport=inbound_transport,
         source_call_id=call_id,
+        source_audio_mode=source_device.get("audio_mode", "full_duplex"),
+        dest_audio_mode=dest_device.get("audio_mode", "full_duplex"),
     )
     _bridges[bridge_id] = bridge
     result = await bridge.start()
@@ -1181,6 +1251,7 @@ async def _ring_ha_for_inbound_call(
         transport=inbound_transport,
         call_id=call_id,
         caller_name=caller_name,
+        audio_mode=source_device.get("audio_mode", "full_duplex"),
     )
     if await session.start_ringing(caller_name=caller_name):
         _sessions[source_device_id] = session
@@ -1208,14 +1279,33 @@ async def _route_inbound_call_pbx_lite(
     dest_name = inbound.dest_name
     dest_route = inbound.dest_route
     devices = await _get_intercom_devices(hass)
-    source_device = next((d for d in devices if d.get("host") == host), None)
+    source_device, source_match = _find_inbound_source_device(
+        devices,
+        host,
+        inbound.caller_name,
+        inbound.caller_route,
+    )
     if source_device is None:
         _LOGGER.warning(
-            "Unsolicited MSG_START from %s: no intercom_native device matches that IP",
+            "Unsolicited MSG_START from %s rejected: no intercom_native device matches "
+            "host/caller_route/caller_name (%s/%s)",
             host,
+            inbound.caller_route or "-",
+            inbound.caller_name or "-",
         )
         await _decline_inbound_start(hass, inbound, "unregistered")
         return
+    if source_match != "host":
+        _LOGGER.info(
+            "Unsolicited MSG_START from %s matched source %s by %s "
+            "(endpoint host=%s, caller_route=%s, caller_name=%s)",
+            host,
+            source_device["name"],
+            source_match,
+            source_device.get("host") or "-",
+            inbound.caller_route or "-",
+            inbound.caller_name or "-",
+        )
 
     if not _is_ha_inbound_destination(hass, dest_name):
         dest_clean = (dest_name or "").strip()

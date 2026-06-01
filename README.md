@@ -112,6 +112,9 @@ Home Assistant / card changes since the PBX-lite release:
 
 - One automation event: `intercom_native.call_event` carries session, bridge and forward updates with `scope`, `type`, state and reason fields.
 - The card handles unavailable ESP devices explicitly instead of rendering a normal destination row with stale controls.
+- ESP endpoints now publish their audio capability (`full_duplex`, `mic_only`, `speaker_only`, `control_only`). HA and the card use it to avoid impossible audio directions and to support standalone mic-only/speaker-only intercom devices.
+- `intercom_api` still works standalone with native ESPHome `microphone`/`speaker` components, but its old internal AEC path is gone. Hardware/DSP-processed devices can bind directly; software AEC/AFE belongs behind `esp_audio_stack`.
+- Inbound TCP calls from routed subnets are matched by PBX-lite caller identity when the socket source IP differs from the published endpoint host.
 - Fast hangup/redial is safer: browser audio cleanup is skipped while a new call is already starting, avoiding muted second calls from the card side.
 - The card keeps the "open device" and integration reload style actions focused on recovery; legacy per-event compatibility shims are not kept.
 - HA services remain explicit and schema-validated: answer, decline with reason, hangup, call, forward and purge devices.
@@ -576,7 +579,7 @@ external_components:
     components: [audio_processor, intercom_api, esp_afe, esp_audio_stack]
 ```
 
-> **Note**: `audio_processor` must be listed because it provides the shared `AudioProcessor` interface used by both `esp_aec` and `esp_afe`. Use `esp_aec` for lightweight single-mic setups, `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below). Maintained profiles route audio through `esp_audio_stack`; `intercom_api.processor_id` is only for advanced standalone intercom builds without the stack.
+> **Note**: `audio_processor` is still listed because it provides shared task and buffer helpers used by the audio components. Use `esp_aec` for lightweight single-mic processing and `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below). `intercom_api` no longer owns software AEC; standalone intercom binds to native ESPHome `microphone`/`speaker`, while software AEC/AFE belongs behind `esp_audio_stack`.
 
 #### After ESP Firmware Package Upgrades: Clear ESPHome Build Cache
 
@@ -1123,8 +1126,9 @@ Three ESPHome components sit between your codec and the intercom / voice assista
 _The same audio stack can serve intercom, Voice Assistant, TTS and media workloads on full voice devices._
 
 Plain intercom does **not** require `esp_audio_stack`: `intercom_api` can run
-on ESPHome's normal `microphone` + `speaker` components and use `esp_aec`
-through `processor_id`.
+on ESPHome's normal `microphone` and/or `speaker` components. This is the right
+fit for hardware/DSP-processed audio such as XMOS front-ends, or for simple
+native I2S tests. It supports full-duplex, mic-only and speaker-only endpoints.
 
 Use `esp_audio_stack` when a board has one shared I2S bus, when you need a
 phase-coherent speaker reference for AEC, or when the same ESP also runs media
@@ -1135,10 +1139,8 @@ shared mic/speaker transport and AEC reference path.
 For a composite device, put the microphone and speaker on the same I2S bus and
 use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The
 audio stack driver hands a phase-coherent speaker reference to the AEC each frame;
-standalone `intercom_api` with separate mic and speaker components falls back
-to a 80 ms ring buffer with looser phase coherence. See
-[intercom_api AEC quality](esphome/components/intercom_api/README.md#aec-quality-standalone-vs-esp_audio_stack)
-for the trade-off in detail.
+standalone `intercom_api` deliberately does not provide software AEC. If your
+hardware does not already process echo, use an `esp_audio_stack` profile.
 
 ### [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
 
@@ -1244,16 +1246,13 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
 
 AEC uses Espressif's closed-source ESP-SR library. All modes have similar CPU cost per frame (~7ms out of 16ms budget). The difference is primarily in memory allocation and adaptive filter quality.
 
-Maintained full-experience YAMLs now include both paths: `generic-s3-full-aec-*`
-for the lighter standalone AEC profile, and `*-full-afe-*` for the heavier AFE
-profile with NS/AGC/VAD.
+Maintained full-experience YAMLs now route AEC/AFE through `esp_audio_stack`.
+`generic-s3-full-aec-*` is the lighter software-AEC profile, and
+`*-full-afe-*` is the heavier AFE profile with NS/AGC/VAD.
 
-For custom VA + MWW builds that deliberately use standalone AEC,
-`sr_low_cost` is the recommended `esp_aec` mode. Linear-only AEC preserves
-spectral features for neural wake word detection (10/10 vs 2/10 with VOIP
-modes). It also uses less CPU than VOIP modes. Requires `buffers_in_psram: true`
-on ESP32-S3. For dual-bus intercom-only devices without esp_audio_stack, use
-`voip_high_perf` (AEC runs inside intercom_api).
+For custom VA + MWW builds, `sr_low_cost` is the recommended `esp_aec` mode.
+Linear-only AEC preserves spectral features for neural wake word detection and
+uses less CPU than VOIP modes. Requires `buffers_in_psram: true` on ESP32-S3.
 
 For devices that benefit from noise suppression and auto gain control (noisy environments, variable mic distance), use `esp_afe` instead of `esp_aec`. The AFE wraps the same AEC engine plus WebRTC NS and AGC, with runtime switches in Home Assistant.
 
@@ -1369,9 +1368,9 @@ logger:
     # intercom_api.udp: INFO    # UDP audio + control
     # intercom_api.settings: INFO
     # audio_stack: INFO          # I2S audio stack driver
-    # esp_aec: INFO             # standalone AEC
+    # esp_aec: INFO             # lightweight AEC processor
     # esp_afe: INFO             # full audio front-end
-    # audio_processor: INFO     # AEC reference mixer
+    # audio_processor: INFO     # shared task/buffer helpers
 ```
 
 **Stay on INFO for normal use**
@@ -1502,7 +1501,7 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic standalone AEC, single-bus mono, previous-frame reference |
+| [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic `esp_audio_stack` AEC, single-bus mono, previous-frame reference |
 | [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AEC light profile, UDP intercom transport |
 
 ### Full Experience with `esp_afe` (VA + MWW + Intercom + NS/AGC/VAD, heavier)

@@ -17,6 +17,7 @@ class Peer:
     tcp_port: int
     udp_audio_port: int
     udp_control_port: int
+    audio_mode: Literal["full_duplex", "mic_only", "speaker_only", "control_only"] = "full_duplex"
     device: dict[str, Any] | None = None
 
     @property

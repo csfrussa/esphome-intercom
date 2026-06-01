@@ -31,9 +31,9 @@ substitutions:
   mic_id: mic_afe
   afe_vad_restore_mode: ALWAYS_OFF
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+  assets_base: "../../../"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -79,24 +79,24 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@main
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@main
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@main
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@main
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@main
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@main
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@main
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k.yaml@main
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
-  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@main
-  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@main
-  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@main
-  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@main
-  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@main
-  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_full.yaml@main
+  core: !include ../../../packages/va_intercom.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
+  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
+  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
+  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
+  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
+  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
+  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_full.yaml
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION

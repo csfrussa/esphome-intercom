@@ -36,11 +36,18 @@ def _valid_port(value: str) -> int | None:
     return port if 1 <= port <= 65535 else None
 
 
+def _valid_audio_mode(value: str | None) -> str:
+    mode = (value or "full_duplex").strip().lower()
+    if mode in ("full_duplex", "mic_only", "speaker_only", "control_only"):
+        return mode
+    return "full_duplex"
+
+
 def parse_intercom_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP intercom_api.
 
-    TCP: Name|tcp|IP|tcp_port
-    UDP: Name|udp|IP|audio_port|control_port
+    TCP: Name|tcp|IP|tcp_port[|audio_mode]
+    UDP: Name|udp|IP|audio_port|control_port[|audio_mode]
     """
     if not value:
         return None
@@ -57,7 +64,7 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
 
     if transport == "tcp":
         tcp_port = _valid_port(parts[3])
-        if tcp_port is None or len(parts) != 4:
+        if tcp_port is None or len(parts) not in (4, 5):
             return None
         return {
             "name": name,
@@ -66,9 +73,10 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
             "tcp_port": tcp_port,
             "udp_audio_port": None,
             "udp_control_port": None,
+            "audio_mode": _valid_audio_mode(parts[4] if len(parts) == 5 else None),
         }
 
-    if len(parts) != 5:
+    if len(parts) not in (5, 6):
         return None
     audio_port = _valid_port(parts[3])
     control_port = _valid_port(parts[4])
@@ -81,6 +89,7 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
         "tcp_port": None,
         "udp_audio_port": audio_port,
         "udp_control_port": control_port,
+        "audio_mode": _valid_audio_mode(parts[5] if len(parts) == 6 else None),
     }
 
 
@@ -205,6 +214,7 @@ class IntercomDeviceResolver:
                 "tcp_port": endpoint["tcp_port"],
                 "udp_audio_port": endpoint["udp_audio_port"],
                 "udp_control_port": endpoint["udp_control_port"],
+                "audio_mode": endpoint["audio_mode"],
                 "esphome_id": esphome_id,
                 "entities": entities,
             })

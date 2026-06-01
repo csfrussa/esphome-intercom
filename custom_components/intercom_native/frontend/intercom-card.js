@@ -606,6 +606,22 @@ class IntercomCard extends HTMLElement {
     return this._availableDevices.find(d => (d.name || "").trim() === wanted) || null;
   }
 
+  _normaliseAudioMode(value) {
+    const v = String(value || "").trim().toLowerCase();
+    return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v)
+      ? v
+      : "full_duplex";
+  }
+
+  _audioModeLabel(mode) {
+    switch (this._normaliseAudioMode(mode)) {
+      case "mic_only": return "MIC";
+      case "speaker_only": return "SPK";
+      case "control_only": return "CTRL";
+      default: return "FULL";
+    }
+  }
+
   _getOwnTransport() {
     const direct = this._transportFromEntity(this._transportEntityId);
     if (direct) return direct;
@@ -620,11 +636,23 @@ class IntercomCard extends HTMLElement {
            this._normaliseTransport(device?.transport);
   }
 
+  _getOwnAudioMode() {
+    const device = this._activeDeviceInfo || this._availableDevices.find(d => this._deviceMatchesConfig(d));
+    return this._normaliseAudioMode(device?.audio_mode);
+  }
+
+  _getDestinationAudioMode(destination) {
+    if (this._isHaName(destination)) return "full_duplex";
+    const device = this._findDeviceByName(destination);
+    return this._normaliseAudioMode(device?.audio_mode);
+  }
+
   _formatHeaderTitle(baseName) {
     const name = baseName || "Intercom";
     if (!this.config?.show_protocol) return name;
     const transport = this._getOwnTransport();
-    return transport ? `${name} - ${transport}` : name;
+    const mode = this._audioModeLabel(this._getOwnAudioMode());
+    return transport ? `${name} - ${transport}/${mode}` : `${name} - ${mode}`;
   }
 
   _formatModeLabel(destination) {
@@ -633,10 +661,12 @@ class IntercomCard extends HTMLElement {
 
     const sourceTransport = this._getOwnTransport();
     const destTransport = this._getDestinationTransport(destination);
+    const sourceMode = this._audioModeLabel(this._getOwnAudioMode());
+    const destMode = this._audioModeLabel(this._getDestinationAudioMode(destination));
     if (sourceTransport && destTransport && sourceTransport !== destTransport) {
-      return `Inter-protocol ${sourceTransport}-${destTransport}`;
+      return `Inter-protocol ${sourceTransport}/${sourceMode}-${destTransport}/${destMode}`;
     }
-    if (sourceTransport && destTransport) return `ESP - ESP ${sourceTransport}`;
+    if (sourceTransport && destTransport) return `ESP - ESP ${sourceTransport} ${sourceMode}-${destMode}`;
     return "ESP - ESP";
   }
 
@@ -1262,37 +1292,43 @@ class IntercomCard extends HTMLElement {
     }
   }
 
-  async _setupMicAndSpeaker() {
-    // Setup mic
-    this._mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    });
+  async _setupMicAndSpeaker(deviceInfo) {
+    const mode = this._normaliseAudioMode(deviceInfo?.audio_mode);
+    const sendToEsp = mode === "full_duplex" || mode === "speaker_only";
+    const receiveFromEsp = mode === "full_duplex" || mode === "mic_only";
 
-    const track = this._mediaStream.getAudioTracks()[0];
-    const trackSampleRate = track?.getSettings?.().sampleRate;
-    this._audioContext = new (window.AudioContext || window.webkitAudioContext)(
-      trackSampleRate ? { sampleRate: trackSampleRate } : undefined
-    );
-    if (this._audioContext.state === "suspended") await this._audioContext.resume();
+    if (sendToEsp) {
+      this._mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
 
-    this._source = this._audioContext.createMediaStreamSource(this._mediaStream);
+      const track = this._mediaStream.getAudioTracks()[0];
+      const trackSampleRate = track?.getSettings?.().sampleRate;
+      this._audioContext = new (window.AudioContext || window.webkitAudioContext)(
+        trackSampleRate ? { sampleRate: trackSampleRate } : undefined
+      );
+      if (this._audioContext.state === "suspended") await this._audioContext.resume();
 
-    await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-processor.js?v=${INTERCOM_CARD_VERSION}`);
-    this._workletNode = new AudioWorkletNode(this._audioContext, "intercom-processor");
-    this._workletNode.port.onmessage = (e) => {
-      if (e.data.type === "audio") this._sendAudio(new Int16Array(e.data.buffer));
-    };
-    this._source.connect(this._workletNode);
+      this._source = this._audioContext.createMediaStreamSource(this._mediaStream);
 
-    // Setup speaker
-    this._playbackContext = new (window.AudioContext || window.webkitAudioContext)();
-    this._gainNode = this._playbackContext.createGain();
-    this._gainNode.gain.value = 1.0;
-    this._gainNode.connect(this._playbackContext.destination);
+      await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-processor.js?v=${INTERCOM_CARD_VERSION}`);
+      this._workletNode = new AudioWorkletNode(this._audioContext, "intercom-processor");
+      this._workletNode.port.onmessage = (e) => {
+        if (e.data.type === "audio") this._sendAudio(new Int16Array(e.data.buffer));
+      };
+      this._source.connect(this._workletNode);
+    }
+
+    if (receiveFromEsp) {
+      this._playbackContext = new (window.AudioContext || window.webkitAudioContext)();
+      this._gainNode = this._playbackContext.createGain();
+      this._gainNode.gain.value = 1.0;
+      this._gainNode.connect(this._playbackContext.destination);
+    }
   }
 
   async _startP2P(deviceInfo) {
-    await this._setupMicAndSpeaker();
+    await this._setupMicAndSpeaker(deviceInfo);
 
     const result = await this._hass.connection.sendMessagePromise({
       type: "intercom_native/start",
@@ -1312,7 +1348,7 @@ class IntercomCard extends HTMLElement {
   }
 
   async _answerEspCall(deviceInfo) {
-    await this._setupMicAndSpeaker();
+    await this._setupMicAndSpeaker(deviceInfo);
 
     const result = await this._hass.connection.sendMessagePromise({
       type: "intercom_native/answer_esp_call",
@@ -1503,7 +1539,11 @@ class IntercomCard extends HTMLElement {
       localStorage.setItem(`intercom_auto_answer_${deviceId}`, this._autoAnswer.toString());
     }
     // If enabling, request mic permission now (user gesture from the toggle click)
-    if (this._autoAnswer && navigator.mediaDevices?.getUserMedia) {
+    const device = this._availableDevices.find(d => this._deviceMatchesConfig(d));
+    const needsBrowserMic = ["full_duplex", "speaker_only"].includes(
+      this._normaliseAudioMode(device?.audio_mode)
+    );
+    if (this._autoAnswer && needsBrowserMic && navigator.mediaDevices?.getUserMedia) {
       navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
           // Got permission, release stream immediately
@@ -1642,6 +1682,22 @@ class IntercomCardEditor extends HTMLElement {
     }
   }
 
+  _normaliseAudioMode(value) {
+    const v = String(value || "").trim().toLowerCase();
+    return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v)
+      ? v
+      : "full_duplex";
+  }
+
+  _audioModeLabel(mode) {
+    switch (this._normaliseAudioMode(mode)) {
+      case "mic_only": return "MIC";
+      case "speaker_only": return "SPK";
+      case "control_only": return "CTRL";
+      default: return "FULL";
+    }
+  }
+
   async _loadDevices() {
     if (!this._hass || this._devicesLoaded || this._devicesLoading) return;
     if (!this._isIntercomNativeLoaded()) {
@@ -1769,15 +1825,22 @@ class IntercomCardEditor extends HTMLElement {
     for (const d of this._devices) {
       const opt = document.createElement("option");
       opt.value = d.device_id;
-      opt.textContent = d.name;
+      opt.textContent = `${d.name} (${this._audioModeLabel(d.audio_mode)})`;
       if (this._config.entity_id === d.device_id) opt.selected = true;
       newOptions.push(opt);
     }
     els.select.replaceChildren(...newOptions);
 
-    els.deviceInfo.textContent = this._devicesLoaded
-      ? (this._devices.length === 0 ? "No devices found" : "Select device")
-      : "Loading...";
+    if (!this._devicesLoaded) {
+      els.deviceInfo.textContent = "Loading...";
+    } else if (this._devices.length === 0) {
+      els.deviceInfo.textContent = "No devices found";
+    } else {
+      const selected = this._devices.find(d => d.device_id === this._config.entity_id);
+      els.deviceInfo.textContent = selected
+        ? `Audio: ${this._normaliseAudioMode(selected.audio_mode).replace("_", " ")}`
+        : "Select device";
+    }
 
     els.nameInput.value = this._config.name || "";
     els.protocolInput.checked = !!this._config.show_protocol;

@@ -9,14 +9,16 @@
           "tcp_port": "TCP port",
           "use_udp": "Enable UDP transport",
           "udp_audio_port": "UDP audio port",
-          "udp_control_port": "UDP control port"
+          "udp_control_port": "UDP control port",
+          "advertise_host": "Advertised HA host/IP"
         },
         "data_description": {
           "use_tcp": "Framed binary protocol (audio + signaling on a single connection).",
           "tcp_port": "Listen port for TCP intercom (default 6054).",
           "use_udp": "Raw PCM audio with framed control signaling on a separate port.",
           "udp_audio_port": "Listen port for UDP audio (default 6054).",
-          "udp_control_port": "Listen port for UDP signaling (default 6055). Must differ from the audio port."
+          "udp_control_port": "Listen port for UDP signaling (default 6055). Must differ from the audio port.",
+          "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices."
         }
       }
     },

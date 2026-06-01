@@ -1,10 +1,9 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import switch
-from esphome.core import CORE
 from esphome.const import ENTITY_CATEGORY_CONFIG
 
-from . import intercom_api_ns, IntercomApi, CONF_INTERCOM_API_ID, CONF_PROCESSOR_ID
+from . import intercom_api_ns, IntercomApi, CONF_INTERCOM_API_ID
 
 DEPENDENCIES = ["intercom_api"]
 
@@ -24,9 +23,6 @@ IntercomApiAutoAnswer = intercom_api_ns.class_(
 )
 IntercomApiDndSwitch = intercom_api_ns.class_(
     "IntercomApiDndSwitch", switch.Switch, cg.Parented.template(IntercomApi)
-)
-IntercomAecSwitch = intercom_api_ns.class_(
-    "IntercomAecSwitch", switch.Switch, cg.Parented.template(IntercomApi)
 )
 IntercomRoutingModeSwitch = intercom_api_ns.class_(
     "IntercomRoutingModeSwitch", switch.Switch, cg.Parented.template(IntercomApi)
@@ -61,9 +57,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_DND): _switch_schema(
             IntercomApiDndSwitch, "mdi:minus-circle", entity_category=ENTITY_CATEGORY_CONFIG
         ),
-        # AEC (Echo Cancellation) - default OFF
-        cv.Optional(CONF_AEC): _switch_schema(
-            IntercomAecSwitch, "mdi:ear-hearing", entity_category=ENTITY_CATEGORY_CONFIG
+        cv.Optional(CONF_AEC): cv.invalid(
+            "intercom_api AEC switch was removed with standalone intercom AEC. "
+            "Use esp_audio_stack/esp_afe/esp_aec controls for software AEC."
         ),
         # Routing mode runtime toggle: ON = ha_pbx (HA bridges every call),
         # OFF = device_independent (peer-to-peer dial). Mirrors the YAML
@@ -75,29 +71,6 @@ CONFIG_SCHEMA = cv.Schema(
         ),
     }
 )
-
-
-def _final_validate(config):
-    if CONF_AEC not in config:
-        return config
-
-    full_config = CORE.config or {}
-    intercom_configs = full_config.get("intercom_api", [])
-    if isinstance(intercom_configs, dict):
-        intercom_configs = [intercom_configs]
-    has_standalone_audio = any(
-        isinstance(intercom, dict) and CONF_PROCESSOR_ID in intercom for intercom in intercom_configs
-    )
-    if not has_standalone_audio:
-        raise cv.Invalid(
-            "intercom_api.switch.aec is only available for the standalone direct "
-            "intercom_api processor_id path. With esp_audio_stack, put AEC/AFE on "
-            "esp_audio_stack and do not create an intercom_api AEC switch."
-        )
-    return config
-
-
-FINAL_VALIDATE_SCHEMA = _final_validate
 
 
 async def to_code(config):
@@ -120,13 +93,6 @@ async def to_code(config):
         var = await switch.new_switch(conf)
         cg.add(var.set_parent(parent))
         cg.add(parent.register_dnd_switch(var))
-
-    if CONF_AEC in config:
-        conf = config[CONF_AEC]
-        var = await switch.new_switch(conf)
-        cg.add(var.set_parent(parent))
-        # Register with parent for state sync after boot
-        cg.add(parent.register_aec_switch(var))
 
     if CONF_HA_PBX_MODE in config:
         conf = config[CONF_HA_PBX_MODE]

@@ -40,8 +40,8 @@ inline const char *contact_protocol_to_str(ContactProtocol protocol) {
 ///   Name|ip|port
 ///   Name|ip|audio_port|control_port
 /// New protocol-aware entries are:
-///   Name|tcp|ip|port
-///   Name|udp|ip|audio_port|control_port
+///   Name|tcp|ip|port[|audio_capability]
+///   Name|udp|ip|audio_port|control_port[|audio_capability]
 ///   Name|ha|ip|port[|control_port]
 ///
 /// The HA-wide unified roster can also publish HA as:
@@ -58,6 +58,7 @@ struct ContactEntry {
   ContactProtocol protocol{ContactProtocol::UNKNOWN};
   uint16_t port{0};
   uint16_t control_port{0};
+  std::string audio_capability;
   uint8_t missing_count{0};
 };
 
@@ -81,8 +82,8 @@ class Phonebook {
   ///   "Name"
   ///   "Name|ip|port"
   ///   "Name|ip|audio_port|control_port" (UDP complete endpoint)
-  ///   "Name|tcp|ip|port"
-  ///   "Name|udp|ip|audio_port|control_port"
+  ///   "Name|tcp|ip|port[|audio_capability]"
+  ///   "Name|udp|ip|audio_port|control_port[|audio_capability]"
   ///   "Name|ha|ip|port[|control_port]"
   AddResult add_one(const std::string &entry) {
     ContactEntry incoming;
@@ -257,7 +258,8 @@ class Phonebook {
       }
       if (existing.ip == incoming.ip && existing.port == incoming.port &&
           existing.control_port == incoming.control_port &&
-          existing.protocol == incoming.protocol) {
+          existing.protocol == incoming.protocol &&
+          existing.audio_capability == incoming.audio_capability) {
         return AddResult::Noop;
       }
       const bool was_unset = existing.ip.empty() && existing.port == 0 &&
@@ -266,6 +268,7 @@ class Phonebook {
       existing.protocol = incoming.protocol;
       existing.port = incoming.port;
       existing.control_port = incoming.control_port;
+      existing.audio_capability = incoming.audio_capability;
       return was_unset ? AddResult::Upgraded : AddResult::EndpointReplaced;
     }
     // New name: append; cursor unchanged so the UI doesn't jump.
@@ -303,14 +306,20 @@ class Phonebook {
     if (out->ip.empty()) return false;
 
     if (protocol == ContactProtocol::TCP) {
-      if (parts.size() != 4) return false;
-      return parse_u16_(trim_(parts[3]), &out->port);
+      if (parts.size() != 4 && parts.size() != 5) return false;
+      if (!parse_u16_(trim_(parts[3]), &out->port)) return false;
+      if (parts.size() == 5) out->audio_capability = trim_(parts[4]);
+      return true;
     }
 
     if (protocol == ContactProtocol::UDP) {
-      if (parts.size() != 5) return false;
-      return parse_u16_(trim_(parts[3]), &out->port) &&
-             parse_u16_(trim_(parts[4]), &out->control_port);
+      if (parts.size() != 5 && parts.size() != 6) return false;
+      if (!parse_u16_(trim_(parts[3]), &out->port) ||
+          !parse_u16_(trim_(parts[4]), &out->control_port)) {
+        return false;
+      }
+      if (parts.size() == 6) out->audio_capability = trim_(parts[5]);
+      return true;
     }
 
     if (protocol == ContactProtocol::HA) {
