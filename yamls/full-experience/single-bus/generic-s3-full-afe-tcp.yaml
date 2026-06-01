@@ -244,9 +244,6 @@ intercom_api:
   microphone: mic_main
   speaker: intercom_speaker
   ringing_timeout: 30s
-  delete_contact_missing_from:
-    updates_number: 5
-
 # =============================================================================
 # Timer alarm (Generic AFE 8 MB+ only)
 # =============================================================================

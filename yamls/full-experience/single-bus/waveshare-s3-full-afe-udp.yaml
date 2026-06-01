@@ -329,9 +329,6 @@ intercom_api:
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
   # via the "HA PBX Mode" switch in the device-specific switch block below.
-  delete_contact_missing_from:
-    updates_number: 5
-
 # =============================================================================
 # Physical Buttons
 # =============================================================================

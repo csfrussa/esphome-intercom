@@ -473,8 +473,6 @@ intercom_api:
   microphone: mic_afe
   speaker: intercom_speaker
   ringing_timeout: 30s
-  delete_contact_missing_from:
-    updates_number: 5
   # Idle screen refresh hook: each merge cycle ends with publish_destination_,
   # so re-render so peer name + contact count reflect the new roster.
   on_update_contacts:

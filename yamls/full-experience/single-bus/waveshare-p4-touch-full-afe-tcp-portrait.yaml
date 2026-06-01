@@ -494,10 +494,7 @@ intercom_api:
   speaker: intercom_speaker
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
-  # via the "HA PBX Mode" switch in the SWITCHES block below.
-  delete_contact_missing_from:
-    updates_number: 5
-  on_update_contacts:
+  # via the "HA PBX Mode" switch in the SWITCHES block below.  on_update_contacts:
     - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
     - script.execute: draw_display
     - delay: 2s
