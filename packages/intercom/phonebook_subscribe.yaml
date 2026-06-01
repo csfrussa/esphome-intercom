@@ -26,8 +26,6 @@ text_sensor:
 intercom_api:
   ha_phonebook_text_sensor_id: ha_phonebook_subscribe
   use_ha_as_first_contact: true
-  delete_contact_missing_from:
-    updates_number: 1
 
 script:
   - id: ha_phonebook_update_from_ha
