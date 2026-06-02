@@ -194,7 +194,7 @@ esp_afe:
   fetch_task_stack_size: 3072
   se_enabled: true
   ns_enabled: true
-  vad_enabled: false
+  vad_enabled: true
   continuous_vad: true
   # With dual-mic BSS active and AEC disabled, ESP-SR exposes the useful
   # non-AEC output through raw_data[1]. The official result->data path can
@@ -491,13 +491,13 @@ select:
     options:
       - "fd_low_cost"
       - "fd_high_perf"
-    initial_option: "fd_low_cost"
+    initial_option: "fd_high_perf"
     # Non-optimistic: template_select::control runs the set_action first
     # and only auto-publishes `index` when optimistic=true, overwriting
     # whatever we published. With optimistic=false, the final lambda
     # publish_state drives HA state from the live esp_afe mode.
     optimistic: false
-    restore_value: true
+    restore_value: false
     set_action:
       - if:
           condition:

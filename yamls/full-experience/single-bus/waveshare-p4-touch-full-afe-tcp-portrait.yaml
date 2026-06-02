@@ -90,7 +90,7 @@ substitutions:
   # P4 AFE profile: dual mic keeps SE/BSS structural. AEC remains runtime
   # togglable, but defaults ON because this ES7210/ES8311 path degrades
   # audibly when AEC is disabled.
-  afe_aec_restore_mode: RESTORE_DEFAULT_ON
+  afe_aec_restore_mode: ALWAYS_ON
   afe_aec_off_output_initial: raw_1
 
 packages:
@@ -252,10 +252,10 @@ i2c:
 esp_afe:
   id: afe_processor
   type: fd
-  mode: low_cost
+  mode: high_perf
   mic_num: 2
   input_format: MMNR
-  aec_enabled: false
+  aec_enabled: true
   # P4 uses the same ES7210 dual-mic BSS topology as WS3. When AEC is off,
   # expose ESP-SR raw_data[1] so the user hears the non-AEC output instead of
   # the GMF/trigger-selected processed channel.
@@ -264,7 +264,7 @@ esp_afe:
   aec_nlp_level: normal
   se_enabled: true             # Structural dual-mic SE/BSS; no runtime SE toggle.
   ns_enabled: true              # SE/BSS is structural; keep the dual-mic profile aligned with WS3.
-  vad_enabled: false           # MWW covers wake detection; AFE VAD is a HA runtime control.
+  vad_enabled: true            # Keep GMF VAD internals live; HA switch gates runtime behavior.
   continuous_vad: true         # Keep Voice Detected alive in standby when VAD is enabled.
   agc_enabled: false
   # Same hybrid placement as WS3 dual-mic AFE: keep per-frame scratch/output
@@ -3038,13 +3038,13 @@ select:
     options:
       - "fd_low_cost"
       - "fd_high_perf"
-    initial_option: "fd_low_cost"
+    initial_option: "fd_high_perf"
     # Non-optimistic: template_select::control runs the set_action first
     # and only auto-publishes `index` when optimistic=true, overwriting
     # whatever we published. With optimistic=false, the final lambda
     # publish_state drives HA state from the live esp_afe mode.
     optimistic: false
-    restore_value: true
+    restore_value: false
     set_action:
       - if:
           condition:
@@ -3075,13 +3075,26 @@ select:
                   - esp_afe.set_mode:
                       id: afe_processor
                       mode: !lambda 'return x;'
-                  - esp_audio_stack.start: audio_stack
-                  - delay: 300ms
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
+                      timeout: 20s
                   - if:
                       condition:
-                        switch.is_off: mute
+                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
                       then:
-                        - script.execute: start_mww_when_ready
+                        - esp_audio_stack.start: audio_stack
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              switch.is_off: mute
+                            then:
+                              - script.execute: start_mww_when_ready
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            tag: main
+                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
           id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
