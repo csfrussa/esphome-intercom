@@ -12,7 +12,7 @@ experimental hardware-specific targets.
    wifi_ssid: "your_network"
    wifi_password: "your_password"
    ```
-3. Compile with ESPHome. The public YAMLs on `main` point at the GitHub copy of this repository, so components, packages, and assets are fetched automatically.
+3. Compile with ESPHome. Public YAMLs point at the GitHub copy of this repository, so components, packages, and assets are fetched automatically. Stable releases point at `main`; opt-in test YAMLs on `dev` point at `dev`.
 
 ## Structure
 
@@ -77,9 +77,14 @@ modern firmware.
 
 ## Local development vs release mode
 
-The public YAMLs in `main` are stored in **remote mode** so they compile
-straight from GitHub. If you are working inside a local clone and want
-them to point back at your checkout, run:
+The public YAMLs are stored in **remote mode** so they compile straight from
+GitHub. Stable release YAMLs must point at `main`. Development test YAMLs may
+intentionally point at `dev`; in that case users should download the YAML from
+the `dev` branch too, so packages, components, and assets all resolve from the
+same branch.
+
+If you are working inside a local clone and want them to point back at your
+checkout, run:
 
 ```bash
 ./scripts/yaml_paths.sh local
@@ -88,7 +93,9 @@ them to point back at your checkout, run:
 When you are ready to switch them back to the published form:
 
 ```bash
+./scripts/yaml_paths.sh remote --branch dev    # development test train
 ./scripts/yaml_paths.sh remote --branch main
+./scripts/yaml_paths.sh check
 ```
 
 ## Not sure which one to pick?
