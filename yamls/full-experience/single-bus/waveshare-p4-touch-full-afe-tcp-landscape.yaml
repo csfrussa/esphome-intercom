@@ -344,7 +344,7 @@ speaker:
         buffer_duration: 100ms
       - id: intercom_speaker_mix    # Intercom audio
         timeout: 10s
-        buffer_duration: 100ms
+        buffer_duration: 128ms       # 4 intercom wire frames (32 ms each)
 
   # ResamplerSpeakers: convert any input rate to 48kHz before the mixer
   - platform: resampler
@@ -361,6 +361,7 @@ speaker:
     id: intercom_speaker           # Intercom RX (16kHz) to 48kHz
     output_speaker: intercom_speaker_mix
     task_stack_in_psram: true
+    buffer_duration: 128ms
 
 # =============================================================================
 # Media Player (TTS via VA speaker)

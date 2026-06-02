@@ -144,7 +144,7 @@ speaker:
     channel: mono
     sample_rate: 16000
     bits_per_sample: 16bit
-    buffer_duration: 100ms
+    buffer_duration: 128ms
     timeout: 500ms
 
 intercom_api:

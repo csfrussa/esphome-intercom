@@ -28,7 +28,8 @@ speaker:
         buffer_duration: 100ms
       - id: intercom_speaker_mix
         timeout: 10s
-        buffer_duration: 100ms
+        # 4 intercom wire frames: 1024 B @ 16 kHz mono = 32 ms/frame.
+        buffer_duration: 128ms
 
   - platform: resampler
     id: media_speaker
@@ -44,3 +45,5 @@ speaker:
     id: intercom_speaker
     output_speaker: intercom_speaker_mix
     task_stack_in_psram: true
+    # Keep the intercom RX resampler buffer frame-aligned with the wire chunk.
+    buffer_duration: 128ms

@@ -282,7 +282,7 @@ speaker:
     source_speakers:
       - id: intercom_speaker_mix
         timeout: 10s
-        buffer_duration: 100ms
+        buffer_duration: 128ms
       - id: ringtone_speaker_mix
         timeout: 10s
         buffer_duration: 100ms
@@ -290,6 +290,7 @@ speaker:
   - platform: resampler
     id: intercom_speaker            # Intercom RX (16kHz) -> 48kHz
     output_speaker: intercom_speaker_mix
+    buffer_duration: 128ms
 
   - platform: resampler
     id: ringtone_speaker             # Ringtone FLAC -> 48kHz
