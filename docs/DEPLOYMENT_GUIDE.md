@@ -261,8 +261,11 @@ Each public YAML carries one line per external resource. Three knobs:
 - `packages:` entries - each one is either `!include ../../../packages/<name>.yaml`
   (local) or `github://OWNER/REPO/packages/<name>.yaml@BRANCH` (remote).
 
-The public YAMLs on `main` ship in **remote mode** so they compile
-directly from GitHub without manual path edits.
+Public YAMLs ship in **remote mode** so they compile directly from GitHub
+without manual path edits. Stable release YAMLs should point at `main`.
+Development test YAMLs may intentionally point at `dev`; users testing that
+train should download YAMLs from the `dev` branch so every package, component,
+and asset resolves from the same branch.
 
 If you are developing inside a local clone and want the YAMLs to point
 back at your working tree, run:
@@ -275,8 +278,10 @@ To switch them back to release mode, point them at `main`, a release
 branch, or your own fork:
 
 ```bash
+./scripts/yaml_paths.sh remote --branch dev
 ./scripts/yaml_paths.sh remote --branch main
 ./scripts/yaml_paths.sh remote --url github://YOUR-USER/esphome-intercom --branch YOUR-BRANCH
+./scripts/yaml_paths.sh check
 ```
 
 For one-off local tweaks (wifi credentials, GPIO swaps, board-specific
