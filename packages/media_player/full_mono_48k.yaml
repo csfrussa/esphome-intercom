@@ -24,6 +24,9 @@ media_player:
     volume_min: 0%
     volume_max: 100%
     volume_increment: 5%
+    # Keep HA pause/resume semantics, but park the media HTTP pipeline so
+    # announcements, VA and intercom can use the mixer/output graph cleanly.
+    pause_releases_pipeline: true
     media_pipeline:
       speaker: media_speaker
       sample_rate: 48000

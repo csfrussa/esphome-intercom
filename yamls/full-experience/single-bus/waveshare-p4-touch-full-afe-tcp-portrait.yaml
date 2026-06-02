@@ -216,7 +216,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor, speaker]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, GT9271)
@@ -380,6 +380,7 @@ media_player:
     volume_min: 0%
     volume_max: 100%
     volume_increment: 5%
+    pause_releases_pipeline: true
     media_pipeline:
       speaker: media_speaker
       sample_rate: 48000
