@@ -151,7 +151,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, intercom_api, esp_audio_stack, esp_afe]
+    components: [audio_processor, intercom_api, esp_audio_stack, esp_afe, speaker]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, TCA9555)

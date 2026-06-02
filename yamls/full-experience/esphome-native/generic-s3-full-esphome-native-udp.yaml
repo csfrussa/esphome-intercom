@@ -149,7 +149,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, audio_processor]
+    components: [intercom_api, audio_processor, speaker]
 
 output:
   - platform: gpio

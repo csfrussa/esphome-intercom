@@ -136,7 +136,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor, speaker]
 
 # =============================================================================
 # ESP AEC

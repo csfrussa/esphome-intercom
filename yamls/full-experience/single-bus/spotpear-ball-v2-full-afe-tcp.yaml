@@ -161,7 +161,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor]
+    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor, speaker]
 
 # =============================================================================
 # CONNECTIVITY
@@ -342,6 +342,7 @@ media_player:
     volume_max: 100%
     volume_increment: 5%
     buffer_size: 262144   # 256KB per pipeline (default 1MB is oversized under full load)
+    pause_releases_pipeline: true
     media_pipeline:
       speaker: media_speaker
       sample_rate: 48000
