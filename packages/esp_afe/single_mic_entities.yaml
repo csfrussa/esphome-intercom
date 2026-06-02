@@ -10,10 +10,10 @@
 # =============================================================================
 
 substitutions:
-  afe_aec_restore_mode: RESTORE_DEFAULT_ON
+  afe_aec_restore_mode: ALWAYS_ON
   afe_ns_restore_mode: RESTORE_DEFAULT_ON
   afe_agc_restore_mode: RESTORE_DEFAULT_ON
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
+  afe_vad_restore_mode: ALWAYS_ON
 
 binary_sensor:
   - platform: esp_afe

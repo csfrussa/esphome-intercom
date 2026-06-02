@@ -15,8 +15,10 @@
 # =============================================================================
 
 substitutions:
-  afe_aec_restore_mode: RESTORE_DEFAULT_OFF
-  afe_vad_restore_mode: RESTORE_DEFAULT_OFF
+  afe_aec_restore_mode: ALWAYS_ON
+  # GMF AFE creates its VAD/wakeup monitor internals only if VAD is enabled
+  # when the element opens. Keep dual-mic VAD on across HA reconnect/reboot.
+  afe_vad_restore_mode: ALWAYS_ON
   afe_aec_off_output_initial: official
 
 binary_sensor:
@@ -50,7 +52,7 @@ select:
       - "raw_0"
       - "raw_1"
     initial_option: ${afe_aec_off_output_initial}
-    restore_value: true
+    restore_value: false
     optimistic: false
     entity_category: diagnostic
     set_action:
