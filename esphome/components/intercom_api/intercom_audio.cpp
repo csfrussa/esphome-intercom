@@ -54,6 +54,7 @@ void IntercomApi::debug_log_pcm_level_(const char *label, const uint8_t *pcm, si
            this->volume_.load(std::memory_order_relaxed), this->get_call_state_str(), path);
 }
 
+#ifdef USE_INTERCOM_API_MIC
 // === TX Task (Core 0) - Mic to Network ===
 
 void IntercomApi::tx_task(void *param) {
@@ -175,6 +176,7 @@ void IntercomApi::on_microphone_data_(const uint8_t *data, size_t len) {
     }
   }
 }
+#endif  // USE_INTERCOM_API_MIC
 
 }  // namespace intercom_api
 }  // namespace esphome

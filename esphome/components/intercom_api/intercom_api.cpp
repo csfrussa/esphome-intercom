@@ -27,6 +27,7 @@ namespace intercom_api {
 static const char *const TAG = "intercom_api";
 
 bool IntercomApi::ensure_mic_processing_buffer_() {
+#ifdef USE_INTERCOM_API_MIC
   if (this->mic_converted_.load(std::memory_order_acquire) != nullptr)
     return true;
 
@@ -44,11 +45,16 @@ bool IntercomApi::ensure_mic_processing_buffer_() {
     alloc.deallocate(buf, kMicConvertedSamples);
   }
   return true;
+#else
+  ESP_LOGW(TAG, "Ignoring mic processing request: this intercom endpoint has no microphone");
+  return false;
+#endif
 }
 
 void IntercomApi::cleanup_partial_setup_() {
   // Transactional setup cleanup. force_delete is safe here only because tasks
   // were just spawned and have not entered a blocking upstream call yet.
+#ifdef USE_INTERCOM_API_MIC
   audio_processor::force_delete_pinned_task(&this->tx_task_handle_, &this->tx_task_stack_,
                                              IntercomApi::kTxTaskStackBytes);
 
@@ -64,10 +70,12 @@ void IntercomApi::cleanup_partial_setup_() {
   }
 
   this->mic_buffer_.reset();
+#endif
   this->transport_.reset();
 }
 
 bool IntercomApi::allocate_setup_buffers_() {
+#ifdef USE_INTERCOM_API_MIC
   if (this->has_microphone_()) {
     this->mic_buffer_ = this->buffers_in_psram_
         ? audio_processor::create_prefer_psram(TX_BUFFER_SIZE, "intercom.mic")
@@ -93,6 +101,7 @@ bool IntercomApi::allocate_setup_buffers_() {
       return false;
     }
   }
+#endif
 
   return true;
 }
@@ -159,6 +168,7 @@ bool IntercomApi::setup_transport_() {
 }
 
 bool IntercomApi::start_runtime_tasks_() {
+#ifdef USE_INTERCOM_API_MIC
   // TX task exists only when a microphone is configured. Speaker-only peers
   // still accept calls and play incoming audio through the transport recv task.
   if (this->has_microphone_()) {
@@ -170,6 +180,7 @@ bool IntercomApi::start_runtime_tasks_() {
       return false;
     }
   }
+#endif
   return true;
 }
 

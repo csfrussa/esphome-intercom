@@ -172,6 +172,7 @@ script:
           condition:
             and:
               - lambda: 'return !id(init_in_progress);'
+              - lambda: 'return !id(g_ota_in_progress);'
               - lambda: 'return id(g_wake_word_enabled);'
               - switch.is_off: mute
               - not:
@@ -196,9 +197,10 @@ script:
             - logger.log:
                 level: INFO
                 tag: mww
-                format: "MWW: safe start skipped init=%d enabled=%d mute=%d va=%d mww=%d announcing=%d intercom_idle=%d"
+                format: "MWW: safe start skipped init=%d ota=%d enabled=%d mute=%d va=%d mww=%d announcing=%d intercom_idle=%d"
                 args:
                   - id(init_in_progress)
+                  - id(g_ota_in_progress)
                   - id(g_wake_word_enabled)
                   - id(mute).state
                   - id(va).is_running()

@@ -475,10 +475,14 @@ void IntercomApi::set_streaming_(bool on) {
     if (this->transport_) this->transport_->start_audio_path();
 
     // Drop stale frames from the previous call before audio resumes.
+#ifdef USE_INTERCOM_API_MIC
     if (this->mic_buffer_) {
       this->mic_buffer_->reset();
     }
+#endif
+#ifdef USE_INTERCOM_API_MIC
     this->dc_offset_ = 0;
+#endif
 
     this->set_call_state_(CallState::STREAMING);  // publishes state internally
   } else {
@@ -491,9 +495,11 @@ void IntercomApi::set_streaming_(bool on) {
 }
 
 void IntercomApi::notify_audio_tasks_() {
+#ifdef USE_INTERCOM_API_MIC
   if (this->tx_task_handle_ != nullptr) {
     xTaskNotifyGive(this->tx_task_handle_);
   }
+#endif
 }
 
 void IntercomApi::set_call_state_(CallState new_state) {

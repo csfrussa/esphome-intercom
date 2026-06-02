@@ -169,6 +169,11 @@ external_components:
 api:
   on_client_connected:
     - script.execute: draw_display
+  on_client_disconnected:
+    - script.stop: ai_animation_loop
+    - lambda: |-
+        lv_anim_del(id(idle_anim), nullptr);
+    - script.execute: draw_display
 ota:
   - platform: esphome
     id: ota_esphome
@@ -198,14 +203,10 @@ wifi:
   # ESP32 defaults to LIGHT power save; on full audio builds that can leave
   # the STA associated while ARP/API traffic stops. Keep realtime devices awake.
   power_save_mode: NONE
-  ap:
-    ssid: "Ball v2 Hotspot"
   on_connect:
     - script.execute: draw_display
   on_disconnect:
     - script.execute: draw_display
-
-captive_portal:
 
 time:
   - platform: sntp

@@ -163,8 +163,6 @@ wifi:
   # Keep intercom endpoints reachable; ESP32 LIGHT power save hurts API/ARP
   # reliability during HA disconnect/reconnect cycles.
   power_save_mode: NONE
-  ap:
-    ssid: "Ball v2 Hotspot"
   on_connect:
     - globals.set:
         id: draw_display_pending
@@ -173,9 +171,6 @@ wifi:
     - globals.set:
         id: draw_display_pending
         value: "true"
-
-captive_portal:
-
 time:
   - platform: sntp
     id: my_time

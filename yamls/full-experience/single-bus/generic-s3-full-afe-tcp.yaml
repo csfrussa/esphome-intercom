@@ -50,6 +50,7 @@ substitutions:
 # =============================================================================
 packages:
   core: !include ../../../packages/va_intercom.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
   speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml

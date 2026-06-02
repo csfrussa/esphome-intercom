@@ -352,6 +352,7 @@ class IntercomApi : public Component {
   void handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_ms);
   void handle_udp_keepalive_(uint32_t now_ms);
 
+#ifdef USE_INTERCOM_API_MIC
   // TX task: mic capture + send (Core 0). Created only when a microphone is
   // configured; recv/control live in the transport task.
   static void tx_task(void *param);
@@ -360,6 +361,7 @@ class IntercomApi : public Component {
   bool is_tx_stream_ready_() const;
   void send_chunk_(const uint8_t *data, size_t length);
   void process_tx_chunk_(const uint8_t *audio_chunk);
+#endif
   void debug_log_pcm_level_(const char *label, const uint8_t *pcm, size_t bytes,
                             uint32_t &last_log_ms, uint32_t &frame_count);
 
@@ -383,7 +385,9 @@ class IntercomApi : public Component {
   void on_connection_change_(bool connected);
   bool can_accept_session_() const;
 
+#ifdef USE_INTERCOM_API_MIC
   void on_microphone_data_(const uint8_t *data, size_t len);
+#endif
 
   void set_active_(bool on);
   void set_streaming_(bool on);
@@ -527,6 +531,7 @@ class IntercomApi : public Component {
   std::string mdns_discovery_pending_csv_;
 #endif
 
+#ifdef USE_INTERCOM_API_MIC
   // Audio buffers
   audio_processor::RingBufferPtr mic_buffer_;
 
@@ -534,10 +539,12 @@ class IntercomApi : public Component {
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.
   static constexpr size_t kTxAudioChunkBytes = AUDIO_CHUNK_SIZE;       // 1024
   static constexpr size_t kMicConvertedSamples = AUDIO_CHUNK_SIZE / sizeof(int16_t);
+#endif
 #ifdef USE_INTERCOM_MDNS_DISCOVERY
   static constexpr uint32_t kMdnsDiscoveryTaskStackBytes = 6144;
   static constexpr uint32_t kMdnsDiscoveryStartupDelayMs = 3000;
 #endif
+#ifdef USE_INTERCOM_API_MIC
   uint8_t *tx_audio_chunk_{nullptr};
 
   // task_stacks_in_psram_: true puts task stacks in PSRAM (saves internal
@@ -547,6 +554,7 @@ class IntercomApi : public Component {
   TaskHandle_t tx_task_handle_{nullptr};
   StaticTask_t tx_task_tcb_{};
   StackType_t *tx_task_stack_{nullptr};
+#endif
   bool task_stacks_in_psram_{false};
 
   std::atomic<float> volume_{1.0f};
@@ -634,10 +642,12 @@ class IntercomApi : public Component {
 
   bool dc_offset_removal_{false};       // for mics with DC bias (SPH0645)
   bool buffers_in_psram_{false};
+#ifdef USE_INTERCOM_API_MIC
   int32_t dc_offset_{0};
 
   // Pre-allocated to avoid task-stack VLAs.
   std::atomic<int16_t *> mic_converted_{nullptr};  // 512 samples, lazy for optional mic processing
+#endif
 
   Trigger<> ringing_trigger_;
   Trigger<> streaming_trigger_;

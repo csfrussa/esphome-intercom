@@ -23,7 +23,8 @@ static const char *const TAG = "intercom_api.tcp";
 
 namespace {
 constexpr uint32_t kSocketIoTimeoutMs = 500;
-constexpr uint32_t kFrameReadTimeoutMs = 750;
+constexpr uint32_t kFrameProgressTimeoutMs = KEEPALIVE_DEADLINE_MS;
+constexpr UBaseType_t kServerTaskPriority = 12;
 
 void set_blocking_mode(int socket, bool blocking) {
   int flags = fcntl(socket, F_GETFL, 0);
@@ -60,6 +61,7 @@ bool wait_socket_writable(int socket, uint32_t wait_ms) {
   int ready = select(socket + 1, nullptr, &wfds, nullptr, &tv);
   return ready > 0 && FD_ISSET(socket, &wfds);
 }
+
 }  // namespace
 
 TcpTransport::TcpTransport(uint16_t port, bool task_stacks_in_psram)
@@ -126,7 +128,7 @@ bool TcpTransport::start() {
   this->running_.store(true, std::memory_order_release);
 
   if (!audio_processor::start_pinned_task(TcpTransport::server_task_trampoline_, "intercom_srv",
-                                           kServerTaskStackBytes, this, 5, 1,
+                                           kServerTaskStackBytes, this, kServerTaskPriority, 1,
                                            this->task_stacks_in_psram_, TAG,
                                            &this->server_task_handle_, &this->server_task_tcb_,
                                            &this->server_task_stack_)) {
@@ -654,12 +656,13 @@ void TcpTransport::send_audio_chunk_(int socket, const uint8_t *data, size_t len
 bool TcpTransport::receive_message_(int socket, MessageHeader &header,
                                      uint8_t *buffer, size_t buffer_size) {
   size_t header_read = 0;
-  const uint32_t start_ms = millis();
+  uint32_t last_progress_ms = millis();
 
-  while (header_read < HEADER_SIZE && millis() - start_ms < kFrameReadTimeoutMs) {
+  while (header_read < HEADER_SIZE && millis() - last_progress_ms < kFrameProgressTimeoutMs) {
     ssize_t received = recv(socket, buffer + header_read, HEADER_SIZE - header_read, 0);
     if (received > 0) {
       header_read += received;
+      last_progress_ms = millis();
       continue;
     }
     if (received == 0) return false;
@@ -672,7 +675,7 @@ bool TcpTransport::receive_message_(int socket, MessageHeader &header,
 
   if (header_read != HEADER_SIZE) {
     if (header_read > 0) {
-      ESP_LOGW(TAG, "Header incomplete: %zu/%zu", header_read, HEADER_SIZE);
+      ESP_LOGW(TAG, "TCP frame stalled while reading header: %zu/%zu", header_read, HEADER_SIZE);
     }
     return false;
   }
@@ -686,11 +689,13 @@ bool TcpTransport::receive_message_(int socket, MessageHeader &header,
 
   if (header.length > 0) {
     size_t payload_read = 0;
-    while (payload_read < header.length && millis() - start_ms < kFrameReadTimeoutMs) {
+    last_progress_ms = millis();
+    while (payload_read < header.length && millis() - last_progress_ms < kFrameProgressTimeoutMs) {
       ssize_t received = recv(socket, buffer + HEADER_SIZE + payload_read,
                               header.length - payload_read, 0);
       if (received > 0) {
         payload_read += received;
+        last_progress_ms = millis();
         continue;
       }
       if (received == 0) return false;
@@ -702,7 +707,7 @@ bool TcpTransport::receive_message_(int socket, MessageHeader &header,
     }
 
     if (payload_read != header.length) {
-      ESP_LOGW(TAG, "Payload incomplete: %zu/%d", payload_read, header.length);
+      ESP_LOGW(TAG, "TCP frame stalled while reading payload: %zu/%d", payload_read, header.length);
       return false;
     }
   }
