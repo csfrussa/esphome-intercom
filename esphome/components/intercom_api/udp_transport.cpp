@@ -353,7 +353,7 @@ void UdpTransport::recv_task_() {
   ESP_LOGD(TAG, "UDP audio recv task started on port %u", (unsigned) this->listen_port_);
 
   // One frame per datagram. 2x leaves headroom for non-default chunk sizes.
-  uint8_t rx[AUDIO_CHUNK_SIZE * 2];
+  uint8_t rx[AUDIO_CHUNK_BYTES * 2];
 
   while (this->running_.load(std::memory_order_acquire) &&
          this->audio_active_.load(std::memory_order_acquire)) {

@@ -149,23 +149,19 @@ bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   // serialises against reinit_(); on miss we emit silence, never raw mic audio.
   const size_t frame_bytes = static_cast<size_t>(this->cached_frame_size_) * sizeof(int16_t);
   if (out == nullptr) {
-    this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
   if (in_mic == nullptr) {
     memset(out, 0, frame_bytes);
-    this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
   if (in_ref == nullptr) {
     memset(out, 0, frame_bytes);
-    this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
   audio_processor::ScopedLock lock(this->handle_mutex_, pdMS_TO_TICKS(10));
   if (!lock || this->handle_ == nullptr || this->input_frame_ == nullptr) {
     memset(out, 0, frame_bytes);
-    this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
   const int mic_stride = std::max<int>(1, mic_channels_in);
@@ -175,10 +171,8 @@ bool EspAec::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
   }
   size_t out_bytes = afe_aec_process(this->handle_, this->input_frame_, out);
   if (out_bytes != frame_bytes) {
-    this->glitch_count_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
-  this->frame_count_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
@@ -194,8 +188,6 @@ bool EspAec::set_feature(AudioFeature feature, bool enabled) {
 
 ProcessorTelemetry EspAec::telemetry() const {
   ProcessorTelemetry t;
-  t.frame_count = this->frame_count_.load(std::memory_order_relaxed);
-  t.glitch_count = this->glitch_count_.load(std::memory_order_relaxed);
   return t;
 }
 

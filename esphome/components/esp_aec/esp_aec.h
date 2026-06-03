@@ -72,8 +72,6 @@ class EspAec : public Component, public AudioProcessor {
   int filter_length_{4};
   int cached_frame_size_{512};
   aec_mode_t mode_{AEC_MODE_SR_LOW_COST};
-  std::atomic<uint32_t> frame_count_{0};
-  std::atomic<uint32_t> glitch_count_{0};
   std::atomic<uint32_t> frame_spec_revision_{0};
   int last_frame_size_{0};
 };

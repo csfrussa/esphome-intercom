@@ -78,7 +78,40 @@ void IntercomApi::send_chunk_(const uint8_t *data, size_t length) {
 }
 
 void IntercomApi::process_tx_chunk_(const uint8_t *audio_chunk) {
-  this->send_chunk_(audio_chunk, AUDIO_CHUNK_SIZE);
+  this->send_chunk_(audio_chunk, AUDIO_CHUNK_BYTES);
+}
+
+bool IntercomApi::read_tx_chunk_(uint8_t *audio_chunk, const uint8_t **chunk_data, void **release_item) {
+  *chunk_data = nullptr;
+  *release_item = nullptr;
+
+  size_t acquired_len = 0;
+  void *acquired = this->mic_buffer_->receive_acquire(acquired_len, AUDIO_CHUNK_BYTES, 0);
+  if (acquired != nullptr && acquired_len == AUDIO_CHUNK_BYTES) {
+    *chunk_data = static_cast<const uint8_t *>(acquired);
+    *release_item = acquired;
+    return true;
+  }
+  if (acquired != nullptr) {
+    if (acquired_len > AUDIO_CHUNK_BYTES) {
+      this->mic_buffer_->receive_release(acquired);
+      return false;
+    }
+    std::memcpy(audio_chunk, acquired, acquired_len);
+    this->mic_buffer_->receive_release(acquired);
+    const size_t remaining = AUDIO_CHUNK_BYTES - acquired_len;
+    if (this->mic_buffer_->read(audio_chunk + acquired_len, remaining, 0) != remaining) {
+      return false;
+    }
+    *chunk_data = audio_chunk;
+    return true;
+  }
+
+  if (this->mic_buffer_->read(audio_chunk, AUDIO_CHUNK_BYTES, 0) != AUDIO_CHUNK_BYTES) {
+    return false;
+  }
+  *chunk_data = audio_chunk;
+  return true;
 }
 
 void IntercomApi::tx_task_() {
@@ -92,35 +125,20 @@ void IntercomApi::tx_task_() {
       continue;
     }
 
-    if (this->mic_buffer_->available() < AUDIO_CHUNK_SIZE) {
+    if (this->mic_buffer_->available() < AUDIO_CHUNK_BYTES) {
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
       continue;
     }
 
-    size_t acquired_len = 0;
-    void *acquired = this->mic_buffer_->receive_acquire(acquired_len, AUDIO_CHUNK_SIZE, 0);
-    if (acquired != nullptr && acquired_len == AUDIO_CHUNK_SIZE) {
-      this->process_tx_chunk_(static_cast<const uint8_t *>(acquired));
-      this->mic_buffer_->receive_release(acquired);
+    const uint8_t *chunk_data = nullptr;
+    void *release_item = nullptr;
+    if (this->read_tx_chunk_(audio_chunk, &chunk_data, &release_item)) {
+      this->process_tx_chunk_(chunk_data);
+      if (release_item != nullptr) {
+        this->mic_buffer_->receive_release(release_item);
+      }
       delay(1);
-      continue;
     }
-    if (acquired != nullptr) {
-      std::memcpy(audio_chunk, acquired, acquired_len);
-      this->mic_buffer_->receive_release(acquired);
-      const size_t remaining = AUDIO_CHUNK_SIZE - acquired_len;
-      if (this->mic_buffer_->read(audio_chunk + acquired_len, remaining, 0) != remaining)
-        continue;
-      this->process_tx_chunk_(audio_chunk);
-      delay(1);
-      continue;
-    }
-
-    if (this->mic_buffer_->read(audio_chunk, AUDIO_CHUNK_SIZE, 0) != AUDIO_CHUNK_SIZE)
-      continue;
-
-    this->process_tx_chunk_(audio_chunk);
-    delay(1);
   }
 }
 

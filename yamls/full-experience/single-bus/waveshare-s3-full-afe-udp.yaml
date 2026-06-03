@@ -50,7 +50,7 @@ substitutions:
 
   # Microphone ID for package mute switch
   mic_id: mic_main
-  afe_aec_off_output_initial: raw_1
+  afe_aec_restore_mode: RESTORE_DEFAULT_ON
 
 # =============================================================================
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
@@ -196,10 +196,8 @@ esp_afe:
   ns_enabled: true
   vad_enabled: true
   continuous_vad: true
-  # With dual-mic BSS active and AEC disabled, ESP-SR exposes the useful
-  # non-AEC output through raw_data[1]. The official result->data path can
-  # still carry the trigger/processed channel and sound metallic on WS3.
-  aec_off_output: raw_1
+  # Dual-mic GMF follows Espressif's official element output path. Keep AEC on
+  # for normal audio quality; AEC-off on dual-mic BSS targets may sound metallic.
   # WS3 keeps AGC out of the runtime profile. It can improve MWW sensitivity
   # under playback, but on this target it causes TTS/media stutter and any
   # runtime toggle requires a full AFE rebuild.

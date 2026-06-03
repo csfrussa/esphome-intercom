@@ -76,7 +76,7 @@ enum class ErrorCode : uint8_t {
 
 // Wire contract: 16 kHz mono int16, 512 samples per chunk = 32 ms.
 static constexpr uint32_t SAMPLE_RATE = 16000;
-static constexpr size_t AUDIO_CHUNK_SIZE = 1024;
+static constexpr size_t AUDIO_CHUNK_BYTES = 1024;
 
 struct __attribute__((packed)) MessageHeader {
   uint8_t type;
