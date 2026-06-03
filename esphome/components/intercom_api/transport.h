@@ -37,7 +37,7 @@ class IntercomTransport {
   /// TCP: a client is accepted. UDP: mirrors start()/stop().
   virtual bool is_connected() const = 0;
 
-  /// Best-effort send. PCM s16le 16 kHz mono, AUDIO_CHUNK_SIZE bytes.
+  /// Best-effort send. PCM s16le 16 kHz mono, AUDIO_CHUNK_BYTES bytes.
   /// Safe from a high-priority audio task; may drop on backpressure.
   virtual void send_audio_frame(const uint8_t *pcm, size_t bytes) = 0;
 

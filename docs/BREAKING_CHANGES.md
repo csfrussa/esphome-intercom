@@ -73,13 +73,14 @@ partition layout actually has enough app-slot headroom.
 
 ### YAML: dual-mic AFE boards
 
-Waveshare S3 and P4 dual-mic AFE profiles now expose an AEC-off output policy.
-When AEC is disabled, the profile selects a raw ESP-SR output channel so the
-device really returns a non-AEC mic stream instead of a still-processed BSS/AEC
-output.
+Waveshare S3 and P4 dual-mic AFE profiles now follow Espressif's official GMF
+element output path. AEC remains runtime-togglable, but the maintained profiles
+restore it ON by default because the official dual-mic SE/BSS output may sound
+metallic when AEC is disabled.
 
-If you maintain a custom dual-mic YAML, check the `esp_afe:` block and carry
-over the `aec_off_output` setting from the closest maintained profile.
+If you maintain a custom dual-mic YAML, remove any old `aec_off_output` setting
+and keep the AEC switch default ON unless the board has been tested with
+AEC-off audio.
 
 ### YAML: P4 Touch mic gain range
 

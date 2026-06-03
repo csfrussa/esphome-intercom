@@ -229,12 +229,12 @@ runtime SE switch on the P4/WS3 dual-mic path. The rebuild implementation is a
 lock-free two-atomic handshake between `process()` (hot path) and
 `recreate_instance_()` (config path).
 
-Dual-mic AEC-off output selection is not a graph rebuild. `esp_afe` keeps using
-Espressif's GMF AFE manager, but its result callback may route
-`afe_fetch_result_t::raw_data[0/1]` to the ESPHome-facing mono bridge when
-`aec_off_output` requests it. This restores the ESP-SR documented BSS
-multi-output path for boards where the official `data` channel remains
-processed/trigger-selected after AEC is disabled.
+Dual-mic AFE follows Espressif's official GMF element model: ESPHome feeds the
+element input port and consumes its output port, while Espressif owns the
+manager read/result callbacks and the internal `out_db` delay buffer. The
+element does not expose `afe_fetch_result_t::raw_data[0/1]`, so the maintained
+dual-mic profiles keep AEC enabled by default and document that AEC-off on
+SE/BSS targets may sound metallic.
 
 Two atomics:
 

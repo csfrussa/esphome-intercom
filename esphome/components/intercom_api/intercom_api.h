@@ -537,8 +537,8 @@ class IntercomApi : public Component {
 
   // Per-iteration drain buffers, heap-allocated at setup() so the audio
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.
-  static constexpr size_t kTxAudioChunkBytes = AUDIO_CHUNK_SIZE;       // 1024
-  static constexpr size_t kMicConvertedSamples = AUDIO_CHUNK_SIZE / sizeof(int16_t);
+  static constexpr size_t kTxAudioChunkBytes = AUDIO_CHUNK_BYTES;       // 1024
+  static constexpr size_t kMicConvertedSamples = AUDIO_CHUNK_BYTES / sizeof(int16_t);
 #endif
 #ifdef USE_INTERCOM_MDNS_DISCOVERY
   static constexpr uint32_t kMdnsDiscoveryTaskStackBytes = 6144;
@@ -546,6 +546,7 @@ class IntercomApi : public Component {
 #endif
 #ifdef USE_INTERCOM_API_MIC
   uint8_t *tx_audio_chunk_{nullptr};
+  bool read_tx_chunk_(uint8_t *audio_chunk, const uint8_t **chunk_data, void **release_item);
 
   // task_stacks_in_psram_: true puts task stacks in PSRAM (saves internal
   // heap on S3/P4 with heavy AFE/MWW/LVGL load); false keeps them in
