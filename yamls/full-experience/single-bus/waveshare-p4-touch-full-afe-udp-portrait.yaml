@@ -3072,13 +3072,26 @@ select:
                   - esp_afe.set_mode:
                       id: afe_processor
                       mode: !lambda 'return x;'
-                  - esp_audio_stack.start: audio_stack
-                  - delay: 300ms
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
+                      timeout: 20s
                   - if:
                       condition:
-                        switch.is_off: mute
+                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
                       then:
-                        - script.execute: start_mww_when_ready
+                        - esp_audio_stack.start: audio_stack
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              switch.is_off: mute
+                            then:
+                              - script.execute: start_mww_when_ready
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            tag: main
+                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
           id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
