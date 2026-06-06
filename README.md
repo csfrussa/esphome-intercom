@@ -835,6 +835,11 @@ Do Not Disturb controls. It rings only for calls addressed to Home Assistant and
 does not mirror an ESP card state. Only `hybrid` cards must be bound to an ESP
 with `device_id`.
 
+![Home Assistant softphone card](docs/images/ha-softphone-card.png)
+
+_Independent Home Assistant softphone mode: one card represents HA itself and
+calls any ESP endpoint from the in-card selector._
+
 The card automatically discovers ESPHome devices with the `intercom_api` component through their `intercom_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- TCP` / `- UDP`; the mode line shows `HA - ESP`, `Home Assistant - ESP`, `ESP - ESP`, or `Inter-protocol TCP-UDP` / `Inter-protocol UDP-TCP`.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.intercom_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
