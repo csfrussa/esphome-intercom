@@ -451,15 +451,11 @@ The card has two top-level modes:
 
 | Card mode | Behavior |
 |---|---|
-| `hybrid` (default) | Current behavior. The card mirrors one ESP endpoint. If that ESP calls HA, the browser answers as HA; if the selected destination is another ESP, the card presses the ESP's own call controls. |
+| `hybrid` (default) | ESP endpoint card. The card mirrors one ESP endpoint and presses that ESP's own call controls for ESP-to-ESP calls. It does not use Home Assistant as a selectable destination. |
 | `ha_softphone` | Independent HA endpoint. One card represents Home Assistant itself, has its own Auto Answer and DND state, rings only for calls addressed to HA, and can call any ESP endpoint from an in-card destination selector. |
 
-Hybrid mode still has two call-control paths:
-
-| Selected destination | Card behavior |
-|---|---|
-| `hass.config.location_name` | HA/browser softphone. The card answers/calls as the HA location peer. |
-| Any ESP friendly name | Mirror mode. The card presses the ESP's real Call/Answer and Decline/Hangup controls. |
+Use `ha_softphone` when the card should call from or ring as Home Assistant.
+Hybrid cards skip the Home Assistant endpoint and keep ESP-to-ESP behavior only.
 
 Optional card config:
 
