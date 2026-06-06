@@ -831,13 +831,13 @@ softphone endpoint, add a separate card:
 type: custom:intercom-card
 mode: ha_softphone
 name: Home Assistant Intercom
-target_device_id: <optional_initial_esp_device_id>
 show_extended_info: true
 ```
 
 In `ha_softphone` mode the card has its own destination selector, Auto Answer and
 Do Not Disturb controls. It rings only for calls addressed to Home Assistant and
-does not mirror an ESP card state.
+does not mirror an ESP card state. Only `hybrid` cards must be bound to an ESP
+with `device_id`.
 
 The card automatically discovers ESPHome devices with the `intercom_api` component through their `intercom_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- TCP` / `- UDP`; the mode line shows `Home Assistant - ESP`, `ESP - ESP`, or `Inter-protocol TCP-UDP` / `Inter-protocol UDP-TCP`.
 

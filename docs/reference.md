@@ -476,13 +476,15 @@ Independent HA softphone card:
 type: custom:intercom-card
 mode: ha_softphone
 name: Home Assistant Intercom
-target_device_id: <optional_initial_esp_device_id>
 show_extended_info: true
 ```
 
 The visual editor stores the stable HA `device_id`. Hand-written YAML can use
 the ESP friendly name published in `intercom_endpoint`, matching the names used
 by ESP-to-ESP phonebook calls.
+Only `hybrid` cards are bound to an ESP. A `ha_softphone` card represents Home
+Assistant itself and chooses the ESP destination at runtime from the in-card
+selector.
 
 With `show_extended_info: true`, the card shows extended routing details and the title appends the selected ESP transport (`Kitchen Intercom - TCP` / `- UDP`). The mode line uses:
 

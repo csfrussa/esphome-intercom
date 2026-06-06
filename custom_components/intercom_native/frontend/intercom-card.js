@@ -395,7 +395,6 @@ class IntercomCard extends HTMLElement {
   setConfig(config) {
     this.config = config;
     this._softphoneTargetDeviceId =
-      config?.target_device_id ||
       this._loadSoftphoneTargetPreference() ||
       this._softphoneTargetDeviceId;
     // Load auto-answer preference from localStorage
@@ -669,7 +668,7 @@ class IntercomCard extends HTMLElement {
   _getSoftphoneTargetDevice() {
     const targets = this._softphoneTargets();
     if (targets.length === 0) return null;
-    const wanted = this._softphoneTargetDeviceId || this.config?.target_device_id;
+    const wanted = this._softphoneTargetDeviceId;
     return targets.find(d => d.device_id === wanted) || targets[0];
   }
 
@@ -881,7 +880,7 @@ class IntercomCard extends HTMLElement {
       if (result?.devices) {
         this._availableDevices = result.devices;
         if (this._isHaSoftphoneMode() && !this._softphoneTargetDeviceId) {
-          this._softphoneTargetDeviceId = this.config?.target_device_id || this._softphoneTargets()[0]?.device_id || null;
+          this._softphoneTargetDeviceId = this._softphoneTargets()[0]?.device_id || null;
         }
         this._render();
       }
@@ -2130,19 +2129,6 @@ class IntercomCardEditor extends HTMLElement {
     deviceGroup.appendChild(deviceInfo);
     wrap.appendChild(deviceGroup);
 
-    const targetGroup = document.createElement("div");
-    targetGroup.className = "form-group";
-    const targetLabel = document.createElement("label");
-    targetLabel.textContent = "Initial Softphone Target";
-    targetGroup.appendChild(targetLabel);
-    const targetSelect = document.createElement("select");
-    targetSelect.id = "target-select";
-    targetGroup.appendChild(targetSelect);
-    const targetInfo = document.createElement("div");
-    targetInfo.className = "info";
-    targetGroup.appendChild(targetInfo);
-    wrap.appendChild(targetGroup);
-
     // Name input
     const nameGroup = document.createElement("div");
     nameGroup.className = "form-group";
@@ -2171,14 +2157,12 @@ class IntercomCardEditor extends HTMLElement {
 
     modeSelect.onchange = (e) => this._modeChanged(e.target.value);
     select.onchange = (e) => this._valueChanged("device_id", e.target.value);
-    targetSelect.onchange = (e) => this._valueChanged("target_device_id", e.target.value);
     nameInput.onchange = (e) => this._valueChanged("name", e.target.value);
     extendedInfoInput.onchange = (e) => this._boolChanged("show_extended_info", e.target.checked);
 
     this._els = {
       modeSelect, modeInfo,
       deviceGroup, select, deviceInfo,
-      targetGroup, targetSelect, targetInfo,
       nameInput, extendedInfoInput,
     };
   }
@@ -2193,7 +2177,6 @@ class IntercomCardEditor extends HTMLElement {
       ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
       : "Current behavior: this card mirrors one ESP endpoint and can also answer ESP-to-HA calls.";
     els.deviceGroup.classList.toggle("hidden", softphoneMode);
-    els.targetGroup.classList.toggle("hidden", !softphoneMode);
 
     // Rebuild the select option list safely: replaceChildren + per-row
     // createElement; option.value/textContent setters reject HTML injection.
@@ -2210,34 +2193,15 @@ class IntercomCardEditor extends HTMLElement {
     }
     els.select.replaceChildren(...newOptions);
 
-    const targetPlaceholder = document.createElement("option");
-    targetPlaceholder.value = "";
-    targetPlaceholder.textContent = "-- Select target --";
-    const targetOptions = [targetPlaceholder];
-    for (const d of this._devices.filter(d => !d.softphone)) {
-      const opt = document.createElement("option");
-      opt.value = d.device_id;
-      opt.textContent = `${d.name} (${this._audioModeLabel(d.audio_mode)})`;
-      if (this._config.target_device_id === d.device_id) opt.selected = true;
-      targetOptions.push(opt);
-    }
-    els.targetSelect.replaceChildren(...targetOptions);
-
     if (!this._devicesLoaded) {
       els.deviceInfo.textContent = "Loading...";
-      els.targetInfo.textContent = "Loading...";
     } else if (this._devices.length === 0) {
       els.deviceInfo.textContent = "No devices found";
-      els.targetInfo.textContent = "No endpoints found";
     } else {
       const selected = this._devices.find(d => d.device_id === (this._config.device_id || this._config.entity_id));
       els.deviceInfo.textContent = selected
         ? `Audio: ${this._normaliseAudioMode(selected.audio_mode).replace("_", " ")}`
-        : "Select device";
-      const target = this._devices.find(d => d.device_id === this._config.target_device_id);
-      els.targetInfo.textContent = target
-        ? `Initial target: ${target.name}`
-        : "The card can still cycle targets at runtime.";
+        : (softphoneMode ? "Home Assistant softphone does not belong to an ESP." : "Required for hybrid mode.");
     }
 
     els.nameInput.value = this._config.name || "";
@@ -2257,10 +2221,7 @@ class IntercomCardEditor extends HTMLElement {
       newConfig.mode = "ha_softphone";
       delete newConfig.device_id;
       delete newConfig.entity_id;
-      if (!newConfig.target_device_id) {
-        const firstTarget = this._devices.find(d => !d.softphone);
-        if (firstTarget?.device_id) newConfig.target_device_id = firstTarget.device_id;
-      }
+      delete newConfig.target_device_id;
     } else {
       delete newConfig.mode;
       delete newConfig.card_mode;
