@@ -748,6 +748,14 @@ class IntercomCard extends HTMLElement {
   }
 
   _formatModeLabel(destination) {
+    if (this._isHaSoftphoneMode()) {
+      if (!this.config?.show_extended_info) return "HA - ESP";
+      const target = this._getSoftphoneTargetDevice();
+      const destTransport = this._transportFromEntity(target?.entities?.intercom_transport) ||
+                            this._normaliseTransport(target?.transport);
+      const destMode = this._audioModeLabel(this._normaliseAudioMode(target?.audio_mode));
+      return destTransport ? `HA - ESP ${destTransport} ${destMode}` : `HA - ESP ${destMode}`;
+    }
     if (this._isHaName(destination)) return "Home Assistant - ESP";
     if (!this.config?.show_extended_info) return "ESP - ESP";
 
@@ -1036,10 +1044,13 @@ class IntercomCard extends HTMLElement {
       els.destValueWrap.classList.toggle("selecting", this._isHaSoftphoneMode());
       this._renderSoftphoneDestinationSelect(els.destSelect);
     }
-    els.prevBtn.disabled = buttonDisabled;
-    els.nextBtn.disabled = buttonDisabled;
-    els.prevBtn.hidden = this._isHaSoftphoneMode();
-    els.nextBtn.hidden = this._isHaSoftphoneMode();
+    const softphoneMode = this._isHaSoftphoneMode();
+    els.prevBtn.disabled = buttonDisabled || softphoneMode;
+    els.nextBtn.disabled = buttonDisabled || softphoneMode;
+    els.prevBtn.hidden = softphoneMode;
+    els.nextBtn.hidden = softphoneMode;
+    els.prevBtn.style.display = softphoneMode ? "none" : "";
+    els.nextBtn.style.display = softphoneMode ? "none" : "";
 
     // Action buttons: exactly one set visible at a time.
     els.answerBtn.hidden = !showAnswer;
