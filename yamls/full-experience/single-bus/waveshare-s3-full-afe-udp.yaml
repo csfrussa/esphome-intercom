@@ -69,6 +69,7 @@ packages:
   speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev
   speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k.yaml@dev
   speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k.yaml@dev
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers.yaml@dev
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
 
 # =============================================================================
@@ -353,18 +354,24 @@ binary_sensor:
         then:
           - if:
               condition:
-                not:
-                  - intercom_api.is_idle: intercom
+                switch.is_on: timer_ringing
               then:
-                - intercom_api.call_toggle: intercom
+                - switch.turn_off: timer_ringing
               else:
                 - if:
                     condition:
-                      voice_assistant.is_running:
+                      not:
+                        - intercom_api.is_idle: intercom
                     then:
-                      - voice_assistant.stop:
+                      - intercom_api.call_toggle: intercom
                     else:
-                      - voice_assistant.start:
+                      - if:
+                          condition:
+                            voice_assistant.is_running:
+                          then:
+                            - voice_assistant.stop:
+                          else:
+                            - voice_assistant.start:
       # Double click: next contact
       - timing:
           - ON for 50ms to 500ms
