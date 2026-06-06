@@ -4,11 +4,12 @@
 
 `2026.6.2` keeps the maintained full-experience profiles on `esp_audio_stack`,
 but the breaking changes users must notice are mostly around Home Assistant
-integration semantics and standalone intercom audio:
+integration semantics, Lovelace card mode and standalone intercom audio:
 the phonebook moved out of the sensor state into an attribute, routed/NAT
-topologies are handled more deliberately, and `intercom_api` can again be used
-cleanly with native ESPHome microphone/speaker components when hardware already
-does the audio processing.
+topologies are handled more deliberately, Home Assistant can be represented by
+its own softphone card, and `intercom_api` can again be used cleanly with native
+ESPHome microphone/speaker components when hardware already does the audio
+processing.
 
 The supported full-experience profiles and current maintained intercom-only
 profiles still use `esp_audio_stack`, the shared audio backend built around
@@ -16,9 +17,8 @@ ESP-IDF/Espressif audio libraries. I2S ownership, codec IO, software AEC
 reference handling, rate conversion and microphone/speaker lifecycle live behind
 the audio stack facade.
 
-If you are already on a late `2026.5.0` test build from `dev`, most changes are
-YAML/package-level. If you are upgrading from `4.x`, read this section and then
-the `2026.5.0` section below.
+If you are upgrading from `4.x`, read this section and then the `2026.5.0`
+section below.
 
 ### Minimum versions
 
@@ -110,6 +110,14 @@ The card now has an explicit `mode`. Existing cards keep the default `hybrid`
 mode. New single-card HA softphone dashboards should use `mode: ha_softphone`;
 that mode represents Home Assistant itself, not a mirrored ESP endpoint.
 
+Only `hybrid` cards are bound to an ESP through `device_id`. Do not configure
+`device_id` on a Home Assistant softphone card: it has its own destination
+selector, Auto Answer and Do Not Disturb state.
+
+Home Assistant now accepts valid inbound PBX-lite calls addressed to HA even
+when the caller is not already present in the ESP phonebook. The phonebook is
+still required when HA must resolve or forward a call to another endpoint.
+
 ### Home Assistant: phonebook sensor state moved to an attribute
 
 `sensor.intercom_phonebook` no longer stores the full CSV roster in its state.
@@ -178,6 +186,23 @@ the native-audio base for devices where ESPHome already exposes the correct
 microphone/speaker components and the hardware, for example an XMOS front-end,
 does its own echo cancellation. If the ESP must do software echo cancellation,
 use a full `esp_audio_stack` profile instead.
+
+### YAML: full AFE runtime defaults
+
+Maintained full AFE profiles now boot with the runtime entities reflecting the
+pipeline that actually starts on the device: AEC and VAD default ON, and boards
+with enough headroom default to FD high-perf. Users can still switch AEC/VAD/AFE
+mode from Home Assistant after boot.
+
+If you copied old full AFE YAML blocks, check that your template switches/selects
+do not restore stale HA values over the boot pipeline unless that is explicitly
+what you want.
+
+### Optional Voice Assistant timers
+
+Voice Assistant timer support is provided as an optional package. It is not part
+of the headless core package. Add it only to devices that should expose timer
+behavior or UI hooks.
 
 ### Home Assistant: routed subnet and mixed-protocol calls
 
