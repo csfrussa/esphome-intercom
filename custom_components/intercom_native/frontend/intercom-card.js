@@ -1107,9 +1107,14 @@ class IntercomCard extends HTMLElement {
 
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; }
+      :host {
+        display: block;
+        --intercom-card-surface: var(--ha-card-background, var(--card-background-color, white));
+        --intercom-control-surface: var(--intercom-card-surface);
+        --intercom-control-hover-surface: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+      }
       .card {
-        background: var(--ha-card-background, var(--card-background-color, white));
+        background: var(--intercom-card-surface);
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
         padding: 16px;
@@ -1124,11 +1129,11 @@ class IntercomCard extends HTMLElement {
       .nav-btn {
         width: 36px; height: 36px; border-radius: 50%;
         border: 1px solid var(--divider-color, #ccc);
-        background: var(--card-background-color, white);
+        background: var(--intercom-control-surface);
         color: var(--primary-text-color); cursor: pointer;
         font-size: 1.2em; display: flex; align-items: center; justify-content: center;
       }
-      .nav-btn:hover { background: var(--secondary-background-color, #f5f5f5); }
+      .nav-btn:hover { background: var(--intercom-control-hover-surface); }
       .nav-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .destination-value {
         flex: 1; text-align: center; font-size: 1.1em; font-weight: 500;
@@ -1139,8 +1144,9 @@ class IntercomCard extends HTMLElement {
       .destination-select {
         width: 100%; box-sizing: border-box; padding: 8px;
         border: 1px solid var(--divider-color, #ccc);
-        border-radius: 4px; background: var(--card-background-color, white);
+        border-radius: 4px; background: var(--intercom-control-surface);
         color: var(--primary-text-color); font-size: 0.95em;
+        color-scheme: light dark;
       }
       .destination-select[hidden] { display: none; }
       .destination-label {
@@ -1189,7 +1195,7 @@ class IntercomCard extends HTMLElement {
         gap: 8px; margin-top: 10px; font-size: 0.85em; color: var(--secondary-text-color);
       }
       .auto-answer-row[hidden] { display: none; }
-      .auto-answer-row input { cursor: pointer; }
+      .auto-answer-row input { cursor: pointer; accent-color: var(--primary-color); }
       .auto-answer-row label { cursor: pointer; user-select: none; }
       .version { font-size: 0.65em; color: #999; text-align: right; margin-top: 8px; }
     `;
