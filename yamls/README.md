@@ -56,6 +56,12 @@ Each ESP flashed with these YAMLs is an independent extension on a peer-to-peer 
 
 There is one product mode: PBX-lite (implicit default). Phonebook / contacts / destination / caller entities are always exposed. The `mode:` key on `intercom_api` is optional and only takes one value: `raw_udp` (audio-only UDP, no signaling, used for go2rtc / two-room direct links). Routing policy lives on the ESP as `routing_mode: device_independent` (default; ESP dials peers from its phonebook, true peer-to-peer) or `routing_mode: ha_pbx` (ESP dials the HA peer named by `hass.config.location_name`, HA bridges).
 
+## Optional packages
+
+`packages/voice_assistant/timers.yaml` adds headless Home Assistant timer alarm
+support on top of the full VA/intercom package. It is intentionally not part of
+`va_intercom.yaml`; include it only on devices that should expose timer behavior.
+
 ## Production logging
 
 Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; the per-frame telemetry path is additionally gated behind `esp_audio_stack.telemetry: true`. Audio deep-debug lives in `packages/debug/p4_audio_deep_debug.yaml`.

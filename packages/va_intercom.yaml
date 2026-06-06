@@ -17,6 +17,9 @@
 #   `lvgl/settings_navigation.yaml`   carousel state + navigation scripts
 #   `lvgl/lvgl_settings_*.yaml`       individual settings pages
 #
+# For headless Voice Assistant timer alarms, ALSO include:
+#   `voice_assistant/timers.yaml`      timer callbacks + alarm loop
+#
 # Required IDs (defined by device):
 #   mic_main / ${mic_id}      - Microphone
 #   hw_speaker                - Hardware speaker
