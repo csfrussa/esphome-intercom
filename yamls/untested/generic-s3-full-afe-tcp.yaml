@@ -1,5 +1,5 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM + VA (ESP AUDIO STACK UDP) - Single I2S bus, no hardware codec
+# GENERIC ESP32-S3 INTERCOM + VA (ESP AUDIO STACK) - Single I2S bus, no hardware codec
 # =============================================================================
 # Full-featured config: Intercom + Media Player + mixer (VA/MWW ready).
 # For ESP32 boards where mic and speaker share the SAME I2S bus.
@@ -39,12 +39,11 @@ substitutions:
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Microphone ID for package mute switch
-  # Non-default ports used by the integration test matrix to prove that mDNS,
-  # HA phonebook generation, and UDP bridge dialing do not assume 6054/6055.
-  intercom_udp_audio_port: "6156"
-  intercom_udp_control_port: "6157"
   mic_id: mic_main
 
+  # Non-default port used by the integration test matrix to prove that mDNS,
+  # HA phonebook generation, and TCP bridge dialing do not assume 6054.
+  intercom_tcp_port: "6154"
 
 # =============================================================================
 # Package: shared VA + Intercom state machine
@@ -52,7 +51,7 @@ substitutions:
 packages:
   core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@dev
   ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
   phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
   speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev
   s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
@@ -305,7 +304,7 @@ select:
     # or the component falls back to the previous mode, the select shows the
     # actual mode rather than a fictitious one.
     optimistic: false
-    restore_value: true
+    restore_value: false
     set_action:
       - if:
           condition:
@@ -329,16 +328,33 @@ select:
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
                   - esp_audio_stack.stop_and_wait: audio_stack
+                  - wait_until:
+                      condition:
+                        esp_audio_stack.is_idle: audio_stack
+                      timeout: 2s
                   - esp_afe.set_mode:
                       id: afe_processor
                       mode: !lambda 'return x;'
-                  - esp_audio_stack.start: audio_stack
-                  - delay: 300ms
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
+                      timeout: 20s
                   - if:
                       condition:
-                        switch.is_off: mute
+                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
                       then:
-                        - micro_wake_word.start:
+                        - esp_audio_stack.start: audio_stack
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              switch.is_off: mute
+                            then:
+                              - micro_wake_word.start:
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            tag: main
+                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
       # Reflect actual live mode (covers rejection and silent fallback).
       - lambda: |-
           id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
