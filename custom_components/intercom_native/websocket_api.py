@@ -166,6 +166,10 @@ class IntercomSession:
         call_id: str = "",
         caller_name: str = "",
         audio_mode: str = "full_duplex",
+        ui_device_id: str | None = None,
+        session_device_id: str | None = None,
+        ui_caller_name: str = "",
+        ui_peer_name: str = "",
     ):
         """Initialize session."""
         self.hass = hass
@@ -175,6 +179,10 @@ class IntercomSession:
         self._initial_call_id = call_id
         self._initial_caller_name = caller_name
         self.audio_mode = _audio_mode(audio_mode)
+        self._ui_device_id = ui_device_id
+        self._session_device_id = session_device_id or device_id
+        self._ui_caller_name = ui_caller_name
+        self._ui_peer_name = ui_peer_name
 
         self._transport: Optional[IntercomTransport] = transport
         self._active = False
@@ -209,13 +217,36 @@ class IntercomSession:
             except Exception:
                 subs.discard((connection, msg_id))
 
+    def _fire_state_event(self, state: str, **extra: Any) -> None:
+        payload = {"device_id": self.device_id, "state": state}
+        payload.update(extra)
+        _fire_call_event(self.hass, payload, "session")
+        self._fire_ui_state_event(state, extra)
+
+    def _fire_ui_state_event(self, state: str, extra: dict[str, Any]) -> None:
+        if not self._ui_device_id or self._ui_device_id == self.device_id:
+            return
+        payload: dict[str, Any] = {
+            "device_id": self._ui_device_id,
+            "session_device_id": self._session_device_id,
+            "state": state,
+        }
+        for key in ("reason", "origin", "code", "target_device_id"):
+            if key in extra:
+                payload[key] = extra[key]
+        caller = extra.get("caller") or self._ui_caller_name or self._initial_caller_name
+        peer = extra.get("peer_name") or self._ui_peer_name or caller
+        if caller:
+            payload["caller"] = caller
+        if peer:
+            payload["peer_name"] = peer
+        _fire_call_event(self.hass, payload, "session")
+
     def _fire_terminal_state(self, state: str, **extra: Any) -> None:
         if self._terminal_fired:
             return
         self._terminal_fired = True
-        payload = {"device_id": self.device_id, "state": state}
-        payload.update(extra)
-        _fire_call_event(self.hass, payload, "session")
+        self._fire_state_event(state, **extra)
 
     def _on_disconnected(self) -> None:
         self._active = False
@@ -231,7 +262,7 @@ class IntercomSession:
     def _on_ringing(self) -> None:
         """ESP is ringing, waiting for local answer."""
         self._ringing = True
-        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "ringing"}, "session")
+        self._fire_state_event("ringing")
 
     def _on_answered(self) -> None:
         """ESP answered the call, streaming started."""
@@ -242,7 +273,7 @@ class IntercomSession:
         # the was_active check we'd leak a TX task per re-fire.
         if _has_speaker(self.audio_mode) and not was_active and (self._tx_task is None or self._tx_task.done()):
             self._tx_task = self.hass.async_create_task(self._tx_sender())
-        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "streaming"}, "session")
+        self._fire_state_event("streaming")
 
     def _on_stop_received(self) -> None:
         """ESP sent HANGUP from its side."""
@@ -349,7 +380,7 @@ class IntercomSession:
         if not await self._transport.connect():
             return "error"
 
-        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "calling"}, "session")
+        self._fire_state_event("calling")
 
         caller_name = (self.hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
         result = await self._transport.start_stream(caller_name=caller_name)
@@ -416,7 +447,10 @@ class IntercomSession:
             _LOGGER.debug("ANSWER sent to ESP")
         return result
 
-    async def start_ringing(self, caller_name: str = "") -> bool:
+    def fire_ringing_event(self, caller_name: str = "") -> None:
+        self._fire_state_event("ringing", caller=caller_name)
+
+    async def start_ringing(self, caller_name: str = "", emit_event: bool = True) -> bool:
         """RING back an ESP-initiated MSG_START without answering.
 
         Lets the card auto-answer (localStorage flag) or present the call
@@ -431,15 +465,8 @@ class IntercomSession:
             await self._transport.disconnect()
             return False
         self._ringing = True
-        _fire_call_event(
-            self.hass,
-            {
-                "device_id": self.device_id,
-                "state": "ringing",
-                "caller": caller_name,
-            },
-            "session",
-        )
+        if emit_event:
+            self.fire_ringing_event(caller_name)
         return True
 
     async def answer_esp_call(self) -> str:

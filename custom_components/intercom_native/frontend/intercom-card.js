@@ -267,6 +267,16 @@ class IntercomCard extends HTMLElement {
         this._sessionCaller = "";
         this._activeSessionDeviceId = null;
       }
+      if (
+        this._isHaSoftphoneMode() &&
+        st === "ringing" &&
+        this._autoAnswer &&
+        !this._autoAnswering &&
+        !this._starting
+      ) {
+        this._autoAnswering = true;
+        this._tryAutoAnswer();
+      }
     }
     if (st === "streaming" || st === "ringing") {
       this._clearEndReason(false);
