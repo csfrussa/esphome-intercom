@@ -13,6 +13,7 @@ with open(_MANIFEST, encoding="utf-8") as _f:
 # Frontend URL base for serving the Lovelace card
 URL_BASE = "/intercom-native"
 HA_PEER_FALLBACK_NAME = "intercom-native"
+HA_SOFTPHONE_DEVICE_ID = "__intercom_native_ha_softphone__"
 
 # Project default ports. TCP and UDP can both live on 6054 because they
 # sit on different protocol stacks; UDP signaling moves to 6055 so audio

@@ -25,6 +25,7 @@ from zeroconf.asyncio import AsyncServiceInfo
 from .const import (
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
+    HA_SOFTPHONE_DEVICE_ID,
     INTEGRATION_VERSION,
     INTERCOM_PORT,
     INTERCOM_UDP_AUDIO_PORT,
@@ -1146,6 +1147,43 @@ def _find_inbound_source_device(
     return None, ""
 
 
+def _external_inbound_source_device(
+    hass: HomeAssistant,
+    inbound: "InboundStart",
+    *,
+    for_ha_softphone: bool,
+) -> dict:
+    """Build a peer identity for callers outside HA's ESP device registry."""
+    caller_name = (
+        (inbound.caller_name or "").strip()
+        or (inbound.caller_route or "").strip()
+        or inbound.host
+        or "External caller"
+    )
+    route_id = (inbound.caller_route or "").strip() or slugify(caller_name)
+    transport = "tcp" if inbound.transport is not None else "udp"
+    device_id = (
+        HA_SOFTPHONE_DEVICE_ID
+        if for_ha_softphone
+        else f"external_{slugify(route_id or caller_name or inbound.host)}"
+    )
+    return {
+        "device_id": device_id,
+        "name": caller_name,
+        "route_id": route_id,
+        "host": inbound.host,
+        "transport": transport,
+        "tcp_port": INTERCOM_PORT if transport == "tcp" else None,
+        "udp_audio_port": None,
+        "udp_control_port": getattr(inbound, "port", None) or None,
+        "audio_mode": "full_duplex",
+        "esphome_id": "",
+        "entities": {},
+        "external": True,
+        "softphone": for_ha_softphone,
+    }
+
+
 def _destination_busy_reason(hass: HomeAssistant, dest_device: dict) -> str | None:
     """Return a log-friendly busy reason for a bridge destination."""
     dest_device_id = dest_device["device_id"]
@@ -1302,6 +1340,7 @@ async def _route_inbound_call_pbx_lite(
     dest_name = inbound.dest_name
     dest_route = inbound.dest_route
     devices = await _get_intercom_devices(hass)
+    ha_destination = _is_ha_inbound_destination(hass, dest_name)
     source_device, source_match = _find_inbound_source_device(
         devices,
         host,
@@ -1309,15 +1348,20 @@ async def _route_inbound_call_pbx_lite(
         inbound.caller_route,
     )
     if source_device is None:
-        _LOGGER.warning(
-            "Unsolicited MSG_START from %s rejected: no intercom_native device matches "
-            "host/caller_route/caller_name (%s/%s)",
+        source_device = _external_inbound_source_device(
+            hass,
+            inbound,
+            for_ha_softphone=ha_destination,
+        )
+        source_match = "external"
+        _LOGGER.info(
+            "Unsolicited MSG_START from %s accepted as external caller "
+            "(caller_route=%s, caller_name=%s, target=%s)",
             host,
             inbound.caller_route or "-",
             inbound.caller_name or "-",
+            "HA" if ha_destination else (dest_name or dest_route or "-"),
         )
-        await _decline_inbound_start(hass, inbound, "unregistered")
-        return
     if source_match != "host":
         _LOGGER.info(
             "Unsolicited MSG_START from %s matched source %s by %s "
@@ -1339,7 +1383,7 @@ async def _route_inbound_call_pbx_lite(
                 control_port=getattr(inbound, "port", None),
             )
 
-    if not _is_ha_inbound_destination(hass, dest_name):
+    if not ha_destination:
         dest_clean = (dest_name or "").strip()
         dest_device = _find_inbound_dest_device(devices, dest_clean, dest_route)
         if dest_device is None:

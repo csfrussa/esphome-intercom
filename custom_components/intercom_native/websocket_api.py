@@ -12,7 +12,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, HA_PEER_FALLBACK_NAME
+from .const import DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
 from .fsm import (
     TerminalReason,
     localize_bridge_reason,
@@ -101,6 +101,8 @@ def _has_speaker(mode: str | None) -> bool:
 
 
 async def _device_audio_mode(hass: HomeAssistant, device_id: str) -> str:
+    if device_id == HA_SOFTPHONE_DEVICE_ID:
+        return "full_duplex"
     for device in await _get_intercom_devices(hass):
         if device.get("device_id") == device_id:
             return _audio_mode(device.get("audio_mode"))
@@ -1565,8 +1567,24 @@ async def websocket_list_devices(
     msg: Dict[str, Any],
 ) -> None:
     """List ESPHome devices with intercom capability."""
-    devices = await _get_intercom_devices(hass)
+    devices = [_ha_softphone_device(hass), *(await _get_intercom_devices(hass))]
     connection.send_result(msg["id"], {"devices": devices})
+
+
+def _ha_softphone_device(hass: HomeAssistant) -> dict[str, Any]:
+    """Synthetic HA endpoint for external protocol callers."""
+    name = (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
+    return {
+        "device_id": HA_SOFTPHONE_DEVICE_ID,
+        "name": name,
+        "route_id": name,
+        "host": "",
+        "transport": "ha",
+        "audio_mode": "full_duplex",
+        "esphome_id": "",
+        "entities": {},
+        "softphone": True,
+    }
 
 
 async def _get_intercom_devices(hass: HomeAssistant) -> list:

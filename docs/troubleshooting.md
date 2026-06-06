@@ -85,23 +85,21 @@ log like:
 remote declined call (unregistered)
 ```
 
-the audio path is not the first suspect. This means the HA-side
-`intercom_native` bridge received the call, but it does not recognize the ESP as
-a registered intercom endpoint.
+the audio path is not the first suspect. Older `intercom_native` builds rejected
+callers that were not present in Home Assistant's ESP registry. Current builds
+treat Home Assistant as a PBX-lite endpoint: any valid LAN peer may call HA, and
+the phonebook is only used when HA must forward the call to another ESP.
 
 Check these in order:
 
-1. In Home Assistant, the ESP must be added through the ESPHome integration.
-2. The ESP must expose `sensor.<device>_intercom_endpoint`. If this entity is
-   missing or empty, the Lovelace card cannot discover the device and HA cannot
-   register it as a call source.
-3. `sensor.intercom_phonebook.attributes.phonebook` must contain an ESP row
-   (`Name|tcp|...` or `Name|udp|...`) in addition to the HA row
-   (`Name|ha|...`). A phonebook with only the HA row lets the ESP dial HA, but
-   HA still has no registered ESP endpoint to answer as.
-4. After changing custom YAMLs or upgrading `intercom_native`, reload the
-   integration or remove/re-add the ESPHome device if HA is still holding stale
-   entity metadata.
+1. Upgrade/reload `intercom_native`; `unregistered` should not be returned for a
+   valid START addressed to HA.
+2. If HA is forwarding to another ESP, `sensor.intercom_phonebook.attributes.phonebook`
+   must contain the destination ESP row (`Name|tcp|...` or `Name|udp|...`).
+   Missing destinations are declined as `unreachable`, not `unregistered`.
+3. For dashboard receiving from non-ESP callers, add an Intercom card and select
+   the Home Assistant softphone entry. ESP-specific cards still work for normal
+   registered ESP calls.
 
 For custom YAMLs, prefer the maintained `packages/intercom/phonebook_subscribe.yaml`
 package instead of manually writing only a `Name|ha|...` contact at boot.
