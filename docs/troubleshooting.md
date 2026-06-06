@@ -10,6 +10,7 @@ Common symptoms and fixes when setting up ESPHome Intercom.
 - [High latency](#high-latency)
 - [ESP shows "Ringing" but browser doesn't connect](#esp-shows-ringing-but-browser-doesnt-connect)
 - [ESP doesn't see other devices](#esp-doesnt-see-other-devices)
+- [ESP call to Home Assistant ends with `unregistered`](#esp-call-to-home-assistant-ends-with-unregistered)
 - [HA integration fails to start (port bind error)](#ha-integration-fails-to-start-port-bind-error)
 - [WARN: cannot determine HA announce IP](#warn-cannot-determine-ha-announce-ip)
 - [ERROR: ha_pbx routing without HA peer name](#error-ha_pbx-routing-without-ha-peer-name)
@@ -23,7 +24,13 @@ Common symptoms and fixes when setting up ESPHome Intercom.
 2. Restart Home Assistant after adding the integration.
 3. Ensure the ESP device is connected via the ESPHome integration.
 4. Check the ESP has `intercom_api` configured (PBX-lite is the implicit default; no `mode:` key needed).
-5. Clear browser cache and reload.
+5. Verify the ESP exposes an `Intercom Endpoint` text sensor. Its state should
+   look like `Kitchen|tcp|192.168.1.50|6054|full_duplex` or
+   `Kitchen|udp|192.168.1.50|6054|6055|full_duplex`.
+6. Verify `sensor.intercom_phonebook` has a `phonebook` attribute containing
+   both the Home Assistant row and the ESP endpoint row. The entity state is
+   only a short count such as `2 entries`; the CSV roster is in the attribute.
+7. Clear browser cache and reload.
 
 ## No audio from ESP speaker
 
@@ -68,6 +75,36 @@ The phonebook is the single source of truth. Empty phonebook is normal at boot; 
 2. If you bypass HA phonebook sync, test with an ESPHome YAML script that calls `intercom_api.set_contacts` with `Name|tcp|ip|port,Name2|udp|ip|audio|control,...`.
 3. HA is the source of truth for contacts in standard packages. Cross-protocol bridging is HA's job. If two ESPs on different protocols don't see each other directly, that is by design - HA is the bridge.
 4. DHCP IP change: HA discovery picks up the new IP within seconds; HA's refresh listener follows shortly after.
+
+## ESP call to Home Assistant ends with `unregistered`
+
+If the ESP can dial the Home Assistant row but the call immediately ends with a
+log like:
+
+```text
+remote declined call (unregistered)
+```
+
+the audio path is not the first suspect. This means the HA-side
+`intercom_native` bridge received the call, but it does not recognize the ESP as
+a registered intercom endpoint.
+
+Check these in order:
+
+1. In Home Assistant, the ESP must be added through the ESPHome integration.
+2. The ESP must expose `sensor.<device>_intercom_endpoint`. If this entity is
+   missing or empty, the Lovelace card cannot discover the device and HA cannot
+   register it as a call source.
+3. `sensor.intercom_phonebook.attributes.phonebook` must contain an ESP row
+   (`Name|tcp|...` or `Name|udp|...`) in addition to the HA row
+   (`Name|ha|...`). A phonebook with only the HA row lets the ESP dial HA, but
+   HA still has no registered ESP endpoint to answer as.
+4. After changing custom YAMLs or upgrading `intercom_native`, reload the
+   integration or remove/re-add the ESPHome device if HA is still holding stale
+   entity metadata.
+
+For custom YAMLs, prefer the maintained `packages/intercom/phonebook_subscribe.yaml`
+package instead of manually writing only a `Name|ha|...` contact at boot.
 
 ## HA integration fails to start (port bind error)
 
