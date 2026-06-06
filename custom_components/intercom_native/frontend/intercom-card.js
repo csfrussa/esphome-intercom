@@ -41,6 +41,8 @@ class IntercomCard extends HTMLElement {
     // UI transition states only
     this._starting = false;
     this._stopping = false;
+    this._sessionState = null;
+    this._sessionCaller = "";
 
     // Browser audio path (active when the card itself is the call origin).
     this._audioContext = null;
@@ -235,6 +237,13 @@ class IntercomCard extends HTMLElement {
     const origin = (data.origin || "").toLowerCase() || null;
     const peer = data.peer_name || "";
     const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
+    if (this._isConfiguredSoftphone()) {
+      this._sessionState = st === "disconnected" ? "idle" : (st || "idle");
+      if (data.caller) this._sessionCaller = data.caller;
+      if (st === "idle" || st === "disconnected" || st === "declined" || st === "error") {
+        this._sessionCaller = "";
+      }
+    }
     if (st === "streaming" || st === "ringing") {
       this._clearEndReason(false);
       if (st === "streaming") this._destRinging = false;
@@ -529,9 +538,15 @@ class IntercomCard extends HTMLElement {
 
   // Get current ESP state from entity
   _getEspState() {
+    if (this._isConfiguredSoftphone()) return this._sessionState || "idle";
     if (!this._hass || !this._intercomStateEntityId) return "unknown";
     const entity = this._hass.states[this._intercomStateEntityId];
     return entity?.state || "unknown";
+  }
+
+  _isConfiguredSoftphone() {
+    const device = this._activeDeviceInfo || this._availableDevices.find(d => this._deviceMatchesConfig(d));
+    return !!device?.softphone;
   }
 
   _isEspUnavailable() {
@@ -557,6 +572,7 @@ class IntercomCard extends HTMLElement {
 
   // Get caller name from entity
   _getCallerName() {
+    if (this._isConfiguredSoftphone()) return this._sessionCaller || "";
     if (!this._hass || !this._callerEntityId) return "";
     const entity = this._hass.states[this._callerEntityId];
     const state = entity?.state;
@@ -675,6 +691,7 @@ class IntercomCard extends HTMLElement {
   }
 
   _isSoftphoneContext() {
+    if (this._isConfiguredSoftphone()) return true;
     if (this._callMode === "softphone") return true;
     if (this._callMode === "mirror") return false;
 
@@ -1261,6 +1278,10 @@ class IntercomCard extends HTMLElement {
 
   async _startCall() {
     const deviceInfo = await this._getDeviceInfo();
+    if (deviceInfo?.softphone) {
+      this._showError("HA softphone waits for incoming calls");
+      return;
+    }
     if (!deviceInfo?.host) {
       this._showError("Device not available");
       return;
@@ -1497,6 +1518,7 @@ class IntercomCard extends HTMLElement {
   }
 
   async _cleanup() {
+    const wasSoftphone = this._isConfiguredSoftphone();
     if (this._unsubscribeAudio) { this._unsubscribeAudio(); this._unsubscribeAudio = null; }
     if (this._mediaStream) { this._mediaStream.getTracks().forEach(t => t.stop()); this._mediaStream = null; }
     if (this._workletNode) { this._workletNode.disconnect(); this._workletNode = null; }
@@ -1508,6 +1530,10 @@ class IntercomCard extends HTMLElement {
     this._activeDeviceInfo = null;
     this._callMode = null;
     this._audioStreaming = false;
+    if (wasSoftphone) {
+      this._sessionState = null;
+      this._sessionCaller = "";
+    }
   }
 
   async _tryAutoAnswer(options = {}) {
