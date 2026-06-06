@@ -29,6 +29,9 @@ WS_TYPE_STOP = f"{DOMAIN}/stop"
 WS_TYPE_ANSWER = f"{DOMAIN}/answer"
 WS_TYPE_AUDIO = f"{DOMAIN}/audio"
 WS_TYPE_LIST = f"{DOMAIN}/list_devices"
+WS_TYPE_HA_SOFTPHONE_START = f"{DOMAIN}/ha_softphone_start"
+WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
+WS_TYPE_SET_HA_SOFTPHONE_DND = f"{DOMAIN}/set_ha_softphone_dnd"
 
 # Active sessions: device_id -> IntercomSession
 _sessions: Dict[str, "IntercomSession"] = {}
@@ -41,6 +44,38 @@ _bridges: Dict[str, "BridgeSession"] = {}
 _audio_subscribers: Dict[str, set] = {}
 
 CALL_EVENT = "intercom_native.call_event"
+
+
+def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
+    return hass.data.setdefault(DOMAIN, {}).setdefault(
+        "ha_softphone",
+        {"dnd": False},
+    )
+
+
+def _ha_softphone_dnd(hass: HomeAssistant) -> bool:
+    return bool(_ha_softphone_store(hass).get("dnd"))
+
+
+def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
+    session = _sessions.get(HA_SOFTPHONE_DEVICE_ID)
+    peer_name = ""
+    session_device_id = HA_SOFTPHONE_DEVICE_ID if session is not None else ""
+    if session is None and _sessions:
+        session_device_id, session = next(iter(_sessions.items()))
+    if session is not None:
+        state = "ringing" if session.is_ringing else ("streaming" if session.is_active else "idle")
+        peer_name = getattr(session, "_initial_caller_name", "") or ""
+    else:
+        state = "idle"
+    return {
+        "device_id": HA_SOFTPHONE_DEVICE_ID,
+        "session_device_id": session_device_id,
+        "dnd": _ha_softphone_dnd(hass),
+        "busy": bool(_sessions),
+        "state": state,
+        "caller": peer_name,
+    }
 
 
 def _put_latest(queue: asyncio.Queue, data: bytes) -> None:
@@ -1136,6 +1171,9 @@ class BridgeSession:
 def async_register_websocket_api(hass: HomeAssistant) -> None:
     """Register WebSocket API commands."""
     websocket_api.async_register_command(hass, websocket_start)
+    websocket_api.async_register_command(hass, websocket_ha_softphone_start)
+    websocket_api.async_register_command(hass, websocket_ha_softphone_state)
+    websocket_api.async_register_command(hass, websocket_set_ha_softphone_dnd)
     websocket_api.async_register_command(hass, websocket_stop)
     websocket_api.async_register_command(hass, websocket_answer)
     websocket_api.async_register_command(hass, websocket_answer_esp_call)
@@ -1194,6 +1232,93 @@ async def websocket_start(
     except Exception as err:
         _LOGGER.exception("Start exception: %s", err)
         connection.send_error(msg_id, "exception", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_HA_SOFTPHONE_START,
+        vol.Required("target_device_id"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_ha_softphone_start(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: Dict[str, Any],
+) -> None:
+    """Start a browser/HA softphone call to an ESP endpoint."""
+    msg_id = msg["id"]
+    target_device_id = msg["target_device_id"]
+
+    if _sessions:
+        connection.send_error(msg_id, "busy", "HA softphone already has an active call")
+        return
+
+    target = next(
+        (d for d in await _get_intercom_devices(hass) if d.get("device_id") == target_device_id),
+        None,
+    )
+    if target is None or not target.get("host"):
+        connection.send_error(msg_id, "not_found", f"Target device not available: {target_device_id}")
+        return
+
+    session = IntercomSession(
+        hass=hass,
+        device_id=HA_SOFTPHONE_DEVICE_ID,
+        host=target["host"],
+        transport_type=configured_transport_type(hass, target["host"]),
+        audio_mode=target.get("audio_mode", "full_duplex"),
+    )
+    result = await session.start()
+    if result in ("streaming", "ringing"):
+        _sessions[HA_SOFTPHONE_DEVICE_ID] = session
+        _fire_call_event(
+            hass,
+            {
+                "device_id": HA_SOFTPHONE_DEVICE_ID,
+                "state": result,
+                "peer_name": target.get("name") or "",
+                "target_device_id": target_device_id,
+            },
+            "session",
+        )
+        connection.send_result(msg_id, {"success": True, "state": result})
+        return
+
+    connection.send_error(msg_id, "connection_failed", f"Failed to connect to {target.get('name') or target_device_id}")
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_HA_SOFTPHONE_STATE,
+    }
+)
+@websocket_api.async_response
+async def websocket_ha_softphone_state(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: Dict[str, Any],
+) -> None:
+    connection.send_result(msg["id"], _ha_softphone_state(hass))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_HA_SOFTPHONE_DND,
+        vol.Required("dnd"): bool,
+    }
+)
+@websocket_api.async_response
+async def websocket_set_ha_softphone_dnd(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: Dict[str, Any],
+) -> None:
+    store = _ha_softphone_store(hass)
+    store["dnd"] = bool(msg["dnd"])
+    state = _ha_softphone_state(hass)
+    _fire_call_event(hass, state, "session")
+    connection.send_result(msg["id"], state)
 
 
 def _find_bridge_by_source(source_device_id: str) -> "BridgeSession | None":

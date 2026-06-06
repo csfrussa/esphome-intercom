@@ -38,6 +38,8 @@ from .websocket_api import (
     _get_intercom_devices,
     _stop_device_sessions,
     _find_bridge_by_source,
+    _fire_call_event,
+    _ha_softphone_dnd,
     _sessions,
     _bridges,
     IntercomSession,
@@ -1299,6 +1301,14 @@ async def _ring_ha_for_inbound_call(
         await _decline_inbound_start(hass, inbound, "busy")
         return
 
+    if _ha_softphone_dnd(hass):
+        _LOGGER.info(
+            "Unsolicited MSG_START from %s rejected: HA softphone DND is enabled",
+            observed_host,
+        )
+        await _decline_inbound_start(hass, inbound, "DND")
+        return
+
     _LOGGER.info(
         "Unsolicited MSG_START from %s as %s (caller=%s, call_id=%s) - ringing on HA card as %s",
         observed_host, source_host, caller_name or "unknown", call_id or "-", source_device_id,
@@ -1316,6 +1326,18 @@ async def _ring_ha_for_inbound_call(
     )
     if await session.start_ringing(caller_name=caller_name):
         _sessions[source_device_id] = session
+        if source_device_id != HA_SOFTPHONE_DEVICE_ID:
+            _fire_call_event(
+                hass,
+                {
+                    "device_id": HA_SOFTPHONE_DEVICE_ID,
+                    "session_device_id": source_device_id,
+                    "state": "ringing",
+                    "caller": caller_name or source_device.get("name") or "",
+                    "peer_name": source_device.get("name") or caller_name or "",
+                },
+                "session",
+            )
         return
 
     _LOGGER.error("Unsolicited start_ringing failed for %s", observed_host)

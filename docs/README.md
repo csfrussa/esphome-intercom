@@ -9,7 +9,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 - **Quick start examples**: the top-level [README](../README.md#quick-start-examples) now includes practical doorbell, room-to-room intercom, and manual boot phonebook examples.
 
 - **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
-  starts with the `2026.6.1` audio-stack/GMF migration notes and keeps upgrade
+  starts with the `2026.6.2` stabilization notes and keeps upgrade
   risks out of the main README. [RELEASE_2026_5_0.md](RELEASE_2026_5_0.md)
   contains the earlier "From PBX-like to PBX-lite" release note.
 

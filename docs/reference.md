@@ -430,7 +430,7 @@ If the device also includes `packages/intercom/phonebook_subscribe.yaml`, later
 HA phonebook updates can merge newer rows into the local phonebook. For a fully
 static local phonebook, omit that subscription package.
 
-## Auto answer (card)
+## Auto answer and DND (card)
 
 The intercom card has an **Auto Answer** checkbox (visible in idle state only):
 
@@ -438,11 +438,23 @@ The intercom card has an **Auto Answer** checkbox (visible in idle state only):
 2. When an incoming call arrives and the checkbox is on, the card auto-answers if the browser has persistent mic permission
 3. If permission is not persistent, the card falls back to showing Answer/Decline buttons
 
-The preference is saved per device in localStorage.
+The preference is saved per device in localStorage. In Home Assistant softphone
+mode, the preference is saved for the HA softphone endpoint instead of an ESP.
+
+In Home Assistant softphone mode the card also exposes **Do Not Disturb**. When
+enabled, calls addressed to HA are declined with `DECLINE("DND")`; outgoing
+calls from the HA card are still allowed.
 
 ## Lovelace card display modes
 
-The card has two call-control modes:
+The card has two top-level modes:
+
+| Card mode | Behavior |
+|---|---|
+| `hybrid` (default) | Current behavior. The card mirrors one ESP endpoint. If that ESP calls HA, the browser answers as HA; if the selected destination is another ESP, the card presses the ESP's own call controls. |
+| `ha_softphone` | Independent HA endpoint. One card represents Home Assistant itself, has its own Auto Answer and DND state, rings only for calls addressed to HA, and can call any ESP endpoint from an in-card destination selector. |
+
+Hybrid mode still has two call-control paths:
 
 | Selected destination | Card behavior |
 |---|---|
@@ -455,6 +467,16 @@ Optional card config:
 type: custom:intercom-card
 device_id: <device_id_or_friendly_name>
 name: Kitchen Intercom
+show_extended_info: true
+```
+
+Independent HA softphone card:
+
+```yaml
+type: custom:intercom-card
+mode: ha_softphone
+name: Home Assistant Intercom
+target_device_id: <optional_initial_esp_device_id>
 show_extended_info: true
 ```
 

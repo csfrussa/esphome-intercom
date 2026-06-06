@@ -19,6 +19,7 @@ const INTERCOM_CARD_VERSION = (() => {
     return "dev";
   }
 })();
+const HA_SOFTPHONE_DEVICE_ID = "__intercom_native_ha_softphone__";
 
 // Lazy gate for verbose logs. Errors and warnings always emit.
 // Enable in the browser console with localStorage.intercom_debug = "1".
@@ -43,6 +44,11 @@ class IntercomCard extends HTMLElement {
     this._stopping = false;
     this._sessionState = null;
     this._sessionCaller = "";
+    this._activeSessionDeviceId = null;
+    this._softphoneDnd = false;
+    this._softphoneTargetDeviceId = null;
+    this._softphoneStateLoaded = false;
+    this._softphoneStateLoading = false;
 
     // Browser audio path (active when the card itself is the call origin).
     this._audioContext = null;
@@ -136,6 +142,11 @@ class IntercomCard extends HTMLElement {
   _eventConcernsThisCard(payload) {
     const myId = this._activeDeviceInfo?.device_id || this._getConfigDeviceId();
     if (!myId || !payload) return false;
+    if (this._isHaSoftphoneMode()) {
+      return payload.device_id === HA_SOFTPHONE_DEVICE_ID
+          || payload.session_device_id === this._activeSessionDeviceId
+          || payload.device_id === this._activeSessionDeviceId;
+    }
     return payload.source_device_id === myId
         || payload.dest_device_id === myId
         || payload.device_id === myId;
@@ -238,10 +249,23 @@ class IntercomCard extends HTMLElement {
     const peer = data.peer_name || "";
     const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
     if (this._isConfiguredSoftphone()) {
-      this._sessionState = st === "disconnected" ? "idle" : (st || "idle");
-      if (data.caller) this._sessionCaller = data.caller;
+      if (data.session_device_id || (data.device_id && data.device_id !== HA_SOFTPHONE_DEVICE_ID)) {
+        this._activeSessionDeviceId = data.session_device_id || data.device_id;
+      }
+      const outgoingRinging =
+        this._isHaSoftphoneMode() &&
+        st === "ringing" &&
+        !data.caller &&
+        (data.device_id === HA_SOFTPHONE_DEVICE_ID || this._activeSessionDeviceId === HA_SOFTPHONE_DEVICE_ID);
+      this._sessionState = outgoingRinging
+        ? "outgoing"
+        : (st === "disconnected" ? "idle" : (st || "idle"));
+      if (outgoingRinging) this._destRinging = true;
+      if (Object.prototype.hasOwnProperty.call(data, "dnd")) this._softphoneDnd = !!data.dnd;
+      if (data.caller || data.peer_name) this._sessionCaller = data.caller || data.peer_name;
       if (st === "idle" || st === "disconnected" || st === "declined" || st === "error") {
         this._sessionCaller = "";
+        this._activeSessionDeviceId = null;
       }
     }
     if (st === "streaming" || st === "ringing") {
@@ -370,8 +394,12 @@ class IntercomCard extends HTMLElement {
 
   setConfig(config) {
     this.config = config;
+    this._softphoneTargetDeviceId =
+      config?.target_device_id ||
+      this._loadSoftphoneTargetPreference() ||
+      this._softphoneTargetDeviceId;
     // Load auto-answer preference from localStorage
-    const deviceId = config?.entity_id || config?.device_id;
+    const deviceId = this._autoAnswerStorageId();
     if (deviceId) {
       this._autoAnswer = localStorage.getItem(`intercom_auto_answer_${deviceId}`) === "true";
     }
@@ -385,6 +413,9 @@ class IntercomCard extends HTMLElement {
     // Devices populate the destination cycler.
     if (hass && this._availableDevices.length === 0) {
       this._loadAvailableDevices();
+    }
+    if (hass && this._isHaSoftphoneMode() && !this._softphoneStateLoaded) {
+      this._loadSoftphoneState();
     }
 
     // Discover entity IDs once
@@ -533,7 +564,38 @@ class IntercomCard extends HTMLElement {
   }
 
   _getConfigDeviceId() {
+    if (this._isHaSoftphoneMode()) return HA_SOFTPHONE_DEVICE_ID;
     return this.config?.entity_id || this.config?.device_id;
+  }
+
+  _isHaSoftphoneMode() {
+    return (this.config?.mode || this.config?.card_mode || "hybrid") === "ha_softphone";
+  }
+
+  _autoAnswerStorageId() {
+    return this._isHaSoftphoneMode()
+      ? HA_SOFTPHONE_DEVICE_ID
+      : (this.config?.entity_id || this.config?.device_id);
+  }
+
+  _softphoneTargetStorageKey() {
+    return `intercom_softphone_target_${this.config?.name || "default"}`;
+  }
+
+  _loadSoftphoneTargetPreference() {
+    try { return localStorage.getItem(this._softphoneTargetStorageKey()) || ""; }
+    catch (_) { return ""; }
+  }
+
+  _saveSoftphoneTargetPreference(deviceId) {
+    try {
+      if (deviceId) localStorage.setItem(this._softphoneTargetStorageKey(), deviceId);
+      else localStorage.removeItem(this._softphoneTargetStorageKey());
+    } catch (_) {}
+  }
+
+  _sessionDeviceId() {
+    return this._activeSessionDeviceId || this._activeDeviceInfo?.device_id || this._getConfigDeviceId();
   }
 
   // Get current ESP state from entity
@@ -545,6 +607,7 @@ class IntercomCard extends HTMLElement {
   }
 
   _isConfiguredSoftphone() {
+    if (this._isHaSoftphoneMode()) return true;
     const device = this._activeDeviceInfo || this._availableDevices.find(d => this._deviceMatchesConfig(d));
     return !!device?.softphone;
   }
@@ -591,9 +654,23 @@ class IntercomCard extends HTMLElement {
 
   // Get destination from entity
   _getDestination() {
+    if (this._isHaSoftphoneMode()) {
+      return this._getSoftphoneTargetDevice()?.name || "No endpoint";
+    }
     if (!this._hass || !this._destinationEntityId) return this._getHaName();
     const entity = this._hass.states[this._destinationEntityId];
     return entity?.state || this._getHaName();
+  }
+
+  _softphoneTargets() {
+    return this._availableDevices.filter(d => d && !d.softphone && d.device_id);
+  }
+
+  _getSoftphoneTargetDevice() {
+    const targets = this._softphoneTargets();
+    if (targets.length === 0) return null;
+    const wanted = this._softphoneTargetDeviceId || this.config?.target_device_id;
+    return targets.find(d => d.device_id === wanted) || targets[0];
   }
 
   _normaliseTransport(value) {
@@ -691,6 +768,7 @@ class IntercomCard extends HTMLElement {
   }
 
   _isSoftphoneContext() {
+    if (this._isHaSoftphoneMode()) return true;
     if (this._isConfiguredSoftphone()) return true;
     if (this._callMode === "softphone") return true;
     if (this._callMode === "mirror") return false;
@@ -740,6 +818,7 @@ class IntercomCard extends HTMLElement {
 
   async _findEntityIds() {
     if (!this._hass) return;
+    if (this._isHaSoftphoneMode()) return;
 
     const deviceInfo = await this._getDeviceInfo();
     const configDeviceId = this._getConfigDeviceId();
@@ -801,6 +880,9 @@ class IntercomCard extends HTMLElement {
       });
       if (result?.devices) {
         this._availableDevices = result.devices;
+        if (this._isHaSoftphoneMode() && !this._softphoneTargetDeviceId) {
+          this._softphoneTargetDeviceId = this.config?.target_device_id || this._softphoneTargets()[0]?.device_id || null;
+        }
         this._render();
       }
     } catch (err) {
@@ -868,7 +950,7 @@ class IntercomCard extends HTMLElement {
     const displayName = customName || espDeviceName || name;
     espDeviceName = espDeviceName || displayName;
 
-    if (this._isEspUnavailable()) {
+    if (!this._isHaSoftphoneMode() && this._isEspUnavailable()) {
       els.headerName.textContent = this._formatHeaderTitle(displayName);
       els.destRow.hidden = true;
       els.offlinePanel.hidden = false;
@@ -895,6 +977,11 @@ class IntercomCard extends HTMLElement {
           const peerLabel = this._lastEndInfo.peer ? ` with ${this._lastEndInfo.peer}` : "";
           statusText = `Call${peerLabel} ended.`;
           statusReason = `Reason: ${reasonLabel}`;
+          statusClass = "disconnected";
+          showCall = true;
+        } else if (this._isHaSoftphoneMode() && this._softphoneDnd) {
+          statusText = "Do Not Disturb";
+          statusReason = "Incoming calls to Home Assistant are declined.";
           statusClass = "disconnected";
           showCall = true;
         } else {
@@ -945,8 +1032,15 @@ class IntercomCard extends HTMLElement {
     // any other peer = ESP-to-ESP bridge).
     els.destRow.hidden = !showCall;
     els.destValue.textContent = destination;
+    if (els.destSelect) {
+      els.destSelect.hidden = !this._isHaSoftphoneMode();
+      els.destValueWrap.classList.toggle("selecting", this._isHaSoftphoneMode());
+      this._renderSoftphoneDestinationSelect(els.destSelect);
+    }
     els.prevBtn.disabled = buttonDisabled;
     els.nextBtn.disabled = buttonDisabled;
+    els.prevBtn.hidden = this._isHaSoftphoneMode();
+    els.nextBtn.hidden = this._isHaSoftphoneMode();
 
     // Action buttons: exactly one set visible at a time.
     els.answerBtn.hidden = !showAnswer;
@@ -968,6 +1062,10 @@ class IntercomCard extends HTMLElement {
     // Auto-answer row (only when call button is the visible action)
     els.autoAnswerRow.hidden = !showCall;
     els.autoAnswerCheckbox.checked = !!this._autoAnswer;
+    if (els.dndRow) {
+      els.dndRow.hidden = !this._isHaSoftphoneMode();
+      els.dndCheckbox.checked = !!this._softphoneDnd;
+    }
 
     // Stats line
     if (this._audioStreaming) {
@@ -1026,6 +1124,15 @@ class IntercomCard extends HTMLElement {
         flex: 1; text-align: center; font-size: 1.1em; font-weight: 500;
         color: var(--primary-text-color); padding: 8px 0;
       }
+      .destination-value.selecting { padding: 0; }
+      .destination-value.selecting .destination-text { display: none; }
+      .destination-select {
+        width: 100%; box-sizing: border-box; padding: 8px;
+        border: 1px solid var(--divider-color, #ccc);
+        border-radius: 4px; background: var(--card-background-color, white);
+        color: var(--primary-text-color); font-size: 0.95em;
+      }
+      .destination-select[hidden] { display: none; }
       .destination-label {
         font-size: 0.75em; color: var(--secondary-text-color);
         display: block; margin-bottom: 2px;
@@ -1101,7 +1208,14 @@ class IntercomCard extends HTMLElement {
     destLabel.textContent = "Destination";
     destValueWrap.appendChild(destLabel);
     const destValue = document.createTextNode("");
-    destValueWrap.appendChild(destValue);
+    const destText = document.createElement("span");
+    destText.className = "destination-text";
+    destText.appendChild(destValue);
+    destValueWrap.appendChild(destText);
+    const destSelect = document.createElement("select");
+    destSelect.className = "destination-select";
+    destSelect.hidden = true;
+    destValueWrap.appendChild(destSelect);
     const nextBtn = document.createElement("button");
     nextBtn.className = "nav-btn";
     nextBtn.title = "Next";
@@ -1182,6 +1296,18 @@ class IntercomCard extends HTMLElement {
     autoAnswerRow.appendChild(autoAnswerLabel);
     card.appendChild(autoAnswerRow);
 
+    const dndRow = document.createElement("div");
+    dndRow.className = "auto-answer-row";
+    const dndCheckbox = document.createElement("input");
+    dndCheckbox.type = "checkbox";
+    dndCheckbox.id = "ha-softphone-dnd-cb";
+    const dndLabel = document.createElement("label");
+    dndLabel.htmlFor = "ha-softphone-dnd-cb";
+    dndLabel.textContent = "Do Not Disturb";
+    dndRow.appendChild(dndCheckbox);
+    dndRow.appendChild(dndLabel);
+    card.appendChild(dndRow);
+
     const stats = document.createElement("div");
     stats.className = "stats";
     card.appendChild(stats);
@@ -1199,10 +1325,10 @@ class IntercomCard extends HTMLElement {
 
     this._els = {
       headerName,
-      destRow, destValue, prevBtn, nextBtn, offlinePanel,
+      destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
       answerBtn, declineBtn, hangupBtn, callBtn, placeholderBtn,
       statusIndicator, statusText, statusReason,
-      autoAnswerRow, autoAnswerCheckbox,
+      autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox,
       stats, err,
     };
 
@@ -1256,21 +1382,61 @@ class IntercomCard extends HTMLElement {
     const els = this._els;
     if (!els) return;
     els.autoAnswerCheckbox.onchange = () => this._toggleAutoAnswer();
+    if (els.dndCheckbox) els.dndCheckbox.onchange = () => this._toggleDnd();
     els.callBtn.onclick = () => this._startCall();
     els.hangupBtn.onclick = () => this._hangup();
     els.answerBtn.onclick = () => this._answer();
     els.declineBtn.onclick = () => this._decline();
     els.prevBtn.onclick = () => this._prevContact();
     els.nextBtn.onclick = () => this._nextContact();
+    if (els.destSelect) {
+      els.destSelect.onchange = (event) => this._setSoftphoneTarget(event.target.value);
+    }
+  }
+
+  _renderSoftphoneDestinationSelect(select) {
+    const targets = this._softphoneTargets();
+    const current = this._getSoftphoneTargetDevice();
+    const options = [];
+    if (targets.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No endpoints";
+      options.push(opt);
+    } else {
+      for (const device of targets) {
+        const opt = document.createElement("option");
+        opt.value = device.device_id;
+        opt.textContent = device.name || device.device_id;
+        if (device.device_id === current?.device_id) opt.selected = true;
+        options.push(opt);
+      }
+    }
+    select.replaceChildren(...options);
+    select.disabled = this._starting || this._stopping || targets.length === 0;
+  }
+
+  _setSoftphoneTarget(deviceId) {
+    this._softphoneTargetDeviceId = deviceId || null;
+    this._saveSoftphoneTargetPreference(this._softphoneTargetDeviceId);
+    this._render();
   }
 
   async _prevContact() {
+    if (this._isHaSoftphoneMode()) {
+      this._cycleSoftphoneTarget(-1);
+      return;
+    }
     if (this._previousButtonEntityId) {
       await this._hass.callService("button", "press", { entity_id: this._previousButtonEntityId });
     }
   }
 
   async _nextContact() {
+    if (this._isHaSoftphoneMode()) {
+      this._cycleSoftphoneTarget(1);
+      return;
+    }
     if (this._nextButtonEntityId) {
       await this._hass.callService("button", "press", { entity_id: this._nextButtonEntityId });
     }
@@ -1278,8 +1444,12 @@ class IntercomCard extends HTMLElement {
 
   async _startCall() {
     const deviceInfo = await this._getDeviceInfo();
+    if (this._isHaSoftphoneMode()) {
+      await this._startHaSoftphoneCall(deviceInfo);
+      return;
+    }
     if (deviceInfo?.softphone) {
-      this._showError("HA softphone waits for incoming calls");
+      this._showError("Set card mode to Home Assistant softphone to call from HA");
       return;
     }
     if (!deviceInfo?.host) {
@@ -1368,6 +1538,53 @@ class IntercomCard extends HTMLElement {
     this._chunksReceived = 0;
   }
 
+  async _startHaSoftphoneCall(softphoneInfo) {
+    const target = this._getSoftphoneTargetDevice();
+    if (!target?.device_id || !target?.host) {
+      this._showError("No endpoint available");
+      return;
+    }
+
+    const sessionInfo = {
+      ...(softphoneInfo || {}),
+      device_id: HA_SOFTPHONE_DEVICE_ID,
+      name: this._getHaName(),
+      audio_mode: target.audio_mode || "full_duplex",
+      softphone: true,
+    };
+    this._activeDeviceInfo = sessionInfo;
+    this._activeSessionDeviceId = HA_SOFTPHONE_DEVICE_ID;
+    this._starting = true;
+    this._callMode = "softphone";
+    this._errorMsg = "";
+    this._render();
+
+    try {
+      await this._setupMicAndSpeaker(sessionInfo);
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "intercom_native/ha_softphone_start",
+        target_device_id: target.device_id,
+      });
+      if (!result?.success) throw new Error("Start failed");
+      this._sessionState = result.state === "ringing" ? "outgoing" : (result.state || "calling");
+      this._destRinging = result.state === "ringing";
+      this._sessionCaller = target.name || "";
+      this._unsubscribeAudio = await this._hass.connection.subscribeMessage(
+        (msg) => this._handleAudioMessage(msg),
+        { type: "intercom_native/subscribe_audio", device_id: HA_SOFTPHONE_DEVICE_ID }
+      );
+      this._audioStreaming = true;
+      this._chunksSent = 0;
+      this._chunksReceived = 0;
+    } catch (err) {
+      this._showError(err.message || String(err));
+      await this._cleanup();
+    } finally {
+      this._starting = false;
+      this._render();
+    }
+  }
+
   async _answerEspCall(deviceInfo) {
     await this._setupMicAndSpeaker(deviceInfo);
 
@@ -1423,6 +1640,34 @@ class IntercomCard extends HTMLElement {
       const destination = this._getDestination();
       const softphone = this._isSoftphoneContext();
 
+      if (this._isHaSoftphoneMode()) {
+        const sessionDeviceId = this._sessionDeviceId();
+        const peer = this._availableDevices.find(d => d.device_id === sessionDeviceId) || deviceInfo;
+        const sessionInfo = {
+          ...(deviceInfo || {}),
+          device_id: sessionDeviceId,
+          audio_mode: peer?.audio_mode || "full_duplex",
+          softphone: true,
+        };
+        this._activeDeviceInfo = sessionInfo;
+        this._activeSessionDeviceId = sessionDeviceId;
+        this._callMode = "softphone";
+        await this._setupMicAndSpeaker(sessionInfo);
+        const res = await this._hass.connection.sendMessagePromise({
+          type: "intercom_native/answer",
+          device_id: sessionDeviceId,
+        });
+        if (!res?.success) throw new Error("Answer failed");
+        this._unsubscribeAudio = await this._hass.connection.subscribeMessage(
+          (msg) => this._handleAudioMessage(msg),
+          { type: "intercom_native/subscribe_audio", device_id: sessionDeviceId }
+        );
+        this._audioStreaming = true;
+        this._chunksSent = 0;
+        this._chunksReceived = 0;
+        return;
+      }
+
       // Check if ESP is calling HA (outgoing + destination matches the HA instance)
       if ((espState === "outgoing" || espState === "calling") && this._isHaName(destination)) {
         // ESP is calling us - answer with proper ANSWER message (not START)
@@ -1469,7 +1714,7 @@ class IntercomCard extends HTMLElement {
       if (this._isSoftphoneContext()) {
         await this._hass.connection.sendMessagePromise({
           type: "intercom_native/decline",
-          device_id: deviceInfo.device_id,
+          device_id: this._sessionDeviceId(),
         });
       } else {
         await this._pressEspButton(this._declineButtonEntityId, "Decline");
@@ -1497,7 +1742,7 @@ class IntercomCard extends HTMLElement {
       if (this._isSoftphoneContext()) {
         await this._hass.connection.sendMessagePromise({
           type: "intercom_native/stop",
-          device_id: deviceInfo.device_id,
+          device_id: this._sessionDeviceId(),
         });
       } else {
         // Mirror mode: Hangup is the ESP's Decline button. Firmware maps
@@ -1533,6 +1778,7 @@ class IntercomCard extends HTMLElement {
     if (wasSoftphone) {
       this._sessionState = null;
       this._sessionCaller = "";
+      this._activeSessionDeviceId = null;
     }
   }
 
@@ -1560,7 +1806,7 @@ class IntercomCard extends HTMLElement {
 
   _toggleAutoAnswer() {
     this._autoAnswer = !this._autoAnswer;
-    const deviceId = this.config?.entity_id || this.config?.device_id;
+    const deviceId = this._autoAnswerStorageId();
     if (deviceId) {
       localStorage.setItem(`intercom_auto_answer_${deviceId}`, this._autoAnswer.toString());
     }
@@ -1583,6 +1829,55 @@ class IntercomCard extends HTMLElement {
     this._render();
   }
 
+  async _toggleDnd() {
+    const next = !this._softphoneDnd;
+    this._softphoneDnd = next;
+    this._render();
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "intercom_native/set_ha_softphone_dnd",
+        dnd: next,
+      });
+      this._softphoneDnd = !!result?.dnd;
+    } catch (err) {
+      this._softphoneDnd = !next;
+      this._showError(err.message || String(err));
+    }
+    this._render();
+  }
+
+  async _loadSoftphoneState() {
+    if (!this._hass?.connection || this._softphoneStateLoading) return;
+    this._softphoneStateLoading = true;
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "intercom_native/ha_softphone_state",
+      });
+      this._softphoneDnd = !!result?.dnd;
+      if (result?.state && result.state !== "idle") {
+        this._sessionState = result.state;
+        this._activeSessionDeviceId = result.session_device_id || null;
+        this._sessionCaller = result.caller || "";
+      }
+      this._softphoneStateLoaded = true;
+    } catch (err) {
+      if (!this._isUnknownCommandError(err)) console.warn("intercom: failed loading HA softphone state", err);
+    } finally {
+      this._softphoneStateLoading = false;
+      this._render();
+    }
+  }
+
+  _cycleSoftphoneTarget(delta) {
+    const targets = this._softphoneTargets();
+    if (targets.length === 0) return;
+    const current = this._getSoftphoneTargetDevice();
+    const idx = Math.max(0, targets.findIndex(d => d.device_id === current?.device_id));
+    const next = targets[(idx + delta + targets.length) % targets.length];
+    this._softphoneTargetDeviceId = next.device_id;
+    this._render();
+  }
+
   async _getDeviceInfo() {
     try {
       const result = await this._hass.connection.sendMessagePromise({
@@ -1590,6 +1885,14 @@ class IntercomCard extends HTMLElement {
       });
       if (result?.devices) {
         const configId = this.config.entity_id || this.config.device_id;
+        if (this._isHaSoftphoneMode()) {
+          return result.devices.find(d => d.device_id === HA_SOFTPHONE_DEVICE_ID) || {
+            device_id: HA_SOFTPHONE_DEVICE_ID,
+            name: this._getHaName(),
+            audio_mode: "full_duplex",
+            softphone: true,
+          };
+        }
         return result.devices.find(d =>
           d.device_id === configId ||
           d.esphome_id === configId ||
@@ -1785,11 +2088,33 @@ class IntercomCardEditor extends HTMLElement {
       .checkbox-group label { display: flex; align-items: center; gap: 8px; }
       .checkbox-group input { width: auto; padding: 0; }
       .info { color: var(--secondary-text-color); font-size: 0.85em; margin-top: 8px; }
+      .hidden { display: none; }
     `;
     this.appendChild(style);
 
     const wrap = document.createElement("div");
     wrap.style.padding = "16px";
+
+    const modeGroup = document.createElement("div");
+    modeGroup.className = "form-group";
+    const modeLabel = document.createElement("label");
+    modeLabel.textContent = "Card Mode";
+    modeGroup.appendChild(modeLabel);
+    const modeSelect = document.createElement("select");
+    modeSelect.id = "mode-select";
+    const hybridOpt = document.createElement("option");
+    hybridOpt.value = "hybrid";
+    hybridOpt.textContent = "Hybrid ESP card";
+    const softphoneOpt = document.createElement("option");
+    softphoneOpt.value = "ha_softphone";
+    softphoneOpt.textContent = "Home Assistant softphone";
+    modeSelect.appendChild(hybridOpt);
+    modeSelect.appendChild(softphoneOpt);
+    modeGroup.appendChild(modeSelect);
+    const modeInfo = document.createElement("div");
+    modeInfo.className = "info";
+    modeGroup.appendChild(modeInfo);
+    wrap.appendChild(modeGroup);
 
     // Device picker
     const deviceGroup = document.createElement("div");
@@ -1804,6 +2129,19 @@ class IntercomCardEditor extends HTMLElement {
     deviceInfo.className = "info";
     deviceGroup.appendChild(deviceInfo);
     wrap.appendChild(deviceGroup);
+
+    const targetGroup = document.createElement("div");
+    targetGroup.className = "form-group";
+    const targetLabel = document.createElement("label");
+    targetLabel.textContent = "Initial Softphone Target";
+    targetGroup.appendChild(targetLabel);
+    const targetSelect = document.createElement("select");
+    targetSelect.id = "target-select";
+    targetGroup.appendChild(targetSelect);
+    const targetInfo = document.createElement("div");
+    targetInfo.className = "info";
+    targetGroup.appendChild(targetInfo);
+    wrap.appendChild(targetGroup);
 
     // Name input
     const nameGroup = document.createElement("div");
@@ -1831,16 +2169,31 @@ class IntercomCardEditor extends HTMLElement {
 
     this.appendChild(wrap);
 
+    modeSelect.onchange = (e) => this._modeChanged(e.target.value);
     select.onchange = (e) => this._valueChanged("device_id", e.target.value);
+    targetSelect.onchange = (e) => this._valueChanged("target_device_id", e.target.value);
     nameInput.onchange = (e) => this._valueChanged("name", e.target.value);
     extendedInfoInput.onchange = (e) => this._boolChanged("show_extended_info", e.target.checked);
 
-    this._els = { select, deviceInfo, nameInput, extendedInfoInput };
+    this._els = {
+      modeSelect, modeInfo,
+      deviceGroup, select, deviceInfo,
+      targetGroup, targetSelect, targetInfo,
+      nameInput, extendedInfoInput,
+    };
   }
 
   _render() {
     if (!this._els) this._buildSkeleton();
     const els = this._els;
+    const mode = this._config.mode || this._config.card_mode || "hybrid";
+    const softphoneMode = mode === "ha_softphone";
+    els.modeSelect.value = softphoneMode ? "ha_softphone" : "hybrid";
+    els.modeInfo.textContent = softphoneMode
+      ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
+      : "Current behavior: this card mirrors one ESP endpoint and can also answer ESP-to-HA calls.";
+    els.deviceGroup.classList.toggle("hidden", softphoneMode);
+    els.targetGroup.classList.toggle("hidden", !softphoneMode);
 
     // Rebuild the select option list safely: replaceChildren + per-row
     // createElement; option.value/textContent setters reject HTML injection.
@@ -1857,15 +2210,34 @@ class IntercomCardEditor extends HTMLElement {
     }
     els.select.replaceChildren(...newOptions);
 
+    const targetPlaceholder = document.createElement("option");
+    targetPlaceholder.value = "";
+    targetPlaceholder.textContent = "-- Select target --";
+    const targetOptions = [targetPlaceholder];
+    for (const d of this._devices.filter(d => !d.softphone)) {
+      const opt = document.createElement("option");
+      opt.value = d.device_id;
+      opt.textContent = `${d.name} (${this._audioModeLabel(d.audio_mode)})`;
+      if (this._config.target_device_id === d.device_id) opt.selected = true;
+      targetOptions.push(opt);
+    }
+    els.targetSelect.replaceChildren(...targetOptions);
+
     if (!this._devicesLoaded) {
       els.deviceInfo.textContent = "Loading...";
+      els.targetInfo.textContent = "Loading...";
     } else if (this._devices.length === 0) {
       els.deviceInfo.textContent = "No devices found";
+      els.targetInfo.textContent = "No endpoints found";
     } else {
       const selected = this._devices.find(d => d.device_id === (this._config.device_id || this._config.entity_id));
       els.deviceInfo.textContent = selected
         ? `Audio: ${this._normaliseAudioMode(selected.audio_mode).replace("_", " ")}`
         : "Select device";
+      const target = this._devices.find(d => d.device_id === this._config.target_device_id);
+      els.targetInfo.textContent = target
+        ? `Initial target: ${target.name}`
+        : "The card can still cycle targets at runtime.";
     }
 
     els.nameInput.value = this._config.name || "";
@@ -1876,6 +2248,24 @@ class IntercomCardEditor extends HTMLElement {
     const newConfig = { ...this._config };
     if (value) newConfig[key] = value;
     else delete newConfig[key];
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: newConfig }, bubbles: true, composed: true }));
+  }
+
+  _modeChanged(value) {
+    const newConfig = { ...this._config };
+    if (value === "ha_softphone") {
+      newConfig.mode = "ha_softphone";
+      delete newConfig.device_id;
+      delete newConfig.entity_id;
+      if (!newConfig.target_device_id) {
+        const firstTarget = this._devices.find(d => !d.softphone);
+        if (firstTarget?.device_id) newConfig.target_device_id = firstTarget.device_id;
+      }
+    } else {
+      delete newConfig.mode;
+      delete newConfig.card_mode;
+      delete newConfig.target_device_id;
+    }
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: newConfig }, bubbles: true, composed: true }));
   }
 
