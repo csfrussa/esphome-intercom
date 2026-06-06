@@ -1,15 +1,15 @@
 # ESPHome Intercom and Full-Duplex Voice for ESP32
 
 [![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20ESP32--P4-blue)](#hardware-support)
-[![Release](https://img.shields.io/badge/release-2026.6.1-%23008cd0)](custom_components/intercom_native/manifest.json)
+[![Release](https://img.shields.io/badge/release-2026.6.2-%23008cd0)](custom_components/intercom_native/manifest.json)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue)](https://www.home-assistant.io)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## BREAKING CHANGES for 2026.6.1
+## BREAKING CHANGES for 2026.6.2
 
-`2026.6.1` is a compatibility and stabilization update on top of `2026.6.0`.
-If you already upgraded to the GMF/`esp_audio_stack` backend, this release does
-not require another audio-backend migration.
+`2026.6.2` is a compatibility and stabilization update on top of `2026.6.0`,
+focused on Home Assistant routing, the native card and maintained package
+semantics.
 
 Read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md) before
 flashing ESP firmware or restarting Home Assistant if you use custom YAMLs,
@@ -88,10 +88,10 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.6.1 - Intercom routing, phonebook and native-audio stabilization
+### 2026.6.2 - Intercom routing, phonebook and native-audio stabilization
 
-`2026.6.1` is not another audio-stack migration. It is the compatibility and
-stability release on top of `2026.6.0`, focused on Home Assistant phonebooks,
+`2026.6.2` is the compatibility and stability release on top of `2026.6.0`,
+focused on Home Assistant phonebooks,
 routed networks, standalone native ESPHome audio and HA restart behavior.
 
 Changes since `2026.6.0`:
@@ -822,6 +822,22 @@ device_id: <your_esp_device_id_or_friendly_name>
 name: Kitchen Intercom
 show_extended_info: true
 ```
+
+The default card mode is `hybrid`: the card mirrors one ESP endpoint and can
+answer ESP-to-HA calls from the browser. To use Home Assistant as one independent
+softphone endpoint, add a separate card:
+
+```yaml
+type: custom:intercom-card
+mode: ha_softphone
+name: Home Assistant Intercom
+target_device_id: <optional_initial_esp_device_id>
+show_extended_info: true
+```
+
+In `ha_softphone` mode the card has its own destination selector, Auto Answer and
+Do Not Disturb controls. It rings only for calls addressed to Home Assistant and
+does not mirror an ESP card state.
 
 The card automatically discovers ESPHome devices with the `intercom_api` component through their `intercom_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- TCP` / `- UDP`; the mode line shows `Home Assistant - ESP`, `ESP - ESP`, or `Inter-protocol TCP-UDP` / `Inter-protocol UDP-TCP`.
 

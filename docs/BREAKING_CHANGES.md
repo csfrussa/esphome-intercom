@@ -1,11 +1,10 @@
 # Breaking changes
 
-## 2026.6.1: routing, phonebook and native-audio cleanup
+## 2026.6.2: routing, phonebook and native-audio cleanup
 
-`2026.6.1` is the first stabilization release after the `2026.5.0` /
-`2026.6.0-dev` audio-stack migration. It keeps the maintained full-experience
-profiles on `esp_audio_stack`, but the breaking changes users must notice are
-mostly around Home Assistant integration semantics and standalone intercom audio:
+`2026.6.2` keeps the maintained full-experience profiles on `esp_audio_stack`,
+but the breaking changes users must notice are mostly around Home Assistant
+integration semantics and standalone intercom audio:
 the phonebook moved out of the sensor state into an attribute, routed/NAT
 topologies are handled more deliberately, and `intercom_api` can again be used
 cleanly with native ESPHome microphone/speaker components when hardware already
@@ -107,6 +106,10 @@ The card state model also changed around unavailable devices and rapid call
 cleanup. Dashboards should use the current bundled card; old copied card files
 can keep stale `unavailable` handling or browser-audio teardown behavior.
 
+The card now has an explicit `mode`. Existing cards keep the default `hybrid`
+mode. New single-card HA softphone dashboards should use `mode: ha_softphone`;
+that mode represents Home Assistant itself, not a mirrored ESP endpoint.
+
 ### Home Assistant: phonebook sensor state moved to an attribute
 
 `sensor.intercom_phonebook` no longer stores the full CSV roster in its state.
@@ -193,7 +196,7 @@ automatically announced address is not reachable by ESP devices.
 
 ### Build cache
 
-After moving to `2026.6.1`, clear ESPHome build caches once before compiling.
+After moving to `2026.6.2`, clear ESPHome build caches once before compiling.
 This matters because the audio backend, IDF managed components and generated
 sdkconfig can change at the same time.
 
