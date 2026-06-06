@@ -1,15 +1,15 @@
 # ESPHome Intercom and Full-Duplex Voice for ESP32
 
-[![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20ESP32--P4-blue)](#hardware-support)
-[![Release](https://img.shields.io/badge/release-2026.6.2-%23008cd0)](custom_components/intercom_native/manifest.json)
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue)](https://www.home-assistant.io)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-ESP32--S3%20%7C%20ESP32--P4-blue.svg)](#hardware-support)
+[![Release](https://img.shields.io/badge/Release-2026.6.2-008cd0.svg)](custom_components/intercom_native/manifest.json)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue.svg)](https://www.home-assistant.io)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ## BREAKING CHANGES for 2026.6.2
 
-`2026.6.2` is a compatibility and stabilization update on top of `2026.6.0`,
-focused on Home Assistant routing, the native card and maintained package
-semantics.
+`2026.6.2` is a stabilization update focused on Home Assistant softphone
+behavior, external PBX-lite callers, runtime audio controls and maintained
+package defaults.
 
 Read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md) before
 flashing ESP firmware or restarting Home Assistant if you use custom YAMLs,
@@ -17,16 +17,14 @@ custom automations, routed subnets/VLANs/VPNs, or copied Lovelace card YAML.
 
 Action required:
 
-- Custom ESP YAMLs that subscribe to `sensor.intercom_phonebook` must read the
-  `phonebook` attribute, not the entity state. Maintained YAMLs already include
-  the fixed package.
-- Custom automations/templates that parse `states('sensor.intercom_phonebook')`
-  must switch to `state_attr('sensor.intercom_phonebook', 'phonebook')`.
-- Copied Lovelace card YAML must rename `show_protocol` to
-  `show_extended_info`; the old key is not kept as a compatibility alias.
-- Custom standalone `intercom_api` YAMLs must use native ESPHome
-  `microphone`/`speaker` bindings, or move software AEC/AFE to
-  `esp_audio_stack`. The old internal standalone AEC path is not restored.
+- Home Assistant softphone cards are now independent endpoints. Use
+  `mode: ha_softphone` without `device_id`; only the default `hybrid` mode is
+  bound to one ESP device.
+- Maintained full AFE profiles now boot with AEC/VAD ON and FD high-perf where
+  the target has enough resources. If you copied old full AFE YAML blocks,
+  ensure HA restore values do not overwrite the boot pipeline unexpectedly.
+- Voice Assistant timers are now an optional package; include them only on
+  devices that should expose timer behavior or UI hooks.
 
 Minimum versions for this release:
 
@@ -88,43 +86,40 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.6.2 - Intercom routing, phonebook and native-audio stabilization
+### 2026.6.2 - HA softphone and audio runtime stabilization
 
-`2026.6.2` is the compatibility and stability release on top of `2026.6.0`,
-focused on Home Assistant phonebooks,
-routed networks, standalone native ESPHome audio and HA restart behavior.
+`2026.6.2` is focused on the Lovelace HA softphone, runtime AFE controls,
+external PBX-lite callers, optional Voice Assistant timers and full-device
+stability under normal HA/API restarts.
 
-Changes since `2026.6.0`:
+Changes since the previous release:
 
-- Phonebook sync now uses the `phonebook` attribute of
-  `sensor.intercom_phonebook` instead of putting the whole CSV in the sensor
-  state. This avoids Home Assistant's 255-character state limit and makes large
-  installs, apartment panels and multi-device rosters viable.
-- Intercom routing was hardened for real networks: HA peer recognition, direct
-  ESP calls and HA bridging were tested across multiple subnets, TCP/UDP mixes,
-  HA PBX on/off, routed return paths and NAT return paths.
-- `intercom_api` now supports native one-way endpoints: `mic_only` for ambient
-  listening / monitor-style devices, `speaker_only` for announcement endpoints,
-  and `full_duplex` for normal calls. These modes are inferred from the declared
-  audio components; users do not need a separate mode flag.
-- New ESPHome-native YAMLs provide full-duplex, mic-only and speaker-only
-  examples without `esp_audio_stack`. They are intended for native ESPHome audio
-  components and hardware/DSP AEC devices such as XMOS front-ends. The tested
-  generic example uses INMP441 + MAX98357A on separate I2S buses; hardware with
-  its own processed mic path should adapt from the same examples.
-- The native full-experience YAML is not a ready-made Voice PE profile, but it
-  sets the architecture for that class of device: use ESPHome-native mic/speaker
-  when the hardware already gives processed microphone audio, and use
-  `esp_audio_stack` only when the ESP must provide software AEC/AFE. Feedback
-  from XMOS / Voice PE-style hardware is welcome.
-- Full audio/LVGL devices no longer run HA disconnect cleanup actions that could
-  destabilize the device during Home Assistant restarts.
+- Home Assistant can now be used as its own softphone endpoint from a Lovelace
+  card with `mode: ha_softphone`. This card is independent from ESP cards, has
+  its own destination selector, Auto Answer and Do Not Disturb controls, and is
+  meant for dashboards that should represent Home Assistant itself.
+- HA accepts valid PBX-lite calls from external LAN peers instead of requiring
+  every caller to be pre-registered in the ESP phonebook. The phonebook is still
+  used for routing and forwarding decisions when HA must reach another endpoint.
+- Full-experience AFE profiles now start with VAD/AEC enabled and FD high-perf
+  selected where maintained board resources allow it. The HA entities mirror
+  the boot pipeline state first; users can still disable VAD/AEC or switch AFE
+  mode at runtime for testing.
+- Runtime AFE rebuilds are serialized through the audio backend so a user can
+  change VAD/AEC/AFE options from Home Assistant without tearing down the stack
+  from two places at once.
+- The media speaker path includes the pause/resume behavior needed by the full
+  voice profiles so TTS, Voice Assistant and media playback share the audio
+  backend more predictably.
+- A Voice Assistant timer package is available as an optional drop-in package
+  for full devices that want timer events and UI hooks; it is not part of the
+  headless core package.
 - ESP endpoints publish their audio capability (`full_duplex`, `mic_only`,
   `speaker_only`, `control_only`). HA and the card use it to avoid impossible
   audio directions and to support standalone mic-only/speaker-only intercom
   devices.
-- The Lovelace card config key is now `show_extended_info`. The old
-  `show_protocol` key is not kept as a compatibility alias.
+- ReSpeaker Lite / Voice PE-style hardware with its own processed microphone
+  path is confirmed by users on the native ESPHome audio examples.
 
 Read the previous PBX-lite release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).
 
