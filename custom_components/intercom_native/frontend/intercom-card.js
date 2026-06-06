@@ -1110,7 +1110,7 @@ class IntercomCard extends HTMLElement {
       :host {
         display: block;
         --intercom-card-surface: var(--ha-card-background, var(--card-background-color, white));
-        --intercom-control-surface: var(--intercom-card-surface);
+        --intercom-control-surface: transparent;
         --intercom-control-hover-surface: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
       }
       .card {
@@ -1130,6 +1130,7 @@ class IntercomCard extends HTMLElement {
         width: 36px; height: 36px; border-radius: 50%;
         border: 1px solid var(--divider-color, #ccc);
         background: var(--intercom-control-surface);
+        background-color: var(--intercom-control-surface);
         color: var(--primary-text-color); cursor: pointer;
         font-size: 1.2em; display: flex; align-items: center; justify-content: center;
       }
@@ -1145,8 +1146,10 @@ class IntercomCard extends HTMLElement {
         width: 100%; box-sizing: border-box; padding: 8px;
         border: 1px solid var(--divider-color, #ccc);
         border-radius: 4px; background: var(--intercom-control-surface);
+        background-color: var(--intercom-control-surface);
         color: var(--primary-text-color); font-size: 0.95em;
         color-scheme: light dark;
+        box-shadow: none;
       }
       .destination-select[hidden] { display: none; }
       .destination-label {
