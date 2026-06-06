@@ -486,10 +486,11 @@ With `show_extended_info: true`, the card shows extended routing details and the
 
 | Situation | Label |
 |---|---|
-| HA selected | `Home Assistant - ESP` |
-| ESP selected, protocol hidden | `ESP - ESP` |
-| ESP selected, same protocol | `ESP - ESP TCP` or `ESP - ESP UDP` |
-| ESP selected, cross protocol | `Inter-protocol TCP-UDP` or `Inter-protocol UDP-TCP` |
+| Hybrid card, HA selected by mirrored ESP | `Home Assistant - ESP` |
+| HA softphone card, target ESP selected | `HA - ESP` |
+| Hybrid card, ESP selected, protocol hidden | `ESP - ESP` |
+| Hybrid card, ESP selected, same protocol | `ESP - ESP TCP` or `ESP - ESP UDP` |
+| Hybrid card, ESP selected, cross protocol | `Inter-protocol TCP-UDP` or `Inter-protocol UDP-TCP` |
 
 ### Frontend card hardening
 
