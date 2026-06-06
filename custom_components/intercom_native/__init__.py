@@ -1323,21 +1323,14 @@ async def _ring_ha_for_inbound_call(
         call_id=call_id,
         caller_name=caller_name,
         audio_mode=source_device.get("audio_mode", "full_duplex"),
+        ui_device_id=HA_SOFTPHONE_DEVICE_ID,
+        session_device_id=source_device_id,
+        ui_caller_name=caller_name or source_device.get("name") or "",
+        ui_peer_name=source_device.get("name") or caller_name or "",
     )
-    if await session.start_ringing(caller_name=caller_name):
+    if await session.start_ringing(caller_name=caller_name, emit_event=False):
         _sessions[source_device_id] = session
-        if source_device_id != HA_SOFTPHONE_DEVICE_ID:
-            _fire_call_event(
-                hass,
-                {
-                    "device_id": HA_SOFTPHONE_DEVICE_ID,
-                    "session_device_id": source_device_id,
-                    "state": "ringing",
-                    "caller": caller_name or source_device.get("name") or "",
-                    "peer_name": source_device.get("name") or caller_name or "",
-                },
-                "session",
-            )
+        session.fire_ringing_event(caller_name)
         return
 
     _LOGGER.error("Unsolicited start_ringing failed for %s", observed_host)
