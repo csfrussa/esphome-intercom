@@ -451,11 +451,11 @@ The card has two top-level modes:
 
 | Card mode | Behavior |
 |---|---|
-| `hybrid` (default) | ESP endpoint card. The card mirrors one ESP endpoint and presses that ESP's own call controls for ESP-to-ESP calls. It does not use Home Assistant as a selectable destination. |
+| `hybrid` (default) | ESP endpoint card. The card mirrors one ESP endpoint. If that ESP selects another ESP, the card presses the ESP's own call controls; if that ESP selects Home Assistant, the browser acts as the HA softphone leg for that ESP. |
 | `ha_softphone` | Independent HA endpoint. One card represents Home Assistant itself, has its own Auto Answer and DND state, rings only for calls addressed to HA, and can call any ESP endpoint from an in-card destination selector. |
 
-Use `ha_softphone` when the card should call from or ring as Home Assistant.
-Hybrid cards skip the Home Assistant endpoint and keep ESP-to-ESP behavior only.
+Use `ha_softphone` when one card should represent Home Assistant itself instead
+of mirroring one ESP.
 
 Optional card config:
 

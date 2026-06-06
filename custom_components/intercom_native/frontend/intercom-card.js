@@ -68,7 +68,6 @@ class IntercomCard extends HTMLElement {
     this._availableDevicesLoading = false;
     this._availableDevicesRetryTimer = null;
     this._callMode = null;  // 'softphone' | 'bridge' | null
-    this._skippingHaDestination = false;
 
     // Entity IDs (discovered once)
     this._intercomStateEntityId = null;
@@ -452,7 +451,6 @@ class IntercomCard extends HTMLElement {
         const oldDestEntity = oldHass?.states?.[this._destinationEntityId];
         if (destEntity?.state !== oldDestEntity?.state) {
           needsRender = true;
-          this._ensureHybridDestinationIsEsp();
         }
       }
 
@@ -665,22 +663,6 @@ class IntercomCard extends HTMLElement {
 
   _softphoneTargets() {
     return this._availableDevices.filter(d => d && !d.softphone && d.device_id);
-  }
-
-  async _ensureHybridDestinationIsEsp() {
-    if (this._isHaSoftphoneMode() || this._skippingHaDestination) return;
-    if (!this._hass || !this._nextButtonEntityId || !this._destinationEntityId) return;
-    if (this._getEspState().toLowerCase() !== "idle") return;
-    if (!this._isHaName(this._getDestination())) return;
-
-    this._skippingHaDestination = true;
-    try {
-      await this._hass.callService("button", "press", { entity_id: this._nextButtonEntityId });
-    } catch (err) {
-      IC_LOG.warn("Unable to skip Home Assistant destination in hybrid card", err);
-    } finally {
-      setTimeout(() => { this._skippingHaDestination = false; }, 500);
-    }
   }
 
   _getSoftphoneTargetDevice() {
@@ -1044,8 +1026,9 @@ class IntercomCard extends HTMLElement {
 
     els.headerName.textContent = this._formatHeaderTitle(displayName);
 
-    // Hybrid cards mirror ESP-to-ESP calls only. Home Assistant has its own
-    // independent softphone mode, so the HA endpoint is skipped here.
+    // Hybrid cards mirror one ESP endpoint. When that ESP selects HA, the
+    // browser acts as the HA leg for that ESP; ha_softphone mode is the
+    // independent HA endpoint with its own destination selector.
     els.destRow.hidden = !showCall;
     els.destValue.textContent = destination;
     if (els.destSelect) {
@@ -1067,8 +1050,7 @@ class IntercomCard extends HTMLElement {
     els.answerBtn.disabled = buttonDisabled;
     els.declineBtn.disabled = buttonDisabled;
     els.hangupBtn.disabled = buttonDisabled;
-    els.callBtn.disabled = buttonDisabled ||
-      (!this._isHaSoftphoneMode() && this._isHaName(destination));
+    els.callBtn.disabled = buttonDisabled;
 
     // Status
     els.statusIndicator.className = "status-indicator " + statusClass;
@@ -1479,13 +1461,16 @@ class IntercomCard extends HTMLElement {
 
     try {
       const destination = this._getDestination();
-      if (this._isHaName(destination)) {
-        this._showError("Use Home Assistant softphone mode to call from HA");
-        return;
-      }
 
-      this._callMode = "mirror";
-      await this._pressEspButton(this._callButtonEntityId, "Call");
+      // Destination = HA: the card is the HA/browser softphone for this ESP.
+      // Destination = another ESP: mirror the ESP's own Call button.
+      if (!this._isHaName(destination)) {
+        this._callMode = "mirror";
+        await this._pressEspButton(this._callButtonEntityId, "Call");
+      } else {
+        this._callMode = "softphone";
+        await this._startP2P(deviceInfo);
+      }
     } catch (err) {
       this._showError(err.message || String(err));
       await this._cleanup();
@@ -2188,7 +2173,7 @@ class IntercomCardEditor extends HTMLElement {
     els.modeSelect.value = softphoneMode ? "ha_softphone" : "hybrid";
     els.modeInfo.textContent = softphoneMode
       ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
-      : "Hybrid ESP card: this card mirrors one ESP endpoint and can call other ESP endpoints.";
+      : "Hybrid ESP card: mirrors one ESP endpoint; HA destination uses the browser as the HA leg for that ESP.";
     els.deviceGroup.classList.toggle("hidden", softphoneMode);
 
     // Rebuild the select option list safely: replaceChildren + per-row
