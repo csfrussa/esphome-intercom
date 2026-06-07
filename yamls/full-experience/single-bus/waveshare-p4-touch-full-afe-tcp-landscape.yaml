@@ -59,7 +59,7 @@ substitutions:
   display_height: "800"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
-  ai_avatar: default
+  ai_avatar: f_off
 
   # P4 uses ES7210 hardware gain plus this post-AFE user trim for capture level.
   mic_gain_min: "-20"
@@ -602,12 +602,6 @@ font:
     id: font_ui_medium
     size: 24
     glyphsets: [GF_Latin_Core]
-    extras:
-      - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
-        glyphs:
-          - "\U000F05A9"  # mdi:wifi
-          - "\U000F05AA"  # mdi:wifi-off
-
   - file:
       type: gfonts
       family: Noto Sans
@@ -3244,14 +3238,13 @@ script:
           static const char* month_names[] = {"January","February","March","April","May","June",
                                               "July","August","September","October","November","December"};
 
-          // --- Header: date + wifi + clock ---
+          // --- Header: date + clock ---
           auto now = id(my_time).now();
           if (now.is_valid()) {
             char date_buf[80];
-            snprintf(date_buf, sizeof(date_buf), "%s %d %s  %s  %02d:%02d",
+            snprintf(date_buf, sizeof(date_buf), "%s %d %s  %02d:%02d",
                      day_full[now.day_of_week - 1], now.day_of_month,
                      month_names[now.month - 1],
-                     wifi::global_wifi_component->is_connected() ? "\U000F05A9" : "\U000F05AA",
                      now.hour, now.minute);
             lv_label_set_text(id(weather_date_label), date_buf);
           }
