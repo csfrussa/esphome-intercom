@@ -32,6 +32,10 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   full-duplex audio backend/wiki for shared codec buses, dual I2S MEMS/amp
   boards, Espressif rate/layout conversion, AEC reference capture, PSRAM
   placement and post-processor mic output.
+- [`speaker`](../esphome/components/speaker/README.md), the narrow ESPHome
+  speaker/media-player fork used by full-experience YAMLs so media pause
+  releases the playback pipeline before TTS, timers or intercom need the
+  speaker graph.
 - [`esp_aec`](../esphome/components/esp_aec/README.md), standalone ESP-SR echo cancellation.
 - [`esp_afe`](../esphome/components/esp_afe/README.md), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
 - [`audio_processor`](../esphome/components/audio_processor/README.md), the abstract processor interface that `esp_aec` and `esp_afe` implement.

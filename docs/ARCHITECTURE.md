@@ -2,10 +2,10 @@
 
 How the audio stack is decomposed, which task owns which buffer, and where the non-obvious decisions live. Written for a new contributor who wants to orient in one sitting without reading every `.cpp`.
 
-Stable reference hardware: Waveshare S3 Audio and Spotpear Ball v2. ESP32-P4
-uses the same PBX/audio concepts but is treated as an experimental
-hardware-specific target because hosted Wi-Fi, LVGL/MIPI/PPA and bus contention
-change the runtime profile.
+Stable compact reference hardware: Waveshare S3 Audio and Spotpear Ball v2.
+ESP32-P4 uses the same PBX/audio concepts, but remains a hardware-specific
+target because hosted Wi-Fi, LVGL/MIPI/PPA, SDIO traffic and larger display
+flushes change the runtime profile.
 
 ---
 

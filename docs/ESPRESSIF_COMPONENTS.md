@@ -20,16 +20,11 @@ The current audio stack uses these Espressif components:
 | `espressif/esp_audio_effects` | `esp_audio_stack` | Espressif MIT-style license, restricted to Espressif products | Provides `esp_ae_rate_cvt`, `esp_ae_bit_cvt` and data weaver APIs used for RX/TX conversion and layout. |
 | `espressif/esp_codec_dev` | `esp_audio_stack` codec-backed builds | Apache-2.0 | Provides codec control plus I2S read/write. P4 and WS3 use ES7210/ES8311 through it; Spotpear single-mic uses ES8311 input/output through it. The generic codec wrapper also exposes ES8388, ES8374 and ES8389 where the board wiring matches those drivers. Generic no-codec builds use direct `esp_driver_i2s` read/write instead. |
 
-On the `gmf-backend-prototype` branch, Espressif component dependencies are
-intentionally latest-first: component `ref` values use the Component Manager's
-latest-compatible resolution unless a component wrapper needs a documented
-minimum API generation. `esp_aec` requires ESP-SR v2 because it wraps the
-`afe_aec_*` API, so it uses `espressif/esp-sr^2.4.4` rather than allowing the
-resolver to fall back to ESP-SR 1.x. Exact pins still require
-a concrete upstream regression to be reproduced and documented. As of 2026-05-20,
-the registry latest versions observed for prototype work are
-tracked in the active component documentation. If one of those
-versions breaks a supported board, add a pin with a short note that names the
+Espressif component dependencies are intentionally latest-compatible unless a
+component wrapper needs a documented minimum API generation. `esp_aec` requires
+ESP-SR v2 because it wraps the `afe_aec_*` API, so it uses an ESP-SR v2
+constraint rather than allowing the resolver to fall back to ESP-SR 1.x. If a
+registry update breaks a supported board, add a pin with a short note naming the
 component version, board, symptom and rollback target.
 
 There is no P4 downgrade pin for `esp-sr`. The P4 full AFE target uses the same
@@ -58,7 +53,8 @@ DC-offset correction.
 
 ## Naming And License Boundaries
 
-Most GMF/audio components used by the prototype are not generic MIT libraries.
+Most GMF/audio components used by the audio backend are not generic MIT
+libraries.
 `gmf_io`, `gmf_ai_audio` and `esp_audio_effects` use Espressif's
 modified MIT-style license: they may be used
 with Espressif products, their copyright/permission notice must stay with copies
@@ -89,12 +85,13 @@ conformance, but are not currently a replacement for `esp_audio_stack`:
 
 ## Generated-Code Coverage
 
-The migration is not P4-only. The current generated-code snapshots confirm:
+The current generated-code snapshots confirm:
 
 - Waveshare P4 landscape AFE: TDM ES7210 input and ES8311 output go through
-  `esp_codec_dev`; dual mic is structural with SE/BSS enabled and AEC booting
-  disabled for controlled tests. It uses `gmf_ai_audio` and `esp-sr` 2.4.4,
-  not the historical standalone P4 `esp-sr` 2.3.x override.
+  `esp_codec_dev`; dual mic is structural with SE/BSS enabled, VAD/AEC boot ON
+  and FD high-perf as the maintained default. It uses `gmf_ai_audio` and the
+  same ESP-SR v2 generation as the S3 dual-mic target, not the historical
+  standalone P4 ESP-SR 2.3.x override.
 - Waveshare S3 full AFE: TDM ES7210 input and ES8311 output also go through
   `esp_codec_dev`; dual mic is structural with SE/BSS enabled.
 - Spotpear single-mic AEC: ES8311 input and ES8311 output go through
