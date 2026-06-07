@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Probe intercom_native with a synthetic PBX-lite TCP caller.
+"""Probe intercom_native or an ESP intercom endpoint with a synthetic caller.
 
 Usage:
   HA_TOKEN=... tools/intercom_softphone_probe.py --ha 192.168.1.10
+  tools/intercom_softphone_probe.py --target 192.168.1.47 --dest-name "WS3" --expect answer
+  tools/intercom_softphone_probe.py --target 192.168.1.47 --send-tone 880 --record-wav /tmp/ws3.wav
 
-The script opens Home Assistant's WebSocket API to subscribe to
-intercom_native.call_event, then connects to the intercom TCP listener and
-sends a synthetic MSG_START. It prints the control response and the HA events.
+When HA_TOKEN is available the script can also subscribe to Home Assistant's
+intercom_native.call_event stream. Audio on the wire is the project protocol:
+16 kHz mono signed 16-bit PCM, 512 samples / 1024 bytes per chunk.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import socket
 import struct
@@ -21,6 +24,7 @@ import sys
 import threading
 import time
 import urllib.request
+import wave
 
 
 INTERCOM_PORT = 6054
@@ -38,6 +42,12 @@ MSG_ERROR = 0x06
 MSG_RING = 0x07
 MSG_ANSWER = 0x08
 MSG_DECLINE = 0x09
+MSG_AUDIO = 0x01
+
+SAMPLE_RATE = 16000
+AUDIO_CHUNK_BYTES = 1024
+AUDIO_CHUNK_SAMPLES = AUDIO_CHUNK_BYTES // 2
+AUDIO_CHUNK_SECONDS = AUDIO_CHUNK_SAMPLES / SAMPLE_RATE
 
 
 OP_TEXT = 0x1
@@ -146,6 +156,7 @@ class MinimalWebSocket:
     def __init__(self, host: str, port: int, path: str) -> None:
         self.sock = socket.create_connection((host, port), timeout=5)
         self.sock.settimeout(0.5)
+        self._rx_buffer = b""
         key = base64.b64encode(os.urandom(16)).decode("ascii")
         request = (
             f"GET {path} HTTP/1.1\r\n"
@@ -163,7 +174,8 @@ class MinimalWebSocket:
             if not chunk:
                 raise RuntimeError("WebSocket HTTP upgrade closed")
             response += chunk
-        if b" 101 " not in response.split(b"\r\n", 1)[0]:
+        header_block, _, self._rx_buffer = response.partition(b"\r\n\r\n")
+        if b" 101 " not in header_block.split(b"\r\n", 1)[0]:
             raise RuntimeError(response.decode("utf-8", errors="replace"))
 
     def send_json(self, payload: dict) -> None:
@@ -215,6 +227,9 @@ class MinimalWebSocket:
     def _recv_exact(self, n: int, timeout: float) -> bytes | None:
         self.sock.settimeout(max(0.05, timeout))
         data = b""
+        if self._rx_buffer:
+            data = self._rx_buffer[:n]
+            self._rx_buffer = self._rx_buffer[n:]
         while len(data) < n:
             try:
                 chunk = self.sock.recv(n - len(data))
@@ -273,6 +288,8 @@ class EventCollector:
             if self._error:
                 raise self._error
             raise RuntimeError("HA event subscription did not become ready")
+        if self._error:
+            raise self._error
 
     def stop(self) -> None:
         self._stop.set()
@@ -280,6 +297,8 @@ class EventCollector:
             self._ws.close()
         if self._thread:
             self._thread.join(timeout=2)
+        if self._error is not None:
+            print(f"HA_WS_ERROR {self._error}", file=sys.stderr)
 
     def _run(self) -> None:
         try:
@@ -311,7 +330,10 @@ class EventCollector:
                     self.events.append(msg.get("event", {}).get("data", {}))
                     print("HA_EVENT", json.dumps(self.events[-1], sort_keys=True))
                 elif msg.get("id") == 2:
-                    print("HA_SOFTPHONE_STATE", json.dumps(msg.get("result", {}), sort_keys=True))
+                    if msg.get("success", True):
+                        print("HA_SOFTPHONE_STATE", json.dumps(msg.get("result", {}), sort_keys=True))
+                    else:
+                        raise RuntimeError(f"HA softphone state command failed: {msg}")
         except OSError as err:
             if not self._stop.is_set():
                 self._error = err
@@ -341,6 +363,7 @@ def _read_control_frame(sock: socket.socket, timeout: float) -> tuple[int, bytes
 
 def _message_name(msg_type: int) -> str:
     return {
+        MSG_AUDIO: "AUDIO",
         MSG_START: "START",
         MSG_HANGUP: "HANGUP",
         MSG_PING: "PING",
@@ -352,21 +375,134 @@ def _message_name(msg_type: int) -> str:
     }.get(msg_type, f"0x{msg_type:02X}")
 
 
+def _load_wav_chunks(path: str) -> list[bytes]:
+    with wave.open(path, "rb") as wav:
+        channels = wav.getnchannels()
+        sample_width = wav.getsampwidth()
+        sample_rate = wav.getframerate()
+        if channels != 1 or sample_width != 2 or sample_rate != SAMPLE_RATE:
+            raise ValueError(
+                f"{path}: expected mono s16le {SAMPLE_RATE}Hz WAV, "
+                f"got channels={channels} width={sample_width} rate={sample_rate}"
+            )
+        raw = wav.readframes(wav.getnframes())
+    if len(raw) % 2:
+        raw = raw[:-1]
+    chunks = []
+    for off in range(0, len(raw), AUDIO_CHUNK_BYTES):
+        chunk = raw[off : off + AUDIO_CHUNK_BYTES]
+        if len(chunk) < AUDIO_CHUNK_BYTES:
+            chunk += b"\x00" * (AUDIO_CHUNK_BYTES - len(chunk))
+        chunks.append(chunk)
+    return chunks
+
+
+def _tone_chunks(freq_hz: float, seconds: float, amplitude: float) -> list[bytes]:
+    if seconds <= 0:
+        return []
+    amplitude_i16 = max(0, min(32767, int(32767 * amplitude)))
+    total_samples = int(seconds * SAMPLE_RATE)
+    chunks = []
+    for base in range(0, total_samples, AUDIO_CHUNK_SAMPLES):
+        samples = bytearray()
+        for i in range(AUDIO_CHUNK_SAMPLES):
+            n = base + i
+            value = 0
+            if n < total_samples:
+                value = int(amplitude_i16 * math.sin(2.0 * math.pi * freq_hz * n / SAMPLE_RATE))
+            samples.extend(struct.pack("<h", value))
+        chunks.append(bytes(samples))
+    return chunks
+
+
+def _audio_chunks_from_args(args: argparse.Namespace) -> list[bytes]:
+    if args.send_wav:
+        return _load_wav_chunks(args.send_wav)
+    if args.send_tone:
+        return _tone_chunks(args.send_tone, args.tone_seconds, args.tone_amplitude)
+    return []
+
+
+def _write_recording(path: str, chunks: list[bytes]) -> None:
+    with wave.open(path, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SAMPLE_RATE)
+        wav.writeframes(b"".join(chunks))
+
+
+class AudioSender:
+    def __init__(self, sock: socket.socket, chunks: list[bytes], repeat: bool) -> None:
+        self.sock = sock
+        self.chunks = chunks
+        self.repeat = repeat
+        self.sent_chunks = 0
+        self.sent_bytes = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        if not self.chunks or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        index = 0
+        next_send = time.monotonic()
+        while not self._stop.is_set() and self.chunks:
+            chunk = self.chunks[index]
+            try:
+                with self._lock:
+                    self.sock.sendall(build_frame(MSG_AUDIO, chunk))
+            except OSError:
+                return
+            self.sent_chunks += 1
+            self.sent_bytes += len(chunk)
+            index += 1
+            if index >= len(self.chunks):
+                if not self.repeat:
+                    return
+                index = 0
+            next_send += AUDIO_CHUNK_SECONDS
+            delay = next_send - time.monotonic()
+            if delay > 0:
+                self._stop.wait(delay)
+
+
 def run_probe(args: argparse.Namespace) -> int:
     token = os.environ.get("HA_TOKEN", "")
-    if not token:
-        print("HA_TOKEN env var is required", file=sys.stderr)
+    target_host = args.target or args.ha
+    ha_events = args.ha_events
+    if ha_events == "auto":
+        ha_events_enabled = bool(token)
+    else:
+        ha_events_enabled = ha_events == "on"
+    if ha_events_enabled and not token:
+        print("HA_TOKEN env var is required when --ha-events=on", file=sys.stderr)
         return 2
+
     base_url = args.ha_url or f"http://{args.ha}:8123"
-    config = _http_get_json(base_url, token, "/api/config")
+    config = _http_get_json(base_url, token, "/api/config") if ha_events_enabled else {}
     dest_name = args.dest_name or config.get("location_name") or "Home Assistant"
     call_id = args.call_id or f"{args.caller_name}<->{dest_name}:{int(time.time())}"
 
-    collector = EventCollector(base_url, token)
-    collector.start()
-    time.sleep(0.3)
+    collector = None
+    if ha_events_enabled:
+        collector = EventCollector(base_url, token)
+        collector.start()
+        time.sleep(0.3)
 
-    sock = socket.create_connection((args.ha, args.port), timeout=5)
+    audio_chunks = _audio_chunks_from_args(args)
+    rx_audio: list[bytes] = []
+    sock = socket.create_connection((target_host, args.port), timeout=5)
+    sender = AudioSender(sock, audio_chunks, args.repeat_audio)
     body = build_start_body(
         call_id=call_id,
         caller_route=args.caller_route,
@@ -375,10 +511,19 @@ def run_probe(args: argparse.Namespace) -> int:
         dest_name=dest_name,
     )
     sock.sendall(build_frame(MSG_START, body))
-    print(f"SENT START caller={args.caller_name!r} dest={dest_name!r} call_id={call_id!r}")
+    print(
+        f"SENT START target={target_host!r} caller={args.caller_name!r} "
+        f"dest={dest_name!r} call_id={call_id!r}"
+    )
+    if audio_chunks:
+        print(
+            f"AUDIO_TX queued chunks={len(audio_chunks)} bytes={sum(len(c) for c in audio_chunks)} "
+            f"repeat={args.repeat_audio}"
+        )
 
     deadline = time.monotonic() + args.listen_seconds
     observed: list[str] = []
+    answered = False
     try:
         while time.monotonic() < deadline:
             frame = _read_control_frame(sock, timeout=0.5)
@@ -386,24 +531,49 @@ def run_probe(args: argparse.Namespace) -> int:
                 continue
             msg_type, payload = frame
             observed.append(_message_name(msg_type).lower())
+            if msg_type == MSG_AUDIO:
+                rx_audio.append(payload)
+                if len(rx_audio) == 1 or len(rx_audio) % 50 == 0:
+                    print(f"AUDIO_RX chunks={len(rx_audio)} bytes={sum(len(c) for c in rx_audio)}")
+                continue
             print(f"TCP_RX {_message_name(msg_type)} len={len(payload)}{describe_payload(msg_type, payload)}")
             if msg_type == MSG_PING:
                 sock.sendall(build_frame(MSG_PONG))
-            if msg_type in (MSG_RING, MSG_ANSWER, MSG_DECLINE, MSG_ERROR):
+            if msg_type == MSG_ANSWER:
+                answered = True
+                sender.start()
+                if not args.record_wav and not audio_chunks:
+                    time.sleep(1.0)
+                    break
+            if msg_type in (MSG_DECLINE, MSG_ERROR):
+                time.sleep(0.5)
+                break
+            if msg_type == MSG_RING and not args.keep_ringing:
                 time.sleep(1.0)
                 break
     finally:
+        sender.stop()
         try:
             sock.sendall(build_frame(MSG_HANGUP, build_call_id_only_body(call_id)))
         except Exception:
             pass
         sock.close()
         time.sleep(0.5)
-        collector.stop()
+        if collector is not None:
+            collector.stop()
+        if args.record_wav:
+            _write_recording(args.record_wav, rx_audio)
+            print(f"AUDIO_RX wrote {args.record_wav} chunks={len(rx_audio)} bytes={sum(len(c) for c in rx_audio)}")
+        if audio_chunks:
+            print(f"AUDIO_TX sent chunks={sender.sent_chunks} bytes={sender.sent_bytes} answered={answered}")
 
     if args.expect:
         return 0 if args.expect.lower() in observed else 1
 
+    if not ha_events_enabled:
+        return 0 if observed else 1
+
+    assert collector is not None
     ringing_events = [
         e for e in collector.events
         if e.get("device_id") == "__intercom_native_ha_softphone__"
@@ -414,8 +584,11 @@ def run_probe(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ha", default="192.168.1.10", help="HA host/IP")
+    parser.add_argument("--ha", default="192.168.1.10", help="HA host/IP for event subscription and default TCP target")
+    parser.add_argument("--target", default="", help="TCP intercom target host/IP; defaults to --ha")
     parser.add_argument("--ha-url", default="", help="HA base URL, default http://HA:8123")
+    parser.add_argument("--ha-events", choices=("auto", "on", "off"), default="auto",
+                        help="Subscribe to HA intercom events. auto enables it when HA_TOKEN is set.")
     parser.add_argument("--port", type=int, default=INTERCOM_PORT)
     parser.add_argument("--caller-name", default="Codex Fake ESP 1")
     parser.add_argument("--caller-route", default="codex-fake-1")
@@ -424,6 +597,14 @@ def main() -> int:
     parser.add_argument("--call-id", default="")
     parser.add_argument("--listen-seconds", type=float, default=6.0)
     parser.add_argument("--expect", choices=("ring", "answer", "decline", "error"), default="")
+    parser.add_argument("--send-tone", type=float, default=0.0, metavar="HZ",
+                        help="Send a generated sine tone after ANSWER, e.g. 880.")
+    parser.add_argument("--tone-seconds", type=float, default=3.0)
+    parser.add_argument("--tone-amplitude", type=float, default=0.20)
+    parser.add_argument("--send-wav", default="", help=f"Send mono s16le {SAMPLE_RATE}Hz WAV after ANSWER.")
+    parser.add_argument("--repeat-audio", action="store_true", help="Loop --send-tone/--send-wav until listen timeout.")
+    parser.add_argument("--record-wav", default="", help=f"Record received AUDIO frames as mono s16le {SAMPLE_RATE}Hz WAV.")
+    parser.add_argument("--keep-ringing", action="store_true", help="Do not exit immediately after RING.")
     return run_probe(parser.parse_args())
 
 
