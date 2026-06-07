@@ -85,15 +85,6 @@ psram:
 preferences:
   flash_write_interval: 5min
 
-api:
-  on_client_connected:
-    - lambda: |-
-        static bool published = false;
-        if (!published) {
-          published = true;
-          id(intercom).publish_entity_states();
-        }
-
 ota:
   - platform: esphome
 

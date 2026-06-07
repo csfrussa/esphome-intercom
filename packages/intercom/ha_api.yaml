@@ -13,7 +13,15 @@
 #   - id `intercom` : intercom_api component (intercom/callbacks.yaml provides this)
 # =============================================================================
 
+wifi:
+  on_connect:
+    - delay: 1s
+    - intercom_api.publish_entity_states: intercom
+
 api:
+  on_client_connected:
+    - delay: 1s
+    - intercom_api.publish_entity_states: intercom
   actions:
     # Card -> intercom_native.call(source=this) ends up here. Sets the
     # current phonebook entry to `dest` and enters OUTGOING locally.

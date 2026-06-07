@@ -58,24 +58,56 @@ def _ha_softphone_dnd(hass: HomeAssistant) -> bool:
 
 
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
-    session = _sessions.get(HA_SOFTPHONE_DEVICE_ID)
-    peer_name = ""
-    session_device_id = HA_SOFTPHONE_DEVICE_ID if session is not None else ""
-    if session is None and _sessions:
-        session_device_id, session = next(iter(_sessions.items()))
-    if session is not None:
-        state = "ringing" if session.is_ringing else ("streaming" if session.is_active else "idle")
-        peer_name = getattr(session, "_initial_caller_name", "") or ""
-    else:
-        state = "idle"
+    store = _ha_softphone_store(hass)
     return {
         "device_id": HA_SOFTPHONE_DEVICE_ID,
-        "session_device_id": session_device_id,
+        "session_device_id": store.get("session_device_id", ""),
         "dnd": _ha_softphone_dnd(hass),
-        "busy": bool(_sessions),
-        "state": state,
-        "caller": peer_name,
+        "busy": bool(store.get("session_device_id")),
+        "state": store.get("state", "idle"),
+        "caller": store.get("caller", ""),
+        "peer_name": store.get("peer_name", ""),
     }
+
+
+def _ha_softphone_session_device_id(hass: HomeAssistant) -> str:
+    return str(_ha_softphone_store(hass).get("session_device_id") or "")
+
+
+def _set_ha_softphone_call_state(
+    hass: HomeAssistant,
+    state: str,
+    *,
+    session_device_id: str = "",
+    caller: str = "",
+    peer_name: str = "",
+    **extra: Any,
+) -> None:
+    store = _ha_softphone_store(hass)
+    terminal = state in {"idle", "disconnected", "declined", "error"}
+    if terminal:
+        session_device_id = store.get("session_device_id", session_device_id)
+        caller = store.get("caller", caller)
+        peer_name = store.get("peer_name", peer_name)
+        store.pop("session_device_id", None)
+        store.pop("state", None)
+        store.pop("caller", None)
+        store.pop("peer_name", None)
+    else:
+        store["session_device_id"] = session_device_id
+        store["state"] = state
+        store["caller"] = caller
+        store["peer_name"] = peer_name
+
+    payload = {
+        "device_id": HA_SOFTPHONE_DEVICE_ID,
+        "session_device_id": session_device_id or "",
+        "state": state,
+        "caller": caller or "",
+        "peer_name": peer_name or "",
+    }
+    payload.update({k: v for k, v in extra.items() if v not in (None, "")})
+    _fire_call_event(hass, payload, "session")
 
 
 def _put_latest(queue: asyncio.Queue, data: bytes) -> None:
@@ -166,10 +198,6 @@ class IntercomSession:
         call_id: str = "",
         caller_name: str = "",
         audio_mode: str = "full_duplex",
-        ui_device_id: str | None = None,
-        session_device_id: str | None = None,
-        ui_caller_name: str = "",
-        ui_peer_name: str = "",
     ):
         """Initialize session."""
         self.hass = hass
@@ -179,10 +207,6 @@ class IntercomSession:
         self._initial_call_id = call_id
         self._initial_caller_name = caller_name
         self.audio_mode = _audio_mode(audio_mode)
-        self._ui_device_id = ui_device_id
-        self._session_device_id = session_device_id or device_id
-        self._ui_caller_name = ui_caller_name
-        self._ui_peer_name = ui_peer_name
 
         self._transport: Optional[IntercomTransport] = transport
         self._active = False
@@ -217,36 +241,21 @@ class IntercomSession:
             except Exception:
                 subs.discard((connection, msg_id))
 
-    def _fire_state_event(self, state: str, **extra: Any) -> None:
-        payload = {"device_id": self.device_id, "state": state}
-        payload.update(extra)
-        _fire_call_event(self.hass, payload, "session")
-        self._fire_ui_state_event(state, extra)
-
-    def _fire_ui_state_event(self, state: str, extra: dict[str, Any]) -> None:
-        if not self._ui_device_id or self._ui_device_id == self.device_id:
-            return
-        payload: dict[str, Any] = {
-            "device_id": self._ui_device_id,
-            "session_device_id": self._session_device_id,
-            "state": state,
-        }
-        for key in ("reason", "origin", "code", "target_device_id"):
-            if key in extra:
-                payload[key] = extra[key]
-        caller = extra.get("caller") or self._ui_caller_name or self._initial_caller_name
-        peer = extra.get("peer_name") or self._ui_peer_name or caller
-        if caller:
-            payload["caller"] = caller
-        if peer:
-            payload["peer_name"] = peer
-        _fire_call_event(self.hass, payload, "session")
-
     def _fire_terminal_state(self, state: str, **extra: Any) -> None:
         if self._terminal_fired:
             return
         self._terminal_fired = True
-        self._fire_state_event(state, **extra)
+        payload = {"device_id": self.device_id, "state": state}
+        payload.update(extra)
+        _fire_call_event(self.hass, payload, "session")
+        if _ha_softphone_session_device_id(self.hass) == self.device_id:
+            _set_ha_softphone_call_state(
+                self.hass,
+                state,
+                reason=extra.get("reason"),
+                origin=extra.get("origin"),
+                code=extra.get("code"),
+            )
 
     def _on_disconnected(self) -> None:
         self._active = False
@@ -262,7 +271,7 @@ class IntercomSession:
     def _on_ringing(self) -> None:
         """ESP is ringing, waiting for local answer."""
         self._ringing = True
-        self._fire_state_event("ringing")
+        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "ringing"}, "session")
 
     def _on_answered(self) -> None:
         """ESP answered the call, streaming started."""
@@ -273,7 +282,16 @@ class IntercomSession:
         # the was_active check we'd leak a TX task per re-fire.
         if _has_speaker(self.audio_mode) and not was_active and (self._tx_task is None or self._tx_task.done()):
             self._tx_task = self.hass.async_create_task(self._tx_sender())
-        self._fire_state_event("streaming")
+        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "streaming"}, "session")
+        if _ha_softphone_session_device_id(self.hass) == self.device_id:
+            peer = self._initial_caller_name or ""
+            _set_ha_softphone_call_state(
+                self.hass,
+                "streaming",
+                session_device_id=self.device_id,
+                caller=peer,
+                peer_name=peer,
+            )
 
     def _on_stop_received(self) -> None:
         """ESP sent HANGUP from its side."""
@@ -380,7 +398,7 @@ class IntercomSession:
         if not await self._transport.connect():
             return "error"
 
-        self._fire_state_event("calling")
+        _fire_call_event(self.hass, {"device_id": self.device_id, "state": "calling"}, "session")
 
         caller_name = (self.hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
         result = await self._transport.start_stream(caller_name=caller_name)
@@ -447,10 +465,7 @@ class IntercomSession:
             _LOGGER.debug("ANSWER sent to ESP")
         return result
 
-    def fire_ringing_event(self, caller_name: str = "") -> None:
-        self._fire_state_event("ringing", caller=caller_name)
-
-    async def start_ringing(self, caller_name: str = "", emit_event: bool = True) -> bool:
+    async def start_ringing(self, caller_name: str = "") -> bool:
         """RING back an ESP-initiated MSG_START without answering.
 
         Lets the card auto-answer (localStorage flag) or present the call
@@ -465,8 +480,15 @@ class IntercomSession:
             await self._transport.disconnect()
             return False
         self._ringing = True
-        if emit_event:
-            self.fire_ringing_event(caller_name)
+        _fire_call_event(
+            self.hass,
+            {
+                "device_id": self.device_id,
+                "state": "ringing",
+                "caller": caller_name,
+            },
+            "session",
+        )
         return True
 
     async def answer_esp_call(self) -> str:
@@ -1299,15 +1321,12 @@ async def websocket_ha_softphone_start(
     result = await session.start()
     if result in ("streaming", "ringing"):
         _sessions[HA_SOFTPHONE_DEVICE_ID] = session
-        _fire_call_event(
+        _set_ha_softphone_call_state(
             hass,
-            {
-                "device_id": HA_SOFTPHONE_DEVICE_ID,
-                "state": result,
-                "peer_name": target.get("name") or "",
-                "target_device_id": target_device_id,
-            },
-            "session",
+            result,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            peer_name=target.get("name") or "",
+            target_device_id=target_device_id,
         )
         connection.send_result(msg_id, {"success": True, "state": result})
         return
