@@ -68,7 +68,6 @@ substitutions:
   voice_assist_not_ready_phase_id: "10"
   voice_assist_error_phase_id: "11"
   voice_assist_muted_phase_id: "12"
-  voice_assist_timer_finished_phase_id: "20"
 
   # Font configuration
   font_glyphsets: "GF_Latin_Core"
@@ -455,9 +454,6 @@ voice_assistant:
     - script.execute: update_timer_state
   on_timer_finished:
     - switch.turn_on: timer_ringing
-    - globals.set:
-        id: voice_assistant_phase
-        value: '${voice_assist_timer_finished_phase_id}'
     - script.execute: draw_display
 
 # =============================================================================
@@ -814,7 +810,7 @@ script:
             else if (r == "protocol_error")  return std::string("Protocol error");
             else if (r == "bridge_error")    return std::string("Bridge error");
             return r.empty() ? std::string("Ended") : ("Declined: " + r);
-      - lvgl.page.show: ic_ended_page
+      - script.execute: draw_display
       - script.execute: backlight_timer
       - delay: 4s
       - if:
@@ -954,9 +950,12 @@ script:
           if (in_call) {
             id(ic_settings_active) = false;  // call interrupts settings view
           }
-          // ui_ic_ended owns the screen for ~4 s after a terminated call
-          // so the user actually reads the reason.
-          if (id(ic_ended_active)) {
+          // Timer ringing owns the UI while the alarm is active. This must use
+          // the switch state, not voice_assistant_phase, because media_player
+          // callbacks can legitimately update the phase while playing the alarm.
+          if (id(timer_ringing).state) {
+            target = id(timer_finished_page)->obj;
+          } else if (id(ic_ended_active)) {
             target = id(ic_ended_page)->obj;
           } else if (id(ic_settings_active) && !id(g_settings_pages).empty()) {
             int idx = id(g_settings_index);
@@ -996,8 +995,6 @@ script:
               target = id(muted_page)->obj;
             } else if (phase == ${voice_assist_not_ready_phase_id}) {
               target = id(no_ha_page)->obj;
-            } else if (phase == ${voice_assist_timer_finished_phase_id}) {
-              target = id(timer_finished_page)->obj;
             } else {
               target = id(idle_page)->obj;
             }
@@ -1017,6 +1014,7 @@ script:
           else if (target == id(ic_ringing_out_page)->obj) page_name = "ic_ringing_out";
           else if (target == id(ic_in_call_page)->obj) page_name = "ic_in_call";
           else if (target == id(ic_ended_page)->obj) page_name = "ic_ended";
+          else if (target == id(timer_finished_page)->obj) page_name = "timer_finished";
 
           // Skip page load if already showing (avoids redundant SPI transfer)
           bool page_changed = (target != lv_disp_get_scr_act(nullptr));
@@ -1649,6 +1647,9 @@ switch:
     restore_mode: ALWAYS_OFF
     on_turn_off:
       - script.stop: timer_alarm_loop
+      - globals.set:
+          id: voice_assistant_phase
+          value: '${voice_assist_idle_phase_id}'
       - media_player.stop:
           announcement: true
       - script.execute: update_status
