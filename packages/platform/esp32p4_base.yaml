@@ -29,33 +29,7 @@ esp32:
       # instruction-cache pressure; larger `-O2` binaries can starve loopTask
       # under full audio load.
     sdkconfig_options:
-      # Display/audio baseline: esp-sr and 800x1280 MIPI/LVGL need the larger
-      # L2 cache, and XIP moves instruction/rodata fetches onto PSRAM instead
-      # of keeping every miss on the flash path.
-      CONFIG_CACHE_L2_CACHE_256KB: "y"
+      # Keep P4 instruction/rodata fetches in PSRAM as in the last stable
+      # display/audio baseline. Disabling this globally fixed one AFE FFT crash
+      # signature but reintroduced display flicker and choppy intercom TX audio.
       CONFIG_SPIRAM_XIP_FROM_PSRAM: "y"
-      # P4 memory policy. Keep generic malloc traffic in PSRAM and reserve a
-      # larger internal/DMA pool for Hosted SDIO, MIPI, I2S and codec buffers.
-      # The default 16KB "always internal" threshold is too generous once the
-      # P4 profile combines display + C6 SDIO + full audio.
-      CONFIG_SPIRAM_USE_CAPS_ALLOC: "n"
-      CONFIG_SPIRAM_USE_MALLOC: "y"
-      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "4096"
-      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "196608"
-      CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: "y"
-      # Keep TLS/crypto on P4 hardware paths. These are ESP-IDF defaults in the
-      # generated P4 sdkconfig today, but pin them here so future package changes
-      # do not silently fall back to software crypto.
-      CONFIG_MBEDTLS_HARDWARE_AES: "y"
-      CONFIG_MBEDTLS_HARDWARE_GCM: "y"
-      CONFIG_MBEDTLS_HARDWARE_MPI: "y"
-      CONFIG_MBEDTLS_HARDWARE_SHA: "y"
-      CONFIG_MBEDTLS_HARDWARE_ECC: "y"
-      CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY: "y"
-      CONFIG_ESP_TLS_USE_DS_PERIPHERAL: "y"
-      # Push TLS arenas to PSRAM (default IDF leaves them in internal RAM and
-      # each HTTPS handshake eats 15-30 KB; on P4 with audio + intercom that
-      # exhausts internal RAM). DYNAMIC_BUFFER allocates only what each handshake
-      # actually needs instead of fixed static buffers.
-      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
-      CONFIG_MBEDTLS_DYNAMIC_BUFFER: "y"

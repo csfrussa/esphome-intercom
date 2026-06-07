@@ -57,7 +57,7 @@ substitutions:
   display_height: "1280"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
-  ai_avatar: default
+  ai_avatar: f_off
 
   # P4 uses ES7210 hardware gain plus this post-AFE user trim for capture level.
   mic_gain_min: "-20"
@@ -642,13 +642,6 @@ font:
       - "\U000F0F37"  # weather-cloudy-alert
 
   - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
-    id: font_status_icon
-    size: 28
-    glyphs:
-      - "\U000F05A9"  # mdi:wifi
-      - "\U000F05AA"  # mdi:wifi-off
-
-  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
     id: font_weather_icon_sm
     size: 48
     glyphs:
@@ -992,15 +985,6 @@ lvgl:
                       text: ""
                       text_color: 0x888888
                       text_font: font_title
-                  # Header: WiFi status
-                  - label:
-                      id: wifi_status_icon
-                      align: TOP_RIGHT
-                      x: -170
-                      y: 15
-                      text: "\U000F05A9"
-                      text_font: font_status_icon
-                      text_color: 0x888888
                   # Header: clock
                   - label:
                       id: weather_clock_label
@@ -2674,7 +2658,7 @@ script:
           static const char* month_names[] = {"January","February","March","April","May","June",
                                               "July","August","September","October","November","December"};
 
-          // --- Header: date + clock + wifi + battery ---
+          // --- Header: date + clock + battery ---
           auto now = id(my_time).now();
           if (now.is_valid()) {
             char date_buf[48];
@@ -2687,16 +2671,6 @@ script:
             snprintf(clk, sizeof(clk), "%02d:%02d", now.hour, now.minute);
             lv_label_set_text(id(weather_clock_label), clk);
           }
-
-          // WiFi status icon
-          if (wifi::global_wifi_component->is_connected()) {
-            lv_label_set_text(id(wifi_status_icon), "\U000F05A9");  // mdi:wifi
-            lv_obj_set_style_text_color(id(wifi_status_icon), lv_color_hex(0x2ECC71), 0);
-          } else {
-            lv_label_set_text(id(wifi_status_icon), "\U000F05AA");  // mdi:wifi-off
-            lv_obj_set_style_text_color(id(wifi_status_icon), lv_color_hex(0xE74C3C), 0);
-          }
-
 
           // --- Current weather ---
           auto cond = id(weather_condition).state;
