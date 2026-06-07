@@ -599,7 +599,11 @@ void IntercomApi::publish_mdns_endpoint_(const std::string &endpoint) {
 // Wired from YAML via `api.on_client_connected:`.
 void IntercomApi::publish_entity_states() {
   // Re-publish on every HA reconnect so intercom_native sees it without
-  // depending on HA restart timing.
+  // depending on HA restart timing. Restore-backed switches are applied only
+  // once; a reconnect must not roll runtime state back to the boot preference.
+  const bool apply_restore = !this->entity_restore_applied_;
+  this->entity_restore_applied_ = true;
+
   this->publish_transport_();
   this->publish_endpoint_();
   if (this->last_reason_sensor_ != nullptr) {
@@ -607,32 +611,34 @@ void IntercomApi::publish_entity_states() {
   }
 
   if (this->auto_answer_switch_ != nullptr) {
-    auto initial = this->auto_answer_switch_->get_initial_state_with_restore_mode();
-    if (initial.has_value()) {
-      this->auto_answer_ = *initial;
-      this->auto_answer_switch_->publish_state(*initial);
+    if (apply_restore) {
+      auto initial = this->auto_answer_switch_->get_initial_state_with_restore_mode();
+      if (initial.has_value()) {
+        this->auto_answer_ = *initial;
+      }
     }
+    this->auto_answer_switch_->publish_state(this->auto_answer_);
   }
 
   if (this->dnd_switch_ != nullptr) {
-    auto initial = this->dnd_switch_->get_initial_state_with_restore_mode();
-    if (initial.has_value()) {
-      this->do_not_disturb_ = *initial;
+    if (apply_restore) {
+      auto initial = this->dnd_switch_->get_initial_state_with_restore_mode();
+      if (initial.has_value()) {
+        this->do_not_disturb_ = *initial;
+      }
     }
     this->dnd_switch_->publish_state(this->do_not_disturb_);
   }
 
-  // Reflect the FSM's current routing_mode_ unless restore_mode overrides.
   if (this->routing_mode_switch_ != nullptr) {
-    auto initial = this->routing_mode_switch_->get_initial_state_with_restore_mode();
-    bool ha_pbx_now;
-    if (initial.has_value()) {
-      ha_pbx_now = *initial;
-      this->routing_mode_ = ha_pbx_now ? IntercomRoutingMode::HA_PBX
-                                        : IntercomRoutingMode::DEVICE_INDEPENDENT;
-    } else {
-      ha_pbx_now = this->routing_mode_ == IntercomRoutingMode::HA_PBX;
+    if (apply_restore) {
+      auto initial = this->routing_mode_switch_->get_initial_state_with_restore_mode();
+      if (initial.has_value()) {
+        this->routing_mode_ = *initial ? IntercomRoutingMode::HA_PBX
+                                       : IntercomRoutingMode::DEVICE_INDEPENDENT;
+      }
     }
+    const bool ha_pbx_now = this->routing_mode_ == IntercomRoutingMode::HA_PBX;
     this->routing_mode_switch_->publish_state(ha_pbx_now);
   }
 
