@@ -2236,52 +2236,45 @@ script:
       - script.execute: draw_display
 
   # Display state routing (extends package placeholder)
-  # Maps g_applied_led to voice_assistant_phase and calls draw_display.
-  - id: !extend ui_state_changed
+  # Maps canonical ui_state to the device-local VA phase and calls draw_display.
+  # Device-local overlays (timer, settings, call-ended) are resolved inside draw_display.
+  - id: !extend render_ui_state
     then:
       - lambda: |-
-          int led = id(g_applied_led);
-          // Intercom idle: restore previous mode after call ends
-          if (led == 0 && id(current_mode) == 1 && id(intercom).get_state_str() == "Idle") {
+          int state = id(ui_state);
+          // Intercom idle: restore previous mode after call ends.
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "Idle") {
             id(peer_name) = id(intercom).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
             }
           }
-          // Map LED state to voice_assistant_phase
-          switch (led) {
-            case 0:  // Idle
-              if (!api::global_api_server->is_connected()) {
-                id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
-              } else if (id(mute).state) {
-                id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
-              } else if (id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_PLAYING) {
-                if (lv_img_get_src(id(mood_bg)) != id(mood_neutral))
-                  lv_img_set_src(id(mood_bg), id(mood_neutral));
-                id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
-              } else {
-                id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-              }
+
+          switch (state) {
+            case ${ui_state_init}:
+            case ${ui_state_no_wifi}:
+            case ${ui_state_no_ha}:
+              id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
               break;
-            case 1:  // Both muted
-            case 2:  // Mic muted
+            case ${ui_state_both_muted}:
+            case ${ui_state_mic_muted}:
               id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
               break;
-            case 4:  // MWW recent / barge-in
-            case 5:  // VA Listening
+            case ${ui_state_mww_recent}:
+            case ${ui_state_va_listening}:
               id(current_mode) = 0;
               id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
               break;
-            case 6:  // VA Thinking
+            case ${ui_state_va_thinking}:
               id(voice_assistant_phase) = ${voice_assist_thinking_phase_id};
               break;
-            case 7:  // VA Speaking (text set by ui_tts_started)
+            case ${ui_state_va_replying}:
               id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
               break;
-            case 11: // VA Error
+            case ${ui_state_va_error}:
               id(voice_assistant_phase) = ${voice_assist_error_phase_id};
               break;
-            case 12: // Media playing
+            case ${ui_state_media}:
               if (id(mute).state) {
                 id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
               } else {
@@ -2290,14 +2283,21 @@ script:
                 id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
               }
               break;
+            case ${ui_state_idle}:
+              if (id(mute).state) {
+                id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+              } else {
+                id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+              }
+              break;
             default:
               break;
           }
       - script.execute: backlight_timer
-      # Reset text on listening start
+      # Reset text on listening start.
       - if:
           condition:
-            lambda: 'return id(g_applied_led) == 5;'
+            lambda: 'return id(ui_state) == ${ui_state_va_listening};'
           then:
             - text_sensor.template.publish:
                 id: text_request
@@ -2305,11 +2305,11 @@ script:
             - text_sensor.template.publish:
                 id: text_response
                 state: "..."
-      # Intercom idle: update labels if staying in IC mode
+      # Intercom idle: update labels if staying in IC mode.
       - if:
           condition:
             lambda: |-
-              return id(g_applied_led) == 0 && id(current_mode) == 1
+              return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
                      && id(intercom).get_state_str() == "Idle";
           then:
             - script.execute: update_ic_idle_labels
@@ -2816,7 +2816,7 @@ script:
           lv_obj_clear_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
 
   # Update peer name + contacts count on the intercom idle group.
-  # Used by next/prev_contact_button and by ui_state_changed when staying idle.
+  # Used by next/prev_contact_button and by render_ui_state when staying idle.
   - id: update_ic_idle_labels
     then:
       - lambda: id(peer_name) = id(intercom).get_current_destination();
