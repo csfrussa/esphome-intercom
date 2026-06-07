@@ -1,8 +1,9 @@
 # Device Configurations
 
-Ready-to-flash ESPHome YAML configurations for tested hardware. Stable release
-reference targets are the ESP32-S3 presets; P4 YAMLs are provided as
-experimental hardware-specific targets.
+Ready-to-flash ESPHome YAML configurations for tested hardware. ESP32-S3
+presets are the compact reference targets; P4 YAMLs are hardware-specific full
+display/audio targets and should be tested with the intended panel and hosted
+Wi-Fi firmware.
 
 ## How to use
 
@@ -68,9 +69,11 @@ Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-l
 
 ## P4 status
 
-Waveshare P4 Touch YAMLs build and boot, but they are not stable release
-reference targets yet. Treat them as experimental while hosted Wi-Fi/SDIO,
-LVGL/PPA, media/TTS transport behavior and task scheduling are investigated.
+Waveshare P4 Touch YAMLs build and boot with the maintained audio/LVGL state
+model, FD high-perf AFE defaults and the validated P4 SDK baseline. Treat them
+as hardware-specific targets: hosted Wi-Fi/SDIO firmware, LVGL/PPA, media/TTS
+transport behavior and task scheduling matter more on P4 than on compact S3
+boards.
 
 If a P4 target resets, hangs, or loses Wi-Fi under media/TTS streaming, update
 the on-board ESP32-C6 hosted Wi-Fi firmware before chasing audio bugs. The

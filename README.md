@@ -101,18 +101,32 @@ Changes since the previous release:
   exposes its own call state, Auto Answer and Do Not Disturb controls, and can
   originate calls from HA without pretending to be a specific ESP.
 - 🧭 `intercom_native`: external LAN callers are accepted as PBX-lite peers
-  instead of being rejected only because they are not already in the ESP
-  phonebook. The phonebook remains the routing source when HA must forward a
-  call to another endpoint.
+  when they call Home Assistant directly. The phonebook remains the routing
+  source when HA must forward a call to another endpoint.
 - 🪪 `intercom_native`: ESP endpoints republish their endpoint/capability state
   after Wi-Fi/API reconnects, and HA preserves intercom runtime state across HA
   reconnects instead of losing the active call surface.
-- 🎛️ Lovelace card: added `mode: ha_softphone` for an independent HA card and
-  kept `hybrid` as the ESP-mirroring mode. Hybrid cards no longer offer HA
-  itself as the ESP device source; use HA softphone mode for that dashboard.
+- 🎛️ Lovelace card: added the new Home Assistant softphone mode requested in
+  [#46](https://github.com/n-IA-hane/esphome-intercom/issues/46). The existing
+  `hybrid` mode remains the default and keeps the previous behavior: the card is
+  attached to one ESP endpoint and mirrors/controls that ESP. If the selected
+  destination is Home Assistant, the browser/card acts as the Home Assistant
+  audio leg and starts a call toward the attached ESP; the ESP will ring, or
+  answer automatically if its Auto Answer is enabled.
+- 🏠 Lovelace card: `mode: ha_softphone` represents Home Assistant as an
+  independent intercom endpoint instead of mirroring an ESP. It can call
+  discovered ESP endpoints from its selector and rings only for calls addressed
+  to Home Assistant itself, which is useful for clean dashboards where HA should
+  behave like one standalone desk phone.
 - 🎨 Lovelace card: HA softphone controls, selectors and buttons now follow the
   Home Assistant card surface styling more closely, including transparent form
   controls and a dedicated HA softphone screenshot in the README.
+
+![Home Assistant softphone card](docs/images/ha-softphone-card.png)
+
+_Home Assistant softphone mode: one dashboard card represents HA itself and can
+call or answer independently from ESP-mirroring hybrid cards._
+
 - 🧪 Diagnostics: `tools/intercom_softphone_probe.py` can simulate an intercom
   peer, call HA or ESP endpoints, send a generated tone or WAV, and record
   received audio to WAV. This is useful for isolating card, HA and ESP audio
@@ -127,17 +141,21 @@ Changes since the previous release:
 - 🧱 The AFE output bridge now uses frame-atomic buffering so VA/MWW/intercom
   consumers receive complete processed frames or silence, never short partial
   reads.
-- 🔊 The media speaker path includes the pause/resume behavior needed by the
-  full voice profiles so TTS, Voice Assistant and media playback share the audio
-  backend more predictably.
+- 🧠 P4 full AFE profiles now use a cleaner SDK baseline: PSRAM XIP remains
+  enabled, aggressive Wi-Fi/LWIP IRAM overrides were removed, and hot
+  AFE/intercom bridge buffers stay internal when contiguous heap allows it. This
+  reduced display flicker and audio glitches on the Waveshare P4 validation
+  target while leaving significantly more largest-free-block headroom than the
+  older tuning set.
+- 🔊 The media speaker path now uses the project-local
+  [`speaker`](esphome/components/speaker/README.md) fork only where full voice
+  YAMLs need it. Its `pause_releases_pipeline` mode keeps HA pause/resume
+  semantics while releasing the media pipeline before TTS, timer alarms or
+  intercom audio need the same speaker graph.
 - ⏲️ Voice Assistant timers are now an optional drop-in package. Display devices
   keep the timer-finished screen while the alarm sound plays, and full display
   YAMLs share one reducer-style UI priority model instead of duplicating
   conflicting display state logic.
-- 📡 ESP endpoints publish their audio capability (`full_duplex`, `mic_only`,
-  `speaker_only`, `control_only`). HA and the card use it to avoid impossible
-  audio directions and to support standalone mic-only/speaker-only intercom
-  devices.
 - 🧰 ReSpeaker Lite / Voice PE-style hardware with its own processed microphone
   path is confirmed by users on the native ESPHome audio examples.
 
@@ -161,6 +179,7 @@ and display-driven voice devices.
 | Full voice device with hardware/DSP echo cancellation | [`generic-s3-full-esphome-native-tcp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-tcp.yaml) or [`generic-s3-full-esphome-native-udp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-udp.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware. |
 | Standalone native ESPHome intercom | [`yamls/intercom-only/esphome-native/`](yamls/intercom-only/esphome-native/) | Full-duplex, mic-only and speaker-only examples using standard ESPHome audio components, without `esp_audio_stack`. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and audio lifecycle support without requiring intercom. |
+| Media pause/resume behavior for full voice profiles | [`speaker` fork](esphome/components/speaker/README.md) | Keeps HA media pause useful while releasing the media pipeline before TTS, timers or intercom use the speaker graph. |
 
 For the normal intercom use case, do not start by designing a PBX. Pick the
 closest YAML, adapt the board pins and audio hardware, add the ESP through the
@@ -596,16 +615,25 @@ by the maintained `esp_audio_stack` YAMLs.
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, intercom_api, esp_audio_stack, esp_aec]
+    components: [audio_processor, intercom_api, esp_audio_stack, esp_aec, speaker]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, intercom_api, esp_afe, esp_audio_stack]
+    components: [audio_processor, intercom_api, esp_afe, esp_audio_stack, speaker]
 ```
 
-> **Note**: `audio_processor` is still listed because it provides shared task and buffer helpers used by the audio components. Use `esp_aec` for lightweight single-mic processing and `esp_afe` for the full pipeline (see [AFE section](#audio-front-end-afe) below). `intercom_api` no longer owns software AEC; standalone intercom binds to native ESPHome `microphone`/`speaker`, while software AEC/AFE belongs behind `esp_audio_stack`.
+> **Note**: `audio_processor` is still listed because it provides shared task
+> and buffer helpers used by the audio components. Use `esp_aec` for
+> lightweight single-mic processing and `esp_afe` for the full pipeline (see
+> [AFE section](#audio-front-end-afe) below). `intercom_api` no longer owns
+> software AEC; standalone intercom binds to native ESPHome
+> `microphone`/`speaker`, while software AEC/AFE belongs behind
+> `esp_audio_stack`. Full voice YAMLs also include the project-local
+> [`speaker`](esphome/components/speaker/README.md) fork for media pause
+> behavior; intercom-only native YAMLs do not need it unless they use
+> `platform: speaker` media playback.
 
 #### After ESP Firmware Package Upgrades: Clear ESPHome Build Cache
 
@@ -1065,8 +1093,8 @@ sequenceDiagram
 | **Waveshare P4-Touch landscape (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, UDP intercom transport |
 | **Generic S3 (full AEC light)** | [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + Intercom, lighter 4 MB-oriented preset |
 | **Generic S3 (full AEC light UDP)** | [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | Same full AEC light experience, UDP intercom transport |
-| **Generic S3 (full AFE)** | [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
-| **Generic S3 (full AFE UDP)** | [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | Same full AFE experience, UDP intercom transport, requires >4 MB app slot |
+| **Generic S3 (full AFE, untested)** | [`generic-s3-full-afe-tcp.yaml`](yamls/untested/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
+| **Generic S3 (full AFE UDP, untested)** | [`generic-s3-full-afe-udp.yaml`](yamls/untested/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | Same full AFE experience, UDP intercom transport, requires >4 MB app slot |
 | **Generic S3 (full native TCP)** | [`generic-s3-full-esphome-native-tcp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-tcp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends or native audio testing |
 | **Generic S3 (full native UDP)** | [`generic-s3-full-esphome-native-udp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-udp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Same full native experience, UDP intercom transport |
 | **Generic S3 (native intercom full-duplex TCP/UDP)** | [`generic-s3-intercom-esphome-native-full-duplex-tcp.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex-tcp.yaml) / [`udp`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex-udp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | Intercom-only native ESPHome audio |
@@ -1083,7 +1111,12 @@ sequenceDiagram
 - I2S microphone (INMP441, SPH0645, ES8311, etc.)
 - I2S speaker amplifier (MAX98357A, ES8311, etc.)
 - ESP-IDF framework (not Arduino)
-- **sdkconfig tuning** for PSRAM devices: `DATA_CACHE_64KB` + `DATA_CACHE_LINE_64B` (S3) or `CACHE_L2_CACHE_256KB` (P4), plus `SPIRAM_FETCH_INSTRUCTIONS` + `SPIRAM_RODATA`. See [esp_audio_stack README](esphome/components/esp_audio_stack/README.md#psram-and-sdkconfig-requirements) for details.
+- **sdkconfig tuning** for PSRAM devices: S3 profiles use cache/PSRAM
+  instruction/rodata options to recover internal heap; P4 profiles keep a
+  smaller validated baseline with L2 cache plus PSRAM XIP and avoid aggressive
+  Wi-Fi/LWIP IRAM overrides. See the board packages and
+  [esp_afe README](esphome/components/esp_afe/README.md#iram-optimization-critical-for-esp32-s3)
+  for details.
 
 Generic full-experience S3 now has two maintained presets. Use
 `generic-s3-full-aec-*` for the lighter 4 MB-oriented build: it keeps VA, MWW,
@@ -1206,6 +1239,12 @@ runs media player, Piper TTS, Micro Wake Word and Voice Assistant on raw
 mic/speaker hardware without hardware echo cancellation. It can also be useful
 outside intercom projects: an ESPHome Voice Assistant device can use it as the
 shared mic/speaker transport and AEC reference path.
+
+Full voice profiles that expose media playback also include the local
+[`speaker`](esphome/components/speaker/README.md) fork. That fork does not own
+I2S; it only adds `pause_releases_pipeline` to the ESPHome speaker media player
+so a paused media stream does not keep the playback pipeline half-owned while
+TTS, timer alarms or intercom audio need the same mixer/speaker graph.
 
 For a composite device, put the microphone and speaker on the same I2S bus and
 use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The
@@ -1359,11 +1398,13 @@ This prevents the adaptive filter from drifting during silence, which would othe
 
 ### LVGL Display
 
-Running a display alongside Voice Assistant, Micro Wake Word, AEC/AFE, and
-intercom on one ESP is challenging due to RAM and CPU constraints.
-`spotpear-ball-v2-full-afe-tcp.yaml` is the stable LVGL reference. The P4
-LVGL YAMLs use the same design direction but remain experimental while hosted
-Wi-Fi, MIPI/LVGL/PPA and runtime contention are investigated.
+Running a display alongside Voice Assistant, Micro Wake Word, AEC/AFE, media
+playback and intercom on one ESP is challenging due to RAM and CPU constraints.
+`spotpear-ball-v2-full-afe-tcp.yaml` is the compact LVGL reference. The P4 LVGL
+YAMLs use the same state model on a larger MIPI panel and now have a cleaner
+runtime profile, but remain hardware-specific targets because hosted Wi-Fi,
+MIPI/LVGL/PPA and SDIO traffic make their tuning different from normal S3
+boards.
 
 | Before (ili9xxx manual) | After (LVGL) |
 |---|---|
@@ -1579,8 +1620,8 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`generic-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic AFE, single-bus mono, TYPE2-style software reference, requires >4 MB app slot |
-| [`generic-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-afe-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AFE, UDP intercom transport, requires >4 MB app slot |
+| [`generic-s3-full-afe-tcp.yaml`](yamls/untested/generic-s3-full-afe-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Untested single-mic AFE, single-bus mono, TYPE2-style software reference, requires >4 MB app slot |
+| [`generic-s3-full-afe-udp.yaml`](yamls/untested/generic-s3-full-afe-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Untested full AFE, UDP intercom transport, requires >4 MB app slot |
 | [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
 | [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Same as TCP full AFE, UDP intercom transport |
 | [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
