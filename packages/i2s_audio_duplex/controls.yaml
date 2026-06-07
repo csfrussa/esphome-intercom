@@ -1,0 +1,26 @@
+# =============================================================================
+# I2S Audio Duplex user controls
+# =============================================================================
+# Drop-in for devices using:
+#   i2s_audio_duplex id: i2s_duplex
+#   speaker id: hw_speaker
+#
+# Exposes the stable user-facing controls:
+#   - Master Volume: speaker-backed software volume for non-codec boards
+#   - Mic Gain: post-AEC/AFE gain for level trim after echo cancellation
+#
+# Pre-AEC mic gain is intentionally not part of the standard controls. Keep it
+# as a hardware-tuning override only when a specific microphone clips before
+# AEC/AFE.
+# =============================================================================
+
+number:
+  - platform: i2s_audio_duplex
+    i2s_audio_duplex_id: i2s_duplex
+    speaker_volume:
+      id: master_volume
+      name: Master Volume
+      speaker_id: hw_speaker
+    mic_gain:
+      id: mic_gain
+      name: Mic Gain

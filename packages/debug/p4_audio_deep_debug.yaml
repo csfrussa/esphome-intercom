@@ -1,0 +1,38 @@
+# ESP32-P4 audio deep-debug package.
+#
+# Include from the P4 YAML only while investigating audio clicks. This enables
+# IDF facilities needed for task/heap snapshots. The audio PCM/discontinuity
+# probe itself is enabled on the `i2s_audio_duplex:` block with:
+#
+#   debug_probe: true
+#   debug_probe_frames: 96
+#   debug_probe_dump_frames: 32
+#   debug_probe_trigger_delta: 12000
+#   debug_probe_cooldown_frames: 512
+#
+# Keep this out of production builds.
+
+esp32:
+  framework:
+    sdkconfig_options:
+      CONFIG_FREERTOS_USE_TRACE_FACILITY: "y"
+      CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS: "y"
+      CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS: "y"
+      CONFIG_HEAP_TRACING_STANDALONE: "y"
+      CONFIG_ESP_GDBSTUB_SUPPORT_TASKS: "y"
+
+logger:
+  level: DEBUG
+  logs:
+    i2s_duplex: DEBUG
+    i2s_duplex.mic: DEBUG
+    i2s_duplex.spk: DEBUG
+    esp_afe: DEBUG
+    esp_aec: DEBUG
+    intercom_api: DEBUG
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+    switch: WARN
+    number: WARN
+    button: WARN

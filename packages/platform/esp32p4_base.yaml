@@ -1,0 +1,59 @@
+# =============================================================================
+# ESP32-P4 platform base
+# =============================================================================
+#
+# Chip-level board/framework selection, hardware accelerator enables and P4
+# memory policy for every P4 device in this repo.
+#
+# Usage:
+#   packages:
+#     p4_base:
+#       url: https://github.com/n-IA-hane/esphome-intercom
+#       file: packages/platform/esp32p4_base.yaml
+#       ref: audio-core-v2
+# =============================================================================
+
+esp32:
+  board: esp32-p4-evboard
+  variant: esp32p4
+  flash_size: 32MB
+  # 360MHz is the standard ESP-IDF/ESPHome maximum for P4. Some datasheet
+  # revisions mention 400MHz only as a special-contact / non-default case, so
+  # treat 400MHz as an explicit experiment, not as the baseline.
+  cpu_frequency: 360MHz
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
+      # Default ESPHome `-Os` (SIZE). P4 AFE/FFT workloads are sensitive to
+      # instruction-cache pressure; larger `-O2` binaries can starve loopTask
+      # under full audio load.
+    sdkconfig_options:
+      # Display/audio baseline: esp-sr and 800x1280 MIPI/LVGL need the larger
+      # L2 cache, and XIP moves instruction/rodata fetches onto PSRAM instead
+      # of keeping every miss on the flash path.
+      CONFIG_CACHE_L2_CACHE_256KB: "y"
+      CONFIG_SPIRAM_XIP_FROM_PSRAM: "y"
+      # P4 memory policy. Without these, malloc() is confined to the ~480KB
+      # internal RAM and audio + Wi-Fi + intercom exhaust it: a call attempt
+      # finds internal_free ~5KB and the device resets. Keep all four.
+      CONFIG_SPIRAM_USE_CAPS_ALLOC: "n"
+      CONFIG_SPIRAM_USE_MALLOC: "y"
+      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "16384"
+      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "131072"
+      # Keep TLS/crypto on P4 hardware paths. These are ESP-IDF defaults in the
+      # generated P4 sdkconfig today, but pin them here so future package changes
+      # do not silently fall back to software crypto.
+      CONFIG_MBEDTLS_HARDWARE_AES: "y"
+      CONFIG_MBEDTLS_HARDWARE_GCM: "y"
+      CONFIG_MBEDTLS_HARDWARE_MPI: "y"
+      CONFIG_MBEDTLS_HARDWARE_SHA: "y"
+      CONFIG_MBEDTLS_HARDWARE_ECC: "y"
+      CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY: "y"
+      CONFIG_ESP_TLS_USE_DS_PERIPHERAL: "y"
+      # Push TLS arenas to PSRAM (default IDF leaves them in internal RAM and
+      # each HTTPS handshake eats 15-30 KB; on P4 with audio + intercom that
+      # exhausts internal RAM). DYNAMIC_BUFFER allocates only what each handshake
+      # actually needs instead of fixed static buffers.
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+      CONFIG_MBEDTLS_DYNAMIC_BUFFER: "y"

@@ -1,0 +1,55 @@
+# Findings and known issues
+
+A short index of upstream issues we depend on and design decisions worth pinning. Not bug bashing: each entry exists because someone reading the code or YAML may otherwise re-derive the wrong conclusion.
+
+## Upstream: esp-sr VAD stuck at SILENCE without a wake event
+
+**Symptom**: With AFE configured for VAD only (`vad_init=true`, `wakenet_init=false`), the `vad_state` field in `afe_fetch_result_t` stays at `VAD_SILENCE` indefinitely, even on loud speech. As soon as a wake word is detected (or WakeNet is initialized), VAD starts reporting transitions normally.
+
+**Root cause**: esp-sr 2.4.x ties VAD evaluation to the WakeNet inference path internally. When WakeNet is not initialized, the VAD state machine is never advanced. Tracked upstream as [espressif/esp-sr#187](https://github.com/espressif/esp-sr/issues/187).
+
+**Impact on this project**: Our `esp_afe` component exposes `vad_enabled` as a runtime switch and lets users configure thresholds via YAML, but **VAD readings are only reliable on builds that also enable WakeNet** (i.e. micro_wake_word configured against the same AFE). Standalone "VAD-only" pipelines are not supported by upstream and we should not work around it locally.
+
+**What not to do**: Do not synthesize VAD transitions from raw mic energy in
+`esp_afe.cpp`. That diverges from the upstream VAD state machine under noise
+and makes the sensor less trustworthy than no VAD reading at all. Wait for the
+upstream state machine to report real VAD transitions.
+
+## Why a custom `i2s_audio_duplex` component instead of stock `i2s_audio`
+
+**The stock split**: ESPHome's `i2s_audio` instantiates a separate I2S controller for `microphone` and for `speaker`. On a board where mic and speaker live on different I2S buses (MEMS mic on one bus, I2S amp on another), this works fine.
+
+**Where it breaks**: Audio codecs like ES8311, ES8388, WM8960 expose mic and speaker on the **same I2S bus**, sharing pin lines and a clock. Two `i2s_audio` instances cannot bind the same I2S controller; they collide on the driver layer and the second one silently fails or produces glitches. The dual-instance setup also cannot do AEC properly: there is no shared frame cadence between the two paths, so the reference and mic streams are not phase-coherent.
+
+**What `i2s_audio_duplex` provides** that stock `i2s_audio` does not:
+
+- **Single I2S controller, both directions**: TX and RX share the same `i2s_chan_handle_t` pair, configured once at start time. Required for any single-bus codec.
+- **Frame cadence guarantee**: TX and RX run lock-step in one task. The AEC reference is the previous TX frame, decimated on the TX side (matches Espressif's `esp-gmf aec_rec` pipeline). Phase coherent, no skew, no ghost-tail residual.
+- **TDM hardware reference**: When paired with ES7210 in TDM mode, captures the DAC analog feedback on a dedicated ADC slot. Sample-aligned with mic data. The board YAML chooses which slot via `tdm_ref_slot` (Korvo-2 baseline = slot 2 / MIC3, Waveshare P4 Touch = slot 1 / MIC2). The audio task watches the chosen slot's RMS while the speaker is active and emits a one-shot WARN ("TDM AEC reference silent for N frames...") if it stays below -60 dBFS for ~3.2 s, so wiring or PGA mistakes surface immediately instead of running a dead reference forever.
+- **Stereo digital reference (ES8311)**: Stereo I2S frame with L=DAC ref, R=ADC mic. Same single-bus codec, sample-accurate ref without extra hardware.
+- **Multi-rate operation**: I2S bus at 48 kHz (for high-quality DAC), mic/AEC/VA at 16 kHz via internal FIR decimation. Not expressible in stock `i2s_audio`.
+- **Cross-component validation**: A `FINAL_VALIDATE_SCHEMA` rejects configurations that would create dual processors or dual DC-offset removal between `i2s_audio_duplex` and `intercom_api`. Catches errors at compile time instead of as runtime audio garbage.
+
+**When stock `i2s_audio` is still the right choice**: Generic boards with truly separate mic and speaker buses. For those, `intercom_api`'s standalone path runs on top of the stock components and does its own AEC via a software ring-buffer reference. Quality is lower than the duplex setup (see [`intercom_api` README, AEC quality section](../esphome/components/intercom_api/README.md#aec-quality-standalone-vs-i2s_audio_duplex)) but acceptable for non-composite use cases.
+
+## Codec baseline vs board-specific override
+
+`packages/codec/es7210_tdm.yaml` is a **baseline** modeled on the Espressif Korvo-2 reference (MIC3 / slot 2 = AEC ref @ 30 dB, MIC4 PGA 0 dB). It is not a "configures every ES7210" package. Boards that route the ES8311 DAC to a different ADC slot must override the affected PGA register from their own `on_boot` lambda **after** the baseline script runs:
+
+| Board | Wiring | YAML setting | PGA override |
+|---|---|---|---|
+| WS3 / Spotpear / Korvo-2 | DAC -> MIC3 / slot 2 | `tdm_ref_slot: 2` (baseline default) | none (baseline already sets MIC3 = 30 dB) |
+| Waveshare P4 Touch | DAC -> MIC2 / slot 1 | `tdm_ref_slot: 1` | reset MIC2 PGA to 0 dB; MIC3 stays at baseline |
+
+If the ref slot RMS stays silent while the speaker is active, the duplex driver emits a WARN (see troubleshooting). That is the canary for "you forgot to override the PGA for your board".
+
+## P4 esp-sr version split
+
+Do not read the P4 `esp_aec` pin as the version used by every P4 firmware.
+
+- `esp_aec` pins ESP32-P4 to `espressif/esp-sr ~2.3.0` because the standalone
+  P4 AEC smoke path regressed when bumped to 2.4.x.
+- `esp_afe` depends on `espressif/esp-sr ~2.4.0`; the P4 full-experience AFE
+  YAMLs use `esp_afe`, so they exercise the 2.4.x AFE path.
+- The P4 full-AEC YAML is kept under `yamls/experimental/` as a reference.
+  Public P4 presets should be validated against the AFE path.

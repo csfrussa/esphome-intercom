@@ -1,0 +1,7 @@
+# =============================================================================
+# Compatibility alias for the full VA + Intercom state machine.
+# New YAMLs should include `intercom/state_machine_full.yaml`.
+# =============================================================================
+
+packages:
+  state_machine_full: !include state_machine_full.yaml

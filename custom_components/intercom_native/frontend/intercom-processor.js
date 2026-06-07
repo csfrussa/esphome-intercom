@@ -1,0 +1,87 @@
+/**
+ * Intercom AudioWorklet Processor
+ * Based on Home Assistant's recorder-worklet.js
+ * This processor runs in a separate audio thread and converts
+ * Float32 audio samples to Int16 PCM format at 16kHz.
+ */
+
+const TARGET_SAMPLE_RATE = 16000;
+
+class RecorderProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._buffer = [];
+    this._targetSamples = 512; // 32ms chunks @ 16kHz, matches ESP AUDIO_CHUNK_SIZE
+    this._frameCount = 0;
+    this._chunksSent = 0;
+    this._totalSamplesProcessed = 0;
+
+    // Resampling state - works for any input rate (44.1kHz, 48kHz, etc)
+    this._resampleRatio = sampleRate / TARGET_SAMPLE_RATE;
+    this._resampleAccum = 0;
+
+    // Send init message to main thread
+    this.port.postMessage({
+      type: "debug",
+      message: `Worklet v2.3.0: ${sampleRate}Hz -> ${TARGET_SAMPLE_RATE}Hz (ratio: ${this._resampleRatio.toFixed(2)})`
+    });
+  }
+
+  process(inputList, _outputList, _parameters) {
+    this._frameCount++;
+
+    // Check input validity
+    if (!inputList || inputList.length === 0) {
+      return true;
+    }
+
+    if (!inputList[0] || inputList[0].length === 0) {
+      return true;
+    }
+
+    const float32Data = inputList[0][0]; // First channel of first input
+    if (!float32Data || float32Data.length === 0) {
+      return true;
+    }
+
+    // Resample to 16kHz using fractional accumulator
+    // Works correctly for any input rate (44.1kHz, 48kHz, etc)
+    for (let i = 0; i < float32Data.length; i++) {
+      this._resampleAccum += 1;
+      if (this._resampleAccum >= this._resampleRatio) {
+        this._buffer.push(float32Data[i]);
+        this._resampleAccum -= this._resampleRatio;
+      }
+    }
+    this._totalSamplesProcessed += float32Data.length;
+
+    // When we have enough samples, convert and send
+    while (this._buffer.length >= this._targetSamples) {
+      const chunk = this._buffer.splice(0, this._targetSamples);
+
+      // Convert Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767)
+      // Following HA's exact pattern from recorder-worklet.js
+      const int16Data = new Int16Array(chunk.length);
+      for (let i = 0; i < chunk.length; i++) {
+        const s = Math.max(-1, Math.min(1, chunk[i]));
+        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+
+      this._chunksSent++;
+
+      // Send to main thread (transferable for performance)
+      try {
+        this.port.postMessage({
+          type: "audio",
+          buffer: int16Data.buffer
+        }, [int16Data.buffer]);
+      } catch (err) {
+        console.error("[IntercomProcessor] postMessage error:", err);
+      }
+    }
+
+    return true; // Keep processor alive
+  }
+}
+
+registerProcessor("intercom-processor", RecorderProcessor);

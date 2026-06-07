@@ -1,0 +1,10 @@
+# =============================================================================
+# I2S Audio Duplex microphone gain control
+# =============================================================================
+
+number:
+  - platform: i2s_audio_duplex
+    i2s_audio_duplex_id: i2s_duplex
+    mic_gain:
+      id: mic_gain
+      name: Mic Gain

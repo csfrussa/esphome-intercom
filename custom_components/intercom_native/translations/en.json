@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Intercom Native",
+        "description": "PBX-lite intercom between ESPHome peers and Home Assistant. Routes calls peer-to-peer or via HA as a switchboard.",
+        "data": {
+          "use_tcp": "Enable TCP transport",
+          "tcp_port": "TCP port",
+          "use_udp": "Enable UDP transport",
+          "udp_audio_port": "UDP audio port",
+          "udp_control_port": "UDP control port"
+        },
+        "data_description": {
+          "use_tcp": "Framed binary protocol (audio + signaling on a single connection).",
+          "tcp_port": "Listen port for TCP intercom (default 6054).",
+          "use_udp": "Raw PCM audio with framed control signaling on a separate port.",
+          "udp_audio_port": "Listen port for UDP audio (default 6054).",
+          "udp_control_port": "Listen port for UDP signaling (default 6055). Must differ from the audio port."
+        }
+      }
+    },
+    "error": {
+      "at_least_one_transport": "Enable at least one transport.",
+      "udp_ports_must_differ": "UDP audio port and UDP control port must differ."
+    },
+    "abort": {
+      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",
+      "already_configured": "Intercom Native is already configured."
+    }
+  }
+}

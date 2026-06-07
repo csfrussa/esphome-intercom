@@ -1,0 +1,34 @@
+# =============================================================================
+# Common intercom call-control buttons.
+#
+# Provides:
+#   buttons: call_button, next_contact_button, prev_contact_button,
+#            decline_button, restart
+#
+# Prerequisites:
+#   - id `intercom` : intercom_api component
+# =============================================================================
+
+button:
+  - platform: intercom_api
+    intercom_api_id: intercom
+    call:
+      name: Call
+      id: call_button
+      icon: mdi:phone
+    next_contact:
+      name: Next Contact
+      id: next_contact_button
+      icon: mdi:skip-next
+    previous_contact:
+      name: Previous Contact
+      id: prev_contact_button
+      icon: mdi:skip-previous
+    decline:
+      name: Decline
+      id: decline_button
+      icon: mdi:phone-hangup
+
+  - platform: restart
+    name: Restart
+    entity_category: config

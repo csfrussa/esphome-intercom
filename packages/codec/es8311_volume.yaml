@@ -1,0 +1,57 @@
+# =============================================================================
+# ES8311 hardware volume control
+# =============================================================================
+#
+# The ES8311 DAC volume must be controlled directly on boards where the codec
+# also provides the AEC reference path. Do not drive this through
+# speaker.volume_set: that changes the speaker abstraction and can disturb the
+# reference/software volume path.
+#
+# For shared mixer builds, do not attach `audio_dac: es8311_dac` to
+# `hw_speaker`: ESPHome media_player volume/mute commands are forwarded through
+# the speaker chain and would otherwise change the global DAC used by intercom.
+#
+# Required IDs in the consumer YAML:
+#   - audio_dac id: es8311_dac
+#
+# Optional substitutions:
+#   es8311_volume_min      default 0.15
+#   es8311_volume_max      default 0.75
+#   es8311_volume_initial  default 50
+# =============================================================================
+
+substitutions:
+  es8311_volume_min: "0.15"
+  es8311_volume_max: "0.75"
+  es8311_volume_initial: "50"
+
+script:
+  - id: es8311_restore_volume
+    mode: restart
+    then:
+      - lambda: |-
+          float pct = id(master_volume).state;
+          if (pct < 0.0f || pct > 100.0f) {
+            pct = ${es8311_volume_initial};
+          }
+          const float volume = ${es8311_volume_min} + (pct / 100.0f) * (${es8311_volume_max} - ${es8311_volume_min});
+          ESP_LOGD("es8311_volume", "restore master_volume=%.1f%% dac_volume=%.3f", pct, volume);
+          id(es8311_dac).set_volume(volume);
+
+number:
+  - platform: template
+    id: master_volume
+    name: Master Volume
+    icon: mdi:volume-high
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: ${es8311_volume_initial}
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    set_action:
+      - lambda: |-
+          const float volume = ${es8311_volume_min} + (x / 100.0f) * (${es8311_volume_max} - ${es8311_volume_min});
+          ESP_LOGD("es8311_volume", "set master_volume=%.1f%% dac_volume=%.3f", x, volume);
+          id(es8311_dac).set_volume(volume);
