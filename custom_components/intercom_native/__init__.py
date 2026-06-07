@@ -40,6 +40,7 @@ from .websocket_api import (
     _find_bridge_by_source,
     _fire_call_event,
     _ha_softphone_dnd,
+    _set_ha_softphone_call_state,
     _sessions,
     _bridges,
     IntercomSession,
@@ -1152,8 +1153,6 @@ def _find_inbound_source_device(
 def _external_inbound_source_device(
     hass: HomeAssistant,
     inbound: "InboundStart",
-    *,
-    for_ha_softphone: bool,
 ) -> dict:
     """Build a peer identity for callers outside HA's ESP device registry."""
     caller_name = (
@@ -1164,11 +1163,7 @@ def _external_inbound_source_device(
     )
     route_id = (inbound.caller_route or "").strip() or slugify(caller_name)
     transport = "tcp" if inbound.transport is not None else "udp"
-    device_id = (
-        HA_SOFTPHONE_DEVICE_ID
-        if for_ha_softphone
-        else f"external_{slugify(route_id or caller_name or inbound.host)}"
-    )
+    device_id = f"external_{slugify(route_id or caller_name or inbound.host)}"
     return {
         "device_id": device_id,
         "name": caller_name,
@@ -1182,7 +1177,6 @@ def _external_inbound_source_device(
         "esphome_id": "",
         "entities": {},
         "external": True,
-        "softphone": for_ha_softphone,
     }
 
 
@@ -1323,14 +1317,16 @@ async def _ring_ha_for_inbound_call(
         call_id=call_id,
         caller_name=caller_name,
         audio_mode=source_device.get("audio_mode", "full_duplex"),
-        ui_device_id=HA_SOFTPHONE_DEVICE_ID,
-        session_device_id=source_device_id,
-        ui_caller_name=caller_name or source_device.get("name") or "",
-        ui_peer_name=source_device.get("name") or caller_name or "",
     )
-    if await session.start_ringing(caller_name=caller_name, emit_event=False):
+    if await session.start_ringing(caller_name=caller_name):
         _sessions[source_device_id] = session
-        session.fire_ringing_event(caller_name)
+        _set_ha_softphone_call_state(
+            hass,
+            "ringing",
+            session_device_id=source_device_id,
+            caller=caller_name or source_device.get("name") or "",
+            peer_name=source_device.get("name") or caller_name or "",
+        )
         return
 
     _LOGGER.error("Unsolicited start_ringing failed for %s", observed_host)
@@ -1366,7 +1362,6 @@ async def _route_inbound_call_pbx_lite(
         source_device = _external_inbound_source_device(
             hass,
             inbound,
-            for_ha_softphone=ha_destination,
         )
         source_match = "external"
         _LOGGER.info(

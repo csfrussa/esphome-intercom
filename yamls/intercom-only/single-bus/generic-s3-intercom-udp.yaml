@@ -77,18 +77,6 @@ psram:
 preferences:
   flash_write_interval: 5min
 
-api:
-  on_client_connected:
-    - lambda: |-
-        static bool published = false;
-        if (!published) {
-          published = true;
-          id(intercom).publish_entity_states();
-        }
-  # `start_call(dest)` / `decline_call(reason)` actions come from
-  # packages/intercom_only.yaml. Contact mutation stays inside intercom_api
-  # actions and the phonebook batch packages.
-
 ota:
   - platform: esphome
 

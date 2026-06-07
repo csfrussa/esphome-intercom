@@ -107,7 +107,6 @@ voice_assistant:
     - globals.set:
         id: init_in_progress
         value: "false"
-    - intercom_api.publish_entity_states: intercom
     - script.execute: update_status
     - script.execute: start_mww_when_ready
 micro_wake_word:
