@@ -482,6 +482,7 @@ class IntercomApi : public Component {
   switch_::Switch *auto_answer_switch_{nullptr};
   switch_::Switch *dnd_switch_{nullptr};
   switch_::Switch *routing_mode_switch_{nullptr};
+  bool entity_restore_applied_{false};
   number::Number *volume_number_{nullptr};
   number::Number *mic_gain_number_{nullptr};
   // Contacts management. Empty at boot; fed by the optional HA text_sensor
