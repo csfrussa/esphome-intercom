@@ -263,12 +263,14 @@ esp_afe:
   vad_enabled: true            # Keep GMF VAD internals live; HA switch gates runtime behavior.
   continuous_vad: true         # Keep Voice Detected alive in standby when VAD is enabled.
   agc_enabled: false
-  # Same hybrid placement as WS3 dual-mic AFE: keep per-frame scratch/output
-  # internal for latency, move the larger feed staging ring to PSRAM to preserve
-  # contiguous internal/DMA heap under HTTPS media + TTS + intercom load.
-  feed_buf_in_psram: true
-  feed_ring_in_psram: true
-  fetch_ring_in_psram: true
+  # Keep the complete GMF bridge in internal RAM. These buffers are touched on
+  # every AFE frame, and P4 now has enough contiguous internal heap after the
+  # SDK baseline cleanup. Setting these three flags to true moves about 45-50KB
+  # back to PSRAM on the P4 dual-mic profile, but adds per-frame PSRAM traffic
+  # and was observed to make intercom TX less stable under full display/audio load.
+  feed_buf_in_psram: false
+  feed_ring_in_psram: false
+  fetch_ring_in_psram: false
 
 esp_audio_stack:
   id: audio_stack
@@ -484,7 +486,10 @@ voice_assistant:
 intercom_api:
   id: intercom
   task_stacks_in_psram: true
-  buffers_in_psram: true
+  # Set true to save roughly 5-8KB internal RAM from intercom-owned staging
+  # buffers. Keep false on P4 full AFE while there is enough heap, because these
+  # buffers sit on the mic TX path during calls.
+  buffers_in_psram: false
   microphone: mic_afe          # Post-AEC: no echo in transmitted audio
   speaker: intercom_speaker
   ringing_timeout: 30s
