@@ -7,9 +7,9 @@
 
 ## BREAKING CHANGES for 2026.6.2
 
-`2026.6.2` is a stabilization update focused on Home Assistant softphone
-behavior, external PBX-lite callers, runtime audio controls and maintained
-package defaults.
+`2026.6.2` is a stabilization update focused on the Home Assistant softphone
+card, external PBX-lite callers, runtime audio controls, timer UI ownership and
+maintained package defaults.
 
 Read the dedicated [breaking changes guide](docs/BREAKING_CHANGES.md) before
 flashing ESP firmware or restarting Home Assistant if you use custom YAMLs,
@@ -20,6 +20,8 @@ Action required:
 - Home Assistant softphone cards are now independent endpoints. Use
   `mode: ha_softphone` without `device_id`; only the default `hybrid` mode is
   bound to one ESP device.
+- Card configuration was cleaned up. Use `show_extended_info`; old copied card
+  configs using the previous extended-info key must be updated.
 - Maintained full AFE profiles now boot with AEC/VAD ON and FD high-perf where
   the target has enough resources. If you copied old full AFE YAML blocks,
   ensure HA restore values do not overwrite the boot pipeline unexpectedly.
@@ -94,31 +96,49 @@ stability under normal HA/API restarts.
 
 Changes since the previous release:
 
-- Home Assistant can now be used as its own softphone endpoint from a Lovelace
-  card with `mode: ha_softphone`. This card is independent from ESP cards, has
-  its own destination selector, Auto Answer and Do Not Disturb controls, and is
-  meant for dashboards that should represent Home Assistant itself.
-- HA accepts valid PBX-lite calls from external LAN peers instead of requiring
-  every caller to be pre-registered in the ESP phonebook. The phonebook is still
-  used for routing and forwarding decisions when HA must reach another endpoint.
-- Full-experience AFE profiles now start with VAD/AEC enabled and FD high-perf
-  selected where maintained board resources allow it. The HA entities mirror
-  the boot pipeline state first; users can still disable VAD/AEC or switch AFE
+- 🧩 `intercom_native`: Home Assistant can now be represented as its own
+  PBX-lite softphone endpoint. The HA softphone accepts valid inbound calls,
+  exposes its own call state, Auto Answer and Do Not Disturb controls, and can
+  originate calls from HA without pretending to be a specific ESP.
+- 🧭 `intercom_native`: external LAN callers are accepted as PBX-lite peers
+  instead of being rejected only because they are not already in the ESP
+  phonebook. The phonebook remains the routing source when HA must forward a
+  call to another endpoint.
+- 🪪 `intercom_native`: ESP endpoints republish their endpoint/capability state
+  after Wi-Fi/API reconnects, and HA preserves intercom runtime state across HA
+  reconnects instead of losing the active call surface.
+- 🎛️ Lovelace card: added `mode: ha_softphone` for an independent HA card and
+  kept `hybrid` as the ESP-mirroring mode. Hybrid cards no longer offer HA
+  itself as the ESP device source; use HA softphone mode for that dashboard.
+- 🎨 Lovelace card: HA softphone controls, selectors and buttons now follow the
+  Home Assistant card surface styling more closely, including transparent form
+  controls and a dedicated HA softphone screenshot in the README.
+- 🧪 Diagnostics: `tools/intercom_softphone_probe.py` can simulate an intercom
+  peer, call HA or ESP endpoints, send a generated tone or WAV, and record
+  received audio to WAV. This is useful for isolating card, HA and ESP audio
+  issues.
+- 🎙️ Full-experience AFE profiles now boot with VAD/AEC enabled and FD
+  high-perf selected where maintained board resources allow it. HA entities
+  mirror the boot pipeline first; users can still disable VAD/AEC or switch AFE
   mode at runtime for testing.
-- Runtime AFE rebuilds are serialized through the audio backend so a user can
-  change VAD/AEC/AFE options from Home Assistant without tearing down the stack
-  from two places at once.
-- The media speaker path includes the pause/resume behavior needed by the full
-  voice profiles so TTS, Voice Assistant and media playback share the audio
+- 🔁 Runtime AFE rebuilds are serialized through the audio backend and coalesce
+  rapid mode changes so the latest requested AFE mode wins without racing the
+  active audio stack.
+- 🧱 The AFE output bridge now uses frame-atomic buffering so VA/MWW/intercom
+  consumers receive complete processed frames or silence, never short partial
+  reads.
+- 🔊 The media speaker path includes the pause/resume behavior needed by the
+  full voice profiles so TTS, Voice Assistant and media playback share the audio
   backend more predictably.
-- A Voice Assistant timer package is available as an optional drop-in package
-  for full devices that want timer events and UI hooks; it is not part of the
-  headless core package.
-- ESP endpoints publish their audio capability (`full_duplex`, `mic_only`,
+- ⏲️ Voice Assistant timers are now an optional drop-in package. Display devices
+  keep the timer-finished screen while the alarm sound plays, and full display
+  YAMLs share one reducer-style UI priority model instead of duplicating
+  conflicting display state logic.
+- 📡 ESP endpoints publish their audio capability (`full_duplex`, `mic_only`,
   `speaker_only`, `control_only`). HA and the card use it to avoid impossible
   audio directions and to support standalone mic-only/speaker-only intercom
   devices.
-- ReSpeaker Lite / Voice PE-style hardware with its own processed microphone
+- 🧰 ReSpeaker Lite / Voice PE-style hardware with its own processed microphone
   path is confirmed by users on the native ESPHome audio examples.
 
 Read the previous PBX-lite release note here: [2026.5.0 release notes](docs/RELEASE_2026_5_0.md).

@@ -114,9 +114,23 @@ Only `hybrid` cards are bound to an ESP through `device_id`. Do not configure
 `device_id` on a Home Assistant softphone card: it has its own destination
 selector, Auto Answer and Do Not Disturb state.
 
+The extended-info card option is now `show_extended_info`. Copied card YAML that
+still uses the previous extended-info key must be updated; the old key is not
+kept as a compatibility alias.
+
+| Was | Is |
+|---|---|
+| ESP-mirroring dashboard card only | `mode: hybrid` (default) |
+| HA/browser dashboard pretending to be one ESP | `mode: ha_softphone` with no `device_id` |
+| old extended-info option | `show_extended_info: true` |
+
 Home Assistant now accepts valid inbound PBX-lite calls addressed to HA even
 when the caller is not already present in the ESP phonebook. The phonebook is
 still required when HA must resolve or forward a call to another endpoint.
+
+In practice this means HA behaves like a PBX-lite endpoint: it can ring for a
+valid caller name received in the protocol, while still using the phonebook only
+when it needs to route toward another ESP.
 
 ### Home Assistant: phonebook sensor state moved to an attribute
 
@@ -203,6 +217,11 @@ what you want.
 Voice Assistant timer support is provided as an optional package. It is not part
 of the headless core package. Add it only to devices that should expose timer
 behavior or UI hooks.
+
+Display YAMLs that include timers now treat the active timer alarm as the owner
+of the display until it is dismissed. Custom display YAMLs that copied only the
+old `on_timer_finished` action should use `id(timer_ringing).state` as the
+authoritative condition, not only a one-shot Voice Assistant phase value.
 
 ### Home Assistant: routed subnet and mixed-protocol calls
 
