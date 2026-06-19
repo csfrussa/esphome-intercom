@@ -166,7 +166,7 @@ class IntercomTcpClient(IntercomTransport):
         self._set_ringing(False, "start_stream_reset")
         self._awaiting_answer_ack = False
 
-        call_id = f"{caller_name or ''}<->{self.host}"
+        call_id = self._current_call_id() or f"{caller_name or ''}<->{self.host}"
         body = protocol.build_start_body(
             call_id=call_id,
             caller_route=caller_name or "",

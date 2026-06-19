@@ -359,7 +359,6 @@ void IntercomApi::handle_udp_keepalive_(uint32_t now_ms) {
       }
       this->set_active_(false);
       this->set_streaming_(false);
-      this->publish_caller_("");
       this->transport_->disconnect();
       return;
     }
@@ -421,7 +420,6 @@ void IntercomApi::fire_timeout_decline_() {
   this->set_terminal_decline_(call_id, kReasonTimeout);
   this->set_active_(false);
   this->streaming_.store(false, std::memory_order_release);
-  this->publish_caller_("");
   this->end_call_(CallEndReason::TIMEOUT, kReasonTimeout);
   if (this->transport_) this->transport_->disconnect();
 }

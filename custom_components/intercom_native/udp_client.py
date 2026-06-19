@@ -139,7 +139,7 @@ class IntercomUdpClient(IntercomTransport):
         # (whatever the user picked for the HA instance).
         ha_name = self._hass.config.location_name or ""
         eff_caller = caller_name or ha_name
-        call_id = f"{eff_caller}<->{self.host}"
+        call_id = self._current_call_id() or f"{eff_caller}<->{self.host}"
         body = protocol.build_start_body(
             call_id=call_id,
             caller_route=eff_caller,

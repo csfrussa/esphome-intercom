@@ -75,7 +75,9 @@ intercom_api:
         args: ['reason.c_str()']
     - script.execute:
         id: ui_ic_ended
-        peer: !lambda 'return id(intercom).get_current_destination();'
+        peer: !lambda |-
+          auto c = id(intercom).get_caller();
+          return c.empty() ? id(intercom).get_current_destination() : c;
         reason: !lambda 'return reason;'
 
 # =============================================================================

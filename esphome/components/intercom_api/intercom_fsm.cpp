@@ -659,6 +659,7 @@ void IntercomApi::end_call_(CallEndReason reason, const std::string &detail) {
   } else {
     this->defer([this, reason_str]() { this->hangup_trigger_.trigger(reason_str); });
   }
+  this->defer([this]() { this->publish_caller_(""); });
 
   // Clear per-call identity. Terminal-decline cache stays so dup-START
   // can replay the same DECLINE; cleared by the next accepted START.
@@ -953,18 +954,9 @@ handle_incoming_start_in_idle:
         break;
       }
 
-      // Accept the new call. Latch identity so RING/ANSWER/STOP can route
-      // back with the same call_id.
-      if (this->protocol_ == TransportType::UDP && !in_caller_name.empty()) {
-        const auto *caller_entry = this->phonebook_.find(in_caller_name);
-        if (caller_entry != nullptr && !caller_entry->ip.empty() && caller_entry->port != 0) {
-          // UDP START arrives on the peer's control socket, so the transport
-          // can learn the control port from source address. It cannot infer the
-          // peer audio port; use the caller's phonebook entry when available.
-          this->set_remote_endpoint(caller_entry->ip, caller_entry->port,
-                                    caller_entry->control_port);
-        }
-      }
+      // Accept the new call. UDP replies stay bound to the packet source
+      // learned by UdpTransport, not to caller_name: with HA PBX the true
+      // caller and the UDP peer are deliberately different.
 
       if (this->do_not_disturb_) {
         ESP_LOGI(TAG, "%s: do-not-disturb active - DECLINE(%s) inbound call from %s",
@@ -1038,7 +1030,6 @@ handle_incoming_start_in_idle:
       ESP_LOGI(TAG, "%s: remote hung up (call_id=%s)",
                this->device_name_.c_str(),
                in_call_id.c_str());
-      this->publish_caller_("");
       // Order matters: publish the terminal reason before disconnect() can
       // fire on_connection_change(false) and mask it as REMOTE_HANGUP.
       this->end_call_(CallEndReason::REMOTE_HANGUP);
@@ -1175,10 +1166,10 @@ void IntercomApi::on_connection_change_(bool connected) {
   ESP_LOGI(TAG, "Transport disconnected");
   this->streaming_.store(false, std::memory_order_release);
   this->set_active_(false);
-  this->publish_caller_("");
   if (this->call_state_.load(std::memory_order_acquire) != CallState::IDLE) {
     this->end_call_(CallEndReason::REMOTE_DEVICE_LOST);
   } else {
+    this->publish_caller_("");
     this->publish_state_();
   }
 }

@@ -1136,6 +1136,7 @@ class BridgeSession:
         # Source already started its own call (its FSM is OUTGOING); a
         # second START would trip the collision DECLINE. Only dest gets
         # START; ANSWER is forwarded back via _notify_source_answered().
+        dest_client.set_call_context(self.bridge_id, self.source_name)
         dest_result = await dest_client.start_stream(caller_name=self.source_name)
 
         if dest_result == "error":

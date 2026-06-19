@@ -476,9 +476,12 @@ void UdpTransport::ctrl_task_() {
         this->send_decline_to_(src, incoming_cid, "busy");
         continue;
       }
-      if ((type == MessageType::START || type == MessageType::ANSWER) && from_current) {
+      const bool learn_inbound_start =
+          type == MessageType::START && !this->audio_active_.load(std::memory_order_acquire);
+      if ((type == MessageType::START || type == MessageType::ANSWER) &&
+          (from_current || learn_inbound_start)) {
         const uint16_t src_control_port = ntohs(src.sin_port);
-        if (cur == 0 && src_host != 0) {
+        if ((cur == 0 || learn_inbound_start) && src_host != 0) {
           char src_ip[16];
           inet_ntoa_r(src.sin_addr, src_ip, sizeof(src_ip));
           ESP_LOGI(TAG, "Learned caller endpoint %s control=%u from inbound %s (0x%02X)",
