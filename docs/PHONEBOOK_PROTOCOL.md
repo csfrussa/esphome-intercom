@@ -51,6 +51,9 @@ Rules:
   signaling.
 - HA as a peer is represented as a first-class entry, not a special
   `device is None` branch.
+- The phonebook is for outbound routing and display rosters. It is not an
+  inbound access-control list: a valid incoming START may come from an external
+  caller that is not present in the callee's local phonebook.
 
 ## Canonical CSV Rows
 
@@ -132,6 +135,9 @@ state. `intercom_api` normalizes that roster locally:
 - UDP firmware keeps UDP peers direct and shapes TCP peers to the HA UDP bridge.
 - Cross-protocol entries point to HA, but preserve the real destination name in
   the call payload so HA can bridge.
+- Inbound START payloads remain authoritative for caller/destination identity.
+  HA PBX bridges preserve those fields and the original call id while routing;
+  they do not rewrite the call into "HA calling device X".
 
 ## ESP Phonebook Model
 

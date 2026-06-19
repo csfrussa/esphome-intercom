@@ -27,6 +27,13 @@ regressions would be a problem.
   producing distorted audio.
 - 📡 TCP and UDP clients/managers understand the negotiated format selected for
   each call leg.
+- 🌉 HA PBX bridge legs preserve the original call identity when routing toward
+  the destination, so caller/destination labels stay stable across TCP ↔ UDP
+  and mixed-format bridges.
+- 🚪 Inbound TCP and UDP START messages do **not** require the caller to exist
+  in the callee phonebook. The phonebook is the outbound dial plan; inbound
+  caller/destination identity comes from START. This keeps VPN/routed callers
+  and HA PBX bridges working without pre-seeding every callee phonebook.
 - 🛡️ Browser audio WebSocket sessions remain server-authoritative: if the socket
   is truly gone, the server ends the call.
 - 🔄 Browser/card reload during an active HA softphone call can explicitly rebind
@@ -52,6 +59,13 @@ regressions would be a problem.
   browser rebinds inside the server grace window.
 - 🧭 Device identity remains `device_id` based in the frontend. Legacy
   name/esphome-id matching is resolved server-side, once.
+- 🔔 HA softphone has an idle-only Options panel for Auto Answer, DND and
+  browser ringtone. Ringtone is a per-browser preference; HA softphone DND is
+  stored in HA state.
+- 🧹 Ringing/In-call screens hide runtime options, so only the call actions
+  relevant to the current state are visible.
+- 🧾 Terminal text uses the active call peer. A card or display no longer reports
+  the currently selected phonebook contact as the caller that just hung up.
 - 🧪 The card version exposed in Lovelace is `v2026.7.0-dev`.
 
 ## 📞 Intercom Protocol
@@ -127,6 +141,12 @@ regressions would be a problem.
   of requiring a reboot or relying on YAML-level automations.
 - 🧭 HA rebuilds the phonebook from endpoint sensors and routes through canonical
   rows.
+- 📥 Incoming calls are not phonebook-gated on the receiving ESP. Unknown but
+  protocol-valid external callers can ring/stream; use DND or explicit routing
+  policy when you want to reject them.
+- 🧾 Device terminal screens preserve the caller sensor long enough for hangup
+  and failed-call callbacks, then clear it after the UI has rendered the final
+  peer/reason.
 - 🧹 Documentation was cleaned up to state the HA-managed phonebook model once,
   instead of repeating the same "do not rely on mDNS as the primary contract"
   guidance in several places.
@@ -165,10 +185,13 @@ regressions would be a problem.
   branches, TCP vs UDP tradeoffs and Sendspin experimental status.
 - 🧾 Breaking/compatibility notes were updated for negotiated formats and the
   new media path.
+- 🛒 HACS guidance was refreshed now that the project is accepted in the HACS
+  default repository flow. Custom repository instructions remain useful for
+  development/prerelease testing.
 - 💚 Donation/support messaging was made more visible near the top of the README
   while keeping the existing footer banner.
 
-## ⚠️ Compatibility / Upgrade Notes from 2026.6.x
+## ⚠️ Compatibility / Upgrade Notes from 2026.6.3
 
 - Custom ESP YAMLs using `intercom_api` should review the new `audio.tx` and
   `audio.rx` settings if they want anything other than legacy 16 kHz/s16/mono.
@@ -187,6 +210,10 @@ regressions would be a problem.
 - Legacy mixed-fleet behavior is conservative: a new high-rate endpoint calling
   an old firmware endpoint may fall back only when both sides are legacy; if the
   format cannot be confirmed safely, the call is rejected or ended.
+- Receiving ESPs do not reject valid inbound START messages just because the
+  caller is absent from the local phonebook. Custom security/policy behavior
+  should be implemented explicitly; missing phonebook rows are not an inbound
+  access-control mechanism.
 
 ## 🧪 Suggested Field Test Matrix
 
@@ -200,6 +227,8 @@ regressions would be a problem.
 - 🌉 ESP-to-ESP calls through HA PBX bridging with different TX/RX formats.
 - ✅ Auto Answer on/off from both sides: ESP ringing, HA ringing, Answer,
   Decline and Hangup.
+- 📥 Inbound TCP and UDP calls from callers not present in the callee phonebook:
+  the callee should ring/answer and terminal UI should show the actual caller.
 - 🎛️ Hybrid card behavior: Call from HA, Answer/Decline mirrored to the attached
   ESP where applicable.
 - 🔊 Full-experience media playback, timer sound, ringtone and intercom priority.

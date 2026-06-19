@@ -27,6 +27,9 @@ Action required:
 - UDP audio is validated against `udp_max_payload` and still defaults to a
   conservative 1200-byte PCM-frame ceiling. Use TCP or opt in explicitly for
   larger LAN datagrams.
+- Incoming TCP/UDP calls no longer require the caller to exist in the callee's
+  local phonebook. The phonebook is for outbound dialing; inbound START carries
+  the caller/destination identity.
 
 Minimum versions for this release:
 
@@ -135,6 +138,13 @@ Changes since `2026.6.3`:
 - Browser/card reload during an active HA softphone call can rebind to the
   server session within a short grace window instead of immediately losing the
   call state.
+- Inbound TCP/UDP calls are accepted from valid external/routed callers even if
+  the caller is not in the callee's local phonebook. This keeps VPN, routed LAN
+  and HA PBX bridge flows natural: START carries the caller/destination identity,
+  while the phonebook remains the outbound dial plan.
+- Terminal call screens now keep the real incoming caller through the hangup /
+  failure callback, so a callee that has another contact selected does not show
+  the selected contact as the peer that just hung up.
 - UDP audio still defaults to a conservative 1200-byte payload limit, but
   advanced LAN installs can opt in to a larger `udp_max_payload` on both ESPHome
   and the HA integration.
@@ -146,6 +156,9 @@ Known prerelease status:
   occasional micro-glitches.
 - UDP remains intentionally conservative by default. Raise `udp_max_payload`
   only after verifying the whole LAN path, or use TCP for larger PCM frames.
+- The HA softphone card now has an idle-only Options panel for Auto Answer,
+  DND and browser ringtone. Ringtone is stored in browser localStorage; DND is
+  stored in HA softphone state.
 
 ## Overview
 

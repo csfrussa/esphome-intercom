@@ -147,6 +147,10 @@ The phonebook is the single contract.
 - **Dedup by name only**: same name = same slot, no duplicates. On endpoint conflict, last writer wins (documented in `phonebook.h`).
 - **Protocol-aware rows are the contract**: `Name|tcp|ip|port`, `Name|udp|ip|audio|control`, `Name|ha|ip|tcp_port|udp_audio|udp_control`. Short manual rows are accepted in YAML scripts and interpreted according to the local transport.
 - **HA-managed installs use the HA phonebook, not ESP-side mDNS**: standard YAMLs consume `sensor.intercom_phonebook`. The optional mDNS discovery package is only for ESP-only installs that do not use HA as the phonebook authority.
+- **Inbound calls are not phonebook-gated**: the phonebook is the outbound dial
+  plan. A valid incoming START over TCP or UDP carries its caller/destination
+  identity on the wire and should still ring even when the caller is external
+  or missing from the local phonebook.
 - **Conflict scenarios are benign**:
   - same-transport peer: HA publishes the direct endpoint from that ESP's `intercom_endpoint` entity.
   - cross-protocol peer: `intercom_api` shapes the typed row to the HA bridge endpoint locally; mDNS never crosses protocols.

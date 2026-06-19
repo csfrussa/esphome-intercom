@@ -39,5 +39,22 @@ ESP endpoint publication now waits for a valid IPv4 address from ESPHome's
 network API and republishes on Wi-Fi or Ethernet IP events. Endpoint sensors
 should no longer publish incomplete rows before the board has a usable address.
 
+Inbound calls are now treated consistently across TCP and UDP: the callee does
+not require the caller to be present in its local phonebook. The phonebook is
+the outbound dial plan; inbound START already contains caller and destination
+identity. This matters for HA PBX bridges, routed subnets, VPN callers and
+manual protocol clients. If a custom automation previously assumed that an
+unknown inbound caller would be rejected by missing phonebook state, replace
+that policy with DND, routing rules or an explicit bridge/service check.
+
+Call-ended UI now preserves the real incoming caller through the terminal
+callback before clearing the caller sensor. Device displays and the HA card
+should show the peer from the active call, not whichever phonebook contact is
+currently selected for the next outbound call.
+
+The HA softphone card exposes Auto Answer, DND and browser ringtone behind an
+idle-only Options panel. Browser ringtone is a per-browser localStorage
+preference; HA softphone DND is stored in Home Assistant state.
+
 Older upgrade notes are kept in their original GitHub release pages. This file
 tracks only the current upgrade delta from `2026.6.3` to `2026.7.0-dev`.

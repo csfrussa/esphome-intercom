@@ -181,7 +181,10 @@ Each ESP publishes an `intercom_endpoint` text sensor. Home Assistant builds the
 central `sensor.intercom_phonebook` from those endpoints and adds itself as the
 HA peer.
 
-Home Assistant now resolves inbound TCP callers by:
+Inbound ESP calls are not rejected just because the caller is missing from the
+callee phonebook. The phonebook is the outbound dial plan; inbound START carries
+caller and destination identity. When HA is in the path, it resolves inbound TCP
+callers by:
 
 1. socket source IP when it matches the endpoint host;
 2. `caller_route` from the PBX-lite START payload;

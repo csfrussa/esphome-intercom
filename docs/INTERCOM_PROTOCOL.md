@@ -88,6 +88,13 @@ friendly name during the current protocol generation; implementations must not
 replace the display destination with HA when HA is only bridging a cross-protocol
 call.
 
+Receivers must not require `caller_route` or `caller_name` to exist in the
+local phonebook. The phonebook is an outbound dial plan, not an inbound ACL.
+If the START is otherwise valid, an unknown or routed caller may ring and the
+display should use the caller identity from the START payload. Access policy
+belongs in explicit logic such as DND, busy handling, firewalling or a future
+allow-list feature.
+
 ### START v2 Audio Extension
 
 Legacy 16 kHz/s16/mono/32 ms peers omit the extension. Peers that support other
