@@ -280,14 +280,32 @@ script:
   - id: va_end_handler
     mode: restart
     then:
-      - wait_until:
+      - if:
           condition:
-            or:
-              - media_player.is_announcing:
-                  id: speaker_media_player
-              - speaker.is_playing:
-                  id: tts_speaker
-          timeout: 2s
+            lambda: 'return id(g_va_state) == 3;'
+          then:
+            - wait_until:
+                condition:
+                  or:
+                    - media_player.is_announcing:
+                        id: speaker_media_player
+                    - speaker.is_playing:
+                        id: tts_speaker
+                timeout: 12s
+            - if:
+                condition:
+                  and:
+                    - not:
+                        media_player.is_announcing:
+                          id: speaker_media_player
+                    - not:
+                        speaker.is_playing:
+                          id: tts_speaker
+                then:
+                  - logger.log:
+                      level: WARN
+                      tag: va
+                      format: "VA: TTS did not start before response grace expired"
       - wait_until:
           condition:
             and:

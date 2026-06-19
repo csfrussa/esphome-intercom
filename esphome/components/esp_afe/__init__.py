@@ -223,6 +223,10 @@ async def to_code(config):
 
     cg.add_define("USE_AUDIO_PROCESSOR")
 
+    # esp-sr 2.4.x requires esp-dsp >=1.8.0. Declare the lower bound here so
+    # artwork/runtime-image users do not inherit an older transitive esp-dsp pin.
+    add_idf_component(name="espressif/esp-dsp", ref="^1.8.0")
+
     if config[CONF_MIC_NUM] <= 1:
         cg.add_define("USE_ESP_AFE_DIRECT_PATH")
         add_idf_component(name="espressif/esp-sr", ref="^2.4.4")
