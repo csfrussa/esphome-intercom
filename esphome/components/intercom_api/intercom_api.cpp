@@ -30,6 +30,19 @@ namespace intercom_api {
 
 static const char *const TAG = "intercom_api";
 
+void IntercomApi::append_audio_format_(AudioFormatList *list, const AudioFormat &format) {
+  if (list == nullptr || !format.is_valid()) return;
+  for (uint8_t i = 0; i < list->count; i++) {
+    if (list->formats[i] == format) return;
+  }
+  if (list->count >= INTERCOM_MAX_AUDIO_FORMATS) {
+    ESP_LOGW(TAG, "Ignoring extra intercom audio format: max supported format count is %u",
+             (unsigned) INTERCOM_MAX_AUDIO_FORMATS);
+    return;
+  }
+  list->formats[list->count++] = format;
+}
+
 bool IntercomApi::ensure_mic_processing_buffer_() {
 #ifdef USE_INTERCOM_API_MIC
   if (this->tx_audio_format_.pcm_format != PcmFormat::S16LE) {
@@ -536,9 +549,17 @@ std::string IntercomApi::build_endpoint_string_() const {
              (unsigned) fmt.channels, (unsigned) fmt.frame_ms);
     return token;
   };
-  const std::string tx = format_token(this->tx_audio_format_);
-  const std::string rx = format_token(this->rx_audio_format_);
-  char buf[320];
+  auto format_list_token = [&](const AudioFormatList &list) -> std::string {
+    std::string out;
+    for (uint8_t i = 0; i < list.count; i++) {
+      if (!out.empty()) out += ";";
+      out += format_token(list.formats[i]);
+    }
+    return out;
+  };
+  const std::string tx = format_list_token(this->tx_audio_formats_);
+  const std::string rx = format_list_token(this->rx_audio_formats_);
+  char buf[768];
   if (this->protocol_ == TransportType::UDP) {
     snprintf(buf, sizeof(buf), "%s | udp | %s | %u | %u | %s | %s | %s", name.c_str(), ip.c_str(),
              (unsigned) this->listen_port_, (unsigned) this->control_port_,

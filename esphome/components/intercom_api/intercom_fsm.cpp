@@ -30,6 +30,24 @@ static audio::AudioStreamInfo audio_stream_info_from_format(const AudioFormat &f
   return audio::AudioStreamInfo(audio_stream_bits_per_sample(format), format.channels, format.sample_rate);
 }
 
+static bool audio_format_list_contains(const AudioFormatList &list, const AudioFormat &format) {
+  for (uint8_t i = 0; i < list.count; i++) {
+    if (list.formats[i] == format) return true;
+  }
+  return false;
+}
+
+static bool choose_common_audio_format(const AudioFormatList &preferred, const AudioFormatList &supported,
+                                       AudioFormat *out) {
+  for (uint8_t i = 0; i < preferred.count; i++) {
+    if (audio_format_list_contains(supported, preferred.formats[i])) {
+      if (out != nullptr) *out = preferred.formats[i];
+      return true;
+    }
+  }
+  return false;
+}
+
 // === Call-identity helpers ===
 // Mutex-guarded so the recv task and the main loop never observe a
 // half-written std::string assignment to the per-call fields.
@@ -56,6 +74,8 @@ void IntercomApi::clear_call_identity_() {
   this->current_dest_name_.clear();
   this->current_caller_to_dest_format_ = LEGACY_AUDIO_FORMAT;
   this->current_dest_to_caller_format_ = LEGACY_AUDIO_FORMAT;
+  this->current_tx_audio_format_ = LEGACY_AUDIO_FORMAT;
+  this->current_rx_audio_format_ = LEGACY_AUDIO_FORMAT;
 }
 
 IntercomApi::CallSnapshot IntercomApi::snapshot_call_identity_() const {
@@ -143,7 +163,7 @@ bool IntercomApi::send_pbx_start_(const std::string &call_id,
                                    const std::string &dest_route,
                                    const std::string &dest_name) {
   if (!this->transport_) return false;
-  uint8_t buf[INTERCOM_MAX_CALL_ID_LEN + 4 * (INTERCOM_MAX_NAME_LEN + 1) + 48];
+  uint8_t buf[INTERCOM_MAX_CALL_ID_LEN + 4 * (INTERCOM_MAX_NAME_LEN + 1) + 176];
   size_t off = encode_call_id_prefix(buf, sizeof(buf), call_id);
   if (off == 0) return false;
   size_t n;
@@ -160,20 +180,28 @@ bool IntercomApi::send_pbx_start_(const std::string &call_id,
   if (n == 0) return false;
   off += n;
   if (!(this->tx_audio_format_ == LEGACY_AUDIO_FORMAT &&
-        this->rx_audio_format_ == LEGACY_AUDIO_FORMAT)) {
+        this->rx_audio_format_ == LEGACY_AUDIO_FORMAT &&
+        this->tx_audio_formats_.count == 1 &&
+        this->rx_audio_formats_.count == 1)) {
     static const uint8_t START_V2_MAGIC[] = {'I', 'C', 'A', 'F', '2'};
     if (sizeof(buf) - off < sizeof(START_V2_MAGIC) + 1 + 2 + 16) return false;
     std::memcpy(buf + off, START_V2_MAGIC, sizeof(START_V2_MAGIC));
     off += sizeof(START_V2_MAGIC);
     buf[off++] = 1;
-    buf[off++] = 1;
-    n = encode_audio_format(buf + off, sizeof(buf) - off, this->tx_audio_format_);
-    if (n == 0) return false;
-    off += n;
-    buf[off++] = 1;
-    n = encode_audio_format(buf + off, sizeof(buf) - off, this->rx_audio_format_);
-    if (n == 0) return false;
-    off += n;
+    auto encode_format_list = [&](const AudioFormatList &list) -> bool {
+      if (list.count == 0 || list.count > INTERCOM_MAX_AUDIO_FORMATS || sizeof(buf) - off < 1) return false;
+      buf[off++] = list.count;
+      for (uint8_t i = 0; i < list.count; i++) {
+        n = encode_audio_format(buf + off, sizeof(buf) - off, list.formats[i]);
+        if (n == 0) return false;
+        off += n;
+      }
+      return true;
+    };
+    if (!encode_format_list(this->tx_audio_formats_) ||
+        !encode_format_list(this->rx_audio_formats_)) {
+      return false;
+    }
   }
   // Surface the transport result so the FSM can distinguish "leg dialed"
   // from "leg silently dropped" (TCP no socket, UDP no peer address yet).
@@ -320,6 +348,8 @@ void IntercomApi::start() {
   if (this->transport_ != nullptr) {
     this->current_caller_to_dest_format_ = this->tx_audio_format_;
     this->current_dest_to_caller_format_ = this->rx_audio_format_;
+    this->current_tx_audio_format_ = this->tx_audio_format_;
+    this->current_rx_audio_format_ = this->rx_audio_format_;
     if (!this->send_pbx_start_(call_id, caller_route, this->device_name_,
                                 dest_route, dest_name)) {
       ESP_LOGE(TAG, "MSG_START encode/send failed");
@@ -499,7 +529,7 @@ void IntercomApi::set_active_(bool on) {
 #endif
 #ifdef USE_INTERCOM_API_SPEAKER
     if (this->speaker_) {
-      this->speaker_->set_audio_stream_info(audio_stream_info_from_format(this->rx_audio_format_));
+      this->speaker_->set_audio_stream_info(audio_stream_info_from_format(this->current_rx_audio_format_));
       this->speaker_->start();
     }
 #endif
@@ -640,15 +670,16 @@ void IntercomApi::end_call_(CallEndReason reason, const std::string &detail) {
 // === Transport callbacks ===
 
 void IntercomApi::on_audio_received_(const uint8_t *pcm, size_t bytes) {
-  const size_t expected = this->rx_audio_format_.nominal_frame_bytes();
+  const AudioFormat &rx_format = this->current_rx_audio_format_;
+  const size_t expected = rx_format.nominal_frame_bytes();
   if (bytes != expected) {
     ESP_LOGW(TAG,
              "Dropping intercom audio frame with wrong size: got %u bytes, expected %u for rx format %u:%u:%u:%u",
              (unsigned) bytes, (unsigned) expected,
-             (unsigned) this->rx_audio_format_.sample_rate,
-             (unsigned) this->rx_audio_format_.pcm_format,
-             (unsigned) this->rx_audio_format_.channels,
-             (unsigned) this->rx_audio_format_.frame_ms);
+             (unsigned) rx_format.sample_rate,
+             (unsigned) rx_format.pcm_format,
+             (unsigned) rx_format.channels,
+             (unsigned) rx_format.frame_ms);
     return;
   }
   // First inbound audio is the strongest "call established" signal; gates
@@ -659,7 +690,7 @@ void IntercomApi::on_audio_received_(const uint8_t *pcm, size_t bytes) {
   }
   if (this->audio_debug_) {
     this->debug_log_pcm_level_("rx_network", pcm, bytes,
-                               this->rx_audio_format_,
+                               rx_format,
                                this->audio_debug_last_rx_log_ms_, this->audio_debug_rx_frames_);
   }
 #ifdef USE_INTERCOM_API_SPEAKER
@@ -947,14 +978,10 @@ handle_incoming_start_in_idle:
         break;
       }
 
-      auto list_contains = [](const AudioFormatList &list, const AudioFormat &fmt) -> bool {
-        for (uint8_t i = 0; i < list.count; i++) {
-          if (list.formats[i] == fmt) return true;
-        }
-        return false;
-      };
-      if (!list_contains(msg.caller_tx_formats, this->rx_audio_format_) ||
-          !list_contains(msg.caller_rx_formats, this->tx_audio_format_)) {
+      AudioFormat caller_to_dest;
+      AudioFormat dest_to_caller;
+      if (!choose_common_audio_format(msg.caller_tx_formats, this->rx_audio_formats_, &caller_to_dest) ||
+          !choose_common_audio_format(msg.caller_rx_formats, this->tx_audio_formats_, &dest_to_caller)) {
         ESP_LOGW(TAG,
                  "%s: inbound START from %s has no compatible audio format - DECLINE(incompatible_audio_format)",
                  this->device_name_.c_str(),
@@ -966,8 +993,10 @@ handle_incoming_start_in_idle:
         }
         break;
       }
-      this->current_caller_to_dest_format_ = this->rx_audio_format_;
-      this->current_dest_to_caller_format_ = this->tx_audio_format_;
+      this->current_caller_to_dest_format_ = caller_to_dest;
+      this->current_dest_to_caller_format_ = dest_to_caller;
+      this->current_rx_audio_format_ = caller_to_dest;
+      this->current_tx_audio_format_ = dest_to_caller;
 
       const std::string dest_route = in_dest_route.empty()
           ? (this->device_route_id_.empty() ? this->device_name_ : this->device_route_id_)
@@ -1034,8 +1063,8 @@ handle_incoming_start_in_idle:
       }
       const CallState state = this->call_state_.load(std::memory_order_acquire);
       if (state == CallState::OUTGOING) {
-        if (!(msg.caller_to_dest_format == this->tx_audio_format_) ||
-            !(msg.dest_to_caller_format == this->rx_audio_format_)) {
+        if (!audio_format_list_contains(this->tx_audio_formats_, msg.caller_to_dest_format) ||
+            !audio_format_list_contains(this->rx_audio_formats_, msg.dest_to_caller_format)) {
           ESP_LOGE(TAG,
                    "%s: ANSWER confirmed an incompatible audio format; ending call",
                    this->device_name_.c_str());
@@ -1047,6 +1076,8 @@ handle_incoming_start_in_idle:
         }
         this->current_caller_to_dest_format_ = msg.caller_to_dest_format;
         this->current_dest_to_caller_format_ = msg.dest_to_caller_format;
+        this->current_tx_audio_format_ = msg.caller_to_dest_format;
+        this->current_rx_audio_format_ = msg.dest_to_caller_format;
         ESP_LOGI(TAG, "%s: destination answered, streaming (call_id=%s)",
                  this->device_name_.c_str(),
                  in_call_id.c_str());

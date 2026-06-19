@@ -31,9 +31,9 @@
 #   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → esp_ae_rate_cvt x3 ──────┐
 #                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / Intercom TX / MWW
 #
-#   Music/radio → media_speaker (resampler) ───────────┐
-#   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
-#   Intercom RX → intercom_speaker (resampler) ────────┘
+#   Music/radio → media_speaker_input (resampler) ───────────┐
+#   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
+#   Intercom RX → intercom_speaker_input (resampler) ────────┘
 #
 # Touch UI:
 #   VA pages:      Status display (idle, listening, thinking, replying, error)
@@ -49,8 +49,8 @@ substitutions:
 
   # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # release mode.
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
 
   # Display dimensions (portrait)
   display_width: "800"
@@ -92,21 +92,21 @@ substitutions:
   afe_aec_restore_mode: ALWAYS_ON
 
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
+  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
+  p4_diagnostics: !include ../../../packages/diagnostics/native_no_wifi_signal.yaml
+  core: !include ../../../packages/va_intercom.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@dev
+  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION
@@ -335,30 +335,30 @@ speaker:
     num_channels: 1
     task_stack_in_psram: true
     source_speakers:
-      - id: media_speaker_mix       # Music/radio streams (duckable)
+      - id: media_mixer_input       # Music/radio streams (duckable)
         timeout: 10s
         buffer_duration: 100ms
-      - id: tts_speaker_mix         # VA TTS announcements (never ducked)
+      - id: tts_mixer_input         # VA TTS announcements (never ducked)
         timeout: 10s
         buffer_duration: 100ms
-      - id: intercom_speaker_mix    # Intercom audio
+      - id: intercom_mixer_input    # Intercom audio
         timeout: 10s
         buffer_duration: 128ms       # 4 intercom wire frames (32 ms each)
 
   # ResamplerSpeakers: convert any input rate to 48kHz before the mixer
   - platform: resampler
-    id: media_speaker              # Music/radio to 48kHz
-    output_speaker: media_speaker_mix
+    id: media_speaker_input              # Music/radio to 48kHz
+    output_speaker: media_mixer_input
     task_stack_in_psram: true
 
   - platform: resampler
-    id: tts_speaker                # VA TTS to 48kHz
-    output_speaker: tts_speaker_mix
+    id: tts_speaker_input                # VA TTS to 48kHz
+    output_speaker: tts_mixer_input
     task_stack_in_psram: true
 
   - platform: resampler
-    id: intercom_speaker           # Intercom RX (16kHz) to 48kHz
-    output_speaker: intercom_speaker_mix
+    id: intercom_speaker_input           # Intercom RX (16kHz) to 48kHz
+    output_speaker: intercom_mixer_input
     task_stack_in_psram: true
     buffer_duration: 128ms
 
@@ -410,14 +410,14 @@ media_player:
     volume_max: 100%
     volume_increment: 5%
     media_pipeline:
-      speaker: media_speaker
+      speaker: media_speaker_input
       sample_rate: 48000
       format: FLAC
       sources:
         - media_http_source
         - sendspin_media_source
     announcement_pipeline:
-      speaker: tts_speaker
+      speaker: tts_speaker_input
       format: FLAC
       sample_rate: 48000
       sources:
@@ -521,8 +521,26 @@ intercom_api:
   # buffers. Keep false on P4 full AFE while there is enough heap, because these
   # buffers sit on the mic TX path during calls.
   buffers_in_psram: false
+  audio:
+    # Primary/preferred RX format: HA/browser calls choose this for better
+    # speaker quality on the 48 kHz mixer path. TX remains the microphone/AFE
+    # format unless audio.tx is overridden.
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 20
+    # Fallback accepted RX formats for direct ESP-to-ESP calls. These are valid
+    # only because speaker: intercom_speaker_input points at the resampler; do
+    # not advertise fallback formats when wiring intercom_api directly to a
+    # fixed-rate mixer input.
+    rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
   microphone: mic_afe          # Post-AEC: no echo in transmitted audio
-  speaker: intercom_speaker
+  speaker: intercom_speaker_input
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
   # via the "HA PBX Mode" switch in the SWITCHES block below.

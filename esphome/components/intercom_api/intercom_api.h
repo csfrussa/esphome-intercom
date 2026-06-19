@@ -143,9 +143,21 @@ class IntercomApi : public Component {
   void set_audio_debug(bool enabled) { this->audio_debug_ = enabled; }
   void set_tx_audio_format(uint32_t sample_rate, uint8_t pcm_format, uint8_t channels, uint16_t frame_ms) {
     this->tx_audio_format_ = AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms};
+    this->tx_audio_formats_.formats[0] = this->tx_audio_format_;
+    this->tx_audio_formats_.count = 1;
   }
   void set_rx_audio_format(uint32_t sample_rate, uint8_t pcm_format, uint8_t channels, uint16_t frame_ms) {
     this->rx_audio_format_ = AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms};
+    this->rx_audio_formats_.formats[0] = this->rx_audio_format_;
+    this->rx_audio_formats_.count = 1;
+  }
+  void add_supported_tx_audio_format(uint32_t sample_rate, uint8_t pcm_format, uint8_t channels, uint16_t frame_ms) {
+    this->append_audio_format_(&this->tx_audio_formats_,
+                               AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms});
+  }
+  void add_supported_rx_audio_format(uint32_t sample_rate, uint8_t pcm_format, uint8_t channels, uint16_t frame_ms) {
+    this->append_audio_format_(&this->rx_audio_formats_,
+                               AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms});
   }
   void set_mdns_announce_enabled(bool enabled) { this->mdns_announce_enabled_ = enabled; }
 
@@ -350,6 +362,7 @@ class IntercomApi : public Component {
   bool setup_audio_processor_();
   bool setup_transport_();
   bool start_runtime_tasks_();
+  void append_audio_format_(AudioFormatList *list, const AudioFormat &format);
 #ifdef USE_INTERCOM_MDNS_DISCOVERY
   void start_mdns_discovery_();
 #endif
@@ -580,8 +593,12 @@ class IntercomApi : public Component {
   bool audio_debug_{false};
   AudioFormat tx_audio_format_{LEGACY_AUDIO_FORMAT};
   AudioFormat rx_audio_format_{LEGACY_AUDIO_FORMAT};
+  AudioFormatList tx_audio_formats_{};
+  AudioFormatList rx_audio_formats_{};
   AudioFormat current_caller_to_dest_format_{LEGACY_AUDIO_FORMAT};
   AudioFormat current_dest_to_caller_format_{LEGACY_AUDIO_FORMAT};
+  AudioFormat current_tx_audio_format_{LEGACY_AUDIO_FORMAT};
+  AudioFormat current_rx_audio_format_{LEGACY_AUDIO_FORMAT};
   uint32_t audio_debug_last_tx_log_ms_{0};
   uint32_t audio_debug_last_rx_log_ms_{0};
   uint32_t audio_debug_tx_frames_{0};

@@ -32,9 +32,9 @@
 #   ES7210 TDM slots [0, 2]          → esp_ae_rate_cvt x3 ──┐
 #   ES7210 TDM slot 1 (DAC ref)      → esp_ae_rate_cvt x3 ──┴── esp_afe (AEC + Speech Enhancement + VAD) → mono mic_main → VA / Intercom TX / MWW
 #
-#   Music/radio → media_speaker (resampler) ───────────┐
-#   VA TTS      → tts_speaker (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311 DAC
-#   Intercom RX → intercom_speaker (resampler) ────────┘
+#   Music/radio → media_speaker_input (resampler) ───────────┐
+#   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311 DAC
+#   Intercom RX → intercom_speaker_input (resampler) ────────┘
 #
 # =============================================================================
 
@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -56,21 +56,21 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k.yaml@dev
-  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k.yaml@dev
-  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  core: !include ../../../packages/va_intercom.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
+  led_state_full: !include ../../../packages/led/state_full_ring.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
+  va_timers: !include ../../../packages/voice_assistant/timers.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
 # =============================================================================
 # ESPHome Base
@@ -317,8 +317,27 @@ voice_assistant:
 intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  audio:
+    # Primary/preferred RX format for UDP: 48 kHz improves HA/browser audio,
+    # and 10 ms keeps each mono s16 frame below the default 1200-byte UDP
+    # payload ceiling. TX remains the microphone/AFE format unless audio.tx is
+    # overridden.
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
+    # Fallback accepted RX formats for direct ESP-to-ESP calls. These are valid
+    # only because speaker: intercom_speaker_input points at the resampler; do
+    # not advertise fallback formats when wiring intercom_api directly to a
+    # fixed-rate mixer input.
+    rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
   microphone: mic_main
-  speaker: intercom_speaker
+  speaker: intercom_speaker_input
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
   # via the "HA PBX Mode" switch in the device-specific switch block below.

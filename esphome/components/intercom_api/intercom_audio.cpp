@@ -74,7 +74,7 @@ void IntercomApi::send_chunk_(const uint8_t *data, size_t length) {
     return;
   if (this->audio_debug_) {
     this->debug_log_pcm_level_("tx_network", data, length,
-                               this->tx_audio_format_,
+                               this->current_tx_audio_format_,
                                this->audio_debug_last_tx_log_ms_, this->audio_debug_tx_frames_);
   }
   this->transport_->send_audio_frame(data, length);

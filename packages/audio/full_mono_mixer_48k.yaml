@@ -6,8 +6,8 @@
 #
 # Provides:
 #   - `audio_mixer`
-#   - `media_speaker_mix`, `tts_speaker_mix`, `intercom_speaker_mix`
-#   - `media_speaker`, `tts_speaker`, `intercom_speaker`
+#   - `media_mixer_input`, `tts_mixer_input`, `intercom_mixer_input`
+#   - `media_speaker_input`, `tts_speaker_input`, `intercom_speaker_input`
 #
 # The hardware speaker stays device-local because codec/no-codec and power
 # handling differ by board.
@@ -20,30 +20,30 @@ speaker:
     num_channels: 1
     task_stack_in_psram: true
     source_speakers:
-      - id: media_speaker_mix
+      - id: media_mixer_input
         timeout: 10s
         buffer_duration: 100ms
-      - id: tts_speaker_mix
+      - id: tts_mixer_input
         timeout: 10s
         buffer_duration: 100ms
-      - id: intercom_speaker_mix
+      - id: intercom_mixer_input
         timeout: 10s
         # 4 intercom wire frames: 1024 B @ 16 kHz mono = 32 ms/frame.
         buffer_duration: 128ms
 
   - platform: resampler
-    id: media_speaker
-    output_speaker: media_speaker_mix
+    id: media_speaker_input
+    output_speaker: media_mixer_input
     task_stack_in_psram: true
 
   - platform: resampler
-    id: tts_speaker
-    output_speaker: tts_speaker_mix
+    id: tts_speaker_input
+    output_speaker: tts_mixer_input
     task_stack_in_psram: true
 
   - platform: resampler
-    id: intercom_speaker
-    output_speaker: intercom_speaker_mix
+    id: intercom_speaker_input
+    output_speaker: intercom_mixer_input
     task_stack_in_psram: true
     # Keep the intercom RX resampler buffer frame-aligned with the wire chunk.
     buffer_duration: 128ms

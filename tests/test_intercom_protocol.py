@@ -308,6 +308,32 @@ class IntercomProtocolFixturesTest(unittest.TestCase):
         self.assertEqual(parsed["caller_tx_formats"], tx)
         self.assertEqual(parsed["caller_rx_formats"], rx)
 
+    def test_endpoint_audio_format_lists_are_semicolon_separated(self) -> None:
+        formats = audio_format.parse_audio_format_list(
+            "48000:s16le:1:20;16000:s16le:1:32"
+        )
+        self.assertEqual(
+            formats,
+            [
+                audio_format.AudioFormat(48000, "s16le", 1, 20),
+                audio_format.LEGACY_AUDIO_FORMAT,
+            ],
+        )
+
+    def test_common_format_prefers_endpoint_order_with_fallback(self) -> None:
+        preferred = audio_format.parse_audio_format_list(
+            "48000:s16le:1:20;16000:s16le:1:32"
+        )
+        legacy_only = [audio_format.LEGACY_AUDIO_FORMAT]
+        self.assertEqual(
+            audio_format.choose_common_format(preferred, legacy_only),
+            audio_format.LEGACY_AUDIO_FORMAT,
+        )
+        self.assertEqual(
+            audio_format.choose_common_format(preferred, preferred),
+            audio_format.AudioFormat(48000, "s16le", 1, 20),
+        )
+
     def test_answer_v2_confirms_selected_direction_formats(self) -> None:
         c2d = audio_format.AudioFormat(32000, "s16le", 1, 20)
         d2c = audio_format.AudioFormat(48000, "s24le", 1, 10)

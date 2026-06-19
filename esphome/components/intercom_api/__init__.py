@@ -76,6 +76,8 @@ CONF_AUDIO_DEBUG = "audio_debug"
 CONF_AUDIO = "audio"
 CONF_TX = "tx"
 CONF_RX = "rx"
+CONF_TX_FORMATS = "tx_formats"
+CONF_RX_FORMATS = "rx_formats"
 CONF_SAMPLE_RATE = "sample_rate"
 CONF_PCM_FORMAT = "pcm_format"
 CONF_CHANNELS = "channels"
@@ -124,6 +126,24 @@ def _validate_intercom_audio_format(value):
             f"sample_rate {value[CONF_SAMPLE_RATE]} and frame_ms {value[CONF_FRAME_MS]} "
             "do not form whole PCM frames"
         )
+    return value
+
+
+def _validate_intercom_audio_config(value):
+    if value[CONF_TX_FORMATS]:
+        raise cv.Invalid(
+            "intercom_api.audio.tx_formats is reserved for a future TX resampler; "
+            "ESP TX must match the configured microphone/source format"
+        )
+    for primary, extra_key in (
+        (CONF_TX, CONF_TX_FORMATS),
+        (CONF_RX, CONF_RX_FORMATS),
+    ):
+        if 1 + len(value[extra_key]) > 8:
+            raise cv.Invalid(
+                f"intercom_api.audio.{extra_key} supports at most 7 extra formats "
+                f"because audio.{primary} is always included first"
+            )
     return value
 
 
@@ -306,12 +326,18 @@ CONFIG_SCHEMA = cv.Schema(
         # Intercom wire PCM contract. `tx` is microphone/source -> wire;
         # `rx` is wire -> speaker/sink. They are intentionally independent:
         # an AFE mic can publish 16 kHz while the speaker sink accepts 48 kHz.
-        cv.Optional(CONF_AUDIO, default={}): cv.Schema(
+        cv.Optional(CONF_AUDIO, default={}): cv.All(cv.Schema(
             {
                 cv.Optional(CONF_TX, default={}): INTERCOM_AUDIO_FORMAT_SCHEMA,
                 cv.Optional(CONF_RX, default={}): INTERCOM_AUDIO_FORMAT_SCHEMA,
+                cv.Optional(CONF_TX_FORMATS, default=[]): cv.ensure_list(
+                    INTERCOM_AUDIO_FORMAT_SCHEMA
+                ),
+                cv.Optional(CONF_RX_FORMATS, default=[]): cv.ensure_list(
+                    INTERCOM_AUDIO_FORMAT_SCHEMA
+                ),
             }
-        ),
+        ), _validate_intercom_audio_config),
         # Publish this device's canonical endpoint as an mDNS TXT record:
         #   endpoint=Name|tcp|ip|tcp_port
         #   endpoint=Name|udp|ip|audio_port|control_port
@@ -474,8 +500,13 @@ def _final_validate(config):
             )
         audio_cfg = config[CONF_AUDIO]
         max_payload = config[CONF_UDP_MAX_PAYLOAD]
-        for direction in (CONF_TX, CONF_RX):
-            fmt = audio_cfg[direction]
+        checks = [
+            (CONF_TX, audio_cfg[CONF_TX]),
+            (CONF_RX, audio_cfg[CONF_RX]),
+        ]
+        checks.extend((CONF_TX_FORMATS, fmt) for fmt in audio_cfg[CONF_TX_FORMATS])
+        checks.extend((CONF_RX_FORMATS, fmt) for fmt in audio_cfg[CONF_RX_FORMATS])
+        for direction, fmt in checks:
             frame_bytes = _format_frame_bytes(fmt)
             if frame_bytes > max_payload:
                 raise cv.Invalid(
@@ -593,6 +624,19 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
                 fmt[CONF_FRAME_MS],
             )
         )
+    for key, setter in (
+        (CONF_TX_FORMATS, var.add_supported_tx_audio_format),
+        (CONF_RX_FORMATS, var.add_supported_rx_audio_format),
+    ):
+        for fmt in audio_cfg[key]:
+            cg.add(
+                setter(
+                    fmt[CONF_SAMPLE_RATE],
+                    PCM_FORMAT_IDS[fmt[CONF_PCM_FORMAT]],
+                    fmt[CONF_CHANNELS],
+                    fmt[CONF_FRAME_MS],
+                )
+            )
     if config[CONF_PROTOCOL] == PROTOCOL_UDP:
         cg.add_define("USE_INTERCOM_UDP_TRANSPORT")
     else:

@@ -44,7 +44,7 @@ substitutions:
   name: generic-native-int-fd-udp
   friendly_name: Generic S3 Native Intercom Full Duplex UDP
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
   intercom_udp_audio_port: "6254"
   intercom_udp_control_port: "6255"
 
@@ -54,13 +54,13 @@ substitutions:
   status_led_rgb_order: GRB
 
 packages:
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api.yaml@dev
-  intercom_auto_entities: github://n-IA-hane/esphome-intercom/packages/intercom/auto_entities.yaml@dev
-  intercom_buttons: github://n-IA-hane/esphome-intercom/packages/intercom/buttons_base.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  ha_api: !include ../../../packages/intercom/ha_api.yaml
+  intercom_auto_entities: !include ../../../packages/intercom/auto_entities.yaml
+  intercom_buttons: !include ../../../packages/intercom/buttons_base.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
 
 esphome:
   name: ${name}
@@ -156,7 +156,7 @@ microphone:
 # resampler in this regression profile.
 speaker:
   - platform: i2s_audio
-    id: intercom_speaker
+    id: intercom_speaker_input
     dac_type: external
     i2s_audio_id: tx_i2s
     i2s_dout_pin: GPIO14
@@ -186,7 +186,7 @@ intercom_api:
     bits_per_sample: 16
     channels: [1]
     gain_factor: 1
-  speaker: intercom_speaker
+  speaker: intercom_speaker_input
   dc_offset_removal: false
   ringing_timeout: 30s
   delete_contact_missing_from:

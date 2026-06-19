@@ -9,7 +9,7 @@
 #
 #   I2S RX 48kHz stereo (L=DAC ref, R=ADC mic) ─esp_ae_rate_cvt x3─> esp_aec @16k ──> mic_main ──> intercom TX
 #
-#   Intercom RX (48kHz) ──> intercom_speaker_mix ────────────────┐
+#   Intercom RX -> intercom_speaker_input (resampler) ───────┐
 #   Ringtone   (FLAC)   ──> ringtone_speaker  (resampler 16→48) ─┴─> audio_mixer (48k) ──> hw_speaker ──> ES8311 DAC
 #
 # Single GPIO0 button (intercom-only, no VA mode):
@@ -28,9 +28,9 @@ substitutions:
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # IC layout proportions (relative to display_height)
   ic_btn_size: "25%"
@@ -63,21 +63,21 @@ substitutions:
 # Packages
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
-  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
-  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
-  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
-  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_intercom_only.yaml@dev
+  core: !include ../../../packages/intercom_only.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
+  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
+  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
+  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
+  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_intercom_only.yaml
 
 # =============================================================================
 # Core
@@ -279,12 +279,17 @@ speaker:
     output_speaker: hw_speaker
     num_channels: 1
     source_speakers:
-      - id: intercom_speaker_mix
+      - id: intercom_mixer_input
         timeout: 10s
         buffer_duration: 128ms
       - id: ringtone_speaker_mix
         timeout: 10s
         buffer_duration: 100ms
+
+  - platform: resampler
+    id: intercom_speaker_input
+    output_speaker: intercom_mixer_input
+    buffer_duration: 128ms
 
   - platform: resampler
     id: ringtone_speaker             # Ringtone FLAC -> 48kHz
@@ -317,23 +322,33 @@ media_player:
         file: ${assets_base}assets/sounds/ringtone.flac
 
 # =============================================================================
-# Intercom API (TCP-based, port 6054). RX is negotiated at 48 kHz and writes
-# directly into the mixer source speaker, so the old 16->48 resampler is not in
-# the intercom hot path.
+# Intercom API (TCP-based, port 6054). RX prefers 48 kHz for HA/browser audio
+# and can accept 16 kHz direct ESP peers through the resampler.
 # =============================================================================
 intercom_api:
   task_stacks_in_psram: true
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: intercom
   audio:
-    # Mic TX is post-AEC and stays at 16 kHz; speaker RX accepts native 48 kHz.
+    # Primary/preferred RX format: HA/browser calls choose this for better
+    # speaker quality on the 48 kHz mixer path. TX remains the microphone/AFE
+    # format unless audio.tx is overridden.
     rx:
       sample_rate: 48000
       pcm_format: s16le
       channels: 1
       frame_ms: 20
+    # Fallback accepted RX formats for direct ESP-to-ESP calls. These are valid
+    # only because speaker: intercom_speaker_input points at the resampler; do
+    # not advertise fallback formats when wiring intercom_api directly to a
+    # fixed-rate mixer input.
+    rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
   microphone: mic_main
-  speaker: intercom_speaker_mix
+  speaker: intercom_speaker_input
   ringing_timeout: 30s
   delete_contact_missing_from:
     updates_number: 1

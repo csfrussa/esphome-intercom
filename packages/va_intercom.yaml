@@ -25,9 +25,9 @@
 #   hw_speaker                - Hardware speaker
 #   speaker_mute              - Speaker mute switch supplied by the device YAML
 #                               or packages/intercom/speaker_mute.yaml
-#   tts_speaker               - TTS speaker (for VA drain wait_until)
+#   tts_speaker_input               - TTS speaker (for VA drain wait_until)
 #   speaker_media_player      - media_player component
-#   media_speaker_mix         - mixer for ducking
+#   media_mixer_input         - mixer for ducking
 #   intercom_ringing_sound    - media_file for ringtone loop
 #
 # Required substitutions:

@@ -2,8 +2,8 @@
 # Full-experience mono 48 kHz source media player.
 #
 # Requires speaker ids from packages/audio/full_mono_mixer_48k.yaml:
-#   - media_speaker
-#   - tts_speaker
+#   - media_speaker_input
+#   - tts_speaker_input
 #
 # One media player owns normal HA media, announcements, local audio files and
 # Sendspin. The mixer remains responsible for arbitration with intercom.
@@ -48,14 +48,14 @@ media_player:
     volume_max: 100%
     volume_increment: 5%
     media_pipeline:
-      speaker: media_speaker
+      speaker: media_speaker_input
       sample_rate: 48000
       format: FLAC
       sources:
         - media_http_source
         - sendspin_media_source
     announcement_pipeline:
-      speaker: tts_speaker
+      speaker: tts_speaker_input
       sample_rate: 48000
       format: FLAC
       sources:
