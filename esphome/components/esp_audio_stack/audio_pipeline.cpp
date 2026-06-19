@@ -723,6 +723,7 @@ void ESPAudioStack::audio_session_() {
   while (this->audio_stack_running_.load(std::memory_order_relaxed)) {
     // Service ring buffer operations requested by main thread
     this->service_speaker_reset_();
+    this->drain_tx_completion_events_();
     // Reset per-frame state
     ctx.output_buffer = nullptr;
     ctx.current_output_frame_size = ctx.input_frame_size;
@@ -746,18 +747,18 @@ void ESPAudioStack::audio_session_() {
     ctx.mic_running = this->has_mic_consumers_.load(std::memory_order_relaxed);
     this->update_runtime_audio_flags_(ctx);
 
-    if (ctx.need_rx_processing) {
-      this->process_rx_path_(ctx);
-    } else if (ctx.need_rx_drain) {
-      this->drain_rx_minimal_(ctx);
-    }
-
     ctx.processor_enabled = this->processor_enabled_.load(std::memory_order_relaxed);
 #ifdef USE_AUDIO_PROCESSOR
     ctx.processor_ready = ctx.processor_enabled && this->processor_ != nullptr &&
                           this->processor_->is_initialized();
 #endif
     ctx.now_ms = millis();
+
+    if (ctx.need_rx_processing) {
+      this->process_rx_path_(ctx);
+    } else if (ctx.need_rx_drain) {
+      this->drain_rx_minimal_(ctx);
+    }
 
     if (ctx.need_rx_processing) {
       this->process_aec_and_callbacks_(ctx);
@@ -853,8 +854,8 @@ void ESPAudioStack::audio_session_() {
     // gets to run and feed the task watchdog. taskYIELD() only cedes to
     // same- or higher-priority tasks; with this audio loop pinned at
     // prio 19 above lwIP=18, IDLE0 would never run on Core 0 and TWDT
-    // would trip. The blocking GMF codec IO read above usually parks the
-    // task long enough for IDLE to run, but the fast path (return with
+    // would trip. The blocking codec/I2S read above usually parks the task
+    // long enough for IDLE to run, but the fast path (return with
     // data immediately available) needs an explicit cooperative point.
     vTaskDelay(1);
   }
@@ -915,7 +916,7 @@ bool ESPAudioStack::read_rx_frame_(AudioTaskCtx &ctx, const char *label) {
   }
   if (!read_ok) {
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-    LOG_W_THROTTLED("GMF codec IO %s read failed", label);
+    LOG_W_THROTTLED("Codec RX %s read failed", label);
 #else
     LOG_W_THROTTLED("I2S %s read failed: err=%s bytes=%u/%u", label, esp_err_to_name(read_err),
                     static_cast<unsigned>(bytes_read),
@@ -1573,7 +1574,7 @@ bool ESPAudioStack::write_tx_frame_(AudioTaskCtx &ctx, void *tx_data, size_t tx_
   }
   if (!write_ok) {
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-    LOG_W_THROTTLED("GMF codec IO write failed");
+    LOG_W_THROTTLED("Codec TX write failed");
 #else
     LOG_W_THROTTLED("I2S write failed: err=%s bytes=%u/%u", esp_err_to_name(write_err),
                     static_cast<unsigned>(bytes_written), static_cast<unsigned>(tx_bytes));
@@ -1591,6 +1592,63 @@ bool ESPAudioStack::write_tx_frame_(AudioTaskCtx &ctx, void *tx_data, size_t tx_
   return true;
 }
 
+bool ESPAudioStack::write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes,
+                                         size_t real_speaker_bytes) {
+  if (tx_data == nullptr || tx_bytes == 0) {
+    return false;
+  }
+  if (this->tx_completion_dma_buffer_bytes_ == 0 || this->tx_completion_dma_frames_ == 0) {
+    ESP_LOGE(TAG, "TX DMA completion tracking is not initialized");
+    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->audio_stack_running_.store(false, std::memory_order_relaxed);
+    return false;
+  }
+  if (tx_bytes % this->tx_completion_dma_buffer_bytes_ != 0) {
+    ESP_LOGE(TAG,
+             "TX frame (%u bytes) is not aligned to DMA buffer (%u bytes); "
+             "speaker playback callbacks cannot stay in lockstep",
+             (unsigned) tx_bytes, (unsigned) this->tx_completion_dma_buffer_bytes_);
+    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->audio_stack_running_.store(false, std::memory_order_relaxed);
+    return false;
+  }
+
+  const size_t public_frame_bytes = sizeof(int16_t) * static_cast<size_t>(ctx.speaker_channels);
+  uint32_t remaining_real_frames = public_frame_bytes > 0
+      ? static_cast<uint32_t>(real_speaker_bytes / public_frame_bytes)
+      : 0;
+  auto *bytes = static_cast<uint8_t *>(tx_data);
+
+#ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  for (size_t offset = 0; offset < tx_bytes; offset += this->tx_completion_dma_buffer_bytes_) {
+    const uint32_t real_frames = std::min(remaining_real_frames, this->tx_completion_dma_frames_);
+    TxCompletionRecord record{};
+    record.real_frames = real_frames;
+    record.trailing_silence_frames = real_frames > 0 ? this->tx_completion_dma_frames_ - real_frames : 0;
+    if (!this->queue_tx_completion_record_(record)) {
+      return false;
+    }
+    remaining_real_frames -= real_frames;
+  }
+  return this->write_tx_frame_(ctx, tx_data, tx_bytes);
+#else
+  for (size_t offset = 0; offset < tx_bytes; offset += this->tx_completion_dma_buffer_bytes_) {
+    const uint32_t real_frames = std::min(remaining_real_frames, this->tx_completion_dma_frames_);
+    TxCompletionRecord record{};
+    record.real_frames = real_frames;
+    record.trailing_silence_frames = real_frames > 0 ? this->tx_completion_dma_frames_ - real_frames : 0;
+    if (!this->queue_tx_completion_record_(record)) {
+      return false;
+    }
+    if (!this->write_tx_frame_(ctx, bytes + offset, this->tx_completion_dma_buffer_bytes_)) {
+      return false;
+    }
+    remaining_real_frames -= real_frames;
+  }
+  return true;
+#endif
+}
+
 void ESPAudioStack::process_tx_clock_only_(AudioTaskCtx &ctx) {
   if (!this->tx_handle_ || ctx.tx_clock_buffer == nullptr)
     return;
@@ -1603,7 +1661,11 @@ void ESPAudioStack::process_tx_clock_only_(AudioTaskCtx &ctx) {
 #ifdef USE_ESP_AUDIO_STACK_TDM_REF_DIAGNOSTIC
   ctx.current_speaker_dbfs = -120.0f;
 #endif
-  this->write_tx_frame_(ctx, ctx.tx_clock_buffer, tx_bytes);
+  // Clock-only TX keeps full-duplex RX/I2S clocks alive while no speaker
+  // audio is playing. It contains no public speaker frames, but the I2S ISR
+  // still emits TX completion events, so queue zero-frame records to keep the
+  // completion stream in lockstep without notifying speaker_source/Sendspin.
+  this->write_tx_dma_blocks_(ctx, ctx.tx_clock_buffer, tx_bytes, 0);
 }
 
 void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
@@ -1735,21 +1797,7 @@ void ESPAudioStack::process_tx_path_(AudioTaskCtx &ctx) {
     return;
   }
 
-  const bool write_ok = this->write_tx_frame_(ctx, tx_data, tx_bytes);
-
-  // Report frames actually consumed from the ring buffer (not silence/pad frames).
-  // Using got (ring buffer read) instead of bytes_written (I2S output) prevents
-  // counting silence frames as "played" during underruns.
-  if (write_ok && ctx.speaker_got > 0 && this->speaker_output_callback_count_ > 0) {
-    uint32_t frames_played = ctx.speaker_got / (sizeof(int16_t) * ctx.speaker_channels);
-    int64_t timestamp = esp_timer_get_time();
-    for (size_t i = 0; i < this->speaker_output_callback_count_; i++) {
-      const auto &slot = this->speaker_output_callbacks_[i];
-      if (slot.fn != nullptr) {
-        slot.fn(slot.ctx, frames_played, timestamp);
-      }
-    }
-  }
+  this->write_tx_dma_blocks_(ctx, tx_data, tx_bytes, ctx.speaker_got);
 }
 
 }  // namespace esp_audio_stack

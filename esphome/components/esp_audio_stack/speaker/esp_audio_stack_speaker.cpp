@@ -125,7 +125,8 @@ size_t ESPAudioStackSpeaker::play(const uint8_t *data, size_t length,
 }
 
 bool ESPAudioStackSpeaker::has_buffered_data() const {
-  return this->parent_->get_speaker_buffer_available() > 0;
+  return this->parent_->get_speaker_buffer_available() > 0 ||
+         this->parent_->has_pending_speaker_output();
 }
 
 void ESPAudioStackSpeaker::set_volume(float volume) {

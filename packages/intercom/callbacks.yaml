@@ -63,9 +63,7 @@ intercom_api:
         args: ['reason.c_str()']
     - script.execute:
         id: ui_ic_ended
-        peer: !lambda |-
-          auto c = id(intercom).get_caller();
-          return c.empty() ? id(intercom).get_current_destination() : c;
+        peer: !lambda 'return id(intercom).get_caller();'
         reason: !lambda 'return reason;'
 
   on_call_failed:
@@ -75,9 +73,7 @@ intercom_api:
         args: ['reason.c_str()']
     - script.execute:
         id: ui_ic_ended
-        peer: !lambda |-
-          auto c = id(intercom).get_caller();
-          return c.empty() ? id(intercom).get_current_destination() : c;
+        peer: !lambda 'return id(intercom).get_caller();'
         reason: !lambda 'return reason;'
 
 # =============================================================================

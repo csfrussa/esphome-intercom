@@ -619,6 +619,7 @@ void IntercomApi::set_call_state_(CallState new_state) {
   switch (new_state) {
     case CallState::IDLE:
       this->defer([this]() { this->idle_trigger_.trigger(); });
+      this->defer([this]() { this->publish_caller_(""); });
       break;
     case CallState::OUTGOING:
       this->publish_last_reason_("");
@@ -659,8 +660,6 @@ void IntercomApi::end_call_(CallEndReason reason, const std::string &detail) {
   } else {
     this->defer([this, reason_str]() { this->hangup_trigger_.trigger(reason_str); });
   }
-  this->defer([this]() { this->publish_caller_(""); });
-
   // Clear per-call identity. Terminal-decline cache stays so dup-START
   // can replay the same DECLINE; cleared by the next accepted START.
   this->clear_call_identity_();

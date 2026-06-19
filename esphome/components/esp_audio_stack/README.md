@@ -4,7 +4,7 @@
 and intercom profiles in this repository. It keeps the normal ESPHome
 `microphone`, `speaker`, media player, mixer, Voice Assistant and Micro Wake
 Word facade, but moves low-level audio ownership to the ESP-IDF and Espressif
-audio libraries: `esp_driver_i2s`, `esp_codec_dev`, `gmf_io`, `esp_audio_effects`
+audio libraries: `esp_driver_i2s`, `esp_codec_dev`, `esp_audio_effects`
 and, through optional processors, ESP-SR/GMF AFE.
 
 The component is not an official Espressif product. It is a repo-native ESPHome
@@ -57,8 +57,8 @@ MWW, Voice Assistant, media_player, mixer, intercom_api, custom components
   separate ESP-IDF simplex controllers via `rx_bus` / `tx_bus`.
 - **ESPHome facade preserved**: exposes standard `microphone` and `speaker`
   platforms, so existing ESPHome VA/MWW/media/mixer components can consume it.
-- **Codec backend**: codec boards use `esp_codec_dev`; codec payload IO can run
-  through synchronous `gmf_io/io_codec_dev` or optional GMF data-bus/task knobs.
+- **Codec backend**: codec boards use `esp_codec_dev` directly for codec
+  read/write, keeping I2S DMA completion visible to ESPHome speaker callbacks.
 - **No-codec backend**: discrete MEMS microphones and I2S amplifiers use direct
   `esp_driver_i2s` read/write without codec shims.
 - **Audio processors**: `processor_id` can point at `esp_aec` for lightweight
@@ -143,7 +143,6 @@ and gain. These are the knobs users most often need when building a new target:
 | `master_volume_min_db` | Tune perceived loudness curve while keeping 0% as hard mute. |
 | `buffers_in_psram` / `aec_ref_ring_in_psram` / `audio_task_stack_in_psram` | Save internal RAM on large full profiles. |
 | `audio_effects.*` | Expose official `esp_ae_rate_cvt` complexity/performance policy. |
-| `gmf_io.reader.*` / `gmf_io.writer.*` | Enable optional GMF codec IO buffering/task controls. |
 
 ## Topology Notes
 
@@ -391,15 +390,6 @@ First-version limits:
 | `output_sample_rate` | int | - | Mic/AEC output rate. If set, enables sample-rate conversion (must divide `sample_rate` evenly, max ratio 6) |
 | `audio_effects.rate_cvt_complexity` | int | 3 | Official `esp_ae_rate_cvt` complexity knob, 1-3. Higher is better quality and more CPU. |
 | `audio_effects.rate_cvt_perf_type` | string | `speed` | Official `esp_ae_rate_cvt` performance policy: `speed` maps to `ESP_AE_RATE_CVT_PERF_TYPE_SPEED`, `memory` maps to `ESP_AE_RATE_CVT_PERF_TYPE_MEMORY`. |
-| `gmf_io.reader.io_size` | int | 0 | Official `io_codec_dev` read transfer size. `0` keeps Espressif's default synchronous IO in the audio task. |
-| `gmf_io.reader.buffer_size` | int | 0 | Official GMF reader data-bus buffer size. Non-zero with a reader task enables buffered GMF IO. |
-| `gmf_io.reader.task_stack_size` | int | 0 | Official GMF reader task stack. `0` disables the extra IO task. |
-| `gmf_io.reader.task_priority` | int | 0 | Official GMF reader task priority when a reader task is enabled. |
-| `gmf_io.reader.task_core` | int | 0 | Official GMF reader task core, 0 or 1 depending on SoC. |
-| `gmf_io.reader.task_stack_in_psram` | bool | false | Place the GMF reader task stack in PSRAM. Enables `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`. |
-| `gmf_io.reader.speed_monitor` | bool | false | Enable GMF IO speed statistics for the reader. |
-| `gmf_io.reader.task_timeout_ms` | int | 0 | Optional GMF IO task close/control timeout override in milliseconds. |
-| `gmf_io.writer.*` | same as reader | same | Same official `io_codec_dev` knobs for the TX writer side. |
 | `processor_id` | ID | - | Reference to audio processor component (`esp_aec` or `esp_afe`) for echo cancellation and audio processing |
 | `input_gain` | float | 1.0 | Input gain before the processor (0.01-32.0). <1.0 attenuates hot mics, >1.0 amplifies weak mics. Keep this as board-level tuning; normal user-facing volume should be handled by the post-AEC/AFE `mic_gain` number. |
 | `master_volume_min_db` | float | - | Optional 1% master-volume floor in dB (-96..0). Omit it to keep codec-dev's native curve on hardware codecs; set it to tune board UX. No-codec software volume defaults to ESPHome's -49 dB curve. |
@@ -564,21 +554,15 @@ esp_audio_stack:
   audio_effects:
     rate_cvt_complexity: 3
     rate_cvt_perf_type: speed
-  gmf_io:
-    reader:
-      speed_monitor: true
-    writer:
-      speed_monitor: true
   processor_id: aec_processor
   # ... other options ...
 ```
 
-`gmf_io.reader` and `gmf_io.writer` default to Espressif's synchronous
-`io_codec_dev` mode: no extra GMF IO task and no data-bus buffering. That is
-the closest replacement for the old direct codec read/write calls. Setting
-`io_size`, `buffer_size` and `task_stack_size` enables GMF's buffered IO task
-for that direction; the ESPHome microphone/speaker API above it does not
-change.
+Codec-backed builds use `esp_codec_dev_read()` / `esp_codec_dev_write()`
+directly. The stack registers the ESP-IDF I2S TX completion callback and
+reports played frames to ESPHome only after DMA has consumed them. This mirrors
+ESPHome's native I2S speaker model and keeps Sendspin / `speaker_source`
+feedback tied to real playback timing rather than to an intermediate buffer.
 
 #### Notes
 
@@ -943,9 +927,8 @@ binary_sensor:
 - **Task Structure**: `audio_task_()` is split into `process_rx_path_()`, `process_aec_and_callbacks_()`, and `process_tx_path_()`, sharing state via `AudioTaskCtx` struct. AEC buffers use 16-byte aligned allocation for ESP-SR SIMD safety.
 - **I2S hardware lifecycle**: the component creates and initializes official
   IDF `esp_driver_i2s` TX/RX channels on demand. `esp_codec_dev_open()` then
-  enables the underlying data interfaces, and `gmf_io/io_codec_dev` performs
-  RX/TX payload transfer. Runtime `stop()` parks the audio task, closes GMF IO,
-  closes `esp_codec_dev`, then deletes the IDF channels. Mic-only
+  enables the underlying data interfaces. Runtime `stop()` parks the audio
+  task, closes `esp_codec_dev`, then deletes the IDF channels. Mic-only
   configurations still create a clock-only TX channel with `dout = GPIO_NUM_NC`,
   matching Espressif's TX-clock-for-RX full-duplex pattern.
 - **Runtime state hooks**: the parent component exposes a minimal runtime state
@@ -1046,7 +1029,7 @@ The driver and its helper entities log under namespaced tags so callers can mute
 
 **Default levels**
 
-- `WARN` - GMF codec IO read/write failures (rate-limited 1st-5th + every 100th via `I2S_LOG_W_THROTTLED`), `TX/RX channel re-enable failed`, audio task did not park within 600 ms
+- `WARN` - codec/I2S read/write failures (rate-limited 1st-5th + every 100th via `I2S_LOG_W_THROTTLED`), `TX/RX channel re-enable failed`, audio task did not park within 600 ms
 - `INFO` - driver lifecycle (`ESP audio stack initialized`, `Audio stack started/stopped`, `Mic consumer registered/removed`, `Audio stack going idle`), AEC reference mode chosen
 - `DEBUG` - channel creation details (TDM mask, rate-conversion ratio), per-frame audio session start/end, TDM slot configuration
 

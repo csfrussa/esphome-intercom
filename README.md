@@ -1324,7 +1324,7 @@ The stack can be used without intercom. For custom devices it covers:
 single-bus codecs, dual I2S RX/TX, 32-bit MEMS microphones, stereo RX slot
 selection, ES8311 digital feedback, ES7210 TDM reference, stereo speaker output,
 48 kHz speaker bus with 16 kHz mic/AEC output, PSRAM buffer placement and
-optional GMF codec IO tasks. See the component README for the option table and
+direct `esp_codec_dev` codec IO. See the component README for the option table and
 topology examples.
 
 ### [`esp_aec`](esphome/components/esp_aec/README.md)

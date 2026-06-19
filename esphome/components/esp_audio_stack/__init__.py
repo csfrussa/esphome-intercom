@@ -82,14 +82,6 @@ CONF_TELEMETRY_LOG_INTERVAL_FRAMES = "telemetry_log_interval_frames"
 CONF_AUDIO_EFFECTS = "audio_effects"
 CONF_RATE_CVT_COMPLEXITY = "rate_cvt_complexity"
 CONF_RATE_CVT_PERF_TYPE = "rate_cvt_perf_type"
-CONF_GMF_IO = "gmf_io"
-CONF_READER = "reader"
-CONF_WRITER = "writer"
-CONF_IO_SIZE = "io_size"
-CONF_BUFFER_SIZE = "buffer_size"
-CONF_TASK_STACK_IN_PSRAM = "task_stack_in_psram"
-CONF_SPEED_MONITOR = "speed_monitor"
-CONF_TASK_TIMEOUT_MS = "task_timeout_ms"
 CONF_CODEC = "codec"
 CONF_INPUT = "input"
 CONF_OUTPUT = "output"
@@ -122,7 +114,6 @@ RATE_CVT_PERF_TYPES = ("speed", "memory")
 # versions resolved by the maintained Waveshare S3 AFE build on ESP-IDF 5.5.4.
 ESP_AUDIO_EFFECTS_REF = "1.3.0~1"
 ESP_CODEC_DEV_REF = "1.5.10"
-GMF_IO_REF = "0.8.1"
 
 I2S_OPTIONAL_MCLK = cv.Any(
     cv.int_range(min=-1, max=-1),
@@ -144,36 +135,6 @@ I2S_TX_BUS_SCHEMA = cv.Schema({
     cv.Optional(CONF_I2S_MCLK_PIN, default=-1): I2S_OPTIONAL_MCLK,
     cv.Required(CONF_I2S_DOUT_PIN): pins.internal_gpio_output_pin_number,
 })
-
-def _validate_gmf_io_direction(config):
-    io_size = config[CONF_IO_SIZE]
-    buffer_size = config[CONF_BUFFER_SIZE]
-    task_stack_size = config[CONF_TASK_STACK_SIZE]
-    async_fields = (io_size, buffer_size, task_stack_size)
-    if any(async_fields) and not all(async_fields):
-        raise cv.Invalid(
-            "gmf_io async mode requires io_size, buffer_size and task_stack_size "
-            "to all be non-zero. Leave all three at 0 for synchronous IO."
-        )
-    return config
-
-
-GMF_IO_DIRECTION_SCHEMA = cv.All(
-    cv.Schema({
-        # Official gmf_io knobs. All defaults are Espressif's zero/default values:
-        # zero task/buffer means synchronous IO in the caller task; non-zero task
-        # and buffer settings enable GMF's async data-bus mode.
-        cv.Optional(CONF_IO_SIZE, default=0): cv.int_range(min=0, max=262144),
-        cv.Optional(CONF_BUFFER_SIZE, default=0): cv.int_range(min=0, max=1048576),
-        cv.Optional(CONF_TASK_STACK_SIZE, default=0): cv.int_range(min=0, max=32768),
-        cv.Optional(CONF_TASK_PRIORITY, default=0): cv.int_range(min=0, max=24),
-        cv.Optional(CONF_TASK_CORE, default=0): cv.int_range(min=0, max=1),
-        cv.Optional(CONF_TASK_STACK_IN_PSRAM, default=False): cv.boolean,
-        cv.Optional(CONF_SPEED_MONITOR, default=False): cv.boolean,
-        cv.Optional(CONF_TASK_TIMEOUT_MS, default=0): cv.int_range(min=0, max=60000),
-    }),
-    _validate_gmf_io_direction,
-)
 
 CODEC_INPUT_SCHEMA = cv.typed_schema(
     {
@@ -467,10 +428,6 @@ CONFIG_SCHEMA = cv.All(
                 *RATE_CVT_PERF_TYPES, lower=True,
             ),
         }),
-        cv.Optional(CONF_GMF_IO, default={}): cv.Schema({
-            cv.Optional(CONF_READER, default={}): GMF_IO_DIRECTION_SCHEMA,
-            cv.Optional(CONF_WRITER, default={}): GMF_IO_DIRECTION_SCHEMA,
-        }),
         cv.Optional(CONF_CODEC): cv.Schema({
             cv.GenerateID(CONF_I2C_ID): cv.use_id(i2c.I2CBus),
             cv.Optional(CONF_INPUT): CODEC_INPUT_SCHEMA,
@@ -542,32 +499,6 @@ def _final_validate(config):
         raise cv.Invalid(
             f"task_core={task_core} not available on {variant} (single-core SoC)"
         )
-    gmf_io = config.get(CONF_GMF_IO, {})
-    for direction in (CONF_READER, CONF_WRITER):
-        direction_conf = gmf_io.get(direction, {})
-        gmf_task_core = direction_conf.get(CONF_TASK_CORE, 0)
-        if gmf_task_core > 0 and variant in SINGLE_CORE_VARIANTS:
-            raise cv.Invalid(
-                f"gmf_io.{direction}.task_core={gmf_task_core} not available on {variant} "
-                "(single-core SoC)"
-            )
-        if CONF_CODEC not in config:
-            active_gmf_io = any((
-                direction_conf.get(CONF_IO_SIZE, 0),
-                direction_conf.get(CONF_BUFFER_SIZE, 0),
-                direction_conf.get(CONF_TASK_STACK_SIZE, 0),
-                direction_conf.get(CONF_TASK_PRIORITY, 0),
-                direction_conf.get(CONF_TASK_STACK_IN_PSRAM, False),
-                direction_conf.get(CONF_SPEED_MONITOR, False),
-                direction_conf.get(CONF_TASK_TIMEOUT_MS, 0),
-            ))
-            if active_gmf_io:
-                raise cv.Invalid(
-                    f"gmf_io.{direction} requires codec:. No-codec profiles use "
-                    "esp_driver_i2s direct read/write, so GMF IO task/buffer knobs "
-                    "would not be applied."
-                )
-
     # APLL is only available on ESP32, ESP32-S2, and ESP32-P4
     APLL_VARIANTS = {VARIANT_ESP32, VARIANT_ESP32S2, VARIANT_ESP32P4}
     if config.get(CONF_USE_APLL, False) and variant not in APLL_VARIANTS:
@@ -636,12 +567,10 @@ async def to_code(config):
     add_idf_component(name="espressif/esp_audio_effects", ref=ESP_AUDIO_EFFECTS_REF)
     if has_hardware_codec:
         add_idf_component(name="espressif/esp_codec_dev", ref=ESP_CODEC_DEV_REF)
-        add_idf_component(name="espressif/gmf_io", ref=GMF_IO_REF)
     await cg.register_component(var, config)
 
     # Define USE_ESP_AUDIO_STACK so other components know it's available
     cg.add_define("USE_ESP_AUDIO_STACK")
-    cg.add_define("USE_ESP_AUDIO_STACK_GMF_BACKEND")
     if CONF_RX_BUS in config:
         cg.add_define("USE_ESP_AUDIO_STACK_DUAL_BUS")
     if use_tdm_bus:
@@ -678,12 +607,7 @@ async def to_code(config):
         cg.add_define("USE_ESP_AUDIO_STACK_HARDWARE_OUTPUT_CODEC")
     include_builtin_idf_component("esp_driver_i2s")
     add_idf_sdkconfig_option("CONFIG_I2S_ISR_IRAM_SAFE", True)
-    gmf_io = config[CONF_GMF_IO]
-    if (
-        config[CONF_AUDIO_TASK_STACK_IN_PSRAM]
-        or gmf_io[CONF_READER][CONF_TASK_STACK_IN_PSRAM]
-        or gmf_io[CONF_WRITER][CONF_TASK_STACK_IN_PSRAM]
-    ):
+    if config[CONF_AUDIO_TASK_STACK_IN_PSRAM]:
         add_idf_sdkconfig_option("CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY", True)
 
     _add_config_setters(
@@ -834,22 +758,6 @@ async def to_code(config):
     audio_effects = config[CONF_AUDIO_EFFECTS]
     cg.add(var.set_rate_cvt_complexity(audio_effects[CONF_RATE_CVT_COMPLEXITY]))
     cg.add(var.set_rate_cvt_perf_type(0 if audio_effects[CONF_RATE_CVT_PERF_TYPE] == "memory" else 1))
-    if has_hardware_codec:
-        for direction, setter in (
-            (CONF_READER, var.configure_gmf_reader_io),
-            (CONF_WRITER, var.configure_gmf_writer_io),
-        ):
-            io_conf = gmf_io[direction]
-            cg.add(setter(
-                io_conf[CONF_IO_SIZE],
-                io_conf[CONF_BUFFER_SIZE],
-                io_conf[CONF_TASK_STACK_SIZE],
-                io_conf[CONF_TASK_PRIORITY],
-                io_conf[CONF_TASK_CORE],
-                io_conf[CONF_TASK_STACK_IN_PSRAM],
-                io_conf[CONF_SPEED_MONITOR],
-                io_conf[CONF_TASK_TIMEOUT_MS],
-            ))
 
     # AEC reference mode is compile-time selected for no-codec setups:
     # ring_buffer pulls in the Espressif/ADF TYPE2-style software reference,

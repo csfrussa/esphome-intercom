@@ -5,6 +5,7 @@
 #include <driver/i2s_common.h>
 #include <esp_heap_caps.h>
 #include <esp_idf_version.h>
+#include <esp_timer.h>
 #include <esp_task_wdt.h>
 #include <gain.h>
 #include <algorithm>
@@ -74,6 +75,16 @@ int32_t multiply_q31(int32_t a, int32_t b) {
   if (a <= 0 || b <= 0) return 0;
   const int64_t value = (static_cast<int64_t>(a) * static_cast<int64_t>(b) + (1LL << 30)) >> 31;
   return value >= INT32_MAX ? INT32_MAX : static_cast<int32_t>(value);
+}
+
+uint32_t largest_divisor_at_most(uint32_t value, uint32_t limit, uint32_t minimum) {
+  if (value == 0 || limit == 0) return 0;
+  uint32_t candidate = std::min(value, limit);
+  while (candidate > minimum) {
+    if (value % candidate == 0) return candidate;
+    candidate--;
+  }
+  return value % minimum == 0 && minimum <= limit ? minimum : std::min(value, limit);
 }
 
 float sanitize_gain_factor(float gain) {
@@ -294,7 +305,7 @@ static i2s_tdm_slot_config_t get_tdm_slot_config(uint8_t fmt, i2s_data_bit_width
 #endif  // SOC_I2S_SUPPORTS_TDM
 
 void ESPAudioStack::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack (Espressif/GMF-first backend)...");
+  ESP_LOGCONFIG(TAG, "Setting up ESP Audio Stack (ESP-IDF I2S + esp_codec_dev backend)...");
 
   // Mutex for the mic consumer registry. Plain FreeRTOS mutex (used as lock,
   // not as a counting semaphore); replaces std::mutex to keep the public
@@ -446,8 +457,8 @@ void ESPAudioStack::loop() {
   }
 
   // Pick up the deferred I2S release queued by stop(). The task may still be
-  // blocked inside GMF codec IO for the current frame, so delete channels only
-  // after it has parked in the outer wait loop.
+  // blocked inside a codec/I2S transfer for the current frame, so delete
+  // channels only after it has parked in the outer wait loop.
   if (this->teardown_pending_.load(std::memory_order_relaxed) &&
       this->audio_task_idle_.load(std::memory_order_relaxed)) {
     this->deinit_i2s_();
@@ -532,7 +543,7 @@ void ESPAudioStack::dump_config() {
                 this->task_priority_, this->task_core_, (unsigned)this->task_stack_size_);
   ESP_LOGCONFIG(TAG, "  I2S Lifecycle: esp_driver_i2s create on start, delete on idle stop");
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-  ESP_LOGCONFIG(TAG, "  Codec Backend: esp_codec_dev + gmf_io/io_codec_dev (input=%s, output=%s)",
+  ESP_LOGCONFIG(TAG, "  Codec Backend: esp_codec_dev direct read/write (input=%s, output=%s)",
                 this->codec_backend_.input_codec_name(), this->codec_backend_.output_codec_name());
 #else
   ESP_LOGCONFIG(TAG, "  IO Backend: esp_driver_i2s direct read/write (no hardware codec)");
@@ -669,6 +680,32 @@ bool ESPAudioStack::prepare_i2s_channels_() {
       dma_frame_num = max_frames;
     }
   }
+  uint32_t logical_tx_frames = 256U * this->rate_conversion_ratio_;
+#ifdef USE_AUDIO_PROCESSOR
+  if (this->processor_ != nullptr) {
+    const auto spec = this->processor_->frame_spec();
+    if (spec.input_samples > 0) {
+      logical_tx_frames = static_cast<uint32_t>(spec.input_samples) * this->rate_conversion_ratio_;
+    }
+  }
+#endif
+  if (logical_tx_frames > 0 && max_frames > 0) {
+    const uint32_t aligned_frames = largest_divisor_at_most(logical_tx_frames, max_frames, 64);
+    if (aligned_frames > 0 && aligned_frames != dma_frame_num) {
+      if (this->dma_frame_num_configured_) {
+        ESP_LOGW(TAG,
+                 "Configured dma_frame_num=%u does not divide audio task TX frame (%u); "
+                 "using %u so speaker playback callbacks stay in DMA lockstep",
+                 (unsigned) dma_frame_num, (unsigned) logical_tx_frames,
+                 (unsigned) aligned_frames);
+      } else {
+        ESP_LOGD(TAG, "Aligning TX DMA to audio task frame: frames %u -> %u (logical=%u, max=%u)",
+                 (unsigned) dma_frame_num, (unsigned) aligned_frames,
+                 (unsigned) logical_tx_frames, (unsigned) max_frames);
+      }
+      dma_frame_num = aligned_frames;
+    }
+  }
 #if SOC_I2S_SUPPORTS_TDM && defined(USE_ESP_AUDIO_STACK_TDM_BUS)
 #ifdef USE_AUDIO_PROCESSOR
   if (this->use_tdm_bus_ && this->processor_ != nullptr && max_frames > 0) {
@@ -682,11 +719,12 @@ bool ESPAudioStack::prepare_i2s_channels_() {
       // The audio task reads/writes one processor frame per loop. Keep enough
       // DMA headroom for that full TDM frame plus margin; otherwise a 1024-sample
       // AFE quantum can underflow a short DMA queue even though the YAML compiles.
+      // Do not change dma_frame_num here: it has already been selected as a
+      // divisor of the logical TX frame so playback completion records stay in
+      // lockstep with the I2S DMA callbacks.
       const uint32_t target_total_frames = ceil_div_u32(processor_bus_frames * 5U, 4U);
       if (target_total_frames > dma_desc_num * dma_frame_num) {
         const uint32_t old_desc = dma_desc_num;
-        const uint32_t old_frames = dma_frame_num;
-        dma_frame_num = std::min(max_frames, std::max(dma_frame_num, ceil_div_u32(target_total_frames, dma_desc_num)));
         dma_desc_num = std::max(dma_desc_num, ceil_div_u32(target_total_frames, dma_frame_num));
         if (dma_desc_num > 16) {
           ESP_LOGE(TAG,
@@ -698,10 +736,10 @@ bool ESPAudioStack::prepare_i2s_channels_() {
           return false;
         }
         ESP_LOGW(TAG,
-                 "Raised TDM DMA queue for processor frame: desc %u->%u, frames %u->%u "
+                 "Raised TDM DMA queue for processor frame: desc %u->%u, frames %u "
                  "(processor=%u bus frames, target=%u)",
                  (unsigned) old_desc, (unsigned) dma_desc_num,
-                 (unsigned) old_frames, (unsigned) dma_frame_num,
+                 (unsigned) dma_frame_num,
                  (unsigned) processor_bus_frames, (unsigned) target_total_frames);
       }
     }
@@ -907,6 +945,11 @@ bool ESPAudioStack::prepare_i2s_channels_() {
   }
 
   this->set_i2s_hardware_state_(I2SHardwareState::READY);
+  this->tx_completion_dma_frames_ = need_tx ? dma_frame_num : 0;
+  this->tx_completion_bytes_per_frame_ = need_tx ? tx_bytes_per_frame : 0;
+  this->tx_completion_dma_buffer_bytes_ =
+      need_tx ? static_cast<size_t>(dma_frame_num) * static_cast<size_t>(tx_bytes_per_frame) : 0;
+  this->tx_completion_queue_size_ = need_tx ? static_cast<size_t>(dma_desc_num) * 2U : 0;
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   if (!this->setup_codec_backend_(clk_src)) {
     ESP_LOGE(TAG, "Failed to prepare esp_codec_dev backend");
@@ -1000,7 +1043,25 @@ bool ESPAudioStack::enable_i2s_channels_() {
     return false;
   }
 
+  if (this->tx_handle_ != nullptr) {
+    if (!this->prepare_tx_completion_tracking_()) {
+      this->deinit_i2s_();
+      return false;
+    }
+    const i2s_event_callbacks_t callbacks = {.on_sent = ESPAudioStack::tx_on_sent_cb_};
+    const esp_err_t cb_err = i2s_channel_register_event_callback(this->tx_handle_, &callbacks, this);
+    if (cb_err != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to register TX completion callback: %s", esp_err_to_name(cb_err));
+      this->deinit_i2s_();
+      return false;
+    }
+  }
+
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
+  if (!this->prime_tx_completion_records_(false)) {
+    this->deinit_i2s_();
+    return false;
+  }
   auto tx_cfg = this->make_tx_sample_config_();
   auto rx_cfg = this->make_rx_sample_config_();
   if (!this->codec_backend_.open(this->tx_handle_ ? &tx_cfg : nullptr,
@@ -1013,6 +1074,10 @@ bool ESPAudioStack::enable_i2s_channels_() {
   this->codec_backend_.set_output_mute(false);
 #else
   if (this->tx_handle_) {
+    if (!this->prime_tx_completion_records_(true)) {
+      this->deinit_i2s_();
+      return false;
+    }
     esp_err_t err = i2s_channel_enable(this->tx_handle_);
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "Failed to enable TX I2S channel: %s", esp_err_to_name(err));
@@ -1066,11 +1131,13 @@ void ESPAudioStack::close_audio_io_() {
   }
 #endif
   this->set_i2s_hardware_state_(I2SHardwareState::READY);
+  this->reset_tx_completion_tracking_();
   this->log_memory_snapshot_("after_i2s_disable");
 }
 
 void ESPAudioStack::deinit_i2s_() {
   this->close_audio_io_();
+  this->reset_tx_completion_tracking_();
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
   this->codec_backend_.teardown();
 #endif
@@ -1084,6 +1151,173 @@ void ESPAudioStack::deinit_i2s_() {
   }
   this->set_i2s_hardware_state_(I2SHardwareState::UNPREPARED);
   ESP_LOGI(TAG, "I2S deinitialized");
+}
+
+bool IRAM_ATTR ESPAudioStack::tx_on_sent_cb_(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
+  auto *self = static_cast<ESPAudioStack *>(user_ctx);
+  if (self == nullptr || self->tx_completion_event_queue_ == nullptr) {
+    return false;
+  }
+  const int64_t now = esp_timer_get_time();
+  BaseType_t need_yield1 = pdFALSE;
+  BaseType_t need_yield2 = pdFALSE;
+  if (xQueueIsQueueFullFromISR(self->tx_completion_event_queue_)) {
+    int64_t dummy = 0;
+    xQueueReceiveFromISR(self->tx_completion_event_queue_, &dummy, &need_yield1);
+    self->tx_completion_desync_ = true;
+  }
+  xQueueSendToBackFromISR(self->tx_completion_event_queue_, &now, &need_yield2);
+  (void) handle;
+  (void) event;
+  return need_yield1 || need_yield2;
+}
+
+bool ESPAudioStack::prepare_tx_completion_tracking_() {
+  if (this->tx_handle_ == nullptr) {
+    return true;
+  }
+  if (this->tx_completion_dma_buffer_bytes_ == 0 || this->tx_completion_queue_size_ == 0) {
+    ESP_LOGE(TAG, "TX completion tracking missing DMA sizing");
+    return false;
+  }
+  if (this->tx_completion_event_queue_ != nullptr) {
+    vQueueDelete(this->tx_completion_event_queue_);
+    this->tx_completion_event_queue_ = nullptr;
+  }
+  if (this->tx_completion_record_queue_ != nullptr) {
+    vQueueDelete(this->tx_completion_record_queue_);
+    this->tx_completion_record_queue_ = nullptr;
+  }
+  this->tx_completion_event_queue_ = xQueueCreate(this->tx_completion_queue_size_, sizeof(int64_t));
+  this->tx_completion_record_queue_ = xQueueCreate(this->tx_completion_queue_size_, sizeof(TxCompletionRecord));
+  if (this->tx_completion_event_queue_ == nullptr || this->tx_completion_record_queue_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate TX completion queues");
+    return false;
+  }
+  if (this->tx_completion_silence_bytes_ < this->tx_completion_dma_buffer_bytes_) {
+    if (this->tx_completion_silence_ != nullptr) {
+      heap_caps_free(this->tx_completion_silence_);
+      this->tx_completion_silence_ = nullptr;
+      this->tx_completion_silence_bytes_ = 0;
+    }
+    this->tx_completion_silence_ = static_cast<uint8_t *>(
+        heap_caps_calloc(1, this->tx_completion_dma_buffer_bytes_, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    this->tx_completion_silence_bytes_ =
+        this->tx_completion_silence_ != nullptr ? this->tx_completion_dma_buffer_bytes_ : 0;
+  } else if (this->tx_completion_silence_ != nullptr) {
+    memset(this->tx_completion_silence_, 0, this->tx_completion_dma_buffer_bytes_);
+  }
+  if (this->tx_completion_silence_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate TX DMA silence buffer (%u bytes)",
+             (unsigned) this->tx_completion_dma_buffer_bytes_);
+    return false;
+  }
+  this->tx_completion_desync_ = false;
+  this->tx_completion_pending_real_records_.store(0, std::memory_order_release);
+  return true;
+}
+
+bool ESPAudioStack::prime_tx_completion_records_(bool preload_dma) {
+  if (this->tx_handle_ == nullptr) {
+    return true;
+  }
+  const size_t desc_count = this->tx_completion_queue_size_ / 2U;
+  for (size_t i = 0; i < desc_count; i++) {
+    if (preload_dma) {
+      size_t loaded = 0;
+      const esp_err_t err = i2s_channel_preload_data(this->tx_handle_, this->tx_completion_silence_,
+                                                     this->tx_completion_dma_buffer_bytes_, &loaded);
+      if (err != ESP_OK || loaded != this->tx_completion_dma_buffer_bytes_) {
+        ESP_LOGE(TAG, "Failed to preload TX DMA silence %u/%u: %s loaded=%u",
+                 (unsigned) (i + 1U), (unsigned) desc_count, esp_err_to_name(err), (unsigned) loaded);
+        return false;
+      }
+    }
+    TxCompletionRecord zero{};
+    if (xQueueSend(this->tx_completion_record_queue_, &zero, 0) != pdTRUE) {
+      ESP_LOGE(TAG, "Failed to queue TX priming completion record");
+      return false;
+    }
+  }
+  return true;
+}
+
+void ESPAudioStack::reset_tx_completion_tracking_() {
+  this->tx_completion_desync_ = false;
+  this->tx_completion_pending_real_records_.store(0, std::memory_order_release);
+  if (this->tx_completion_event_queue_ != nullptr) {
+    xQueueReset(this->tx_completion_event_queue_);
+  }
+  if (this->tx_completion_record_queue_ != nullptr) {
+    xQueueReset(this->tx_completion_record_queue_);
+  }
+}
+
+void ESPAudioStack::dispatch_speaker_output_callbacks_(uint32_t frames, int64_t timestamp) {
+  for (size_t i = 0; i < this->speaker_output_callback_count_; i++) {
+    const auto &slot = this->speaker_output_callbacks_[i];
+    if (slot.fn != nullptr) {
+      slot.fn(slot.ctx, frames, timestamp);
+    }
+  }
+}
+
+void ESPAudioStack::drain_tx_completion_events_() {
+  if (this->tx_completion_event_queue_ == nullptr || this->tx_completion_record_queue_ == nullptr) {
+    return;
+  }
+  if (this->tx_completion_desync_) {
+    ESP_LOGE(TAG, "TX completion event queue overflowed; stopping audio stack to restore lockstep");
+    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->audio_stack_running_.store(false, std::memory_order_relaxed);
+    return;
+  }
+  int64_t timestamp = 0;
+  while (xQueueReceive(this->tx_completion_event_queue_, &timestamp, 0) == pdTRUE) {
+    TxCompletionRecord record{};
+    if (xQueueReceive(this->tx_completion_record_queue_, &record, 0) != pdTRUE) {
+      if (this->tx_completion_pending_real_records_.load(std::memory_order_acquire) == 0) {
+        // esp_codec_dev_open()/I2S channel reconfiguration can emit initial TX
+        // completion callbacks before the audio task has queued clock-only or
+        // speaker records. With no real speaker frames pending, those callbacks
+        // are driver priming noise and must not stop the full-duplex mic path.
+        continue;
+      }
+      ESP_LOGE(TAG, "TX completion event without matching write record; stopping audio stack");
+      this->has_i2s_error_.store(true, std::memory_order_relaxed);
+      this->audio_stack_running_.store(false, std::memory_order_relaxed);
+      return;
+    }
+    if (record.real_frames == 0) {
+      continue;
+    }
+    if (this->tx_completion_pending_real_records_.load(std::memory_order_acquire) > 0) {
+      this->tx_completion_pending_real_records_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    if (this->speaker_output_callback_count_ == 0) {
+      continue;
+    }
+    const int64_t adjusted_timestamp =
+        timestamp - static_cast<int64_t>(record.trailing_silence_frames) *
+                        1000000LL / static_cast<int64_t>(this->sample_rate_);
+    this->dispatch_speaker_output_callbacks_(record.real_frames, adjusted_timestamp);
+  }
+}
+
+bool ESPAudioStack::queue_tx_completion_record_(const TxCompletionRecord &record) {
+  if (this->tx_completion_record_queue_ == nullptr) {
+    return true;
+  }
+  if (xQueueSend(this->tx_completion_record_queue_, &record, 0) != pdTRUE) {
+    ESP_LOGE(TAG, "TX completion record queue full; stopping audio stack");
+    this->has_i2s_error_.store(true, std::memory_order_relaxed);
+    this->audio_stack_running_.store(false, std::memory_order_relaxed);
+    return false;
+  }
+  if (record.real_frames > 0) {
+    this->tx_completion_pending_real_records_.fetch_add(1, std::memory_order_acq_rel);
+  }
+  return true;
 }
 
 bool ESPAudioStack::wait_audio_task_state_(bool idle, uint32_t timeout_ms) {
@@ -1109,9 +1343,9 @@ void ESPAudioStack::start() {
   }
 
   // Complete any deferred close from the previous session before reopening.
-  // Reusing a GMF codec IO that the audio task has already parked during a
+  // Reusing codec/I2S handles that the audio task has already parked during a
   // stop/start call cycle can leave TX in a half-closed state on the next
-  // intercom call.
+  // playback or intercom call.
   if (this->teardown_pending_.load(std::memory_order_relaxed)) {
     if (this->wait_audio_task_idle_(250)) {
       this->deinit_i2s_();
@@ -1140,7 +1374,7 @@ void ESPAudioStack::start() {
   }
 
   // I2S allocation happens here, not in setup(): start() owns both driver
-  // channel creation and GMF IO open while stop() tears the bus back down.
+  // channel creation and codec open while stop() tears the bus back down.
   this->request_audio_preallocation_();
   if (!this->enable_i2s_channels_()) {
     ESP_LOGE(TAG, "Failed to start I2S");
@@ -1287,7 +1521,7 @@ bool ESPAudioStack::register_mic_consumer(void *token) {
     this->mic_start_trigger_.trigger();
     // If the stack is already running, wake the processor immediately. If this
     // consumer is also starting the stack, start() will wake the audio task
-    // first and then enable the processor so GMF has input frames available.
+    // first and then enable the processor so AFE has input frames available.
     if (!needs_start && this->processor_ != nullptr) {
       this->processor_->set_processing_active(true);
     }
@@ -1398,9 +1632,17 @@ size_t ESPAudioStack::play(const uint8_t *data, size_t len, TickType_t ticks_to_
   }
 
   // Data arrives at bus rate (e.g. 48kHz from mixer/resampler). Partial writes
-  // are allowed here because upstream ESPHome sources can push chunks larger
-  // than the currently free ring space and retry the unwritten tail.
-  size_t written = this->speaker_buffer_->write_without_replacement((void *) data, len, ticks_to_wait, true);
+  // are allowed because upstream ESPHome sources retry unwritten tails, but a
+  // partial must never split an interleaved PCM frame.
+  const size_t frame_bytes = sizeof(int16_t) * static_cast<size_t>(this->get_speaker_channels());
+  if (frame_bytes == 0) {
+    return 0;
+  }
+  const size_t aligned_len = len - (len % frame_bytes);
+  if (aligned_len == 0) {
+    return 0;
+  }
+  size_t written = this->speaker_buffer_->write_without_replacement((void *) data, aligned_len, ticks_to_wait, false);
 
   if (written > 0) {
     this->last_speaker_audio_ms_.store(millis(), std::memory_order_relaxed);

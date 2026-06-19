@@ -231,21 +231,6 @@ esp_audio_stack:
   task_core: 0
   task_priority: 19
   task_stack_size: 8192
-  # Official IDF i2s_chan_config_t knob. 240 frames is the IDF/periph_i2s
-  # default and halves the WS3 full-duplex TDM DMA reservation vs the previous
-  # 10ms auto value (~480 frames), recovering ~23 KB contiguous internal heap.
-  dma_frame_num: 240
-  gmf_io:
-    reader:
-      io_size: 0
-      buffer_size: 0
-      task_stack_size: 0
-      speed_monitor: false
-    writer:
-      io_size: 0
-      buffer_size: 0
-      task_stack_size: 0
-      speed_monitor: false
   i2s_lrclk_pin: GPIO14
   i2s_bclk_pin: GPIO13
   i2s_mclk_pin: GPIO12

@@ -18,6 +18,7 @@
 #include <driver/i2s_tdm.h>
 #endif
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <freertos/task.h>
 
 #include <esp_heap_caps.h>
@@ -406,6 +407,9 @@ class ESPAudioStack : public Component {
   }
   size_t get_mic_callback_buffer_size() const;
   size_t get_speaker_buffer_available() const;
+  bool has_pending_speaker_output() const {
+    return this->tx_completion_pending_real_records_.load(std::memory_order_acquire) > 0;
+  }
   size_t get_speaker_buffer_size() const;
 
   // Task configuration (settable from YAML)
@@ -432,36 +436,6 @@ class ESPAudioStack : public Component {
   void set_telemetry_log_interval_frames(uint16_t frames) { this->telemetry_log_interval_frames_ = frames; }
   void set_rate_cvt_complexity(uint8_t complexity) { this->rate_cvt_complexity_ = complexity; }
   void set_rate_cvt_perf_type(uint8_t perf_type) { this->rate_cvt_perf_type_ = perf_type; }
-#ifdef USE_ESP_AUDIO_STACK_HARDWARE_CODEC
-  void configure_gmf_reader_io(uint32_t io_size, uint32_t buffer_size, uint32_t task_stack_size,
-                               uint8_t task_priority, uint8_t task_core, bool task_stack_in_psram,
-                               bool speed_monitor, int32_t task_timeout_ms) {
-    CodecDevBackend::GmfIoConfig cfg;
-    cfg.io_size = io_size;
-    cfg.buffer_size = buffer_size;
-    cfg.task_stack_size = task_stack_size;
-    cfg.task_priority = task_priority;
-    cfg.task_core = task_core;
-    cfg.task_stack_in_psram = task_stack_in_psram;
-    cfg.speed_monitor = speed_monitor;
-    cfg.task_timeout_ms = task_timeout_ms;
-    this->codec_backend_.set_gmf_reader_config(cfg);
-  }
-  void configure_gmf_writer_io(uint32_t io_size, uint32_t buffer_size, uint32_t task_stack_size,
-                               uint8_t task_priority, uint8_t task_core, bool task_stack_in_psram,
-                               bool speed_monitor, int32_t task_timeout_ms) {
-    CodecDevBackend::GmfIoConfig cfg;
-    cfg.io_size = io_size;
-    cfg.buffer_size = buffer_size;
-    cfg.task_stack_size = task_stack_size;
-    cfg.task_priority = task_priority;
-    cfg.task_core = task_core;
-    cfg.task_stack_in_psram = task_stack_in_psram;
-    cfg.speed_monitor = speed_monitor;
-    cfg.task_timeout_ms = task_timeout_ms;
-    this->codec_backend_.set_gmf_writer_config(cfg);
-  }
-#endif
  protected:
   bool init_audio_stack_();
   bool prepare_i2s_channels_();
@@ -601,6 +575,7 @@ class ESPAudioStack : public Component {
   void process_tx_path_(AudioTaskCtx &ctx);
   void process_tx_clock_only_(AudioTaskCtx &ctx);
   bool write_tx_frame_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes);
+  bool write_tx_dma_blocks_(AudioTaskCtx &ctx, void *tx_data, size_t tx_bytes, size_t real_speaker_bytes);
   bool can_dispatch_mic_frame_(const AudioTaskCtx &ctx) const;
   void apply_post_processor_gain_(AudioTaskCtx &ctx);
   void dispatch_mic_callbacks_(const AudioTaskCtx &ctx);
@@ -618,6 +593,18 @@ class ESPAudioStack : public Component {
   bool wait_audio_task_state_(bool idle, uint32_t timeout_ms);
   bool wait_audio_task_idle_(uint32_t timeout_ms) { return this->wait_audio_task_state_(true, timeout_ms); }
   bool wait_audio_task_active_(uint32_t timeout_ms) { return this->wait_audio_task_state_(false, timeout_ms); }
+
+  struct TxCompletionRecord {
+    uint32_t real_frames{0};
+    uint32_t trailing_silence_frames{0};
+  };
+  static bool IRAM_ATTR tx_on_sent_cb_(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+  bool prepare_tx_completion_tracking_();
+  bool prime_tx_completion_records_(bool preload_dma);
+  void drain_tx_completion_events_();
+  void reset_tx_completion_tracking_();
+  bool queue_tx_completion_record_(const TxCompletionRecord &record);
+  void dispatch_speaker_output_callbacks_(uint32_t frames, int64_t timestamp);
 
 #ifdef USE_ESP_AUDIO_STACK_MONO_REF
   // Fill ctx.spk_ref_buffer for the mono AEC path (ring buffer or previous
@@ -757,6 +744,17 @@ class ESPAudioStack : public Component {
   // Speaker output callbacks (for mixer pending_playback_frames tracking)
   SpeakerOutputCallbackSlot speaker_output_callbacks_[MAX_LISTENERS]{};
   size_t speaker_output_callback_count_{0};
+
+  QueueHandle_t tx_completion_event_queue_{nullptr};
+  QueueHandle_t tx_completion_record_queue_{nullptr};
+  uint8_t *tx_completion_silence_{nullptr};
+  size_t tx_completion_silence_bytes_{0};
+  size_t tx_completion_queue_size_{0};
+  size_t tx_completion_dma_buffer_bytes_{0};
+  uint32_t tx_completion_dma_frames_{0};
+  uint32_t tx_completion_bytes_per_frame_{0};
+  volatile bool tx_completion_desync_{false};
+  std::atomic<uint32_t> tx_completion_pending_real_records_{0};
 
   // Speaker ring buffer: stores data at bus rate (sample_rate_)
   audio_processor::RingBufferPtr speaker_buffer_;

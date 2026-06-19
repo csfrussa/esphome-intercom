@@ -7,7 +7,6 @@
 #include <driver/i2s_types.h>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
-#include <esp_gmf_io.h>
 #include <hal/i2s_types.h>
 
 #include <cstddef>
@@ -56,17 +55,6 @@ class CodecDevBackend {
     uint32_t mclk_multiple{256};
   };
 
-  struct GmfIoConfig {
-    size_t io_size{0};
-    size_t buffer_size{0};
-    uint32_t task_stack_size{0};
-    uint8_t task_priority{0};
-    uint8_t task_core{0};
-    bool task_stack_in_psram{false};
-    bool speed_monitor{false};
-    int32_t task_timeout_ms{0};
-  };
-
   CodecDevBackend() = default;
   ~CodecDevBackend();
 
@@ -77,8 +65,6 @@ class CodecDevBackend {
   void set_es7210_config(const Es7210Config &config) { this->es7210_ = config; }
   void set_input_codec_config(const GenericCodecConfig &config) { this->input_codec_ = config; }
   void set_output_codec_config(const GenericCodecConfig &config) { this->output_codec_ = config; }
-  void set_gmf_reader_config(const GmfIoConfig &config) { this->gmf_reader_ = config; }
-  void set_gmf_writer_config(const GmfIoConfig &config) { this->gmf_writer_ = config; }
 
   bool setup(uint8_t tx_i2s_port, uint8_t rx_i2s_port,
              i2s_chan_handle_t tx_handle, i2s_chan_handle_t rx_handle,
@@ -109,10 +95,6 @@ class CodecDevBackend {
   static esp_codec_dev_sample_info_t make_sample_info_(const SampleConfig &config);
 
   const audio_codec_ctrl_if_t *new_i2c_ctrl_(uint8_t address);
-  bool open_gmf_io_(esp_codec_dev_handle_t dev, esp_gmf_io_dir_t dir, const char *name,
-                    const GmfIoConfig &gmf_config, esp_gmf_io_handle_t *io,
-                    bool *io_open);
-  void close_gmf_io_(esp_gmf_io_handle_t *io, bool *io_open);
   void apply_output_volume_curve_();
   const audio_codec_if_t *new_generic_codec_(const GenericCodecConfig &config, bool input,
                                              uint16_t mclk_div, const audio_codec_ctrl_if_t **ctrl);
@@ -122,8 +104,6 @@ class CodecDevBackend {
   Es7210Config es7210_{};
   GenericCodecConfig input_codec_{};
   GenericCodecConfig output_codec_{};
-  GmfIoConfig gmf_reader_{};
-  GmfIoConfig gmf_writer_{};
 
 #ifdef USE_ESP_AUDIO_STACK_DUAL_BUS
   const audio_codec_data_if_t *rx_data_if_{nullptr};
@@ -138,10 +118,6 @@ class CodecDevBackend {
   const audio_codec_if_t *tx_codec_if_{nullptr};
   esp_codec_dev_handle_t rx_dev_{nullptr};
   esp_codec_dev_handle_t tx_dev_{nullptr};
-  esp_gmf_io_handle_t rx_io_{nullptr};
-  esp_gmf_io_handle_t tx_io_{nullptr};
-  bool rx_io_open_{false};
-  bool tx_io_open_{false};
   bool output_volume_curve_configured_{false};
   float output_volume_min_db_{-49.0f};
 

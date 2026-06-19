@@ -16,7 +16,6 @@ The current audio stack uses these Espressif components:
 | `espressif/esp-sr` | `esp_aec`, `esp_afe`, pulled directly or through GMF | Espressif MIT-style license, restricted to Espressif products | Provides AEC, AFE, SE/BSS, VAD, NS and AGC libraries. Some DSP implementation is shipped by Espressif as precompiled target libraries. |
 | `espressif/gmf_ai_audio` | `esp_afe` | Espressif Modified MIT, restricted to Espressif products | Provides the official `esp_gmf_afe` element plus `esp_gmf_afe_manager`; `esp_afe` runs that element in a GMF pipeline while ESPHome keeps the microphone consumer facade. |
 | `espressif/gmf_core` | Transitive dependency of GMF components | Espressif Modified MIT, restricted to Espressif products | Base GMF object and support layer required by GMF audio/AI/IO components. |
-| `espressif/gmf_io` | `esp_audio_stack` | Espressif Modified MIT, restricted to Espressif products | Provides `io_codec_dev`, now used as the RX/TX codec IO owner through `esp_gmf_io_acquire/release_*`. |
 | `espressif/esp_audio_effects` | `esp_audio_stack` | Espressif MIT-style license, restricted to Espressif products | Provides `esp_ae_rate_cvt`, `esp_ae_bit_cvt` and data weaver APIs used for RX/TX conversion and layout. |
 | `espressif/esp_codec_dev` | `esp_audio_stack` codec-backed builds | Apache-2.0 | Provides codec control plus I2S read/write. P4 and WS3 use ES7210/ES8311 through it; Spotpear single-mic uses ES8311 input/output through it. The generic codec wrapper also exposes ES8388, ES8374 and ES8389 where the board wiring matches those drivers. Generic no-codec builds use direct `esp_driver_i2s` read/write instead. |
 
@@ -39,7 +38,7 @@ The public composition stays modular:
 
 | ESPHome component | Espressif backend it owns | Required project components | Optional peers |
 |---|---|---|---|
-| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, `gmf_io/io_codec_dev` for RX/TX IO, `esp_audio_effects` for rate/layout conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `intercom_api`, MWW and VA as consumers |
+| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `intercom_api`, MWW and VA as consumers |
 | `esp_aec` | `esp-sr` low-level `afe_aec` API | `audio_processor` | `esp_audio_stack` or standalone `intercom_api` as the caller |
 | `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | `audio_processor` | `esp_audio_stack` as the required steady-frame caller |
 | `intercom_api` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `esp_audio_stack` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
@@ -55,7 +54,7 @@ DC-offset correction.
 
 Most GMF/audio components used by the audio backend are not generic MIT
 libraries.
-`gmf_io`, `gmf_ai_audio` and `esp_audio_effects` use Espressif's
+`gmf_ai_audio` and `esp_audio_effects` use Espressif's
 modified MIT-style license: they may be used
 with Espressif products, their copyright/permission notice must stay with copies
 or substantial portions, and redistribution for non-Espressif products is
@@ -197,7 +196,7 @@ entities or device-specific data routing.
 | `afe_aec` from `esp-sr` | Low-level standalone AEC API | Integrated now | No-codec and Spotpear single-mic AEC devices keep a direct ESPHome-friendly processor while still using Espressif's current AEC implementation and official `MR` input format. |
 | `gmf_audio` / `aud_rate_cvt`, `aud_bit_cvt`, `aud_deintlv`, `aud_intlv` | GMF audio pipeline elements for conversion and layout | Deferred | Official examples run codec at 48 kHz and insert GMF conversion elements before AEC. `esp_audio_stack` currently uses the lower `esp_audio_effects` primitives in-place; full GMF task/port ownership remains a future step. |
 | `esp_audio_effects` / `esp_ae_rate_cvt`, `esp_ae_bit_cvt`, data weaver, channel convert | Standalone C API behind GMF conversion elements | Integrated now | RX bit/rate/layout conversion, mono-speaker duplication onto stereo STD TX, TDM TX layout, TX bit conversion and stereo-to-mono software AEC reference conversion use Espressif APIs. True `speaker_channels: 2` STD output is already ESPHome interleaved PCM and is written directly. `audio_effects.rate_cvt_complexity` and `audio_effects.rate_cvt_perf_type` expose the official rate-converter knobs in YAML. |
-| `gmf_io` / `io_codec_dev` | GMF IO wrapper around codec-device read/write | Integrated now | `esp_audio_stack` creates `audio_stack_rx` and `audio_stack_tx` IO instances and drives them through GMF acquire/release. Defaults stay synchronous; YAML can enable GMF data-bus/task buffering per direction. |
+| `gmf_io` / `io_codec_dev` | GMF IO wrapper around codec-device read/write | Not used in `esp_audio_stack` | Sendspin / `speaker_source` need playback timestamps tied to I2S DMA completion. `esp_audio_stack` therefore uses `esp_codec_dev_read/write` directly and registers the ESP-IDF I2S TX completion callback, mirroring ESPHome's native I2S speaker model. |
 | `esp_codec_dev` | Codec control plus I2S read/write abstraction | Integrated now | `esp_audio_stack` now creates one shared I2S data interface and separate IN/OUT codec devices, matching Espressif's test pattern. ES7210, ES8311, ES8388, ES8374 and ES8389 control/gain/volume/mute/data read/write go through the official component while ESPHome keeps mic/speaker callback routing. |
 | `esp_board_manager` / `periph_i2s` | Board/peripheral lifecycle manager for I2S TX/RX STD/TDM/PDM | Audited, not active | Official adapter, but it currently hides `i2s_chan_config_t` DMA/auto-clear policy and enables channels on ref. Active backend stays on official `esp_driver_i2s` direct ownership. |
 | `esp_capture` audio sources | High-level capture sources, including codec AEC capture | Do not integrate now | It owns a capture pipeline and source lifecycle intended for recording/streaming. It conflicts with ESPHome's microphone, speaker, mixer and intercom ownership. Useful as reference only. |
@@ -211,10 +210,9 @@ audio boards while still keeping fake knobs out:
 1. **STD stereo speaker output** is exposed through `esp_audio_stack.speaker_channels: 2` plus `num_channels: 2` and the standard ESPHome speaker platform. `num_channels` alone stays a physical bus setting so codec-feedback boards can keep mono media playback on a stereo TX bus.
 2. **TDM layout** exposes `tdm_total_slots`, one or two mic slots, `tdm_ref_slot` and `tdm_tx_slot`. RX slot extraction and TDM TX layout use Espressif audio-effects primitives.
 3. **Codec selection** exposes ES7210 input plus ES8311/ES8388/ES8374/ES8389 generic input/output through `esp_codec_dev`.
-4. **GMF codec IO** exposes reader/writer `io_size`, `buffer_size`, task stack/priority/core, PSRAM stack, speed monitor and task timeout.
-5. **Rate and bit conversion** expose official `esp_ae_rate_cvt` complexity/performance and automatic bit-depth conversion for 24/32-bit bus formats.
-6. **Processor integration** stays behind the `AudioProcessor` facade so users can pick `esp_aec`, `esp_afe`, or no processor without depending on `intercom_api`.
-7. **Lifecycle/power hooks** expose audio, mic, speaker and amplifier-required edges for board-level PA and power policy.
+4. **Rate and bit conversion** expose official `esp_ae_rate_cvt` complexity/performance and automatic bit-depth conversion for 24/32-bit bus formats.
+5. **Processor integration** stays behind the `AudioProcessor` facade so users can pick `esp_aec`, `esp_afe`, or no processor without depending on `intercom_api`.
+6. **Lifecycle/power hooks** expose audio, mic, speaker and amplifier-required edges for board-level PA and power policy.
 
 Not exposed as YAML switches yet: PDM full-duplex, arbitrary GMF element graphs,
 codec-private analog register scripts, and raw multi-channel microphone output
