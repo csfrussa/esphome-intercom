@@ -318,6 +318,14 @@ script:
           # Long replies can keep the TTS pipeline draining well after VA on_end.
           # A short timeout here forces idle cleanup and truncates the tail.
           timeout: 90s
+      - wait_until:
+          condition:
+            lambda: |-
+              using S = media_player::MediaPlayerState;
+              auto state = id(speaker_media_player).state;
+              return state != S::MEDIA_PLAYER_STATE_PLAYING &&
+                     state != S::MEDIA_PLAYER_STATE_ANNOUNCING;
+          timeout: 700ms
       - if:
           condition:
             or:
