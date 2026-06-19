@@ -1,4 +1,4 @@
-# 2026.7.0-dev — negotiated audio formats, speaker-source media path and Sendspin field testing
+# 2026.7.0-dev — negotiated audio formats, speaker-source media path and Sendspin
 
 This is a **development prerelease** for field testing the next intercom and
 media generation before it becomes a stable release. It contains large changes
@@ -122,16 +122,13 @@ regressions would be a problem.
 
 ## 🎵 Sendspin / Music Assistant
 
-- 🧪 Sendspin is included in full-experience profiles as an **experimental**
-  Music Assistant source.
-- 🎧 The current field-test default is 48 kHz mono PCM.
+- 🎵 Sendspin is included in full-experience profiles as a Music Assistant
+  source.
+- 🎧 The default stream format is 48 kHz mono PCM.
 - 🧠 Decode buffers are configured for PSRAM where supported.
-- ⏱️ Full profiles use an adjustable static delay baseline; WS3/Spotpear field
-  testing currently uses `180 ms`.
-- 👥 Grouped-speaker playback is part of the requested test matrix.
-- ⚠️ Micro-glitch tuning is still ongoing for some device/network combinations.
-  This prerelease intentionally exposes the feature so the real field data can
-  be collected.
+- ⏱️ Playback feedback is tied to I2S/DMA completion instead of software-ring
+  enqueue timing, matching ESPHome's native speaker-source timing model.
+- 👥 Grouped-speaker playback was validated on WS3, Spotpear and P4.
 
 ## 📡 Endpoint / Phonebook / Network Recovery
 
@@ -201,9 +198,9 @@ regressions would be a problem.
   audio formats.
 - UDP high-rate audio is limited by datagram size. Use TCP unless the UDP frame
   size is known to fit the configured payload ceiling.
-- Sendspin is experimental. Normal intercom, HA media, TTS and timers should
-  continue to work when Sendspin is unused, but grouped Sendspin playback still
-  needs field validation.
+- Sendspin/Music Assistant grouped playback was validated on WS3, Spotpear and
+  P4. Keep testing other boards before treating every custom hardware profile
+  as covered.
 - The HA custom integration now requires NumPy. HA OS wheel availability was
   checked for modern Python/aarch64/x86_64 targets, but this remains one of the
   areas to watch during prerelease testing.
@@ -232,7 +229,6 @@ regressions would be a problem.
 - 🎛️ Hybrid card behavior: Call from HA, Answer/Decline mirrored to the attached
   ESP where applicable.
 - 🔊 Full-experience media playback, timer sound, ringtone and intercom priority.
-- 🎵 Sendspin single speaker, duplicate cards open, grouped speakers and static
-  delay adjustment.
+- 🎵 Sendspin single speaker, duplicate cards open and grouped speakers.
 - 🧯 Long playback/call sessions with logs checked for underruns, stuck media
   sources, stale sessions and warning spam.

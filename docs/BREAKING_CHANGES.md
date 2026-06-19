@@ -15,11 +15,11 @@ should migrate away from `platform: speaker` media-player blocks and local
 `files:` entries toward `media_source` plus `media_player.play_media` with
 `audio-file://...` URLs.
 
-Sendspin is included in maintained full-experience profiles as an experimental
+Sendspin is included in maintained full-experience profiles as a Music Assistant
 media source. It is not required for normal HA media, TTS, timer sounds,
-ringtones, Voice Assistant or intercom calls. If Sendspin causes glitches in a
-specific installation, disable only that source or continue testing on TCP/HA
-media while leaving the shared mixer path in place.
+ringtones, Voice Assistant or intercom calls. WS3, Spotpear and P4 grouped
+playback were validated with the shared `speaker_source` path and the
+hardware-clocked ESP audio stack timing model.
 
 Native ESPHome intercom-only presets now use 48 kHz PCM where the actual
 native I2S microphone or speaker path supports it. TCP native profiles use

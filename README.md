@@ -18,9 +18,10 @@ Action required:
 - Custom full-experience YAMLs copied from older `platform: speaker` media
   player blocks should be refreshed against the maintained 2026.7.0-dev
   packages.
-- Sendspin / Music Assistant is included as an experimental source in full
-  profiles. It is optional and still under field tuning for occasional
-  micro-glitches.
+- Sendspin / Music Assistant is included in maintained full profiles through
+  the shared `speaker_source` media path. WS3, Spotpear and P4 field tests
+  validated grouped 48 kHz mono PCM playback with the hardware-clocked timing
+  path.
 - Native ESPHome intercom-only presets advertise 48 kHz PCM where the real
   native I2S path supports it. AFE/AEC microphone branches remain
   16 kHz/s16/mono because that is the Espressif AFE/AEC output format.
@@ -118,9 +119,10 @@ Changes since `2026.6.3`:
   Sendspin all enter the same media player, then the mixer arbitrates them
   against intercom and Voice Assistant audio.
 - Sendspin / Music Assistant is available in maintained full-experience
-  profiles as an experimental source. It is integrated as one source in the
-  media pipeline, not as a second parallel media player. Current defaults use
-  48 kHz mono PCM, PSRAM decode buffers and an adjustable 180 ms static delay.
+  profiles. It is integrated as one source in the media pipeline, not as a
+  second parallel media player. Current defaults use 48 kHz mono PCM and PSRAM
+  decode buffers, with speaker playback timing driven by I2S/DMA completion
+  feedback.
 - Waveshare P4 full profiles now use the same source-based media path as the
   S3/Spotpear/generic full profiles while preserving their LVGL callbacks.
 - Native ESPHome intercom-only profiles now run their native I2S microphone and
@@ -151,9 +153,8 @@ Changes since `2026.6.3`:
 
 Known prerelease status:
 
-- Sendspin is marked experimental in this project. It works through the shared
-  media path, but some device/network combinations may still need tuning for
-  occasional micro-glitches.
+- Sendspin works through the shared media path. WS3, Spotpear and P4 were
+  validated with Music Assistant grouped playback on the 2026.7.0-dev firmware.
 - UDP remains intentionally conservative by default. Raise `udp_max_payload`
   only after verifying the whole LAN path, or use TCP for larger PCM frames.
 - The HA softphone card now has an idle-only Options panel for Auto Answer,
