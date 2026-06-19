@@ -15,6 +15,12 @@ should migrate away from `platform: speaker` media-player blocks and local
 `files:` entries toward `media_source` plus `media_player.play_media` with
 `audio-file://...` URLs.
 
+Voice Assistant response state is now tied to TTS/media-player announcement
+lifecycle callbacks. Custom full-experience YAMLs that override the state
+machine should preserve the VA pending/active response flags; otherwise slow
+local TTS backends may look idle before audio playback starts, or barge-in may
+stop the wrong source.
+
 Sendspin is included in maintained full-experience profiles as a Music Assistant
 media source. It is not required for normal HA media, TTS, timer sounds,
 ringtones, Voice Assistant or intercom calls. WS3, Spotpear and P4 grouped

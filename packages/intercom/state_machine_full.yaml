@@ -66,6 +66,14 @@ globals:
     type: int
     restore_value: false
     initial_value: "0"
+  - id: g_va_tts_pending
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: g_va_tts_active
+    type: int
+    restore_value: false
+    initial_value: "0"
   - id: g_ducking_active
     type: int
     restore_value: false
@@ -122,15 +130,15 @@ script:
           } else if (id(g_mww_recent) || id(g_barge_in_pending)) {
             state = ${ui_state_mww_recent};
             led = 4;
+          } else if (id(g_va_state) == 3 || id(g_va_tts_pending) || id(g_va_tts_active)) {
+            state = ${ui_state_va_replying};
+            led = 7;
           } else if (id(g_va_state) == 1) {
             state = ${ui_state_va_listening};
             led = 5;
           } else if (id(g_va_state) == 2) {
             state = ${ui_state_va_thinking};
             led = 6;
-          } else if (id(g_va_state) == 3) {
-            state = ${ui_state_va_replying};
-            led = 7;
           } else if (id(intercom).is_ringing()) {
             state = ${ui_state_ic_ringing};
             led = 8;
@@ -157,6 +165,8 @@ script:
             or:
               - voice_assistant.is_running:
               - lambda: 'return id(g_va_state) != 0;'
+              - lambda: 'return id(g_va_tts_pending) != 0;'
+              - lambda: 'return id(g_va_tts_active) != 0;'
               - not:
                   intercom_api.is_idle: intercom
               - media_player.is_announcing:
@@ -276,95 +286,162 @@ script:
                   - id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING
                   - id(intercom).is_idle()
 
+  - id: handle_mww_detected
+    mode: restart
+    parameters:
+      wake_word: string
+    then:
+      - logger.log:
+          tag: mww
+          format: "MWW: wake word detected"
+      - globals.set:
+          id: g_mww_recent
+          value: "1"
+      - script.execute: update_status
+      - script.execute: mww_failsafe
+      - if:
+          condition:
+            or:
+              - lambda: 'return id(g_va_state) == 3 || id(g_va_tts_pending) != 0 || id(g_va_tts_active) != 0;'
+              - lambda: 'return id(g_barge_in_pending) != 0;'
+          then:
+            - logger.log:
+                tag: mww
+                format: "MWW: VA response barge-in"
+            - globals.set:
+                id: g_barge_in_pending
+                value: "1"
+            - script.execute: barge_failsafe
+            - script.execute: va_barge_restart
+          else:
+            - if:
+                condition:
+                  voice_assistant.is_running:
+                then:
+                  - logger.log:
+                      tag: mww
+                      format: "MWW: ignored duplicate while VA is already running"
+                  - globals.set:
+                      id: g_mww_recent
+                      value: "0"
+                  - script.execute: update_status
+                else:
+                  - logger.log:
+                      tag: mww
+                      format: "MWW: fresh VA start"
+                  - voice_assistant.start:
+                      wake_word: !lambda return wake_word;
+
   # Core scripts
   - id: va_end_handler
     mode: restart
     then:
       - if:
           condition:
-            lambda: 'return id(g_va_state) == 3;'
-          then:
-            - wait_until:
-                condition:
-                  or:
-                    - media_player.is_announcing:
-                        id: speaker_media_player
-                    - speaker.is_playing:
-                        id: tts_speaker_input
-                timeout: 12s
-            - if:
-                condition:
-                  and:
-                    - not:
-                        media_player.is_announcing:
-                          id: speaker_media_player
-                    - not:
-                        speaker.is_playing:
-                          id: tts_speaker_input
-                then:
-                  - logger.log:
-                      level: WARN
-                      tag: va
-                      format: "VA: TTS did not start before response grace expired"
-      - wait_until:
-          condition:
-            and:
-              - not:
-                  media_player.is_announcing:
-                    id: speaker_media_player
-              - not:
-                  speaker.is_playing:
-                      id: tts_speaker_input
-          # Long replies can keep the TTS pipeline draining well after VA on_end.
-          # A short timeout here forces idle cleanup and truncates the tail.
-          timeout: 90s
-      - wait_until:
-          condition:
-            lambda: |-
-              using S = media_player::MediaPlayerState;
-              auto state = id(speaker_media_player).state;
-              return state != S::MEDIA_PLAYER_STATE_PLAYING &&
-                     state != S::MEDIA_PLAYER_STATE_ANNOUNCING;
-          timeout: 700ms
-      - if:
-          condition:
-            or:
-              - media_player.is_announcing:
-                  id: speaker_media_player
-              - speaker.is_playing:
-                  id: tts_speaker_input
-          then:
-            - logger.log:
-                level: WARN
-                format: "VA: TTS drain timeout, forcing cleanup"
-            - media_player.stop:
-                id: speaker_media_player
-                announcement: true
-      - delay: 100ms
-      - voice_assistant.stop:
-      - if:
-          condition:
             lambda: 'return id(g_barge_in_pending) != 0;'
           then:
             - logger.log:
                 tag: va
-                format: "VA: barge restart"
-            - wait_until:
-                condition:
-                  not:
-                    voice_assistant.is_running:
-                timeout: 2s
-            - delay: 200ms
-            - voice_assistant.start:
+                format: "VA: on_end while barge pending"
+            - script.execute: va_barge_restart
           else:
+            - if:
+                condition:
+                  lambda: 'return id(g_va_state) == 3 || id(g_va_tts_pending) || id(g_va_tts_active);'
+                then:
+                  - logger.log:
+                      tag: va
+                      format: "VA: on_end during TTS, waiting for media announcement completion"
+                  - script.execute: va_tts_maybe_done
+                else:
+                  - logger.log:
+                      tag: va
+                      format: "VA: end, clearing state"
+                  - globals.set:
+                      id: g_va_state
+                      value: "0"
+                  - globals.set:
+                      id: g_va_tts_pending
+                      value: "0"
+                  - globals.set:
+                      id: g_va_tts_active
+                      value: "0"
+                  - script.execute: update_status
+                  - script.execute: va_end_cleanup
+
+  - id: va_tts_maybe_done
+    mode: restart
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(g_va_tts_active) != 0;'
+              - not:
+                  media_player.is_announcing:
+                    id: speaker_media_player
+          then:
             - logger.log:
                 tag: va
-                format: "VA: end, clearing state"
+                format: "VA: TTS audio completed, clearing response state"
             - globals.set:
                 id: g_va_state
                 value: "0"
+            - globals.set:
+                id: g_va_tts_pending
+                value: "0"
+            - globals.set:
+                id: g_va_tts_active
+                value: "0"
             - script.execute: update_status
             - script.execute: va_end_cleanup
+
+  - id: va_barge_maybe_restart
+    mode: restart
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(g_barge_in_pending) != 0;'
+              - not:
+                  voice_assistant.is_running:
+              - not:
+                  media_player.is_announcing:
+                    id: speaker_media_player
+          then:
+            - logger.log:
+                tag: va
+                format: "VA: barge restart conditions satisfied"
+            - globals.set:
+                id: g_va_state
+                value: "0"
+            - globals.set:
+                id: g_va_tts_pending
+                value: "0"
+            - globals.set:
+                id: g_va_tts_active
+                value: "0"
+            - globals.set:
+                id: g_mww_recent
+                value: "0"
+            - globals.set:
+                id: g_barge_in_pending
+                value: "0"
+            - script.execute: update_status
+            - voice_assistant.start:
+
+  - id: va_barge_restart
+    mode: restart
+    then:
+      - logger.log:
+          tag: va
+          format: "VA: barge restart requested"
+      - script.stop: va_end_handler
+      - media_player.stop:
+          id: speaker_media_player
+          announcement: true
+      - voice_assistant.stop:
+      - script.execute: update_status
+      - script.execute: va_barge_maybe_restart
 
   - id: va_error_flash
     mode: restart

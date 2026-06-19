@@ -112,6 +112,13 @@ regressions would be a problem.
 - 🧩 Normal HA media, announcements, timer sounds, local files and Sendspin all
   enter one media player/source path, then the mixer arbitrates against
   intercom and Voice Assistant.
+- 🗣️ Voice Assistant reply state is now tied to real TTS/media-player
+  announcement lifecycle callbacks. Slow local TTS engines keep the blue
+  response state while the URL is pending, switch cleanly when playback starts,
+  and restore media/ducking state when the announcement actually ends.
+- 🔁 Wake-word barge-in during an active VA TTS response stops only the VA
+  announcement path and restarts the assistant from real component states,
+  without using fixed delay windows as the normal decision path.
 - 🥇 Intercom keeps priority through its dedicated mixer source.
 - ⏲️ Timer/ringtone/media playback now follow the same source arbitration model
   instead of drifting through separate speaker paths.
@@ -179,7 +186,7 @@ regressions would be a problem.
 - 📘 `docs/reference.md`, architecture docs, protocol docs and troubleshooting
   docs were audited for stale 16 kHz-only assumptions.
 - 🧭 YAML selection docs now call out native high-rate paths, AFE/AEC 16 kHz
-  branches, TCP vs UDP tradeoffs and Sendspin experimental status.
+  branches, TCP vs UDP tradeoffs and Sendspin validation status.
 - 🧾 Breaking/compatibility notes were updated for negotiated formats and the
   new media path.
 - 🛒 HACS guidance was refreshed now that the project is accepted in the HACS

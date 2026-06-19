@@ -118,6 +118,13 @@ Changes since `2026.6.3`:
   HA media, announcements, timer sounds, local audio files and optional
   Sendspin all enter the same media player, then the mixer arbitrates them
   against intercom and Voice Assistant audio.
+- Voice Assistant TTS state now follows the real media-player announcement
+  lifecycle. Slow local TTS backends keep the reply LED/state active while the
+  audio URL is pending, start playback as an announcement, and restore ducking
+  when the announcement ends.
+- Wake-word barge-in during a VA TTS response stops the VA announcement path
+  and restarts the assistant from real component states, without stopping normal
+  background media.
 - Sendspin / Music Assistant is available in maintained full-experience
   profiles. It is integrated as one source in the media pipeline, not as a
   second parallel media player. Current defaults use 48 kHz mono PCM and PSRAM
@@ -1382,8 +1389,8 @@ Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you wan
 The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the same hardware: shared cleaned microphone, shared speaker (via mixer/source arbitration), always-on wake word detection. No display required (works on headless devices like the Waveshare S3 Audio); on devices with a screen, you also get a full touch UI:
 
 - **Always listening**: Micro Wake Word runs continuously on **post-AEC** audio (`stop_after_detection: false`). SR linear AEC preserves the spectral features that the neural wake word model relies on (10/10 detection vs 2/10 with VOIP AEC modes). MWW detects the wake word even while TTS is playing, during music, or during an intercom call
-- **Audio ducking**: When the wake word is detected, background music automatically ducks (-20dB). Volume restores when the VA cycle ends. During intercom calls, music is also ducked. The 3-source mixer (media + TTS + intercom) enables independent volume control per source
-- **Barge-in**: Say the wake word during a TTS response to interrupt and ask a new question. The barge-in state machine (`restart_intent` flag + `va_end_handler` script with `mode: restart`) ensures clean pipeline teardown and restart, waiting for VA to reach IDLE before restarting (`voice_assistant.start` is silently ignored if not IDLE)
+- **Audio ducking**: When the wake word is detected, background music automatically ducks (-20dB). Volume restores when the VA/TTS cycle ends. During intercom calls, music is also ducked. The source mixer keeps media, announcements and intercom as separately arbitrated inputs.
+- **Barge-in**: Say the wake word during a TTS response to interrupt and ask a new question. The state machine tracks VA response pending/active phases from real ESPHome `voice_assistant` and media-player announcement callbacks, so slow TTS engines keep the reply LED state until playback actually starts and finishes.
 - **Touch or voice**: Start the assistant by saying the wake word or tapping the screen (on touch displays)
 - **Intercom calls**: Call other devices or Home Assistant with one tap; incoming calls ring with audio + visual feedback. Ringtone plays over music (via announcement pipeline)
 - **Runtime AEC mode switching**: An `AEC Mode` select entity in Home Assistant lets you switch between SR and VOIP AEC modes at runtime without reflashing
