@@ -15,6 +15,9 @@ Action required:
   media, announcements, timers, local files and optional Sendspin enter one
   media player, then the mixer arbitrates them against intercom and Voice
   Assistant.
+- Maintained full-experience YAMLs now use `runtime_fsm`, a generic
+  YAML-programmed reducer that owns LED/display/ducking/ringtone/timer
+  arbitration from one state snapshot instead of scattered callback scripts.
 - Custom full-experience YAMLs copied from older `platform: speaker` media
   player blocks should be refreshed against the maintained 2026.7.0-dev
   packages.
@@ -118,10 +121,18 @@ Changes since `2026.6.3`:
   HA media, announcements, timer sounds, local audio files and optional
   Sendspin all enter the same media player, then the mixer arbitrates them
   against intercom and Voice Assistant audio.
+- Full-experience YAMLs now use the generic [`runtime_fsm`](esphome/components/runtime_fsm/README.md)
+  reducer for runtime state arbitration. Voice Assistant, media, timers,
+  mute/connectivity and optional intercom events feed activities; policies then
+  derive LED, display, ducking and alarm outputs from a single committed state.
 - Voice Assistant TTS state now follows the real media-player announcement
   lifecycle. Slow local TTS backends keep the reply LED/state active while the
   audio URL is pending, start playback as an announcement, and restore ducking
   when the announcement ends.
+- The project-local `voice_assistant` fork temporarily exposes
+  `tts_playback_start_timeout`. Maintained full profiles set it to `10s` so
+  slower local XTTS backends do not trip ESPHome's historical 2-second TTS
+  playback-start watchdog before the announcement source begins.
 - Wake-word barge-in during a VA TTS response stops the VA announcement path
   and restarts the assistant from real component states, without stopping normal
   background media.
@@ -185,6 +196,7 @@ and display-driven voice devices.
 | Standalone native ESPHome intercom | [`yamls/intercom-only/esphome-native/`](yamls/intercom-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. Do not use this path for shared single-bus software-AEC builds. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and intercom while media/TTS keeps playing. |
 | Media, announcements and optional Music Assistant / Sendspin for full voice profiles | [`speaker_source` media path](docs/reference.md#full-experience-media-path) | One media player feeds the mixer with HA media, announcements, local files and optional Sendspin streams; intercom keeps its own higher-priority mixer source. |
+| Runtime state arbitration for full profiles | [`runtime_fsm`](esphome/components/runtime_fsm/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, intercom and timers overlap. |
 
 For the normal intercom use case, do not start by designing a PBX. Pick the
 closest YAML, adapt the board pins and audio hardware, add the ESP through the
@@ -1309,6 +1321,38 @@ hardware speaker. Older custom YAMLs that still use ESPHome's
 `platform: speaker` media player can keep using the local
 [`speaker`](esphome/components/speaker/README.md) fork for its pause-release
 compatibility mode.
+
+Full-experience profiles also use [`runtime_fsm`](esphome/components/runtime_fsm/README.md)
+as the control-plane reducer. It does not touch PCM audio. YAML callbacks send
+events such as `media_playing`, `wake_word`, `timer_finished` or
+`ha_disconnected`; the reducer keeps composable activities and resolves named
+policies such as `led_status`, `display_status`, `audio_policy`, `ringtone`
+and `timer_alarm`. This is what keeps a slow TTS response blue while media is
+playing underneath, lets intercom override the LED without forgetting media,
+and prevents timer/ringtone/mute callbacks from racing display and ducking.
+
+The maintained reducer package is deliberately readable YAML:
+
+```yaml
+runtime_fsm:
+  id: runtime_controller
+  activities:
+    media:
+      priority: 100
+      policies: { led_status: media, audio_policy: normal }
+    va_responding:
+      priority: 800
+      policies: { led_status: responding, audio_policy: duck }
+  events:
+    media_playing: { activate: media }
+    media_idle: { deactivate: [media, va_responding] }
+    wake_word:
+      activate: va_starting
+      cases:
+        - any: [va_responding, announcement]
+          deactivate: announcement
+          action: voice_restart_response
+```
 
 For a composite device, put the microphone and speaker on the same I2S bus and
 use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The

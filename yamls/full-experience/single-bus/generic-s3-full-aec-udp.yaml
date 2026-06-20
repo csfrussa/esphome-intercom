@@ -33,9 +33,9 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -49,19 +49,20 @@ substitutions:
 # Package: shared VA + Intercom state machine
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_intercom.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_single.yaml
-  led_state_full: !include ../../../packages/led/state_full_single.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute_cpp.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
+  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_single.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
 
 esphome:
   name: ${name}
@@ -136,7 +137,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor, speaker]
+    components: [intercom_api, esp_audio_stack, esp_aec, audio_processor, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # ESP AEC
@@ -322,13 +323,9 @@ binary_sensor:
               then:
                 - intercom_api.call_toggle: intercom
               else:
-                - if:
-                    condition:
-                      voice_assistant.is_running:
-                    then:
-                      - voice_assistant.stop:
-                    else:
-                      - voice_assistant.start:
+                - runtime_fsm.event:
+                    id: runtime_controller
+                    event: wake_word
       # Double click: next contact
       - timing:
           - ON for 50ms to 500ms

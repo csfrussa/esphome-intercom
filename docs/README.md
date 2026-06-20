@@ -61,6 +61,10 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   media player before the mixer arbitrates with intercom and Voice Assistant.
   The local [`speaker`](../esphome/components/speaker/README.md) fork remains
   documented for legacy/custom YAMLs that still use `platform: speaker`.
+- [`runtime_fsm`](../esphome/components/runtime_fsm/README.md), a generic
+  YAML-programmed reducer used by maintained full-experience profiles to derive
+  LED, LVGL/display, audio ducking, ringtone and timer policies from one state
+  snapshot. It is control-plane only and does not process audio samples.
 - [`esp_aec`](../esphome/components/esp_aec/README.md), standalone ESP-SR echo cancellation.
 - [`esp_afe`](../esphome/components/esp_afe/README.md), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
 - [`audio_processor`](../esphome/components/audio_processor/README.md), the abstract processor interface that `esp_aec` and `esp_afe` implement.

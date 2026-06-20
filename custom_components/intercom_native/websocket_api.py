@@ -580,6 +580,7 @@ class IntercomSession:
             return False
         self.rx_format = caller_to_dest
         self.tx_format = dest_to_caller
+        self._transport.set_local_audio_formats([self.tx_format], [self.rx_format])
         self._transport.set_selected_audio_formats(caller_to_dest, dest_to_caller)
         return True
 
@@ -705,6 +706,9 @@ class IntercomSession:
             return "streaming"
 
         self._transport = self._create_transport()
+        if not self._negotiate_incoming_formats():
+            self._transition(SessionState.ENDED, event="error", reason="incompatible_audio_format")
+            return "error"
 
         if not await self._transport.connect():
             return "error"
@@ -1548,6 +1552,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
 
         if kind == "start":
             host = str(payload.get("host") or "")
+            ha_softphone_leg = bool(payload.get("ha_softphone_leg"))
             if not device_id or not host:
                 await _ws_send_json(ws, {"error": "missing start target"})
                 return None
@@ -1571,6 +1576,13 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             result = await session.start()
             if result in ("streaming", "ringing"):
                 _sessions[device_id] = session
+                if ha_softphone_leg:
+                    _set_ha_softphone_call_state(
+                        hass,
+                        result,
+                        session_device_id=device_id,
+                        peer_name=(target or {}).get("name") or "",
+                    )
                 session.bind_audio_ws(ws)
                 if not await _ws_send_json(ws, _session_audio_payload(session, result)):
                     await session.unbind_audio_ws(ws)
@@ -1628,6 +1640,10 @@ class IntercomAudioWebSocketView(HomeAssistantView):
 
         if kind == "answer_esp_call":
             host = str(payload.get("host") or "")
+            target = next(
+                (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
+                None,
+            )
             existing = _sessions.get(device_id)
             if existing is not None and existing.is_ringing:
                 ok = await existing.answer()
@@ -1640,7 +1656,11 @@ class IntercomAudioWebSocketView(HomeAssistantView):
                 device_id=device_id,
                 host=host,
                 transport_type=configured_transport_type(hass, host),
-                audio_mode=await _device_audio_mode(hass, device_id),
+                audio_mode=(target or {}).get("audio_mode") or await _device_audio_mode(hass, device_id),
+                local_tx_formats=list(HA_BROWSER_TX_FORMATS),
+                local_rx_formats=list(HA_BROWSER_RX_FORMATS),
+                peer_tx_formats=_device_formats(target, "tx_formats"),
+                peer_rx_formats=_device_formats(target, "rx_formats"),
             )
             result = await session.answer_esp_call()
             if result == "streaming":

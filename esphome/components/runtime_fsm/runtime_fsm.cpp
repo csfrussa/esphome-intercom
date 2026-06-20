@@ -227,6 +227,10 @@ void RuntimeFsm::on_intercom_event() {
 }
 
 void RuntimeFsm::event(const char *name) {
+  if (this->dispatching_) {
+    (void) this->enqueue_event_(name);
+    return;
+  }
   if (this->debug_) {
     ESP_LOGI(TAG, "EVENT seq=%" PRIu32 " name=%s mask=0x%08" PRIx32, this->sequence_,
              name != nullptr ? name : "-", this->generic_activity_mask_);
@@ -275,6 +279,10 @@ void RuntimeFsm::event(const char *name) {
 }
 
 void RuntimeFsm::set_activity(const char *name, bool active) {
+  if (this->dispatching_) {
+    (void) this->enqueue_activity_update_(name, active);
+    return;
+  }
   const uint32_t old_mask = this->generic_activity_mask_;
   const ResolvedPolicies old_policies = this->resolved_policies_;
   bool changed = this->apply_activity_update_(name, active);
@@ -289,6 +297,10 @@ void RuntimeFsm::set_activity(const char *name, bool active) {
 void RuntimeFsm::set_activities(const ActivityUpdate *updates, size_t count) {
   if (updates == nullptr || count == 0)
     return;
+  if (this->dispatching_) {
+    (void) this->enqueue_activity_updates_(updates, count);
+    return;
+  }
 
   const uint32_t old_mask = this->generic_activity_mask_;
   const ResolvedPolicies old_policies = this->resolved_policies_;
@@ -480,8 +492,13 @@ void RuntimeFsm::commit_outputs_(const char *reason, uint32_t old_mask, const Re
     ESP_LOGI(TAG, "REDUCE seq=%" PRIu32 " reason=%s mask=0x%08" PRIx32 "->0x%08" PRIx32, this->sequence_,
              reason != nullptr ? reason : "-", old_mask, this->generic_activity_mask_);
   }
+  const bool was_dispatching = this->dispatching_;
+  this->dispatching_ = true;
   this->run_policy_actions_(old_policies, this->resolved_policies_);
   this->publish_outputs_();
+  this->dispatching_ = was_dispatching;
+  if (!this->dispatching_)
+    this->drain_pending_events_();
 }
 
 void RuntimeFsm::build_intercom_activity_name_(const char *state) {
@@ -585,6 +602,60 @@ int RuntimeFsm::find_action_(const char *name) const {
       return static_cast<int>(i);
   }
   return -1;
+}
+
+bool RuntimeFsm::enqueue_event_(const char *name) {
+  if (name == nullptr || name[0] == '\0')
+    return false;
+  if (this->pending_event_count_ >= this->pending_events_.size()) {
+    ESP_LOGE(TAG, "Cannot queue event '%s': queue full", name);
+    return false;
+  }
+  auto &event = this->pending_events_[this->pending_event_count_++];
+  event = PendingEvent{};
+  event.kind = PendingEventKind::EVENT;
+  std::snprintf(event.name, sizeof(event.name), "%s", name);
+  if (this->debug_)
+    ESP_LOGI(TAG, "EVENT_QUEUE seq=%" PRIu32 " name=%s", this->sequence_, event.name);
+  return true;
+}
+
+bool RuntimeFsm::enqueue_activity_update_(const char *name, bool active) {
+  ActivityUpdate update{name, active};
+  return this->enqueue_activity_updates_(&update, 1);
+}
+
+bool RuntimeFsm::enqueue_activity_updates_(const ActivityUpdate *updates, size_t count) {
+  if (updates == nullptr || count == 0)
+    return false;
+  if (this->pending_event_count_ >= this->pending_events_.size()) {
+    ESP_LOGE(TAG, "Cannot queue activity update: queue full");
+    return false;
+  }
+  auto &event = this->pending_events_[this->pending_event_count_++];
+  event = PendingEvent{};
+  event.kind = PendingEventKind::SET_ACTIVITIES;
+  event.update_count = count > std::size(event.updates) ? std::size(event.updates) : count;
+  for (size_t i = 0; i < event.update_count; i++)
+    event.updates[i] = updates[i];
+  if (this->debug_)
+    ESP_LOGI(TAG, "SET_QUEUE seq=%" PRIu32 " count=%u", this->sequence_, static_cast<unsigned>(event.update_count));
+  return true;
+}
+
+void RuntimeFsm::drain_pending_events_() {
+  while (!this->dispatching_ && this->pending_event_count_ > 0) {
+    PendingEvent event = this->pending_events_[0];
+    for (size_t i = 1; i < this->pending_event_count_; i++)
+      this->pending_events_[i - 1] = this->pending_events_[i];
+    this->pending_events_[--this->pending_event_count_] = PendingEvent{};
+
+    if (event.kind == PendingEventKind::EVENT) {
+      this->event(event.name);
+    } else {
+      this->set_activities(event.updates, event.update_count);
+    }
+  }
 }
 
 void RuntimeFsm::run_named_action_(const char *name) {

@@ -51,6 +51,7 @@ voice_assistant:
         event: va_end
         dump: true
         reason: va:on_end
+    - script.execute: ui_va_end
   on_error:
     - runtime_fsm.event:
         id: runtime_controller
@@ -62,19 +63,17 @@ voice_assistant:
     - globals.set:
         id: init_in_progress
         value: "false"
-    - runtime_fsm.set_activity:
+    - runtime_fsm.event:
         id: runtime_controller
-        activity: no_va
-        active: false
+        event: va_client_connected
     - script.execute: start_mww_when_ready
   on_client_disconnected:
     - logger.log:
         tag: va
         format: "VA: client disconnected"
-    - runtime_fsm.set_activities:
+    - runtime_fsm.event:
         id: runtime_controller
-        set:
-          no_va: true
+        event: va_client_disconnected
 
 micro_wake_word:
   id: mww

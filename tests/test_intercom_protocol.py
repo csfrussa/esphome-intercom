@@ -215,6 +215,9 @@ class FakeTransport:
     async def send_answer(self):
         return True
 
+    async def send_answer_blind(self):
+        return True
+
     async def send_ring(self):
         return True
 
@@ -740,6 +743,29 @@ class IntercomSessionFsmTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await session.answer())
         self.assertEqual(session.tx_format, fmt)
         self.assertEqual(session.rx_format, fmt)
+        self.assertEqual(transport.caller_to_dest_format, fmt)
+        self.assertEqual(transport.dest_to_caller_format, fmt)
+
+    async def test_answer_esp_call_uses_negotiated_peer_formats(self) -> None:
+        fmt = audio_format.AudioFormat(48000, audio_format.PcmFormat.S16LE, 1, 20)
+        transport = FakeTransport()
+        session = websocket_api.IntercomSession(
+            hass=self.hass,
+            device_id="device-fsm",
+            host="192.0.2.10",
+            transport=transport,
+            audio_mode="full_duplex",
+            local_tx_formats=[fmt],
+            local_rx_formats=[fmt],
+            peer_tx_formats=[fmt],
+            peer_rx_formats=[fmt],
+        )
+
+        self.assertEqual(await session.answer_esp_call(), "streaming")
+        self.assertEqual(session.tx_format, fmt)
+        self.assertEqual(session.rx_format, fmt)
+        self.assertEqual(transport.local_tx_formats, [fmt])
+        self.assertEqual(transport.local_rx_formats, [fmt])
         self.assertEqual(transport.caller_to_dest_format, fmt)
         self.assertEqual(transport.dest_to_caller_format, fmt)
 

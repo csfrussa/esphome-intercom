@@ -86,23 +86,11 @@ esphome:
           id: runtime_controller
           event: boot_start
       - delay: 1s
-      - runtime_fsm.set_activity:
+      - runtime_fsm.event:
           id: runtime_controller
-          activity: boot
-          active: false
+          event: boot_ready
 
 script:
-  - id: va_debug_dump
-    parameters:
-      event: string
-    then:
-      - lambda: |-
-          ESP_LOGI("fsm", "%s seq=%u mask=0x%08" PRIx32 " ui=%d led=%d va=%d duck=%d",
-                   event.c_str(), id(runtime_controller).get_sequence(),
-                   id(runtime_controller).get_activity_mask(), id(ui_state),
-                   id(g_applied_led), id(va).is_running(),
-                   id(g_ducking_active));
-
   - id: update_led
     mode: restart
     then: []
@@ -116,6 +104,8 @@ script:
   - id: ui_stt_ended
     parameters:
       text: string
+    then: []
+  - id: ui_va_end
     then: []
   - id: ui_ic_call
     parameters:

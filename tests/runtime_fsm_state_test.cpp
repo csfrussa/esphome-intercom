@@ -64,7 +64,7 @@ static void expect_mask(const char *label, const ResolvedPolicies &actual, uint3
 }
 
 static void esp_like_combinations() {
-  std::array<NamedActivity, 11> activities{{
+  std::array<NamedActivity, 13> activities{{
       {"boot", activity(1u << 0, 1000, {policy("led_status", "boot"), policy("display_status", "boot")})},
       {"no_wifi", activity(1u << 1, 990, {policy("led_status", "no_wifi"), policy("display_status", "no_wifi")})},
       {"no_ha", activity(1u << 2, 980, {policy("led_status", "no_ha"), policy("display_status", "no_ha")})},
@@ -76,6 +76,8 @@ static void esp_like_combinations() {
       {"assistant_thinking", activity(1u << 8, 600, {policy("led_status", "thinking"), policy("display_status", "thinking"), policy("audio_policy", "duck")})},
       {"assistant_response", activity(1u << 9, 800, {policy("led_status", "responding"), policy("display_status", "responding"), policy("audio_policy", "duck")})},
       {"screen_dim", activity(1u << 10, 50, {policy("screen_policy", "dim")})},
+      {"timer_ringing", activity(1u << 11, 500, {policy("audio_policy", "duck"), policy("timer_alarm", "play")})},
+      {"intercom_ringtone", activity(1u << 12, 700, {policy("audio_policy", "duck"), policy("ringtone", "play")})},
   }};
 
   auto out = eval(activities);
@@ -144,16 +146,48 @@ static void esp_like_combinations() {
   out = eval(activities);
   expect_policy("ringing overrides announcement led", out, "led_status", "ringing");
   expect_policy("ringing overrides announcement display", out, "display_status", "intercom_ringing");
+  expect_policy("ringing starts ringtone", out, "ringtone", nullptr);
+
+  set(activities, "intercom_ringtone", true);
+  out = eval(activities);
+  expect_policy("intercom ringtone policy", out, "ringtone", "play");
 
   set(activities, "intercom_ringing", false);
+  set(activities, "intercom_ringtone", false);
   set(activities, "assistant_thinking", true);
   out = eval(activities);
   expect_policy("thinking overrides announcement led", out, "led_status", "thinking");
   expect_policy("thinking overrides announcement display", out, "display_status", "thinking");
   expect_policy("thinking audio", out, "audio_policy", "duck");
+
+  set(activities, "timer_ringing", true);
+  out = eval(activities);
+  expect_policy("timer alarm policy", out, "timer_alarm", "play");
+  expect_policy("timer keeps ducking", out, "audio_policy", "duck");
+}
+
+static void explicit_stop_policies() {
+  std::array<NamedActivity, 2> activities{{
+      {"idle", activity(1u << 0, 0, {policy("timer_alarm", "stop"), policy("ringtone", "stop")})},
+      {"timer_ringing", activity(1u << 1, 500, {policy("timer_alarm", "play")})},
+  }};
+
+  set(activities, "idle", true);
+  auto out = eval(activities);
+  expect_policy("idle declares timer stop", out, "timer_alarm", "stop");
+  expect_policy("idle declares ringtone stop", out, "ringtone", "stop");
+
+  set(activities, "timer_ringing", true);
+  out = eval(activities);
+  expect_policy("ringing overrides idle timer stop", out, "timer_alarm", "play");
+
+  set(activities, "timer_ringing", false);
+  out = eval(activities);
+  expect_policy("timer stop returns after ringing", out, "timer_alarm", "stop");
 }
 
 int main() {
   esp_like_combinations();
+  explicit_stop_policies();
   std::cout << "runtime_fsm generic policy reducer tests passed\n";
 }

@@ -31,9 +31,9 @@ substitutions:
   mic_id: mic_afe
   afe_vad_restore_mode: ALWAYS_ON
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -78,24 +78,24 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: !include ../../../packages/va_intercom.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
-  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_full.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
+  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@dev
+  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_full.yaml@dev
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION
@@ -117,7 +117,6 @@ esphome:
       - lambda: |-
           id(g_settings_pages).clear();
           id(g_settings_pages).push_back(id(settings_continuous_page)->obj);
-      - script.execute: draw_display
       - script.execute: backlight_timer
       - micro_wake_word.stop:
       - delay: 1s
@@ -160,7 +159,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor, speaker]
+    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # CONNECTIVITY
@@ -377,75 +376,31 @@ media_player:
         - announcement_http_source
         - announcement_file_source
     on_announcement:
-      - script.execute: update_status
-      # Only show LED for announcements when intercom is idle
-      # During intercom calls, keep current intercom LED state
-      - if:
-          condition:
-            intercom_api.is_idle: intercom
-          then:
-            - light.turn_on:
-                id: status_led
-                brightness: 100%
-                red: 0.00
-                green: 0.00
-                blue: 1.00
-      # Set replying phase for non-VA announcements (e.g., timer sound)
-      - if:
-          condition:
-            not:
-              voice_assistant.is_running:
-          then:
-            - globals.set:
-                id: voice_assistant_phase
-                value: '${voice_assist_replying_phase_id}'
-            - script.execute: update_replying_text
-            - script.execute: draw_display
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: announcement_started
     on_play:
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: media_playing
       - logger.log:
           tag: mp
           format: "MP: on_play"
-      - script.execute: update_status
       - script.execute: backlight_timer
-      # Keep the display in its neutral media state while playback owns audio.
-      - if:
-          condition:
-            and:
-              - intercom_api.is_idle: intercom
-              - not:
-                  voice_assistant.is_running:
-          then:
-            - lambda: |-
-                // Clear previous VA text and show the neutral mood image.
-                id(wrapped_lines_reply).clear();
-                id(reply_total_pages) = 1;
-                id(reply_page_index) = 0;
-                lv_img_set_src(id(mood_bg), id(mood_neutral));
-            - script.execute: update_replying_text
-            - globals.set:
-                id: voice_assistant_phase
-                value: '${voice_assist_replying_phase_id}'
-            - script.execute: draw_display
     on_pause:
-      # PAUSED is a real media_player state; update the UI here because
-      # on_idle only runs after stop/finish.
-      - globals.set:
-          id: voice_assistant_phase
-          value: '${voice_assist_idle_phase_id}'
-      - script.execute: update_status
-      - script.execute: draw_display
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: media_paused
       - script.execute: backlight_timer
     on_idle:
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: media_idle
       - logger.log:
           tag: mp
           format: "MP: on_idle (phase=%d, va_state=%d)"
           args: ['id(voice_assistant_phase)', 'id(g_va_state)']
       - delay: 200ms
-      - globals.set:
-          id: voice_assistant_phase
-          value: '${voice_assist_idle_phase_id}'
-      - script.execute: update_status
-      - script.execute: draw_display
       - script.execute: backlight_timer
 
 # =============================================================================
@@ -479,7 +434,9 @@ voice_assistant:
   on_timer_tick:
     - script.execute: update_timer_state
   on_timer_finished:
-    - switch.turn_on: timer_ringing
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: timer_finished
     - script.execute: draw_display
 
 # =============================================================================
@@ -605,8 +562,8 @@ globals:
 # SCRIPTS
 # =============================================================================
 script:
-  # Display cleanup after VA ends (extends package placeholder)
-  - id: !extend va_end_cleanup
+  # Display cleanup after VA ends
+  - id: !extend ui_va_end
     then:
       - script.stop: reply_pagination_timer
       - script.execute: backlight_timer
@@ -856,7 +813,6 @@ script:
             else if (r == "protocol_error")  return std::string("Protocol error");
             else if (r == "bridge_error")    return std::string("Bridge error");
             return r.empty() ? std::string("Ended") : ("Declined: " + r);
-      - script.execute: draw_display
       - script.execute: backlight_timer
       - delay: 4s
       - if:
@@ -997,9 +953,9 @@ script:
             id(ic_settings_active) = false;  // call interrupts settings view
           }
           // Timer ringing owns the UI while the alarm is active. This must use
-          // the switch state, not voice_assistant_phase, because media_player
+          // the runtime_fsm timer activity, not voice_assistant_phase, because media_player
           // callbacks can legitimately update the phase while playing the alarm.
-          if (id(timer_ringing).state) {
+          if (id(runtime_controller).is_activity_active("timer_ringing")) {
             target = id(timer_finished_page)->obj;
           } else if (id(ic_ended_active)) {
             target = id(ic_ended_page)->obj;
@@ -1383,19 +1339,29 @@ script:
             - script.execute: update_replying_text
             - script.execute: reply_pagination_timer
 
-  # Timer alarm: play sound in a loop until timer_ringing is turned off
+  # Timer alarm: play sound in a loop while runtime_fsm timer_ringing is active
   - id: timer_alarm_loop
     mode: single
     then:
       - while:
           condition:
-            switch.is_on: timer_ringing
+            runtime_fsm.is_active:
+              id: runtime_controller
+              activity: timer_ringing
           then:
             - media_player.play_media:
                 id: speaker_media_player
                 media_url: "audio-file://timer_finished_sound"
                 announcement: true
             - delay: 6s
+
+  - id: timer_alarm_auto_stop
+    mode: restart
+    then:
+      - delay: 15min
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: timer_stopped
 
   # Backlight timer
   - id: backlight_timer
@@ -1520,9 +1486,13 @@ binary_sensor:
         then:
           - if:
               condition:
-                switch.is_on: timer_ringing
+                runtime_fsm.is_active:
+                  id: runtime_controller
+                  activity: timer_ringing
               then:
-                - switch.turn_off: timer_ringing
+                - runtime_fsm.event:
+                    id: runtime_controller
+                    event: timer_stopped
               else:
                 - if:
                     condition:
@@ -1539,14 +1509,9 @@ binary_sensor:
                           then:
                             - intercom_api.call_toggle: intercom
                           else:
-                            - if:
-                                condition:
-                                  not:
-                                    voice_assistant.is_running:
-                                then:
-                                  - voice_assistant.start:
-                                else:
-                                  - voice_assistant.stop:
+                            - runtime_fsm.event:
+                                id: runtime_controller
+                                event: wake_word
       # Double click: decline incoming or next contact
       - timing:
           - ON for 50ms to 500ms
@@ -1635,20 +1600,18 @@ switch:
       - voice_assistant.stop:
       - micro_wake_word.stop:
       - microphone.mute: mic_afe
-      - globals.set:
-          id: voice_assistant_phase
-          value: '${voice_assist_muted_phase_id}'
-      - script.execute: draw_display
-      - script.execute: update_status
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: mic_muted
     on_turn_off:
       - logger.log:
           level: INFO
           tag: mute
           format: "Mic mute OFF: microphone active, MWW started"
       - microphone.unmute: mic_afe
-      - globals.set:
-          id: voice_assistant_phase
-          value: '${voice_assist_idle_phase_id}'
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: mic_unmuted
       - if:
           condition:
             not:
@@ -1656,7 +1619,6 @@ switch:
           then:
             - script.execute: start_mww_when_ready
       - script.execute: draw_display
-      - script.execute: update_status
 
   # Speaker Mute (device override): adds amp enable/disable
   - platform: template
@@ -1672,9 +1634,11 @@ switch:
           tag: mute
           format: "Speaker mute ON: DAC muted, amplifier off"
       - speaker.mute_on: hw_speaker
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: speaker_muted
       - delay: 50ms
       - output.turn_off: speaker_enable
-      - script.execute: update_status
     on_turn_off:
       - logger.log:
           level: INFO
@@ -1687,31 +1651,9 @@ switch:
             - output.turn_on: speaker_enable
             - delay: 50ms
       - speaker.mute_off: hw_speaker
-      - script.execute: update_status
-
-  - platform: template
-    id: timer_ringing
-    optimistic: true
-    internal: true
-    restore_mode: ALWAYS_OFF
-    on_turn_off:
-      - script.stop: timer_alarm_loop
-      - globals.set:
-          id: voice_assistant_phase
-          value: '${voice_assist_idle_phase_id}'
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - script.execute: update_status
-    on_turn_on:
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - script.execute: timer_alarm_loop
-      - script.execute: update_status
-      - delay: 15min
-      - switch.turn_off: timer_ringing
-
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: speaker_unmuted
   # Intercom switches
 
   # AEC runtime toggles
@@ -2187,9 +2129,13 @@ touchscreen:
       - script.execute: backlight_timer
       - if:
           condition:
-            switch.is_on: timer_ringing
+            runtime_fsm.is_active:
+              id: runtime_controller
+              activity: timer_ringing
           then:
-            - switch.turn_off: timer_ringing
+            - runtime_fsm.event:
+                id: runtime_controller
+                event: timer_stopped
     # Gestures handled natively by LVGL on each page (on_swipe_up/down/left/right);
     # no manual dx/dy lambda needed. on_touch above is kept for backlight refresh.
 

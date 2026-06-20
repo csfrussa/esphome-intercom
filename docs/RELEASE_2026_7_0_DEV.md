@@ -109,6 +109,11 @@ regressions would be a problem.
 
 - 🔊 Maintained full-experience presets now use the ESPHome `speaker_source`
   media path as the default media architecture.
+- 🧠 Maintained full-experience presets now use the generic `runtime_fsm`
+  reducer for LED/display/ducking/ringtone/timer arbitration. YAML callbacks
+  report events; one reducer snapshot decides the visible state and audio
+  policy, so media, TTS, timers, mute, connectivity and intercom no longer
+  race each other through separate scripts.
 - 🧩 Normal HA media, announcements, timer sounds, local files and Sendspin all
   enter one media player/source path, then the mixer arbitrates against
   intercom and Voice Assistant.
@@ -116,6 +121,10 @@ regressions would be a problem.
   announcement lifecycle callbacks. Slow local TTS engines keep the blue
   response state while the URL is pending, switch cleanly when playback starts,
   and restore media/ducking state when the announcement actually ends.
+- ⏱️ The project-local `voice_assistant` fork temporarily exposes
+  `tts_playback_start_timeout`; maintained full profiles set it to `10s` to
+  tolerate slower local XTTS responses that can exceed ESPHome's historical
+  2-second playback-start watchdog.
 - 🔁 Wake-word barge-in during an active VA TTS response stops only the VA
   announcement path and restarts the assistant from real component states,
   without using fixed delay windows as the normal decision path.
@@ -157,6 +166,9 @@ regressions would be a problem.
 
 ## 📦 YAML Presets
 
+- 🧩 All maintained non-native full-experience presets now use the `runtime_fsm`
+  package path. Native ESPHome full presets remain on their native component
+  path.
 - 🧪 Native ESPHome intercom-only presets now advertise 48 kHz PCM where the
   native I2S path can support it.
 - 🚦 TCP native intercom presets use larger 20 ms PCM frames.
@@ -182,6 +194,8 @@ regressions would be a problem.
 
 ## 📚 Documentation
 
+- 📘 Added a dedicated `runtime_fsm` component README with the reducer model,
+  YAML syntax, policy/action examples, debug mode and host-test command.
 - 📖 README was reworked for the 2026.7.0-dev audio/media direction.
 - 📘 `docs/reference.md`, architecture docs, protocol docs and troubleshooting
   docs were audited for stale 16 kHz-only assumptions.

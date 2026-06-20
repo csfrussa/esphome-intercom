@@ -1,0 +1,344 @@
+# =============================================================================
+# Runtime reducer for full-experience devices.
+#
+# Generic state reducer:
+#   - inputs are runtime_fsm.event calls from VA/media/intercom/connectivity YAML;
+#   - activities are composable state bits;
+#   - policies derive outputs such as LED, display, ducking and ringtone/timer
+#     actions from a single reducer snapshot.
+# =============================================================================
+
+runtime_fsm:
+  id: runtime_controller
+  debug: false
+  state_outputs:
+    activity_mask: g_activity_mask
+    sequence: g_fsm_seq
+  intercom:
+    id: intercom
+    states:
+      ringing:
+        priority: 700
+        policies:
+          led_status: intercom_ringing
+          display_status: intercom_ringing
+          audio_policy: duck
+          ringtone: play
+          va_state: idle
+      outgoing:
+        priority: 690
+        policies:
+          led_status: intercom_outgoing
+          display_status: intercom_outgoing
+          audio_policy: duck
+          va_state: idle
+      streaming:
+        priority: 650
+        policies:
+          led_status: intercom_streaming
+          display_status: intercom_streaming
+          audio_policy: duck
+          va_state: idle
+  groups:
+    va: [va_starting, va_listening, va_thinking, va_responding]
+  actions:
+    voice_start:
+      - wait_until:
+          condition:
+            not:
+              voice_assistant.is_running:
+      - voice_assistant.start:
+          wake_word: !lambda 'return id(g_last_wake_word);'
+    voice_restart_live:
+      - voice_assistant.stop:
+    voice_restart_response:
+      - media_player.stop:
+          id: speaker_media_player
+          announcement: true
+      - voice_assistant.stop:
+    stop_announcement:
+      - media_player.stop:
+          id: speaker_media_player
+          announcement: true
+  events:
+    boot_start:
+      activate: [boot, no_wifi, no_ha]
+    boot_ready:
+      deactivate: boot
+    wifi_connected:
+      deactivate: no_wifi
+    wifi_disconnected:
+      activate: no_wifi
+    ha_connected:
+      deactivate: no_ha
+    ha_disconnected:
+      activate: no_ha
+    va_client_connected:
+      deactivate: no_va
+    va_client_disconnected:
+      activate: no_va
+    media_paused:
+      deactivate: media
+    mic_muted:
+      activate: mic_muted
+    mic_unmuted:
+      deactivate: mic_muted
+    speaker_muted:
+      activate: speaker_muted
+    speaker_unmuted:
+      deactivate: speaker_muted
+    timer_started:
+      activate: timer
+    timer_stopped:
+      deactivate: [timer, timer_ringing]
+    timer_finished:
+      activate: timer_ringing
+    media_idle:
+      deactivate: [media, announcement, va_responding]
+      cases:
+        - any: va_starting
+          deactivate: [media, announcement, va_responding]
+          action: voice_start
+    media_playing:
+      activate: media
+      deactivate: announcement
+      cases:
+        - any: va_starting
+          activate: media
+          deactivate: announcement
+          action: voice_start
+        - all: [va_responding, announcement]
+          activate: media
+          deactivate: [announcement, va_responding]
+    announcement_started:
+      activate: announcement
+      cases:
+        - any: [va_starting, va_listening, va_thinking]
+          deactivate: announcement
+          action: stop_announcement
+    wake_word:
+      activate: va_starting
+      cases:
+        - any: [va_starting, va_listening, va_thinking]
+          activate: va_starting
+          action: voice_restart_live
+        - any: [va_responding, announcement]
+          activate: va_starting
+          deactivate: announcement
+          action: voice_restart_response
+      action: voice_start
+    va_start:
+      activate: va_starting
+    va_end:
+      deactivate: [va_starting, va_listening, va_thinking]
+      cases:
+        - any: va_starting
+          deactivate: [va_listening, va_thinking, va_responding, announcement]
+          action: voice_start
+    va_error:
+      deactivate: [va_starting, va_listening, va_thinking, va_responding]
+  activities:
+    idle:
+      priority: 0
+      initial: true
+      policies:
+        led_status: idle
+        display_status: idle
+        va_state: idle
+        audio_policy: normal
+        ringtone: stop
+        timer_alarm: stop
+    boot:
+      priority: 1000
+      policies:
+        led_status: boot
+        display_status: boot
+        va_state: idle
+    no_wifi:
+      priority: 990
+      policies:
+        led_status: no_wifi
+        display_status: no_wifi
+        va_state: idle
+    no_ha:
+      priority: 980
+      policies:
+        led_status: no_ha
+        display_status: no_ha
+        va_state: idle
+    no_va:
+      priority: 970
+      policies:
+        led_status: no_va
+        display_status: no_va
+        va_state: idle
+    both_muted:
+      priority: 960
+      policies:
+        led_status: muted
+        display_status: muted
+        va_state: idle
+    mic_muted:
+      priority: 950
+      policies:
+        led_status: mic_muted
+        display_status: muted
+        va_state: idle
+    speaker_muted:
+      priority: 940
+      policies:
+        led_status: speaker_muted
+        display_status: muted
+        va_state: idle
+    media:
+      priority: 100
+      policies:
+        led_status: media
+        display_status: media
+        audio_policy: normal
+        va_state: idle
+    announcement:
+      priority: 200
+      policies:
+        led_status: media
+        display_status: media
+        audio_policy: duck
+        va_state: idle
+    timer:
+      priority: 300
+      policies:
+        led_status: media
+        display_status: media
+        audio_policy: duck
+        va_state: idle
+    timer_ringing:
+      priority: 500
+      policies:
+        led_status: media
+        display_status: media
+        audio_policy: duck
+        timer_alarm: play
+        va_state: idle
+    va_starting:
+      priority: 610
+      policies:
+        led_status: wake
+        display_status: wake
+        audio_policy: duck
+        va_state: idle
+    va_listening:
+      priority: 620
+      policies:
+        led_status: listening
+        display_status: listening
+        audio_policy: duck
+        va_state: listening
+    va_thinking:
+      priority: 630
+      policies:
+        led_status: thinking
+        display_status: thinking
+        audio_policy: duck
+        va_state: thinking
+    va_responding:
+      priority: 800
+      policies:
+        led_status: responding
+        display_status: responding
+        audio_policy: duck
+        va_state: responding
+  derived_activities:
+    - name: both_muted
+      when:
+        all_active: [mic_muted, speaker_muted]
+  policies:
+    led_status:
+      output: g_applied_led
+      on_change:
+        - script.execute: update_led
+      values:
+        idle: 0
+        muted: 1
+        mic_muted: 2
+        speaker_muted: 3
+        wake: 4
+        listening: 5
+        thinking: 6
+        responding: 7
+        intercom_ringing: 8
+        intercom_outgoing: 9
+        intercom_streaming: 10
+        error: 11
+        media: 12
+        boot: 13
+        no_wifi: 14
+        no_ha: 15
+        no_va: 16
+    display_status:
+      output: ui_state
+      on_change:
+        - script.execute: render_ui_state
+      values:
+        idle: ${ui_state_idle}
+        boot: ${ui_state_init}
+        no_wifi: ${ui_state_no_wifi}
+        no_ha: ${ui_state_no_ha}
+        muted: ${ui_state_mic_muted}
+        wake: ${ui_state_mww_recent}
+        listening: ${ui_state_va_listening}
+        thinking: ${ui_state_va_thinking}
+        responding: ${ui_state_va_replying}
+        intercom_ringing: ${ui_state_ic_ringing}
+        intercom_outgoing: ${ui_state_ic_outgoing}
+        intercom_streaming: ${ui_state_ic_streaming}
+        error: ${ui_state_va_error}
+        media: ${ui_state_media}
+        no_va: ${ui_state_no_va}
+    va_state:
+      output: g_va_state
+      values:
+        idle: 0
+        listening: 1
+        thinking: 2
+        responding: 3
+    audio_policy:
+      output: g_ducking_active
+      values:
+        normal:
+          value: 0
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 0
+                duration: 500ms
+        duck:
+          value: 1
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 20
+                duration: 200ms
+    ringtone:
+      values:
+        play:
+          then:
+            - script.execute: intercom_ringing_loop
+        stop:
+          then:
+            - script.stop: intercom_ringing_loop
+    timer_alarm:
+      values:
+        play:
+          then:
+            - media_player.stop:
+                id: speaker_media_player
+                announcement: true
+            - script.execute: timer_alarm_loop
+            - script.execute: timer_alarm_auto_stop
+        stop:
+          then:
+            - script.stop: timer_alarm_auto_stop
+            - script.stop: timer_alarm_loop
+            - media_player.stop:
+                id: speaker_media_player
+                announcement: true

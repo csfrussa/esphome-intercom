@@ -122,6 +122,10 @@ class RuntimeFsm : public Component {
   bool rule_matches_(const EventRule &rule) const;
   bool derived_matches_(const DerivedActivity &derived) const;
   bool apply_derived_activities_();
+  bool enqueue_event_(const char *name);
+  bool enqueue_activity_update_(const char *name, bool active);
+  bool enqueue_activity_updates_(const ActivityUpdate *updates, size_t count);
+  void drain_pending_events_();
   void run_named_action_(const char *name);
   void execute_named_action_(const char *name);
   void drain_pending_actions_();
@@ -200,6 +204,16 @@ class RuntimeFsm : public Component {
     void *target{nullptr};
     void (*set)(void *, uint32_t){nullptr};
   };
+  enum class PendingEventKind : uint8_t {
+    EVENT,
+    SET_ACTIVITIES,
+  };
+  struct PendingEvent {
+    PendingEventKind kind{PendingEventKind::EVENT};
+    char name[48]{};
+    ActivityUpdate updates[16]{};
+    size_t update_count{0};
+  };
 
   std::array<ActivityConfig, MAX_ACTIVITIES> activities_{};
   std::array<NamedAction, MAX_ACTIONS> actions_{};
@@ -211,6 +225,7 @@ class RuntimeFsm : public Component {
   std::array<PolicyChangeTrigger, MAX_POLICIES> policy_change_triggers_{};
   std::array<PolicyGlobalOutput, MAX_POLICIES> policy_global_outputs_{};
   std::array<const char *, 16> pending_actions_{};
+  std::array<PendingEvent, 16> pending_events_{};
   StateOutput activity_mask_output_{};
   StateOutput sequence_output_{};
   size_t activity_count_{0};
@@ -223,6 +238,8 @@ class RuntimeFsm : public Component {
   size_t policy_change_trigger_count_{0};
   size_t policy_global_output_count_{0};
   size_t pending_action_count_{0};
+  size_t pending_event_count_{0};
+  bool dispatching_{false};
   uint32_t generic_activity_mask_{0};
 };
 
@@ -299,7 +316,7 @@ template<typename... Ts> class IsActiveCondition : public Condition<Ts...>, publ
  public:
   TEMPLATABLE_VALUE(std::string, activity)
 
-  bool check(Ts... x) override {
+  bool check(const Ts &...x) override {
     auto activity = this->activity_.value(x...);
     return this->parent_->is_activity_active(activity.c_str());
   }

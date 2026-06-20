@@ -37,14 +37,16 @@ CONF_INTERCOM_ID = "intercom_id"
 CONF_INTERCOM = "intercom"
 CONF_ACTIVITY_PREFIX = "activity_prefix"
 CONF_ACTIVITIES = "activities"
+CONF_GROUPS = "groups"
+CONF_AUTO_EVENTS = "auto_events"
 CONF_DERIVED_ACTIVITIES = "derived_activities"
 CONF_EVENTS = "events"
 CONF_SET = "set"
+CONF_POLICIES = "policies"
 CONF_GROUP = "group"
 CONF_PRIORITY = "priority"
 CONF_INITIAL = "initial"
 CONF_ACTIONS = "actions"
-CONF_POLICIES = "policies"
 CONF_VALUES = "values"
 CONF_OUTPUT = "output"
 CONF_ON_CHANGE = "on_change"
@@ -60,16 +62,35 @@ CONF_WHEN = "when"
 CONF_ANY_ACTIVE = "any_active"
 CONF_ALL_ACTIVE = "all_active"
 CONF_NONE_ACTIVE = "none_active"
+CONF_ACTIVATE = "activate"
+CONF_DEACTIVATE = "deactivate"
+CONF_CASES = "cases"
+CONF_ANY = "any"
+CONF_ALL = "all"
+CONF_NONE = "none"
+CONF_STATES = "states"
 
-ACTIVITY_SCHEMA = cv.Schema(
+
+def _list_or_one(value_schema):
+    return cv.Any(value_schema, cv.ensure_list(value_schema))
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+ACTIVITY_BODY_SCHEMA = cv.Schema(
     {
-        cv.Required(CONF_NAME): cv.string_strict,
-        cv.Optional(CONF_GROUP): cv.string_strict,
         cv.Optional(CONF_PRIORITY, default=0): cv.int_range(min=-32768, max=32767),
         cv.Optional(CONF_INITIAL, default=False): cv.boolean,
-        cv.Optional(CONF_SET, default={}): cv.Schema({cv.string_strict: cv.string_strict}),
+        cv.Optional(CONF_POLICIES, default={}): cv.Schema({cv.string_strict: cv.string_strict}),
     }
 )
+ACTIVITIES_SCHEMA = cv.Schema({cv.string_strict: ACTIVITY_BODY_SCHEMA})
+GROUPS_SCHEMA = cv.Schema({cv.string_strict: cv.ensure_list(cv.string_strict)})
 
 ACTION_TRIGGER_SCHEMA = automation.validate_automation(single=True)
 POLICY_VALUE_SCHEMA = cv.Any(
@@ -78,24 +99,29 @@ POLICY_VALUE_SCHEMA = cv.Any(
 )
 POLICY_SCHEMA = cv.Schema(
     {
-        cv.Required(CONF_NAME): cv.string_strict,
         cv.Optional(CONF_OUTPUT): cv.use_id(globals_component.GlobalsComponent),
         cv.Optional(CONF_VALUES, default={}): cv.Schema({cv.string_strict: POLICY_VALUE_SCHEMA}),
         cv.Optional(CONF_ON_CHANGE): ACTION_TRIGGER_SCHEMA,
     }
 )
 
-EVENT_RULE_SCHEMA = cv.Schema(
+EVENT_CASE_SCHEMA = cv.Schema(
     {
-        cv.Optional(CONF_WHEN, default={}): cv.Schema(
-            {
-                cv.Optional(CONF_ANY_ACTIVE, default=[]): cv.ensure_list(cv.string_strict),
-                cv.Optional(CONF_ALL_ACTIVE, default=[]): cv.ensure_list(cv.string_strict),
-                cv.Optional(CONF_NONE_ACTIVE, default=[]): cv.ensure_list(cv.string_strict),
-            }
-        ),
-        cv.Optional(CONF_SET, default={}): cv.Schema({cv.string_strict: cv.boolean}),
+        cv.Optional(CONF_ANY, default=[]): _list_or_one(cv.string_strict),
+        cv.Optional(CONF_ALL, default=[]): _list_or_one(cv.string_strict),
+        cv.Optional(CONF_NONE, default=[]): _list_or_one(cv.string_strict),
+        cv.Optional(CONF_ACTIVATE, default=[]): _list_or_one(cv.string_strict),
+        cv.Optional(CONF_DEACTIVATE, default=[]): _list_or_one(cv.string_strict),
         cv.Optional(CONF_ACTION): cv.string_strict,
+    }
+)
+EVENT_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_ACTIVATE, default=[]): _list_or_one(cv.string_strict),
+        cv.Optional(CONF_DEACTIVATE, default=[]): _list_or_one(cv.string_strict),
+        cv.Optional(CONF_ACTION): cv.string_strict,
+        cv.Optional(CONF_CASES, default=[]): cv.ensure_list(EVENT_CASE_SCHEMA),
+        cv.Optional(CONF_THEN): ACTION_TRIGGER_SCHEMA,
     }
 )
 
@@ -126,24 +152,17 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_INTERCOM): cv.Schema(
             {
                 cv.Required(CONF_ID): cv.use_id(cg.esphome_ns.namespace("intercom_api").class_("IntercomApi", cg.Component)),
-                cv.Required(CONF_ACTIVITY_PREFIX): cv.string_strict,
+                cv.Optional(CONF_ACTIVITY_PREFIX, default="intercom:"): cv.string_strict,
+                cv.Optional(CONF_STATES, default={}): cv.Schema({cv.string_strict: ACTIVITY_BODY_SCHEMA}),
             }
         ),
-        cv.Optional(CONF_ACTIVITIES, default=[]): cv.ensure_list(ACTIVITY_SCHEMA),
+        cv.Optional(CONF_ACTIVITIES, default={}): ACTIVITIES_SCHEMA,
+        cv.Optional(CONF_GROUPS, default={}): GROUPS_SCHEMA,
+        cv.Optional(CONF_AUTO_EVENTS, default=True): cv.boolean,
         cv.Optional(CONF_DERIVED_ACTIVITIES, default=[]): cv.ensure_list(DERIVED_ACTIVITY_SCHEMA),
-        cv.Optional(CONF_EVENTS, default={}): cv.Schema(
-            {
-                cv.string_strict: cv.Schema(
-                    {
-                        cv.Optional(CONF_SET, default={}): cv.Schema({cv.string_strict: cv.boolean}),
-                        cv.Optional(CONF_RULES, default=[]): cv.ensure_list(EVENT_RULE_SCHEMA),
-                        cv.Optional(CONF_THEN): ACTION_TRIGGER_SCHEMA,
-                    }
-                )
-            }
-        ),
+        cv.Optional(CONF_EVENTS, default={}): cv.Schema({cv.string_strict: EVENT_SCHEMA}),
         cv.Optional(CONF_ACTIONS, default={}): cv.Schema({cv.string_strict: ACTION_TRIGGER_SCHEMA}),
-        cv.Optional(CONF_POLICIES, default=[]): cv.ensure_list(POLICY_SCHEMA),
+        cv.Optional(CONF_POLICIES, default={}): cv.Schema({cv.string_strict: POLICY_SCHEMA}),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -175,19 +194,30 @@ async def to_code(config):
         cg.add(var.set_intercom(intercom))
         cg.add(var.set_intercom_activity_prefix(intercom_conf[CONF_ACTIVITY_PREFIX]))
         cg.add_define("USE_RUNTIME_FSM_INTERCOM")
+        for state, activity in intercom_conf[CONF_STATES].items():
+            name = f"{intercom_conf[CONF_ACTIVITY_PREFIX]}{state}"
+            cg.add(var.add_activity(name, activity[CONF_PRIORITY], activity[CONF_INITIAL]))
+            for policy, value in activity[CONF_POLICIES].items():
+                cg.add(var.add_activity_policy(name, policy, value))
 
-    for activity in config[CONF_ACTIVITIES]:
+    for name, activity in config[CONF_ACTIVITIES].items():
         cg.add(
             var.add_activity(
-                activity[CONF_NAME],
+                name,
                 activity[CONF_PRIORITY],
                 activity[CONF_INITIAL],
             )
         )
-        if CONF_GROUP in activity:
-            cg.add(var.set_activity_group(activity[CONF_NAME], activity[CONF_GROUP]))
-        for policy, value in activity[CONF_SET].items():
-            cg.add(var.add_activity_policy(activity[CONF_NAME], policy, value))
+        for policy, value in activity[CONF_POLICIES].items():
+            cg.add(var.add_activity_policy(name, policy, value))
+
+    for group, activities in config[CONF_GROUPS].items():
+        for activity in activities:
+            cg.add(var.set_activity_group(activity, group))
+
+    if config[CONF_AUTO_EVENTS]:
+        for name in config[CONF_ACTIVITIES]:
+            cg.add(var.add_event_activity(name, name, True))
 
     for derived in config[CONF_DERIVED_ACTIVITIES]:
         cg.add(var.add_derived_activity(derived[CONF_NAME]))
@@ -199,18 +229,27 @@ async def to_code(config):
             cg.add(var.add_derived_none_active(activity))
 
     for name, event_conf in config[CONF_EVENTS].items():
-        for activity, active in event_conf[CONF_SET].items():
-            cg.add(var.add_event_activity(name, activity, active))
-        for rule in event_conf[CONF_RULES]:
+        for rule in event_conf[CONF_CASES]:
             cg.add(var.add_event_rule(name, rule.get(CONF_ACTION, "")))
-            for activity in rule[CONF_WHEN][CONF_ANY_ACTIVE]:
+            for activity in _as_list(rule[CONF_ANY]):
                 cg.add(var.add_event_rule_any_active(activity))
-            for activity in rule[CONF_WHEN][CONF_ALL_ACTIVE]:
+            for activity in _as_list(rule[CONF_ALL]):
                 cg.add(var.add_event_rule_all_active(activity))
-            for activity in rule[CONF_WHEN][CONF_NONE_ACTIVE]:
+            for activity in _as_list(rule[CONF_NONE]):
                 cg.add(var.add_event_rule_none_active(activity))
-            for activity, active in rule[CONF_SET].items():
-                cg.add(var.add_event_rule_update(activity, active))
+            for activity in _as_list(rule[CONF_ACTIVATE]):
+                cg.add(var.add_event_rule_update(activity, True))
+            for activity in _as_list(rule[CONF_DEACTIVATE]):
+                cg.add(var.add_event_rule_update(activity, False))
+        default_activate = _as_list(event_conf[CONF_ACTIVATE])
+        default_deactivate = _as_list(event_conf[CONF_DEACTIVATE])
+        default_action = event_conf.get(CONF_ACTION, "")
+        if default_activate or default_deactivate or default_action:
+            cg.add(var.add_event_rule(name, default_action))
+            for activity in default_activate:
+                cg.add(var.add_event_rule_update(activity, True))
+            for activity in default_deactivate:
+                cg.add(var.add_event_rule_update(activity, False))
         if CONF_THEN in event_conf:
             trigger = cg.new_Pvariable(event_conf[automation.CONF_TRIGGER_ID], cg.TemplateArguments())
             cg.add(var.add_action_trigger(name, trigger))
@@ -221,8 +260,7 @@ async def to_code(config):
         cg.add(var.add_action_trigger(name, trigger))
         await automation.build_automation(trigger, [], action_conf)
 
-    for policy_conf in config[CONF_POLICIES]:
-        policy = policy_conf[CONF_NAME]
+    for policy, policy_conf in config[CONF_POLICIES].items():
         if CONF_OUTPUT in policy_conf:
             full_id, output = await cg.get_variable_with_full_id(policy_conf[CONF_OUTPUT])
             template_arg = cg.TemplateArguments(full_id.type)

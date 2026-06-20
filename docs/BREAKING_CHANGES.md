@@ -15,11 +15,21 @@ should migrate away from `platform: speaker` media-player blocks and local
 `files:` entries toward `media_source` plus `media_player.play_media` with
 `audio-file://...` URLs.
 
+Maintained non-native full-experience YAMLs now use the generic `runtime_fsm`
+component for runtime state arbitration. Custom full-experience YAMLs copied
+from older releases should migrate away from `update_status`,
+`timer_ringing`, local VA pending flags and callback-local LED/display/ducking
+decisions. The new pattern is: callbacks send `runtime_fsm.event`, the reducer
+sets activities, and policies drive LED/display/audio/timer outputs from one
+committed snapshot.
+
 Voice Assistant response state is now tied to TTS/media-player announcement
-lifecycle callbacks. Custom full-experience YAMLs that override the state
-machine should preserve the VA pending/active response flags; otherwise slow
-local TTS backends may look idle before audio playback starts, or barge-in may
-stop the wrong source.
+lifecycle callbacks through `runtime_fsm`. Slow local TTS backends can exceed
+ESPHome's historical 2-second playback-start watchdog, especially XTTS running
+locally. This prerelease temporarily ships a project-local `voice_assistant`
+fork that exposes `tts_playback_start_timeout`; maintained full profiles set
+it to `10s`. Custom full profiles using the maintained `core_cpp` package get
+that setting automatically.
 
 Sendspin is included in maintained full-experience profiles as a Music Assistant
 media source. It is not required for normal HA media, TTS, timer sounds,

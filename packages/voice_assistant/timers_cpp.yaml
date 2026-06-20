@@ -9,15 +9,13 @@ audio_file:
 voice_assistant:
   id: va
   on_timer_started:
-    - runtime_fsm.set_activity:
+    - runtime_fsm.event:
         id: runtime_controller
-        activity: timer
-        active: true
+        event: timer_started
   on_timer_cancelled:
-    - runtime_fsm.set_activity:
+    - runtime_fsm.event:
         id: runtime_controller
-        activity: timer
-        active: false
+        event: timer_stopped
   on_timer_updated:
     - runtime_fsm.event:
         id: runtime_controller
@@ -27,7 +25,9 @@ voice_assistant:
         id: runtime_controller
         event: timer_tick
   on_timer_finished:
-    - switch.turn_on: timer_ringing
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: timer_finished
 
 script:
   - id: timer_alarm_loop
@@ -35,37 +35,19 @@ script:
     then:
       - while:
           condition:
-            switch.is_on: timer_ringing
+            runtime_fsm.is_active:
+              id: runtime_controller
+              activity: timer_ringing
           then:
             - media_player.play_media:
                 id: speaker_media_player
                 media_url: "audio-file://timer_finished_sound"
                 announcement: true
             - delay: 6s
-
-switch:
-  - platform: template
-    id: timer_ringing
-    optimistic: true
-    internal: true
-    restore_mode: ALWAYS_OFF
-    on_turn_off:
-      - script.stop: timer_alarm_loop
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - runtime_fsm.set_activity:
-          id: runtime_controller
-          activity: timer
-          active: false
-    on_turn_on:
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - script.execute: timer_alarm_loop
-      - runtime_fsm.set_activity:
-          id: runtime_controller
-          activity: timer
-          active: true
+  - id: timer_alarm_auto_stop
+    mode: restart
+    then:
       - delay: 15min
-      - switch.turn_off: timer_ringing
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: timer_stopped
