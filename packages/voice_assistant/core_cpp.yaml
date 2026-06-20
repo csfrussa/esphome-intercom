@@ -7,26 +7,54 @@ voice_assistant:
   media_player: speaker_media_player
   tts_playback_start_timeout: 10s
   on_start:
-    - lambda: 'id(runtime_controller).on_va_started();'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_start
   on_listening:
-    - lambda: 'id(runtime_controller).on_va_listening();'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_listening
+        dump: true
+        reason: va:on_listening
   on_stt_vad_end:
-    - lambda: 'id(runtime_controller).on_va_thinking();'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_thinking
+        dump: true
+        reason: va:on_stt_vad_end
   on_stt_end:
     - script.execute:
         id: ui_stt_ended
         text: !lambda 'return x;'
+  on_intent_progress:
+    - if:
+        condition:
+          lambda: 'return !x.empty();'
+        then:
+          - runtime_fsm.event:
+              id: runtime_controller
+              event: va_responding
+              dump: true
+              reason: va:on_intent_progress
   on_tts_start:
-    - lambda: 'id(runtime_controller).on_tts_start(x);'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_responding
+        dump: true
+        reason: va:on_tts_start
     - script.execute:
         id: ui_tts_started
         text: !lambda 'return x;'
-  on_tts_end:
-    - lambda: 'id(runtime_controller).on_tts_end(x);'
   on_end:
-    - lambda: 'id(runtime_controller).on_va_end();'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_end
+        dump: true
+        reason: va:on_end
   on_error:
-    - lambda: 'id(runtime_controller).on_va_error(code, message);'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_error
   on_client_connected:
     - logger.log:
         tag: va
@@ -34,17 +62,27 @@ voice_assistant:
     - globals.set:
         id: init_in_progress
         value: "false"
-    - lambda: 'id(runtime_controller).on_connectivity_event();'
-    - script.execute: runtime_controller_output
+    - runtime_fsm.set_activity:
+        id: runtime_controller
+        activity: no_va
+        active: false
     - script.execute: start_mww_when_ready
   on_client_disconnected:
     - logger.log:
         tag: va
         format: "VA: client disconnected"
-    - lambda: 'id(runtime_controller).on_connectivity_event();'
+    - runtime_fsm.set_activities:
+        id: runtime_controller
+        set:
+          no_va: true
 
 micro_wake_word:
   id: mww
   stop_after_detection: false
   on_wake_word_detected:
-    - lambda: 'id(runtime_controller).on_wake_word(wake_word);'
+    - globals.set:
+        id: g_last_wake_word
+        value: !lambda 'return wake_word;'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: wake_word

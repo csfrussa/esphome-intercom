@@ -1,0 +1,87 @@
+# =============================================================================
+# Intercom API callbacks for VA-enabled devices.
+# Like intercom/callbacks.yaml but also drives intercom_ringing_loop (full
+# ringtone playback on incoming call), since VA devices have a media player
+# stack capable of running it. Use this on full-experience devices that
+# include the runtime voice_assistant package.
+#
+# Prerequisites in the device YAML:
+#   - intercom_api hardware config (microphone, speaker, ringing_timeout, ...)
+#   - script id `intercom_ringing_loop` (provided by runtime_fsm bridge package)
+#   - script ids `ui_ic_call`, `ui_ic_dest_ringing`, `ui_ic_ended`
+#     (provided as placeholders by runtime_fsm bridge package; device
+#      !extends them to drive LVGL)
+#
+# Required substitutions:
+#   ${friendly_name} - used in the homeassistant.event payload on outgoing call
+# =============================================================================
+
+intercom_api:
+  id: intercom
+  on_outgoing_call:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_outgoing_call"
+    - script.execute:
+        id: ui_ic_call
+        peer: !lambda 'return id(intercom).get_current_destination();'
+    - if:
+        condition:
+          intercom_api.is_ha_destination: intercom
+        then:
+          - homeassistant.event:
+              event: esphome.intercom_call
+              data:
+                caller: "${friendly_name}"
+                destination: !lambda 'return id(intercom).get_current_destination();'
+                type: "doorbell"
+  on_ringing:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_ringing"
+    - script.execute:
+        id: ui_ic_call
+        peer: !lambda 'return id(intercom).get_caller();'
+    - script.execute: intercom_ringing_loop
+  on_dest_ringing:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_dest_ringing"
+    # Caller path: dest acked with RING. Same outgoing screen, the
+    # device YAML flips its label inside ui_ic_dest_ringing.
+    - script.execute:
+        id: ui_ic_dest_ringing
+        peer: !lambda 'return id(intercom).get_current_destination();'
+  on_streaming:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_streaming"
+    - script.stop: intercom_ringing_loop
+    - script.execute:
+        id: ui_ic_call
+        peer: !lambda |-
+          auto c = id(intercom).get_caller();
+          return c.empty() ? id(intercom).get_current_destination() : c;
+  on_idle:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_idle"
+    - script.stop: intercom_ringing_loop
+  on_hangup:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_hangup"
+    - script.stop: intercom_ringing_loop
+    - script.execute:
+        id: ui_ic_ended
+        peer: !lambda 'return id(intercom).get_caller();'
+        reason: !lambda 'return reason;'
+  on_call_failed:
+    - script.execute:
+        id: va_debug_dump
+        event: "intercom:on_call_failed"
+    - script.stop: intercom_ringing_loop
+    - script.execute:
+        id: ui_ic_ended
+        peer: !lambda 'return id(intercom).get_caller();'
+        reason: !lambda 'return reason;'

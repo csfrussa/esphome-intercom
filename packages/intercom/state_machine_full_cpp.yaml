@@ -22,6 +22,7 @@ substitutions:
   ui_state_ic_streaming: "13"
   ui_state_va_error: "14"
   ui_state_media: "15"
+  ui_state_no_va: "16"
 
 globals:
   - id: init_in_progress
@@ -68,39 +69,39 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  - id: g_ha_api_clients
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: g_last_wake_word
+    type: std::string
+    restore_value: false
+    initial_value: "\"\""
+
+esphome:
+  on_boot:
+    priority: 700
+    then:
+      - runtime_fsm.event:
+          id: runtime_controller
+          event: boot_start
+      - delay: 1s
+      - runtime_fsm.set_activity:
+          id: runtime_controller
+          activity: boot
+          active: false
 
 script:
-  - id: runtime_controller_output
-    mode: restart
-    then:
-      - lambda: |-
-          id(ui_state) = id(runtime_controller).get_ui_state();
-          id(g_applied_led) = id(runtime_controller).get_led_state();
-          id(g_va_state) = id(runtime_controller).get_compat_va_state();
-          id(g_activity_mask) = id(runtime_controller).get_activity_mask();
-          id(g_fsm_seq) = id(runtime_controller).get_sequence();
-          id(g_va_epoch) = id(runtime_controller).get_va_epoch();
-          id(g_tts_owner_epoch) = id(runtime_controller).get_tts_epoch();
-          id(g_ducking_active) = id(runtime_controller).is_ducking_active() ? 1 : 0;
-      - script.execute: update_led
-      - script.execute: render_ui_state
-
-  - id: update_status
-    mode: restart
-    then:
-      - lambda: 'id(runtime_controller).on_media_event();'
-
   - id: va_debug_dump
     parameters:
       event: string
     then:
       - lambda: |-
-          ESP_LOGI("fsm", "%s seq=%u phase=%d mask=0x%08" PRIx32 " ui=%d led=%d va=%d epoch=%u tts=%u duck=%d",
-                   event.c_str(), id(runtime_controller).get_sequence(), id(runtime_controller).get_va_phase(),
-                   id(runtime_controller).get_activity_mask(), id(runtime_controller).get_ui_state(),
-                   id(runtime_controller).get_led_state(), id(va).is_running(),
-                   id(runtime_controller).get_va_epoch(), id(runtime_controller).get_tts_epoch(),
-                   id(runtime_controller).is_ducking_active());
+          ESP_LOGI("fsm", "%s seq=%u mask=0x%08" PRIx32 " ui=%d led=%d va=%d duck=%d",
+                   event.c_str(), id(runtime_controller).get_sequence(),
+                   id(runtime_controller).get_activity_mask(), id(ui_state),
+                   id(g_applied_led), id(va).is_running(),
+                   id(g_ducking_active));
 
   - id: update_led
     mode: restart
@@ -129,9 +130,6 @@ script:
       peer: string
       reason: string
     then: []
-  - id: va_end_cleanup
-    then: []
-
   - id: start_mww_when_ready
     mode: restart
     then:
@@ -185,4 +183,3 @@ script:
                     media_player.is_announcing:
                       id: speaker_media_player
                 timeout: 5s
-

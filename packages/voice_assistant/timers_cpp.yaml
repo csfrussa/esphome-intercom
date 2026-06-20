@@ -9,13 +9,23 @@ audio_file:
 voice_assistant:
   id: va
   on_timer_started:
-    - lambda: 'id(runtime_controller).on_media_event();'
+    - runtime_fsm.set_activity:
+        id: runtime_controller
+        activity: timer
+        active: true
   on_timer_cancelled:
-    - lambda: 'id(runtime_controller).on_media_event();'
+    - runtime_fsm.set_activity:
+        id: runtime_controller
+        activity: timer
+        active: false
   on_timer_updated:
-    - lambda: 'id(runtime_controller).on_media_event();'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: timer_updated
   on_timer_tick:
-    - lambda: 'id(runtime_controller).on_media_event();'
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: timer_tick
   on_timer_finished:
     - switch.turn_on: timer_ringing
 
@@ -44,13 +54,18 @@ switch:
       - media_player.stop:
           id: speaker_media_player
           announcement: true
-      - lambda: 'id(runtime_controller).on_media_event();'
+      - runtime_fsm.set_activity:
+          id: runtime_controller
+          activity: timer
+          active: false
     on_turn_on:
       - media_player.stop:
           id: speaker_media_player
           announcement: true
       - script.execute: timer_alarm_loop
-      - lambda: 'id(runtime_controller).on_media_event();'
+      - runtime_fsm.set_activity:
+          id: runtime_controller
+          activity: timer
+          active: true
       - delay: 15min
       - switch.turn_off: timer_ringing
-

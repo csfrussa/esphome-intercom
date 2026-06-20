@@ -3,14 +3,12 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
-#ifdef USE_API
-#include "esphome/components/api/api_server.h"
-#endif
-#ifdef USE_INTERCOM_API
+#include <cstdio>
+#include <cstring>
+#include <iterator>
+
+#ifdef USE_RUNTIME_FSM_INTERCOM
 #include "esphome/components/intercom_api/intercom_api.h"
-#endif
-#ifdef USE_WIFI
-#include "esphome/components/wifi/wifi_component.h"
 #endif
 
 namespace esphome::runtime_fsm {
@@ -18,253 +16,619 @@ namespace esphome::runtime_fsm {
 static const char *const TAG = "runtime_fsm";
 
 void RuntimeFsm::setup() {
-  this->boot_led_until_ = millis() + 1000;
-  this->last_boot_initializing_ = this->boot_initializing_();
-  this->last_wifi_connected_ = this->wifi_connected_();
-  this->last_api_connected_ = this->api_connected_();
-  this->state_ = RuntimeState{};
-  recompute_outputs(this->state_, this->observe_());
-  this->last_media_state_ = this->media_player_ != nullptr ? this->media_player_->state : media_player::MEDIA_PLAYER_STATE_NONE;
-  this->publish_outputs_();
+  const ResolvedPolicies old_policies = this->resolved_policies_;
+  const uint32_t old_mask = this->generic_activity_mask_;
+  (void) this->sync_intercom_activity_();
+  (void) this->apply_derived_activities_();
+  this->apply_generic_outputs_();
+  this->commit_outputs_("setup", old_mask, old_policies);
 }
 
 void RuntimeFsm::loop() {
-  const bool boot_initializing = this->boot_initializing_();
-  const bool wifi_connected = this->wifi_connected_();
-  const bool api_connected = this->api_connected_();
-  if (boot_initializing != this->last_boot_initializing_ || wifi_connected != this->last_wifi_connected_ ||
-      api_connected != this->last_api_connected_) {
-    this->last_boot_initializing_ = boot_initializing;
-    this->last_wifi_connected_ = wifi_connected;
-    this->last_api_connected_ = api_connected;
-    this->dispatch_(Event{EventType::OBSERVED_STATE_CHANGED}, "connectivity");
-  }
+  this->drain_pending_actions_();
 
-  if (this->media_player_ != nullptr && this->media_player_->state != this->last_media_state_) {
-    auto old = this->last_media_state_;
-    this->last_media_state_ = this->media_player_->state;
-    if (this->media_player_->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING &&
-        (this->state_.phase == VaPhase::TTS_SYNTHESIZING || this->state_.phase == VaPhase::THINKING)) {
-      this->dispatch_(Event{EventType::TTS_URL_ACCEPTED});
-      this->dispatch_(Event{EventType::TTS_SOURCE_PLAYING});
-    } else if (old == media_player::MEDIA_PLAYER_STATE_ANNOUNCING &&
-               this->media_player_->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING) {
-      this->dispatch_(Event{EventType::TTS_SOURCE_TERMINAL});
-    } else {
-      this->dispatch_(Event{EventType::OBSERVED_STATE_CHANGED});
-    }
-  }
-
-  if (this->state_.phase == VaPhase::TTS_DRAINING && !this->media_announcing_()) {
-    this->dispatch_(Event{EventType::TTS_DRAINED});
-  }
-
-  if (this->state_.phase == VaPhase::CANCEL_REQUESTED && this->state_.barge_pending && !this->va_running_() &&
-      !this->media_announcing_()) {
-    this->dispatch_(Event{EventType::BARGE_READY});
-  }
-
-  if (this->state_.phase == VaPhase::WAITING_FOLLOWUP && !this->va_running_()) {
-    this->dispatch_(Event{EventType::VA_RUN_ENDED}, "followup_done");
-  }
+  const uint32_t old_mask = this->generic_activity_mask_;
+  const ResolvedPolicies old_policies = this->resolved_policies_;
+  if (!this->sync_intercom_activity_())
+    return;
+  (void) this->apply_derived_activities_();
+  this->apply_generic_outputs_();
+  this->commit_outputs_("observer", old_mask, old_policies);
 }
 
 void RuntimeFsm::dump_config() {
   ESP_LOGCONFIG(TAG, "Runtime FSM:");
-  ESP_LOGCONFIG(TAG, "  Voice Assistant: %s", this->va_ != nullptr ? "configured" : "missing");
-  ESP_LOGCONFIG(TAG, "  Media player: %s", this->media_player_ != nullptr ? "configured" : "missing");
-  ESP_LOGCONFIG(TAG, "  Media mixer input: %s", this->media_mixer_input_ != nullptr ? "configured" : "missing");
+  ESP_LOGCONFIG(TAG, "  Activities: %u/%u", static_cast<unsigned>(this->activity_count_),
+                static_cast<unsigned>(MAX_ACTIVITIES));
+  ESP_LOGCONFIG(TAG, "  Actions: %u/%u", static_cast<unsigned>(this->action_count_),
+                static_cast<unsigned>(MAX_ACTIONS));
+  ESP_LOGCONFIG(TAG, "  Debug: %s", YESNO(this->debug_));
+#ifdef USE_RUNTIME_FSM_INTERCOM
+  ESP_LOGCONFIG(TAG, "  Intercom observer: %s", this->intercom_ != nullptr ? "configured" : "missing");
+#endif
 }
 
-void RuntimeFsm::on_va_started() { this->dispatch_(Event{EventType::VA_START_ACCEPTED}); }
-void RuntimeFsm::on_va_listening() { this->dispatch_(Event{EventType::VA_LISTENING}); }
-void RuntimeFsm::on_va_thinking() { this->dispatch_(Event{EventType::VA_THINKING}); }
-void RuntimeFsm::on_tts_start(const std::string &text) { this->dispatch_(Event{EventType::TTS_SYNTHESIS_STARTED}, text.c_str()); }
-void RuntimeFsm::on_tts_end(const std::string &url) { this->dispatch_(Event{EventType::OBSERVED_STATE_CHANGED}, "tts_end"); }
-void RuntimeFsm::on_va_end() { this->dispatch_(Event{EventType::VA_RUN_ENDED}); }
-void RuntimeFsm::on_va_error(const std::string &code, const std::string &message) {
-  this->dispatch_(Event{EventType::VA_ERROR}, code.c_str());
-}
-void RuntimeFsm::on_wake_word(const std::string &wake_word) {
-  Event event{EventType::WAKE_WORD};
-  event.has_wake_word = !wake_word.empty();
-  this->dispatch_(event, wake_word.c_str());
-}
-void RuntimeFsm::on_intercom_event() { this->dispatch_(Event{EventType::OBSERVED_STATE_CHANGED}, "intercom"); }
-void RuntimeFsm::on_media_event() { this->dispatch_(Event{EventType::OBSERVED_STATE_CHANGED}, "media"); }
-void RuntimeFsm::on_connectivity_event() {
-  this->last_boot_initializing_ = this->boot_initializing_();
-  this->last_wifi_connected_ = this->wifi_connected_();
-  this->last_api_connected_ = this->api_connected_();
-  this->dispatch_(Event{EventType::OBSERVED_STATE_CHANGED}, "connectivity");
+void RuntimeFsm::add_activity(const char *name, int16_t priority, bool initial) {
+  if (name == nullptr || name[0] == '\0')
+    return;
+  if (this->activity_count_ >= MAX_ACTIVITIES) {
+    ESP_LOGE(TAG, "Cannot add activity '%s': maximum %u activities reached", name,
+             static_cast<unsigned>(MAX_ACTIVITIES));
+    return;
+  }
+  ActivityConfig activity;
+  activity.name = name;
+  activity.bit = 1u << this->activity_count_;
+  activity.priority = priority;
+  activity.active = initial;
+  this->activities_[this->activity_count_++] = activity;
 }
 
-void RuntimeFsm::dispatch_(Event event, const char *detail) {
-  if (this->dispatching_) {
-    if (this->pending_count_ < EVENT_QUEUE_SIZE) {
-      size_t index = (this->pending_head_ + this->pending_count_) % EVENT_QUEUE_SIZE;
-      this->pending_events_[index] = QueuedEvent{event, detail != nullptr ? detail : ""};
-      this->pending_count_++;
-    } else {
-      ESP_LOGE(TAG, "Event queue full, dropping %s", event_name(event.type));
+void RuntimeFsm::set_activity_group(const char *activity_name, const char *group) {
+  int index = this->find_activity_(activity_name);
+  if (index < 0 || group == nullptr || group[0] == '\0')
+    return;
+  this->activities_[index].group = group;
+}
+
+void RuntimeFsm::add_activity_policy(const char *activity_name, const char *policy, const char *value) {
+  int index = this->find_activity_(activity_name);
+  if (index < 0) {
+    ESP_LOGE(TAG, "Cannot add policy '%s': unknown activity '%s'", policy != nullptr ? policy : "-",
+             activity_name != nullptr ? activity_name : "-");
+    return;
+  }
+  auto &activity = this->activities_[index];
+  if (activity.policy_count >= MAX_ACTIVITY_POLICIES) {
+    ESP_LOGE(TAG, "Cannot add policy '%s' to activity '%s': maximum %u policies reached",
+             policy != nullptr ? policy : "-", activity_name, static_cast<unsigned>(MAX_ACTIVITY_POLICIES));
+    return;
+  }
+  activity.policies[activity.policy_count++] = PolicyValue{policy, value};
+}
+
+void RuntimeFsm::add_event_activity(const char *event, const char *activity, bool active) {
+  if (event == nullptr || event[0] == '\0' || activity == nullptr || activity[0] == '\0')
+    return;
+  if (this->event_update_count_ >= this->event_updates_.size()) {
+    ESP_LOGE(TAG, "Cannot add event update '%s:%s': maximum reached", event, activity);
+    return;
+  }
+  this->event_updates_[this->event_update_count_++] = EventActivity{event, activity, active};
+}
+
+void RuntimeFsm::add_event_rule(const char *event, const char *action) {
+  if (event == nullptr || event[0] == '\0')
+    return;
+  if (this->event_rule_count_ >= this->event_rules_.size()) {
+    ESP_LOGE(TAG, "Cannot add event rule '%s': maximum reached", event);
+    return;
+  }
+  this->event_rules_[this->event_rule_count_++] = EventRule{event, action};
+}
+
+void RuntimeFsm::add_event_rule_update(const char *activity, bool active) {
+  if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &rule = this->event_rules_[this->event_rule_count_ - 1];
+  if (rule.update_count >= std::size(rule.updates)) {
+    ESP_LOGE(TAG, "Cannot add event rule update '%s': maximum reached", activity);
+    return;
+  }
+  rule.updates[rule.update_count++] = ActivityUpdate{activity, active};
+}
+
+void RuntimeFsm::add_event_rule_any_active(const char *activity) {
+  if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &rule = this->event_rules_[this->event_rule_count_ - 1];
+  if (rule.any_count < std::size(rule.any_active))
+    rule.any_active[rule.any_count++] = activity;
+}
+
+void RuntimeFsm::add_event_rule_all_active(const char *activity) {
+  if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &rule = this->event_rules_[this->event_rule_count_ - 1];
+  if (rule.all_count < std::size(rule.all_active))
+    rule.all_active[rule.all_count++] = activity;
+}
+
+void RuntimeFsm::add_event_rule_none_active(const char *activity) {
+  if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &rule = this->event_rules_[this->event_rule_count_ - 1];
+  if (rule.none_count < std::size(rule.none_active))
+    rule.none_active[rule.none_count++] = activity;
+}
+
+void RuntimeFsm::add_derived_activity(const char *activity) {
+  if (activity == nullptr || activity[0] == '\0')
+    return;
+  if (this->derived_activity_count_ >= this->derived_activities_.size()) {
+    ESP_LOGE(TAG, "Cannot add derived activity '%s': maximum reached", activity);
+    return;
+  }
+  this->derived_activities_[this->derived_activity_count_++] = DerivedActivity{activity};
+}
+
+void RuntimeFsm::add_derived_any_active(const char *activity) {
+  if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
+  if (derived.any_count < std::size(derived.any_active))
+    derived.any_active[derived.any_count++] = activity;
+}
+
+void RuntimeFsm::add_derived_all_active(const char *activity) {
+  if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
+  if (derived.all_count < std::size(derived.all_active))
+    derived.all_active[derived.all_count++] = activity;
+}
+
+void RuntimeFsm::add_derived_none_active(const char *activity) {
+  if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
+    return;
+  auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
+  if (derived.none_count < std::size(derived.none_active))
+    derived.none_active[derived.none_count++] = activity;
+}
+
+void RuntimeFsm::add_action_trigger(const char *name, Trigger<> *trigger) {
+  if (name == nullptr || name[0] == '\0' || trigger == nullptr)
+    return;
+  if (this->action_count_ >= MAX_ACTIONS) {
+    ESP_LOGE(TAG, "Cannot add action '%s': maximum %u actions reached", name, static_cast<unsigned>(MAX_ACTIONS));
+    return;
+  }
+  this->actions_[this->action_count_++] = NamedAction{name, trigger};
+}
+
+void RuntimeFsm::add_policy_value_trigger(const char *policy, const char *value, Trigger<> *trigger) {
+  if (policy == nullptr || policy[0] == '\0' || value == nullptr || trigger == nullptr)
+    return;
+  if (this->policy_value_action_count_ >= this->policy_value_actions_.size()) {
+    ESP_LOGE(TAG, "Cannot add policy action '%s:%s': maximum reached", policy, value);
+    return;
+  }
+  this->policy_value_actions_[this->policy_value_action_count_++] = PolicyValueAction{policy, value, trigger};
+}
+
+void RuntimeFsm::add_policy_output(const char *policy, const char *value, int32_t output) {
+  if (policy == nullptr || policy[0] == '\0' || value == nullptr)
+    return;
+  if (this->policy_output_count_ >= this->policy_outputs_.size()) {
+    ESP_LOGE(TAG, "Cannot add policy output '%s:%s': maximum reached", policy, value);
+    return;
+  }
+  this->policy_outputs_[this->policy_output_count_++] = PolicyOutput{policy, value, output};
+}
+
+void RuntimeFsm::set_policy_change_trigger(const char *policy, Trigger<int32_t> *trigger) {
+  if (policy == nullptr || policy[0] == '\0' || trigger == nullptr)
+    return;
+  if (this->policy_change_trigger_count_ >= this->policy_change_triggers_.size()) {
+    ESP_LOGE(TAG, "Cannot add policy on_change '%s': maximum reached", policy);
+    return;
+  }
+  this->policy_change_triggers_[this->policy_change_trigger_count_++] = PolicyChangeTrigger{policy, trigger};
+}
+
+void RuntimeFsm::on_intercom_event() {
+  const uint32_t old_mask = this->generic_activity_mask_;
+  const ResolvedPolicies old_policies = this->resolved_policies_;
+  if (!this->sync_intercom_activity_())
+    return;
+  (void) this->apply_derived_activities_();
+  this->apply_generic_outputs_();
+  this->commit_outputs_("intercom_event", old_mask, old_policies);
+}
+
+void RuntimeFsm::event(const char *name) {
+  if (this->debug_) {
+    ESP_LOGI(TAG, "EVENT seq=%" PRIu32 " name=%s mask=0x%08" PRIx32, this->sequence_,
+             name != nullptr ? name : "-", this->generic_activity_mask_);
+  }
+  const uint32_t old_mask = this->generic_activity_mask_;
+  const ResolvedPolicies old_policies = this->resolved_policies_;
+  bool changed = false;
+  bool event_known = false;
+
+  for (size_t i = 0; i < this->event_rule_count_; i++) {
+    auto &rule = this->event_rules_[i];
+    if (rule.event == nullptr || name == nullptr || strcmp(rule.event, name) != 0)
+      continue;
+    event_known = true;
+    if (!this->rule_matches_(rule))
+      continue;
+    for (size_t j = 0; j < rule.update_count; j++)
+      changed |= this->apply_activity_update_(rule.updates[j].name, rule.updates[j].active);
+    changed |= this->apply_derived_activities_();
+    if (changed) {
+      this->apply_generic_outputs_();
+      this->commit_outputs_(name != nullptr ? name : "event", old_mask, old_policies);
     }
+    this->run_named_action_(rule.action);
     return;
   }
 
-  this->dispatching_ = true;
-  VaPhase old_phase = this->state_.phase;
-  uint32_t old_mask = this->state_.activity_mask;
-  this->sequence_++;
-  ReduceResult result = reduce(this->state_, this->observe_(), event);
-  this->apply_result_(result, event.type, detail);
-  this->log_transition_(event.type, old_phase, old_mask, detail, result.effects);
-  this->dispatching_ = false;
-  this->drain_events_();
-}
-
-void RuntimeFsm::drain_events_() {
-  while (this->pending_count_ > 0 && !this->dispatching_) {
-    QueuedEvent queued = this->pending_events_[this->pending_head_];
-    this->pending_head_ = (this->pending_head_ + 1) % EVENT_QUEUE_SIZE;
-    this->pending_count_--;
-    this->dispatch_(queued.event, queued.detail.empty() ? nullptr : queued.detail.c_str());
+  for (size_t i = 0; i < this->event_update_count_; i++) {
+    const auto &update = this->event_updates_[i];
+    if (update.event != nullptr && name != nullptr && strcmp(update.event, name) == 0) {
+      event_known = true;
+      changed |= this->apply_activity_update_(update.activity, update.active);
+    }
+  }
+  if (changed) {
+    changed |= this->apply_derived_activities_();
+    this->apply_generic_outputs_();
+    this->commit_outputs_(name != nullptr ? name : "event", old_mask, old_policies);
+  }
+  int action_index = this->find_action_(name);
+  if (action_index >= 0) {
+    this->run_named_action_(this->actions_[action_index].name);
+  } else if (!event_known && !changed) {
+    ESP_LOGW(TAG, "Ignoring unknown event '%s'", name != nullptr ? name : "-");
   }
 }
 
-void RuntimeFsm::apply_result_(const ReduceResult &result, EventType event_type, const char *detail) {
-  this->state_ = result.state;
-  if (!validate_invariants(this->state_)) {
-    ESP_LOGE(TAG, "FSM invariant failed after %s", event_name(event_type));
-    this->state_.phase = VaPhase::ERROR;
-    recompute_outputs(this->state_, this->observe_());
-  }
-  this->execute_effects_(result.effects, event_type, detail);
-  this->publish_outputs_();
+void RuntimeFsm::set_activity(const char *name, bool active) {
+  const uint32_t old_mask = this->generic_activity_mask_;
+  const ResolvedPolicies old_policies = this->resolved_policies_;
+  bool changed = this->apply_activity_update_(name, active);
+  changed |= this->apply_derived_activities_();
+  if (!changed)
+    return;
+
+  this->apply_generic_outputs_();
+  this->commit_outputs_(name != nullptr ? name : "set_activity", old_mask, old_policies);
 }
 
-ObservedState RuntimeFsm::observe_() const {
-  ObservedState observed;
-  observed.va_running = this->va_running_();
-  observed.proxy_announcing = this->media_announcing_();
-  observed.tts_source_playing = this->media_announcing_();
-  observed.tts_source_terminal = !this->media_announcing_();
-  observed.tts_audio_terminal = !this->media_announcing_();
-  observed.media_playing = this->media_playing_();
-  observed.announcement_playing = this->media_announcing_();
-  observed.mic_muted = this->mic_mute_switch_ != nullptr && this->mic_mute_switch_->state;
-  observed.speaker_muted = this->speaker_mute_switch_ != nullptr && this->speaker_mute_switch_->state;
-  observed.initializing = this->boot_initializing_();
-  observed.no_wifi = !this->wifi_connected_();
-  observed.no_ha = !this->api_connected_();
-  observed.intercom = this->intercom_phase_();
-  return observed;
+void RuntimeFsm::set_activities(const ActivityUpdate *updates, size_t count) {
+  if (updates == nullptr || count == 0)
+    return;
+
+  const uint32_t old_mask = this->generic_activity_mask_;
+  const ResolvedPolicies old_policies = this->resolved_policies_;
+  bool changed = false;
+  for (size_t i = 0; i < count; i++)
+    changed |= this->apply_activity_update_(updates[i].name, updates[i].active);
+  changed |= this->apply_derived_activities_();
+  if (!changed)
+    return;
+
+  this->apply_generic_outputs_();
+  this->commit_outputs_("set_activities", old_mask, old_policies);
+}
+
+void RuntimeFsm::request_action(const char *name) {
+  this->run_named_action_(name);
+}
+
+void RuntimeFsm::dump_state(const char *reason) {
+#ifdef USE_RUNTIME_FSM_DEBUG
+  ESP_LOGI(TAG, "SNAPSHOT reason=%s seq=%" PRIu32 " mask=0x%08" PRIx32,
+           reason != nullptr ? reason : "-", this->sequence_, this->generic_activity_mask_);
+  for (size_t i = 0; i < this->activity_count_; i++) {
+    const auto &activity = this->activities_[i];
+    if (activity.active) {
+      ESP_LOGI(TAG, "  activity %s priority=%d group=%s", activity.name != nullptr ? activity.name : "-",
+               static_cast<int>(activity.priority), activity.group != nullptr ? activity.group : "-");
+    }
+  }
+  for (size_t i = 0; i < this->resolved_policies_.value_count; i++) {
+    const auto &policy = this->resolved_policies_.values[i];
+    ESP_LOGI(TAG, "  policy %s=%s output=%" PRId32, policy.policy != nullptr ? policy.policy : "-",
+             policy.value != nullptr ? policy.value : "-", this->resolve_policy_output_(policy.policy, policy.value));
+  }
+#ifdef USE_RUNTIME_FSM_INTERCOM
+  if (this->intercom_ != nullptr) {
+    ESP_LOGI(TAG, "  observed intercom=%s activity=%s", this->intercom_->get_call_state_str(),
+             this->last_intercom_activity_[0] != '\0' ? this->last_intercom_activity_ : "-");
+  }
+#endif
+}
+#else
+  (void) reason;
+  if (this->debug_) {
+    ESP_LOGI(TAG, "SNAPSHOT seq=%" PRIu32 " mask=0x%08" PRIx32, this->sequence_, this->generic_activity_mask_);
+  }
+}
+#endif
+
+bool RuntimeFsm::is_activity_active(const char *name) const {
+  const int index = this->find_activity_(name);
+  if (index < 0)
+    return false;
+  return this->activities_[index].active;
+}
+
+bool RuntimeFsm::rule_matches_(const RuntimeFsm::EventRule &rule) const {
+  if (rule.any_count > 0) {
+    bool any = false;
+    for (size_t i = 0; i < rule.any_count; i++)
+      any |= this->is_activity_active(rule.any_active[i]);
+    if (!any)
+      return false;
+  }
+  for (size_t i = 0; i < rule.all_count; i++) {
+    if (!this->is_activity_active(rule.all_active[i]))
+      return false;
+  }
+  for (size_t i = 0; i < rule.none_count; i++) {
+    if (this->is_activity_active(rule.none_active[i]))
+      return false;
+  }
+  return true;
+}
+
+bool RuntimeFsm::derived_matches_(const RuntimeFsm::DerivedActivity &derived) const {
+  if (derived.any_count > 0) {
+    bool any = false;
+    for (size_t i = 0; i < derived.any_count; i++)
+      any |= this->is_activity_active(derived.any_active[i]);
+    if (!any)
+      return false;
+  }
+  for (size_t i = 0; i < derived.all_count; i++) {
+    if (!this->is_activity_active(derived.all_active[i]))
+      return false;
+  }
+  for (size_t i = 0; i < derived.none_count; i++) {
+    if (this->is_activity_active(derived.none_active[i]))
+      return false;
+  }
+  return true;
+}
+
+bool RuntimeFsm::apply_derived_activities_() {
+  bool changed = false;
+  for (size_t i = 0; i < this->derived_activity_count_; i++) {
+    const auto &derived = this->derived_activities_[i];
+    changed |= this->set_activity_value_(derived.activity, this->derived_matches_(derived));
+  }
+  return changed;
 }
 
 void RuntimeFsm::publish_outputs_() {
-  bool want_ducking =
-      (this->state_.activity_mask & (ACT_INTERCOM_RINGING | ACT_INTERCOM_OUTGOING | ACT_INTERCOM_STREAMING |
-                                     ACT_VA_STARTING | ACT_VA_LISTENING | ACT_VA_THINKING |
-                                     ACT_TTS_SYNTHESIZING | ACT_TTS_QUEUED | ACT_TTS_PLAYING |
-                                     ACT_TTS_DRAINING | ACT_WAITING_FOLLOWUP | ACT_BARGE_PENDING |
-                                     ACT_ANNOUNCEMENT | ACT_TIMER_RINGING)) != 0;
-  if (this->media_mixer_input_ != nullptr && want_ducking != this->ducking_active_) {
-    this->media_mixer_input_->apply_ducking(want_ducking ? 20 : 0, want_ducking ? 200 : 500);
-    this->ducking_active_ = want_ducking;
-  }
-  if (this->output_script_ != nullptr) {
+  this->publish_state_outputs_();
+  if (this->output_script_ != nullptr)
     this->output_script_->execute();
-  }
 }
 
-void RuntimeFsm::execute_effects_(uint32_t effects, EventType event_type, const char *detail) {
-  if (effects & EFFECT_STOP_TTS_PATH) {
-    this->stop_tts_announcement_();
-  }
-  if (effects & EFFECT_REQUEST_VA_STOP) {
-    this->request_va_stop_();
-  }
-  if (effects & EFFECT_REQUEST_VA_START) {
-    this->request_va_start_(detail);
-  }
+void RuntimeFsm::publish_state_outputs_() {
+  if (this->activity_mask_output_.target != nullptr && this->activity_mask_output_.set != nullptr)
+    this->activity_mask_output_.set(this->activity_mask_output_.target, this->generic_activity_mask_);
+  if (this->sequence_output_.target != nullptr && this->sequence_output_.set != nullptr)
+    this->sequence_output_.set(this->sequence_output_.target, this->sequence_);
 }
 
-void RuntimeFsm::request_va_start_(const char *wake_word) {
-  if (this->va_ == nullptr)
-    return;
-  if (wake_word != nullptr && wake_word[0] != '\0') {
-    this->va_->set_wake_word(wake_word);
+void RuntimeFsm::apply_generic_outputs_() {
+  std::array<GenericActivity, MAX_ACTIVITIES> generic{};
+  for (size_t i = 0; i < this->activity_count_; i++) {
+    generic[i].bit = this->activities_[i].bit;
+    generic[i].priority = this->activities_[i].priority;
+    generic[i].active = this->activities_[i].active;
+    generic[i].policy_count = this->activities_[i].policy_count;
+    for (size_t j = 0; j < this->activities_[i].policy_count; j++)
+      generic[i].policies[j] = this->activities_[i].policies[j];
   }
-  this->va_->request_start(false, true);
+  auto policies = reduce_generic_activities(generic.data(), this->activity_count_);
+  this->generic_activity_mask_ = policies.mask;
+  this->resolved_policies_ = policies;
 }
 
-void RuntimeFsm::request_va_stop_() {
-  if (this->va_ != nullptr) {
-    this->va_->request_stop();
+bool RuntimeFsm::set_activity_value_(const char *name, bool active) {
+  int index = this->find_activity_(name);
+  if (index < 0) {
+    ESP_LOGW(TAG, "Ignoring unknown activity '%s'", name != nullptr ? name : "-");
+    return false;
   }
-}
 
-void RuntimeFsm::stop_tts_announcement_() {
-  if (this->media_player_ == nullptr)
-    return;
-  auto call = this->media_player_->make_call();
-  call.set_command(media_player::MEDIA_PLAYER_COMMAND_STOP);
-  call.set_announcement(true);
-  call.perform();
-}
-
-void RuntimeFsm::log_transition_(EventType event_type, VaPhase old_phase, uint32_t old_mask, const char *detail,
-                                 uint32_t effects) {
-  ESP_LOGI(TAG,
-           "TRANSITION seq=%" PRIu32 " event=%s detail=%s %s->%s epoch=%" PRIu32 " proposed=%" PRIu32
-           " tts=%" PRIu32 " cancelled=%" PRIu32 " mask=0x%08" PRIx32 "->0x%08" PRIx32
-           " effects=0x%08" PRIx32 " media=%d va=%d ui=%d led=%d duck=%d",
-           this->sequence_, event_name(event_type), detail != nullptr ? detail : "-", phase_name(old_phase),
-           phase_name(this->state_.phase), this->state_.va_epoch, this->state_.proposed_epoch,
-           this->state_.tts_epoch, this->state_.cancelled_epoch, old_mask, this->state_.activity_mask, effects,
-           this->media_player_ != nullptr ? this->media_player_->state : -1, this->va_running_(),
-           static_cast<int>(this->state_.ui_state), this->state_.led_state, this->ducking_active_);
-}
-
-bool RuntimeFsm::va_running_() const { return this->va_ != nullptr && this->va_->is_running(); }
-
-bool RuntimeFsm::boot_initializing_() const { return millis() < this->boot_led_until_; }
-
-bool RuntimeFsm::wifi_connected_() const {
-#ifdef USE_WIFI
-  return wifi::global_wifi_component != nullptr && wifi::global_wifi_component->is_connected();
-#else
+  ActivityConfig &activity = this->activities_[index];
+  if (activity.active == active)
+    return false;
+  activity.active = active;
   return true;
-#endif
 }
 
-bool RuntimeFsm::api_connected_() const {
-#ifdef USE_API
-  return api::global_api_server != nullptr && api::global_api_server->is_connected();
+bool RuntimeFsm::apply_activity_update_(const char *name, bool active) {
+  int index = this->find_activity_(name);
+  if (index < 0) {
+    ESP_LOGW(TAG, "Ignoring unknown activity '%s'", name != nullptr ? name : "-");
+    return false;
+  }
+
+  bool changed = false;
+  ActivityConfig &activity = this->activities_[index];
+  if (active && activity.group != nullptr && activity.group[0] != '\0') {
+    for (size_t i = 0; i < this->activity_count_; i++) {
+      if (i == static_cast<size_t>(index))
+        continue;
+      ActivityConfig &peer = this->activities_[i];
+      if (peer.group != nullptr && strcmp(peer.group, activity.group) == 0 && peer.active) {
+        peer.active = false;
+        changed = true;
+      }
+    }
+  }
+  changed |= this->set_activity_value_(name, active);
+  return changed;
+}
+
+bool RuntimeFsm::set_activity_value_if_known_(const char *name, bool active) {
+  return this->find_activity_(name) >= 0 && this->apply_activity_update_(name, active);
+}
+
+void RuntimeFsm::commit_outputs_(const char *reason, uint32_t old_mask, const ResolvedPolicies &old_policies) {
+  if (old_mask == this->generic_activity_mask_) {
+    bool policy_changed = old_policies.value_count != this->resolved_policies_.value_count;
+    for (size_t i = 0; !policy_changed && i < this->resolved_policies_.value_count; i++) {
+      const char *policy = this->resolved_policies_.values[i].policy;
+      const char *old_value = find_policy_value(old_policies, policy, nullptr);
+      const char *new_value = this->resolved_policies_.values[i].value;
+      policy_changed = old_value == nullptr || new_value == nullptr || strcmp(old_value, new_value) != 0;
+    }
+    if (!policy_changed)
+      return;
+  }
+
+  this->sequence_++;
+  if (this->debug_) {
+    ESP_LOGI(TAG, "REDUCE seq=%" PRIu32 " reason=%s mask=0x%08" PRIx32 "->0x%08" PRIx32, this->sequence_,
+             reason != nullptr ? reason : "-", old_mask, this->generic_activity_mask_);
+  }
+  this->run_policy_actions_(old_policies, this->resolved_policies_);
+  this->publish_outputs_();
+}
+
+void RuntimeFsm::build_intercom_activity_name_(const char *state) {
+  this->intercom_activity_[0] = '\0';
+#ifdef USE_RUNTIME_FSM_INTERCOM
+  if (this->intercom_activity_prefix_ == nullptr || this->intercom_activity_prefix_[0] == '\0' || state == nullptr ||
+      state[0] == '\0')
+    return;
+  std::snprintf(this->intercom_activity_, sizeof(this->intercom_activity_), "%s%s", this->intercom_activity_prefix_,
+                state);
 #else
-  return true;
+  (void) state;
 #endif
 }
 
-bool RuntimeFsm::media_announcing_() const {
-  return this->media_player_ != nullptr && this->media_player_->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;
-}
+bool RuntimeFsm::sync_intercom_activity_() {
+#ifdef USE_RUNTIME_FSM_INTERCOM
+  if (this->intercom_ == nullptr || this->intercom_activity_prefix_ == nullptr)
+    return false;
 
-bool RuntimeFsm::media_playing_() const {
-  return this->media_player_ != nullptr && this->media_player_->state == media_player::MEDIA_PLAYER_STATE_PLAYING;
-}
+  this->build_intercom_activity_name_(this->intercom_->get_call_state_str());
+  if (std::strcmp(this->intercom_activity_, this->last_intercom_activity_) == 0)
+    return false;
 
-IntercomPhase RuntimeFsm::intercom_phase_() const {
-#ifdef USE_INTERCOM_API
-  if (this->intercom_ == nullptr)
-    return IntercomPhase::IDLE;
-  if (this->intercom_->is_ringing())
-    return IntercomPhase::RINGING;
-  if (this->intercom_->is_outgoing())
-    return IntercomPhase::OUTGOING;
-  if (this->intercom_->is_streaming())
-    return IntercomPhase::STREAMING;
+  bool changed = false;
+  if (this->last_intercom_activity_[0] != '\0')
+    changed |= this->set_activity_value_if_known_(this->last_intercom_activity_, false);
+  if (this->intercom_activity_[0] != '\0')
+    changed |= this->set_activity_value_if_known_(this->intercom_activity_, true);
+
+  std::snprintf(this->last_intercom_activity_, sizeof(this->last_intercom_activity_), "%s", this->intercom_activity_);
+  return changed;
+#else
+  return false;
 #endif
-  return IntercomPhase::IDLE;
+}
+
+void RuntimeFsm::run_policy_actions_(const ResolvedPolicies &old_policies, const ResolvedPolicies &new_policies) {
+  for (size_t i = 0; i < new_policies.value_count; i++) {
+    const char *policy = new_policies.values[i].policy;
+    const char *value = new_policies.values[i].value;
+    const char *old_value = find_policy_value(old_policies, policy, nullptr);
+    if (old_value != nullptr && value != nullptr && strcmp(old_value, value) == 0)
+      continue;
+    for (size_t j = 0; j < this->policy_value_action_count_; j++) {
+      const auto &action = this->policy_value_actions_[j];
+      if (action.policy != nullptr && action.value != nullptr && strcmp(action.policy, policy) == 0 &&
+          strcmp(action.value, value) == 0) {
+        if (this->debug_)
+          ESP_LOGI(TAG, "POLICY seq=%" PRIu32 " %s=%s", this->sequence_, policy, value);
+        action.trigger->trigger();
+      }
+    }
+    const int32_t output = this->resolve_policy_output_(policy, value);
+    for (size_t j = 0; j < this->policy_global_output_count_; j++) {
+      const auto &target = this->policy_global_outputs_[j];
+      if (target.policy != nullptr && target.set != nullptr && strcmp(target.policy, policy) == 0) {
+        target.set(target.target, output);
+      }
+    }
+    for (size_t j = 0; j < this->policy_change_trigger_count_; j++) {
+      const auto &trigger = this->policy_change_triggers_[j];
+      if (trigger.policy != nullptr && strcmp(trigger.policy, policy) == 0) {
+        if (this->debug_) {
+          ESP_LOGI(TAG, "POLICY_CHANGE seq=%" PRIu32 " %s=%s output=%" PRId32, this->sequence_, policy, value,
+                   output);
+        }
+        trigger.trigger->trigger(output);
+      }
+    }
+  }
+}
+
+int32_t RuntimeFsm::resolve_policy_output_(const char *policy, const char *value) const {
+  if (policy == nullptr || value == nullptr)
+    return 0;
+  for (size_t i = 0; i < this->policy_output_count_; i++) {
+    const auto &entry = this->policy_outputs_[i];
+    if (entry.policy != nullptr && entry.value != nullptr && strcmp(entry.policy, policy) == 0 &&
+        strcmp(entry.value, value) == 0)
+      return entry.output;
+  }
+  return 0;
+}
+
+int RuntimeFsm::find_activity_(const char *name) const {
+  if (name == nullptr)
+    return -1;
+  for (size_t i = 0; i < this->activity_count_; i++) {
+    if (strcmp(this->activities_[i].name, name) == 0)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int RuntimeFsm::find_action_(const char *name) const {
+  if (name == nullptr)
+    return -1;
+  for (size_t i = 0; i < this->action_count_; i++) {
+    if (strcmp(this->actions_[i].name, name) == 0)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void RuntimeFsm::run_named_action_(const char *name) {
+  if (name == nullptr || name[0] == '\0')
+    return;
+  if (this->find_action_(name) < 0) {
+    ESP_LOGW(TAG, "Ignoring unknown action '%s'", name);
+    return;
+  }
+  for (size_t i = 0; i < this->pending_action_count_; i++) {
+    if (this->pending_actions_[i] != nullptr && strcmp(this->pending_actions_[i], name) == 0) {
+      if (this->debug_)
+        ESP_LOGI(TAG, "ACTION_SKIP_DUP seq=%" PRIu32 " name=%s", this->sequence_, name);
+      return;
+    }
+  }
+  if (this->pending_action_count_ >= this->pending_actions_.size()) {
+    ESP_LOGE(TAG, "Cannot queue action '%s': queue full", name);
+    return;
+  }
+  if (this->debug_)
+    ESP_LOGI(TAG, "ACTION_QUEUE seq=%" PRIu32 " name=%s", this->sequence_, name);
+  this->pending_actions_[this->pending_action_count_++] = name;
+}
+
+void RuntimeFsm::execute_named_action_(const char *name) {
+  int index = this->find_action_(name);
+  if (index < 0) {
+    ESP_LOGW(TAG, "Ignoring unknown queued action '%s'", name != nullptr ? name : "-");
+    return;
+  }
+  if (this->debug_)
+    ESP_LOGI(TAG, "ACTION_RUN seq=%" PRIu32 " name=%s", this->sequence_, this->actions_[index].name);
+  this->actions_[index].trigger->trigger();
+}
+
+void RuntimeFsm::drain_pending_actions_() {
+  while (this->pending_action_count_ > 0) {
+    const char *name = this->pending_actions_[0];
+    for (size_t i = 1; i < this->pending_action_count_; i++)
+      this->pending_actions_[i - 1] = this->pending_actions_[i];
+    this->pending_actions_[--this->pending_action_count_] = nullptr;
+    this->execute_named_action_(name);
+  }
 }
 
 }  // namespace esphome::runtime_fsm

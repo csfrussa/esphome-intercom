@@ -1,122 +1,159 @@
 #include "../esphome/components/runtime_fsm/runtime_fsm_state.h"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 using namespace esphome::runtime_fsm;
 
-static void check(bool condition, const char *message) {
-  if (!condition) {
-    std::cerr << "FAIL: " << message << "\n";
+struct NamedActivity {
+  const char *name;
+  GenericActivity activity;
+};
+
+static PolicyValue policy(const char *name, const char *value) { return PolicyValue{name, value}; }
+
+static GenericActivity activity(uint32_t bit, int16_t priority, std::initializer_list<PolicyValue> policies) {
+  GenericActivity result;
+  result.bit = bit;
+  result.priority = priority;
+  size_t i = 0;
+  for (auto item : policies) {
+    if (i >= MAX_ACTIVITY_POLICIES)
+      break;
+    result.policies[i++] = item;
+  }
+  result.policy_count = i;
+  return result;
+}
+
+template<size_t N> static void set(std::array<NamedActivity, N> &activities, const char *name, bool active) {
+  for (auto &entry : activities) {
+    if (std::string(entry.name) == name) {
+      entry.activity.active = active;
+      return;
+    }
+  }
+  std::cerr << "unknown activity " << name << "\n";
+  std::exit(1);
+}
+
+template<size_t N> static ResolvedPolicies eval(const std::array<NamedActivity, N> &activities) {
+  std::array<GenericActivity, N> generic{};
+  for (size_t i = 0; i < N; i++)
+    generic[i] = activities[i].activity;
+  return reduce_generic_activities(generic.data(), generic.size());
+}
+
+static void expect_policy(const char *label, const ResolvedPolicies &actual, const char *name, const char *expected) {
+  const char *got = find_policy_value(actual, name, nullptr);
+  if ((got == nullptr && expected != nullptr) || (got != nullptr && expected == nullptr) ||
+      (got != nullptr && expected != nullptr && std::string(got) != expected)) {
+    std::cerr << label << " failed: " << name << "=" << (got != nullptr ? got : "<none>")
+              << " expected=" << (expected != nullptr ? expected : "<none>") << "\n";
     std::exit(1);
   }
 }
 
-static RuntimeState step(RuntimeState state, ObservedState observed, EventType event, uint32_t expected_effects = 0) {
-  auto result = reduce(state, observed, Event{event});
-  check(validate_invariants(result.state), "invariant");
-  if (expected_effects != 0) {
-    check((result.effects & expected_effects) == expected_effects, "expected effects missing");
+static void expect_mask(const char *label, const ResolvedPolicies &actual, uint32_t expected) {
+  if (actual.mask != expected) {
+    std::cerr << label << " failed: mask=0x" << std::hex << actual.mask << " expected=0x" << expected << "\n";
+    std::exit(1);
   }
-  return result.state;
 }
 
-static void normal_tts_no_media() {
-  RuntimeState s;
-  ObservedState o;
-  s = step(s, o, EventType::WAKE_WORD, EFFECT_REQUEST_VA_START);
-  check(s.phase == VaPhase::START_REQUESTED, "wake starts requested");
-  check(s.va_epoch == 0 && s.proposed_epoch == 1, "epoch proposed not committed");
-  o.va_running = true;
-  s = step(s, o, EventType::VA_START_ACCEPTED);
-  check(s.va_epoch == 1, "epoch committed on VA start");
-  s = step(s, o, EventType::VA_LISTENING);
-  s = step(s, o, EventType::VA_THINKING);
-  s = step(s, o, EventType::TTS_SYNTHESIS_STARTED);
-  check(s.phase == VaPhase::TTS_SYNTHESIZING && s.tts_epoch == 1, "tts synth owns epoch");
-  s = step(s, o, EventType::TTS_URL_ACCEPTED, EFFECT_PROXY_ANNOUNCING | EFFECT_START_TTS_CURRENT);
-  check(s.phase == VaPhase::TTS_QUEUED, "tts queued");
-  o.announcement_playing = true;
-  s = step(s, o, EventType::TTS_SOURCE_PLAYING);
-  check(s.phase == VaPhase::TTS_PLAYING, "tts playing");
-  o.announcement_playing = false;
-  s = step(s, o, EventType::TTS_SOURCE_TERMINAL);
-  check(s.phase == VaPhase::TTS_DRAINING, "tts draining");
-  s = step(s, o, EventType::TTS_DRAINED, EFFECT_PROXY_IDLE);
-  check(s.phase == VaPhase::WAITING_FOLLOWUP, "waiting followup after tts");
-  o.va_running = false;
-  s = step(s, o, EventType::VA_RUN_ENDED);
-  check(s.phase == VaPhase::IDLE, "idle after followup done");
-}
+static void esp_like_combinations() {
+  std::array<NamedActivity, 11> activities{{
+      {"boot", activity(1u << 0, 1000, {policy("led_status", "boot"), policy("display_status", "boot")})},
+      {"no_wifi", activity(1u << 1, 990, {policy("led_status", "no_wifi"), policy("display_status", "no_wifi")})},
+      {"no_ha", activity(1u << 2, 980, {policy("led_status", "no_ha"), policy("display_status", "no_ha")})},
+      {"muted", activity(1u << 3, 950, {policy("led_status", "mic_muted"), policy("display_status", "muted")})},
+      {"media", activity(1u << 4, 100, {policy("led_status", "media"), policy("display_status", "media"), policy("audio_policy", "normal")})},
+      {"announcement", activity(1u << 5, 200, {policy("led_status", "announcement"), policy("display_status", "announcement"), policy("audio_policy", "duck")})},
+      {"intercom_ringing", activity(1u << 6, 700, {policy("led_status", "ringing"), policy("display_status", "intercom_ringing"), policy("audio_policy", "duck")})},
+      {"intercom_streaming", activity(1u << 7, 650, {policy("led_status", "intercom"), policy("display_status", "intercom_streaming"), policy("audio_policy", "duck")})},
+      {"assistant_thinking", activity(1u << 8, 600, {policy("led_status", "thinking"), policy("display_status", "thinking"), policy("audio_policy", "duck")})},
+      {"assistant_response", activity(1u << 9, 800, {policy("led_status", "responding"), policy("display_status", "responding"), policy("audio_policy", "duck")})},
+      {"screen_dim", activity(1u << 10, 50, {policy("screen_policy", "dim")})},
+  }};
 
-static void media_ducking_persists_through_tts() {
-  RuntimeState s;
-  ObservedState o;
-  o.media_playing = true;
-  recompute_outputs(s, o);
-  check((s.activity_mask & ACT_MEDIA) != 0, "media bit");
-  s = step(s, o, EventType::WAKE_WORD, EFFECT_REQUEST_VA_START);
-  o.va_running = true;
-  s = step(s, o, EventType::VA_START_ACCEPTED);
-  s = step(s, o, EventType::VA_LISTENING);
-  s = step(s, o, EventType::VA_THINKING);
-  s = step(s, o, EventType::TTS_SYNTHESIS_STARTED);
-  s = step(s, o, EventType::TTS_URL_ACCEPTED);
-  check((s.activity_mask & ACT_MEDIA) != 0, "media remains under tts");
-  check((s.activity_mask & ACT_TTS_QUEUED) != 0, "tts queued bit");
-  check(s.ui_state == UiState::RESPONDING, "tts ui priority over media");
-}
+  auto out = eval(activities);
+  expect_mask("idle", out, 0);
+  expect_policy("idle", out, "led_status", nullptr);
 
-static void duplicate_mww_is_ignored_while_listening() {
-  RuntimeState s;
-  ObservedState o;
-  s = step(s, o, EventType::WAKE_WORD, EFFECT_REQUEST_VA_START);
-  o.va_running = true;
-  s = step(s, o, EventType::VA_START_ACCEPTED);
-  s = step(s, o, EventType::VA_LISTENING);
-  RuntimeState before = s;
-  s = step(s, o, EventType::WAKE_WORD);
-  check(s.phase == before.phase, "duplicate mww listening ignored");
-  check(!s.barge_pending, "no barge while listening");
-}
+  set(activities, "media", true);
+  out = eval(activities);
+  expect_mask("media", out, 1u << 4);
+  expect_policy("media", out, "led_status", "media");
+  expect_policy("media", out, "display_status", "media");
+  expect_policy("media", out, "audio_policy", "normal");
 
-static void barge_during_tts_playing() {
-  RuntimeState s;
-  ObservedState o;
-  s = step(s, o, EventType::WAKE_WORD, EFFECT_REQUEST_VA_START);
-  o.va_running = true;
-  s = step(s, o, EventType::VA_START_ACCEPTED);
-  s = step(s, o, EventType::VA_THINKING);
-  s = step(s, o, EventType::TTS_SYNTHESIS_STARTED);
-  s = step(s, o, EventType::TTS_URL_ACCEPTED);
-  o.announcement_playing = true;
-  s = step(s, o, EventType::TTS_SOURCE_PLAYING);
-  s = step(s, o, EventType::WAKE_WORD, EFFECT_REQUEST_VA_STOP | EFFECT_STOP_TTS_PATH);
-  check(s.phase == VaPhase::CANCEL_REQUESTED && s.barge_pending, "barge cancel requested");
-  check(s.cancelled_epoch == 1, "cancelled epoch set");
-  o.va_running = false;
-  o.announcement_playing = false;
-  s = step(s, o, EventType::BARGE_READY, EFFECT_REQUEST_VA_START);
-  check(s.phase == VaPhase::START_REQUESTED, "barge starts new request");
-  check(s.proposed_epoch == 2, "new proposed epoch");
-}
+  set(activities, "screen_dim", true);
+  out = eval(activities);
+  expect_mask("media+screen", out, (1u << 4) | (1u << 10));
+  expect_policy("media+screen", out, "led_status", "media");
+  expect_policy("media+screen", out, "screen_policy", "dim");
 
-static void intercom_priority_over_media() {
-  RuntimeState s;
-  ObservedState o;
-  o.media_playing = true;
-  o.intercom = IntercomPhase::STREAMING;
-  recompute_outputs(s, o);
-  check((s.activity_mask & ACT_MEDIA) != 0, "media bit under intercom");
-  check((s.activity_mask & ACT_INTERCOM_STREAMING) != 0, "intercom streaming bit");
-  check(s.ui_state == UiState::INTERCOM_STREAMING, "intercom priority over media");
+  set(activities, "intercom_streaming", true);
+  out = eval(activities);
+  expect_mask("media+intercom", out, (1u << 4) | (1u << 7) | (1u << 10));
+  expect_policy("media+intercom", out, "led_status", "intercom");
+  expect_policy("media+intercom", out, "display_status", "intercom_streaming");
+  expect_policy("media+intercom", out, "audio_policy", "duck");
+  expect_policy("media+intercom", out, "screen_policy", "dim");
+
+  set(activities, "assistant_response", true);
+  out = eval(activities);
+  expect_mask("media+intercom+response", out, (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
+  expect_policy("media+intercom+response", out, "led_status", "responding");
+  expect_policy("media+intercom+response", out, "display_status", "responding");
+  expect_policy("media+intercom+response", out, "audio_policy", "duck");
+
+  set(activities, "muted", true);
+  out = eval(activities);
+  expect_mask("muted overrides visual only", out, (1u << 3) | (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
+  expect_policy("muted visual", out, "led_status", "mic_muted");
+  expect_policy("muted visual", out, "display_status", "muted");
+  expect_policy("muted keeps audio policy", out, "audio_policy", "duck");
+
+  set(activities, "boot", true);
+  out = eval(activities);
+  expect_policy("boot led", out, "led_status", "boot");
+  expect_policy("boot display", out, "display_status", "boot");
+  expect_policy("boot keeps independent screen policy", out, "screen_policy", "dim");
+
+  set(activities, "boot", false);
+  set(activities, "no_ha", true);
+  out = eval(activities);
+  expect_policy("no_ha led", out, "led_status", "no_ha");
+  expect_policy("no_ha display", out, "display_status", "no_ha");
+
+  set(activities, "no_ha", false);
+  set(activities, "muted", false);
+  set(activities, "assistant_response", false);
+  set(activities, "intercom_streaming", false);
+  set(activities, "intercom_ringing", true);
+  out = eval(activities);
+  expect_mask("ringing+media+screen", out, (1u << 4) | (1u << 6) | (1u << 10));
+  expect_policy("ringing led", out, "led_status", "ringing");
+  expect_policy("ringing display", out, "display_status", "intercom_ringing");
+  expect_policy("ringing audio", out, "audio_policy", "duck");
+
+  set(activities, "announcement", true);
+  out = eval(activities);
+  expect_policy("ringing overrides announcement led", out, "led_status", "ringing");
+  expect_policy("ringing overrides announcement display", out, "display_status", "intercom_ringing");
+
+  set(activities, "intercom_ringing", false);
+  set(activities, "assistant_thinking", true);
+  out = eval(activities);
+  expect_policy("thinking overrides announcement led", out, "led_status", "thinking");
+  expect_policy("thinking overrides announcement display", out, "display_status", "thinking");
+  expect_policy("thinking audio", out, "audio_policy", "duck");
 }
 
 int main() {
-  normal_tts_no_media();
-  media_ducking_persists_through_tts();
-  duplicate_mww_is_ignored_while_listening();
-  barge_during_tts_playing();
-  intercom_priority_over_media();
-  std::cout << "runtime_fsm_state tests passed\n";
+  esp_like_combinations();
+  std::cout << "runtime_fsm generic policy reducer tests passed\n";
 }

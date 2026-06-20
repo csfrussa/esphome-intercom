@@ -2,13 +2,9 @@
 
 #include "runtime_fsm_state.h"
 
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
-#include "esphome/components/media_player/media_player.h"
-#include "esphome/components/micro_wake_word/micro_wake_word.h"
-#include "esphome/components/mixer/speaker/mixer_speaker.h"
 #include "esphome/components/script/script.h"
-#include "esphome/components/switch/switch.h"
-#include "esphome/components/voice_assistant/voice_assistant.h"
 
 #include <array>
 #include <cstdint>
@@ -22,96 +18,291 @@ namespace runtime_fsm {
 
 class RuntimeFsm : public Component {
  public:
+  struct ActivityUpdate {
+    const char *name{nullptr};
+    bool active{false};
+  };
+
   void setup() override;
   void loop() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::PROCESSOR; }
 
-  void set_voice_assistant(voice_assistant::VoiceAssistant *va) { this->va_ = va; }
-#ifdef USE_MICRO_WAKE_WORD
-  void set_micro_wake_word(micro_wake_word::MicroWakeWord *mww) { this->mww_ = mww; }
-#endif
-  void set_media_mixer_input(mixer_speaker::SourceSpeaker *speaker) { this->media_mixer_input_ = speaker; }
-  void set_media_player(media_player::MediaPlayer *player) { this->media_player_ = player; }
+  void set_debug(bool debug) { this->debug_ = debug; }
   void set_output_script(script::Script<> *script) { this->output_script_ = script; }
   void set_intercom(intercom_api::IntercomApi *intercom) { this->intercom_ = intercom; }
-  void set_mic_mute_switch(switch_::Switch *sw) { this->mic_mute_switch_ = sw; }
-  void set_speaker_mute_switch(switch_::Switch *sw) { this->speaker_mute_switch_ = sw; }
+  void set_intercom_activity_prefix(const char *prefix) { this->intercom_activity_prefix_ = prefix; }
+  void add_activity(const char *name, int16_t priority, bool initial);
+  void set_activity_group(const char *activity, const char *group);
+  void add_activity_policy(const char *activity, const char *policy, const char *value);
+  void add_action_trigger(const char *name, Trigger<> *trigger);
+  void add_event_activity(const char *event, const char *activity, bool active);
+  void add_event_rule(const char *event, const char *action);
+  void add_event_rule_update(const char *activity, bool active);
+  void add_event_rule_any_active(const char *activity);
+  void add_event_rule_all_active(const char *activity);
+  void add_event_rule_none_active(const char *activity);
+  void add_derived_activity(const char *activity);
+  void add_derived_any_active(const char *activity);
+  void add_derived_all_active(const char *activity);
+  void add_derived_none_active(const char *activity);
+  void add_policy_value_trigger(const char *policy, const char *value, Trigger<> *trigger);
+  void add_policy_output(const char *policy, const char *value, int32_t output);
+  void set_policy_change_trigger(const char *policy, Trigger<int32_t> *trigger);
+  template<typename C> void add_policy_global_output(const char *policy, C *target) {
+    if (policy == nullptr || policy[0] == '\0' || target == nullptr)
+      return;
+    if (this->policy_global_output_count_ >= this->policy_global_outputs_.size())
+      return;
+    this->policy_global_outputs_[this->policy_global_output_count_++] = PolicyGlobalOutput{
+        policy,
+        target,
+        [](void *ptr, int32_t value) {
+          auto *global = static_cast<C *>(ptr);
+          global->value() = static_cast<typename C::value_type>(value);
+        },
+    };
+  }
+  template<typename C> void set_activity_mask_output(C *target) {
+    if (target == nullptr)
+      return;
+    this->activity_mask_output_ = StateOutput{
+        target,
+        [](void *ptr, uint32_t value) {
+          auto *global = static_cast<C *>(ptr);
+          global->value() = static_cast<typename C::value_type>(value);
+        },
+    };
+  }
+  template<typename C> void set_sequence_output(C *target) {
+    if (target == nullptr)
+      return;
+    this->sequence_output_ = StateOutput{
+        target,
+        [](void *ptr, uint32_t value) {
+          auto *global = static_cast<C *>(ptr);
+          global->value() = static_cast<typename C::value_type>(value);
+        },
+    };
+  }
 
-  void on_va_started();
-  void on_va_listening();
-  void on_va_thinking();
-  void on_tts_start(const std::string &text);
-  void on_tts_end(const std::string &url);
-  void on_va_end();
-  void on_va_error(const std::string &code, const std::string &message);
-  void on_wake_word(const std::string &wake_word);
   void on_intercom_event();
-  void on_media_event();
-  void on_connectivity_event();
+  void event(const char *name);
+  void set_activity(const char *name, bool active);
+  void set_activities(const ActivityUpdate *updates, size_t count);
+  void request_action(const char *name);
+  void dump_state(const char *reason);
+  bool is_activity_active(const char *name) const;
 
-  int get_ui_state() const { return static_cast<int>(this->state_.ui_state); }
-  int get_led_state() const { return this->state_.led_state; }
-  int get_compat_va_state() const { return this->state_.compat_va_state; }
-  uint32_t get_activity_mask() const { return this->state_.activity_mask; }
+  const char *get_policy(const char *name, const char *fallback = "") const {
+    return find_policy_value(this->resolved_policies_, name, fallback);
+  }
+  uint32_t get_activity_mask() const { return this->generic_activity_mask_; }
   uint32_t get_sequence() const { return this->sequence_; }
-  uint32_t get_va_epoch() const { return this->state_.va_epoch; }
-  uint32_t get_tts_epoch() const { return this->state_.tts_epoch; }
-  uint32_t get_cancelled_epoch() const { return this->state_.cancelled_epoch; }
-  int get_va_phase() const { return static_cast<int>(this->state_.phase); }
-  bool is_ducking_active() const { return this->ducking_active_; }
 
  protected:
-  static constexpr size_t EVENT_QUEUE_SIZE = 8;
+  struct EventRule;
+  struct DerivedActivity;
 
-  struct QueuedEvent {
-    Event event;
-    std::string detail;
-  };
+  static constexpr size_t MAX_ACTIVITIES = 32;
+  static constexpr size_t MAX_ACTIONS = 16;
+  static constexpr size_t MAX_EVENT_UPDATES = 64;
 
-  void dispatch_(Event event, const char *detail = nullptr);
-  void drain_events_();
-  void apply_result_(const ReduceResult &result, EventType event_type, const char *detail);
-  ObservedState observe_() const;
   void publish_outputs_();
-  void execute_effects_(uint32_t effects, EventType event_type, const char *detail);
-  void request_va_start_(const char *wake_word);
-  void request_va_stop_();
-  void stop_tts_announcement_();
-  void log_transition_(EventType event_type, VaPhase old_phase, uint32_t old_mask, const char *detail,
-                       uint32_t effects);
+  void publish_state_outputs_();
+  void apply_generic_outputs_();
+  bool set_activity_value_(const char *name, bool active);
+  bool apply_activity_update_(const char *name, bool active);
+  bool set_activity_value_if_known_(const char *name, bool active);
+  void commit_outputs_(const char *reason, uint32_t old_mask, const ResolvedPolicies &old_policies);
+  bool sync_intercom_activity_();
+  void build_intercom_activity_name_(const char *state);
+  int find_activity_(const char *name) const;
+  int find_action_(const char *name) const;
+  bool rule_matches_(const EventRule &rule) const;
+  bool derived_matches_(const DerivedActivity &derived) const;
+  bool apply_derived_activities_();
+  void run_named_action_(const char *name);
+  void execute_named_action_(const char *name);
+  void drain_pending_actions_();
+  void run_policy_actions_(const ResolvedPolicies &old_policies, const ResolvedPolicies &new_policies);
+  int32_t resolve_policy_output_(const char *policy, const char *value) const;
 
-  bool va_running_() const;
-  bool boot_initializing_() const;
-  bool wifi_connected_() const;
-  bool api_connected_() const;
-  bool media_announcing_() const;
-  bool media_playing_() const;
-  IntercomPhase intercom_phase_() const;
-
-  voice_assistant::VoiceAssistant *va_{nullptr};
-#ifdef USE_MICRO_WAKE_WORD
-  micro_wake_word::MicroWakeWord *mww_{nullptr};
-#endif
-  mixer_speaker::SourceSpeaker *media_mixer_input_{nullptr};
-  media_player::MediaPlayer *media_player_{nullptr};
   script::Script<> *output_script_{nullptr};
   intercom_api::IntercomApi *intercom_{nullptr};
-  switch_::Switch *mic_mute_switch_{nullptr};
-  switch_::Switch *speaker_mute_switch_{nullptr};
+  const char *intercom_activity_prefix_{nullptr};
 
-  RuntimeState state_{};
-  bool dispatching_{false};
-  std::array<QueuedEvent, EVENT_QUEUE_SIZE> pending_events_{};
-  size_t pending_head_{0};
-  size_t pending_count_{0};
-  bool ducking_active_{false};
+  bool debug_{false};
   uint32_t sequence_{0};
-  uint32_t boot_led_until_{0};
-  bool last_boot_initializing_{false};
-  bool last_wifi_connected_{false};
-  bool last_api_connected_{false};
-  media_player::MediaPlayerState last_media_state_{media_player::MEDIA_PLAYER_STATE_NONE};
+  ResolvedPolicies resolved_policies_{};
+  char intercom_activity_[64]{};
+  char last_intercom_activity_[64]{};
+
+  struct ActivityConfig {
+    const char *name{nullptr};
+    const char *group{nullptr};
+    uint32_t bit{0};
+    int16_t priority{0};
+    bool active{false};
+    PolicyValue policies[MAX_ACTIVITY_POLICIES]{};
+    size_t policy_count{0};
+  };
+  struct NamedAction {
+    const char *name{nullptr};
+    Trigger<> *trigger{nullptr};
+  };
+  struct EventActivity {
+    const char *event{nullptr};
+    const char *activity{nullptr};
+    bool active{false};
+  };
+  struct EventRule {
+    const char *event{nullptr};
+    const char *action{nullptr};
+    ActivityUpdate updates[16]{};
+    const char *any_active[8]{};
+    const char *all_active[8]{};
+    const char *none_active[8]{};
+    size_t update_count{0};
+    size_t any_count{0};
+    size_t all_count{0};
+    size_t none_count{0};
+  };
+  struct DerivedActivity {
+    const char *activity{nullptr};
+    const char *any_active[8]{};
+    const char *all_active[8]{};
+    const char *none_active[8]{};
+    size_t any_count{0};
+    size_t all_count{0};
+    size_t none_count{0};
+  };
+  struct PolicyValueAction {
+    const char *policy{nullptr};
+    const char *value{nullptr};
+    Trigger<> *trigger{nullptr};
+  };
+  struct PolicyOutput {
+    const char *policy{nullptr};
+    const char *value{nullptr};
+    int32_t output{0};
+  };
+  struct PolicyChangeTrigger {
+    const char *policy{nullptr};
+    Trigger<int32_t> *trigger{nullptr};
+  };
+  struct PolicyGlobalOutput {
+    const char *policy{nullptr};
+    void *target{nullptr};
+    void (*set)(void *, int32_t){nullptr};
+  };
+  struct StateOutput {
+    void *target{nullptr};
+    void (*set)(void *, uint32_t){nullptr};
+  };
+
+  std::array<ActivityConfig, MAX_ACTIVITIES> activities_{};
+  std::array<NamedAction, MAX_ACTIONS> actions_{};
+  std::array<EventActivity, MAX_EVENT_UPDATES> event_updates_{};
+  std::array<EventRule, 32> event_rules_{};
+  std::array<DerivedActivity, 16> derived_activities_{};
+  std::array<PolicyValueAction, 32> policy_value_actions_{};
+  std::array<PolicyOutput, 64> policy_outputs_{};
+  std::array<PolicyChangeTrigger, MAX_POLICIES> policy_change_triggers_{};
+  std::array<PolicyGlobalOutput, MAX_POLICIES> policy_global_outputs_{};
+  std::array<const char *, 16> pending_actions_{};
+  StateOutput activity_mask_output_{};
+  StateOutput sequence_output_{};
+  size_t activity_count_{0};
+  size_t action_count_{0};
+  size_t event_update_count_{0};
+  size_t event_rule_count_{0};
+  size_t derived_activity_count_{0};
+  size_t policy_value_action_count_{0};
+  size_t policy_output_count_{0};
+  size_t policy_change_trigger_count_{0};
+  size_t policy_global_output_count_{0};
+  size_t pending_action_count_{0};
+  uint32_t generic_activity_mask_{0};
+};
+
+template<typename... Ts> class EventAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+ public:
+  TEMPLATABLE_VALUE(std::string, event)
+  TEMPLATABLE_VALUE(std::string, reason)
+
+  void set_dump(bool dump) { this->dump_ = dump; }
+
+  void play(const Ts &...x) override {
+    auto event = this->event_.value(x...);
+    this->parent_->event(event.c_str());
+    if (this->dump_) {
+      auto reason = this->reason_.value(x...);
+      this->parent_->dump_state(reason.empty() ? event.c_str() : reason.c_str());
+    }
+  }
+
+ protected:
+  bool dump_{false};
+};
+
+template<typename... Ts> class SetActivityAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+ public:
+  TEMPLATABLE_VALUE(std::string, activity)
+  TEMPLATABLE_VALUE(bool, active)
+
+  void play(const Ts &...x) override {
+    auto activity = this->activity_.value(x...);
+    this->parent_->set_activity(activity.c_str(), this->active_.value(x...));
+  }
+};
+
+template<typename... Ts> class SetActivitiesAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+ public:
+  void add_activity_state(const char *name, bool active) {
+    if (name == nullptr || name[0] == '\0' || this->update_count_ >= this->updates_.size())
+      return;
+    this->updates_[this->update_count_++] = RuntimeFsm::ActivityUpdate{name, active};
+  }
+
+  void play(const Ts &...x) override {
+    (void) sizeof...(x);
+    this->parent_->set_activities(this->updates_.data(), this->update_count_);
+  }
+
+ protected:
+  std::array<RuntimeFsm::ActivityUpdate, 16> updates_{};
+  size_t update_count_{0};
+};
+
+template<typename... Ts> class RequestActionAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+ public:
+  TEMPLATABLE_VALUE(std::string, action)
+
+  void play(const Ts &...x) override {
+    auto action = this->action_.value(x...);
+    this->parent_->request_action(action.c_str());
+  }
+};
+
+template<typename... Ts> class DumpAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+ public:
+  TEMPLATABLE_VALUE(std::string, reason)
+
+  void play(const Ts &...x) override {
+    auto reason = this->reason_.value(x...);
+    this->parent_->dump_state(reason.c_str());
+  }
+};
+
+template<typename... Ts> class IsActiveCondition : public Condition<Ts...>, public Parented<RuntimeFsm> {
+ public:
+  TEMPLATABLE_VALUE(std::string, activity)
+
+  bool check(Ts... x) override {
+    auto activity = this->activity_.value(x...);
+    return this->parent_->is_activity_active(activity.c_str());
+  }
 };
 
 }  // namespace runtime_fsm

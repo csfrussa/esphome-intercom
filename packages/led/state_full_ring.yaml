@@ -60,6 +60,9 @@ script:
             case 15: // Home Assistant/API missing: blue blink
               led->turn_on().set_rgb(0.1f, 0.25f, 1.0f).set_brightness(0.6f).set_effect("Blink").perform();
               break;
+            case 16: // Voice Assistant client missing: violet blink
+              led->turn_on().set_rgb(0.55f, 0.15f, 1.0f).set_brightness(0.6f).set_effect("Blink").perform();
+              break;
             default: // Off
               led->turn_off().perform();
               break;

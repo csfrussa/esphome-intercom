@@ -80,24 +80,6 @@ esphome:
   friendly_name: ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
-  on_boot:
-    priority: 200
-    then:
-      - delay: 200ms
-      # Brief LED flash to indicate boot
-      - light.turn_on:
-          id: status_led
-          red: 0%
-          green: 0%
-          blue: 100%
-          brightness: 50%
-          effect: none
-      - delay: 500ms
-      - light.turn_off: status_led
-      # Sync reducer state with boot flash
-      - globals.set:
-          id: g_applied_led
-          value: "0"
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -129,7 +111,7 @@ psram:
   speed: 80MHz
 
 api:
-  # `start_call(dest)` actions come from packages/intercom/ha_api.yaml.
+  # `start_call(dest)` actions come from the runtime HA API package.
 
 ota:
   - platform: esphome
@@ -377,13 +359,9 @@ binary_sensor:
                     then:
                       - intercom_api.call_toggle: intercom
                     else:
-                      - if:
-                          condition:
-                            voice_assistant.is_running:
-                          then:
-                            - voice_assistant.stop:
-                          else:
-                            - voice_assistant.start:
+                      - runtime_fsm.event:
+                          id: runtime_controller
+                          event: wake_word
       # Double click: next contact
       - timing:
           - ON for 50ms to 500ms
@@ -477,7 +455,10 @@ switch:
       - speaker.mute_on: hw_speaker
       - delay: 50ms
       - switch.turn_off: speaker_enable
-      - script.execute: update_status
+      - runtime_fsm.set_activity:
+          id: runtime_controller
+          activity: speaker_muted
+          active: true
     on_turn_off:
       - logger.log:
           level: INFO
@@ -490,7 +471,10 @@ switch:
             - switch.turn_on: speaker_enable
             - delay: 50ms
       - speaker.mute_off: hw_speaker
-      - script.execute: update_status
+      - runtime_fsm.set_activity:
+          id: runtime_controller
+          activity: speaker_muted
+          active: false
 
   # Intercom switches
 
