@@ -72,5 +72,17 @@ The HA softphone card exposes Auto Answer, DND and browser ringtone behind an
 idle-only Options panel. Browser ringtone is a per-browser localStorage
 preference; HA softphone DND is stored in Home Assistant state.
 
+Hybrid and HA-softphone Lovelace modes have intentionally separate semantics.
+`hybrid` mirrors one ESP endpoint and exposes controls from that ESP's
+perspective. `ha_softphone` represents Home Assistant itself. If you previously
+depended on one card mixing both models, split it into one hybrid ESP card and
+one optional HA softphone card.
+
+Browser audio setup now waits for the server START/ANSWER response and uses the
+negotiated TX/RX formats from that response before creating the AudioWorklets.
+Custom frontend code that starts microphone/playback worklets before the
+control reply should be updated; otherwise ESP -> HA answered calls can use the
+wrong frame size when one direction negotiates 48 kHz.
+
 Older upgrade notes are kept in their original GitHub release pages. This file
 tracks only the current upgrade delta from `2026.6.3` to `2026.7.0-dev`.

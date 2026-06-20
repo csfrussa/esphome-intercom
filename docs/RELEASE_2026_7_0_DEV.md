@@ -39,6 +39,11 @@ regressions would be a problem.
 - 🔄 Browser/card reload during an active HA softphone call can explicitly rebind
   to the existing server session within a short grace window, avoiding the old
   "dashboard refresh killed or desynced the softphone call" behavior.
+- 📞 ESP -> HA browser-answer calls now initialize the browser audio pipeline
+  only after the server `ANSWER` reply carries the negotiated TX/RX formats.
+  This keeps the ESP-caller / HA-responder path aligned with HA-originated
+  calls and avoids deep/slow audio caused by a browser worklet using stale
+  16 kHz framing against a negotiated 48 kHz leg.
 - 🚫 Duplicate terminal/bridge events were tightened so cards should see one
   final reason instead of compensating for repeated `disconnected` events.
 - 🧪 `tools/intercom_softphone_probe.py` was expanded for negotiated-format
@@ -62,6 +67,11 @@ regressions would be a problem.
 - 🔔 HA softphone has an idle-only Options panel for Auto Answer, DND and
   browser ringtone. Ringtone is a per-browser preference; HA softphone DND is
   stored in HA state.
+- 🪞 Hybrid cards keep the original mirror semantics: the card represents the
+  selected ESP, mirrors ESP ringing/streaming state, and becomes the HA
+  softphone leg only when that ESP is calling Home Assistant. A separate
+  `ha_softphone` card represents HA itself and shows Answer/Decline only for
+  calls addressed to HA.
 - 🧹 Ringing/In-call screens hide runtime options, so only the call actions
   relevant to the current state are visible.
 - 🧾 Terminal text uses the active call peer. A card or display no longer reports

@@ -494,6 +494,14 @@ frame. ESP-to-browser audio uses the same binary framing in the opposite
 direction. Control messages on that socket are JSON text frames (`start`,
 `answer`, `hangup`, errors and selected `tx_format`/`rx_format`).
 
+The browser audio graph is created only after the server confirms the selected
+formats for that leg. This is especially important for ESP -> HA calls: the
+browser is the responder, so the effective HA-to-ESP frame size is not known
+until the `ANSWER` reply. Starting the AudioWorklet before that reply risks
+emitting stale 16 kHz frames into a 48 kHz negotiated leg. No prewarm step is
+required; HA-originated and ESP-originated calls both follow the same
+"negotiate first, then start browser audio" rule.
+
 Server-side lifecycle is authoritative. If the socket closes, the server
 unbinds the browser and stops the session so the ESP leg does not remain stuck
 in a call. Client-side `pagehide`/hidden-page cleanup is best effort UX, not

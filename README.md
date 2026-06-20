@@ -158,6 +158,13 @@ Changes since `2026.6.3`:
 - Browser/card reload during an active HA softphone call can rebind to the
   server session within a short grace window instead of immediately losing the
   call state.
+- ESP -> HA calls answered from the browser now build the AudioWorklet after
+  the server `ANSWER` reply has selected the effective TX/RX formats. This
+  keeps HA-originated and ESP-originated softphone calls on the same negotiated
+  audio contract and prevents stale-format browser audio.
+- Hybrid Lovelace cards retain the original mirror model: they represent one
+  ESP endpoint and show that ESP's ringing/streaming controls. A separate
+  `ha_softphone` card represents Home Assistant itself.
 - Inbound TCP/UDP calls are accepted from valid external/routed callers even if
   the caller is not in the callee's local phonebook. This keeps VPN, routed LAN
   and HA PBX bridge flows natural: START carries the caller/destination identity,
@@ -944,6 +951,13 @@ In `ha_softphone` mode the card has its own destination selector, Auto Answer an
 Do Not Disturb controls. It rings only for calls addressed to Home Assistant and
 does not mirror an ESP card state. Only `hybrid` cards must be bound to an ESP
 with `device_id`.
+
+The two modes intentionally display calls differently. A `hybrid` card shows
+Answer/Decline when its mirrored ESP is ringing, including the case where that
+ESP is being called by Home Assistant. A `ha_softphone` card shows Hangup while
+HA is the caller and Answer/Decline only when HA is the callee. In both
+directions the browser audio pipeline is configured from the negotiated call
+formats returned by the server before microphone or playback worklets start.
 
 ![Home Assistant softphone card](docs/images/ha-softphone-card.png)
 

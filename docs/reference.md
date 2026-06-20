@@ -547,6 +547,21 @@ Only `hybrid` cards are bound to an ESP. A `ha_softphone` card represents Home
 Assistant itself and chooses the ESP destination at runtime from the in-card
 selector.
 
+Call controls follow the perspective of the card:
+
+- A `hybrid` card mirrors the bound ESP. If Home Assistant calls that ESP, the
+  hybrid card shows the ESP ringing state and exposes Answer/Decline for the
+  ESP leg. If that ESP calls Home Assistant, the hybrid card shows the incoming
+  HA leg for that ESP and Answer/Decline controls answer as Home Assistant.
+- A `ha_softphone` card represents Home Assistant itself. When HA calls an ESP,
+  it shows the target ESP ringing/in-call state and exposes Hangup. When an ESP
+  calls HA, it shows Answer/Decline because HA is the callee.
+
+Browser audio is not pre-initialized before call negotiation. The card waits
+for the server START/ANSWER reply, then configures the capture and playback
+worklets from the selected TX/RX PCM formats. This is required because the
+effective ESP->HA and HA->ESP frame sizes can differ per direction.
+
 With `show_extended_info: true`, the card shows extended routing details and the title appends the selected ESP transport (`Kitchen Intercom - TCP` / `- UDP`). The mode line uses:
 
 | Situation | Label |
