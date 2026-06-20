@@ -49,3 +49,18 @@ light:
               duration: 500ms
             - state: false
               duration: 500ms
+      - addressable_lambda:
+          name: "Blink"
+          update_interval: 120ms
+          lambda: |-
+            static bool on = true;
+            static uint32_t last = 0;
+            if (initial_run) {
+              on = true;
+              last = millis();
+            }
+            if (millis() - last >= 420) {
+              last = millis();
+              on = !on;
+            }
+            it.all() = on ? current_color : Color(0, 0, 0);

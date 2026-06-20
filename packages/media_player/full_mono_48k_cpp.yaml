@@ -1,0 +1,77 @@
+# =============================================================================
+# Full-experience media graph for runtime_fsm.
+#
+# HA/Sendspin media, generic announcements and VA TTS remain on the standard
+# speaker_source media player. runtime_fsm observes this player and owns only
+# control-plane state, UI state and ducking decisions.
+# =============================================================================
+
+sendspin:
+  id: sendspin_hub
+  task_stack_in_psram: true
+
+audio_file:
+  - id: intercom_ringing_sound
+    file: ${assets_base}assets/sounds/ringtone.flac
+
+media_source:
+  - platform: audio_http
+    id: media_http_source
+    buffer_size: 131072
+    task_stack_in_psram: true
+  - platform: audio_http
+    id: announcement_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_file
+    id: announcement_file_source
+    task_stack_in_psram: true
+  - platform: sendspin
+    id: sendspin_media_source
+    sample_rate: 48000
+    buffer_size: 524288
+    task_stack_in_psram: true
+    decode_memory: psram
+
+media_player:
+  - platform: speaker_source
+    id: speaker_media_player
+    name: None
+    internal: false
+    volume_initial: 100%
+    volume_min: 0%
+    volume_max: 100%
+    volume_increment: 5%
+    media_pipeline:
+      speaker: media_speaker_input
+      sample_rate: 48000
+      format: FLAC
+      sources:
+        - media_http_source
+        - sendspin_media_source
+    announcement_pipeline:
+      speaker: tts_speaker_input
+      sample_rate: 48000
+      format: FLAC
+      sources:
+        - announcement_http_source
+        - announcement_file_source
+    on_announcement:
+      - lambda: 'id(runtime_controller).on_media_event();'
+    on_play:
+      - lambda: 'id(runtime_controller).on_media_event();'
+    on_pause:
+      - lambda: 'id(runtime_controller).on_media_event();'
+    on_idle:
+      - lambda: 'id(runtime_controller).on_media_event();'
+
+runtime_fsm:
+  id: runtime_controller
+  voice_assistant_id: va
+  micro_wake_word_id: mww
+  media_mixer_input: media_mixer_input
+  media_player: speaker_media_player
+  output_script: runtime_controller_output
+  intercom_id: intercom
+  mic_mute_switch: mute
+  speaker_mute_switch: speaker_mute

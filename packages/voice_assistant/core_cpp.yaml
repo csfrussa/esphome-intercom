@@ -1,0 +1,50 @@
+# =============================================================================
+# Voice Assistant + Micro Wake Word forwarding-only core for runtime_fsm.
+# =============================================================================
+
+voice_assistant:
+  id: va
+  media_player: speaker_media_player
+  tts_playback_start_timeout: 10s
+  on_start:
+    - lambda: 'id(runtime_controller).on_va_started();'
+  on_listening:
+    - lambda: 'id(runtime_controller).on_va_listening();'
+  on_stt_vad_end:
+    - lambda: 'id(runtime_controller).on_va_thinking();'
+  on_stt_end:
+    - script.execute:
+        id: ui_stt_ended
+        text: !lambda 'return x;'
+  on_tts_start:
+    - lambda: 'id(runtime_controller).on_tts_start(x);'
+    - script.execute:
+        id: ui_tts_started
+        text: !lambda 'return x;'
+  on_tts_end:
+    - lambda: 'id(runtime_controller).on_tts_end(x);'
+  on_end:
+    - lambda: 'id(runtime_controller).on_va_end();'
+  on_error:
+    - lambda: 'id(runtime_controller).on_va_error(code, message);'
+  on_client_connected:
+    - logger.log:
+        tag: va
+        format: "VA: client connected"
+    - globals.set:
+        id: init_in_progress
+        value: "false"
+    - lambda: 'id(runtime_controller).on_connectivity_event();'
+    - script.execute: runtime_controller_output
+    - script.execute: start_mww_when_ready
+  on_client_disconnected:
+    - logger.log:
+        tag: va
+        format: "VA: client disconnected"
+    - lambda: 'id(runtime_controller).on_connectivity_event();'
+
+micro_wake_word:
+  id: mww
+  stop_after_detection: false
+  on_wake_word_detected:
+    - lambda: 'id(runtime_controller).on_wake_word(wake_word);'

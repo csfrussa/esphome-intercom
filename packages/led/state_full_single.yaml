@@ -51,6 +51,15 @@ script:
             case 12: // Media playing: green solid
               led->turn_on().set_rgb(0.0f, 1.0f, 0.0f).set_brightness(1.0f).set_effect("None").perform();
               break;
+            case 13: // Boot: red solid
+              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.6f).set_effect("None").perform();
+              break;
+            case 14: // Wi-Fi missing: orange blink
+              led->turn_on().set_rgb(1.0f, 0.45f, 0.0f).set_brightness(0.7f).set_effect("Blink").perform();
+              break;
+            case 15: // Home Assistant/API missing: blue blink
+              led->turn_on().set_rgb(0.1f, 0.25f, 1.0f).set_brightness(0.6f).set_effect("Blink").perform();
+              break;
             default: // Off
               led->turn_off().perform();
               break;

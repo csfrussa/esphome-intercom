@@ -56,7 +56,7 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_intercom.yaml
+  core: !include ../../../packages/va_intercom_cpp.yaml
   ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
   intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
   phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
@@ -67,9 +67,9 @@ packages:
   afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
   audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
   speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
-  va_timers: !include ../../../packages/voice_assistant/timers.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
+  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
   flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
 # =============================================================================
@@ -165,7 +165,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, intercom_api, esp_audio_stack, esp_afe, speaker]
+    components: [audio_processor, intercom_api, esp_audio_stack, esp_afe, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, TCA9555)
@@ -297,6 +297,7 @@ speaker:
 # =============================================================================
 micro_wake_word:
   microphone: mic_main
+  task_stack_in_psram: true
   models:
     - model: alexa
 
