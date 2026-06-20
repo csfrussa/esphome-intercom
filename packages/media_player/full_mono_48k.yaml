@@ -60,134 +60,99 @@ media_player:
         - announcement_http_source
         - announcement_file_source
     on_announcement:
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_announcement:enter"
       - logger.log:
           level: INFO
           tag: media
-          format: "media_player: on_announcement state=%d va_state=%d va_running=%d pending=%d active=%d cancel=%d"
+          format: "media_player: on_announcement state=%d phase=%d va=%d epoch=%u tts_epoch=%u"
           args:
             - id(speaker_media_player).state
-            - id(g_va_state)
+            - id(g_va_phase)
             - id(va).is_running()
-            - id(g_va_tts_pending)
-            - id(g_va_tts_active)
-            - id(g_va_tts_cancel_next)
+            - id(g_va_epoch)
+            - id(g_tts_owner_epoch)
       - if:
           condition:
-            lambda: |-
-              return id(g_va_tts_cancel_next) != 0 ||
-                     (id(va).is_running() &&
-                      id(g_va_tts_pending) == 0 &&
-                      id(g_va_tts_active) == 0);
+            lambda: 'return id(g_va_phase) == 5;'
           then:
             - logger.log:
                 level: WARN
                 tag: va
-                format: "VA: cancelling stale TTS announcement state=%d running=%d pending=%d active=%d cancel=%d"
-                args:
-                  - id(g_va_state)
-                  - id(va).is_running()
-                  - id(g_va_tts_pending)
-                  - id(g_va_tts_active)
-                  - id(g_va_tts_cancel_next)
-            - globals.set:
-                id: g_va_tts_cancel_next
-                value: "0"
-            - globals.set:
-                id: g_va_tts_pending
-                value: "0"
-            - globals.set:
-                id: g_va_tts_active
-                value: "0"
+                format: "VA: stopping announcement while barge cancel is pending"
             - media_player.stop:
                 id: speaker_media_player
                 announcement: true
-            - script.execute: va_barge_maybe_restart
-            - script.execute:
-                id: va_debug_dump
-                event: "media:on_announcement:stale_stopped"
+            - script.execute: va_barge_start_when_ready
           else:
             - if:
                 condition:
-                  lambda: 'return id(g_va_state) == 3 || id(g_va_tts_pending) != 0;'
+                  lambda: 'return id(g_va_phase) == 3;'
                 then:
                   - logger.log:
                       level: INFO
                       tag: va
                       format: "VA: TTS announcement started"
                   - globals.set:
-                      id: g_va_tts_pending
-                      value: "0"
+                      id: g_va_phase
+                      value: "4"
                   - globals.set:
-                      id: g_va_tts_active
-                      value: "1"
-                  - script.execute:
-                      id: va_debug_dump
-                      event: "media:on_announcement:tts_active"
-                  - voice_assistant.stop:
-                  - script.execute:
-                      id: va_debug_dump
-                      event: "media:on_announcement:va_stopped_for_tts"
+                      id: g_va_state
+                      value: "3"
       - script.execute: update_status
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_announcement:exit"
     on_play:
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_play:enter"
       - logger.log:
           level: INFO
           tag: media
-          format: "media_player: on_play state=%d va_state=%d va_running=%d"
+          format: "media_player: on_play state=%d phase=%d va=%d"
           args:
             - id(speaker_media_player).state
-            - id(g_va_state)
+            - id(g_va_phase)
+            - id(va).is_running()
+      - script.execute: va_barge_start_when_ready
+      - script.execute: update_status
+    on_pause:
+      - logger.log:
+          level: INFO
+          tag: media
+          format: "media_player: on_pause state=%d phase=%d va=%d"
+          args:
+            - id(speaker_media_player).state
+            - id(g_va_phase)
+            - id(va).is_running()
+      - script.execute: update_status
+    on_idle:
+      - logger.log:
+          level: INFO
+          tag: media
+          format: "media_player: on_idle state=%d phase=%d va=%d"
+          args:
+            - id(speaker_media_player).state
+            - id(g_va_phase)
             - id(va).is_running()
       - if:
           condition:
-            lambda: 'return id(g_va_tts_active) != 0 && !id(va).is_running();'
+            lambda: 'return id(g_va_phase) == 4;'
           then:
-            - script.execute: va_tts_maybe_done
-      - script.execute: va_barge_maybe_restart
+            - logger.log:
+                level: INFO
+                tag: va
+                format: "VA: TTS announcement completed, returning idle"
+            - if:
+                condition:
+                  lambda: 'return id(g_barge_in_pending) != 0;'
+                then:
+                  - globals.set:
+                      id: g_va_phase
+                      value: "5"
+                  - globals.set:
+                      id: g_va_state
+                      value: "0"
+                else:
+                  - globals.set:
+                      id: g_va_phase
+                      value: "0"
+                  - globals.set:
+                      id: g_va_state
+                      value: "0"
+                  - script.execute: va_end_cleanup
+      - script.execute: va_barge_start_when_ready
       - script.execute: update_status
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_play:exit"
-    on_pause:
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_pause:enter"
-      - logger.log:
-          level: INFO
-          tag: media
-          format: "media_player: on_pause state=%d va_state=%d va_running=%d"
-          args:
-            - id(speaker_media_player).state
-            - id(g_va_state)
-            - id(va).is_running()
-      - script.execute: update_status
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_pause:exit"
-    on_idle:
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_idle:enter"
-      - logger.log:
-          level: INFO
-          tag: media
-          format: "media_player: on_idle state=%d va_state=%d va_running=%d"
-          args:
-            - id(speaker_media_player).state
-            - id(g_va_state)
-            - id(va).is_running()
-      - delay: 200ms
-      - script.execute: va_tts_maybe_done
-      - script.execute: va_barge_maybe_restart
-      - script.execute: update_status
-      - script.execute:
-          id: va_debug_dump
-          event: "media:on_idle:exit"

@@ -27,29 +27,28 @@ globals:
 voice_assistant:
   id: va
   on_listening:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_listening:enter"
     - if:
         condition:
-          lambda: 'return id(g_va_tts_pending) != 0 || id(g_va_tts_active) != 0;'
+          lambda: 'return id(g_va_phase) == 3 || id(g_va_phase) == 4;'
         then:
           - logger.log:
-              level: WARN
+              level: ERROR
               tag: va
-              format: "VA: on_listening while TTS pending/active, preserving response state"
-          - globals.set:
-              id: g_mww_recent
-              value: "0"
-          - script.stop: mww_failsafe
+              format: "VA: unexpected on_listening while TTS is queued/playing (phase=%d epoch=%u tts_epoch=%u)"
+              args:
+                - id(g_va_phase)
+                - id(g_va_epoch)
+                - id(g_tts_owner_epoch)
           - script.execute: update_status
         else:
           - logger.log:
-              level: INFO
               tag: va
               format: "VA: on_listening"
           - globals.set:
               id: g_va_state
+              value: "1"
+          - globals.set:
+              id: g_va_phase
               value: "1"
           - globals.set:
               id: g_mww_recent
@@ -57,91 +56,117 @@ voice_assistant:
           - globals.set:
               id: g_barge_in_pending
               value: "0"
-          - globals.set:
-              id: g_va_tts_pending
-              value: "0"
-          - globals.set:
-              id: g_va_tts_active
-              value: "0"
           - script.stop: mww_failsafe
           - script.stop: barge_failsafe
           - script.execute: update_status
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_listening:exit"
   on_stt_vad_end:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_stt_vad_end:enter"
-    - logger.log:
-        level: INFO
-        tag: va
-        format: "VA: on_stt_vad_end (thinking)"
-    - globals.set:
-        id: g_va_state
-        value: "2"
-    - script.execute: update_status
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_stt_vad_end:exit"
+    - if:
+        condition:
+          lambda: 'return id(g_va_phase) == 3 || id(g_va_phase) == 4 || id(g_va_phase) == 5;'
+        then:
+          - logger.log:
+              level: ERROR
+              tag: va
+              format: "VA: unexpected on_stt_vad_end while response/cancel is active (phase=%d)"
+              args:
+                - id(g_va_phase)
+          - script.execute: update_status
+        else:
+          - logger.log:
+              tag: va
+              format: "VA: on_stt_vad_end (thinking)"
+          - globals.set:
+              id: g_va_state
+              value: "2"
+          - globals.set:
+              id: g_va_phase
+              value: "2"
+          - script.execute: update_status
   on_stt_end:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_stt_end"
     - script.execute:
         id: ui_stt_ended
         text: !lambda 'return x;'
+  on_intent_progress:
+    - if:
+        condition:
+          # Non-empty x means ESPHome has handed a streaming TTS URL to the
+          # media player as an announcement.
+          lambda: 'return !x.empty();'
+        then:
+          - logger.log:
+              level: INFO
+              tag: va
+              format: "VA: on_intent_progress TTS url queued"
+          - if:
+              condition:
+                lambda: 'return id(g_va_phase) != 4 && id(g_va_phase) != 5;'
+              then:
+                - lambda: |-
+                    id(g_tts_owner_epoch) = id(g_va_epoch);
+                - globals.set:
+                    id: g_va_state
+                    value: "3"
+                - globals.set:
+                    id: g_va_phase
+                    value: "3"
+                - script.execute: update_status
+          - script.execute: va_hold_response_until_announcement
   on_tts_start:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_tts_start:enter"
+    - if:
+        condition:
+          lambda: 'return id(g_va_phase) == 3 || id(g_va_phase) == 4 || id(g_va_phase) == 5;'
+        then:
+          - logger.log:
+              level: INFO
+              tag: va
+              format: "VA: on_tts_start while TTS already queued/playing (phase=%d epoch=%u tts_epoch=%u)"
+              args:
+                - id(g_va_phase)
+                - id(g_va_epoch)
+                - id(g_tts_owner_epoch)
+          - script.execute: update_status
+        else:
+          - logger.log:
+              tag: va
+              format: "VA: on_tts_start (speaking)"
+          - lambda: |-
+              id(g_tts_owner_epoch) = id(g_va_epoch);
+          - globals.set:
+              id: g_va_state
+              value: "3"
+          - globals.set:
+              id: g_va_phase
+              value: "3"
+          - script.execute: update_status
+          - script.execute:
+              id: ui_tts_started
+              text: !lambda 'return x;'
+  on_tts_end:
     - logger.log:
         level: INFO
         tag: va
-        format: "VA: on_tts_start (speaking) state=%d running=%d mp=%d"
-        args:
-          - id(g_va_state)
-          - id(va).is_running()
-          - id(speaker_media_player).state
-    - globals.set:
-        id: g_va_state
-        value: "3"
-    - globals.set:
-        id: g_va_tts_pending
-        value: "1"
-    - globals.set:
-        id: g_va_tts_active
-        value: "0"
-    - script.execute: update_status
-    - script.execute:
-        id: ui_tts_started
-        text: !lambda 'return x;'
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_tts_start:exit"
+        format: "VA: on_tts_end TTS url queued"
+    - if:
+        condition:
+          lambda: 'return id(g_va_phase) != 4 && id(g_va_phase) != 5;'
+        then:
+          - lambda: |-
+              id(g_tts_owner_epoch) = id(g_va_epoch);
+          - globals.set:
+              id: g_va_state
+              value: "3"
+          - globals.set:
+              id: g_va_phase
+              value: "3"
+          - script.execute: update_status
+    - script.execute: va_hold_response_until_announcement
   on_end:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_end:enter"
     - logger.log:
-        level: INFO
         tag: va
-        format: "VA: on_end state=%d running=%d mp=%d announcing=%d"
-        args:
-          - id(g_va_state)
-          - id(va).is_running()
-          - id(speaker_media_player).state
-          - id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING
+        format: "VA: on_end"
     - script.execute: va_end_handler
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_end:exit"
   on_error:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_error:enter"
     - logger.log:
-        level: WARN
         tag: va
         format: "VA: on_error (code=%s, msg=%s)"
         args: ['code.c_str()', 'message.c_str()']
@@ -156,12 +181,6 @@ voice_assistant:
           - globals.set:
               id: g_mww_recent
               value: "0"
-          - globals.set:
-              id: g_va_tts_pending
-              value: "0"
-          - globals.set:
-              id: g_va_tts_active
-              value: "0"
           - if:
               condition:
                 lambda: 'return !id(init_in_progress);'
@@ -169,22 +188,21 @@ voice_assistant:
                 - globals.set:
                     id: g_va_state
                     value: "4"
+                - globals.set:
+                    id: g_va_phase
+                    value: "6"
                 - script.execute: update_status
                 - script.execute: va_error_flash
               else:
                 - globals.set:
                     id: g_va_state
                     value: "0"
+                - globals.set:
+                    id: g_va_phase
+                    value: "0"
                 - script.execute: update_status
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_error:exit"
   on_client_connected:
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_client_connected:enter"
     - logger.log:
-        level: INFO
         tag: va
         format: "VA: client connected"
     - globals.set:
@@ -192,27 +210,13 @@ voice_assistant:
         value: "false"
     - script.execute: update_status
     - script.execute: start_mww_when_ready
-    - script.execute:
-        id: va_debug_dump
-        event: "va:on_client_connected:exit"
 micro_wake_word:
   id: mww
   stop_after_detection: false
   on_wake_word_detected:
-    - script.execute:
-        id: va_debug_dump
-        event: "mww:on_wake_word_detected:enter"
     - logger.log:
-        level: INFO
         tag: mww
-        format: "MWW: wake word detected state=%d pending=%d active=%d barge=%d running=%d mp=%d"
-        args:
-          - id(g_va_state)
-          - id(g_va_tts_pending)
-          - id(g_va_tts_active)
-          - id(g_barge_in_pending)
-          - id(va).is_running()
-          - id(speaker_media_player).state
+        format: "MWW: wake word detected"
     - globals.set:
         id: g_mww_recent
         value: "1"
@@ -221,54 +225,34 @@ micro_wake_word:
     - if:
         condition:
           or:
-            - lambda: 'return id(g_va_state) == 3 || id(g_va_tts_pending) != 0 || id(g_va_tts_active) != 0;'
+            - voice_assistant.is_running:
+            - lambda: 'return id(g_va_phase) != 0 || id(g_va_state) != 0;'
             - lambda: 'return id(g_barge_in_pending) != 0;'
         then:
           - logger.log:
-              level: INFO
               tag: mww
-              format: "MWW: VA response barge-in state=%d pending=%d active=%d running=%d"
-              args:
-                - id(g_va_state)
-                - id(g_va_tts_pending)
-                - id(g_va_tts_active)
-                - id(va).is_running()
+              format: "MWW: reset active VA and restart listening"
           - globals.set:
               id: g_barge_in_pending
               value: "1"
+          - globals.set:
+              id: g_va_phase
+              value: "5"
           - script.execute: barge_failsafe
           - voice_assistant.stop:
           - media_player.stop:
               id: speaker_media_player
               announcement: true
-          - script.execute: va_barge_maybe_restart
-          - script.execute:
-              id: va_debug_dump
-              event: "mww:on_wake_word_detected:barge_exit"
+          - script.execute: va_barge_start_when_ready
         else:
-          - if:
-              condition:
-                lambda: 'return id(va).is_running() || id(g_va_state) != 0;'
-              then:
-                - logger.log:
-                    level: WARN
-                    tag: mww
-                    format: "MWW: duplicate wake ignored state=%d running=%d pending=%d active=%d"
-                    args:
-                      - id(g_va_state)
-                      - id(va).is_running()
-                      - id(g_va_tts_pending)
-                      - id(g_va_tts_active)
-                - script.execute:
-                    id: va_debug_dump
-                    event: "mww:on_wake_word_detected:duplicate_exit"
-              else:
-                - logger.log:
-                    level: INFO
-                    tag: mww
-                    format: "MWW: fresh VA start"
-                - voice_assistant.start:
-                    wake_word: !lambda return wake_word;
-                - script.execute:
-                    id: va_debug_dump
-                    event: "mww:on_wake_word_detected:fresh_exit"
+          - logger.log:
+              tag: mww
+              format: "MWW: fresh VA start"
+          - lambda: |-
+              id(g_va_epoch)++;
+              id(g_tts_owner_epoch) = 0;
+          - globals.set:
+              id: g_va_phase
+              value: "0"
+          - voice_assistant.start:
+              wake_word: !lambda return wake_word;
