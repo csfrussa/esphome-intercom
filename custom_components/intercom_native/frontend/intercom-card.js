@@ -659,7 +659,7 @@ class IntercomCard extends HTMLElement {
 
   _getEspState() {
     if (this._isConfiguredSoftphone()) return this._sessionState || "idle";
-    if (this._sessionState && (this._callMode === "softphone" || this._isHybridHaLeg())) {
+    if (this._sessionState && this._callMode === "softphone") {
       return this._sessionState;
     }
     return this._getRawEspState();
@@ -694,12 +694,17 @@ class IntercomCard extends HTMLElement {
 
   // Get caller name from entity
   _getCallerName() {
-    if (this._isConfiguredSoftphone()) return this._sessionCaller || "";
+    const clean = (value) => {
+      const text = String(value || "").trim();
+      const key = text.toLowerCase();
+      return !text || key === "unknown" || key === "unavailable" ? "" : text;
+    };
+    if (this._isConfiguredSoftphone()) {
+      return clean(this._sessionCaller) || clean(this._activeDeviceInfo?.name);
+    }
     if (!this._hass || !this._callerEntityId) return "";
     const entity = this._hass.states[this._callerEntityId];
-    const state = entity?.state;
-    if (!state || state === "unknown" || state === "") return "";
-    return state;
+    return clean(entity?.state) || (this._isHaName(this._getDestination()) ? clean(this._sessionCaller) : "");
   }
 
   // The HA peer is identified by the instance friendly name (location_name).
@@ -1044,7 +1049,7 @@ class IntercomCard extends HTMLElement {
         break;
       case "calling":
       case "outgoing":
-        if (this._isSoftphoneContext() && this._sessionState) {
+        if (this._callMode === "softphone" && this._sessionState) {
           statusText = this._destRinging
             ? `${espDeviceName} is ringing...`
             : `Calling ${espDeviceName}...`;

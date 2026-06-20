@@ -547,7 +547,7 @@ class IntercomSession:
         return transport
 
     def _negotiate_outgoing_formats(self) -> bool:
-        tx = choose_common_format(self.peer_rx_formats, self.local_tx_formats)
+        tx = choose_common_format(self.local_tx_formats, self.peer_rx_formats)
         rx = choose_common_format(self.peer_tx_formats, self.local_rx_formats)
         if tx is None or rx is None:
             _LOGGER.error(
@@ -567,7 +567,12 @@ class IntercomSession:
         if self._transport is None:
             return False
         caller_to_dest = choose_common_format(self.peer_tx_formats, self.local_rx_formats)
-        dest_to_caller = choose_common_format(self.peer_rx_formats, self.local_tx_formats)
+        # HA/browser is the responder in this path, but it still owns the
+        # encoder clock for audio sent back to the ESP. Keep the same local
+        # preference order used by HA-originated calls; otherwise an ESP that
+        # advertises a higher-rate RX format first can make the browser send
+        # 48 kHz while older/intercom RX paths still consume it as 16 kHz.
+        dest_to_caller = choose_common_format(self.local_tx_formats, self.peer_rx_formats)
         if caller_to_dest is None or dest_to_caller is None:
             _LOGGER.error(
                 "No compatible inbound audio format for %s: peer_tx=%s local_rx=%s local_tx=%s peer_rx=%s",
