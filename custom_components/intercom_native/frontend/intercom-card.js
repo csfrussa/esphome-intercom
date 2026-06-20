@@ -136,9 +136,6 @@ class IntercomCard extends HTMLElement {
           || payload.session_device_id === this._activeSessionDeviceId
           || payload.device_id === this._activeSessionDeviceId;
     }
-    if (payload.device_id === HA_SOFTPHONE_DEVICE_ID) {
-      return payload.session_device_id === myId || payload.target_device_id === myId;
-    }
     return payload.source_device_id === myId
         || payload.dest_device_id === myId
         || payload.device_id === myId;
@@ -241,11 +238,12 @@ class IntercomCard extends HTMLElement {
     const origin = (data.origin || "").toLowerCase() || null;
     const peer = data.peer_name || "";
     const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
-    if (this._isSoftphoneContext()) {
+    if (this._isConfiguredSoftphone()) {
       if (data.session_device_id || (data.device_id && data.device_id !== HA_SOFTPHONE_DEVICE_ID)) {
         this._activeSessionDeviceId = data.session_device_id || data.device_id;
       }
       const outgoingRinging =
+        this._isHaSoftphoneMode() &&
         st === "ringing" &&
         !data.caller &&
         (data.device_id === HA_SOFTPHONE_DEVICE_ID || this._activeSessionDeviceId === HA_SOFTPHONE_DEVICE_ID);
@@ -651,18 +649,11 @@ class IntercomCard extends HTMLElement {
   }
 
   // Get current ESP state from entity
-  _getRawEspState() {
+  _getEspState() {
+    if (this._isConfiguredSoftphone()) return this._sessionState || "idle";
     if (!this._hass || !this._intercomStateEntityId) return "unknown";
     const entity = this._hass.states[this._intercomStateEntityId];
     return entity?.state || "unknown";
-  }
-
-  _getEspState() {
-    if (this._isConfiguredSoftphone()) return this._sessionState || "idle";
-    if (this._sessionState && this._callMode === "softphone") {
-      return this._sessionState;
-    }
-    return this._getRawEspState();
   }
 
   _isConfiguredSoftphone() {
@@ -694,17 +685,12 @@ class IntercomCard extends HTMLElement {
 
   // Get caller name from entity
   _getCallerName() {
-    const clean = (value) => {
-      const text = String(value || "").trim();
-      const key = text.toLowerCase();
-      return !text || key === "unknown" || key === "unavailable" ? "" : text;
-    };
-    if (this._isConfiguredSoftphone()) {
-      return clean(this._sessionCaller) || clean(this._activeDeviceInfo?.name);
-    }
+    if (this._isConfiguredSoftphone()) return this._sessionCaller || "";
     if (!this._hass || !this._callerEntityId) return "";
     const entity = this._hass.states[this._callerEntityId];
-    return clean(entity?.state) || (this._isHaName(this._getDestination()) ? clean(this._sessionCaller) : "");
+    const state = entity?.state;
+    if (!state || state === "unknown" || state === "") return "";
+    return state;
   }
 
   // The HA peer is identified by the instance friendly name (location_name).
@@ -815,9 +801,8 @@ class IntercomCard extends HTMLElement {
     if (this._isConfiguredSoftphone()) return true;
     if (this._callMode === "softphone") return true;
     if (this._callMode === "mirror") return false;
-    if (this._isHybridHaLeg()) return true;
 
-    const state = this._getRawEspState().toLowerCase();
+    const state = this._getEspState().toLowerCase();
     if (state === "ringing" || state === "incoming" ||
         state === "streaming" || state === "answering") {
       const caller = this._getCallerName();
@@ -831,11 +816,6 @@ class IntercomCard extends HTMLElement {
     if (this._isHaSoftphoneMode()) return false;
     const s = String(state || "").toLowerCase();
     return s === "ringing" || s === "incoming";
-  }
-
-  _isHybridHaLeg() {
-    if (this._isHaSoftphoneMode() || this._isConfiguredSoftphone()) return false;
-    return this._isHaName(this._getDestination()) || this._isHaName(this._getCallerName());
   }
 
   _usesEspReasonForTerminalDisplay() {
@@ -1049,13 +1029,7 @@ class IntercomCard extends HTMLElement {
         break;
       case "calling":
       case "outgoing":
-        if (this._callMode === "softphone" && this._sessionState) {
-          statusText = this._destRinging
-            ? `${espDeviceName} is ringing...`
-            : `Calling ${espDeviceName}...`;
-          statusClass = this._destRinging ? "ringing" : "transitioning";
-          showHangup = true;
-        } else if (destination === this._getHaName()) {
+        if (destination === this._getHaName()) {
           statusText = `Incoming: ${espDeviceName}`;
           statusClass = "ringing";
           showAnswer = true;
@@ -1619,14 +1593,7 @@ class IntercomCard extends HTMLElement {
   }
 
   async _startP2P(deviceInfo) {
-    const reply = await intercomEngine.startP2P(deviceInfo, { haSoftphoneLeg: true });
-    const replyState = String(reply?.state || "").toLowerCase();
-    if (replyState) {
-      this._sessionState = replyState === "ringing" ? "outgoing" : replyState;
-      this._destRinging = replyState === "ringing";
-      this._sessionCaller = "";
-      this._activeSessionDeviceId = deviceInfo?.device_id || this._getConfigDeviceId();
-    }
+    await intercomEngine.startP2P(deviceInfo);
   }
 
   async _startHaSoftphoneCall(softphoneInfo) {
@@ -1709,9 +1676,6 @@ class IntercomCard extends HTMLElement {
         // ESP is calling us - answer with proper ANSWER message (not START)
         this._callMode = "softphone";
         await this._answerEspCall(deviceInfo);
-      } else if (this._isHybridEspIncomingState(espState) && this._isHybridHaLeg()) {
-        this._callMode = "softphone";
-        await this._answerEspCall(deviceInfo);
       } else if (this._isHybridEspIncomingState(espState)) {
         // Hybrid card answering an ESP-side incoming call: press the ESP's
         // real smart Call button, even when the peer is the HA softphone.
@@ -1755,13 +1719,13 @@ class IntercomCard extends HTMLElement {
     this._render();
 
     try {
-      if (this._isSoftphoneContext()) {
+      if (this._isHybridEspIncomingState(this._getEspState())) {
+        await this._pressEspButton(this._declineButtonEntityId, "Decline");
+      } else if (this._isSoftphoneContext()) {
         await this._hass.connection.sendMessagePromise({
           type: "intercom_native/decline",
           device_id: this._sessionDeviceId(),
         });
-      } else if (this._isHybridEspIncomingState(this._getEspState())) {
-        await this._pressEspButton(this._declineButtonEntityId, "Decline");
       } else {
         await this._pressEspButton(this._declineButtonEntityId, "Decline");
       }
@@ -1911,10 +1875,6 @@ class IntercomCard extends HTMLElement {
       if (result?.state && result.state !== "idle") {
         const rawState = String(result.state || "").toLowerCase();
         const sessionDeviceId = result.session_device_id || null;
-        if (!this._isHaSoftphoneMode() && sessionDeviceId && sessionDeviceId !== this._getConfigDeviceId()) {
-          this._softphoneStateLoaded = true;
-          return;
-        }
         const outgoingRinging =
           rawState === "ringing" &&
           !result.caller &&
@@ -1930,8 +1890,8 @@ class IntercomCard extends HTMLElement {
             ...(target || {}),
             device_id: sessionDeviceId || HA_SOFTPHONE_DEVICE_ID,
             audio_mode: result.audio_mode || target?.audio_mode || "full_duplex",
-            tx_formats: result.tx_format ? [result.tx_format] : target?.tx_formats,
-            rx_formats: result.rx_format ? [result.rx_format] : target?.rx_formats,
+            tx_formats: result.rx_format ? [result.rx_format] : target?.tx_formats,
+            rx_formats: result.tx_format ? [result.tx_format] : target?.rx_formats,
             softphone: true,
           },
           sessionDeviceId || HA_SOFTPHONE_DEVICE_ID,

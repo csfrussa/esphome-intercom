@@ -1,7 +1,7 @@
 const HA_SOFTPHONE_DEVICE_ID = "__intercom_native_ha_softphone__";
 const WS_AUDIO = 1;
 const WS_SUBSCRIBE_CALL_EVENTS = "intercom_native/subscribe_call_events";
-const ASSET_V = "10";
+const ASSET_V = "11";
 const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(ASSET_V)}`);
 const HIDDEN_HANGUP_GRACE_MS = 15000;
@@ -315,15 +315,13 @@ class IntercomEngine extends EventTarget {
     const receiveFromEsp = this._audioMode === "full_duplex" || this._audioMode === "mic_only";
     if (!sendToEsp && !receiveFromEsp) return;
 
-    if (!this._audioContext) this._audioContext = this._createAudioContext();
+    this._audioContext = this._createAudioContext();
     if (this._audioContext.state === "suspended") await this._audioContext.resume();
 
     if (sendToEsp) {
-      if (!this._mediaStream) {
-        this._mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-      }
+      this._mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-processor.js?v=${ASSET_V}`);
       this._source = this._audioContext.createMediaStreamSource(this._mediaStream);
       this._captureNode = new AudioWorkletNode(this._audioContext, "intercom-processor", {
@@ -353,30 +351,6 @@ class IntercomEngine extends EventTarget {
     }
   }
 
-  async _prewarmAudio(deviceInfo) {
-    const mode = this._normaliseAudioMode(deviceInfo?.audio_mode);
-    const sendToEsp = mode === "full_duplex" || mode === "speaker_only";
-    const receiveFromEsp = mode === "full_duplex" || mode === "mic_only";
-    if (!sendToEsp && !receiveFromEsp) return true;
-
-    try {
-      if (!this._audioContext) this._audioContext = this._createAudioContext();
-      if (this._audioContext.state === "suspended") await this._audioContext.resume();
-      if (sendToEsp && !this._mediaStream) {
-        this._mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-      }
-      return true;
-    } catch (err) {
-      console.error("intercom-engine: audio prewarm failed", err);
-      this.dispatchEvent(new CustomEvent("error", { detail: err?.message || String(err) }));
-      this._setState("ERROR");
-      await this.close("audio_prewarm_failed", { sendHangup: false });
-      return false;
-    }
-  }
-
   _normaliseAudioMode(value) {
     const v = String(value || "").trim().toLowerCase();
     return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v) ? v : "full_duplex";
@@ -395,23 +369,17 @@ class IntercomEngine extends EventTarget {
     }
   }
 
-  async startP2P(deviceInfo, options = {}) {
+  async startP2P(deviceInfo) {
     await this._connect(deviceInfo.device_id);
     this._resetStats();
     this._setState("CALLING");
-    const reply = await this._sendControl({
-      type: "start",
-      device_id: deviceInfo.device_id,
-      host: deviceInfo.host,
-      ha_softphone_leg: !!options.haSoftphoneLeg,
-    }, true);
+    const reply = await this._sendControl({ type: "start", device_id: deviceInfo.device_id, host: deviceInfo.host }, true);
     if (!["streaming", "ringing"].includes(reply?.state)) {
       this._setState("ERROR");
       return;
     }
     if (!await this._setupAudioOrAbort(deviceInfo.device_id, deviceInfo, reply)) return;
     this._setState(reply.state);
-    return reply;
   }
 
   async startHaSoftphone(target, softphoneInfo) {
@@ -437,7 +405,6 @@ class IntercomEngine extends EventTarget {
     const deviceId = sessionDeviceId || deviceInfo.device_id;
     await this._connect(deviceId);
     this._resetStats();
-    if (!await this._prewarmAudio({ ...(deviceInfo || {}), device_id: deviceId })) return;
     const reply = await this._sendControl({ type: "answer", device_id: deviceId, host: deviceInfo?.host || "" }, true);
     if (reply?.state !== "streaming") {
       this._setState("ERROR");
@@ -451,7 +418,6 @@ class IntercomEngine extends EventTarget {
   async answerEspCall(deviceInfo) {
     await this._connect(deviceInfo.device_id);
     this._resetStats();
-    if (!await this._prewarmAudio(deviceInfo)) return;
     const reply = await this._sendControl({ type: "answer_esp_call", device_id: deviceInfo.device_id, host: deviceInfo.host }, true);
     if (reply?.state !== "streaming") {
       this._setState("ERROR");
