@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -56,21 +56,21 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k.yaml@dev
-  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k.yaml@dev
-  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  core: !include ../../../packages/va_intercom.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
+  led_state_full: !include ../../../packages/led/state_full_ring.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k.yaml
+  va_timers: !include ../../../packages/voice_assistant/timers.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
 # =============================================================================
 # ESPHome Base
@@ -285,6 +285,7 @@ speaker:
     id: hw_speaker
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
+    bits_per_sample: 16
     # Full-duplex profiles must not let the upstream ESPHome mixer prefill the
     # final hardware sink for 500 ms. Mixer transfers 50 ms chunks every 25 ms;
     # keep the hardware backlog short so backpressure reaches media/TTS quickly.

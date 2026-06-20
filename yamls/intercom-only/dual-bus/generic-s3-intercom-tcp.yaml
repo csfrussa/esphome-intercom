@@ -29,23 +29,23 @@ substitutions:
   name: generic-s3-dual-bus
   friendly_name: Generic S3 Dual Bus
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
   speaker_enable_pin: GPIO18
   status_led_pin: GPIO48
   status_led_chipset: WS2812
   status_led_rgb_order: GRB
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  core: !include ../../../packages/intercom_only.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
+  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
 
 esphome:
   name: ${name}
@@ -146,6 +146,7 @@ speaker:
     id: hw_speaker
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
+    bits_per_sample: 16
 
   - platform: resampler
     id: intercom_speaker_input

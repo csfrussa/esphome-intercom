@@ -21,7 +21,7 @@
 #   - id `va`                    : voice_assistant component (voice_assistant/core.yaml)
 #   - id `mww`                   : micro_wake_word component (voice_assistant/core.yaml)
 #   - id `mute`, `speaker_mute`  : mute switches (intercom/va_buttons_switches.yaml)
-#   - id `tts_speaker_input`           : TTS speaker for drain wait_until
+#   - id `tts_speaker_input`     : TTS speaker for drain wait_until
 #   - id `speaker_media_player`  : media_player component
 #   - id `media_mixer_input`     : mixer for ducking
 #   - id `intercom_ringing_sound`: media_file for ringtone loop
@@ -74,6 +74,10 @@ globals:
     type: int
     restore_value: false
     initial_value: "0"
+  - id: g_va_tts_cancel_next
+    type: int
+    restore_value: false
+    initial_value: "0"
   - id: g_ducking_active
     type: int
     restore_value: false
@@ -88,10 +92,43 @@ globals:
     initial_value: "-1"
 
 script:
+  - id: va_debug_dump
+    parameters:
+      event: string
+    then:
+      - logger.log:
+          level: INFO
+          tag: fsm
+          format: "FSM[%s] ui=%d led=%d va_state=%d pending=%d active=%d cancel=%d barge=%d mww_recent=%d duck=%d va_running=%d mww_running=%d mp=%d announcing=%d ic_idle=%d ic_ring=%d ic_out=%d ic_stream=%d mute=%d spk_mute=%d"
+          args:
+            - event.c_str()
+            - id(ui_state)
+            - id(g_applied_led)
+            - id(g_va_state)
+            - id(g_va_tts_pending)
+            - id(g_va_tts_active)
+            - id(g_va_tts_cancel_next)
+            - id(g_barge_in_pending)
+            - id(g_mww_recent)
+            - id(g_ducking_active)
+            - id(va).is_running()
+            - id(mww).is_running()
+            - id(speaker_media_player).state
+            - id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING
+            - id(intercom).is_idle()
+            - id(intercom).is_ringing()
+            - id(intercom).is_outgoing()
+            - id(intercom).is_streaming()
+            - id(mute).state
+            - id(speaker_mute).state
+
   # CENTRAL REDUCER
   - id: update_status
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "update_status:enter"
       - lambda: |-
           // Central UI reducer. Priority order:
           //   init/connectivity > mute states > wake-word
@@ -157,6 +194,9 @@ script:
           }
           id(ui_state) = state;
           id(g_applied_led) = led;
+      - script.execute:
+          id: va_debug_dump
+          event: "update_status:reduced"
       - script.execute: update_led
       - script.execute: render_ui_state
       # Ducking
@@ -164,6 +204,8 @@ script:
           condition:
             or:
               - voice_assistant.is_running:
+              - lambda: 'return id(g_mww_recent) != 0;'
+              - lambda: 'return id(g_barge_in_pending) != 0;'
               - lambda: 'return id(g_va_state) != 0;'
               - lambda: 'return id(g_va_tts_pending) != 0;'
               - lambda: 'return id(g_va_tts_active) != 0;'
@@ -176,25 +218,34 @@ script:
                 condition:
                   lambda: 'return id(g_ducking_active) == 0;'
                 then:
-                  - mixer_speaker.apply_ducking:
-                      id: media_mixer_input
-                      decibel_reduction: 20
-                      duration: 200ms
-                  - globals.set:
-                      id: g_ducking_active
-                      value: "1"
+                    - mixer_speaker.apply_ducking:
+                        id: media_mixer_input
+                        decibel_reduction: 20
+                        duration: 200ms
+                    - script.execute:
+                        id: va_debug_dump
+                        event: "duck:on"
+                    - globals.set:
+                        id: g_ducking_active
+                        value: "1"
           else:
             - if:
                 condition:
                   lambda: 'return id(g_ducking_active) != 0;'
                 then:
-                  - mixer_speaker.apply_ducking:
-                      id: media_mixer_input
-                      decibel_reduction: 0
-                      duration: 500ms
-                  - globals.set:
-                      id: g_ducking_active
-                      value: "0"
+                    - mixer_speaker.apply_ducking:
+                        id: media_mixer_input
+                        decibel_reduction: 0
+                        duration: 500ms
+                    - script.execute:
+                        id: va_debug_dump
+                        event: "duck:off"
+                    - globals.set:
+                        id: g_ducking_active
+                        value: "0"
+      - script.execute:
+          id: va_debug_dump
+          event: "update_status:exit"
 
   # Hook placeholders (devices !extend)
   - id: update_led
@@ -232,11 +283,17 @@ script:
       reason: string
     then: []
   - id: va_end_cleanup
-    then: []
+    then:
+      - script.execute:
+          id: va_debug_dump
+          event: "va_end_cleanup"
 
   - id: start_mww_when_ready
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "start_mww_when_ready:enter"
       # MWW owns the microphone consumer and starts the AFE/I2S path. Do not
       # start it from early boot or generic API callbacks; wait for init to
       # clear and make every caller pass through this single gate.
@@ -264,6 +321,9 @@ script:
             - logger.log:
                 tag: mww
                 format: "MWW: safe start"
+            - script.execute:
+                id: va_debug_dump
+                event: "start_mww_when_ready:start"
             - micro_wake_word.start:
             - delay: 1s
             - lambda: |-
@@ -285,65 +345,32 @@ script:
                   - id(mww).is_running()
                   - id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING
                   - id(intercom).is_idle()
-
-  - id: handle_mww_detected
-    mode: restart
-    parameters:
-      wake_word: string
-    then:
-      - logger.log:
-          tag: mww
-          format: "MWW: wake word detected"
-      - globals.set:
-          id: g_mww_recent
-          value: "1"
-      - script.execute: update_status
-      - script.execute: mww_failsafe
-      - if:
-          condition:
-            or:
-              - lambda: 'return id(g_va_state) == 3 || id(g_va_tts_pending) != 0 || id(g_va_tts_active) != 0;'
-              - lambda: 'return id(g_barge_in_pending) != 0;'
-          then:
-            - logger.log:
-                tag: mww
-                format: "MWW: VA response barge-in"
-            - globals.set:
-                id: g_barge_in_pending
-                value: "1"
-            - script.execute: barge_failsafe
-            - script.execute: va_barge_restart
-          else:
-            - if:
-                condition:
-                  voice_assistant.is_running:
-                then:
-                  - logger.log:
-                      tag: mww
-                      format: "MWW: ignored duplicate while VA is already running"
-                  - globals.set:
-                      id: g_mww_recent
-                      value: "0"
-                  - script.execute: update_status
-                else:
-                  - logger.log:
-                      tag: mww
-                      format: "MWW: fresh VA start"
-                  - voice_assistant.start:
-                      wake_word: !lambda return wake_word;
+            - script.execute:
+                id: va_debug_dump
+                event: "start_mww_when_ready:skip"
 
   # Core scripts
   - id: va_end_handler
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "va_end_handler:enter"
       - if:
           condition:
             lambda: 'return id(g_barge_in_pending) != 0;'
           then:
             - logger.log:
                 tag: va
-                format: "VA: on_end while barge pending"
-            - script.execute: va_barge_restart
+                format: "VA: barge restart"
+            - script.execute:
+                id: va_debug_dump
+                event: "va_end_handler:barge"
+            - media_player.stop:
+                id: speaker_media_player
+                announcement: true
+            - voice_assistant.stop:
+            - script.execute: va_barge_maybe_restart
           else:
             - if:
                 condition:
@@ -352,11 +379,17 @@ script:
                   - logger.log:
                       tag: va
                       format: "VA: on_end during TTS, waiting for media announcement completion"
+                  - script.execute:
+                      id: va_debug_dump
+                      event: "va_end_handler:tts_wait"
                   - script.execute: va_tts_maybe_done
                 else:
                   - logger.log:
                       tag: va
                       format: "VA: end, clearing state"
+                  - script.execute:
+                      id: va_debug_dump
+                      event: "va_end_handler:clear"
                   - globals.set:
                       id: g_va_state
                       value: "0"
@@ -372,6 +405,9 @@ script:
   - id: va_tts_maybe_done
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "va_tts_maybe_done:enter"
       - if:
           condition:
             and:
@@ -383,6 +419,9 @@ script:
             - logger.log:
                 tag: va
                 format: "VA: TTS audio completed, clearing response state"
+            - script.execute:
+                id: va_debug_dump
+                event: "va_tts_maybe_done:clear"
             - globals.set:
                 id: g_va_state
                 value: "0"
@@ -398,6 +437,9 @@ script:
   - id: va_barge_maybe_restart
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "va_barge_maybe_restart:enter"
       - if:
           condition:
             and:
@@ -411,9 +453,12 @@ script:
             - logger.log:
                 tag: va
                 format: "VA: barge restart conditions satisfied"
+            - script.execute:
+                id: va_debug_dump
+                event: "va_barge_maybe_restart:start"
             - globals.set:
                 id: g_va_state
-                value: "0"
+                value: "1"
             - globals.set:
                 id: g_va_tts_pending
                 value: "0"
@@ -423,29 +468,15 @@ script:
             - globals.set:
                 id: g_mww_recent
                 value: "0"
-            - globals.set:
-                id: g_barge_in_pending
-                value: "0"
             - script.execute: update_status
             - voice_assistant.start:
-
-  - id: va_barge_restart
-    mode: restart
-    then:
-      - logger.log:
-          tag: va
-          format: "VA: barge restart requested"
-      - script.stop: va_end_handler
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - voice_assistant.stop:
-      - script.execute: update_status
-      - script.execute: va_barge_maybe_restart
 
   - id: va_error_flash
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "va_error_flash:enter"
       - delay: 2s
       - if:
           condition:
@@ -459,6 +490,9 @@ script:
   - id: mww_failsafe
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "mww_failsafe:enter"
       - delay: 3s
       - logger.log:
           level: WARN
@@ -471,6 +505,9 @@ script:
   - id: barge_failsafe
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "barge_failsafe:enter"
       - delay: 15s
       - if:
           condition:
@@ -487,6 +524,9 @@ script:
   - id: intercom_ringing_loop
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "intercom_ringing_loop:enter"
       - while:
           condition:
             intercom_api.is_ringing: intercom

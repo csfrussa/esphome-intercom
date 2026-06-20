@@ -16,20 +16,38 @@ audio_file:
 voice_assistant:
   id: va
   on_timer_started:
+    - script.execute:
+        id: va_debug_dump
+        event: "timer:on_started"
     - script.execute: va_timer_state_changed
   on_timer_cancelled:
+    - script.execute:
+        id: va_debug_dump
+        event: "timer:on_cancelled"
     - script.execute: va_timer_state_changed
   on_timer_updated:
+    - script.execute:
+        id: va_debug_dump
+        event: "timer:on_updated"
     - script.execute: va_timer_state_changed
   on_timer_tick:
+    - script.execute:
+        id: va_debug_dump
+        event: "timer:on_tick"
     - script.execute: va_timer_state_changed
   on_timer_finished:
+    - script.execute:
+        id: va_debug_dump
+        event: "timer:on_finished"
     - switch.turn_on: timer_ringing
 
 script:
   - id: va_timer_state_changed
     mode: restart
     then:
+      - script.execute:
+          id: va_debug_dump
+          event: "timer:state_changed"
       - script.execute: update_status
 
   - id: timer_alarm_loop
@@ -52,12 +70,18 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
     on_turn_off:
+      - script.execute:
+          id: va_debug_dump
+          event: "timer_ringing:off"
       - script.stop: timer_alarm_loop
       - media_player.stop:
           id: speaker_media_player
           announcement: true
       - script.execute: update_status
     on_turn_on:
+      - script.execute:
+          id: va_debug_dump
+          event: "timer_ringing:on"
       - media_player.stop:
           id: speaker_media_player
           announcement: true

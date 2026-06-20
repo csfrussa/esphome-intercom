@@ -29,6 +29,9 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     on_turn_on:
+      - script.execute:
+          id: va_debug_dump
+          event: "mute:on"
       - logger.log:
           level: INFO
           tag: mute
@@ -38,6 +41,9 @@ switch:
       - microphone.mute: ${mic_id}
       - script.execute: update_status
     on_turn_off:
+      - script.execute:
+          id: va_debug_dump
+          event: "mute:off"
       - logger.log:
           level: INFO
           tag: mute
@@ -54,12 +60,18 @@ switch:
     restore_mode: DISABLED
     lambda: 'return id(g_wake_word_enabled);'
     turn_on_action:
+      - script.execute:
+          id: va_debug_dump
+          event: "wake_switch:on"
       - globals.set:
           id: g_wake_word_enabled
           value: "true"
       - script.execute: start_mww_when_ready
       - script.execute: update_status
     turn_off_action:
+      - script.execute:
+          id: va_debug_dump
+          event: "wake_switch:off"
       - globals.set:
           id: g_wake_word_enabled
           value: "false"
