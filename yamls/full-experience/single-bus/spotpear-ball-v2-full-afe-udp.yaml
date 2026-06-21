@@ -34,6 +34,7 @@ substitutions:
   ext_components_source: "../../../esphome/components"
 
   assets_base: "../../../"
+  runtime_ui_debug: "true"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -401,7 +402,7 @@ media_player:
 #
 # MWW always-on (stop_after_detection: false) on mic_afe.
 # SR linear AEC preserves spectral features for neural detection (10/10).
-# Ducking managed centrally: acquire in on_wake_word_detected, release in va_end_handler.
+# Ducking is derived by runtime_fsm from the active VA/media/intercom policies.
 # =============================================================================
 micro_wake_word:
   id: mww
@@ -579,8 +580,6 @@ script:
           }
           lv_label_set_text(id(reply_page_counter), "");
       - script.execute: update_replying_text
-      - script.execute: set_idle_or_mute_phase
-      - script.execute: draw_display
 
   # Spotpear Ball v2 LED patterns (extends empty package placeholder)
   - id: !extend update_led
@@ -589,6 +588,20 @@ script:
           static int last = -2;
           int t = id(g_applied_led);
           if (t == last) return;
+          if (strcmp("${runtime_ui_debug}", "true") == 0) {
+            ESP_LOGI("ui_trace",
+                     "LED seq=%u mask=0x%08" PRIx32 " led=%d->%d led_policy=%s display=%s audio=%s va_resp=%s ui=%d phase=%d",
+                     id(runtime_controller).get_sequence(),
+                     id(runtime_controller).get_activity_mask(),
+                     last,
+                     t,
+                     id(runtime_controller).get_policy("led_status", ""),
+                     id(runtime_controller).get_policy("display_status", ""),
+                     id(runtime_controller).get_policy("audio_policy", ""),
+                     id(runtime_controller).get_policy("va_response", ""),
+                     id(ui_state),
+                     id(voice_assistant_phase));
+          }
           last = t;
           auto *led = id(status_led);
           switch (t) {
@@ -638,6 +651,19 @@ script:
     then:
       - lambda: |-
           int state = id(ui_state);
+          if (strcmp("${runtime_ui_debug}", "true") == 0) {
+            ESP_LOGI("ui_trace",
+                     "RENDER seq=%u mask=0x%08" PRIx32 " ui=%d display=%s led=%s audio=%s va_resp=%s phase_before=%d mode=%d",
+                     id(runtime_controller).get_sequence(),
+                     id(runtime_controller).get_activity_mask(),
+                     state,
+                     id(runtime_controller).get_policy("display_status", ""),
+                     id(runtime_controller).get_policy("led_status", ""),
+                     id(runtime_controller).get_policy("audio_policy", ""),
+                     id(runtime_controller).get_policy("va_response", ""),
+                     id(voice_assistant_phase),
+                     id(current_mode));
+          }
           // Intercom idle: restore previous mode after call ends.
           if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "Idle") {
             id(peer_name) = id(intercom).get_current_destination();
@@ -688,6 +714,10 @@ script:
               break;
             default:
               break;
+          }
+          if (strcmp("${runtime_ui_debug}", "true") == 0) {
+            ESP_LOGI("ui_trace", "RENDER_DONE seq=%u ui=%d phase_after=%d mode=%d",
+                     id(runtime_controller).get_sequence(), state, id(voice_assistant_phase), id(current_mode));
           }
       - script.execute: backlight_timer
       # Reset text on listening start.
@@ -1023,6 +1053,20 @@ script:
 
           // Skip page load if already showing (avoids redundant SPI transfer)
           bool page_changed = (target != lv_disp_get_scr_act(nullptr));
+          if (strcmp("${runtime_ui_debug}", "true") == 0) {
+            ESP_LOGI("ui_trace",
+                     "PAGE seq=%u mask=0x%08" PRIx32 " target=%s changed=%d display=%s led=%s audio=%s va_resp=%s phase=%d mode=%d",
+                     id(runtime_controller).get_sequence(),
+                     id(runtime_controller).get_activity_mask(),
+                     page_name,
+                     page_changed,
+                     id(runtime_controller).get_policy("display_status", ""),
+                     id(runtime_controller).get_policy("led_status", ""),
+                     id(runtime_controller).get_policy("audio_policy", ""),
+                     id(runtime_controller).get_policy("va_response", ""),
+                     id(voice_assistant_phase),
+                     id(current_mode));
+          }
           if (page_changed) {
             // Stop animation before page switch to prevent split-screen glitch
             lv_anim_del(id(idle_anim), nullptr);
@@ -1501,7 +1545,7 @@ binary_sensor:
                           else:
                             - runtime_fsm.event:
                                 id: runtime_controller
-                                event: wake_word
+                                event: manual_voice_toggle
       # Double click: decline incoming or next contact
       - timing:
           - ON for 50ms to 500ms
