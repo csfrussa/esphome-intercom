@@ -49,8 +49,8 @@ substitutions:
 
   # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # release mode.
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
 
   # Display dimensions (portrait)
   display_width: "800"
@@ -92,21 +92,21 @@ substitutions:
   afe_aec_restore_mode: ALWAYS_ON
 
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
+  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
+  p4_diagnostics: !include ../../../packages/diagnostics/native_no_wifi_signal.yaml
+  core: !include ../../../packages/va_intercom_cpp.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@dev
+  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION

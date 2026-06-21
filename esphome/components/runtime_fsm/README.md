@@ -18,6 +18,44 @@ names are just YAML policy names. A different project can use the same reducer
 for relays, text sensors, display pages, motor modes, HVAC presets or any other
 stateful output.
 
+## The Short Version
+
+Use this component when your YAML starts looking like this:
+
+```text
+media callback changes LED
+voice callback changes the same LED
+intercom callback changes the same LED
+timer callback changes the same LED
+mute callback changes the same LED
+```
+
+That design breaks because every callback has to know what every other callback
+is doing.
+
+With `runtime_fsm`, callbacks stop rendering outputs. They only say what
+happened:
+
+```text
+media started
+assistant is responding
+intercom is streaming
+speaker is muted
+```
+
+Then one reducer computes the final result:
+
+```text
+LED = intercom
+display = intercom
+audio = duck
+ringtone = stop
+```
+
+The useful part is that facts can overlap. If media is playing underneath a TTS
+response, media remains active. When TTS ends, the reducer naturally returns to
+the media state without any callback storing a "previous state" variable.
+
 ## Why This Exists
 
 ESPHome automations are event-driven. That is good, but composite devices often
@@ -46,6 +84,154 @@ or UI that says "media" while an intercom call is active.
 
 It does not guess time, sleep, poll or wait for hardcoded delays. Normal
 decisions are made from events and current activities.
+
+## When To Use It
+
+Use `runtime_fsm` when several independent features must control the same
+outputs:
+
+- media playback and Voice Assistant both drive the same LED;
+- TTS should duck background music, then restore it;
+- an intercom call should override media effects without forgetting that media
+  is still playing underneath;
+- a timer, mute switch or connectivity state must override the normal UI;
+- callbacks can arrive in different orders and you do not want short wrong
+  flashes or stale output state.
+
+Do not use it for a simple one-callback automation. If one button toggles one
+relay, native ESPHome YAML is clearer.
+
+## Before And After
+
+### Without A Reducer
+
+This style is common in simple ESPHome YAMLs. It works until events overlap:
+
+```yaml
+media_player:
+  - id: speaker_media_player
+    on_play:
+      - light.turn_on:
+          id: status_led
+          effect: media_spin
+      - mixer_speaker.apply_ducking:
+          id: media_mixer_input
+          decibel_reduction: 0
+    on_idle:
+      - light.turn_off: status_led
+      - mixer_speaker.apply_ducking:
+          id: media_mixer_input
+          decibel_reduction: 0
+
+voice_assistant:
+  on_tts_start:
+    - light.turn_on:
+        id: status_led
+        effect: assistant_blue
+    - mixer_speaker.apply_ducking:
+        id: media_mixer_input
+        decibel_reduction: 20
+  on_end:
+    - light.turn_off: status_led
+    - mixer_speaker.apply_ducking:
+        id: media_mixer_input
+        decibel_reduction: 0
+
+intercom_api:
+  on_streaming:
+    - light.turn_on:
+        id: status_led
+        effect: intercom_green
+  on_hangup:
+    - light.turn_off: status_led
+```
+
+The problem is ownership. If media is playing, then TTS starts, then TTS ends,
+`on_end` turns the LED off even though media is still playing. If intercom is
+streaming and a media callback fires, media can steal the LED from the call.
+Every callback has to remember every other feature.
+
+### With `runtime_fsm`
+
+With the reducer, callbacks report facts only:
+
+```yaml
+media_player:
+  - id: speaker_media_player
+    on_play:
+      - runtime_fsm.event:
+          id: runtime
+          event: media_started
+    on_idle:
+      - runtime_fsm.event:
+          id: runtime
+          event: media_stopped
+
+voice_assistant:
+  on_tts_start:
+    - runtime_fsm.event:
+        id: runtime
+        event: assistant_started
+  on_end:
+    - runtime_fsm.event:
+        id: runtime
+        event: assistant_finished
+
+intercom_api:
+  on_streaming:
+    - runtime_fsm.event:
+        id: runtime
+        event: call_started
+  on_hangup:
+    - runtime_fsm.event:
+        id: runtime
+        event: call_ended
+```
+
+The state and output policy live in one place:
+
+```yaml
+runtime_fsm:
+  id: runtime
+
+  activities:
+    media:
+      priority: 100
+      policies:
+        led_state: media_spin
+        audio_policy: normal
+
+    assistant_response:
+      priority: 800
+      policies:
+        led_state: assistant_blue
+        audio_policy: duck
+
+    intercom_streaming:
+      priority: 900
+      policies:
+        led_state: intercom_green
+        audio_policy: duck
+
+  events:
+    media_started:
+      activate: media
+    media_stopped:
+      deactivate: media
+    assistant_started:
+      activate: assistant_response
+    assistant_finished:
+      deactivate: assistant_response
+    call_started:
+      activate: intercom_streaming
+    call_ended:
+      deactivate: intercom_streaming
+```
+
+Now the callback order does not need to encode the whole product state. If
+`assistant_response` ends while `media` is still active, the reducer naturally
+returns to `led_state: media_spin`. If intercom is active, its higher priority
+wins until the call ends.
 
 ## Core Concepts
 
@@ -166,71 +352,204 @@ When `runtime_fsm.event` is called, the component does this:
 The important property is "run to completion": a policy automation can trigger
 another event, but that event is queued until the current commit is finished.
 
-## A First Useful Example
+## Tutorial: Build A Reducer In Steps
 
-This example drives a single LED output and an audio ducking flag. It is small
-enough to understand but already solves a real priority problem: intercom and
-assistant response override media.
+The component is useful when two or more callbacks want to control the same
+thing. Instead of every callback writing the LED, display or audio mixer
+directly, callbacks only report facts. `runtime_fsm` decides the final output.
+
+Each step below is complete enough to compile once the referenced ESPHome
+components exist in your YAML. The names are deliberately ordinary YAML names:
+`led_state`, `audio_policy`, `duck`, `apply_audio_policy` and the globals are
+not special to the component.
+
+### 1. One Output: LED State
+
+First create one output global and one script that knows how to render it:
 
 ```yaml
 globals:
-  - id: g_activity_mask
-    type: uint32_t
-    restore_value: false
-    initial_value: "0"
-  - id: g_fsm_seq
-    type: uint32_t
-    restore_value: false
-    initial_value: "0"
   - id: g_led_state
-    type: int
-    restore_value: false
-    initial_value: "0"
-  - id: g_audio_duck
     type: int
     restore_value: false
     initial_value: "0"
 
 script:
-  - id: apply_led
+  - id: apply_led_state
     parameters:
       value: int
     then:
       - logger.log:
-          format: "LED policy resolved to %d"
+          format: "Apply LED state %d"
           args: [value]
+```
 
+Then define facts, events and the policy that maps facts to that output:
+
+```yaml
 runtime_fsm:
   id: runtime
-  debug: false
-  state_outputs:
-    activity_mask: g_activity_mask
-    sequence: g_fsm_seq
 
   activities:
     idle:
       initial: true
       priority: 0
       policies:
-        led_status: idle
+        led_state: idle
+
+    media:
+      priority: 100
+      policies:
+        led_state: media
+
+  events:
+    media_started:
+      activate: media
+    media_stopped:
+      deactivate: media
+
+  policies:
+    led_state:
+      output: g_led_state
+      on_change:
+        - script.execute:
+            id: apply_led_state
+            value: !lambda "return value;"
+      values:
+        idle: 0
+        media: 12
+```
+
+Now any callback can report media state without knowing how LEDs are rendered:
+
+```yaml
+media_player:
+  - platform: speaker_source
+    # ...
+    on_play:
+      - runtime_fsm.event:
+          id: runtime
+          event: media_started
+    on_idle:
+      - runtime_fsm.event:
+          id: runtime
+          event: media_stopped
+```
+
+### 2. Add A Second Output: Audio Policy
+
+Add another global and script. This is where you define what "duck" means for
+your hardware. `runtime_fsm` does not know about mixers or ducking.
+
+```yaml
+globals:
+  - id: g_audio_policy
+    type: int
+    restore_value: false
+    initial_value: "0"
+
+script:
+  - id: apply_audio_policy
+    parameters:
+      value: int
+    then:
+      - if:
+          condition:
+            lambda: "return value == 1;"
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 20
+                duration: 200ms
+          else:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 0
+                duration: 500ms
+```
+
+Then add the policy to the same reducer:
+
+```yaml
+runtime_fsm:
+  # ...
+  activities:
+    idle:
+      initial: true
+      priority: 0
+      policies:
+        led_state: idle
         audio_policy: normal
 
     media:
       priority: 100
       policies:
-        led_status: media
+        led_state: media
+        audio_policy: normal
+
+  policies:
+    audio_policy:
+      output: g_audio_policy
+      on_change:
+        - script.execute:
+            id: apply_audio_policy
+            value: !lambda "return value;"
+      values:
+        normal: 0
+        duck: 1
+```
+
+Nothing is hardcoded: `audio_policy`, `normal`, `duck`, `g_audio_policy` and
+`apply_audio_policy` are all names chosen by the YAML.
+
+Here is the complete flow for that one output. Notice the `idle` activity: it
+defines the fallback `normal` policy, so when all temporary activities stop the
+audio policy is explicitly restored.
+
+```yaml
+globals:
+  - id: g_audio_policy
+    type: int
+    restore_value: false
+    initial_value: "0"
+
+script:
+  - id: apply_audio_policy
+    parameters:
+      value: int
+    then:
+      - if:
+          condition:
+            lambda: "return value == 1;"
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 20
+                duration: 200ms
+          else:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 0
+                duration: 500ms
+
+runtime_fsm:
+  id: runtime
+
+  activities:
+    idle:
+      initial: true
+      priority: 0
+      policies:
+        audio_policy: normal
+
+    media:
+      priority: 100
+      policies:
         audio_policy: normal
 
     assistant_response:
       priority: 800
       policies:
-        led_status: assistant
-        audio_policy: duck
-
-    intercom_streaming:
-      priority: 900
-      policies:
-        led_status: intercom
         audio_policy: duck
 
   events:
@@ -242,59 +561,130 @@ runtime_fsm:
       activate: assistant_response
     assistant_finished:
       deactivate: assistant_response
+
+  policies:
+    audio_policy:
+      output: g_audio_policy
+      on_change:
+        - script.execute:
+            id: apply_audio_policy
+            value: !lambda "return value;"
+      values:
+        normal: 0
+        duck: 1
+```
+
+What happens:
+
+```text
+media_started      -> media=true               -> audio_policy=normal
+assistant_started  -> media=true, assistant=true -> audio_policy=duck
+assistant_finished -> media=true               -> audio_policy=normal
+media_stopped      -> idle=true                -> audio_policy=normal
+```
+
+Use the same pattern for every output that needs a known fallback: LED idle,
+display idle, ringtone stop, timer alarm stop, audio normal.
+
+### 3. Add Priority: Assistant Or Intercom Overrides Media
+
+Now add activities that can overlap with media:
+
+```yaml
+runtime_fsm:
+  # ...
+  activities:
+    media:
+      priority: 100
+      policies:
+        led_state: media
+        audio_policy: normal
+
+    assistant_response:
+      priority: 800
+      policies:
+        led_state: assistant
+        audio_policy: duck
+
+    intercom_streaming:
+      priority: 900
+      policies:
+        led_state: intercom
+        audio_policy: duck
+
+  events:
+    assistant_started:
+      activate: assistant_response
+    assistant_finished:
+      deactivate: assistant_response
     call_started:
       activate: intercom_streaming
     call_ended:
       deactivate: intercom_streaming
-
-  policies:
-    led_status:
-      output: g_led_state
-      on_change:
-        - script.execute:
-            id: apply_led
-            value: !lambda "return value;"
-      values:
-        idle: 0
-        media: 12
-        assistant: 7
-        intercom: 10
-
-    audio_policy:
-      output: g_audio_duck
-      values:
-        normal:
-          value: 0
-          then:
-            - logger.log: "Audio policy: normal"
-        duck:
-          value: 1
-          then:
-            - logger.log: "Audio policy: duck"
 ```
 
-If media is active and `assistant_started` arrives, both facts are true:
+If media is playing and the assistant starts speaking, both facts are active:
 
 ```text
 media=true, assistant_response=true
 ```
 
-The reducer resolves:
+For each policy, the highest-priority active activity wins:
 
 ```text
-led_status=assistant
+led_state=assistant
 audio_policy=duck
 ```
 
-When `assistant_finished` arrives, media was never forgotten, so the reducer
+When `assistant_finished` arrives, `media` was never cleared, so the reducer
 returns to:
 
 ```text
-led_status=media
+led_state=media
 audio_policy=normal
 ```
 
-No callback needs to remember "what was underneath".
+No callback needs to remember the previous LED or previous ducking state.
+
+### 4. Add Multiple State Changes In One Event
+
+Use `set_activities` when a callback must change several facts atomically:
+
+```yaml
+on_idle:
+  - runtime_fsm.set_activities:
+      id: runtime
+      set:
+        media: false
+        assistant_response: false
+```
+
+This avoids publishing an intermediate snapshot where only one of those facts
+has changed.
+
+### 5. Add Actions
+
+Actions are named ESPHome automations the reducer may request. The action body
+is still normal YAML:
+
+```yaml
+runtime_fsm:
+  actions:
+    voice_start:
+      - voice_assistant.start:
+    voice_stop:
+      - voice_assistant.stop:
+
+  events:
+    wake_word:
+      action: voice_start
+    barge_in:
+      deactivate: assistant_response
+      action: voice_stop
+```
+
+Use this when you want the same event that updates state to also request an
+external component action.
 
 ## How To Design A Reducer Configuration
 
@@ -683,7 +1073,9 @@ policies:
       listening: 6
 ```
 
-Or an object with `value` and `then`:
+Or an object with `value` and `then`. This is still a user-defined policy; the
+component does not know what "duck" means, it only resolves that the active
+highest-priority activity selected the `duck` value:
 
 ```yaml
 policies:

@@ -131,12 +131,14 @@ class RuntimeFsm : public Component {
   void drain_pending_actions_();
   void run_policy_actions_(const ResolvedPolicies &old_policies, const ResolvedPolicies &new_policies);
   int32_t resolve_policy_output_(const char *policy, const char *value) const;
+  void mark_config_error_();
 
   script::Script<> *output_script_{nullptr};
   intercom_api::IntercomApi *intercom_{nullptr};
   const char *intercom_activity_prefix_{nullptr};
 
   bool debug_{false};
+  bool config_error_{false};
   uint32_t sequence_{0};
   ResolvedPolicies resolved_policies_{};
   char intercom_activity_[64]{};
@@ -218,7 +220,7 @@ class RuntimeFsm : public Component {
   std::array<ActivityConfig, MAX_ACTIVITIES> activities_{};
   std::array<NamedAction, MAX_ACTIONS> actions_{};
   std::array<EventActivity, MAX_EVENT_UPDATES> event_updates_{};
-  std::array<EventRule, 32> event_rules_{};
+  std::array<EventRule, 64> event_rules_{};
   std::array<DerivedActivity, 16> derived_activities_{};
   std::array<PolicyValueAction, 32> policy_value_actions_{};
   std::array<PolicyOutput, 64> policy_outputs_{};

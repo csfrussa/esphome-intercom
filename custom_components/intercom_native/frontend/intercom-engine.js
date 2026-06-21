@@ -1,9 +1,15 @@
 const HA_SOFTPHONE_DEVICE_ID = "__intercom_native_ha_softphone__";
 const WS_AUDIO = 1;
 const WS_SUBSCRIBE_CALL_EVENTS = "intercom_native/subscribe_call_events";
-const ASSET_V = "12";
+const MODULE_VERSION = (() => {
+  try {
+    return new URL(import.meta.url).searchParams.get("v") || "dev";
+  } catch (_) {
+    return "dev";
+  }
+})();
 const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
-  await import(`./ringtone.js?v=${encodeURIComponent(ASSET_V)}`);
+  await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const HIDDEN_HANGUP_GRACE_MS = 15000;
 const CONTROL_ACK_TIMEOUT_MS = 3000;
 const ENGINE_TRANSITIONS = {
@@ -327,7 +333,7 @@ class IntercomEngine extends EventTarget {
       this._mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
-      await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-processor.js?v=${ASSET_V}`);
+      await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-processor.js?v=${encodeURIComponent(MODULE_VERSION)}`);
       this._source = this._audioContext.createMediaStreamSource(this._mediaStream);
       this._captureNode = new AudioWorkletNode(this._audioContext, "intercom-processor", {
         processorOptions: { format: this._txFormat },
@@ -342,7 +348,7 @@ class IntercomEngine extends EventTarget {
     }
 
     if (receiveFromEsp) {
-      await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-playback-processor.js?v=${ASSET_V}`);
+      await this._audioContext.audioWorklet.addModule(`/intercom-native/intercom-playback-processor.js?v=${encodeURIComponent(MODULE_VERSION)}`);
       this._playbackNode = new AudioWorkletNode(this._audioContext, "intercom-playback-processor", {
         outputChannelCount: [this._rxFormat.channels],
         processorOptions: { format: this._rxFormat },

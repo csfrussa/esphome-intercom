@@ -44,6 +44,10 @@ regressions would be a problem.
   This keeps the ESP-caller / HA-responder path aligned with HA-originated
   calls and avoids deep/slow audio caused by a browser worklet using stale
   16 kHz framing against a negotiated 48 kHz leg.
+- 🧭 ESP caller devices now also apply the selected RX speaker format before
+  activation and again when the `ANSWER` arrives. ESP-originated calls answered
+  by HA therefore use the negotiated speaker rate instead of a stale/default
+  playback format.
 - 🚫 Duplicate terminal/bridge events were tightened so cards should see one
   final reason instead of compensating for repeated `disconnected` events.
 - 🧪 `tools/intercom_softphone_probe.py` was expanded for negotiated-format
@@ -76,6 +80,9 @@ regressions would be a problem.
   relevant to the current state are visible.
 - 🧾 Terminal text uses the active call peer. A card or display no longer reports
   the currently selected phonebook contact as the caller that just hung up.
+- 🧹 Ringtone and AudioWorklet cache keys are derived from the loaded card module
+  URL/version. The frontend no longer needs a manually bumped audio asset
+  constant during prerelease testing.
 - 🧪 The card version exposed in Lovelace is `v2026.7.0-dev`.
 
 ## 📞 Intercom Protocol
@@ -141,6 +148,9 @@ regressions would be a problem.
 - 🥇 Intercom keeps priority through its dedicated mixer source.
 - ⏲️ Timer/ringtone/media playback now follow the same source arbitration model
   instead of drifting through separate speaker paths.
+- 🧯 Runtime reducer state dumps are disabled by default in production package
+  callbacks. Enable `debug: true` or call the diagnostic dump service when
+  developing a profile.
 - 🧹 The project-local speaker fork remains available for legacy/custom YAMLs,
   but maintained full profiles are moving to the `speaker_source` path.
 - 🔇 Mute paths and source priority rules were kept aligned with the full UI
@@ -188,6 +198,11 @@ regressions would be a problem.
   higher-rate RX toward the speaker branch.
 - 🔊 WS3 and Spotpear full profiles are aligned around 48 kHz RX for better
   HA-to-ESP playback quality.
+- 🔁 Spotpear UDP mirrors the TCP display cleanup on HA API disconnect. P4 UDP
+  landscape uses the same high-performance AFE mode as the TCP landscape
+  profile.
+- 🧱 The local P4 MIPI DSI wrapper accepts ESPHome's current multi-value display
+  dimension API, keeping P4 builds compatible with ESPHome 2026.6.x.
 - ⚙️ Full profiles include the shared performance build option baseline.
 - 🧭 Release YAML references for this prerelease point to the `dev` branch.
 

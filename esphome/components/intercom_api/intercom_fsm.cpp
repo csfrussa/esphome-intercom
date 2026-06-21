@@ -315,6 +315,10 @@ void IntercomApi::start() {
 
   ESP_LOGI(TAG, "%s -> %s: calling... (call_id=%s)",
            this->device_name_.c_str(), dest_name.c_str(), call_id.c_str());
+  this->current_caller_to_dest_format_ = this->tx_audio_format_;
+  this->current_dest_to_caller_format_ = this->rx_audio_format_;
+  this->current_tx_audio_format_ = this->tx_audio_format_;
+  this->current_rx_audio_format_ = this->rx_audio_format_;
   this->set_active_(true);
   this->set_call_state_(CallState::OUTGOING);
   this->outgoing_start_time_ = millis();
@@ -346,10 +350,6 @@ void IntercomApi::start() {
   }
 
   if (this->transport_ != nullptr) {
-    this->current_caller_to_dest_format_ = this->tx_audio_format_;
-    this->current_dest_to_caller_format_ = this->rx_audio_format_;
-    this->current_tx_audio_format_ = this->tx_audio_format_;
-    this->current_rx_audio_format_ = this->rx_audio_format_;
     if (!this->send_pbx_start_(call_id, caller_route, this->device_name_,
                                 dest_route, dest_name)) {
       ESP_LOGE(TAG, "MSG_START encode/send failed");
@@ -1068,6 +1068,14 @@ handle_incoming_start_in_idle:
         this->current_dest_to_caller_format_ = msg.dest_to_caller_format;
         this->current_tx_audio_format_ = msg.caller_to_dest_format;
         this->current_rx_audio_format_ = msg.dest_to_caller_format;
+#ifdef USE_INTERCOM_API_SPEAKER
+        if (this->speaker_) {
+          this->speaker_->set_audio_stream_info(audio_stream_info_from_format(this->current_rx_audio_format_));
+          if (this->active_.load(std::memory_order_acquire)) {
+            this->speaker_->start();
+          }
+        }
+#endif
         ESP_LOGI(TAG, "%s: destination answered, streaming (call_id=%s)",
                  this->device_name_.c_str(),
                  in_call_id.c_str());

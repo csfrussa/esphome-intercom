@@ -6,7 +6,7 @@
 namespace esphome::runtime_fsm {
 
 static constexpr size_t MAX_POLICIES = 8;
-static constexpr size_t MAX_ACTIVITY_POLICIES = 4;
+static constexpr size_t MAX_ACTIVITY_POLICIES = 8;
 
 struct PolicyValue {
   const char *policy{nullptr};

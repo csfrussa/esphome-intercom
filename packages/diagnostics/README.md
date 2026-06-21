@@ -12,4 +12,5 @@ component internally to publish heap, reset reason, device info and loop timing
 as `entity_category: diagnostic`.
 
 Low-level runtime debug packages live under `packages/debug/`, for example
-`packages/debug/runtime_diag.yaml`.
+`packages/debug/runtime_diag.yaml`. Even there, periodic runtime dumps are
+disabled by default; enable them only while capturing a focused debug session.

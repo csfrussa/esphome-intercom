@@ -84,5 +84,16 @@ Custom frontend code that starts microphone/playback worklets before the
 control reply should be updated; otherwise ESP -> HA answered calls can use the
 wrong frame size when one direction negotiates 48 kHz.
 
+ESP caller playback now applies the negotiated RX speaker format before the
+call is activated and re-applies it when the ANSWER confirms the effective
+direction formats. Custom ESP integrations that bypass the maintained
+`intercom_api` speaker setup must do the same before feeding high-rate PCM to
+the local speaker path.
+
+The Lovelace frontend derives ringtone/worklet cache keys from the loaded card
+module version instead of a manually bumped audio asset constant. During custom
+frontend testing, clear the browser cache or change the card resource URL when
+serving files outside the packaged release flow.
+
 Older upgrade notes are kept in their original GitHub release pages. This file
 tracks only the current upgrade delta from `2026.6.3` to `2026.7.0-dev`.

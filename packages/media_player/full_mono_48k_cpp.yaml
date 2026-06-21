@@ -60,14 +60,10 @@ media_player:
       - runtime_fsm.event:
           id: runtime_controller
           event: announcement_started
-          dump: true
-          reason: media:on_announcement
     on_play:
       - runtime_fsm.event:
           id: runtime_controller
           event: media_playing
-          dump: true
-          reason: media:on_play
     on_pause:
       - runtime_fsm.event:
           id: runtime_controller
@@ -76,5 +72,3 @@ media_player:
       - runtime_fsm.event:
           id: runtime_controller
           event: media_idle
-          dump: true
-          reason: media:on_idle

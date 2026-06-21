@@ -40,7 +40,9 @@ runtime_diag:
   id: runtime_diag_component
   dump_interval: 5s
   dump_window: 10min
-  periodic_dump: true
+  # Keep disabled by default even in the debug package. Enable only for focused
+  # serial captures; periodic dumps are noisy on normal development builds.
+  periodic_dump: false
   dump_network: false
   task_log_limit: 12
   loop_watch: true

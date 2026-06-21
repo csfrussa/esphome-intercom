@@ -20,9 +20,6 @@
 intercom_api:
   id: intercom
   on_outgoing_call:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_outgoing_call"
     - script.execute: update_status
     - script.execute:
         id: ui_ic_call
@@ -38,27 +35,18 @@ intercom_api:
                 destination: !lambda 'return id(intercom).get_current_destination();'
                 type: "doorbell"
   on_ringing:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_ringing"
     - script.execute: update_status
     - script.execute:
         id: ui_ic_call
         peer: !lambda 'return id(intercom).get_caller();'
     - script.execute: intercom_ringing_loop
   on_dest_ringing:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_dest_ringing"
     # Caller path: dest acked with RING. Same outgoing screen, the
     # device YAML flips its label inside ui_ic_dest_ringing.
     - script.execute:
         id: ui_ic_dest_ringing
         peer: !lambda 'return id(intercom).get_current_destination();'
   on_streaming:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_streaming"
     - script.stop: intercom_ringing_loop
     - script.execute: update_status
     - script.execute:
@@ -67,28 +55,21 @@ intercom_api:
           auto c = id(intercom).get_caller();
           return c.empty() ? id(intercom).get_current_destination() : c;
   on_idle:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_idle"
     - script.stop: intercom_ringing_loop
     - script.execute: update_status
   on_hangup:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_hangup"
     - script.stop: intercom_ringing_loop
     - script.execute: update_status
     - script.execute:
         id: ui_ic_ended
-        peer: !lambda 'return id(intercom).get_caller();'
+        peer: !lambda |-
+          auto c = id(intercom).get_caller();
+          return c.empty() ? id(intercom).get_current_destination() : c;
         reason: !lambda 'return reason;'
   on_call_failed:
-    - script.execute:
-        id: va_debug_dump
-        event: "intercom:on_call_failed"
     - script.stop: intercom_ringing_loop
     - script.execute: update_status
     - script.execute:
         id: ui_ic_ended
-        peer: !lambda 'return id(intercom).get_caller();'
+        peer: !lambda 'return id(intercom).get_current_destination();'
         reason: !lambda 'return reason;'

@@ -100,29 +100,6 @@ globals:
     initial_value: "-1"
 
 script:
-  - id: fsm_debug
-    parameters:
-      event: string
-    then:
-      - lambda: |-
-          ESP_LOGI("fsm", "#%u %-24s phase=%d va=%d epoch=%u tts_epoch=%u mask=0x%08" PRIx32
-                          " ui=%d led=%d duck=%d va_run=%d mww=%d mp=%d ann=%d ic=%s",
-                   id(g_fsm_seq), event.c_str(), id(g_va_phase), id(g_va_state),
-                   id(g_va_epoch), id(g_tts_owner_epoch), id(g_activity_mask),
-                   id(ui_state), id(g_applied_led), id(g_ducking_active),
-                   id(va).is_running(), id(mww).is_running(),
-                   id(speaker_media_player).state,
-                   id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING,
-                   id(intercom).get_state_str());
-
-  - id: va_debug_dump
-    parameters:
-      event: string
-    then:
-      - script.execute:
-          id: fsm_debug
-          event: !lambda 'return event;'
-
   # CENTRAL REDUCER
   - id: update_status
     mode: queued
@@ -254,10 +231,6 @@ script:
                   - globals.set:
                       id: g_ducking_active
                       value: "0"
-      - script.execute:
-          id: fsm_debug
-          event: "update_status"
-
   # Hook placeholders (devices !extend)
   - id: update_led
     mode: restart

@@ -49,8 +49,8 @@ substitutions:
 
   # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # release mode.
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
 
   # Logical LVGL dimensions after software rotation. Runtime layout still reads
   # the active LVGL resolution so the main dashboard can be reused on nearby
@@ -96,22 +96,22 @@ substitutions:
   afe_aec_restore_mode: ALWAYS_ON
 
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
+  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
+  p4_diagnostics: !include ../../../packages/diagnostics/native_no_wifi_signal.yaml
+  core: !include ../../../packages/va_intercom_cpp.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
+  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
   # No carousel (lvgl_settings_navigation) on P4: the landscape display holds
   # all settings in one scrollable dashboard page.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@dev
+  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION
@@ -251,7 +251,7 @@ i2c:
 esp_afe:
   id: afe_processor
   type: fd
-  mode: low_cost
+  mode: high_perf
   mic_num: 2
   input_format: MMNR
   aec_enabled: true
@@ -2820,6 +2820,8 @@ script:
       - text_sensor.template.publish:
           id: text_response
           state: ""
+      - lambda: |-
+          lv_label_set_text(id(replying_text_label), "");
       - script.execute: set_idle_or_mute_phase
       - script.execute: draw_display
 
@@ -3049,30 +3051,19 @@ script:
             set_label(label, active ? on_text : off_text);
           };
 
-          // Stop idle animation when leaving main page (prevents LVGL memory leak)
-          auto stop_anim = [&]() {
-            id(ai_animation_loop).stop();
-            lv_anim_del(id(idle_animation), nullptr);
-            lv_animimg_start(id(idle_animation));
-            lv_anim_del(id(idle_animation), nullptr);
-          };
-
           // Overlay pages (full-screen, cover everything)
           if (!wifi::global_wifi_component->is_connected()) {
-            stop_anim();
             if (active_scr != id(no_wifi_page)->obj)
               lv_disp_load_scr(id(no_wifi_page)->obj);
             return;
           }
           if (!api::global_api_server->is_connected()) {
-            stop_anim();
             if (active_scr != id(no_ha_page)->obj)
               lv_disp_load_scr(id(no_ha_page)->obj);
             return;
           }
           int phase = id(voice_assistant_phase);
           if (phase == ${voice_assist_not_ready_phase_id}) {
-            stop_anim();
             if (active_scr != id(no_ha_page)->obj)
               lv_disp_load_scr(id(no_ha_page)->obj);
             return;
@@ -3081,7 +3072,6 @@ script:
           // Use the runtime_fsm timer activity instead of voice_assistant_phase because the
           // alarm sound is played through media_player and may update the phase.
           if (id(runtime_controller).is_activity_active("timer_ringing")) {
-            stop_anim();
             if (active_scr != id(timer_finished_page)->obj)
               lv_disp_load_scr(id(timer_finished_page)->obj);
             return;

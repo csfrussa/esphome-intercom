@@ -162,6 +162,13 @@ Changes since `2026.6.3`:
   the server `ANSWER` reply has selected the effective TX/RX formats. This
   keeps HA-originated and ESP-originated softphone calls on the same negotiated
   audio contract and prevents stale-format browser audio.
+- ESP caller devices also update their local speaker stream info from the
+  negotiated RX format before and after `ANSWER`, so HA browser audio answered
+  from an ESP-originated call is played at the selected rate instead of a stale
+  default rate.
+- The Lovelace frontend derives ringtone/worklet cache keys from the loaded
+  card module version, removing the old manually bumped audio asset constant
+  from the browser audio test path.
 - Hybrid Lovelace cards retain the original mirror model: they represent one
   ESP endpoint and show that ESP's ringing/streaming controls. A separate
   `ha_softphone` card represents Home Assistant itself.

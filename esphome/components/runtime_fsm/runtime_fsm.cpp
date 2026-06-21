@@ -16,6 +16,11 @@ namespace esphome::runtime_fsm {
 static const char *const TAG = "runtime_fsm";
 
 void RuntimeFsm::setup() {
+  if (this->config_error_) {
+    ESP_LOGE(TAG, "Runtime FSM configuration overflow; refusing to run with a truncated reducer table");
+    this->mark_failed();
+    return;
+  }
   const ResolvedPolicies old_policies = this->resolved_policies_;
   const uint32_t old_mask = this->generic_activity_mask_;
   (void) this->sync_intercom_activity_();
@@ -42,11 +47,20 @@ void RuntimeFsm::dump_config() {
                 static_cast<unsigned>(MAX_ACTIVITIES));
   ESP_LOGCONFIG(TAG, "  Actions: %u/%u", static_cast<unsigned>(this->action_count_),
                 static_cast<unsigned>(MAX_ACTIONS));
+  ESP_LOGCONFIG(TAG, "  Event rules: %u/%u", static_cast<unsigned>(this->event_rule_count_),
+                static_cast<unsigned>(this->event_rules_.size()));
+  ESP_LOGCONFIG(TAG, "  Event updates: %u/%u", static_cast<unsigned>(this->event_update_count_),
+                static_cast<unsigned>(this->event_updates_.size()));
+  ESP_LOGCONFIG(TAG, "  Derived activities: %u/%u", static_cast<unsigned>(this->derived_activity_count_),
+                static_cast<unsigned>(this->derived_activities_.size()));
   ESP_LOGCONFIG(TAG, "  Debug: %s", YESNO(this->debug_));
+  ESP_LOGCONFIG(TAG, "  Config valid: %s", YESNO(!this->config_error_));
 #ifdef USE_RUNTIME_FSM_INTERCOM
   ESP_LOGCONFIG(TAG, "  Intercom observer: %s", this->intercom_ != nullptr ? "configured" : "missing");
 #endif
 }
+
+void RuntimeFsm::mark_config_error_() { this->config_error_ = true; }
 
 void RuntimeFsm::add_activity(const char *name, int16_t priority, bool initial) {
   if (name == nullptr || name[0] == '\0')
@@ -54,6 +68,7 @@ void RuntimeFsm::add_activity(const char *name, int16_t priority, bool initial) 
   if (this->activity_count_ >= MAX_ACTIVITIES) {
     ESP_LOGE(TAG, "Cannot add activity '%s': maximum %u activities reached", name,
              static_cast<unsigned>(MAX_ACTIVITIES));
+    this->mark_config_error_();
     return;
   }
   ActivityConfig activity;
@@ -82,6 +97,7 @@ void RuntimeFsm::add_activity_policy(const char *activity_name, const char *poli
   if (activity.policy_count >= MAX_ACTIVITY_POLICIES) {
     ESP_LOGE(TAG, "Cannot add policy '%s' to activity '%s': maximum %u policies reached",
              policy != nullptr ? policy : "-", activity_name, static_cast<unsigned>(MAX_ACTIVITY_POLICIES));
+    this->mark_config_error_();
     return;
   }
   activity.policies[activity.policy_count++] = PolicyValue{policy, value};
@@ -92,6 +108,7 @@ void RuntimeFsm::add_event_activity(const char *event, const char *activity, boo
     return;
   if (this->event_update_count_ >= this->event_updates_.size()) {
     ESP_LOGE(TAG, "Cannot add event update '%s:%s': maximum reached", event, activity);
+    this->mark_config_error_();
     return;
   }
   this->event_updates_[this->event_update_count_++] = EventActivity{event, activity, active};
@@ -102,6 +119,7 @@ void RuntimeFsm::add_event_rule(const char *event, const char *action) {
     return;
   if (this->event_rule_count_ >= this->event_rules_.size()) {
     ESP_LOGE(TAG, "Cannot add event rule '%s': maximum reached", event);
+    this->mark_config_error_();
     return;
   }
   this->event_rules_[this->event_rule_count_++] = EventRule{event, action};
@@ -113,6 +131,7 @@ void RuntimeFsm::add_event_rule_update(const char *activity, bool active) {
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
   if (rule.update_count >= std::size(rule.updates)) {
     ESP_LOGE(TAG, "Cannot add event rule update '%s': maximum reached", activity);
+    this->mark_config_error_();
     return;
   }
   rule.updates[rule.update_count++] = ActivityUpdate{activity, active};
@@ -122,24 +141,36 @@ void RuntimeFsm::add_event_rule_any_active(const char *activity) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
-  if (rule.any_count < std::size(rule.any_active))
-    rule.any_active[rule.any_count++] = activity;
+  if (rule.any_count >= std::size(rule.any_active)) {
+    ESP_LOGE(TAG, "Cannot add event rule any condition '%s': maximum reached", activity);
+    this->mark_config_error_();
+    return;
+  }
+  rule.any_active[rule.any_count++] = activity;
 }
 
 void RuntimeFsm::add_event_rule_all_active(const char *activity) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
-  if (rule.all_count < std::size(rule.all_active))
-    rule.all_active[rule.all_count++] = activity;
+  if (rule.all_count >= std::size(rule.all_active)) {
+    ESP_LOGE(TAG, "Cannot add event rule all condition '%s': maximum reached", activity);
+    this->mark_config_error_();
+    return;
+  }
+  rule.all_active[rule.all_count++] = activity;
 }
 
 void RuntimeFsm::add_event_rule_none_active(const char *activity) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
-  if (rule.none_count < std::size(rule.none_active))
-    rule.none_active[rule.none_count++] = activity;
+  if (rule.none_count >= std::size(rule.none_active)) {
+    ESP_LOGE(TAG, "Cannot add event rule none condition '%s': maximum reached", activity);
+    this->mark_config_error_();
+    return;
+  }
+  rule.none_active[rule.none_count++] = activity;
 }
 
 void RuntimeFsm::add_derived_activity(const char *activity) {
@@ -147,6 +178,7 @@ void RuntimeFsm::add_derived_activity(const char *activity) {
     return;
   if (this->derived_activity_count_ >= this->derived_activities_.size()) {
     ESP_LOGE(TAG, "Cannot add derived activity '%s': maximum reached", activity);
+    this->mark_config_error_();
     return;
   }
   this->derived_activities_[this->derived_activity_count_++] = DerivedActivity{activity};
@@ -156,24 +188,36 @@ void RuntimeFsm::add_derived_any_active(const char *activity) {
   if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
-  if (derived.any_count < std::size(derived.any_active))
-    derived.any_active[derived.any_count++] = activity;
+  if (derived.any_count >= std::size(derived.any_active)) {
+    ESP_LOGE(TAG, "Cannot add derived any condition '%s': maximum reached", activity);
+    this->mark_config_error_();
+    return;
+  }
+  derived.any_active[derived.any_count++] = activity;
 }
 
 void RuntimeFsm::add_derived_all_active(const char *activity) {
   if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
-  if (derived.all_count < std::size(derived.all_active))
-    derived.all_active[derived.all_count++] = activity;
+  if (derived.all_count >= std::size(derived.all_active)) {
+    ESP_LOGE(TAG, "Cannot add derived all condition '%s': maximum reached", activity);
+    this->mark_config_error_();
+    return;
+  }
+  derived.all_active[derived.all_count++] = activity;
 }
 
 void RuntimeFsm::add_derived_none_active(const char *activity) {
   if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
-  if (derived.none_count < std::size(derived.none_active))
-    derived.none_active[derived.none_count++] = activity;
+  if (derived.none_count >= std::size(derived.none_active)) {
+    ESP_LOGE(TAG, "Cannot add derived none condition '%s': maximum reached", activity);
+    this->mark_config_error_();
+    return;
+  }
+  derived.none_active[derived.none_count++] = activity;
 }
 
 void RuntimeFsm::add_action_trigger(const char *name, Trigger<> *trigger) {
@@ -181,6 +225,7 @@ void RuntimeFsm::add_action_trigger(const char *name, Trigger<> *trigger) {
     return;
   if (this->action_count_ >= MAX_ACTIONS) {
     ESP_LOGE(TAG, "Cannot add action '%s': maximum %u actions reached", name, static_cast<unsigned>(MAX_ACTIONS));
+    this->mark_config_error_();
     return;
   }
   this->actions_[this->action_count_++] = NamedAction{name, trigger};
@@ -191,6 +236,7 @@ void RuntimeFsm::add_policy_value_trigger(const char *policy, const char *value,
     return;
   if (this->policy_value_action_count_ >= this->policy_value_actions_.size()) {
     ESP_LOGE(TAG, "Cannot add policy action '%s:%s': maximum reached", policy, value);
+    this->mark_config_error_();
     return;
   }
   this->policy_value_actions_[this->policy_value_action_count_++] = PolicyValueAction{policy, value, trigger};
@@ -201,6 +247,7 @@ void RuntimeFsm::add_policy_output(const char *policy, const char *value, int32_
     return;
   if (this->policy_output_count_ >= this->policy_outputs_.size()) {
     ESP_LOGE(TAG, "Cannot add policy output '%s:%s': maximum reached", policy, value);
+    this->mark_config_error_();
     return;
   }
   this->policy_outputs_[this->policy_output_count_++] = PolicyOutput{policy, value, output};
@@ -211,6 +258,7 @@ void RuntimeFsm::set_policy_change_trigger(const char *policy, Trigger<int32_t> 
     return;
   if (this->policy_change_trigger_count_ >= this->policy_change_triggers_.size()) {
     ESP_LOGE(TAG, "Cannot add policy on_change '%s': maximum reached", policy);
+    this->mark_config_error_();
     return;
   }
   this->policy_change_triggers_[this->policy_change_trigger_count_++] = PolicyChangeTrigger{policy, trigger};

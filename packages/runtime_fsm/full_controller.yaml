@@ -10,7 +10,7 @@
 
 runtime_fsm:
   id: runtime_controller
-  debug: false
+  debug: true
   state_outputs:
     activity_mask: g_activity_mask
     sequence: g_fsm_seq
@@ -40,22 +40,22 @@ runtime_fsm:
           audio_policy: duck
           va_state: idle
   groups:
-    va: [va_starting, va_listening, va_thinking, va_responding]
+    va: [va_start_requested, va_starting, va_listening, va_thinking, va_responding]
   actions:
     voice_start:
+      - voice_assistant.start:
+          wake_word: !lambda 'return id(g_last_wake_word);'
+    voice_restart_response:
+      - media_player.stop:
+          id: speaker_media_player
+          announcement: true
+      - voice_assistant.stop:
       - wait_until:
           condition:
             not:
               voice_assistant.is_running:
       - voice_assistant.start:
           wake_word: !lambda 'return id(g_last_wake_word);'
-    voice_restart_live:
-      - voice_assistant.stop:
-    voice_restart_response:
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - voice_assistant.stop:
     stop_announcement:
       - media_player.stop:
           id: speaker_media_player
@@ -94,49 +94,57 @@ runtime_fsm:
     timer_finished:
       activate: timer_ringing
     media_idle:
-      deactivate: [media, announcement, va_responding]
+      deactivate: media
       cases:
-        - any: va_starting
-          deactivate: [media, announcement, va_responding]
-          action: voice_start
+        - all: [va_responding, announcement]
+          deactivate: [media, announcement, announcement_play_seen, va_responding]
+        - all: [announcement]
+          deactivate: [media, announcement, announcement_play_seen]
     media_playing:
       activate: media
-      deactivate: announcement
       cases:
-        - any: va_starting
+        - all: [va_responding, announcement, announcement_play_seen]
           activate: media
-          deactivate: announcement
-          action: voice_start
+          deactivate: [announcement, announcement_play_seen, va_responding]
         - all: [va_responding, announcement]
-          activate: media
-          deactivate: [announcement, va_responding]
+          activate: [media, announcement_play_seen]
+        - all: [announcement]
+          activate: [media, announcement_play_seen]
     announcement_started:
       activate: announcement
+      deactivate: announcement_play_seen
       cases:
         - any: [va_starting, va_listening, va_thinking]
-          deactivate: announcement
+          deactivate: [announcement, announcement_play_seen]
           action: stop_announcement
     wake_word:
-      activate: va_starting
+      activate: va_start_requested
       cases:
-        - any: [va_starting, va_listening, va_thinking]
+        - any: va_start_requested
+          activate: va_start_requested
+          action: voice_start
+        - any: va_starting
           activate: va_starting
-          action: voice_restart_live
+        - any: va_listening
+          activate: va_listening
+        - any: va_thinking
+          activate: va_thinking
         - any: [va_responding, announcement]
-          activate: va_starting
-          deactivate: announcement
+          activate: va_start_requested
+          deactivate: [announcement, announcement_play_seen, va_responding]
           action: voice_restart_response
       action: voice_start
     va_start:
       activate: va_starting
     va_end:
-      deactivate: [va_starting, va_listening, va_thinking]
+      deactivate: [va_start_requested, va_starting, va_listening, va_thinking]
       cases:
-        - any: va_starting
-          deactivate: [va_listening, va_thinking, va_responding, announcement]
-          action: voice_start
+        - any: va_responding
+          activate: va_responding
+    va_idle:
+      deactivate: [va_start_requested, va_starting, va_listening, va_thinking]
     va_error:
-      deactivate: [va_starting, va_listening, va_thinking, va_responding]
+      deactivate: [va_start_requested, va_starting, va_listening, va_thinking, va_responding]
   activities:
     idle:
       priority: 0
@@ -145,6 +153,7 @@ runtime_fsm:
         led_status: idle
         display_status: idle
         va_state: idle
+        va_response: inactive
         audio_policy: normal
         ringtone: stop
         timer_alarm: stop
@@ -204,6 +213,9 @@ runtime_fsm:
         display_status: media
         audio_policy: duck
         va_state: idle
+    announcement_play_seen:
+      priority: 0
+      policies: {}
     timer:
       priority: 300
       policies:
@@ -219,6 +231,14 @@ runtime_fsm:
         audio_policy: duck
         timer_alarm: play
         va_state: idle
+    va_start_requested:
+      priority: 610
+      policies:
+        led_status: wake
+        display_status: wake
+        audio_policy: duck
+        va_state: idle
+        va_response: inactive
     va_starting:
       priority: 610
       policies:
@@ -226,6 +246,7 @@ runtime_fsm:
         display_status: wake
         audio_policy: duck
         va_state: idle
+        va_response: inactive
     va_listening:
       priority: 620
       policies:
@@ -233,6 +254,7 @@ runtime_fsm:
         display_status: listening
         audio_policy: duck
         va_state: listening
+        va_response: inactive
     va_thinking:
       priority: 630
       policies:
@@ -240,6 +262,7 @@ runtime_fsm:
         display_status: thinking
         audio_policy: duck
         va_state: thinking
+        va_response: inactive
     va_responding:
       priority: 800
       policies:
@@ -247,6 +270,7 @@ runtime_fsm:
         display_status: responding
         audio_policy: duck
         va_state: responding
+        va_response: active
   derived_activities:
     - name: both_muted
       when:
@@ -301,6 +325,13 @@ runtime_fsm:
         listening: 1
         thinking: 2
         responding: 3
+    va_response:
+      values:
+        inactive:
+          value: 0
+          then:
+            - script.execute: ui_va_end
+        active: 1
     audio_policy:
       output: g_ducking_active
       values:

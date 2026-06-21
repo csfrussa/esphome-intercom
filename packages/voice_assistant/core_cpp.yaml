@@ -14,14 +14,10 @@ voice_assistant:
     - runtime_fsm.event:
         id: runtime_controller
         event: va_listening
-        dump: true
-        reason: va:on_listening
   on_stt_vad_end:
     - runtime_fsm.event:
         id: runtime_controller
         event: va_thinking
-        dump: true
-        reason: va:on_stt_vad_end
   on_stt_end:
     - script.execute:
         id: ui_stt_ended
@@ -34,14 +30,10 @@ voice_assistant:
           - runtime_fsm.event:
               id: runtime_controller
               event: va_responding
-              dump: true
-              reason: va:on_intent_progress
   on_tts_start:
     - runtime_fsm.event:
         id: runtime_controller
         event: va_responding
-        dump: true
-        reason: va:on_tts_start
     - script.execute:
         id: ui_tts_started
         text: !lambda 'return x;'
@@ -49,9 +41,10 @@ voice_assistant:
     - runtime_fsm.event:
         id: runtime_controller
         event: va_end
-        dump: true
-        reason: va:on_end
-    - script.execute: ui_va_end
+  on_idle:
+    - runtime_fsm.event:
+        id: runtime_controller
+        event: va_idle
   on_error:
     - runtime_fsm.event:
         id: runtime_controller
