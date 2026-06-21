@@ -46,12 +46,26 @@ runtime_fsm:
       - voice_assistant.start:
           wake_word: !lambda 'return id(g_last_wake_word);'
     voice_cancel_response:
+      - script.execute: ui_va_barge_start
       - media_player.stop:
           id: speaker_media_player
           announcement: true
       - voice_assistant.stop:
+      - wait_until:
+          condition:
+            not:
+              voice_assistant.is_running:
+      - voice_assistant.start:
+          wake_word: !lambda 'return id(g_last_wake_word);'
     voice_cancel_pipeline:
+      - script.execute: ui_va_barge_start
       - voice_assistant.stop:
+      - wait_until:
+          condition:
+            not:
+              voice_assistant.is_running:
+      - voice_assistant.start:
+          wake_word: !lambda 'return id(g_last_wake_word);'
     voice_stop_all:
       - media_player.stop:
           id: speaker_media_player
@@ -82,7 +96,7 @@ runtime_fsm:
     va_client_disconnected:
       activate: no_va
     media_paused:
-      deactivate: media
+      deactivate: [media, announcement, announcement_play_seen]
     mic_muted:
       activate: mic_muted
     mic_unmuted:
@@ -102,10 +116,6 @@ runtime_fsm:
       cases:
         - all: [va_stopping]
           deactivate: [announcement, announcement_play_seen, va_stopping]
-        - all: [va_barging, va_run_ended]
-          activate: va_start_requested
-          deactivate: [announcement, announcement_play_seen, va_barging, va_run_ended, va_response_drained]
-          action: voice_start
         - all: [va_barging]
           deactivate: [announcement, announcement_play_seen]
         - all: [va_responding, announcement, va_run_ended]
@@ -121,10 +131,6 @@ runtime_fsm:
         - all: [va_stopping]
           activate: media
           deactivate: [announcement, announcement_play_seen, va_stopping]
-        - all: [va_barging, va_run_ended]
-          activate: [media, va_start_requested]
-          deactivate: [announcement, announcement_play_seen, va_barging, va_run_ended, va_response_drained]
-          action: voice_start
         - all: [va_barging]
           activate: media
           deactivate: [announcement, announcement_play_seen]
@@ -155,7 +161,7 @@ runtime_fsm:
         - all: [va_responding, va_run_ended]
           activate: va_start_requested
           deactivate: [va_responding, va_run_ended, va_response_drained]
-          action: voice_start
+          action: voice_cancel_pipeline
         - any: [va_starting, va_listening, va_thinking, va_responding]
           activate: [va_start_requested, va_barging]
           deactivate: [va_starting, va_listening, va_thinking, va_responding]
@@ -195,7 +201,6 @@ runtime_fsm:
         - any: va_barging
           activate: va_start_requested
           deactivate: [va_barging, va_responding, announcement, announcement_play_seen, va_run_ended, va_response_drained]
-          action: voice_start
         - all: [va_responding, va_response_drained]
           deactivate: [va_responding, va_run_ended, va_response_drained, announcement, announcement_play_seen]
         - any: va_responding
@@ -206,7 +211,6 @@ runtime_fsm:
         - any: va_barging
           activate: va_start_requested
           deactivate: va_barging
-          action: voice_start
     va_response_done:
       deactivate: [va_responding, announcement, announcement_play_seen, va_run_ended, va_response_drained]
     va_error:

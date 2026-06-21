@@ -107,6 +107,8 @@ script:
     then: []
   - id: ui_va_end
     then: []
+  - id: ui_va_barge_start
+    then: []
   - id: ui_ic_call
     parameters:
       peer: string
@@ -136,10 +138,7 @@ script:
               - lambda: 'return id(g_wake_word_enabled);'
               - switch.is_off: mute
               - not:
-                  voice_assistant.is_running:
-              - not:
                   micro_wake_word.is_running:
-              - intercom_api.is_idle: intercom
           then:
             - logger.log:
                 tag: mww

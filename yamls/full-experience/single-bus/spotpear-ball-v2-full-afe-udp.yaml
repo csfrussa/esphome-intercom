@@ -556,17 +556,8 @@ globals:
 # SCRIPTS
 # =============================================================================
 script:
-  # Display cleanup after VA ends
-  - id: !extend ui_va_end
+  - id: clear_replying_text
     then:
-      - script.stop: reply_pagination_timer
-      - script.execute: backlight_timer
-      - text_sensor.template.publish:
-          id: text_request
-          state: ""
-      - text_sensor.template.publish:
-          id: text_response
-          state: ""
       - lambda: |-
           id(wrapped_lines_reply).clear();
           id(reply_total_pages) = 1;
@@ -579,6 +570,24 @@ script:
             lv_label_set_text(line, "");
           }
           lv_label_set_text(id(reply_page_counter), "");
+
+  - id: !extend ui_va_barge_start
+    then:
+      - script.stop: reply_pagination_timer
+      - script.execute: clear_replying_text
+
+  # Display cleanup after VA ends
+  - id: !extend ui_va_end
+    then:
+      - script.stop: reply_pagination_timer
+      - script.execute: backlight_timer
+      - text_sensor.template.publish:
+          id: text_request
+          state: ""
+      - text_sensor.template.publish:
+          id: text_response
+          state: ""
+      - script.execute: clear_replying_text
       - script.execute: update_replying_text
 
   # Spotpear Ball v2 LED patterns (extends empty package placeholder)
