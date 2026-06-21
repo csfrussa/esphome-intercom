@@ -6,11 +6,8 @@
 #   - activities are composable state bits;
 #   - policies derive outputs such as LED, display, ducking and ringtone/timer
 #     actions from a single reducer snapshot.
-# =============================================================================
-
 runtime_fsm:
   id: runtime_controller
-  debug: true
   state_outputs:
     activity_mask: g_activity_mask
     sequence: g_fsm_seq

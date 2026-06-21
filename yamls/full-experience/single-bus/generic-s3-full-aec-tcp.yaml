@@ -104,6 +104,13 @@ logger:
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
+    intercom_api: INFO
+    intercom_api.fsm: INFO
+    intercom_api.tcp: INFO
+    intercom_api.udp: INFO
+    intercom_api.audio: INFO
+    intercom_api.settings: INFO
+    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN

@@ -58,6 +58,7 @@ substitutions:
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: f_off
+  sendspin_artwork_resize: 400x400
 
   # P4 uses ES7210 hardware gain plus this post-AFE user trim for capture level.
   mic_gain_min: "-20"
@@ -102,6 +103,7 @@ packages:
   audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
   speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
   lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
   p4_va_cleanup: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_va_cleanup.yaml@dev
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
@@ -187,6 +189,13 @@ logger:
   # Production profile. Debug packages are opt-in and kept out of device YAMLs.
   level: INFO
   logs:
+    intercom_api: INFO
+    intercom_api.fsm: INFO
+    intercom_api.tcp: INFO
+    intercom_api.udp: INFO
+    intercom_api.audio: INFO
+    intercom_api.settings: INFO
+    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -2242,6 +2251,12 @@ script:
     then:
       - script.execute: draw_display
 
+  - id: apply_media_artwork
+    then:
+      - lambda: |-
+          lv_img_set_src(id(mood_bg), id(mood_neutral));
+          lv_obj_invalidate(id(mood_bg));
+
   # Display cleanup after VA ends
   - id: !extend ui_va_end
     then:
@@ -2299,8 +2314,7 @@ script:
               if (id(mute).state) {
                 id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
               } else {
-                if (lv_img_get_src(id(mood_bg)) != id(mood_neutral))
-                  lv_img_set_src(id(mood_bg), id(mood_neutral));
+                id(apply_media_artwork).execute();
                 id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
               }
               break;
@@ -2859,8 +2873,7 @@ script:
                   media_player.is_playing:
                 then:
                   # Music playing: show neutral mood screen instead of idle animation
-                  - lambda: |-
-                      lv_img_set_src(id(mood_bg), id(mood_neutral));
+                  - script.execute: apply_media_artwork
                   - globals.set:
                       id: voice_assistant_phase
                       value: '${voice_assist_replying_phase_id}'

@@ -90,7 +90,7 @@ packages:
   speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
   speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork_experimental.yaml@dev
+  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
   lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
   lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
   lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
@@ -178,6 +178,13 @@ logger:
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
+    intercom_api: INFO
+    intercom_api.fsm: INFO
+    intercom_api.tcp: INFO
+    intercom_api.udp: INFO
+    intercom_api.audio: INFO
+    intercom_api.settings: INFO
+    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN

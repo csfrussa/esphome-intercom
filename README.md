@@ -141,6 +141,15 @@ Changes since `2026.6.3`:
   second parallel media player. Current defaults use 48 kHz mono PCM and PSRAM
   decode buffers, with speaker playback timing driven by I2S/DMA completion
   feedback.
+- Sendspin artwork is now supported on display profiles that opt in to the
+  artwork package. Spotpear and Waveshare P4 render Music Assistant album art
+  when Sendspin exposes it, falling back to the neutral media screen when no
+  artwork is available. This uses ESPHome's development `generic_image` /
+  `sendspin` image support from
+  [esphome/esphome#16057](https://github.com/esphome/esphome/pull/16057).
+
+![Sendspin artwork on Spotpear Ball v2](docs/images/sendspin-artwork.jpg)
+
 - Waveshare P4 full profiles now use the same source-based media path as the
   S3/Spotpear/generic full profiles while preserving their LVGL callbacks.
 - Native ESPHome intercom-only profiles now run their native I2S microphone and
@@ -187,6 +196,9 @@ Known prerelease status:
 
 - Sendspin works through the shared media path. WS3, Spotpear and P4 were
   validated with Music Assistant grouped playback on the 2026.7.0-dev firmware.
+- Sendspin artwork support depends on ESPHome development image support from
+  `esphome/esphome#16057`; the local package pins that external component until
+  the feature lands in an ESPHome release.
 - UDP remains intentionally conservative by default. Raise `udp_max_payload`
   only after verifying the whole LAN path, or use TCP for larger PCM frames.
 - The HA softphone card now has an idle-only Options panel for Auto Answer,

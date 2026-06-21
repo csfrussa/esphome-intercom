@@ -1,8 +1,20 @@
-# Experimental Sendspin artwork support for display devices.
+# Sendspin artwork support for display devices.
 #
-# Uses ESPHome PR #16057 while generic_image/sendspin artwork is still WIP
-# upstream. Remove this package include to fall back to the static media
-# neutral screen.
+# Source and status:
+#   - Added for https://github.com/n-IA-hane/esphome-intercom/issues/58.
+#   - Uses ESPHome development PR https://github.com/esphome/esphome/pull/16057
+#     for the generic_image/sendspin image platform until that support lands in
+#     the ESPHome release used by this project.
+#
+# Include this package on display builds that already define:
+#   - sendspin_hub
+#   - speaker_media_player
+#   - runtime_controller
+#   - apply_media_artwork
+#   - mood_bg and mood_neutral LVGL image objects
+
+substitutions:
+  sendspin_artwork_resize: 240x240
 
 external_components:
   - source: github://pr#16057
@@ -20,7 +32,7 @@ generic_image:
     sendspin_id: sendspin_hub
     format: JPEG
     type: RGB565
-    resize: 240x240
+    resize: ${sendspin_artwork_resize}
     source: ALBUM
     on_image_display:
       - if:
