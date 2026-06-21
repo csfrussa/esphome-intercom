@@ -1,9 +1,9 @@
 # =============================================================================
-# SPOTPEAR BALL V2 - INTERCOM ONLY UDP (LVGL, single-bus, esp_aec)
+# SPOTPEAR BALL V2 - INTERCOM ONLY (LVGL, single-bus, esp_aec)
 # =============================================================================
-# UDP transport variant of spotpear-ball-v2-intercom-tcp.yaml. It keeps the
-# same intercom-only UI, ES8311 codec path, and esp_aec processing model; only
-# the intercom transport and mDNS advertisement differ.
+# Intercom-only LVGL variant of the Spotpear Ball v2. It keeps the same
+# intercom UI, ES8311 codec path, and esp_aec processing model as the full
+# build, but with NO voice assistant, NO micro_wake_word, and NO VA pages.
 #
 # Audio pipeline (mixer topology shared with the Spotpear full builds):
 #
@@ -22,14 +22,15 @@
 # =============================================================================
 
 substitutions:
-  # Hardware identity is shared with the TCP variant. The selected transport is
-  # exposed by the intercom transport sensor and the unified phonebook row.
+  # Hardware identity is shared by the transport variants. The selected
+  # transport is exposed by the intercom transport sensor and the unified
+  # phonebook row.
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # IC layout proportions (relative to display_height)
   ic_btn_size: "25%"
@@ -64,23 +65,23 @@ substitutions:
 # Packages
 # =============================================================================
 packages:
-  core: !include ../../../packages/intercom_only.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
-  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
   # LVGL settings carousel: globals, navigation scripts, and the individual
   # settings pages this device exposes (swipe-left order is the include order).
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_intercom_only.yaml
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
+  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_intercom_only.yaml@dev
 
 # =============================================================================
 # Core
@@ -185,16 +186,6 @@ time:
 external_components:
   - source: ${ext_components_source}
     components: [intercom_api, esp_audio_stack, esp_aec, audio_processor]
-
-# =============================================================================
-# UDP signaling is owned by intercom_api. START/HANGUP/RING/ANSWER/DECLINE
-# flow through the UDP control socket (control_port 6055), with the same
-# MessageHeader as the TCP path. C++ side:
-#  - intercom_api.start() -> udp_transport.send_control(MSG_START, caller_name)
-#  - peer receives START -> FSM goes to RINGING/STREAMING as on TCP
-#  - intercom_api.stop() -> send_control(MSG_HANGUP) or DECLINE during setup
-# No YAML signaling lambdas, no external UDP helper component.
-# =============================================================================
 
 # =============================================================================
 # I2C buses (separate buses for codec and touchscreen)
@@ -322,24 +313,17 @@ media_player:
         file: ${assets_base}assets/sounds/ringtone.flac
 
 # =============================================================================
-# Intercom API. The HA phonebook sensor publishes target-shaped UDP contacts;
-# their ip/port travel along the CSV so intercom_api.start auto-binds the
-# transport without YAML lookups. RX flows through intercom_speaker_input (resampler)
-# into audio_mixer for ringtone/intercom co-existence.
+# Intercom API. RX flows through intercom_speaker_input (resampler) into
+# audio_mixer for ringtone/intercom co-existence. Transport selection lives in
+# packages/intercom/transport_*.yaml.
 # =============================================================================
 intercom_api:
   task_stacks_in_psram: true
   buffers_in_psram: true
   id: intercom
-  protocol: udp
-  # remote_port / listen_port / control_port follow the project defaults
-  # (6054 audio, 6055 control). Override here only if the host network
-  # has them in use.
   audio:
-    # Primary/preferred RX format for UDP: 48 kHz improves HA/browser audio,
-    # and 10 ms keeps each mono s16 frame below the default 1200-byte UDP
-    # payload ceiling. TX remains the microphone/AEC format unless audio.tx is
-    # overridden.
+    # Primary/preferred RX format: 48 kHz improves HA/browser audio. TX remains
+    # the microphone/AEC format unless audio.tx is overridden.
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -366,8 +350,6 @@ intercom_api:
     - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
     - script.execute: update_ic_idle_labels
     - script.execute: draw_display
-  # routing_mode default = device_independent (P2P). Override at runtime
-  # via the "HA PBX Mode" switch in the Switches block below.
 
 # =============================================================================
 # Globals (peer_name only - no VA state needed)
@@ -650,9 +632,7 @@ script:
             - delay: 30s
 
 # =============================================================================
-# Buttons. start()/stop()/decline_call() emit signaling frames directly on
-# the UDP control socket - no wrapper scripts. next/prev stay as local-only
-# rotation (endpoint binding happens just-in-time inside intercom_api.start).
+# Buttons (package buttons extended here for Spotpear Ball v2 display sync)
 # =============================================================================
 button:
   - platform: factory_reset

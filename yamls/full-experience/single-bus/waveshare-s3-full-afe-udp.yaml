@@ -1,5 +1,5 @@
 # =============================================================================
-# Waveshare ESP32-S3-AUDIO-Board: VA + Intercom + MWW (UDP intercom)
+# Waveshare ESP32-S3-AUDIO-Board: VA + Intercom + MWW (no display)
 # =============================================================================
 #
 # Hardware:
@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -56,21 +56,21 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_intercom_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_udp.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
-  led_state_full: !include ../../../packages/led/state_full_ring.yaml
-  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
-  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
+  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@dev
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
 
 # =============================================================================
 # ESPHome Base
@@ -80,24 +80,6 @@ esphome:
   friendly_name: ${friendly_name}
   platformio_options:
     board_build.flash_mode: dio
-  on_boot:
-    priority: 200
-    then:
-      - delay: 200ms
-      # Brief LED flash to indicate boot
-      - light.turn_on:
-          id: status_led
-          red: 0%
-          green: 0%
-          blue: 100%
-          brightness: 50%
-          effect: none
-      - delay: 500ms
-      - light.turn_off: status_led
-      # Sync reducer state with boot flash
-      - globals.set:
-          id: g_applied_led
-          value: "0"
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -114,13 +96,22 @@ esp32:
       # Keep AES in hardware for HTTPS media/TTS worst-case testing. The AFE
       # bridge buffers below live in PSRAM to preserve contiguous DMA heap.
       CONFIG_MBEDTLS_HARDWARE_AES: "y"
+      # Keep Wi-Fi buffering below ESPHome's streaming high-performance preset
+      # (64 dynamic RX + 64 dynamic TX + BA windows 32). That preset is useful
+      # for throughput, but this profile needs bounded media/TTS ingress so the
+      # audio graph sees backpressure before the final I2S sink saturates.
+      CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM: "10"
+      CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "32"
+      CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM: "32"
+      CONFIG_ESP_WIFI_TX_BA_WIN: "16"
+      CONFIG_ESP_WIFI_RX_BA_WIN: "16"
 
 psram:
   mode: octal
   speed: 80MHz
 
 api:
-  # `start_call(dest)` actions come from packages/intercom/ha_api.yaml.
+  # `start_call(dest)` actions come from the runtime HA API package.
 
 ota:
   - platform: esphome
@@ -141,7 +132,11 @@ logger:
     component: WARN
 
 network:
-  enable_high_performance: true
+  # The speaker media player requests high-performance networking by default,
+  # which expands lwIP to 65KB TCP windows and 64-entry mailboxes. On this
+  # full-duplex audio profile that creates bursty HTTP/TTS ingress and memory
+  # pressure in front of the mixer, while I2S can only drain 96 KB/s.
+  enable_high_performance: false
 
 wifi:
   ssid: !secret wifi_ssid
@@ -175,7 +170,7 @@ tca9555:
 esp_afe:
   id: afe_processor
   type: fd
-  mode: low_cost
+  mode: high_perf
   mic_num: 2
   aec_filter_length: 4
   aec_nlp_level: normal
@@ -220,9 +215,6 @@ esp_audio_stack:
   # - audio_stack task stack in PSRAM saves ~8 KB internal heap.
   # - component frame buffers in PSRAM preserve internal/DMA heap for Wi-Fi,
   #   TLS, I2S DMA and esp-sr internals.
-  # - GMF codec IO stays synchronous: io_codec_dev read/write run inside the
-  #   audio_stack task, so they inherit the PSRAM stack without adding reader/
-  #   writer tasks or data-bus latency between mic/ref and AFE.
   audio_task_stack_in_psram: true
   buffers_in_psram: true
   # WS3 ES8311/NS4150 path drops perceived loudness too aggressively with the
@@ -276,6 +268,10 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    # Full-duplex profiles must not let the upstream ESPHome mixer prefill the
+    # final hardware sink for 500 ms. Mixer transfers 50 ms chunks every 25 ms;
+    # keep the hardware backlog short so backpressure reaches media/TTS quickly.
+    buffer_duration: 128ms
 
 
 # =============================================================================
@@ -283,6 +279,7 @@ speaker:
 # =============================================================================
 micro_wake_word:
   microphone: mic_main
+  task_stack_in_psram: true
   models:
     - model: alexa
 

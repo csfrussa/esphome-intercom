@@ -1,15 +1,15 @@
 # =============================================================================
 # SPOTPEAR BALL V2 - INTERCOM ONLY (LVGL, single-bus, esp_aec)
 # =============================================================================
-# Intercom-only LVGL variant of the Spotpear Ball v2. Same graphic identity as
-# the full-experience build for the intercom pages, but with NO voice
-# assistant, NO micro_wake_word, NO mixer, and NO VA pages.
+# Intercom-only LVGL variant of the Spotpear Ball v2. It keeps the same
+# intercom UI, ES8311 codec path, and esp_aec processing model as the full
+# build, but with NO voice assistant, NO micro_wake_word, and NO VA pages.
 #
 # Audio pipeline (mixer topology shared with the Spotpear full builds):
 #
 #   I2S RX 48kHz stereo (L=DAC ref, R=ADC mic) ─esp_ae_rate_cvt x3─> esp_aec @16k ──> mic_main ──> intercom TX
 #
-#   Intercom RX -> intercom_speaker_input (resampler) ───────┐
+#   Intercom RX (16kHz) ──> intercom_speaker_input  (resampler 16→48) ─┐
 #   Ringtone   (FLAC)   ──> ringtone_speaker  (resampler 16→48) ─┴─> audio_mixer (48k) ──> hw_speaker ──> ES8311 DAC
 #
 # Single GPIO0 button (intercom-only, no VA mode):
@@ -22,15 +22,15 @@
 # =============================================================================
 
 substitutions:
-  # Device identity is hardware-based, not firmware-variant-based: all Spotpear Ball v2
-  # firmwares (intercom / full-afe) share `spotpear-ball-v2` so a flash swap
-  # reuses the same HA device entity and the same .esphome/build cache.
+  # Hardware identity is shared by the transport variants. The selected
+  # transport is exposed by the intercom transport sensor and the unified
+  # phonebook row.
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # IC layout proportions (relative to display_height)
   ic_btn_size: "25%"
@@ -44,7 +44,7 @@ substitutions:
   ic_ended_text_width: "187"         # ic_ended_page "Call ended" (y≈53) and "Reason:" (y≈139) labels: chord minus 12 px margin
   ic_ended_reason_text_width: "177"  # ic_ended_page reason text (dynamic) at y≈168: chord minus 12 px margin (above top_battery_label at y=197)
   # Settings page: inscribed-square width fits any y on the round 240x240 panel
-  ic_settings_row_width: "170"
+  ic_settings_row_width: "170"       # rows fit safely inside the circle for any y
   ic_settings_wide_width: "190"
   ic_settings_mid_width: "170"
   ic_settings_narrow_width: "150"
@@ -63,21 +63,23 @@ substitutions:
 # Packages
 # =============================================================================
 packages:
-  core: !include ../../../packages/intercom_only.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_intercom_only.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  # LVGL settings carousel: globals, navigation scripts, and the individual
+  # settings pages this device exposes (swipe-left order is the include order).
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
+  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_intercom_only.yaml@dev
 
 # =============================================================================
 # Core
@@ -136,14 +138,10 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps our PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
-  # Chatty ESPHome built-ins below are muted to WARN so the log stays
-  # focused on this project's components. Telemetry is opt-in via
-  # esp_audio_stack.telemetry: true and remains compile-time-stripped
-  # when global level drops below DEBUG.
+  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
-    # ESPHome chatty built-ins muted at DEBUG
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -153,16 +151,6 @@ logger:
     api: WARN
     api.connection: WARN
     component: WARN
-    # Project components inherit DEBUG. Uncomment to mute individually:
-    #   intercom_api: INFO
-    #   intercom_api.fsm: INFO
-    #   intercom_api.audio: INFO
-    #   intercom_api.tcp: INFO
-    #   intercom_api.udp: INFO
-    #   audio_stack: INFO
-    #   esp_aec: INFO
-    #   esp_afe: INFO
-    #   audio_processor: INFO
 
 network:
   enable_high_performance: true
@@ -263,7 +251,7 @@ microphone:
     esp_audio_stack_id: audio_stack
 
 # =============================================================================
-# Speakers (mixer topology: sources -> mixer 48kHz -> hw_speaker)
+# Speakers (mixer topology: sources -> resampler -> mixer 48kHz -> hw_speaker)
 # Mirrors the Spotpear full-build speaker stack so the intercom RX push-stream and the
 # ringtone announcement go through a buffered mixer instead of competing
 # directly on hw_speaker.
@@ -288,7 +276,7 @@ speaker:
         buffer_duration: 100ms
 
   - platform: resampler
-    id: intercom_speaker_input
+    id: intercom_speaker_input            # Intercom RX (16kHz) -> 48kHz
     output_speaker: intercom_mixer_input
     buffer_duration: 128ms
 
@@ -323,17 +311,17 @@ media_player:
         file: ${assets_base}assets/sounds/ringtone.flac
 
 # =============================================================================
-# Intercom API (TCP-based, port 6054). RX prefers 48 kHz for HA/browser audio
-# and can accept 16 kHz direct ESP peers through the resampler.
+# Intercom API. RX flows through intercom_speaker_input (resampler) into
+# audio_mixer for ringtone/intercom co-existence. Transport selection lives in
+# packages/intercom/transport_*.yaml.
 # =============================================================================
 intercom_api:
   task_stacks_in_psram: true
-  buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  buffers_in_psram: true
   id: intercom
   audio:
-    # Primary/preferred RX format: HA/browser calls choose this for better
-    # speaker quality on the 48 kHz mixer path. TX remains the microphone/AFE
-    # format unless audio.tx is overridden.
+    # Primary/preferred RX format: 48 kHz improves HA/browser audio. TX remains
+    # the microphone/AEC format unless audio.tx is overridden.
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -354,10 +342,10 @@ intercom_api:
   delete_contact_missing_from:
     updates_number: 1
   on_update_contacts:
-    - lambda: id(peer_name) = id(intercom).get_current_destination();
+    - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
     - script.execute: update_ic_idle_labels
   on_destination_changed:
-    - lambda: id(peer_name) = id(intercom).get_current_destination();
+    - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
     - script.execute: update_ic_idle_labels
     - script.execute: draw_display
 
@@ -444,8 +432,6 @@ script:
           text: !lambda 'return id(peer_name);'
       - script.execute: draw_display
 
-  # Call terminated screen: render peer + reason on ic_ended_page,
-  # gate draw_display via ic_ended_active for the auto-return window.
   - id: !extend ui_ic_ended
     mode: restart
     then:
@@ -508,6 +494,7 @@ script:
     then:
       - lambda: |-
           lv_obj_t* target = nullptr;
+          // Active call always wins so we don't hide an incoming/outgoing screen.
           auto s = id(intercom).get_state_str();
           bool in_call = (s == "Ringing" || s == "Incoming" ||
                           s == "Calling" || s == "Outgoing" ||
@@ -515,8 +502,9 @@ script:
           if (in_call) {
             id(ic_settings_active) = false;  // call interrupts settings view
           }
-          // ui_ic_ended owns the screen for ~4 s after a terminated call
-          // so the user actually reads the reason.
+          // ui_ic_ended owns the screen for ~4 s after a terminated
+          // call. Any redraw triggered in that window keeps the ended
+          // page so the user actually reads the reason.
           if (id(ic_ended_active)) {
             target = id(ic_ended_page)->obj;
           } else if (id(ic_settings_active) && !id(g_settings_pages).empty()) {
@@ -781,11 +769,6 @@ light:
     output: backlight_output
     restore_mode: ALWAYS_ON
     default_transition_length: 250ms
-
-# =============================================================================
-# Switches
-# =============================================================================
-switch:
 
 # =============================================================================
 # AEC mode select (VOIP-only, intercom-only)
@@ -1342,8 +1325,8 @@ lvgl:
             long_mode: SCROLL
             width: ${ic_ended_reason_text_width}
     # ========================================================================
-    # SETTINGS PAGES (factored into packages/lvgl/lvgl_settings_*.yaml)
-    # The order here is the swipe-left navigation cycle. on_boot above
+    # SETTINGS PAGES (factored into packages/lvgl/*.yaml)
+    # The order here is the swipe-left navigation cycle. on_boot below
     # populates g_settings_pages with the matching object pointers.
     # ========================================================================
     # =============================================================================

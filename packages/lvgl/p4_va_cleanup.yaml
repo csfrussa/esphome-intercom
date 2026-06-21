@@ -1,0 +1,19 @@
+# Shared P4 display cleanup for VA response text.
+#
+# P4 renders the replying/media panel from text_response. Clear both the
+# template sensors and the live LVGL label when a response ends or is barged.
+script:
+  - id: clear_replying_text
+    then:
+      - lambda: |-
+          lv_label_set_text(id(replying_text_label), "");
+
+  - id: !extend ui_va_barge_start
+    then:
+      - text_sensor.template.publish:
+          id: text_request
+          state: ""
+      - text_sensor.template.publish:
+          id: text_response
+          state: ""
+      - script.execute: clear_replying_text

@@ -31,9 +31,9 @@ substitutions:
   mic_id: mic_afe
   afe_vad_restore_mode: ALWAYS_ON
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -78,24 +78,24 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: !include ../../../packages/va_intercom_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
-  intercom_transport: !include ../../../packages/intercom/transport_tcp.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
-  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_full.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_tcp.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
+  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@dev
+  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_full.yaml@dev
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION
@@ -166,11 +166,6 @@ external_components:
 # =============================================================================
 api:
   on_client_connected:
-    - script.execute: draw_display
-  on_client_disconnected:
-    - script.stop: ai_animation_loop
-    - lambda: |-
-        lv_anim_del(id(idle_anim), nullptr);
     - script.execute: draw_display
 ota:
   - platform: esphome
@@ -388,9 +383,6 @@ media_player:
       - runtime_fsm.event:
           id: runtime_controller
           event: media_playing
-      - logger.log:
-          tag: mp
-          format: "MP: on_play"
       - script.execute: backlight_timer
     on_pause:
       - runtime_fsm.event:
@@ -401,10 +393,6 @@ media_player:
       - runtime_fsm.event:
           id: runtime_controller
           event: media_idle
-      - logger.log:
-          tag: mp
-          format: "MP: on_idle (phase=%d, va_state=%d)"
-          args: ['id(voice_assistant_phase)', 'id(g_va_state)']
       - delay: 200ms
       - script.execute: backlight_timer
 
@@ -413,7 +401,7 @@ media_player:
 #
 # MWW always-on (stop_after_detection: false) on mic_afe.
 # SR linear AEC preserves spectral features for neural detection (10/10).
-# Ducking managed centrally: acquire in on_wake_word_detected, release in va_end_handler.
+# Ducking is derived by runtime_fsm from the active VA/media/intercom policies.
 # =============================================================================
 micro_wake_word:
   id: mww
@@ -445,16 +433,15 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# INTERCOM API (TCP-based, port 6054)
+# INTERCOM API
 # =============================================================================
 intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: intercom
   audio:
-    # Primary/preferred RX format: HA/browser calls choose this for better
-    # speaker quality on the 48 kHz mixer path. TX remains the microphone/AFE
-    # format unless audio.tx is overridden.
+    # Primary/preferred RX format: 48 kHz improves HA/browser audio. TX remains
+    # the microphone/AFE format unless audio.tx is overridden.
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -566,6 +553,26 @@ globals:
 # SCRIPTS
 # =============================================================================
 script:
+  - id: clear_replying_text
+    then:
+      - lambda: |-
+          id(wrapped_lines_reply).clear();
+          id(reply_total_pages) = 1;
+          id(reply_page_index) = 0;
+          lv_obj_t* lines[] = {
+            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
+            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
+          };
+          for (auto *line : lines) {
+            lv_label_set_text(line, "");
+          }
+          lv_label_set_text(id(reply_page_counter), "");
+
+  - id: !extend ui_va_barge_start
+    then:
+      - script.stop: reply_pagination_timer
+      - script.execute: clear_replying_text
+
   # Display cleanup after VA ends
   - id: !extend ui_va_end
     then:
@@ -577,13 +584,8 @@ script:
       - text_sensor.template.publish:
           id: text_response
           state: ""
-      - lambda: |-
-          id(wrapped_lines_reply).clear();
-          id(reply_total_pages) = 1;
-          id(reply_page_index) = 0;
+      - script.execute: clear_replying_text
       - script.execute: update_replying_text
-      - script.execute: set_idle_or_mute_phase
-      - script.execute: draw_display
 
   # Spotpear Ball v2 LED patterns (extends empty package placeholder)
   - id: !extend update_led
@@ -604,9 +606,9 @@ script:
             case 3:  // Speaker muted: orange dim
               led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(0.3f).set_effect("None").perform();
               break;
-            case 4:  // MWW recent / barge-in: green slow pulse
-            case 5:  // VA Listening: green slow pulse
-              led->turn_on().set_rgb(0.0f, 1.0f, 0.0f).set_brightness(0.7f).set_effect("Slow Pulse").perform();
+            case 4:  // MWW recent / barge-in: red slow pulse
+            case 5:  // VA Listening: red slow pulse
+              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.7f).set_effect("Slow Pulse").perform();
               break;
             case 6:  // VA Thinking: orange fast pulse
               led->turn_on().set_rgb(1.0f, 1.0f, 0.0f).set_brightness(0.7f).set_effect("Fast Pulse").perform();
@@ -774,7 +776,6 @@ script:
   # Intercom call display (extends package placeholder)
   - id: !extend ui_ic_call
     then:
-      - script.stop: ai_animation_loop
       - script.stop: reply_pagination_timer
       - lambda: |-
           id(peer_name) = peer;
@@ -838,7 +839,10 @@ script:
           lv_anim_del(id(idle_anim), nullptr);
       - while:
           condition:
-            binary_sensor.is_on: is_idle_screen
+            lambda: |-
+              return id(current_mode) == 0 &&
+                     id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
+                     !id(init_in_progress);
           then:
             - lambda: lv_animimg_start(id(idle_anim));
             - delay: 25s
@@ -1459,19 +1463,6 @@ binary_sensor:
       return id(current_mode) == 0 &&
              id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
              !id(init_in_progress);
-    on_state:
-      then:
-        - if:
-            condition:
-              binary_sensor.is_on: is_idle_screen
-            then:
-              - script.execute: ai_animation_loop
-            else:
-              - script.stop: ai_animation_loop
-              - lambda: |-
-                  lv_anim_del(id(idle_anim), nullptr);
-                  lv_animimg_start(id(idle_anim));
-                  lv_anim_del(id(idle_anim), nullptr);
 
   # Physical GPIO0 button - PAGE AWARE (uses mode/state checks instead of display.is_displaying_page)
   - platform: gpio
@@ -1515,7 +1506,7 @@ binary_sensor:
                           else:
                             - runtime_fsm.event:
                                 id: runtime_controller
-                                event: wake_word
+                                event: manual_voice_toggle
       # Double click: decline incoming or next contact
       - timing:
           - ON for 50ms to 500ms
