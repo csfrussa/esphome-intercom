@@ -374,11 +374,18 @@ class IntercomEngine extends EventTarget {
     }
   }
 
-  async startP2P(deviceInfo) {
+  async startP2P(deviceInfo, context = {}) {
     await this._connect(deviceInfo.device_id);
     this._resetStats();
     this._setState("CALLING");
-    const reply = await this._sendControl({ type: "start", device_id: deviceInfo.device_id, host: deviceInfo.host }, true);
+    const reply = await this._sendControl({
+      type: "start",
+      device_id: deviceInfo.device_id,
+      host: deviceInfo.host,
+      target_name: context.callee || deviceInfo.name || "",
+      callee: context.callee || deviceInfo.name || "",
+      call_id: context.call_id || "",
+    }, true);
     if (!["streaming", "ringing"].includes(reply?.state)) {
       this._setState("ERROR");
       return;
@@ -387,12 +394,17 @@ class IntercomEngine extends EventTarget {
     this._setState(reply.state);
   }
 
-  async startHaSoftphone(target, softphoneInfo) {
+  async startHaSoftphone(target, softphoneInfo, context = {}) {
     const info = { ...(softphoneInfo || {}), device_id: HA_SOFTPHONE_DEVICE_ID, audio_mode: target.audio_mode || "full_duplex" };
     await this._connect(HA_SOFTPHONE_DEVICE_ID);
     this._resetStats();
     this._setState("CALLING");
-    const reply = await this._sendControl({ type: "ha_softphone_start", target_device_id: target.device_id }, true);
+    const reply = await this._sendControl({
+      type: "ha_softphone_start",
+      target_name: context.callee || target.name || "",
+      callee: context.callee || target.name || "",
+      call_id: context.call_id || "",
+    }, true);
     if (!["streaming", "ringing"].includes(reply?.state)) {
       this._setState("ERROR");
       return;
@@ -406,12 +418,12 @@ class IntercomEngine extends EventTarget {
     return reply;
   }
 
-  async answer(deviceInfo, sessionDeviceId) {
+  async answer(deviceInfo, sessionDeviceId, context = {}) {
     const deviceId = sessionDeviceId || deviceInfo.device_id;
     await this._connect(deviceId);
     this._resetStats();
     const reply = await this._sendControl(
-      { type: "answer", device_id: deviceId, host: deviceInfo?.host || "" },
+      { type: "answer", device_id: deviceId, host: deviceInfo?.host || "", call_id: context.call_id || "" },
       true,
       (msg) => this._isTerminalControlReply(msg),
     );
@@ -424,11 +436,18 @@ class IntercomEngine extends EventTarget {
     this._setState("STREAMING");
   }
 
-  async answerEspCall(deviceInfo) {
+  async answerEspCall(deviceInfo, context = {}) {
     await this._connect(deviceInfo.device_id);
     this._resetStats();
     const reply = await this._sendControl(
-      { type: "answer_esp_call", device_id: deviceInfo.device_id, host: deviceInfo.host },
+      {
+        type: "answer_esp_call",
+        device_id: deviceInfo.device_id,
+        host: deviceInfo.host,
+        target_name: context.caller || deviceInfo.name || "",
+        caller: context.caller || deviceInfo.name || "",
+        call_id: context.call_id || "",
+      },
       true,
       (msg) => this._isTerminalControlReply(msg),
     );
@@ -459,8 +478,8 @@ class IntercomEngine extends EventTarget {
     }
   }
 
-  async stop(deviceId = this._deviceId) {
-    await this._sendControl({ type: "stop", device_id: deviceId }, true);
+  async stop(deviceId = this._deviceId, context = {}) {
+    await this._sendControl({ type: "stop", device_id: deviceId, call_id: context.call_id || "" }, true);
     await this.close("stop", { sendHangup: false });
   }
 

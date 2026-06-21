@@ -52,8 +52,10 @@ WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
 WS_TYPE_SET_HA_SOFTPHONE_DND = f"{DOMAIN}/set_ha_softphone_dnd"
 WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
 
-# Active sessions: device_id -> IntercomSession
+# Active sessions are still bound to a transport endpoint key, but the public
+# call identity is the nominal caller<->callee call_id.
 _sessions: Dict[str, "IntercomSession"] = {}
+_session_call_index: Dict[str, str] = {}
 
 # Active bridges: bridge_id -> BridgeSession
 _bridges: Dict[str, "BridgeSession"] = {}
@@ -76,10 +78,131 @@ async def _ws_send_json(ws: web.WebSocketResponse, payload: dict[str, Any]) -> b
 
 
 def _session_audio_payload(session: "IntercomSession", state: str) -> dict[str, Any]:
-    return {
+    caller, callee, local, peer, direction = session._event_names()
+    payload = {
         "state": state,
         "tx_format": session.tx_format.wire_token(),
         "rx_format": session.rx_format.wire_token(),
+    }
+    payload.update(_canonical_session_fields(
+        state=state,
+        local_name=local,
+        peer_name=peer,
+        caller=caller,
+        callee=callee,
+        direction=direction,
+        call_id=session.call_id,
+    ))
+    return payload
+
+
+def _ha_peer_name(hass: HomeAssistant) -> str:
+    return (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
+
+
+def _default_call_id(caller: str, callee: str, fallback: str = "") -> str:
+    caller = (caller or "").strip()
+    callee = (callee or "").strip()
+    if caller and callee:
+        return f"{caller}<->{callee}"
+    return fallback or caller or callee
+
+
+def _session_register(key: str, session: "IntercomSession") -> None:
+    for call_id, indexed_key in list(_session_call_index.items()):
+        if indexed_key == key:
+            _session_call_index.pop(call_id, None)
+    _sessions[key] = session
+    if session.call_id:
+        _session_call_index[session.call_id] = key
+
+
+def _session_key(selector: str) -> str:
+    selector = str(selector or "")
+    return _session_call_index.get(selector, selector)
+
+
+def _session_get(selector: str) -> "IntercomSession | None":
+    return _sessions.get(_session_key(selector))
+
+
+def _session_pop(selector: str) -> "IntercomSession | None":
+    key = _session_key(selector)
+    session = _sessions.pop(key, None)
+    if session is not None:
+        for call_id, indexed_key in list(_session_call_index.items()):
+            if indexed_key == key or call_id == session.call_id:
+                _session_call_index.pop(call_id, None)
+    return session
+
+
+def _session_remove(session: "IntercomSession") -> None:
+    for key, current in list(_sessions.items()):
+        if current is session:
+            _sessions.pop(key, None)
+    for call_id, key in list(_session_call_index.items()):
+        if _sessions.get(key) is session or call_id == session.call_id:
+            _session_call_index.pop(call_id, None)
+
+
+def _direction_for_local(local_name: str, caller: str, callee: str) -> str:
+    local = (local_name or "").strip().lower()
+    if not local:
+        return ""
+    if local == (caller or "").strip().lower():
+        return "outgoing"
+    if local == (callee or "").strip().lower():
+        return "incoming"
+    return ""
+
+
+def _norm_peer(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _find_device_by_selector(devices: list[dict[str, Any]], selector: str) -> dict[str, Any] | None:
+    wanted = _norm_peer(selector)
+    if not wanted:
+        return None
+    for device in devices:
+        for key in ("name", "route_id", "friendly_name", "device_id", "entity_id"):
+            if _norm_peer(device.get(key, "")) == wanted:
+                return device
+    return None
+
+
+def _canonical_session_fields(
+    *,
+    state: str,
+    local_name: str = "",
+    peer_name: str = "",
+    caller: str = "",
+    callee: str = "",
+    direction: str = "",
+    call_id: str = "",
+) -> dict[str, str]:
+    caller = (caller or "").strip()
+    callee = (callee or "").strip()
+    local_name = (local_name or "").strip()
+    peer_name = (peer_name or "").strip()
+    if not direction and caller and callee:
+        direction = _direction_for_local(local_name, caller, callee)
+    if not peer_name:
+        peer_name = callee if direction == "outgoing" else caller
+    if not local_name:
+        local_name = caller if direction == "outgoing" else callee
+    if not call_id:
+        call_id = _default_call_id(caller, callee)
+    role = "caller" if direction == "outgoing" else "callee" if direction == "incoming" else ""
+    return {
+        "call_id": call_id or "",
+        "caller": caller or "",
+        "callee": callee or "",
+        "local_name": local_name or "",
+        "peer_name": peer_name or "",
+        "direction": direction or "",
+        "role": role,
+        "state": state,
     }
 
 
@@ -120,10 +243,15 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "busy": bool(store.get("session_device_id")),
         "state": store.get("state", "idle"),
         "caller": store.get("caller", ""),
+        "callee": store.get("callee", ""),
+        "local_name": store.get("local_name", _ha_peer_name(hass)),
         "peer_name": store.get("peer_name", ""),
+        "direction": store.get("direction", ""),
+        "role": store.get("role", ""),
+        "call_id": store.get("call_id", ""),
         "target_device_id": store.get("target_device_id", ""),
     }
-    session = _sessions.get(str(state["session_device_id"] or ""))
+    session = _session_get(str(state["call_id"] or state["session_device_id"] or ""))
     if session is not None:
         state.update(_session_audio_payload(session, str(state["state"] or "idle")))
         state["audio_mode"] = session.audio_mode
@@ -141,35 +269,68 @@ def _set_ha_softphone_call_state(
     *,
     session_device_id: str = "",
     caller: str = "",
+    callee: str = "",
     peer_name: str = "",
+    direction: str = "",
+    call_id: str = "",
     **extra: Any,
 ) -> None:
     store = _ha_softphone_store(hass)
+    local_name = extra.pop("local_name", _ha_peer_name(hass))
     terminal = state in {"idle", "disconnected", "declined", "error"}
     if terminal:
         session_device_id = store.get("session_device_id", session_device_id)
         caller = store.get("caller", caller)
+        callee = store.get("callee", callee)
         peer_name = store.get("peer_name", peer_name)
+        direction = store.get("direction", direction)
+        call_id = store.get("call_id", call_id)
+        local_name = store.get("local_name", local_name)
         store.pop("session_device_id", None)
         store.pop("state", None)
         store.pop("caller", None)
+        store.pop("callee", None)
+        store.pop("local_name", None)
         store.pop("peer_name", None)
+        store.pop("direction", None)
+        store.pop("role", None)
+        store.pop("call_id", None)
         store.pop("target_device_id", None)
     else:
+        canonical = _canonical_session_fields(
+            state=state,
+            local_name=local_name,
+            peer_name=peer_name,
+            caller=caller,
+            callee=callee,
+            direction=direction,
+            call_id=call_id,
+        )
         store["session_device_id"] = session_device_id
         store["state"] = state
-        store["caller"] = caller
-        store["peer_name"] = peer_name
+        store["caller"] = canonical["caller"]
+        store["callee"] = canonical["callee"]
+        store["local_name"] = canonical["local_name"]
+        store["peer_name"] = canonical["peer_name"]
+        store["direction"] = canonical["direction"]
+        store["role"] = canonical["role"]
+        store["call_id"] = canonical["call_id"]
         if "target_device_id" in extra:
             store["target_device_id"] = extra["target_device_id"]
 
     payload = {
         "device_id": HA_SOFTPHONE_DEVICE_ID,
         "session_device_id": session_device_id or "",
-        "state": state,
-        "caller": caller or "",
-        "peer_name": peer_name or "",
     }
+    payload.update(_canonical_session_fields(
+        state=state,
+        local_name=local_name,
+        peer_name=peer_name,
+        caller=caller,
+        callee=callee,
+        direction=direction,
+        call_id=call_id,
+    ))
     payload.update({k: v for k, v in extra.items() if v not in (None, "")})
     _fire_call_event(hass, payload, "session")
 
@@ -283,6 +444,9 @@ class IntercomSession:
         transport: IntercomTransport | None = None,
         call_id: str = "",
         caller_name: str = "",
+        local_name: str = "",
+        peer_name: str = "",
+        direction: str = "",
         audio_mode: str = "full_duplex",
         local_tx_formats: list[AudioFormat] | None = None,
         local_rx_formats: list[AudioFormat] | None = None,
@@ -296,6 +460,9 @@ class IntercomSession:
         self.transport_type = transport_type or configured_transport_type(hass, host)
         self._initial_call_id = call_id
         self._initial_caller_name = caller_name
+        self._local_name = local_name or _ha_peer_name(hass)
+        self._peer_name = peer_name or caller_name
+        self._direction = direction
         self.audio_mode = _audio_mode(audio_mode)
         self.local_tx_formats = local_tx_formats or [LEGACY_AUDIO_FORMAT]
         self.local_rx_formats = local_rx_formats or [LEGACY_AUDIO_FORMAT]
@@ -313,6 +480,43 @@ class IntercomSession:
         self._audio_ws_task: asyncio.Task | None = None
         self._last_browser_audio = time.monotonic()
         self._browser_audio_frames = 0
+
+    def _event_names(self) -> tuple[str, str, str, str, str]:
+        """Return caller, callee, local, peer, direction for this HA session."""
+        local = self._local_name or _ha_peer_name(self.hass)
+        peer = self._peer_name or self._initial_caller_name or ""
+        direction = self._direction
+        if direction == "incoming":
+            caller, callee = peer, local
+        elif direction == "outgoing":
+            caller, callee = local, peer
+        else:
+            caller = self._initial_caller_name or peer
+            callee = local
+            direction = _direction_for_local(local, caller, callee)
+        return caller, callee, local, peer, direction
+
+    @property
+    def call_id(self) -> str:
+        caller, callee, _, _, _ = self._event_names()
+        return self._initial_call_id or _default_call_id(caller, callee, self.device_id)
+
+    def _session_event_payload(self, state: str, **extra: Any) -> dict[str, Any]:
+        caller, callee, local, peer, direction = self._event_names()
+        payload: dict[str, Any] = {
+            "device_id": self.device_id,
+        }
+        payload.update(_canonical_session_fields(
+            state=state,
+            local_name=local,
+            peer_name=peer,
+            caller=extra.pop("caller", caller),
+            callee=extra.pop("callee", callee),
+            direction=extra.pop("direction", direction),
+            call_id=extra.pop("call_id", self._initial_call_id),
+        ))
+        payload.update(extra)
+        return payload
 
     @property
     def state(self) -> SessionState:
@@ -351,8 +555,7 @@ class IntercomSession:
         if not wire:
             return True
 
-        payload = {"device_id": self.device_id, "state": wire}
-        payload.update(extra)
+        payload = self._session_event_payload(wire, **extra)
         _fire_call_event(self.hass, payload, "session")
 
         ws = self._audio_ws
@@ -369,13 +572,17 @@ class IntercomSession:
                     code=extra.get("code"),
                 )
             elif target is SessionState.STREAMING:
-                peer = self._initial_caller_name or ""
+                caller, callee, local, peer, direction = self._event_names()
                 _set_ha_softphone_call_state(
                     self.hass,
                     "streaming",
                     session_device_id=self.device_id,
-                    caller=peer,
+                    caller=caller,
+                    callee=callee,
                     peer_name=peer,
+                    direction=direction,
+                    call_id=self._initial_call_id,
+                    local_name=local,
                 )
         return True
 
@@ -508,8 +715,8 @@ class IntercomSession:
                 _LOGGER.exception(
                     "Session %s: cleanup after %s failed", self.device_id, cause,
                 )
-            if _sessions.get(self.device_id) is self:
-                _sessions.pop(self.device_id, None)
+            if _session_get(self.call_id) is self:
+                _session_pop(self.call_id)
                 _LOGGER.debug(
                     "Session %s removed from registry (cause=%s)",
                     self.device_id, cause,
@@ -1242,8 +1449,13 @@ class BridgeSession:
             "source_name": self.source_name,
             "dest_device_id": self.dest_device_id,
             "dest_name": self.dest_name,
-            "state": state,
         }
+        payload.update(_canonical_session_fields(
+            state=state,
+            caller=self.source_name,
+            callee=self.dest_name,
+            call_id=self.bridge_id,
+        ))
         if reason is not None:
             payload["reason"] = reason
         if origin is not None:
@@ -1273,12 +1485,19 @@ class BridgeSession:
         ):
             payload: dict[str, Any] = {
                 "device_id": device_id,
-                "state": device_state,
                 "bridge_id": self.bridge_id,
                 "bridge_role": role,
                 "peer_device_id": peer_device_id,
-                "peer_name": peer_name,
             }
+            payload.update(_canonical_session_fields(
+                state=device_state,
+                local_name=self.source_name if role == "source" else self.dest_name,
+                peer_name=peer_name,
+                caller=self.source_name,
+                callee=self.dest_name,
+                direction="outgoing" if role == "source" else "incoming",
+                call_id=self.bridge_id,
+            ))
             localized_reason = self._localized_terminal_reason(role, reason, origin)
             if localized_reason is not None:
                 payload["reason"] = localized_reason
@@ -1533,7 +1752,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
 
         device_id = request.query.get("device_id", "")
         _LOGGER.debug("Audio WS opened: bound_device=%s", device_id)
-        session: IntercomSession | None = _sessions.get(device_id)
+        session: IntercomSession | None = _session_get(device_id)
         if session is not None:
             session.bind_audio_ws(ws)
             await _ws_send_json(ws, _session_audio_payload(session, "streaming" if session.is_active else "ringing"))
@@ -1541,7 +1760,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.BINARY:
-                    session = _sessions.get(device_id)
+                    session = _session_get(device_id)
                     if session is not None:
                         try:
                             session.queue_audio(decode_audio_frame(msg.data))
@@ -1558,7 +1777,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
         except Exception:
             _LOGGER.exception("Browser audio WebSocket failed for %s", device_id)
         finally:
-            session = _sessions.get(device_id)
+            session = _session_get(device_id)
             if session is not None:
                 await session.unbind_audio_ws(ws, stop=False)
             _LOGGER.debug("Audio WS closed: bound_device=%s", device_id)
@@ -1573,23 +1792,33 @@ class IntercomAudioWebSocketView(HomeAssistantView):
     ) -> IntercomSession | None:
         kind = str(payload.get("type") or "")
         device_id = str(payload.get("device_id") or bound_device_id)
+        call_id = str(payload.get("call_id") or "")
+        selector = call_id or device_id
 
         if kind == "start":
-            host = str(payload.get("host") or "")
+            devices = await _get_intercom_devices(hass)
+            target = _find_device_by_selector(
+                devices,
+                str(payload.get("target_name") or payload.get("callee") or payload.get("peer_name") or device_id),
+            )
+            if target is not None:
+                device_id = str(target.get("device_id") or device_id)
+            host = str((target or {}).get("host") or payload.get("host") or "")
             if not device_id or not host:
                 await _ws_send_json(ws, {"error": "missing start target"})
                 return None
-            target = next(
-                (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
-                None,
-            )
-            if device_id in _sessions:
-                await _sessions.pop(device_id).stop()
+            old_session = _session_get(call_id or device_id)
+            if old_session is not None:
+                await _session_pop(old_session.call_id).stop()
             session = IntercomSession(
                 hass=hass,
                 device_id=device_id,
                 host=host,
                 transport_type=configured_transport_type(hass, host),
+                call_id=call_id,
+                local_name=_ha_peer_name(hass),
+                peer_name=(target or {}).get("name") or "",
+                direction="outgoing",
                 audio_mode=(target or {}).get("audio_mode") or await _device_audio_mode(hass, device_id),
                 local_tx_formats=list(HA_BROWSER_TX_FORMATS),
                 local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -1598,7 +1827,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             )
             result = await session.start()
             if result in ("streaming", "ringing"):
-                _sessions[device_id] = session
+                _session_register(device_id, session)
                 session.bind_audio_ws(ws)
                 if not await _ws_send_json(ws, _session_audio_payload(session, result)):
                     await session.unbind_audio_ws(ws)
@@ -1608,14 +1837,15 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             return None
 
         if kind == "ha_softphone_start":
-            target_device_id = str(payload.get("target_device_id") or "")
-            target = next(
-                (d for d in await _get_intercom_devices(hass) if d.get("device_id") == target_device_id),
-                None,
+            devices = await _get_intercom_devices(hass)
+            target = _find_device_by_selector(
+                devices,
+                str(payload.get("target_name") or payload.get("callee") or payload.get("peer_name") or payload.get("target_device_id") or ""),
             )
             if target is None or not target.get("host"):
                 await _ws_send_json(ws, {"error": "target_not_found"})
                 return None
+            target_device_id = str(target.get("device_id") or "")
             if _sessions:
                 await _ws_send_json(ws, {"error": "busy"})
                 return None
@@ -1624,6 +1854,10 @@ class IntercomAudioWebSocketView(HomeAssistantView):
                 device_id=HA_SOFTPHONE_DEVICE_ID,
                 host=target["host"],
                 transport_type=configured_transport_type(hass, target["host"]),
+                call_id=call_id,
+                local_name=_ha_peer_name(hass),
+                peer_name=target.get("name") or "",
+                direction="outgoing",
                 audio_mode=target.get("audio_mode", "full_duplex"),
                 local_tx_formats=list(HA_BROWSER_TX_FORMATS),
                 local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -1632,12 +1866,15 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             )
             result = await session.start()
             if result in ("streaming", "ringing"):
-                _sessions[HA_SOFTPHONE_DEVICE_ID] = session
+                _session_register(HA_SOFTPHONE_DEVICE_ID, session)
                 _set_ha_softphone_call_state(
                     hass,
                     result,
                     session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    caller=_ha_peer_name(hass),
+                    callee=target.get("name") or "",
                     peer_name=target.get("name") or "",
+                    direction="outgoing",
                     target_device_id=target_device_id,
                 )
                 session.bind_audio_ws(ws)
@@ -1649,29 +1886,37 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             return None
 
         if kind == "answer":
-            session = _sessions.get(device_id)
+            session = _session_get(selector)
             ok = await session.answer() if session is not None else False
             await _ws_send_json(ws, _session_audio_payload(session, "streaming") if ok else {"state": "error"})
             return session if ok else None
 
         if kind == "answer_esp_call":
-            host = str(payload.get("host") or "")
-            target = next(
-                (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
-                None,
+            devices = await _get_intercom_devices(hass)
+            target = _find_device_by_selector(
+                devices,
+                str(payload.get("target_name") or payload.get("caller") or payload.get("peer_name") or device_id),
             )
-            existing = _sessions.get(device_id)
+            if target is not None:
+                device_id = str(target.get("device_id") or device_id)
+            host = str((target or {}).get("host") or payload.get("host") or "")
+            existing = _session_get(selector)
             if existing is not None and existing.is_ringing:
                 ok = await existing.answer()
                 await _ws_send_json(ws, _session_audio_payload(existing, "streaming") if ok else {"state": "error"})
                 return existing if ok else None
-            if device_id in _sessions:
-                await _sessions.pop(device_id).stop()
+            old_session = _session_get(call_id or device_id)
+            if old_session is not None:
+                await _session_pop(old_session.call_id).stop()
             session = IntercomSession(
                 hass=hass,
                 device_id=device_id,
                 host=host,
                 transport_type=configured_transport_type(hass, host),
+                call_id=call_id,
+                local_name=_ha_peer_name(hass),
+                peer_name=(target or {}).get("name") or "",
+                direction="incoming",
                 audio_mode=(target or {}).get("audio_mode") or await _device_audio_mode(hass, device_id),
                 local_tx_formats=list(HA_BROWSER_TX_FORMATS),
                 local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -1680,7 +1925,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             )
             result = await session.answer_esp_call()
             if result == "streaming":
-                _sessions[device_id] = session
+                _session_register(device_id, session)
                 session.bind_audio_ws(ws)
                 if not await _ws_send_json(ws, _session_audio_payload(session, "streaming")):
                     await session.unbind_audio_ws(ws)
@@ -1690,7 +1935,14 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             return None
 
         if kind in ("stop", "hangup"):
-            await _stop_device_sessions(device_id, hass=hass)
+            if call_id:
+                session = _session_pop(call_id)
+                if session is not None:
+                    await session.stop()
+                else:
+                    await _stop_device_sessions(device_id, hass=hass)
+            else:
+                await _stop_device_sessions(device_id, hass=hass)
             await _ws_send_json(ws, {"state": "idle"})
             return None
 
@@ -1745,8 +1997,11 @@ def websocket_subscribe_call_events(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_START,
-        vol.Required("device_id"): str,
-        vol.Required("host"): str,
+        vol.Optional("device_id", default=""): str,
+        vol.Optional("host", default=""): str,
+        vol.Optional("target_name", default=""): str,
+        vol.Optional("callee", default=""): str,
+        vol.Optional("call_id", default=""): str,
     }
 )
 @websocket_api.async_response
@@ -1756,27 +2011,35 @@ async def websocket_start(
     msg: Dict[str, Any],
 ) -> None:
     """Start intercom session."""
-    device_id = msg["device_id"]
-    host = msg["host"]
+    devices = await _get_intercom_devices(hass)
+    target = _find_device_by_selector(
+        devices,
+        str(msg.get("target_name") or msg.get("callee") or msg.get("device_id") or ""),
+    )
+    device_id = str((target or {}).get("device_id") or msg.get("device_id") or "")
+    host = str((target or {}).get("host") or msg.get("host") or "")
+    call_id = str(msg.get("call_id") or "")
     msg_id = msg["id"]
 
     _LOGGER.debug("Start request: device=%s host=%s", device_id, host)
 
     try:
-        target = next(
-            (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
-            None,
-        )
         # Stop existing session if any
-        if device_id in _sessions:
-            old_session = _sessions.pop(device_id)
-            await old_session.stop()
+        old_session = _session_get(call_id or device_id)
+        if old_session is not None:
+            old_session = _session_pop(old_session.call_id)
+            if old_session is not None:
+                await old_session.stop()
 
         session = IntercomSession(
             hass=hass,
             device_id=device_id,
             host=host,
             transport_type=configured_transport_type(hass, host),
+            call_id=call_id,
+            local_name=_ha_peer_name(hass),
+            peer_name=(target or {}).get("name") or "",
+            direction="outgoing",
             audio_mode=(target or {}).get("audio_mode") or await _device_audio_mode(hass, device_id),
             local_tx_formats=list(HA_BROWSER_TX_FORMATS),
             local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -1786,11 +2049,11 @@ async def websocket_start(
         result = await session.start()
 
         if result == "streaming":
-            _sessions[device_id] = session
+            _session_register(device_id, session)
             _LOGGER.debug("Session started (streaming): %s", device_id)
             connection.send_result(msg_id, {"success": True, **_session_audio_payload(session, "streaming")})
         elif result == "ringing":
-            _sessions[device_id] = session
+            _session_register(device_id, session)
             _LOGGER.debug("Session started (ringing): %s", device_id)
             connection.send_result(msg_id, {"success": True, **_session_audio_payload(session, "ringing")})
         else:
@@ -1804,7 +2067,10 @@ async def websocket_start(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_HA_SOFTPHONE_START,
-        vol.Required("target_device_id"): str,
+        vol.Optional("target_device_id", default=""): str,
+        vol.Optional("target_name", default=""): str,
+        vol.Optional("callee", default=""): str,
+        vol.Optional("call_id", default=""): str,
     }
 )
 @websocket_api.async_response
@@ -1815,16 +2081,18 @@ async def websocket_ha_softphone_start(
 ) -> None:
     """Start a browser/HA softphone call to an ESP endpoint."""
     msg_id = msg["id"]
-    target_device_id = msg["target_device_id"]
+    devices = await _get_intercom_devices(hass)
+    target = _find_device_by_selector(
+        devices,
+        str(msg.get("target_name") or msg.get("callee") or msg.get("target_device_id") or ""),
+    )
+    target_device_id = str((target or {}).get("device_id") or msg.get("target_device_id") or "")
+    call_id = str(msg.get("call_id") or "")
 
     if _sessions:
         connection.send_error(msg_id, "busy", "HA softphone already has an active call")
         return
 
-    target = next(
-        (d for d in await _get_intercom_devices(hass) if d.get("device_id") == target_device_id),
-        None,
-    )
     if target is None or not target.get("host"):
         connection.send_error(msg_id, "not_found", f"Target device not available: {target_device_id}")
         return
@@ -1834,6 +2102,10 @@ async def websocket_ha_softphone_start(
         device_id=HA_SOFTPHONE_DEVICE_ID,
         host=target["host"],
         transport_type=configured_transport_type(hass, target["host"]),
+        call_id=call_id,
+        local_name=_ha_peer_name(hass),
+        peer_name=target.get("name") or "",
+        direction="outgoing",
         audio_mode=target.get("audio_mode", "full_duplex"),
         local_tx_formats=list(HA_BROWSER_TX_FORMATS),
         local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -1842,12 +2114,15 @@ async def websocket_ha_softphone_start(
     )
     result = await session.start()
     if result in ("streaming", "ringing"):
-        _sessions[HA_SOFTPHONE_DEVICE_ID] = session
+        _session_register(HA_SOFTPHONE_DEVICE_ID, session)
         _set_ha_softphone_call_state(
             hass,
             result,
             session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=_ha_peer_name(hass),
+            callee=target.get("name") or "",
             peer_name=target.get("name") or "",
+            direction="outgoing",
             target_device_id=target_device_id,
         )
         connection.send_result(msg_id, {"success": True, **_session_audio_payload(session, result)})
@@ -1901,7 +2176,7 @@ def _find_bridge_by_source(source_device_id: str) -> "BridgeSession | None":
 async def _async_shutdown_all() -> None:
     """Best-effort teardown of sessions / bridges / subscribers on unload."""
     for device_id in list(_sessions.keys()):
-        session = _sessions.pop(device_id, None)
+        session = _session_pop(device_id)
         if session is None:
             continue
         try:
@@ -2031,7 +2306,7 @@ async def _stop_device_sessions(
     """
     stopped = False
 
-    session = _sessions.pop(device_id, None)
+    session = _session_pop(device_id)
     if session:
         await session.stop()
         _LOGGER.debug("Session stopped: %s", device_id)
@@ -2084,7 +2359,8 @@ async def _stop_device_sessions(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_STOP,
-        vol.Required("device_id"): str,
+        vol.Optional("device_id", default=""): str,
+        vol.Optional("call_id", default=""): str,
     }
 )
 @websocket_api.async_response
@@ -2095,18 +2371,28 @@ async def websocket_stop(
 ) -> None:
     """Stop intercom session or bridge involving this device."""
     device_id = msg["device_id"]
+    call_id = msg["call_id"]
     msg_id = msg["id"]
 
-    _LOGGER.debug("websocket_stop called: device_id=%s", device_id)
+    _LOGGER.debug("websocket_stop called: device_id=%s call_id=%s", device_id, call_id)
 
-    stopped = await _stop_device_sessions(device_id, hass=hass)
+    if call_id:
+        session = _session_pop(call_id)
+        if session is not None:
+            await session.stop()
+            stopped = True
+        else:
+            stopped = await _stop_device_sessions(device_id, hass=hass) if device_id else False
+    else:
+        stopped = await _stop_device_sessions(device_id, hass=hass)
     connection.send_result(msg_id, {"success": True, "stopped": stopped})
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_ANSWER,
-        vol.Required("device_id"): str,
+        vol.Optional("device_id", default=""): str,
+        vol.Optional("call_id", default=""): str,
     }
 )
 @websocket_api.async_response
@@ -2117,10 +2403,12 @@ async def websocket_answer(
 ) -> None:
     """Answer a ringing call (send ANSWER to ESP)."""
     device_id = msg["device_id"]
+    call_id = msg["call_id"]
+    selector = call_id or device_id
     msg_id = msg["id"]
 
     # First check P2P sessions
-    session = _sessions.get(device_id)
+    session = _session_get(selector)
     if session:
         result = await session.answer()
         if result:
@@ -2161,8 +2449,12 @@ WS_TYPE_ANSWER_ESP_CALL = f"{DOMAIN}/answer_esp_call"
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_ANSWER_ESP_CALL,
-        vol.Required("device_id"): str,
-        vol.Required("host"): str,
+        vol.Optional("device_id", default=""): str,
+        vol.Optional("host", default=""): str,
+        vol.Optional("target_name", default=""): str,
+        vol.Optional("caller", default=""): str,
+        vol.Optional("peer_name", default=""): str,
+        vol.Optional("call_id", default=""): str,
     }
 )
 @websocket_api.async_response
@@ -2173,21 +2465,23 @@ async def websocket_answer_esp_call(
 ) -> None:
     """Answer an ESP -> HA call. Reuses any ringing session from the
     unsolicited handler; otherwise opens a fresh one and sends ANSWER."""
-    device_id = msg["device_id"]
-    host = msg["host"]
+    devices = await _get_intercom_devices(hass)
+    target = _find_device_by_selector(
+        devices,
+        str(msg.get("target_name") or msg.get("caller") or msg.get("peer_name") or msg.get("device_id") or ""),
+    )
+    device_id = str((target or {}).get("device_id") or msg.get("device_id") or "")
+    host = str((target or {}).get("host") or msg.get("host") or "")
+    call_id = str(msg.get("call_id") or "")
     msg_id = msg["id"]
 
     _LOGGER.debug("Answer ESP call: device=%s host=%s", device_id, host)
 
     try:
-        target = next(
-            (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
-            None,
-        )
         # Reuse any ringing session created by the unsolicited handler;
         # rebuilding the transport would race the consumer registry and
         # drop the inbound PONG.
-        existing = _sessions.get(device_id)
+        existing = _session_get(call_id or device_id)
         if existing is not None and existing.is_ringing:
             _LOGGER.debug("Reusing ringing session for %s", device_id)
             ok = await existing.answer()
@@ -2200,15 +2494,21 @@ async def websocket_answer_esp_call(
             return
 
         # No ringing session: rare (card opened before any MSG_START).
-        if device_id in _sessions:
-            old_session = _sessions.pop(device_id)
-            await old_session.stop()
+        old_session = _session_get(call_id or device_id)
+        if old_session is not None:
+            old_session = _session_pop(old_session.call_id)
+            if old_session is not None:
+                await old_session.stop()
 
         session = IntercomSession(
             hass=hass,
             device_id=device_id,
             host=host,
             transport_type=configured_transport_type(hass, host),
+            call_id=call_id,
+            local_name=_ha_peer_name(hass),
+            peer_name=(target or {}).get("name") or "",
+            direction="incoming",
             audio_mode=(target or {}).get("audio_mode") or await _device_audio_mode(hass, device_id),
             local_tx_formats=list(HA_BROWSER_TX_FORMATS),
             local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -2218,7 +2518,7 @@ async def websocket_answer_esp_call(
         result = await session.answer_esp_call()
 
         if result == "streaming":
-            _sessions[device_id] = session
+            _session_register(device_id, session)
             _LOGGER.info("Answered ESP call (streaming): %s", device_id)
             connection.send_result(msg_id, {"success": True, **_session_audio_payload(session, "streaming")})
         else:
@@ -2296,7 +2596,8 @@ WS_TYPE_DECLINE = f"{DOMAIN}/decline"
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_DECLINE,
-        vol.Required("device_id"): str,
+        vol.Optional("device_id", default=""): str,
+        vol.Optional("call_id", default=""): str,
     }
 )
 @websocket_api.async_response
@@ -2307,14 +2608,15 @@ async def websocket_decline(
 ) -> None:
     """Decline / stop any session or bridge involving this device."""
     device_id = msg["device_id"]
+    call_id = msg["call_id"]
     msg_id = msg["id"]
 
-    _LOGGER.debug("Decline request for device: %s", device_id)
+    _LOGGER.debug("Decline request for device=%s call_id=%s", device_id, call_id)
 
-    session = _sessions.pop(device_id, None)
+    session = _session_pop(call_id or device_id)
     if session is not None:
         stopped = await session.decline(TerminalReason.DECLINED.value)
-        _LOGGER.debug("Session declined: %s", device_id)
+        _LOGGER.debug("Session declined: %s", call_id or device_id)
     else:
-        stopped = await _stop_device_sessions(device_id, hass=hass)
+        stopped = await _stop_device_sessions(device_id, hass=hass) if device_id else False
     connection.send_result(msg_id, {"success": True, "stopped": stopped})

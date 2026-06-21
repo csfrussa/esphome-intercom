@@ -51,6 +51,9 @@ from .websocket_api import (
     _fire_call_event,
     _ha_softphone_dnd,
     _set_ha_softphone_call_state,
+    _session_get,
+    _session_pop,
+    _session_register,
     _sessions,
     _bridges,
     IntercomSession,
@@ -627,7 +630,7 @@ async def _handle_answer_service(call: ServiceCall, device: dict) -> None:
     device_id = device["device_id"]
     host = device["host"]
 
-    session = _sessions.get(device_id)
+    session = _session_get(device_id)
     if session:
         await session.answer()
         return
@@ -647,6 +650,9 @@ async def _handle_answer_service(call: ServiceCall, device: dict) -> None:
         device_id=device_id,
         host=host,
         transport_type=_select_transport_type(hass, host),
+        local_name=_ha_peer_name(hass),
+        peer_name=device.get("name") or "",
+        direction="incoming",
         audio_mode=device.get("audio_mode", "full_duplex"),
         local_tx_formats=list(HA_BROWSER_TX_FORMATS),
         local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -655,7 +661,7 @@ async def _handle_answer_service(call: ServiceCall, device: dict) -> None:
     )
     result = await session.answer_esp_call()
     if result == "streaming":
-        _sessions[device_id] = session
+        _session_register(device_id, session)
         _LOGGER.info("Answered ESP call via service: %s", device["name"])
     else:
         _LOGGER.error("Failed to answer call on %s", device["name"])
@@ -672,11 +678,11 @@ async def _handle_decline_service(call: ServiceCall, device: dict) -> None:
         _LOGGER.info("Decline via service: %s (stopped=%s)", device["name"], stopped)
         return
 
-    session = _sessions.get(device_id)
+    session = _session_get(device_id)
     if session is not None:
         ok = await session.decline(reason)
         if ok:
-            _sessions.pop(device_id, None)
+            _session_pop(device_id)
             _LOGGER.info(
                 "Decline via service (P2P, reason=%r): %s",
                 reason, device["name"],
@@ -734,7 +740,7 @@ async def _handle_decline_service(call: ServiceCall, device: dict) -> None:
     # No live call: fall back to a clean stop.
     stopped = await _stop_device_sessions(device_id, hass=hass)
     _LOGGER.info(
-        "Decline via service (no live call, fallback stop): %s (stopped=%s)",
+        "Decline via service (no live call): %s (stopped=%s)",
         device["name"], stopped,
     )
 
@@ -804,6 +810,9 @@ async def _handle_call_service(call: ServiceCall, dest_device: dict) -> None:
         device_id=device_id,
         host=dest_host,
         transport_type=_select_transport_type(hass, dest_host),
+        local_name=_ha_peer_name(hass),
+        peer_name=dest_device.get("name") or "",
+        direction="outgoing",
         audio_mode=dest_device.get("audio_mode", "full_duplex"),
         local_tx_formats=list(HA_BROWSER_TX_FORMATS),
         local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -813,7 +822,7 @@ async def _handle_call_service(call: ServiceCall, dest_device: dict) -> None:
     result = await session.start()
 
     if result in ("streaming", "ringing"):
-        _sessions[device_id] = session
+        _session_register(device_id, session)
         _LOGGER.info(
             "P2P call via service: -> %s (%s)", dest_device["name"], result
         )
@@ -1283,7 +1292,7 @@ def _destination_busy_reason(hass: HomeAssistant, dest_device: dict) -> str | No
     dest_bridge = _bridge_for_device(dest_device_id)
     if dest_bridge is not None:
         return f"bridge {dest_bridge.bridge_id}"
-    if dest_device_id in _sessions:
+    if _session_get(dest_device_id) is not None:
         return "HA session"
     if _state_entity_is_busy(hass, dest_device):
         return (dest_device.get("entities") or {}).get("intercom_state", "ESP state")
@@ -1379,12 +1388,26 @@ async def _ring_ha_for_inbound_call(
     inbound_transport = inbound.transport
     source_device_id = source_device["device_id"]
 
+    def _fire_ha_reject(reason: str) -> None:
+        _set_ha_softphone_call_state(
+            hass,
+            "declined",
+            session_device_id=source_device_id,
+            caller=caller_name or source_device.get("name") or "",
+            callee=_ha_peer_name(hass),
+            peer_name=source_device.get("name") or caller_name or "",
+            direction="incoming",
+            call_id=call_id,
+            reason=reason,
+        )
+
     if _device_has_ha_call(source_device_id):
         _LOGGER.info(
             "Unsolicited MSG_START from %s rejected: source %s already has an HA call",
             observed_host,
             source_device["name"],
         )
+        _fire_ha_reject("busy")
         await _decline_inbound_start(hass, inbound, "busy")
         return
 
@@ -1393,6 +1416,7 @@ async def _ring_ha_for_inbound_call(
             "Unsolicited MSG_START from %s rejected: HA softphone already has a session",
             observed_host,
         )
+        _fire_ha_reject("busy")
         await _decline_inbound_start(hass, inbound, "busy")
         return
 
@@ -1401,6 +1425,7 @@ async def _ring_ha_for_inbound_call(
             "Unsolicited MSG_START from %s rejected: HA softphone DND is enabled",
             observed_host,
         )
+        _fire_ha_reject("DND")
         await _decline_inbound_start(hass, inbound, "DND")
         return
 
@@ -1417,6 +1442,9 @@ async def _ring_ha_for_inbound_call(
         transport=inbound_transport,
         call_id=call_id,
         caller_name=caller_name,
+        local_name=_ha_peer_name(hass),
+        peer_name=source_device.get("name") or caller_name or "",
+        direction="incoming",
         audio_mode=source_device.get("audio_mode", "full_duplex"),
         local_tx_formats=list(HA_BROWSER_TX_FORMATS),
         local_rx_formats=list(HA_BROWSER_RX_FORMATS),
@@ -1424,13 +1452,16 @@ async def _ring_ha_for_inbound_call(
         peer_rx_formats=inbound.caller_rx_formats or _device_formats(source_device, "rx_formats"),
     )
     if await session.start_ringing(caller_name=caller_name):
-        _sessions[source_device_id] = session
+        _session_register(source_device_id, session)
         _set_ha_softphone_call_state(
             hass,
             "ringing",
             session_device_id=source_device_id,
             caller=caller_name or source_device.get("name") or "",
+            callee=_ha_peer_name(hass),
             peer_name=source_device.get("name") or caller_name or "",
+            direction="incoming",
+            call_id=call_id,
         )
         return
 
