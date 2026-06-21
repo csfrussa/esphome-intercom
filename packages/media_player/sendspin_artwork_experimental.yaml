@@ -1,0 +1,55 @@
+# Experimental Sendspin artwork support for display devices.
+#
+# Uses ESPHome PR #16057 while generic_image/sendspin artwork is still WIP
+# upstream. Remove this package include to fall back to the static media
+# neutral screen.
+
+external_components:
+  - source: github://pr#16057
+    components: [generic_image, sendspin]
+    refresh: 1h
+
+esp32:
+  framework:
+    components:
+      - espressif/esp-dsp^1.8.0
+
+generic_image:
+  - platform: sendspin
+    id: sendspin_cover_art
+    sendspin_id: sendspin_hub
+    format: JPEG
+    type: RGB565
+    resize: 240x240
+    source: ALBUM
+    on_image_display:
+      - if:
+          condition:
+            lambda: |-
+              return id(current_mode) == 0 &&
+                     id(voice_assistant_phase) == ${voice_assist_replying_phase_id} &&
+                     id(speaker_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING &&
+                     !id(runtime_controller).is_activity_active("announcement");
+          then:
+            - script.execute: apply_media_artwork
+    on_image_error:
+      - if:
+          condition:
+            lambda: |-
+              return id(current_mode) == 0 &&
+                     id(voice_assistant_phase) == ${voice_assist_replying_phase_id} &&
+                     id(speaker_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING &&
+                     !id(runtime_controller).is_activity_active("announcement");
+          then:
+            - script.execute: apply_media_artwork
+
+script:
+  - id: !extend apply_media_artwork
+    then:
+      - lambda: |-
+          if (id(sendspin_cover_art).is_loaded()) {
+            lv_img_set_src(id(mood_bg), id(sendspin_cover_art));
+          } else {
+            lv_img_set_src(id(mood_bg), id(mood_neutral));
+          }
+          lv_obj_invalidate(id(mood_bg));

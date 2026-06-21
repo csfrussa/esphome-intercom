@@ -90,6 +90,7 @@ packages:
   speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
   speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork_experimental.yaml@dev
   lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
   lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
   lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
@@ -553,6 +554,12 @@ globals:
 # SCRIPTS
 # =============================================================================
 script:
+  - id: apply_media_artwork
+    then:
+      - lambda: |-
+          lv_img_set_src(id(mood_bg), id(mood_neutral));
+          lv_obj_invalidate(id(mood_bg));
+
   - id: clear_replying_text
     then:
       - lambda: |-
@@ -679,8 +686,7 @@ script:
               if (id(mute).state) {
                 id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
               } else {
-                if (lv_img_get_src(id(mood_bg)) != id(mood_neutral))
-                  lv_img_set_src(id(mood_bg), id(mood_neutral));
+                id(apply_media_artwork).execute();
                 id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
               }
               break;
@@ -1180,8 +1186,7 @@ script:
                     id: speaker_media_player
                 then:
                   # Music playing: show neutral mood screen instead of idle animation
-                  - lambda: |-
-                      lv_img_set_src(id(mood_bg), id(mood_neutral));
+                  - script.execute: apply_media_artwork
                   - globals.set:
                       id: voice_assistant_phase
                       value: '${voice_assist_replying_phase_id}'
