@@ -1,7 +1,7 @@
 const HA_SOFTPHONE_DEVICE_ID = "__intercom_native_ha_softphone__";
 const WS_AUDIO = 1;
 const WS_SUBSCRIBE_CALL_EVENTS = "intercom_native/subscribe_call_events";
-const ASSET_V = "11";
+const ASSET_V = "12";
 const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(ASSET_V)}`);
 const HIDDEN_HANGUP_GRACE_MS = 15000;
@@ -215,7 +215,7 @@ class IntercomEngine extends EventTarget {
     });
   }
 
-  _sendControl(payload, waitForReply = false) {
+  _sendControl(payload, waitForReply = false, acceptReply = null) {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
       return waitForReply ? Promise.resolve(null) : null;
     }
@@ -232,7 +232,7 @@ class IntercomEngine extends EventTarget {
         if (this._controlWaiter?.resolve === resolve) this._controlWaiter = null;
         resolve(null);
       }, CONTROL_ACK_TIMEOUT_MS);
-      this._controlWaiter = { resolve, timer };
+      this._controlWaiter = { resolve, timer, acceptReply };
     });
     this._ws.send(JSON.stringify(payload));
     return promise;
@@ -241,9 +241,14 @@ class IntercomEngine extends EventTarget {
   _resolveControlWaiter(msg) {
     if (!this._controlWaiter) return;
     const waiter = this._controlWaiter;
+    if (waiter.acceptReply && !waiter.acceptReply(msg)) return;
     this._controlWaiter = null;
     window.clearTimeout(waiter.timer);
     waiter.resolve(msg);
+  }
+
+  _isTerminalControlReply(msg) {
+    return !!msg?.error || ["streaming", "idle", "error"].includes(String(msg?.state || "").toLowerCase());
   }
 
   _sendAudio(buffer) {
@@ -405,7 +410,11 @@ class IntercomEngine extends EventTarget {
     const deviceId = sessionDeviceId || deviceInfo.device_id;
     await this._connect(deviceId);
     this._resetStats();
-    const reply = await this._sendControl({ type: "answer", device_id: deviceId, host: deviceInfo?.host || "" }, true);
+    const reply = await this._sendControl(
+      { type: "answer", device_id: deviceId, host: deviceInfo?.host || "" },
+      true,
+      (msg) => this._isTerminalControlReply(msg),
+    );
     if (reply?.state !== "streaming") {
       this._setState("ERROR");
       await this.stop(deviceId).catch(() => this.close("answer_failed"));
@@ -418,7 +427,11 @@ class IntercomEngine extends EventTarget {
   async answerEspCall(deviceInfo) {
     await this._connect(deviceInfo.device_id);
     this._resetStats();
-    const reply = await this._sendControl({ type: "answer_esp_call", device_id: deviceInfo.device_id, host: deviceInfo.host }, true);
+    const reply = await this._sendControl(
+      { type: "answer_esp_call", device_id: deviceInfo.device_id, host: deviceInfo.host },
+      true,
+      (msg) => this._isTerminalControlReply(msg),
+    );
     if (reply?.state !== "streaming") {
       this._setState("ERROR");
       return;

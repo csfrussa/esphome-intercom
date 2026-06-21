@@ -59,7 +59,6 @@ _sessions: Dict[str, "IntercomSession"] = {}
 _bridges: Dict[str, "BridgeSession"] = {}
 
 CALL_EVENT = "intercom_native.call_event"
-WS_AUDIO_IDLE_TIMEOUT = 5.0
 WS_AUDIO_RECONNECT_GRACE = 15.0
 WS_AUDIO_WATCHDOG_INTERVAL = 1.0
 HA_SOFTPHONE_STORE_KEY = f"{DOMAIN}_ha_softphone"
@@ -313,6 +312,7 @@ class IntercomSession:
         self._audio_ws: web.WebSocketResponse | None = None
         self._audio_ws_task: asyncio.Task | None = None
         self._last_browser_audio = time.monotonic()
+        self._browser_audio_frames = 0
 
     @property
     def state(self) -> SessionState:
@@ -405,12 +405,28 @@ class IntercomSession:
             self.hass.async_create_task(old_ws.close())
         self._audio_ws = ws
         self._last_browser_audio = time.monotonic()
+        self._browser_audio_frames = 0
+        _LOGGER.debug(
+            "Audio WS bound: device=%s state=%s tx=%s rx=%s mode=%s",
+            self.device_id,
+            self._state.value,
+            self.tx_format.wire_token(),
+            self.rx_format.wire_token(),
+            self.audio_mode,
+        )
         if self._audio_ws_task is None or self._audio_ws_task.done():
             self._audio_ws_task = self.hass.async_create_task(self._audio_watchdog())
 
     async def unbind_audio_ws(self, ws: web.WebSocketResponse, *, stop: bool = True) -> None:
         if self._audio_ws is not ws:
             return
+        _LOGGER.debug(
+            "Audio WS unbound: device=%s stop=%s frames_from_browser=%d state=%s",
+            self.device_id,
+            stop,
+            self._browser_audio_frames,
+            self._state.value,
+        )
         self._audio_ws = None
         if stop:
             await cancel_task(self._audio_ws_task)
@@ -430,13 +446,6 @@ class IntercomSession:
                         return
                     continue
                 missing_ws_since = None
-                if (
-                    self._state is SessionState.STREAMING
-                    and _has_speaker(self.audio_mode)
-                    and time.monotonic() - self._last_browser_audio > WS_AUDIO_IDLE_TIMEOUT
-                ):
-                    await _stop_device_sessions(self.device_id, hass=self.hass)
-                    return
         except asyncio.CancelledError:
             pass
 
@@ -581,6 +590,14 @@ class IntercomSession:
         self.rx_format = caller_to_dest
         self.tx_format = dest_to_caller
         self._transport.set_selected_audio_formats(caller_to_dest, dest_to_caller)
+        _LOGGER.info(
+            "Inbound audio negotiated for %s: browser->ESP tx=%s ESP->browser rx=%s peer_tx=%s peer_rx=%s",
+            self.device_id,
+            self.tx_format.wire_token(),
+            self.rx_format.wire_token(),
+            [fmt.wire_token() for fmt in self.peer_tx_formats],
+            [fmt.wire_token() for fmt in self.peer_rx_formats],
+        )
         return True
 
     async def start(self) -> str:
@@ -740,6 +757,15 @@ class IntercomSession:
             )
             return
         self._last_browser_audio = time.monotonic()
+        self._browser_audio_frames += 1
+        if self._browser_audio_frames in (1, 2, 3, 10, 32, 64):
+            _LOGGER.debug(
+                "Browser audio frame: device=%s count=%d bytes=%d tx=%s",
+                self.device_id,
+                self._browser_audio_frames,
+                len(data),
+                self.tx_format.wire_token(),
+            )
         _put_latest(self._tx_queue, data)
 
 
@@ -1506,6 +1532,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
         await ws.prepare(request)
 
         device_id = request.query.get("device_id", "")
+        _LOGGER.debug("Audio WS opened: bound_device=%s", device_id)
         session: IntercomSession | None = _sessions.get(device_id)
         if session is not None:
             session.bind_audio_ws(ws)
@@ -1534,6 +1561,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             session = _sessions.get(device_id)
             if session is not None:
                 await session.unbind_audio_ws(ws, stop=False)
+            _LOGGER.debug("Audio WS closed: bound_device=%s", device_id)
         return ws
 
     async def _handle_control(
@@ -1628,6 +1656,10 @@ class IntercomAudioWebSocketView(HomeAssistantView):
 
         if kind == "answer_esp_call":
             host = str(payload.get("host") or "")
+            target = next(
+                (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
+                None,
+            )
             existing = _sessions.get(device_id)
             if existing is not None and existing.is_ringing:
                 ok = await existing.answer()
@@ -1640,7 +1672,11 @@ class IntercomAudioWebSocketView(HomeAssistantView):
                 device_id=device_id,
                 host=host,
                 transport_type=configured_transport_type(hass, host),
-                audio_mode=await _device_audio_mode(hass, device_id),
+                audio_mode=(target or {}).get("audio_mode") or await _device_audio_mode(hass, device_id),
+                local_tx_formats=list(HA_BROWSER_TX_FORMATS),
+                local_rx_formats=list(HA_BROWSER_RX_FORMATS),
+                peer_tx_formats=_device_formats(target, "tx_formats"),
+                peer_rx_formats=_device_formats(target, "rx_formats"),
             )
             result = await session.answer_esp_call()
             if result == "streaming":
