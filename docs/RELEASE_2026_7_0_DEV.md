@@ -11,6 +11,17 @@ regressions would be a problem.
 
 ## 🏠 Intercom Native / Home Assistant
 
+- 🗣️ **Intercom Native now is able to call other intercoms via Voice
+  Assistant.** An optional Assist intent adapter can be enabled from the
+  Intercom Native setup/reconfigure dialog. With the provided custom sentences,
+  voice satellites can call a phonebook contact, hang up, answer or decline
+  using the satellite that heard the sentence. Spoken contact names are resolved
+  dynamically against the live phonebook, so `call kitchen speaker` can resolve
+  to the canonical `Kitchen Speaker` contact without changing low-level
+  intercom matching. If no phonebook contact matches, the adapter can also call
+  the single intercom device assigned to a matching Home Assistant area name.
+  Multiple intercom devices per area are intentionally not voice-dialed in this
+  prerelease; group/area calls are left for a later release.
 - 🧬 Added negotiated PCM audio formats to the HA side of the PBX-lite stack.
 - 🔁 Audio formats are now **per direction**, not one global device format:
   `tx_format` describes device-to-wire audio and `rx_format` describes
@@ -44,17 +55,6 @@ regressions would be a problem.
   This keeps the ESP-caller / HA-responder path aligned with HA-originated
   calls and avoids deep/slow audio caused by a browser worklet using stale
   16 kHz framing against a negotiated 48 kHz leg.
-- 🗣️ **Intercom Native now is able to call other intercoms via Voice
-  Assistant.** An optional Assist intent adapter can be enabled from the
-  Intercom Native setup/reconfigure dialog. With the provided custom sentences,
-  voice satellites can call a phonebook contact, hang up, answer or decline
-  using the satellite that heard the sentence. Spoken contact names are resolved
-  dynamically against the live phonebook, so `call kitchen speaker` can resolve
-  to the canonical `Kitchen Speaker` contact without changing low-level
-  intercom matching. If no phonebook contact matches, the adapter can also call
-  the single intercom device assigned to a matching Home Assistant area name.
-  Multiple intercom devices per area are intentionally not voice-dialed in this
-  prerelease; group/area calls are left for a later release.
 - 🧭 ESP caller devices now also apply the selected RX speaker format before
   activation and again when the `ANSWER` arrives. ESP-originated calls answered
   by HA therefore use the negotiated speaker rate instead of a stale/default
