@@ -59,7 +59,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_BUFFER_DURATION, default="500ms"
             ): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_TIMEOUT, default="500ms"): cv.Any(
+            cv.Optional(CONF_TIMEOUT, default=CONF_NEVER): cv.Any(
                 cv.positive_time_period_milliseconds,
                 cv.one_of(CONF_NEVER, lower=True),
             ),

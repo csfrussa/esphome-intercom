@@ -729,8 +729,9 @@ speaker:
   - platform: esp_audio_stack
     id: hw_speaker
     esp_audio_stack_id: audio_stack
-    buffer_duration: 500ms       # Same semantics as ESPHome i2s_audio.speaker
-    timeout: 500ms               # Use "never" only for always-on raw streams
+    buffer_duration: 500ms
+    # timeout is optional and defaults to never. Set e.g. timeout: 10s only
+    # when this hardware speaker should auto-stop after an abandoned writer.
 
   # Mixer combines VA TTS and intercom at 48kHz
   - platform: mixer
@@ -919,7 +920,7 @@ binary_sensor:
   10 ms per descriptor, clamped to IDF's 4092-byte DMA descriptor limit. There
   is still no public ESPHome YAML DMA knob; if latency needs tuning, expose the
   relevant IDF channel fields explicitly instead of adding a fallback backend.
-- **Speaker Buffer**: the public `speaker: platform: esp_audio_stack` exposes ESPHome-compatible `buffer_duration` and `timeout` options. Default `buffer_duration: 500ms` allocates a mono PCM staging ring at the I2S bus rate, preferably in PSRAM.
+- **Speaker Buffer**: the public `speaker: platform: esp_audio_stack` exposes ESPHome-compatible `buffer_duration` and `timeout` options. Default `buffer_duration: 500ms` allocates a mono PCM staging ring at the I2S bus rate, preferably in PSRAM. `timeout` defaults to `never`; set an explicit value such as `10s` only when the hardware speaker should auto-stop after an abandoned writer.
 - **Task Priority**: 19 (above lwIP at 18, below WiFi at 23). Configurable via `task_priority` YAML option.
 - **Core Affinity**: Pinned to Core 0 for the non-network realtime I2S bridge. Espressif's GMF AFE path keeps manager feed on Core 0 and manager fetch plus the GMF pipeline task on Core 1 via `esp_afe`; Core 1 remains available for GMF output, MWW inference and LVGL. Configurable via `task_core` YAML option.
 - **Processor Surface**: Mono, stereo and TDM processor modes all keep callbacks on the processed surface. Mono software-reference mode zero-fills the reference when playback is idle instead of switching around the processor.
