@@ -12,7 +12,7 @@
           "udp_control_port": "UDP control port",
           "udp_max_payload": "UDP max audio payload",
           "advertise_host": "Advertised HA host/IP",
-          "assist_intents": "Enable Assist intercom intents"
+          "assist_intents": "Enable Assist intents"
         },
         "data_description": {
           "use_tcp": "Framed binary protocol (audio + signaling on a single connection).",
@@ -22,7 +22,7 @@
           "udp_control_port": "Listen port for UDP signaling (default 6055). Must differ from the audio port.",
           "udp_max_payload": "Maximum raw PCM bytes accepted per UDP audio datagram. Default 1200 avoids IP fragmentation; raise only on LANs where you intentionally allow larger packets.",
           "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices.",
-          "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline. Spoken contact names are resolved dynamically against the live intercom phonebook."
+          "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live intercom phonebook."
         }
       }
     },
