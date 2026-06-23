@@ -23,6 +23,7 @@ from homeassistant.util import slugify
 from zeroconf.asyncio import AsyncServiceInfo
 
 from .const import (
+    CONF_ASSIST_INTENTS,
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
@@ -1018,6 +1019,20 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "purge_devices", handle_purge_devices, schema=purge_schema)
 
 
+async def _async_apply_assist_intents(hass: HomeAssistant, enabled: bool) -> None:
+    """Register optional Assist intent handlers only when explicitly enabled."""
+    if enabled:
+        from .assist_intents import async_register_assist_intents
+
+        async_register_assist_intents(hass)
+        return
+
+    if hass.data.get(DOMAIN, {}).get("assist_intents_registered"):
+        from .assist_intents import async_unregister_assist_intents
+
+        async_unregister_assist_intents(hass)
+
+
 async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -> None:
     """Shared setup logic for both YAML and config entry."""
     if hass.data.get(DOMAIN, {}).get("initialized"):
@@ -1067,6 +1082,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})["transport_config"] = cfg
     hass.data[DOMAIN]["tcp_port"] = cfg["tcp_port"]
     await _async_setup_shared(hass)
+    await _async_apply_assist_intents(
+        hass,
+        bool(entry.data.get(CONF_ASSIST_INTENTS, False)),
+    )
     if cfg["use_tcp"]:
         if not await _async_start_tcp_socket_manager(hass):
             raise ConfigEntryError(
@@ -1088,6 +1107,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    await _async_apply_assist_intents(hass, False)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Stop sessions / bridges before tearing down listeners; otherwise

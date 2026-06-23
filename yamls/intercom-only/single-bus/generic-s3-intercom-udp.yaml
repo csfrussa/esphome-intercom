@@ -37,6 +37,9 @@ substitutions:
 # =============================================================================
 packages:
   core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@dev
+  buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/buttons_switches.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api.yaml@dev
   phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
   intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
   speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev

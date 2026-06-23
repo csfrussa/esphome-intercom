@@ -1,0 +1,39 @@
+# Home Assistant Assist example for local ESPHome voice quiet.
+#
+# Paste this into automations.yaml when you want "shut up" style commands to
+# stop only the local VA/TTS announcement on the satellite that heard the
+# sentence. Intercom call/hangup/answer/decline commands are handled by the
+# optional Intercom Native Assist intents instead; see:
+#   examples/home-assistant/custom_sentences/
+#
+# Requirements on each ESPHome full-experience satellite:
+#   - packages/voice_assistant/local_commands*.yaml for voice_quiet.
+
+- id: local_satellite_voice_quiet
+  alias: Local satellite voice quiet
+  description: Stop only the local VA/TTS announcement from the satellite that heard the sentence.
+  triggers:
+    - trigger: conversation
+      command:
+        - shut up
+        - be quiet
+        - stop talking
+        - stop the response
+        - cancel the response
+  conditions: []
+  actions:
+    - variables:
+        # ESPHome action services are named from the ESPHome device name.
+        # Example: "Kitchen Speaker" -> esphome.kitchen_speaker_voice_quiet.
+        satellite_slug: "{{ (device_attr(trigger.device_id, 'name') or '') | slugify }}"
+        quiet_service: "esphome.{{ satellite_slug }}_voice_quiet"
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ satellite_slug | length > 0 }}"
+          sequence:
+            - action: "{{ quiet_service }}"
+            - set_conversation_response: "OK."
+      default:
+        - set_conversation_response: "I do not know which satellite to quiet."
+  mode: single

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 DOMAIN = "intercom_native"
+CONF_ASSIST_INTENTS = "assist_intents"
 
 # Version from manifest.json
 _MANIFEST = Path(__file__).parent / "manifest.json"

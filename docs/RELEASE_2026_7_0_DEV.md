@@ -44,6 +44,17 @@ regressions would be a problem.
   This keeps the ESP-caller / HA-responder path aligned with HA-originated
   calls and avoids deep/slow audio caused by a browser worklet using stale
   16 kHz framing against a negotiated 48 kHz leg.
+- 🗣️ **Intercom Native now is able to call other intercoms via Voice
+  Assistant.** An optional Assist intent adapter can be enabled from the
+  Intercom Native setup/reconfigure dialog. With the provided custom sentences,
+  voice satellites can call a phonebook contact, hang up, answer or decline
+  using the satellite that heard the sentence. Spoken contact names are resolved
+  dynamically against the live phonebook, so `call kitchen speaker` can resolve
+  to the canonical `Kitchen Speaker` contact without changing low-level
+  intercom matching. If no phonebook contact matches, the adapter can also call
+  the single intercom device assigned to a matching Home Assistant area name.
+  Multiple intercom devices per area are intentionally not voice-dialed in this
+  prerelease; group/area calls are left for a later release.
 - 🧭 ESP caller devices now also apply the selected RX speaker format before
   activation and again when the `ANSWER` arrives. ESP-originated calls answered
   by HA therefore use the negotiated speaker rate instead of a stale/default
@@ -145,6 +156,20 @@ regressions would be a problem.
 - 🔁 Wake-word barge-in during an active VA TTS response stops only the VA
   announcement path and restarts the assistant from real component states,
   without using fixed delay windows as the normal decision path.
+- 🗣️ Maintained full YAMLs now expose an optional package for local Assist
+  silence commands. It lets `shut up` style commands stop only the active
+  VA/TTS announcement on the satellite that heard the sentence, without
+  stopping background media. Intercom call/hangup/answer/decline commands are
+  handled by the optional Intercom Native Assist intent adapter instead of
+  YAML automations.
+- 🖼️ Sendspin artwork is promoted for display profiles that opt in to the
+  artwork package. Spotpear and Waveshare P4 render Music Assistant album art
+  when Sendspin exposes it, with a neutral media fallback when no artwork is
+  available. The package pins ESPHome development image support from
+  [esphome/esphome#16057](https://github.com/esphome/esphome/pull/16057) until
+  it lands in an ESPHome release. Thanks to
+  [issue #58](https://github.com/n-IA-hane/esphome-intercom/issues/58) for the
+  FYI that surfaced this capability.
 - 🥇 Intercom keeps priority through its dedicated mixer source.
 - ⏲️ Timer/ringtone/media playback now follow the same source arbitration model
   instead of drifting through separate speaker paths.

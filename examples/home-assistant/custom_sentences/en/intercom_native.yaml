@@ -1,0 +1,26 @@
+language: en
+
+intents:
+  IntercomCall:
+    data:
+      - sentences:
+          - "call {target}"
+  IntercomHangup:
+    data:
+      - sentences:
+          - "hang up"
+          - "end the call"
+  IntercomAnswer:
+    data:
+      - sentences:
+          - "answer"
+          - "answer the call"
+  IntercomDecline:
+    data:
+      - sentences:
+          - "decline"
+          - "decline the call"
+
+lists:
+  target:
+    wildcard: true

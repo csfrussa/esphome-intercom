@@ -97,6 +97,10 @@ packages:
   p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
   p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
   core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
   intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport_udp.yaml@dev
   phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
   afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev

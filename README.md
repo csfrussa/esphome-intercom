@@ -136,6 +136,17 @@ Changes since `2026.6.3`:
 - Wake-word barge-in during a VA TTS response stops the VA announcement path
   and restarts the assistant from real component states, without stopping normal
   background media.
+- Intercom Native can now register optional Home Assistant Assist intent
+  handlers. Voice satellites can say commands such as `call kitchen speaker`,
+  `hang up`, `answer` and `decline`; the handler uses the Assist `device_id` of
+  the satellite that heard the sentence, resolves the spoken contact
+  dynamically against the live intercom phonebook, and calls the existing
+  intercom services. If no contact matches, it can resolve a Home Assistant
+  area name when that area contains exactly one intercom device. The feature is
+  gated by the Intercom Native setup option and is off by default.
+- Maintained full-experience YAMLs include an explicit optional local voice
+  command package for assistant silence. Users can say "shut up" to stop only
+  the current VA/TTS announcement without stopping background media.
 - Sendspin / Music Assistant is available in maintained full-experience
   profiles. It is integrated as one source in the media pipeline, not as a
   second parallel media player. Current defaults use 48 kHz mono PCM and PSRAM
@@ -147,6 +158,9 @@ Changes since `2026.6.3`:
   artwork is available. This uses ESPHome's development `generic_image` /
   `sendspin` image support from
   [esphome/esphome#16057](https://github.com/esphome/esphome/pull/16057).
+  Thanks to
+  [the FYI report in issue #58](https://github.com/n-IA-hane/esphome-intercom/issues/58)
+  for pointing out that Sendspin can expose artwork.
 
 ![Sendspin artwork on Spotpear Ball v2](docs/images/sendspin-artwork.jpg)
 
@@ -199,6 +213,10 @@ Known prerelease status:
 - Sendspin artwork support depends on ESPHome development image support from
   `esphome/esphome#16057`; the local package pins that external component until
   the feature lands in an ESPHome release.
+- Maintained full-experience YAMLs keep optional user-facing features as
+  explicit package lines next to the core package. Comment out the local voice
+  commands, timers, HA API, call settings or artwork package line when you do
+  not want that feature in a custom build.
 - UDP remains intentionally conservative by default. Raise `udp_max_payload`
   only after verifying the whole LAN path, or use TCP for larger PCM frames.
 - The HA softphone card now has an idle-only Options panel for Auto Answer,
@@ -1470,6 +1488,10 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
 - **Barge-in**: Say the wake word during a TTS response to interrupt and ask a new question. The state machine tracks VA response pending/active phases from real ESPHome `voice_assistant` and media-player announcement callbacks, so slow TTS engines keep the reply LED state until playback actually starts and finishes.
 - **Touch or voice**: Start the assistant by saying the wake word or tapping the screen (on touch displays)
 - **Intercom calls**: Call other devices or Home Assistant with one tap; incoming calls ring with audio + visual feedback. Ringtone plays over music (via announcement pipeline)
+- **Local voice commands**: Intercom Native can optionally register Home
+  Assistant Assist intents for calling, hangup, answer and decline from the
+  satellite that heard the sentence. Maintained full YAMLs also expose an
+  optional ESPHome `voice_quiet` action for "shut up" style assistant silence.
 - **Runtime AEC mode switching**: An `AEC Mode` select entity in Home Assistant lets you switch between SR and VOIP AEC modes at runtime without reflashing
 - **Weather at a glance**: Current conditions, temperature, and 5-day forecast updated automatically (touch displays)
 - **Mood-aware responses**: The assistant shows different expressions (happy, neutral, angry) based on the tone of its reply. Requires instructing your LLM to prepend an ASCII emoticon (`:-)` `:-(` `:-|`) to each response based on its tone
@@ -1497,6 +1519,67 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
   | `error_no_ha.png` | Home Assistant disconnected overlay |
 
   The folder name matches the avatar identity (e.g. `images/assistant/default/`). To switch avatar, just change the substitution. Images are resized automatically at compile time (240x240 for Spotpear Ball v2, 400x400 for P4 Touch LCD).
+
+### Voice Commands for Intercom and Assistant Quiet
+
+Intercom call control is handled by an optional Home Assistant-side Assist
+adapter in the `intercom_native` integration. Enable **Assist intercom
+intents** in the Intercom Native integration setup/reconfigure dialog, then add
+the matching custom sentences from:
+
+- [`examples/home-assistant/custom_sentences/en/intercom_native.yaml`](examples/home-assistant/custom_sentences/en/intercom_native.yaml)
+- [`examples/home-assistant/custom_sentences/it/intercom_native.yaml`](examples/home-assistant/custom_sentences/it/intercom_native.yaml)
+
+The custom sentence uses a wildcard `target`; Intercom Native resolves the
+spoken text dynamically against the live phonebook. For example, if Assist
+hears `call kitchen speaker`, the handler resolves it to the canonical
+`Kitchen Speaker` contact and uses the satellite `device_id` that heard the
+command as the call source. It
+does not change the intercom protocol or make low-level phonebook matching
+fuzzy.
+
+If no phonebook contact matches the spoken target, the adapter also tries a
+Home Assistant area-name fallback. This prerelease supports only one intercom
+device per area for voice dialing: `call kitchen` can call the single intercom
+device assigned to the `Kitchen` area, but if the area has zero or multiple
+intercom devices the command fails instead of guessing. Group calls are planned
+for a later release.
+
+Supported intercom intents:
+
+- `call {target}` / `chiama {target}` -> call a live phonebook contact from the
+  satellite that heard the command;
+- `hang up` / `riaggancia` -> hang up the current call for that satellite;
+- `answer` / `rispondi` -> answer the call on that satellite;
+- `decline` / `rifiuta` -> decline the call on that satellite.
+
+Maintained full-experience presets also include a local assistant-silence
+package as an explicit, optional package line:
+
+```yaml
+packages:
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+```
+
+Runtime-FSM profiles use `local_commands_cpp.yaml`; legacy/native profiles use
+`local_commands.yaml`. Both expose a `voice_quiet` ESPHome API action. It stops
+only the current media-player announcement and the active Voice Assistant
+session, so a Sendspin or normal media stream underneath is not stopped.
+
+Home Assistant Assist sentence triggers can call the satellite-local quiet
+service. The example automation covers:
+
+- `shut up`, `be quiet`, `stop talking` -> silence only the assistant response.
+
+Use exact, speakable phonebook contact names. For best results, name ESP peers
+with natural words such as `Kitchen Speaker`, `Office Display`,
+`Living Room Display` or `Front Door`. Avoid relying on slug names such as
+`living_room_display`, and avoid fuzzy
+matching: if Assist hears a different contact name, the call
+should fail instead of silently calling the wrong peer.
+
+See the Home Assistant `voice_quiet` automation example:
+[`examples/assist-voice-intercom-commands.yaml`](examples/assist-voice-intercom-commands.yaml).
 
 ### AEC Best Practices
 

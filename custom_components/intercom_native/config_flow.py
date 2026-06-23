@@ -6,6 +6,7 @@ from homeassistant.config_entries import ConfigFlow
 from homeassistant.helpers.selector import BooleanSelector, NumberSelector, NumberSelectorConfig
 
 from .const import (
+    CONF_ASSIST_INTENTS,
     DOMAIN,
     INTERCOM_PORT,
     INTERCOM_UDP_AUDIO_PORT,
@@ -40,6 +41,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
             "udp_control_port": existing.get("udp_control_port", INTERCOM_UDP_CONTROL_PORT),
             "udp_max_payload": existing.get("udp_max_payload", UDP_SAFE_PAYLOAD_BYTES),
             "advertise_host": existing.get("advertise_host", ""),
+            CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
         }
         schema = vol.Schema(
             {
@@ -52,6 +54,10 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                     NumberSelectorConfig(min=576, max=65507, step=1, mode="box")
                 ),
                 vol.Optional("advertise_host", default=defaults["advertise_host"]): str,
+                vol.Required(
+                    CONF_ASSIST_INTENTS,
+                    default=defaults[CONF_ASSIST_INTENTS],
+                ): BooleanSelector(),
             }
         )
         errors: dict[str, str] = {}

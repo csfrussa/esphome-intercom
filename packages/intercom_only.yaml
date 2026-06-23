@@ -1,15 +1,14 @@
 # =============================================================================
 # Intercom-Only meta-package.
-# Bundles the four sub-packages that make up an intercom-only device:
+# Bundles the core sub-packages that make up an intercom-only device:
 #   - intercom/state_machine.yaml      LED reducer + g_applied_led
 #   - intercom/callbacks.yaml          intercom_api on_* + ui_ic_* hooks
-#   - intercom/buttons_switches.yaml   call/next/prev/decline buttons + mic mute switch
+#
+# Maintained presets include optional feature packages explicitly next to this
+# core package, so users can comment out one line to remove a feature:
+#   - intercom/buttons_switches.yaml   call/next/prev/decline buttons + mute
 #   - intercom/call_settings.yaml      auto-answer + DND switches
 #   - intercom/ha_api.yaml             HA-callable call-control services
-#
-# Drop-in replacement for the previous monolithic intercom_only.yaml. Existing
-# device YAMLs that include `core: !include packages/intercom_only.yaml`
-# continue to work unchanged.
 #
 # For LVGL devices that want a settings carousel, ALSO include:
 #   `lvgl/settings_navigation.yaml`   carousel state + navigation scripts
@@ -30,9 +29,6 @@
 packages:
   state_machine: !include intercom/state_machine.yaml
   callbacks: !include intercom/callbacks.yaml
-  buttons_switches: !include intercom/buttons_switches.yaml
-  call_settings: !include intercom/call_settings.yaml
-  ha_api: !include intercom/ha_api.yaml
 
 # No CONFIG_LWIP_MAX_SOCKETS override: intercom_api reserves its socket
 # quota through socket.consume_sockets() in its Python validation path,

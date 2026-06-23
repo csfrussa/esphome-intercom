@@ -1,0 +1,26 @@
+# =============================================================================
+# Local VA control commands exposed to Home Assistant as ESPHome API actions.
+#
+# Legacy/non-runtime-FSM variant.
+#
+# Prerequisites:
+#   - id `va`                   : voice_assistant
+#   - id `speaker_media_player` : speaker_source media_player
+# =============================================================================
+
+api:
+  actions:
+    # Silence the current VA session without starting a new one.
+    #
+    # This is intentionally narrower than a media stop: only the announcement
+    # pipeline is stopped, so Sendspin/background media can continue underneath.
+    - action: voice_quiet
+      then:
+        - logger.log:
+            level: INFO
+            tag: va
+            format: "VA: quiet requested"
+        - media_player.stop:
+            id: speaker_media_player
+            announcement: true
+        - voice_assistant.stop:
