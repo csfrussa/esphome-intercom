@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import asyncio
+import json
 import math
 import sys
 import types
@@ -770,6 +771,42 @@ class IntercomSessionFsmTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.local_rx_formats, [fmt])
         self.assertEqual(transport.caller_to_dest_format, fmt)
         self.assertEqual(transport.dest_to_caller_format, fmt)
+
+    async def test_ha_softphone_target_resolves_from_shared_roster_json(self) -> None:
+        fmt = "48000:s16le:1:10"
+        self.hass.states["sensor.intercom_phonebook"] = types.SimpleNamespace(
+            attributes={
+                "roster_json": json.dumps(
+                    {
+                        "version": 1,
+                        "contacts": [
+                            {"id": "Casa", "kind": "ha", "address": "192.168.1.10"},
+                            {
+                                "id": "Cucina",
+                                "kind": "esp",
+                                "address": "192.168.1.47",
+                                "metadata": {
+                                    "transport": "sip",
+                                    "sip_port": 5060,
+                                    "rtp_port": 40000,
+                                    "audio_mode": "full_duplex",
+                                    "tx_formats": [fmt],
+                                    "rx_formats": [fmt],
+                                },
+                            },
+                        ],
+                    }
+                )
+            }
+        )
+        target = websocket_api._ha_softphone_target_from_roster(self.hass, "Cucina")
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.assertEqual(target["device_id"], "Cucina")
+        self.assertEqual(target["host"], "192.168.1.47")
+        self.assertEqual(target["transport"], "sip")
+        self.assertEqual(target["tx_formats"], [fmt])
+        self.assertIsNone(websocket_api._ha_softphone_target_from_roster(self.hass, "Casa"))
 
     async def test_start_refused_after_terminal(self) -> None:
         session = self._session()

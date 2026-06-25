@@ -61,6 +61,7 @@ class IntercomCard extends HTMLElement {
     this._availableDevices = [];
     this._availableDevicesLoading = false;
     this._availableDevicesRetryTimer = null;
+    this._rosterEntries = [];
     this._callMode = null;  // 'softphone' in HA mode only; ESP cards are pure mirrors.
 
     // Entity IDs (discovered once)
@@ -483,6 +484,9 @@ class IntercomCard extends HTMLElement {
     if (hass && this._availableDevices.length === 0) {
       this._loadAvailableDevices();
     }
+    if (hass) {
+      this._loadSharedRoster();
+    }
     if (hass && this._isHaSoftphoneMode() && !this._softphoneStateLoaded) {
       this._loadSoftphoneState();
     }
@@ -522,6 +526,15 @@ class IntercomCard extends HTMLElement {
         if (destEntity?.state !== oldDestEntity?.state) {
           needsRender = true;
         }
+      }
+      const rosterState = hass.states["sensor.intercom_phonebook"];
+      const oldRosterState = oldHass?.states?.["sensor.intercom_phonebook"];
+      if (
+        rosterState?.attributes?.roster_json !== oldRosterState?.attributes?.roster_json ||
+        rosterState?.attributes?.phonebook !== oldRosterState?.attributes?.phonebook
+      ) {
+        this._loadSharedRoster();
+        needsRender = true;
       }
 
       if (this._transportEntityId) {
@@ -763,7 +776,9 @@ class IntercomCard extends HTMLElement {
   }
 
   _softphoneTargets() {
-    return this._availableDevices.filter(d => d && !d.softphone && d.device_id);
+    return this._rosterEntries
+      .filter(entry => this._isCallableRosterEntry(entry))
+      .map(entry => this._targetFromRosterEntry(entry));
   }
 
   _getSoftphoneTargetDevice() {
@@ -771,6 +786,66 @@ class IntercomCard extends HTMLElement {
     if (targets.length === 0) return null;
     const wanted = this._softphoneTargetDeviceId;
     return targets.find(d => d.device_id === wanted) || targets[0];
+  }
+
+  _loadSharedRoster() {
+    const attr = this._hass?.states?.["sensor.intercom_phonebook"]?.attributes || {};
+    const raw = attr.roster_json || "";
+    let contacts = [];
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        contacts = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.contacts) ? parsed.contacts : []);
+      } catch (err) {
+        console.error("Invalid intercom roster_json:", err);
+      }
+    }
+    this._rosterEntries = contacts
+      .filter(entry => entry && typeof entry === "object")
+      .map(entry => ({
+        id: String(entry.id || entry.name || "").trim(),
+        name: String(entry.name || entry.id || "").trim(),
+        kind: String(entry.kind || "esp").trim().toLowerCase(),
+        address: String(entry.address || entry.host || "").trim(),
+        sip_uri: String(entry.sip_uri || "").trim(),
+        number: String(entry.number || "").trim(),
+        route_via_ha: !!entry.route_via_ha,
+        enabled: entry.enabled !== false,
+        metadata: entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {},
+      }))
+      .filter(entry => entry.id);
+    if (this._isHaSoftphoneMode() && !this._getSoftphoneTargetDevice()) {
+      this._softphoneTargetDeviceId = this._softphoneTargets()[0]?.device_id || null;
+    }
+  }
+
+  _isCallableRosterEntry(entry) {
+    if (!entry || entry.enabled === false) return false;
+    const name = entry.name || entry.id;
+    if (!name || this._isHaName(name)) return false;
+    if (entry.kind === "ha") return false;
+    return ["esp", "sip", "phone", "group"].includes(entry.kind);
+  }
+
+  _targetFromRosterEntry(entry) {
+    const metadata = entry.metadata || {};
+    const id = entry.id || entry.name;
+    return {
+      device_id: id,
+      name: entry.name || id,
+      route_id: id,
+      host: entry.address || "",
+      transport: metadata.transport || (entry.sip_uri ? "sip" : ""),
+      sip_uri: entry.sip_uri || "",
+      number: entry.number || "",
+      kind: entry.kind || "esp",
+      audio_mode: metadata.audio_mode || "full_duplex",
+      tx_formats: Array.isArray(metadata.tx_formats) ? metadata.tx_formats : [],
+      rx_formats: Array.isArray(metadata.rx_formats) ? metadata.rx_formats : [],
+      sip_port: metadata.sip_port,
+      rtp_port: metadata.rtp_port,
+      roster: true,
+    };
   }
 
   _normaliseTransport(value) {
@@ -948,9 +1023,6 @@ class IntercomCard extends HTMLElement {
       });
       if (result?.devices) {
         this._availableDevices = result.devices;
-        if (this._isHaSoftphoneMode() && !this._softphoneTargetDeviceId) {
-          this._softphoneTargetDeviceId = this._softphoneTargets()[0]?.device_id || null;
-        }
         this._render();
       }
     } catch (err) {

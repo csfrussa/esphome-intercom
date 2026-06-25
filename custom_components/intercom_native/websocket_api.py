@@ -234,6 +234,38 @@ def _ha_softphone_dnd(hass: HomeAssistant) -> bool:
     return bool(_ha_softphone_store(hass).get("dnd"))
 
 
+def _ha_softphone_target_from_roster(hass: HomeAssistant, selector: str) -> dict[str, Any] | None:
+    """Resolve a HA softphone target from the shared JSON phonebook."""
+    from .roster import find_entry, parse_roster_json
+
+    wanted = str(selector or "").strip()
+    if not wanted:
+        return None
+    sensor = hass.states.get("sensor.intercom_phonebook")
+    roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
+    entries = parse_roster_json(roster_json) if roster_json else []
+    entry = find_entry(entries, wanted)
+    if entry is None or not entry.enabled or entry.kind == "ha":
+        return None
+
+    metadata = entry.metadata or {}
+    transport = str(metadata.get("transport") or ("sip" if entry.sip_uri else "")).lower()
+    host = entry.address
+    if not host and entry.sip_uri and "@" in entry.sip_uri:
+        host = entry.sip_uri.rsplit("@", 1)[1].split(":", 1)[0].strip()
+    return {
+        "device_id": entry.id,
+        "name": entry.display_name,
+        "host": host,
+        "transport": transport,
+        "audio_mode": str(metadata.get("audio_mode") or "full_duplex"),
+        "tx_formats": list(metadata.get("tx_formats") or []),
+        "rx_formats": list(metadata.get("rx_formats") or []),
+        "sip_port": metadata.get("sip_port"),
+        "rtp_port": metadata.get("rtp_port"),
+    }
+
+
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
     state = {
@@ -2083,14 +2115,11 @@ async def websocket_ha_softphone_start(
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any],
 ) -> None:
-    """Start a browser/HA softphone call to an ESP endpoint."""
+    """Start a browser/HA softphone call to a shared-roster target."""
     msg_id = msg["id"]
-    devices = await _get_intercom_devices(hass)
-    target = _find_device_by_selector(
-        devices,
-        str(msg.get("target_name") or msg.get("callee") or msg.get("target_device_id") or ""),
-    )
-    target_device_id = str((target or {}).get("device_id") or msg.get("target_device_id") or "")
+    selector = str(msg.get("target_name") or msg.get("callee") or msg.get("target_device_id") or "").strip()
+    target = _ha_softphone_target_from_roster(hass, selector)
+    target_device_id = str((target or {}).get("device_id") or selector)
     call_id = str(msg.get("call_id") or "")
 
     if _sessions:
@@ -2105,7 +2134,7 @@ async def websocket_ha_softphone_start(
         hass=hass,
         device_id=HA_SOFTPHONE_DEVICE_ID,
         host=target["host"],
-        transport_type=configured_transport_type(hass, target["host"]),
+        transport_type=target.get("transport") or configured_transport_type(hass, target["host"]),
         call_id=call_id,
         local_name=_ha_peer_name(hass),
         peer_name=target.get("name") or "",

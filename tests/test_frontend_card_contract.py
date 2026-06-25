@@ -66,6 +66,12 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("this._isHaName(this._getDestination())", body)
         self.assertNotIn('this._callMode === "mirror"', body)
 
+    def test_ha_softphone_targets_come_from_shared_roster(self) -> None:
+        body = _method_body(self.source, "_softphoneTargets")
+        self.assertIn("this._rosterEntries", body)
+        self.assertIn("_isCallableRosterEntry", body)
+        self.assertNotIn("_availableDevices", body)
+
 
 if __name__ == "__main__":
     unittest.main()
