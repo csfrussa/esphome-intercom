@@ -92,6 +92,7 @@ def _install_websocket_api_fakes() -> None:
     if "voluptuous" not in sys.modules:
         vol = types.ModuleType("voluptuous")
         vol.Required = lambda key: key
+        vol.Optional = lambda key, **_kwargs: key
         sys.modules["voluptuous"] = vol
 
     helpers_name = f"{PKG_NAME}.transport_helpers"
@@ -580,15 +581,16 @@ class IntercomWebSocketSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ws.closed)
         self.assertIs(websocket_api._sessions.get("device-a"), session)
 
-    async def test_audio_ws_watchdog_hangs_up_idle_browser_audio(self) -> None:
+    async def test_audio_ws_watchdog_hangs_up_after_missing_browser_socket(self) -> None:
         old_interval = websocket_api.WS_AUDIO_WATCHDOG_INTERVAL
-        old_timeout = websocket_api.WS_AUDIO_IDLE_TIMEOUT
+        old_grace = websocket_api.WS_AUDIO_RECONNECT_GRACE
         websocket_api.WS_AUDIO_WATCHDOG_INTERVAL = 0.01
-        websocket_api.WS_AUDIO_IDLE_TIMEOUT = 0.02
+        websocket_api.WS_AUDIO_RECONNECT_GRACE = 0.02
         try:
             session, transport = await self._started_session()
             ws = FakeWebSocket()
             session.bind_audio_ws(ws)
+            ws.closed = True
 
             await asyncio.sleep(0.08)
 
@@ -598,13 +600,13 @@ class IntercomWebSocketSessionTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ws.closed)
         finally:
             websocket_api.WS_AUDIO_WATCHDOG_INTERVAL = old_interval
-            websocket_api.WS_AUDIO_IDLE_TIMEOUT = old_timeout
+            websocket_api.WS_AUDIO_RECONNECT_GRACE = old_grace
 
     async def test_audio_ws_watchdog_does_not_hang_up_outgoing_ringing(self) -> None:
         old_interval = websocket_api.WS_AUDIO_WATCHDOG_INTERVAL
-        old_timeout = websocket_api.WS_AUDIO_IDLE_TIMEOUT
+        old_grace = websocket_api.WS_AUDIO_RECONNECT_GRACE
         websocket_api.WS_AUDIO_WATCHDOG_INTERVAL = 0.01
-        websocket_api.WS_AUDIO_IDLE_TIMEOUT = 0.02
+        websocket_api.WS_AUDIO_RECONNECT_GRACE = 0.02
         try:
             transport = FakeTransport(result="ringing")
             session, _ = await self._started_session("device-a", transport, expected="ringing")
@@ -619,7 +621,7 @@ class IntercomWebSocketSessionTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(ws.closed)
         finally:
             websocket_api.WS_AUDIO_WATCHDOG_INTERVAL = old_interval
-            websocket_api.WS_AUDIO_IDLE_TIMEOUT = old_timeout
+            websocket_api.WS_AUDIO_RECONNECT_GRACE = old_grace
 
     async def test_issue_53_socket_kill_clears_session_before_second_call(self) -> None:
         first, first_transport = await self._started_session("device-a")

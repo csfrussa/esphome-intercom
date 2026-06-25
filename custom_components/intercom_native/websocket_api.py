@@ -780,8 +780,6 @@ class IntercomSession:
         return True
 
     def _negotiate_incoming_formats(self) -> bool:
-        if self._transport is None:
-            return False
         caller_to_dest = choose_common_format(self.peer_tx_formats, self.local_rx_formats)
         dest_to_caller = choose_common_format(self.peer_rx_formats, self.local_tx_formats)
         if caller_to_dest is None or dest_to_caller is None:
@@ -796,7 +794,9 @@ class IntercomSession:
             return False
         self.rx_format = caller_to_dest
         self.tx_format = dest_to_caller
-        self._transport.set_selected_audio_formats(caller_to_dest, dest_to_caller)
+        if self._transport is not None:
+            self._transport.set_local_audio_formats([self.tx_format], [self.rx_format])
+            self._transport.set_selected_audio_formats(caller_to_dest, dest_to_caller)
         _LOGGER.info(
             "Inbound audio negotiated for %s: browser->ESP tx=%s ESP->browser rx=%s peer_tx=%s peer_rx=%s",
             self.device_id,
@@ -927,6 +927,10 @@ class IntercomSession:
         """Answer an ESP-initiated call. Returns "streaming" / "error"."""
         if self._state is SessionState.STREAMING:
             return "streaming"
+
+        if not self._negotiate_incoming_formats():
+            self._transition(SessionState.ENDED, event="error", reason="incompatible_audio_format")
+            return "error"
 
         self._transport = self._create_transport()
 

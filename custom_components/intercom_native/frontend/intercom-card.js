@@ -61,7 +61,7 @@ class IntercomCard extends HTMLElement {
     this._availableDevices = [];
     this._availableDevicesLoading = false;
     this._availableDevicesRetryTimer = null;
-    this._callMode = null;  // 'softphone' | 'bridge' | null
+    this._callMode = null;  // 'softphone' in HA mode only; ESP cards are pure mirrors.
 
     // Entity IDs (discovered once)
     this._intercomStateEntityId = null;
@@ -575,16 +575,19 @@ class IntercomCard extends HTMLElement {
         if (!this._lastEndInfo) this._captureMirroredLastReason();
       }
 
-      // Card auto_answer fires only when the ESP is dialling HA itself.
-      // ESP-to-ESP bridged calls go through the callee's firmware
-      // auto_answer instead.
-      if (espStateChanged && this._autoAnswer && !this._autoAnswering && !this._starting) {
-        const isCallingHa = (newEspState === "calling" || newEspState === "outgoing")
-            && this._getDestination() === this._getHaName();
-        if (isCallingHa) {
+      // In ESP mirror mode, auto-answer mirrors the ESP smart Call button when
+      // the ESP itself is ringing. HA softphone auto-answer is handled from
+      // HA session events.
+      if (
+        espStateChanged &&
+        !this._isHaSoftphoneMode() &&
+        this._autoAnswer &&
+        !this._autoAnswering &&
+        !this._starting &&
+        (newEspState === "ringing" || newEspState === "incoming")
+      ) {
           this._autoAnswering = true;
           this._tryAutoAnswer();
-        }
       }
 
       this._maybeAnswerFromUrl(newEspState);
@@ -621,9 +624,7 @@ class IntercomCard extends HTMLElement {
     if (!this._shouldAnswerFromUrl()) return;
     if (this._autoAnswering || this._starting) return;
     const state = (espState || this._getEspState()).toLowerCase();
-    const isCallingHa = (state === "calling" || state === "outgoing")
-        && this._getDestination() === this._getHaName();
-    if (!isCallingHa) return;
+    if (this._isHaSoftphoneMode() || (state !== "ringing" && state !== "incoming")) return;
 
     this._deepLinkAnswerConsumed = true;
     this._clearAnswerUrlParam();
@@ -756,9 +757,6 @@ class IntercomCard extends HTMLElement {
     if (this._isHaSoftphoneMode()) {
       return this._getSoftphoneTargetDevice()?.name || "No endpoint";
     }
-    if (this._callMode === "softphone" && this._activeDeviceInfo?.name) {
-      return this._activeDeviceInfo.name;
-    }
     if (!this._hass || !this._destinationEntityId) return this._getHaName();
     const entity = this._hass.states[this._destinationEntityId];
     return entity?.state || this._getHaName();
@@ -836,12 +834,11 @@ class IntercomCard extends HTMLElement {
       const destMode = this._audioModeLabel(this._normaliseAudioMode(target?.audio_mode));
       return destTransport ? `HA - ESP ${destTransport} ${destMode}` : `HA - ESP ${destMode}`;
     }
-    if (this._isHaName(destination)) return "Home Assistant - ESP";
     if (!this.config?.show_extended_info) return "ESP - ESP";
 
     const sourceTransport = this._getOwnTransport();
     const sourceMode = this._audioModeLabel(this._getOwnAudioMode());
-    return sourceTransport ? `ESP - ESP ${sourceTransport} ${sourceMode}` : "ESP - ESP";
+    return sourceTransport ? `ESP mirror ${sourceTransport} ${sourceMode}` : "ESP mirror";
   }
 
   _isHaName(name) {
@@ -851,13 +848,6 @@ class IntercomCard extends HTMLElement {
   _isSoftphoneContext() {
     if (this._isHaSoftphoneMode()) return true;
     if (this._isConfiguredSoftphone()) return true;
-    if (this._callMode === "mirror") return false;
-
-    const state = this._getEspState().toLowerCase();
-    if (state === "calling" || state === "outgoing") {
-      return this._isHaName(this._getDestination());
-    }
-
     return false;
   }
 
@@ -1072,17 +1062,11 @@ class IntercomCard extends HTMLElement {
         break;
       case "calling":
       case "outgoing":
-        if (destination === this._getHaName()) {
-          statusText = `Incoming: ${espDeviceName}`;
-          statusClass = "ringing";
-          showAnswer = true;
-        } else {
-          statusText = this._destRinging
-            ? `${destination} is ringing...`
-            : `Calling ${destination}...`;
-          statusClass = this._destRinging ? "ringing" : "transitioning";
-          showHangup = true;
-        }
+        statusText = this._destRinging
+          ? `${destination} is ringing...`
+          : `Calling ${destination}...`;
+        statusClass = this._destRinging ? "ringing" : "transitioning";
+        showHangup = true;
         break;
       case "ringing":
       case "incoming":
@@ -1108,9 +1092,8 @@ class IntercomCard extends HTMLElement {
 
     els.headerName.textContent = this._formatHeaderTitle(displayName);
 
-    // Hybrid cards mirror one ESP endpoint. When that ESP selects HA, the
-    // browser acts as the HA leg for that ESP; ha_softphone mode is the
-    // independent HA endpoint with its own destination selector.
+    // ESP cards are pure mirrors. Only ha_softphone mode owns an in-card
+    // destination selector and browser audio path.
     els.destRow.hidden = !showCall;
     els.destValue.textContent = destination;
     if (els.destSelect) {
@@ -1615,17 +1598,8 @@ class IntercomCard extends HTMLElement {
     this._render();
 
     try {
-      const destination = this._getDestination();
-
-      // Destination = HA: the card is the HA/browser softphone for this ESP.
-      // Destination = another ESP: mirror the ESP's own Call button.
-      if (!this._isHaName(destination)) {
-        this._callMode = "mirror";
-        await this._pressEspButton(this._callButtonEntityId, "Call");
-      } else {
-        this._callMode = "softphone";
-        await this._startP2P(deviceInfo);
-      }
+      this._callMode = "mirror";
+      await this._pressEspButton(this._callButtonEntityId, "Call");
     } catch (err) {
       this._showError(err.message || String(err));
       await this._cleanup();
@@ -1705,10 +1679,6 @@ class IntercomCard extends HTMLElement {
     this._render();
 
     try {
-      const espState = this._getEspState().toLowerCase();
-      const destination = this._getDestination();
-      const softphone = this._isSoftphoneContext();
-
       if (this._isHaSoftphoneMode()) {
         const sessionDeviceId = this._sessionDeviceId();
         const peer = this._availableDevices.find(d => d.device_id === sessionDeviceId) || deviceInfo;
@@ -1727,25 +1697,8 @@ class IntercomCard extends HTMLElement {
         return;
       }
 
-      // Check if ESP is calling HA (outgoing + destination matches the HA instance)
-      if ((espState === "outgoing" || espState === "calling") && this._isHaName(destination)) {
-        // ESP is calling us - answer with proper ANSWER message (not START)
-        this._callMode = "softphone";
-        await this._answerEspCall(deviceInfo);
-      } else if (!softphone) {
-        // Mirror mode: use the ESP's real smart Call button (ringing -> answer).
-        this._callMode = "mirror";
-        await this._pressEspButton(this._callButtonEntityId, "Call");
-      } else {
-        // HA/browser softphone session.
-        this._callMode = "softphone";
-        const res = await this._hass.connection.sendMessagePromise({
-          type: "intercom_native/answer",
-          device_id: deviceInfo.device_id,
-          call_id: this._sessionCallId(),
-        });
-        if (!res?.success) throw new Error("Answer failed");
-      }
+      this._callMode = "mirror";
+      await this._pressEspButton(this._callButtonEntityId, "Call");
     } catch (err) {
       this._showError(err.message || String(err));
       await intercomEngine.close("answer_error");
@@ -1767,7 +1720,7 @@ class IntercomCard extends HTMLElement {
     this._render();
 
     try {
-      if (this._isSoftphoneContext()) {
+      if (this._isHaSoftphoneMode()) {
         await this._hass.connection.sendMessagePromise({
           type: "intercom_native/decline",
           device_id: this._sessionDeviceId(),
@@ -1825,7 +1778,7 @@ class IntercomCard extends HTMLElement {
       this._showError(err.message || String(err));
     }
 
-    await intercomEngine.close("hangup");
+    if (wasSoftphone) await intercomEngine.close("hangup");
     this._stopping = false;
     this._render();
   }
@@ -1872,7 +1825,9 @@ class IntercomCard extends HTMLElement {
       localStorage.setItem(`intercom_auto_answer_${deviceId}`, this._autoAnswer.toString());
     }
     // If enabling, request mic permission now (user gesture from the toggle click)
-    const device = this._availableDevices.find(d => this._deviceMatchesConfig(d));
+    const device = this._isHaSoftphoneMode()
+      ? this._getSoftphoneTargetDevice()
+      : null;
     const needsBrowserMic = ["full_duplex", "speaker_only"].includes(
       this._normaliseAudioMode(device?.audio_mode)
     );
@@ -2210,7 +2165,7 @@ class IntercomCardEditor extends HTMLElement {
     els.modeSelect.value = softphoneMode ? "ha_softphone" : "hybrid";
     els.modeInfo.textContent = softphoneMode
       ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
-      : "Hybrid ESP card: mirrors one ESP endpoint; HA destination uses the browser as the HA leg for that ESP.";
+      : "ESP mirror card: mirrors one ESP endpoint and presses that ESP's own call, answer and hangup controls.";
     els.deviceGroup.classList.toggle("hidden", softphoneMode);
 
     // Rebuild the select option list safely: replaceChildren + per-row

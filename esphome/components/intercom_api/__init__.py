@@ -2,11 +2,13 @@ import logging
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
+import esphome.final_validate as fv
 from esphome import automation
 from esphome.core import CORE, TimePeriod
 from esphome.const import (
     CONF_ID,
     CONF_MICROPHONE,
+    CONF_NUM_CHANNELS,
     CONF_SPEAKER,
     CONF_ICON,
     CONF_NAME,
@@ -95,6 +97,7 @@ CONF_MAX_RESULTS = "max_results"
 CONF_PROTOCOLS = "protocols"
 CONF_NETWORK_SOCKET_HEADROOM = "network_socket_headroom"
 CONF_UDP_MAX_PAYLOAD = "udp_max_payload"
+CONF_AUTO = "auto"
 
 ROUTING_DEVICE_INDEPENDENT = "device_independent"
 ROUTING_HA_PBX = "ha_pbx"
@@ -123,7 +126,15 @@ SUPPORTED_INTERCOM_SAMPLE_RATES = (8000, 12000, 16000, 24000, 32000, 44100, 4800
 UDP_SAFE_PAYLOAD_BYTES = 1200
 
 
+def _is_auto(value):
+    return isinstance(value, str) and value.lower() == CONF_AUTO
+
+
 def _validate_intercom_audio_format(value):
+    if _is_auto(value):
+        return CONF_AUTO
+    if any(_is_auto(value[key]) for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS, CONF_FRAME_MS)):
+        return value
     if (value[CONF_SAMPLE_RATE] * value[CONF_FRAME_MS]) % 1000 != 0:
         raise cv.Invalid(
             f"sample_rate {value[CONF_SAMPLE_RATE]} and frame_ms {value[CONF_FRAME_MS]} "
@@ -150,14 +161,22 @@ def _validate_intercom_audio_config(value):
     return value
 
 
-INTERCOM_AUDIO_FORMAT_SCHEMA = cv.All(cv.Schema(
+INTERCOM_AUDIO_FORMAT_SCHEMA = cv.All(cv.Any(cv.one_of(CONF_AUTO, lower=True), cv.Schema(
     {
-        cv.Optional(CONF_SAMPLE_RATE, default=16000): cv.one_of(*SUPPORTED_INTERCOM_SAMPLE_RATES, int=True),
-        cv.Optional(CONF_PCM_FORMAT, default="s16le"): cv.one_of(*PCM_FORMAT_IDS.keys(), lower=True),
-        cv.Optional(CONF_CHANNELS, default=1): cv.one_of(1, 2, int=True),
-        cv.Optional(CONF_FRAME_MS, default=32): cv.one_of(10, 20, 32, int=True),
+        cv.Optional(CONF_SAMPLE_RATE, default=CONF_AUTO): cv.Any(
+            cv.one_of(CONF_AUTO, lower=True), cv.one_of(*SUPPORTED_INTERCOM_SAMPLE_RATES, int=True)
+        ),
+        cv.Optional(CONF_PCM_FORMAT, default=CONF_AUTO): cv.Any(
+            cv.one_of(CONF_AUTO, lower=True), cv.one_of(*PCM_FORMAT_IDS.keys(), lower=True)
+        ),
+        cv.Optional(CONF_CHANNELS, default=CONF_AUTO): cv.Any(
+            cv.one_of(CONF_AUTO, lower=True), cv.one_of(1, 2, int=True)
+        ),
+        cv.Optional(CONF_FRAME_MS, default=CONF_AUTO): cv.Any(
+            cv.one_of(CONF_AUTO, lower=True), cv.one_of(10, 20, 32, int=True)
+        ),
     }
-), _validate_intercom_audio_format)
+)), _validate_intercom_audio_format)
 
 
 def _format_container_bits(fmt: dict) -> int:
@@ -172,6 +191,155 @@ def _format_container_bits(fmt: dict) -> int:
 def _format_frame_bytes(fmt: dict) -> int:
     samples = (fmt[CONF_SAMPLE_RATE] * fmt[CONF_FRAME_MS]) // 1000
     return samples * fmt[CONF_CHANNELS] * (_format_container_bits(fmt) // 8)
+
+
+def _pcm_from_bits(bits: int) -> str:
+    if bits == 16:
+        return "s16le"
+    if bits == 24:
+        return "s24le"
+    if bits == 32:
+        # Most ESP I2S 24-bit microphone paths are transported in 32-bit slots.
+        # Users with true 32-bit PCM can still declare pcm_format: s32le.
+        return "s24le_in_s32"
+    raise cv.Invalid(f"intercom_api audio auto cannot map {bits} bits per sample to a PCM format")
+
+
+def _declared_config_for_id(id_value):
+    fconf = fv.full_config.get()
+    path = fconf.get_path_for_id(id_value)[:-1]
+    return fconf.get_config_for_path(path)
+
+
+def _single_stream_value(declaration: dict, key: str, min_key: str, max_key: str, *, context: str):
+    if key in declaration:
+        return declaration[key]
+    low = declaration.get(min_key)
+    high = declaration.get(max_key)
+    if low is not None and high is not None and low == high:
+        return low
+    return None
+
+
+def _esp_audio_stack_parent_config(declaration: dict):
+    parent_id = declaration.get("esp_audio_stack_id")
+    if parent_id is None:
+        return None
+    return _declared_config_for_id(parent_id)
+
+
+def _derive_stream_format_from_device(device_config: dict, *, direction: str) -> dict | None:
+    parent = _esp_audio_stack_parent_config(device_config)
+    if parent is not None:
+        if direction == CONF_TX:
+            sample_rate = parent.get("output_sample_rate") or parent.get(CONF_SAMPLE_RATE)
+            channels = 1
+            bits = 16
+        else:
+            sample_rate = parent.get(CONF_SAMPLE_RATE)
+            channels = device_config.get(CONF_NUM_CHANNELS) or parent.get("speaker_channels") or 1
+            bits = 16
+        if sample_rate:
+            return {
+                CONF_SAMPLE_RATE: sample_rate,
+                CONF_PCM_FORMAT: _pcm_from_bits(bits),
+                CONF_CHANNELS: channels,
+                CONF_FRAME_MS: 32,
+            }
+
+    sample_rate = _single_stream_value(
+        device_config,
+        CONF_SAMPLE_RATE,
+        audio.CONF_MIN_SAMPLE_RATE,
+        audio.CONF_MAX_SAMPLE_RATE,
+        context=direction,
+    )
+    bits = _single_stream_value(
+        device_config,
+        "bits_per_sample",
+        audio.CONF_MIN_BITS_PER_SAMPLE,
+        audio.CONF_MAX_BITS_PER_SAMPLE,
+        context=direction,
+    )
+    channels = _single_stream_value(
+        device_config,
+        CONF_NUM_CHANNELS,
+        audio.CONF_MIN_CHANNELS,
+        audio.CONF_MAX_CHANNELS,
+        context=direction,
+    )
+    if sample_rate is None or bits is None or channels is None:
+        return None
+    return {
+        CONF_SAMPLE_RATE: sample_rate,
+        CONF_PCM_FORMAT: _pcm_from_bits(int(bits)),
+        CONF_CHANNELS: channels,
+        CONF_FRAME_MS: 32,
+    }
+
+
+def _derive_tx_format(config: dict) -> dict | None:
+    if CONF_MICROPHONE_SOURCE in config:
+        source = config[CONF_MICROPHONE_SOURCE]
+        mic_config = _declared_config_for_id(source[CONF_MICROPHONE])
+        base = _derive_stream_format_from_device(mic_config, direction=CONF_TX)
+        if base is None:
+            return None
+        bits = int(source.get("bits_per_sample", 16))
+        channels = len(source.get(CONF_CHANNELS, [0]))
+        base[CONF_PCM_FORMAT] = _pcm_from_bits(bits)
+        base[CONF_CHANNELS] = channels
+        return base
+    if CONF_MICROPHONE in config:
+        return _derive_stream_format_from_device(
+            _declared_config_for_id(config[CONF_MICROPHONE]),
+            direction=CONF_TX,
+        )
+    return None
+
+
+def _derive_rx_format(config: dict) -> dict | None:
+    if CONF_SPEAKER not in config:
+        return None
+    return _derive_stream_format_from_device(
+        _declared_config_for_id(config[CONF_SPEAKER]),
+        direction=CONF_RX,
+    )
+
+
+def _resolve_audio_format(config: dict, direction: str, value) -> dict:
+    derive = _derive_tx_format if direction == CONF_TX else _derive_rx_format
+    derived = derive(config)
+    if _is_auto(value):
+        if derived is not None:
+            return derived
+        if (direction == CONF_TX and CONF_MICROPHONE not in config and CONF_MICROPHONE_SOURCE not in config) or (
+            direction == CONF_RX and CONF_SPEAKER not in config
+        ):
+            return {
+                CONF_SAMPLE_RATE: 16000,
+                CONF_PCM_FORMAT: "s16le",
+                CONF_CHANNELS: 1,
+                CONF_FRAME_MS: 32,
+            }
+        source = "microphone/source" if direction == CONF_TX else "speaker"
+        raise cv.Invalid(
+            f"intercom_api.audio.{direction}: auto could not derive the PCM format from the referenced "
+            f"{source}. Declare audio.{direction}.sample_rate/pcm_format/channels/frame_ms manually."
+        )
+
+    resolved = dict(value)
+    if any(_is_auto(resolved[key]) for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS, CONF_FRAME_MS)):
+        if derived is None:
+            source = "microphone/source" if direction == CONF_TX else "speaker"
+            raise cv.Invalid(
+                f"intercom_api.audio.{direction}: one or more fields are auto, but the referenced {source} "
+                "does not expose a concrete stream format. Declare every audio field manually."
+            )
+        for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS, CONF_FRAME_MS):
+            if _is_auto(resolved[key]):
+                resolved[key] = derived[key]
+    return _validate_intercom_audio_format(resolved)
 
 # === Action classes (for YAML: intercom_api.next_contact, etc.) ===
 NextContactAction = intercom_api_ns.class_("NextContactAction", automation.Action)
@@ -498,6 +666,18 @@ def _final_validate(config):
     mdns_config = full_config.get("mdns")
     if (mdns_discovery is not None or config.get(CONF_ANNOUNCE)) and isinstance(mdns_config, dict) and mdns_config.get("disabled"):
         raise cv.Invalid("intercom_api mDNS announce/discovery requires mdns to be enabled.")
+
+    if CONF_MICROPHONE in config and CONF_MICROPHONE_SOURCE in config:
+        raise cv.Invalid(
+            "Use only one of intercom_api.microphone or intercom_api.microphone_source."
+        )
+
+    audio_cfg = config[CONF_AUDIO]
+    audio_cfg[CONF_TX] = _resolve_audio_format(config, CONF_TX, audio_cfg[CONF_TX])
+    audio_cfg[CONF_RX] = _resolve_audio_format(config, CONF_RX, audio_cfg[CONF_RX])
+    tx_fmt = audio_cfg[CONF_TX]
+    rx_fmt = audio_cfg[CONF_RX]
+
     if protocol == PROTOCOL_UDP:
         # remote_ip used to be required at compile-time; it's now an optional
         # YAML-pinned fallback. Runtime start() refuses if neither phonebook nor
@@ -521,19 +701,10 @@ def _final_validate(config):
                 raise cv.Invalid(
                     f"intercom_api UDP audio.{direction} frame is {frame_bytes} bytes, "
                     f"above the configured UDP payload limit of {max_payload}. "
-                    "UDP audio sends one complete PCM frame per datagram and does not rely on IP "
-                    "fragmentation. Use protocol: tcp, lower sample_rate/channels/pcm_format/frame_ms, "
-                    "or raise udp_max_payload only on a LAN that intentionally supports larger datagrams."
+                    "ESPHome editor action required: lower audio sample_rate, channels, pcm_format, "
+                    "or frame_ms for this UDP profile. Only raise udp_max_payload when this LAN is "
+                    "intentionally configured for larger datagrams; the default limit is 1200 bytes."
                 )
-
-    if CONF_MICROPHONE in config and CONF_MICROPHONE_SOURCE in config:
-        raise cv.Invalid(
-            "Use only one of intercom_api.microphone or intercom_api.microphone_source."
-        )
-
-    audio_cfg = config[CONF_AUDIO]
-    tx_fmt = audio_cfg[CONF_TX]
-    rx_fmt = audio_cfg[CONF_RX]
 
     if CONF_MICROPHONE in config:
         try:
