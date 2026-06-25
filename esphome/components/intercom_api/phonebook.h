@@ -16,6 +16,7 @@ enum class ContactProtocol : uint8_t {
   UNKNOWN,
   TCP,
   UDP,
+  SIP,
   HA,
 };
 
@@ -25,6 +26,8 @@ inline const char *contact_protocol_to_str(ContactProtocol protocol) {
       return "tcp";
     case ContactProtocol::UDP:
       return "udp";
+    case ContactProtocol::SIP:
+      return "sip";
     case ContactProtocol::HA:
       return "ha";
     case ContactProtocol::UNKNOWN:
@@ -42,6 +45,7 @@ inline const char *contact_protocol_to_str(ContactProtocol protocol) {
 /// New protocol-aware entries are:
 ///   Name|tcp|ip|port[|audio_capability]
 ///   Name|udp|ip|audio_port|control_port[|audio_capability]
+///   Name|sip|ip|sip_port|rtp_port[|audio_capability]
 ///   Name|ha|ip|port[|control_port]
 ///
 /// The HA-wide unified roster can also publish HA as:
@@ -322,6 +326,16 @@ class Phonebook {
       return true;
     }
 
+    if (protocol == ContactProtocol::SIP) {
+      if (parts.size() != 5 && parts.size() != 6) return false;
+      if (!parse_u16_(trim_(parts[3]), &out->port) ||
+          !parse_u16_(trim_(parts[4]), &out->control_port)) {
+        return false;
+      }
+      if (parts.size() == 6) out->audio_capability = trim_(parts[5]);
+      return true;
+    }
+
     if (protocol == ContactProtocol::HA) {
       if (parts.size() != 4 && parts.size() != 5 && parts.size() != 6) return false;
       if (!parse_u16_(trim_(parts[3]), &out->port)) return false;
@@ -358,6 +372,10 @@ class Phonebook {
     }
     if (s == "udp" || s == "UDP") {
       *out = ContactProtocol::UDP;
+      return true;
+    }
+    if (s == "sip" || s == "SIP") {
+      *out = ContactProtocol::SIP;
       return true;
     }
     if (s == "ha" || s == "HA") {

@@ -176,6 +176,13 @@ std::string IntercomApi::run_mdns_discovery_query_() {
         append_csv(&out, name + "|udp|" + ip + "|" + std::to_string(audio_port) + "|" +
                             std::to_string(control_port));
         accepted++;
+      } else if (contact_protocol == ContactProtocol::SIP) {
+        const uint16_t sip_port = txt_port_or(r, "sip_port", r->port);
+        const uint16_t rtp_port = txt_port_or(r, "rtp_port", 40000);
+        if (sip_port == 0 || rtp_port == 0) continue;
+        append_csv(&out, name + "|sip|" + ip + "|" + std::to_string(sip_port) + "|" +
+                            std::to_string(rtp_port));
+        accepted++;
       }
     }
 
@@ -186,6 +193,7 @@ std::string IntercomApi::run_mdns_discovery_query_() {
 
   if (this->mdns_discovery_scan_tcp_) query("_intercom-tcp", "_tcp", ContactProtocol::TCP);
   if (this->mdns_discovery_scan_udp_) query("_intercom-udp", "_udp", ContactProtocol::UDP);
+  if (this->mdns_discovery_scan_sip_) query("_sip", "_udp", ContactProtocol::SIP);
   return out;
 }
 

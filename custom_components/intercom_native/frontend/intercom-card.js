@@ -777,7 +777,7 @@ class IntercomCard extends HTMLElement {
 
   _normaliseTransport(value) {
     const v = String(value || "").trim().toLowerCase();
-    return (v === "tcp" || v === "udp") ? v.toUpperCase() : "";
+    return (v === "tcp" || v === "udp" || v === "sip") ? v.toUpperCase() : "";
   }
 
   _transportFromEntity(entityId) {

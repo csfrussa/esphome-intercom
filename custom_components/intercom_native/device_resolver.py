@@ -71,6 +71,7 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
 
     TCP: Name|tcp|IP|tcp_port[|audio_mode[|tx_formats|rx_formats]]
     UDP: Name|udp|IP|audio_port|control_port[|audio_mode[|tx_formats|rx_formats]]
+    SIP: Name|sip|IP|sip_port|rtp_port[|audio_mode[|tx_formats|rx_formats]]
     """
     if not value:
         return None
@@ -82,7 +83,7 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
         return None
 
     name, transport, host = parts[0], parts[1].lower(), parts[2]
-    if not name or not host or transport not in ("tcp", "udp"):
+    if not name or not host or transport not in ("tcp", "udp", "sip"):
         return None
 
     def parse_formats(first: int) -> tuple[str, list, list] | None:
@@ -110,6 +111,8 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
             "tcp_port": tcp_port,
             "udp_audio_port": None,
             "udp_control_port": None,
+            "sip_port": None,
+            "rtp_port": None,
             "audio_mode": mode,
             "tx_formats": tx_formats,
             "rx_formats": rx_formats,
@@ -117,21 +120,37 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
 
     if len(parts) not in (5, 6, 7, 8):
         return None
-    audio_port = _valid_port(parts[3])
-    control_port = _valid_port(parts[4])
-    if audio_port is None or control_port is None:
+    primary_port = _valid_port(parts[3])
+    secondary_port = _valid_port(parts[4])
+    if primary_port is None or secondary_port is None:
         return None
     parsed_tail = parse_formats(5)
     if parsed_tail is None:
         return None
     mode, tx_formats, rx_formats = parsed_tail
+    if transport == "sip":
+        return {
+            "name": name,
+            "transport": "sip",
+            "host": host,
+            "tcp_port": None,
+            "udp_audio_port": None,
+            "udp_control_port": None,
+            "sip_port": primary_port,
+            "rtp_port": secondary_port,
+            "audio_mode": mode,
+            "tx_formats": tx_formats,
+            "rx_formats": rx_formats,
+        }
     return {
         "name": name,
         "transport": "udp",
         "host": host,
         "tcp_port": None,
-        "udp_audio_port": audio_port,
-        "udp_control_port": control_port,
+        "udp_audio_port": primary_port,
+        "udp_control_port": secondary_port,
+        "sip_port": None,
+        "rtp_port": None,
         "audio_mode": mode,
         "tx_formats": tx_formats,
         "rx_formats": rx_formats,
@@ -279,6 +298,8 @@ class IntercomDeviceResolver:
                 "tcp_port": endpoint["tcp_port"],
                 "udp_audio_port": endpoint["udp_audio_port"],
                 "udp_control_port": endpoint["udp_control_port"],
+                "sip_port": endpoint.get("sip_port"),
+                "rtp_port": endpoint.get("rtp_port"),
                 "udp_max_payload": (
                     int(
                         self.hass.data.get(DOMAIN, {})

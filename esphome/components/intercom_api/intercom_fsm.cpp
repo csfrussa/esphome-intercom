@@ -12,6 +12,7 @@ namespace intercom_api {
 
 static const char *const TAG = "intercom_api.fsm";
 
+#ifdef USE_INTERCOM_API_SPEAKER
 static uint8_t audio_stream_bits_per_sample(const AudioFormat &format) {
   switch (format.pcm_format) {
     case PcmFormat::S16LE:
@@ -29,6 +30,7 @@ static uint8_t audio_stream_bits_per_sample(const AudioFormat &format) {
 static audio::AudioStreamInfo audio_stream_info_from_format(const AudioFormat &format) {
   return audio::AudioStreamInfo(audio_stream_bits_per_sample(format), format.channels, format.sample_rate);
 }
+#endif
 
 static bool audio_format_list_contains(const AudioFormatList &list, const AudioFormat &format) {
   for (uint8_t i = 0; i < list.count; i++) {
@@ -285,10 +287,9 @@ void IntercomApi::start() {
     dial_control_port = ha_entry->control_port;
   }
 
-  // UDP: bind the transport to the resolved endpoint before opening
-  // the stream so the next sendto targets the right peer. Empty ip
-  // falls back to the YAML-configured remote_ip_/remote_port_.
-  if (this->protocol_ == TransportType::UDP) {
+  // Datagram transports bind the transport to the resolved endpoint before
+  // opening the stream. For SIP, port is signaling and control_port is RTP.
+  if (this->protocol_ == TransportType::UDP || this->protocol_ == TransportType::SIP) {
     if (!dial_ip.empty() && dial_port > 0) {
       this->set_remote_endpoint(dial_ip, dial_port, dial_control_port);
     }
@@ -323,19 +324,23 @@ void IntercomApi::start() {
   this->set_call_state_(CallState::OUTGOING);
   this->outgoing_start_time_ = millis();
 
-  // TCP needs an outbound connect before the START frame can be written.
-  // (UDP already pinned the destination via set_remote_endpoint above.)
-  if (this->protocol_ == TransportType::TCP && this->transport_ != nullptr) {
+  // TCP connects before START. SIP creates a dialog target before INVITE.
+  // UDP already pinned the destination via set_remote_endpoint above.
+  if ((this->protocol_ == TransportType::TCP || this->protocol_ == TransportType::SIP) &&
+      this->transport_ != nullptr) {
     if (dial_ip.empty() || dial_port == 0) {
-      ESP_LOGE(TAG, "%s: TCP outgoing needs ip+port in phonebook for '%s' (got '%s':%u)",
-               this->device_name_.c_str(), dest_name.c_str(),
-               dial_ip.c_str(), (unsigned) dial_port);
+      ESP_LOGE(TAG, "%s: %s outgoing needs ip+port in phonebook for '%s' (got '%s':%u)",
+               this->device_name_.c_str(),
+               this->protocol_ == TransportType::SIP ? "SIP" : "TCP",
+               dest_name.c_str(), dial_ip.c_str(), (unsigned) dial_port);
       this->end_call_(CallEndReason::UNREACHABLE);
       return;
     }
     if (!this->transport_->originate(dial_ip, dial_port)) {
-      ESP_LOGE(TAG, "%s: TCP originate to %s:%u failed",
-               this->device_name_.c_str(), dial_ip.c_str(), (unsigned) dial_port);
+      ESP_LOGE(TAG, "%s: %s originate to %s:%u failed",
+               this->device_name_.c_str(),
+               this->protocol_ == TransportType::SIP ? "SIP" : "TCP",
+               dial_ip.c_str(), (unsigned) dial_port);
       this->end_call_(CallEndReason::UNREACHABLE);
       return;
     }
@@ -410,10 +415,11 @@ void IntercomApi::answer_call() {
     return;
   }
 
-  // UDP: the transport already pinned the caller endpoint from the inbound
+  // UDP/SIP: the transport already pinned the caller endpoint from the inbound
   // MSG_START source address. Don't override from the local phonebook - the
   // currently selected contact may be a different peer.
-  if (this->protocol_ != TransportType::UDP && !this->is_connected()) {
+  if (this->protocol_ != TransportType::UDP && this->protocol_ != TransportType::SIP &&
+      !this->is_connected()) {
     ESP_LOGW(TAG, "Cannot answer: no connection");
     return;
   }

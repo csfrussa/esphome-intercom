@@ -9,6 +9,7 @@ from .const import (
     CONF_ASSIST_INTENTS,
     DOMAIN,
     INTERCOM_PORT,
+    INTERCOM_SIP_PORT,
     INTERCOM_UDP_AUDIO_PORT,
     INTERCOM_UDP_CONTROL_PORT,
 )
@@ -35,6 +36,8 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
         existing = current_entry.data if current_entry else {}
         defaults = {
             "use_tcp": existing.get("use_tcp", True),
+            "use_sip": existing.get("use_sip", True),
+            "sip_port": existing.get("sip_port", INTERCOM_SIP_PORT),
             "use_udp": existing.get("use_udp", False),
             "tcp_port": existing.get("tcp_port", INTERCOM_PORT),
             "udp_audio_port": existing.get("udp_audio_port", INTERCOM_UDP_AUDIO_PORT),
@@ -47,6 +50,8 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required("use_tcp", default=defaults["use_tcp"]): BooleanSelector(),
                 vol.Required("tcp_port", default=defaults["tcp_port"]): _port_selector(),
+                vol.Required("use_sip", default=defaults["use_sip"]): BooleanSelector(),
+                vol.Required("sip_port", default=defaults["sip_port"]): _port_selector(),
                 vol.Required("use_udp", default=defaults["use_udp"]): BooleanSelector(),
                 vol.Required("udp_audio_port", default=defaults["udp_audio_port"]): _port_selector(),
                 vol.Required("udp_control_port", default=defaults["udp_control_port"]): _port_selector(),
@@ -64,11 +69,11 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # Number selectors hand floats; coerce to int once on the boundary.
-            for k in ("tcp_port", "udp_audio_port", "udp_control_port", "udp_max_payload"):
+            for k in ("tcp_port", "sip_port", "udp_audio_port", "udp_control_port", "udp_max_payload"):
                 user_input[k] = int(user_input[k])
             user_input["advertise_host"] = (user_input.get("advertise_host") or "").strip()
 
-            if not user_input["use_tcp"] and not user_input["use_udp"]:
+            if not user_input["use_tcp"] and not user_input["use_udp"] and not user_input["use_sip"]:
                 errors["base"] = "at_least_one_transport"
             elif user_input["use_udp"] and user_input["udp_audio_port"] == user_input["udp_control_port"]:
                 errors["base"] = "udp_ports_must_differ"

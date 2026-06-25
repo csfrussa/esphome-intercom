@@ -116,3 +116,146 @@ purge_devices:
           step: 0.5
           unit_of_measurement: h
           mode: box
+
+sip_answer:
+  name: Answer SIP Call
+  description: Send 200 OK for a pending SIP call addressed to Home Assistant.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID. If omitted and only one call is pending, that call is answered.
+      required: false
+      selector:
+        text:
+
+sip_decline:
+  name: Decline SIP Call
+  description: Send a final SIP rejection for a pending SIP call.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID. If omitted and only one call is pending, that call is declined.
+      required: false
+      selector:
+        text:
+    status:
+      name: SIP Status
+      description: Final SIP status code to send.
+      required: false
+      default: 486
+      selector:
+        number:
+          min: 400
+          max: 699
+          step: 1
+          mode: box
+    reason:
+      name: Reason
+      description: SIP reason phrase.
+      required: false
+      default: Busy Here
+      selector:
+        text:
+
+sip_call:
+  name: SIP Call
+  description: Originate a standards-SIP call from Home Assistant to a roster target or SIP URI.
+  fields:
+    target:
+      name: Target
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for target, useful in scripts and automations.
+      required: false
+      selector:
+        text:
+    route_via_ha:
+      name: Route Via HA
+      description: Force HA as the SIP destination even if the contact has a direct endpoint.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+sip_hangup:
+  name: SIP Hang Up
+  description: Send BYE and stop any SIP RTP relay for an active SIP call.
+  fields:
+    call_id:
+      name: Call ID
+      description: Active SIP Call-ID. If omitted and only one call is active, that call is ended.
+      required: false
+      selector:
+        text:
+
+phonebook_add_contact:
+  name: Add Phonebook Contact
+  description: Add or replace one manual contact in the central JSON phonebook.
+  fields:
+    id:
+      name: ID
+      required: true
+      selector:
+        text:
+    name:
+      name: Name
+      required: false
+      selector:
+        text:
+    kind:
+      name: Kind
+      required: false
+      default: esp
+      selector:
+        select:
+          options:
+            - ha
+            - esp
+            - phone
+            - sip
+            - group
+    address:
+      name: Address
+      description: IP or host for HA/ESP/SIP contacts.
+      required: false
+      selector:
+        text:
+    sip_uri:
+      name: SIP URI
+      required: false
+      selector:
+        text:
+    number:
+      name: Number
+      required: false
+      selector:
+        text:
+    route_via_ha:
+      name: Route Via HA
+      required: false
+      default: false
+      selector:
+        boolean:
+
+phonebook_set_contacts:
+  name: Set Phonebook Contacts
+  description: Replace manual contacts with a JSON roster document.
+  fields:
+    roster_json:
+      name: Roster JSON
+      required: true
+      selector:
+        text:
+          multiline: true
+
+phonebook_clear:
+  name: Clear Phonebook Contacts
+  description: Clear manual contacts from the central JSON phonebook.
+
+phonebook_export:
+  name: Export Phonebook
+  description: Emit the current central JSON phonebook as an intercom_native call event.

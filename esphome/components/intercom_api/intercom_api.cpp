@@ -18,6 +18,9 @@
 #ifdef USE_INTERCOM_UDP_TRANSPORT
 #include "udp_transport.h"
 #endif
+#ifdef USE_INTERCOM_SIP_TRANSPORT
+#include "sip_transport.h"
+#endif
 
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -152,6 +155,13 @@ bool IntercomApi::setup_audio_processor_() {
 }
 
 bool IntercomApi::setup_transport_() {
+#ifdef USE_INTERCOM_SIP_TRANSPORT
+  if (this->protocol_ == TransportType::SIP) {
+    this->transport_ = std::make_unique<SipTransport>(
+        this->sip_port_, this->rtp_port_, this->remote_ip_,
+        this->task_stacks_in_psram_);
+  } else
+#endif
 #ifdef USE_INTERCOM_UDP_TRANSPORT
   if (this->protocol_ == TransportType::UDP) {
     this->transport_ = std::make_unique<UdpTransport>(
@@ -266,9 +276,12 @@ void IntercomApi::fail_setup_() {
 void IntercomApi::setup() {
   ESP_LOGI(TAG, "Setting up Intercom API...");
 
+  const char *transport_name = this->protocol_ == TransportType::UDP
+      ? "udp"
+      : (this->protocol_ == TransportType::SIP ? "sip" : "tcp");
   ESP_LOGI(TAG, "Audio capability: %s (transport: %s, tasks: %s)",
            this->audio_capability_(),
-           this->protocol_ == TransportType::UDP ? "udp" : "tcp",
+           transport_name,
            this->has_microphone_() ? "tx+rx/control" : "rx/control");
 
   if (!this->allocate_setup_buffers_()) {
@@ -301,6 +314,9 @@ void IntercomApi::setup() {
     ESP_LOGI(TAG, "Intercom API ready on UDP port %u (peer %s:%u)",
              (unsigned) this->listen_port_, this->remote_ip_.c_str(),
              (unsigned) this->remote_port_);
+  } else if (this->protocol_ == TransportType::SIP) {
+    ESP_LOGI(TAG, "Intercom API ready on SIP UDP/%u RTP UDP/%u",
+             (unsigned) this->sip_port_, (unsigned) this->rtp_port_);
   } else {
     ESP_LOGI(TAG, "Intercom API ready on TCP port %u", (unsigned) this->tcp_port_);
   }
@@ -496,7 +512,9 @@ void IntercomApi::set_remote_endpoint(const std::string &ip, uint16_t port, uint
 
 void IntercomApi::publish_transport_() {
   if (this->transport_sensor_ != nullptr) {
-    const char *t = (this->protocol_ == TransportType::UDP) ? "udp" : "tcp";
+    const char *t = this->protocol_ == TransportType::UDP
+        ? "udp"
+        : (this->protocol_ == TransportType::SIP ? "sip" : "tcp");
     this->transport_sensor_->publish_state(t);
   }
 }
@@ -562,6 +580,10 @@ std::string IntercomApi::build_endpoint_string_() const {
     snprintf(buf, sizeof(buf), "%s | udp | %s | %u | %u | %s | %s | %s", name.c_str(), ip.c_str(),
              (unsigned) this->listen_port_, (unsigned) this->control_port_,
              this->audio_capability_(), tx.c_str(), rx.c_str());
+  } else if (this->protocol_ == TransportType::SIP) {
+    snprintf(buf, sizeof(buf), "%s | sip | %s | %u | %u | %s | %s | %s", name.c_str(), ip.c_str(),
+             (unsigned) this->sip_port_, (unsigned) this->rtp_port_,
+             this->audio_capability_(), tx.c_str(), rx.c_str());
   } else {
     snprintf(buf, sizeof(buf), "%s | tcp | %s | %u | %s | %s | %s", name.c_str(), ip.c_str(),
              (unsigned) this->tcp_port_, this->audio_capability_(), tx.c_str(), rx.c_str());
@@ -611,9 +633,15 @@ bool IntercomApi::ensure_mdns_announce_registered_(const std::string &endpoint) 
   const std::string instance = !this->device_name_.empty()
                                    ? this->device_name_
                                    : App.get_friendly_name().str();
-  const char *service = this->protocol_ == TransportType::UDP ? "_intercom-udp" : "_intercom-tcp";
-  const char *proto = this->protocol_ == TransportType::UDP ? "_udp" : "_tcp";
-  const uint16_t port = this->protocol_ == TransportType::UDP ? this->listen_port_ : this->tcp_port_;
+  const char *service = this->protocol_ == TransportType::UDP
+      ? "_intercom-udp"
+      : (this->protocol_ == TransportType::SIP ? "_sip" : "_intercom-tcp");
+  const char *proto = (this->protocol_ == TransportType::UDP || this->protocol_ == TransportType::SIP)
+      ? "_udp"
+      : "_tcp";
+  const uint16_t port = this->protocol_ == TransportType::UDP
+      ? this->listen_port_
+      : (this->protocol_ == TransportType::SIP ? this->sip_port_ : this->tcp_port_);
   mdns_txt_item_t txt[] = {
       {"endpoint", endpoint.c_str()},
       {"friendly_name", instance.c_str()},
@@ -643,8 +671,12 @@ void IntercomApi::publish_mdns_endpoint_(const std::string &endpoint) {
   if (!this->ensure_mdns_announce_registered_(endpoint)) return;
   if (endpoint == this->last_mdns_endpoint_) return;
 
-  const char *service = this->protocol_ == TransportType::UDP ? "_intercom-udp" : "_intercom-tcp";
-  const char *proto = this->protocol_ == TransportType::UDP ? "_udp" : "_tcp";
+  const char *service = this->protocol_ == TransportType::UDP
+      ? "_intercom-udp"
+      : (this->protocol_ == TransportType::SIP ? "_sip" : "_intercom-tcp");
+  const char *proto = (this->protocol_ == TransportType::UDP || this->protocol_ == TransportType::SIP)
+      ? "_udp"
+      : "_tcp";
   const esp_err_t err = mdns_service_txt_item_set(service, proto, "endpoint", endpoint.c_str());
   if (err != ESP_OK) {
     this->mdns_announce_registered_ = false;

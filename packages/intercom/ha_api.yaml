@@ -49,3 +49,30 @@ api:
       then:
         - intercom_api.set_ha_peer_name:
             name: !lambda 'return name;'
+    # Manual/central roster management. These are intentionally exposed as API
+    # actions so HA, scripts, and test tools can publish the same dial plan the
+    # device consumes locally.
+    - action: set_contacts
+      variables:
+        contacts_csv: string
+      then:
+        - intercom_api.set_contacts:
+            contacts_csv: !lambda 'return contacts_csv;'
+    - action: add_contact
+      variables:
+        entry: string
+      then:
+        - intercom_api.add_contact:
+            entry: !lambda 'return entry;'
+    - action: remove_contact
+      variables:
+        entry: string
+      then:
+        - intercom_api.remove_contact:
+            entry: !lambda 'return entry;'
+    - action: flush_contacts
+      then:
+        - intercom_api.flush_contacts: intercom
+    - action: update_contacts
+      then:
+        - intercom_api.update_contacts: intercom

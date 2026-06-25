@@ -18,6 +18,8 @@ namespace {
 struct ParsedPhonebookSlot {
   ContactEntry entry;
   uint16_t ha_udp_audio_port{0};
+  uint16_t ha_sip_port{0};
+  uint16_t ha_rtp_port{0};
 };
 
 float db_to_linear(float db) {
@@ -38,13 +40,14 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
   const auto parts = Phonebook::split(raw, '|');
   ContactProtocol protocol = ContactProtocol::UNKNOWN;
 
-  // Unified HA rows carry every HA transport port:
+  // Unified HA rows carry HA transport ports:
   //   HA Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
+  //   HA Name|ha|ip|tcp_port|udp_audio_port|udp_control_port|sip_port|rtp_port
   // Phonebook::ContactEntry only stores one primary port, so keep the UDP
-  // audio port beside the parsed slot for local transport shaping.
+  // and SIP media ports beside the parsed slot for local transport shaping.
   if (parts.size() >= 2 &&
       Phonebook::parse_protocol(Phonebook::trim(parts[1]), &protocol) &&
-      protocol == ContactProtocol::HA && parts.size() == 6) {
+      protocol == ContactProtocol::HA && (parts.size() == 6 || parts.size() == 8)) {
     ContactEntry entry;
     entry.name = Phonebook::trim(parts[0]);
     entry.protocol = ContactProtocol::HA;
@@ -53,6 +56,10 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
     if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port)) return false;
     if (!Phonebook::parse_u16(Phonebook::trim(parts[4]), &slot->ha_udp_audio_port)) return false;
     if (!Phonebook::parse_u16(Phonebook::trim(parts[5]), &entry.control_port)) return false;
+    if (parts.size() == 8) {
+      if (!Phonebook::parse_u16(Phonebook::trim(parts[6]), &slot->ha_sip_port)) return false;
+      if (!Phonebook::parse_u16(Phonebook::trim(parts[7]), &slot->ha_rtp_port)) return false;
+    }
     slot->entry = entry;
     return true;
   }
@@ -62,7 +69,8 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
   // endpoint; START/ANSWER negotiate audio formats per call.
   if (parts.size() >= 2 &&
       Phonebook::parse_protocol(Phonebook::trim(parts[1]), &protocol) &&
-      (protocol == ContactProtocol::TCP || protocol == ContactProtocol::UDP)) {
+      (protocol == ContactProtocol::TCP || protocol == ContactProtocol::UDP ||
+       protocol == ContactProtocol::SIP)) {
     ContactEntry entry;
     entry.name = Phonebook::trim(parts[0]);
     entry.protocol = protocol;
@@ -81,20 +89,32 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
       slot->entry = entry;
       return true;
     }
+    if (protocol == ContactProtocol::SIP && (parts.size() == 5 || parts.size() == 8)) {
+      if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port) ||
+          !Phonebook::parse_u16(Phonebook::trim(parts[4]), &entry.control_port)) {
+        return false;
+      }
+      slot->entry = entry;
+      return true;
+    }
   }
 
   if (!Phonebook::parse_entry(raw, &slot->entry)) return false;
   if (slot->entry.protocol == ContactProtocol::HA) {
     // Short HA row: use the primary port for both TCP and UDP audio. This is
     // correct for the default 6054/6055 config; canonical HA rows can carry
-    // distinct TCP, UDP audio and UDP control ports.
+    // distinct TCP, UDP and SIP ports.
     slot->ha_udp_audio_port = slot->entry.port;
+    slot->ha_sip_port = slot->entry.port;
+    slot->ha_rtp_port = slot->entry.control_port;
   }
   return true;
 }
 
 ContactProtocol local_contact_protocol(TransportType transport) {
-  return transport == TransportType::UDP ? ContactProtocol::UDP : ContactProtocol::TCP;
+  if (transport == TransportType::UDP) return ContactProtocol::UDP;
+  if (transport == TransportType::SIP) return ContactProtocol::SIP;
+  return ContactProtocol::TCP;
 }
 
 void append_csv(std::string *out, const std::string &entry) {
@@ -113,6 +133,10 @@ std::string serialize_endpoint(const std::string &name, ContactProtocol protocol
   }
   if (protocol == ContactProtocol::UDP) {
     return name + "|udp|" + ip + "|" + std::to_string(port) + "|" +
+           std::to_string(control_port);
+  }
+  if (protocol == ContactProtocol::SIP) {
+    return name + "|sip|" + ip + "|" + std::to_string(port) + "|" +
            std::to_string(control_port);
   }
   if (protocol == ContactProtocol::HA) {
@@ -325,10 +349,16 @@ std::string IntercomApi::normalize_phonebook_for_transport_(const std::string &c
                                      ? (ha_slot.ha_udp_audio_port != 0
                                             ? ha_slot.ha_udp_audio_port
                                             : ha_slot.entry.port)
-                                     : ha_slot.entry.port;
+                                     : (local_protocol == ContactProtocol::SIP
+                                            ? (ha_slot.ha_sip_port != 0
+                                                   ? ha_slot.ha_sip_port
+                                                   : ha_slot.entry.port)
+                                            : ha_slot.entry.port);
   const uint16_t ha_local_control = local_protocol == ContactProtocol::UDP
                                         ? ha_slot.entry.control_port
-                                        : 0;
+                                        : (local_protocol == ContactProtocol::SIP
+                                               ? ha_slot.ha_rtp_port
+                                               : 0);
 
   std::string out;
   for (const auto &slot : slots) {
@@ -339,10 +369,16 @@ std::string IntercomApi::normalize_phonebook_for_transport_(const std::string &c
                                       ? (slot.ha_udp_audio_port != 0
                                              ? slot.ha_udp_audio_port
                                              : entry.port)
-                                      : entry.port;
+                                      : (local_protocol == ContactProtocol::SIP
+                                             ? (slot.ha_sip_port != 0
+                                                    ? slot.ha_sip_port
+                                                    : entry.port)
+                                             : entry.port);
       const uint16_t local_control = local_protocol == ContactProtocol::UDP
                                          ? entry.control_port
-                                         : 0;
+                                         : (local_protocol == ContactProtocol::SIP
+                                                ? slot.ha_rtp_port
+                                                : 0);
       append_csv(&out, serialize_endpoint(entry.name, local_protocol, entry.ip,
                                           local_port, local_control));
       continue;
@@ -354,8 +390,8 @@ std::string IntercomApi::normalize_phonebook_for_transport_(const std::string &c
       continue;
     }
 
-    if ((entry.protocol == ContactProtocol::TCP || entry.protocol == ContactProtocol::UDP) &&
-        has_ha) {
+    if ((entry.protocol == ContactProtocol::TCP || entry.protocol == ContactProtocol::UDP ||
+         entry.protocol == ContactProtocol::SIP) && has_ha) {
       append_csv(&out, serialize_endpoint(entry.name, local_protocol, ha_slot.entry.ip,
                                           ha_local_port, ha_local_control));
       continue;

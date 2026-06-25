@@ -29,6 +29,8 @@ from .const import (
     HA_SOFTPHONE_DEVICE_ID,
     INTEGRATION_VERSION,
     INTERCOM_PORT,
+    INTERCOM_RTP_PORT,
+    INTERCOM_SIP_PORT,
     INTERCOM_UDP_AUDIO_PORT,
     INTERCOM_UDP_CONTROL_PORT,
 )
@@ -131,6 +133,9 @@ def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
     data = entry.data if entry is not None else {}
     return {
         "use_tcp": data.get("use_tcp", True),
+        "use_sip": data.get("use_sip", True),
+        "sip_port": int(data.get("sip_port", INTERCOM_SIP_PORT)),
+        "rtp_port": int(data.get("rtp_port", INTERCOM_RTP_PORT)),
         "use_udp": data.get("use_udp", False),
         "tcp_port": int(data.get("tcp_port", INTERCOM_PORT)),
         "udp_audio_port": int(data.get("udp_audio_port", INTERCOM_UDP_AUDIO_PORT)),
@@ -146,6 +151,9 @@ def _get_transport_config(hass: HomeAssistant) -> dict:
         "transport_config",
         {
             "use_tcp": True,
+            "use_sip": True,
+            "sip_port": INTERCOM_SIP_PORT,
+            "rtp_port": INTERCOM_RTP_PORT,
             "use_udp": False,
             "tcp_port": INTERCOM_PORT,
             "udp_audio_port": INTERCOM_UDP_AUDIO_PORT,
@@ -385,7 +393,7 @@ async def _decline_inbound_start(
 
 def _device_transport(hass: HomeAssistant, d: dict, udp_manager=None) -> str:
     """Read the endpoint-declared device transport."""
-    return d.get("transport") if d.get("transport") in ("udp", "tcp") else "tcp"
+    return d.get("transport") if d.get("transport") in ("udp", "tcp", "sip") else "tcp"
 
 
 def _udp_peer_ports(hass: HomeAssistant, host: str, cfg: dict | None = None) -> tuple[int, int]:
@@ -441,6 +449,8 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             tcp_port=_tcp_peer_port(hass, host, cfg),
             udp_audio_port=udp_audio_port,
             udp_control_port=udp_control_port,
+            sip_port=int(d.get("sip_port") or cfg["sip_port"]),
+            rtp_port=int(d.get("rtp_port") or cfg["rtp_port"]),
             audio_mode=d.get("audio_mode", "full_duplex"),
             tx_formats=list(d.get("tx_formats") or []),
             rx_formats=list(d.get("rx_formats") or []),
@@ -456,6 +466,8 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             tcp_port=cfg["tcp_port"],
             udp_audio_port=cfg["udp_audio_port"],
             udp_control_port=cfg["udp_control_port"],
+            sip_port=cfg["sip_port"],
+            rtp_port=cfg["rtp_port"],
             audio_mode="full_duplex",
         ))
     else:
@@ -481,7 +493,8 @@ def _format_entry_unified(peer: Peer) -> str:
     if peer.is_ha:
         return (
             f"{name}|ha|{peer_ip}|{peer.tcp_port}|"
-            f"{peer.udp_audio_port}|{peer.udp_control_port}"
+            f"{peer.udp_audio_port}|{peer.udp_control_port}|"
+            f"{peer.sip_port or 5060}|{peer.rtp_port or 40000}"
         )
     tx = ";".join(peer.tx_formats or [])
     rx = ";".join(peer.rx_formats or [])
@@ -489,6 +502,11 @@ def _format_entry_unified(peer: Peer) -> str:
         return (
             f"{name}|udp|{peer_ip}|{peer.udp_audio_port}|"
             f"{peer.udp_control_port}|{peer.audio_mode}|{tx}|{rx}"
+        )
+    if peer.transport == "sip":
+        return (
+            f"{name}|sip|{peer_ip}|{peer.sip_port or 5060}|"
+            f"{peer.rtp_port or 40000}|{peer.audio_mode}|{tx}|{rx}"
         )
     return f"{name}|tcp|{peer_ip}|{peer.tcp_port}|{peer.audio_mode}|{tx}|{rx}"
 
@@ -511,6 +529,8 @@ async def _async_build_service_info(
         "audio_port": str(cfg["udp_audio_port"]),
         "control_port": str(cfg["udp_control_port"]),
         "tcp_port": str(cfg["tcp_port"]),
+        "sip_port": str(cfg["sip_port"]),
+        "rtp_port": str(cfg["rtp_port"]),
         "friendly_name": location_name,
         "role": "ha",
         "version": INTEGRATION_VERSION,
@@ -524,7 +544,8 @@ async def _async_build_service_info(
     if advertise_host:
         properties["endpoint"] = (
             f"{location_name}|ha|{advertise_host}|{cfg['tcp_port']}|"
-            f"{cfg['udp_audio_port']}|{cfg['udp_control_port']}"
+            f"{cfg['udp_audio_port']}|{cfg['udp_control_port']}|"
+            f"{cfg['sip_port']}|{cfg['rtp_port']}"
         )
     return AsyncServiceInfo(
         service_type,
@@ -806,6 +827,45 @@ async def _handle_call_service(call: ServiceCall, dest_device: dict) -> None:
     dest_host = dest_device["host"]
     await _stop_device_sessions(device_id, hass=hass)
 
+    if dest_device.get("transport") == "sip":
+        from .sip_client import SipCallClient
+
+        cfg = _get_transport_config(hass)
+        local_ip = await _ha_advertise_host(hass)
+        if not local_ip:
+            _LOGGER.error("Cannot start SIP call: HA advertise IP is unknown")
+            return
+        client = SipCallClient(
+            local_ip=local_ip,
+            local_name=_ha_peer_name(hass),
+            local_sip_port=int(cfg["sip_port"]),
+            local_rtp_port=int(cfg["rtp_port"]),
+            supported_formats=list(_device_formats(dest_device, "rx_formats")),
+        )
+        result = await client.invite(
+            target=dest_device.get("name") or "intercom",
+            remote_host=dest_host,
+            remote_sip_port=int(dest_device.get("sip_port") or cfg["sip_port"]),
+        )
+        bucket = hass.data.setdefault(DOMAIN, {})
+        active = bucket.setdefault("sip_clients", {})
+        if result in {"ringing", "streaming"}:
+            active[client.dialog_ids.call_id] = client
+        else:
+            await client.close()
+        _fire_call_event(
+            hass,
+            {
+                "state": result,
+                "scope": "sip",
+                "call_id": client.dialog_ids.call_id,
+                "target": dest_device.get("name") or "",
+            },
+            "sip",
+        )
+        _LOGGER.info("SIP P2P call via service: -> %s (%s)", dest_device["name"], result)
+        return
+
     session = IntercomSession(
         hass=hass,
         device_id=device_id,
@@ -950,6 +1010,231 @@ async def _handle_purge_devices_service(call: ServiceCall) -> None:
         _LOGGER.info("Purge: no stale intercom devices to remove")
 
 
+async def _handle_sip_answer_service(call: ServiceCall) -> None:
+    hass: HomeAssistant = call.hass
+    call_id = str(call.data.get("call_id") or "").strip()
+    pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+    if not call_id and len(pending) == 1:
+        call_id = next(iter(pending))
+    invite = pending.pop(call_id, None) if call_id else None
+    server = hass.data.get(DOMAIN, {}).get("sip_server")
+    if invite is None or server is None:
+        _LOGGER.warning("sip_answer: no pending SIP call %s", call_id or "(current)")
+        return
+
+    cfg = _get_transport_config(hass)
+    local_ip = await _ha_advertise_host(hass)
+    from .sdp import build_answer
+    answer = build_answer(local_ip, local_ip, int(cfg["rtp_port"]), invite.selected_format)
+    if not server.send_final_response(call_id, 200, "OK", answer_sdp=answer):
+        _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
+        return
+
+    _LOGGER.info("SIP answered call_id=%s", call_id)
+    _set_ha_softphone_call_state(
+        hass,
+        "streaming",
+        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        caller=invite.caller,
+        callee=_ha_peer_name(hass),
+        peer_name=invite.caller,
+        direction="incoming",
+        call_id=call_id,
+    )
+
+
+async def _handle_sip_decline_service(call: ServiceCall) -> None:
+    hass: HomeAssistant = call.hass
+    call_id = str(call.data.get("call_id") or "").strip()
+    status = int(call.data.get("status") or 486)
+    reason = str(call.data.get("reason") or "Busy Here").strip() or "Busy Here"
+    pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+    if not call_id and len(pending) == 1:
+        call_id = next(iter(pending))
+    pending.pop(call_id, None)
+    server = hass.data.get(DOMAIN, {}).get("sip_server")
+    if not call_id or server is None or not server.send_final_response(call_id, status, reason):
+        _LOGGER.warning("sip_decline: no pending SIP call %s", call_id or "(current)")
+        return
+
+    _LOGGER.info("SIP declined call_id=%s status=%s reason=%s", call_id, status, reason)
+    _set_ha_softphone_call_state(
+        hass,
+        "declined",
+        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        reason=reason,
+        call_id=call_id,
+    )
+
+
+async def _handle_sip_hangup_service(call: ServiceCall) -> None:
+    hass: HomeAssistant = call.hass
+    call_id = str(call.data.get("call_id") or "").strip()
+    bucket = hass.data.get(DOMAIN, {})
+    clients = bucket.setdefault("sip_clients", {})
+    relays = bucket.setdefault("sip_relays", {})
+    if not call_id and len(clients) == 1:
+        call_id = next(iter(clients))
+    client = clients.pop(call_id, None) if call_id else None
+    relay = relays.pop(call_id, None) if call_id else None
+    if client is not None:
+        client.bye()
+        await client.close()
+    if relay is not None:
+        await relay.stop()
+    _fire_call_event(
+        hass,
+        {"state": "ended", "scope": "sip", "call_id": call_id},
+        "sip",
+    )
+    _LOGGER.info("SIP hangup call_id=%s client=%s relay=%s", call_id, client is not None, relay is not None)
+
+
+async def _refresh_phonebook_sensor(hass: HomeAssistant) -> None:
+    sensor = hass.data.get(DOMAIN, {}).get("phonebook_sensor")
+    if sensor is not None:
+        await sensor.async_update()
+
+
+async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
+    from .roster import RosterEntry
+
+    hass: HomeAssistant = call.hass
+    entry = RosterEntry(
+        id=str(call.data["id"]).strip(),
+        name=str(call.data.get("name") or call.data["id"]).strip(),
+        kind=str(call.data.get("kind") or "esp").strip().lower(),
+        address=str(call.data.get("address") or "").strip(),
+        sip_uri=str(call.data.get("sip_uri") or "").strip(),
+        number=str(call.data.get("number") or "").strip(),
+        route_via_ha=bool(call.data.get("route_via_ha", False)),
+    )
+    bucket = hass.data.setdefault(DOMAIN, {}).setdefault("manual_roster_entries", [])
+    bucket[:] = [item for item in bucket if getattr(item, "id", "").lower() != entry.id.lower()]
+    bucket.append(entry)
+    await _refresh_phonebook_sensor(hass)
+    _LOGGER.info("Phonebook contact added: %s (%s)", entry.id, entry.kind)
+
+
+async def _handle_phonebook_set_contacts_service(call: ServiceCall) -> None:
+    from .roster import parse_roster_json
+
+    hass: HomeAssistant = call.hass
+    entries = parse_roster_json(str(call.data.get("roster_json") or "[]"))
+    hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = entries
+    await _refresh_phonebook_sensor(hass)
+    _LOGGER.info("Phonebook manual contacts replaced: %d entries", len(entries))
+
+
+async def _handle_phonebook_clear_service(call: ServiceCall) -> None:
+    hass: HomeAssistant = call.hass
+    hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = []
+    await _refresh_phonebook_sensor(hass)
+    _LOGGER.info("Phonebook manual contacts cleared")
+
+
+async def _handle_phonebook_export_service(call: ServiceCall) -> None:
+    hass: HomeAssistant = call.hass
+    sensor = hass.data.get(DOMAIN, {}).get("phonebook_sensor")
+    if sensor is not None:
+        await sensor.async_update()
+        roster_json = sensor.extra_state_attributes.get("roster_json", "")
+    else:
+        roster_json = ""
+    _fire_call_event(
+        hass,
+        {
+            "state": "phonebook_export",
+            "roster_json": roster_json,
+            "call_id": "",
+        },
+        "phonebook",
+    )
+    _LOGGER.info("Phonebook exported (%d bytes)", len(roster_json))
+
+
+async def _handle_sip_call_target_service(call: ServiceCall) -> None:
+    """Originate a standards SIP call from HA to a roster target or URI-shaped target."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    from .roster import parse_roster_json, resolve_target
+    from .sip import parse_sip_uri
+    from .sip_client import SipCallClient
+
+    hass: HomeAssistant = call.hass
+    target = str(call.data.get("target") or call.data.get("call") or "").strip()
+    if not target:
+        raise ServiceValidationError("target is required")
+    cfg = _get_transport_config(hass)
+    local_ip = await _ha_advertise_host(hass)
+    if not local_ip:
+        raise ServiceValidationError("HA advertise IP is unknown")
+    sensor = hass.states.get("sensor.intercom_phonebook")
+    roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
+    contacts = parse_roster_json(roster_json) if roster_json else []
+    route = resolve_target(
+        target,
+        contacts,
+        ha_host=local_ip,
+        ha_sip_port=int(cfg["sip_port"]),
+        force_ha=bool(call.data.get("route_via_ha", False)),
+    )
+    if route.kind == "requires_pbx":
+        raise ServiceValidationError(f"{target} requires Asterisk/PBX trunk routing")
+    if route.kind not in {"direct", "via_ha"} or not route.sip_uri:
+        raise ServiceValidationError(f"cannot resolve SIP target: {target}")
+    uri = parse_sip_uri(route.sip_uri)
+    client = SipCallClient(
+        local_ip=local_ip,
+        local_name=_ha_peer_name(hass),
+        local_sip_port=int(cfg["sip_port"]),
+        local_rtp_port=int(cfg["rtp_port"]),
+        supported_formats=list(HA_BROWSER_TX_FORMATS),
+    )
+    result = await client.invite(
+        target=uri.user,
+        remote_host=uri.host,
+        remote_sip_port=uri.port or int(cfg["sip_port"]),
+    )
+    bucket = hass.data.setdefault(DOMAIN, {})
+    active = bucket.setdefault("sip_clients", {})
+    if result in {"ringing", "streaming"}:
+        active[client.dialog_ids.call_id] = client
+        if result == "ringing":
+            async def _watch_sip_final() -> None:
+                final = await client.wait_for_final()
+                _fire_call_event(
+                    hass,
+                    {
+                        "state": final,
+                        "scope": "sip",
+                        "call_id": client.dialog_ids.call_id,
+                        "target": target,
+                        "sip_uri": route.sip_uri,
+                    },
+                    "sip",
+                )
+                if final not in {"ringing", "streaming"}:
+                    active.pop(client.dialog_ids.call_id, None)
+                    await client.close()
+
+            hass.async_create_task(_watch_sip_final())
+    else:
+        await client.close()
+    _fire_call_event(
+        hass,
+        {
+            "state": result,
+            "scope": "sip",
+            "call_id": client.dialog_ids.call_id,
+            "target": target,
+            "sip_uri": route.sip_uri,
+        },
+        "sip",
+    )
+    _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route.sip_uri, result)
+
+
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register HA services for intercom control."""
 
@@ -975,6 +1260,30 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_purge_devices(call: ServiceCall) -> None:
         await _handle_purge_devices_service(call)
+
+    async def handle_sip_answer(call: ServiceCall) -> None:
+        await _handle_sip_answer_service(call)
+
+    async def handle_sip_decline(call: ServiceCall) -> None:
+        await _handle_sip_decline_service(call)
+
+    async def handle_sip_hangup(call: ServiceCall) -> None:
+        await _handle_sip_hangup_service(call)
+
+    async def handle_phonebook_add_contact(call: ServiceCall) -> None:
+        await _handle_phonebook_add_contact_service(call)
+
+    async def handle_phonebook_set_contacts(call: ServiceCall) -> None:
+        await _handle_phonebook_set_contacts_service(call)
+
+    async def handle_phonebook_clear(call: ServiceCall) -> None:
+        await _handle_phonebook_clear_service(call)
+
+    async def handle_phonebook_export(call: ServiceCall) -> None:
+        await _handle_phonebook_export_service(call)
+
+    async def handle_sip_call(call: ServiceCall) -> None:
+        await _handle_sip_call_target_service(call)
 
     # PREVENT_EXTRA so unknown fields raise instead of being silently dropped.
     # Target selectors are still valid payload fields here because the custom
@@ -1011,12 +1320,64 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         {**target_fields, vol.Optional("min_unavailable_hours", default=0): vol.Coerce(float)},
         extra=vol.PREVENT_EXTRA,
     )
+    sip_answer_schema = vol.Schema(
+        {vol.Optional("call_id", default=""): cv.string},
+        extra=vol.PREVENT_EXTRA,
+    )
+    sip_decline_schema = vol.Schema(
+        {
+            vol.Optional("call_id", default=""): cv.string,
+            vol.Optional("status", default=486): vol.Coerce(int),
+            vol.Optional("reason", default="Busy Here"): cv.string,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    sip_hangup_schema = vol.Schema(
+        {vol.Optional("call_id", default=""): cv.string},
+        extra=vol.PREVENT_EXTRA,
+    )
+    sip_call_schema = vol.Schema(
+        {
+            vol.Optional("target"): cv.string,
+            vol.Optional("call"): cv.string,
+            vol.Optional("route_via_ha", default=False): cv.boolean,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    phonebook_add_schema = vol.Schema(
+        {
+            vol.Required("id"): cv.string,
+            vol.Optional("name", default=""): cv.string,
+            vol.Optional("kind", default="esp"): vol.In(["ha", "esp", "phone", "sip", "group"]),
+            vol.Optional("address", default=""): cv.string,
+            vol.Optional("sip_uri", default=""): cv.string,
+            vol.Optional("number", default=""): cv.string,
+            vol.Optional("route_via_ha", default=False): cv.boolean,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    phonebook_set_schema = vol.Schema(
+        {vol.Required("roster_json"): cv.string},
+        extra=vol.PREVENT_EXTRA,
+    )
     hass.services.async_register(DOMAIN, "answer", handle_answer, schema=target_schema)
     hass.services.async_register(DOMAIN, "decline", handle_decline, schema=decline_schema)
     hass.services.async_register(DOMAIN, "hangup", handle_hangup, schema=target_schema)
     hass.services.async_register(DOMAIN, "call", handle_call, schema=call_schema)
     hass.services.async_register(DOMAIN, "forward", handle_forward, schema=forward_schema)
     hass.services.async_register(DOMAIN, "purge_devices", handle_purge_devices, schema=purge_schema)
+    hass.services.async_register(DOMAIN, "sip_answer", handle_sip_answer, schema=sip_answer_schema)
+    hass.services.async_register(DOMAIN, "sip_decline", handle_sip_decline, schema=sip_decline_schema)
+    hass.services.async_register(DOMAIN, "sip_hangup", handle_sip_hangup, schema=sip_hangup_schema)
+    hass.services.async_register(DOMAIN, "sip_call", handle_sip_call, schema=sip_call_schema)
+    hass.services.async_register(
+        DOMAIN, "phonebook_add_contact", handle_phonebook_add_contact, schema=phonebook_add_schema
+    )
+    hass.services.async_register(
+        DOMAIN, "phonebook_set_contacts", handle_phonebook_set_contacts, schema=phonebook_set_schema
+    )
+    hass.services.async_register(DOMAIN, "phonebook_clear", handle_phonebook_clear)
+    hass.services.async_register(DOMAIN, "phonebook_export", handle_phonebook_export)
 
 
 async def _async_apply_assist_intents(hass: HomeAssistant, enabled: bool) -> None:
@@ -1065,6 +1426,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Intercom Native defaults from configuration.yaml."""
     hass.data.setdefault(DOMAIN, {})["transport_config"] = {
         "use_tcp": True,
+        "use_sip": True,
+        "sip_port": INTERCOM_SIP_PORT,
+        "rtp_port": INTERCOM_RTP_PORT,
         "use_udp": False,
         "tcp_port": INTERCOM_PORT,
         "udp_audio_port": INTERCOM_UDP_AUDIO_PORT,
@@ -1072,6 +1436,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "udp_max_payload": UDP_SAFE_PAYLOAD_BYTES,
     }
     hass.data[DOMAIN]["tcp_port"] = INTERCOM_PORT
+    hass.data[DOMAIN]["sip_port"] = INTERCOM_SIP_PORT
     await _async_setup_shared(hass, config)
     return True
 
@@ -1081,6 +1446,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cfg = _entry_transport_config(entry)
     hass.data.setdefault(DOMAIN, {})["transport_config"] = cfg
     hass.data[DOMAIN]["tcp_port"] = cfg["tcp_port"]
+    hass.data[DOMAIN]["sip_port"] = cfg["sip_port"]
     await _async_setup_shared(hass)
     await _async_apply_assist_intents(
         hass,
@@ -1093,6 +1459,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "another HA integration is already listening on that port."
             )
         await _async_register_tcp_mdns_service(hass, entry)
+    if cfg["use_sip"]:
+        if not await _async_start_sip_udp_server(hass):
+            raise ConfigEntryError(
+                f"Failed to bind SIP UDP port {cfg['sip_port']}. Another SIP "
+                "endpoint may already be listening on that port."
+            )
     if cfg["use_udp"]:
         if not await _async_start_udp_socket_manager(hass):
             raise ConfigEntryError(
@@ -1117,10 +1489,222 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_unregister_udp_mdns_service(hass, entry)
     await _async_unregister_tcp_mdns_service(hass, entry)
+    await _async_stop_sip_udp_server(hass)
     await _async_stop_udp_socket_manager(hass)
     await _async_stop_tcp_socket_manager(hass)
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok
+
+
+async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
+    """Bind the SIP/UDP endpoint for standards-compatible phase-1 calls."""
+    from .roster import RosterEntry, resolve_target
+    from .sdp import build_answer
+    from .sip import parse_sip_uri
+    from .sip_client import SipCallClient
+    from .sip_listener import SipInvite, SipInviteResult, SipUdpServer
+    from .sip_rtp_bridge import RtpPeer, SipRtpRelay
+
+    if hass.data.get(DOMAIN, {}).get("sip_server") is not None:
+        return True
+
+    cfg = _get_transport_config(hass)
+    local_ip = await _ha_advertise_host(hass)
+    if not local_ip:
+        _LOGGER.error("Cannot start SIP endpoint: HA announce IP is unknown")
+        return False
+
+    def _roster_from_peers(peers: list[Peer]) -> list[RosterEntry]:
+        entries: list[RosterEntry] = []
+        for peer in peers:
+            entries.append(
+                RosterEntry(
+                    id=peer.name,
+                    name=peer.name,
+                    kind="ha" if peer.is_ha else "esp",
+                    address=peer.host,
+                    metadata={
+                        "transport": peer.transport,
+                        "tcp_port": peer.tcp_port,
+                        "udp_audio_port": peer.udp_audio_port,
+                        "udp_control_port": peer.udp_control_port,
+                        "sip_port": peer.sip_port,
+                        "rtp_port": peer.rtp_port,
+                        "audio_mode": peer.audio_mode,
+                    },
+                )
+            )
+        return entries
+
+    async def _on_invite(invite: SipInvite) -> SipInviteResult:
+        peers = await _async_build_peer_snapshot(hass)
+        decision = resolve_target(invite.target, _roster_from_peers(peers), route_via_ha=True)
+        _fire_call_event(
+            hass,
+            {
+                "state": "route_requested",
+                "caller": invite.caller,
+                "callee": invite.target,
+                "peer_name": invite.caller,
+                "local_name": _ha_peer_name(hass),
+                "direction": "incoming",
+                "call_id": invite.call_id,
+                "source_host": invite.source_host,
+                "target": decision.target,
+                "route_kind": decision.kind,
+                "sip_uri": decision.sip_uri,
+                "rtp_format": (
+                    f"{invite.selected_format.encoding}/"
+                    f"{invite.selected_format.sample_rate}/"
+                    f"{invite.selected_format.channels}"
+                ),
+            },
+            "sip",
+        )
+        _LOGGER.info(
+            "SIP route requested: caller=%s target=%s route=%s uri=%s media=%s/%s",
+            invite.caller or invite.source_host,
+            invite.target,
+            decision.kind,
+            decision.sip_uri or "-",
+            invite.selected_format.encoding,
+            invite.selected_format.sample_rate,
+        )
+        if decision.kind == "requires_pbx":
+            return SipInviteResult(503, "Service Unavailable", to_tag="")
+        if decision.reason == "ha_required":
+            return SipInviteResult(404, "Not Found", to_tag="")
+        if decision.kind in {"direct", "via_ha", "group"} and decision.entry is not None:
+            decision_uri = parse_sip_uri(decision.sip_uri) if decision.sip_uri else None
+            if decision_uri is not None and decision_uri.host != local_ip:
+                bucket = hass.data.setdefault(DOMAIN, {})
+                next_port = int(bucket.get("sip_rtp_next_port", int(cfg["rtp_port"]) + 2))
+                source_relay_port = next_port
+                dest_relay_port = next_port + 2
+                bucket["sip_rtp_next_port"] = next_port + 4
+                client = SipCallClient(
+                    local_ip=local_ip,
+                    local_name=_ha_peer_name(hass),
+                    local_sip_port=int(cfg["sip_port"]),
+                    local_rtp_port=dest_relay_port,
+                    supported_formats=[invite.selected_format.audio_format],
+                )
+                result = await client.invite(
+                    target=decision_uri.user,
+                    remote_host=decision_uri.host,
+                    remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
+                )
+                active = bucket.setdefault("sip_clients", {})
+                active[client.dialog_ids.call_id] = client
+
+                async def _finish_bridge(initial_result: str) -> None:
+                    final = initial_result
+                    if final == "ringing":
+                        final = await client.wait_for_final()
+                    server = hass.data.get(DOMAIN, {}).get("sip_server")
+                    if final != "streaming" or client.dialog is None or server is None:
+                        if server is not None:
+                            server.send_final_response(invite.call_id, 486, "Busy Here")
+                        active.pop(client.dialog_ids.call_id, None)
+                        await client.close()
+                        return
+                    relay = SipRtpRelay(
+                        left=RtpPeer(
+                            host=invite.remote_rtp_host,
+                            port=invite.remote_rtp_port,
+                            payload_type=invite.selected_format.payload_type,
+                            audio_format=invite.selected_format.audio_format,
+                        ),
+                        right=RtpPeer(
+                            host=client.dialog.remote_rtp_host,
+                            port=client.dialog.remote_rtp_port,
+                            payload_type=client.dialog.selected_format.payload_type,
+                            audio_format=client.dialog.selected_format.audio_format,
+                        ),
+                        left_port=source_relay_port,
+                        right_port=dest_relay_port,
+                    )
+                    await relay.start()
+                    bucket.setdefault("sip_relays", {})[invite.call_id] = relay
+                    answer = build_answer(
+                        local_ip,
+                        local_ip,
+                        source_relay_port,
+                        invite.selected_format,
+                    )
+                    server.send_final_response(invite.call_id, 200, "OK", answer_sdp=answer)
+                    _fire_call_event(
+                        hass,
+                        {
+                            "state": "streaming",
+                            "scope": "sip_bridge",
+                            "call_id": invite.call_id,
+                            "target": invite.target,
+                            "dest_call_id": client.dialog_ids.call_id,
+                        },
+                        "sip",
+                    )
+
+                hass.async_create_task(_finish_bridge(result))
+                return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+            hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending", {})[invite.call_id] = invite
+            _set_ha_softphone_call_state(
+                hass,
+                "ringing",
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=invite.target,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                route_kind=decision.kind,
+                sip_uri=decision.sip_uri,
+            )
+            return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        answer = build_answer(
+            local_ip,
+            local_ip,
+            int(cfg["rtp_port"]),
+            invite.selected_format,
+        )
+        return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
+
+    server = SipUdpServer(
+        host="0.0.0.0",
+        port=int(cfg["sip_port"]),
+        local_ip=local_ip,
+        local_rtp_port=int(cfg["rtp_port"]),
+        supported_formats=[
+            AudioFormat(48000, "s16le", 1, 20),
+            AudioFormat(32000, "s16le", 1, 20),
+            AudioFormat(16000, "s16le", 1, 20),
+        ],
+        on_invite=_on_invite,
+    )
+    if not await server.start():
+        return False
+    hass.data[DOMAIN]["sip_server"] = server
+    _LOGGER.info("SIP endpoint enabled on UDP/%s (RTP base %s)", cfg["sip_port"], cfg["rtp_port"])
+    return True
+
+
+async def _async_stop_sip_udp_server(hass: HomeAssistant) -> None:
+    relays = hass.data.get(DOMAIN, {}).pop("sip_relays", {})
+    for relay in list(relays.values()):
+        try:
+            await relay.stop()
+        except Exception:
+            _LOGGER.debug("Ignoring SIP RTP relay stop error", exc_info=True)
+    clients = hass.data.get(DOMAIN, {}).pop("sip_clients", {})
+    for client in list(clients.values()):
+        try:
+            client.bye()
+            await client.close()
+        except Exception:
+            _LOGGER.debug("Ignoring SIP client stop error", exc_info=True)
+    server = hass.data.get(DOMAIN, {}).pop("sip_server", None)
+    if server is not None:
+        await server.stop()
 
 
 async def _async_start_udp_socket_manager(hass: HomeAssistant) -> bool:

@@ -45,6 +45,7 @@ namespace intercom_api {
 enum class TransportType : uint8_t {
   TCP,  // Framed binary protocol on port 6054 (audio + signaling on a single connection).
   UDP,  // Raw PCM datagram audio + framed signaling, ESP <-> ESP and go2rtc-compatible.
+  SIP,  // SIP/SDP/RTP profile, PCM-only media.
 };
 
 // Connection state, derived from transport_->is_connected() and streaming_.
@@ -125,6 +126,8 @@ class IntercomApi : public Component {
   void set_control_port(uint16_t port) { this->control_port_ = port; }
   void set_udp_max_payload(size_t bytes) { this->udp_max_payload_ = bytes; }
   void set_tcp_port(uint16_t port) { this->tcp_port_ = port; }
+  void set_sip_port(uint16_t port) { this->sip_port_ = port; }
+  void set_rtp_port(uint16_t port) { this->rtp_port_ = port; }
   uint16_t get_tcp_port() const { return this->tcp_port_; }
   std::string get_endpoint() const { return this->build_endpoint_string_(); }
   const char *get_audio_capability() const { return this->audio_capability_(); }
@@ -165,6 +168,7 @@ class IntercomApi : public Component {
   void set_mdns_discovery_enabled(bool enabled) { this->mdns_discovery_enabled_ = enabled; }
   void set_mdns_discovery_scan_tcp(bool enabled) { this->mdns_discovery_scan_tcp_ = enabled; }
   void set_mdns_discovery_scan_udp(bool enabled) { this->mdns_discovery_scan_udp_ = enabled; }
+  void set_mdns_discovery_scan_sip(bool enabled) { this->mdns_discovery_scan_sip_ = enabled; }
   void set_mdns_discovery_startup_scan(bool enabled) { this->mdns_discovery_startup_scan_ = enabled; }
   void set_mdns_discovery_interval_ms(uint32_t ms) { this->mdns_discovery_interval_ms_ = ms; }
   void set_mdns_discovery_query_timeout_ms(uint32_t ms) { this->mdns_discovery_query_timeout_ms_ = ms; }
@@ -173,6 +177,7 @@ class IntercomApi : public Component {
   void set_mdns_discovery_enabled(bool enabled) { (void) enabled; }
   void set_mdns_discovery_scan_tcp(bool enabled) { (void) enabled; }
   void set_mdns_discovery_scan_udp(bool enabled) { (void) enabled; }
+  void set_mdns_discovery_scan_sip(bool enabled) { (void) enabled; }
   void set_mdns_discovery_startup_scan(bool enabled) { (void) enabled; }
   void set_mdns_discovery_interval_ms(uint32_t ms) { (void) ms; }
   void set_mdns_discovery_query_timeout_ms(uint32_t ms) { (void) ms; }
@@ -483,6 +488,8 @@ class IntercomApi : public Component {
   uint16_t control_port_{6055};    // UDP: local control listen port
   size_t udp_max_payload_{UDP_SAFE_AUDIO_PAYLOAD_BYTES};
   uint16_t tcp_port_{6054};        // TCP: server listen + outbound originate
+  uint16_t sip_port_{5060};        // SIP/UDP signaling
+  uint16_t rtp_port_{40000};       // RTP/UDP media
   IntercomRoutingMode routing_mode_{IntercomRoutingMode::DEVICE_INDEPENDENT};
 
   // Active network transport (created in setup() based on protocol_).
@@ -549,6 +556,7 @@ class IntercomApi : public Component {
   bool mdns_discovery_enabled_{false};
   bool mdns_discovery_scan_tcp_{false};
   bool mdns_discovery_scan_udp_{false};
+  bool mdns_discovery_scan_sip_{false};
   bool mdns_discovery_startup_scan_{true};
   uint32_t mdns_discovery_interval_ms_{60000};
   uint32_t mdns_discovery_query_timeout_ms_{1000};

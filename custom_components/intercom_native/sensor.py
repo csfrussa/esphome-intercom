@@ -6,7 +6,8 @@ Entity names:
   - sensor.intercom_phonebook       format per row:
       ESP TCP: name|tcp|ip|tcp_port
       ESP UDP: name|udp|ip|audio_port|control_port
-      HA:      name|ha|ip|tcp_port|udp_audio_port|udp_control_port
+      ESP SIP: name|sip|ip|sip_port|rtp_port
+      HA:      name|ha|ip|tcp_port|udp_audio_port|udp_control_port|sip_port|rtp_port
 
 ESP YAMLs subscribe to the unified sensor and normalize it locally into their
 own transport dial plan.
@@ -52,6 +53,7 @@ class IntercomPhonebookSensor(SensorEntity):
         self.entity_id = "sensor.intercom_phonebook"
         self._attr_native_value = "0 entries"
         self._phonebook = ""
+        self._roster_json = '{"version":1,"contacts":[]}'
         self._count = 0
         self._tracked_entities: set[str] = set()
         self._unsub_state = None
@@ -61,6 +63,7 @@ class IntercomPhonebookSensor(SensorEntity):
     def extra_state_attributes(self) -> dict[str, object]:
         return {
             "phonebook": self._phonebook,
+            "roster_json": self._roster_json,
             "count": self._count,
         }
 
@@ -129,14 +132,44 @@ class IntercomPhonebookSensor(SensorEntity):
             _async_build_peer_snapshot,
             _format_entry_unified,
         )
+        from .roster import RosterEntry, dump_roster_json
 
         peers = await _async_build_peer_snapshot(self.hass)
         entries = [_format_entry_unified(p) for p in peers]
+        roster_entries = [
+            RosterEntry(
+                id=p.name,
+                name=p.name,
+                kind="ha" if p.is_ha else "esp",
+                address=p.host,
+                metadata={
+                    "transport": p.transport,
+                    "tcp_port": p.tcp_port,
+                    "udp_audio_port": p.udp_audio_port,
+                    "udp_control_port": p.udp_control_port,
+                    "sip_port": p.sip_port,
+                    "rtp_port": p.rtp_port,
+                    "audio_mode": p.audio_mode,
+                    "tx_formats": p.tx_formats or [],
+                    "rx_formats": p.rx_formats or [],
+                },
+            )
+            for p in peers
+        ]
+        for raw in self.hass.data.get(DOMAIN, {}).get("manual_roster_entries", []):
+            if isinstance(raw, RosterEntry):
+                roster_entries.append(raw)
         phonebook = ",".join(entries)
+        roster_json = dump_roster_json(roster_entries)
         new_value = f"{len(entries)} entry" if len(entries) == 1 else f"{len(entries)} entries"
-        if new_value != self._attr_native_value or phonebook != self._phonebook:
+        if (
+            new_value != self._attr_native_value
+            or phonebook != self._phonebook
+            or roster_json != self._roster_json
+        ):
             self._attr_native_value = new_value
             self._phonebook = phonebook
+            self._roster_json = roster_json
             self._count = len(entries)
             _LOGGER.debug(
                 "Phonebook recomputed (%d entries)", len(entries)

@@ -70,6 +70,8 @@ CONF_REMOTE_PORT = "remote_port"
 CONF_LISTEN_PORT = "listen_port"
 CONF_CONTROL_PORT = "control_port"
 CONF_TCP_PORT = "tcp_port"
+CONF_SIP_PORT = "sip_port"
+CONF_RTP_PORT = "rtp_port"
 CONF_ROUTING_MODE = "routing_mode"
 CONF_USE_HA_AS_FIRST_CONTACT = "use_ha_as_first_contact"
 CONF_AUDIO_DEBUG = "audio_debug"
@@ -98,6 +100,7 @@ ROUTING_DEVICE_INDEPENDENT = "device_independent"
 ROUTING_HA_PBX = "ha_pbx"
 PROTOCOL_TCP = "tcp"
 PROTOCOL_UDP = "udp"
+PROTOCOL_SIP = "sip"
 
 # Mode constants. PBX-lite is the implicit default (phonebook / contacts /
 # destination / caller entities always exposed); explicit `mode:` is only
@@ -279,7 +282,7 @@ CONFIG_SCHEMA = cv.Schema(
         # Transport: tcp (default, one PBX-lite socket for signaling+audio)
         # or udp (PBX-lite control socket + raw PCM audio socket).
         cv.Optional(CONF_PROTOCOL, default=PROTOCOL_TCP): cv.one_of(
-            PROTOCOL_TCP, PROTOCOL_UDP, lower=True
+            PROTOCOL_TCP, PROTOCOL_UDP, PROTOCOL_SIP, lower=True
         ),
         # PBX-lite project default: 6054 for the data plane on both TCP and
         # UDP, 6055 for the UDP control plane (framed signaling). TCP and
@@ -305,6 +308,8 @@ CONFIG_SCHEMA = cv.Schema(
         # calls from peers) and client (originate to dest's tcp_port) use
         # the same number.
         cv.Optional(CONF_TCP_PORT, default=6054): cv.port,
+        cv.Optional(CONF_SIP_PORT, default=5060): cv.port,
+        cv.Optional(CONF_RTP_PORT, default=40000): cv.port,
         # Routing mode for outgoing calls:
         #  - device_independent (default): dial the phonebook entry directly.
         #    True peer-to-peer; HA only sees the call when it is the dest.
@@ -450,9 +455,13 @@ def _consume_intercom_sockets(config):
     """
     from esphome.components import socket
 
-    if config.get(CONF_PROTOCOL, PROTOCOL_TCP) == PROTOCOL_UDP:
+    protocol = config.get(CONF_PROTOCOL, PROTOCOL_TCP)
+    if protocol == PROTOCOL_UDP:
         # Two UDP sockets: audio (listen_port) + control (control_port).
         socket.consume_sockets(2, "intercom_api", socket.SocketType.UDP)(config)
+    elif protocol == PROTOCOL_SIP:
+        # SIP signaling + RTP media sockets.
+        socket.consume_sockets(2, "intercom_api_sip", socket.SocketType.UDP)(config)
     else:
         socket.consume_sockets(3, "intercom_api")(config)
         socket.consume_sockets(1, "intercom_api", socket.SocketType.TCP_LISTEN)(config)
@@ -639,6 +648,8 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
             )
     if config[CONF_PROTOCOL] == PROTOCOL_UDP:
         cg.add_define("USE_INTERCOM_UDP_TRANSPORT")
+    elif config[CONF_PROTOCOL] == PROTOCOL_SIP:
+        cg.add_define("USE_INTERCOM_SIP_TRANSPORT")
     else:
         cg.add_define("USE_INTERCOM_TCP_TRANSPORT")
     if config[CONF_ANNOUNCE]:
@@ -655,6 +666,11 @@ def _add_transport_settings(var, config):
         cg.add(var.set_listen_port(config[CONF_LISTEN_PORT]))
         cg.add(var.set_control_port(config[CONF_CONTROL_PORT]))
         cg.add(var.set_udp_max_payload(config[CONF_UDP_MAX_PAYLOAD]))
+    elif config[CONF_PROTOCOL] == PROTOCOL_SIP:
+        cg.add(var.set_protocol(TransportType.SIP))
+        cg.add(var.set_remote_ip(config[CONF_REMOTE_IP]))
+        cg.add(var.set_sip_port(config[CONF_SIP_PORT]))
+        cg.add(var.set_rtp_port(config[CONF_RTP_PORT]))
     else:
         cg.add(var.set_protocol(TransportType.TCP))
         cg.add(var.set_tcp_port(config[CONF_TCP_PORT]))
@@ -682,6 +698,7 @@ def _add_mdns_discovery_settings(var, config):
         cg.add(var.set_mdns_discovery_enabled(True))
         cg.add(var.set_mdns_discovery_scan_tcp(PROTOCOL_TCP in protocols))
         cg.add(var.set_mdns_discovery_scan_udp(PROTOCOL_UDP in protocols))
+        cg.add(var.set_mdns_discovery_scan_sip(PROTOCOL_SIP in protocols))
         cg.add(var.set_mdns_discovery_startup_scan(mdns_discovery[CONF_STARTUP_SCAN]))
         cg.add(
             var.set_mdns_discovery_interval_ms(

@@ -47,13 +47,20 @@ class TransportCallbacks:
 def configured_transport_type(hass: HomeAssistant, host: str | None = None) -> str:
     """Return the transport HA should use for a host.
 
-    UDP needs both `use_udp` and an endpoint-declared UDP device. Fall back to
-    TCP so a TCP-only ESP is never addressed over UDP by accident.
+    SIP/UDP need both the feature flag and an endpoint-declared device. Fall
+    back to TCP so a TCP-only ESP is never addressed over another protocol.
     """
     config = hass.data.get(DOMAIN, {}).get(
         "transport_config",
-        {"use_tcp": True, "use_udp": False},
+        {"use_tcp": True, "use_udp": False, "use_sip": True},
     )
+    if config.get("use_sip", True):
+        if host is None:
+            return "sip"
+        from .device_resolver import get_resolver
+        for device in get_resolver(hass)._devices or []:
+            if device.get("host") == host and device.get("transport") == "sip":
+                return "sip"
     if not config.get("use_udp", False):
         return "tcp"
     if host is None:
@@ -64,7 +71,7 @@ def configured_transport_type(hass: HomeAssistant, host: str | None = None) -> s
         if device.get("host") != host:
             continue
         transport = device.get("transport")
-        if transport in ("udp", "tcp"):
+        if transport in ("udp", "tcp", "sip"):
             return transport
         break
     return "tcp"
