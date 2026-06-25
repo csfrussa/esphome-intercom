@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import sys
 import types
 import unittest
@@ -41,6 +42,8 @@ sdp = _load_intercom_module("sdp")
 rtp = _load_intercom_module("rtp")
 roster = _load_intercom_module("roster")
 sip_client = _load_intercom_module("sip_client")
+sip_listener = _load_intercom_module("sip_listener")
+sip_rtp_bridge = _load_intercom_module("sip_rtp_bridge")
 
 
 class SipProfileTest(unittest.TestCase):
@@ -242,6 +245,213 @@ class RosterResolverTest(unittest.TestCase):
             roster.resolve_target("Cucina@192.168.1.30", entries).sip_uri,
             "sip:Cucina@192.168.1.30",
         )
+
+
+class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_symbolic_target_bridges_through_ha_with_rtp_relay(self) -> None:
+        local = "127.0.0.1"
+        ha_sip = 5070
+        caller_rtp = 41700
+        dest_sip = 5072
+        dest_rtp = 41720
+        ha_rtp_left = 41740
+        ha_rtp_right = 41742
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
+        stats = {"dest_invites": 0, "caller_rtp_rx": 0, "dest_rtp_rx": 0}
+
+        class DestRtp(asyncio.DatagramProtocol):
+            def __init__(self) -> None:
+                self.transport = None
+                self.remote: tuple[str, int, int] | None = None
+                self.sequence = 10
+                self.timestamp = 0
+
+            def connection_made(self, transport) -> None:
+                self.transport = transport
+
+            def datagram_received(self, data: bytes, addr) -> None:
+                rtp.parse_packet(data)
+                stats["dest_rtp_rx"] += 1
+
+            async def send_loop(self) -> None:
+                while True:
+                    await asyncio.sleep(0.032)
+                    if self.transport is None or self.remote is None:
+                        continue
+                    host, port, pt = self.remote
+                    packet = rtp.build_packet(
+                        rtp.RtpPacket(
+                            payload_type=pt,
+                            sequence=self.sequence,
+                            timestamp=self.timestamp,
+                            ssrc=0x2222,
+                            payload=b"\0" * 1024,
+                        )
+                    )
+                    self.transport.sendto(packet, (host, port))
+                    self.sequence = rtp.next_sequence(self.sequence)
+                    self.timestamp = rtp.next_timestamp(self.timestamp, 512)
+
+        class CallerRtp(asyncio.DatagramProtocol):
+            def __init__(self) -> None:
+                self.transport = None
+                self.remote: tuple[str, int, int] | None = None
+                self.sequence = 500
+                self.timestamp = 0
+
+            def connection_made(self, transport) -> None:
+                self.transport = transport
+
+            def datagram_received(self, data: bytes, addr) -> None:
+                rtp.parse_packet(data)
+                stats["caller_rtp_rx"] += 1
+
+            async def send_loop(self) -> None:
+                while True:
+                    await asyncio.sleep(0.032)
+                    if self.transport is None or self.remote is None:
+                        continue
+                    host, port, pt = self.remote
+                    packet = rtp.build_packet(
+                        rtp.RtpPacket(
+                            payload_type=pt,
+                            sequence=self.sequence,
+                            timestamp=self.timestamp,
+                            ssrc=0x1111,
+                            payload=b"\0" * 1024,
+                        )
+                    )
+                    self.transport.sendto(packet, (host, port))
+                    self.sequence = rtp.next_sequence(self.sequence)
+                    self.timestamp = rtp.next_timestamp(self.timestamp, 512)
+
+        dest_rtp_proto = DestRtp()
+        caller_rtp_proto = CallerRtp()
+        relay: sip_rtp_bridge.SipRtpRelay | None = None
+        dest_client: sip_client.SipCallClient | None = None
+        tasks: list[asyncio.Task] = []
+
+        async def dest_invite(invite):
+            stats["dest_invites"] += 1
+            dest_rtp_proto.remote = (
+                invite.remote_rtp_host,
+                invite.remote_rtp_port,
+                invite.selected_format.payload_type,
+            )
+            return sip_listener.SipInviteResult(
+                200,
+                "OK",
+                answer_sdp=sdp.build_answer(local, local, dest_rtp, invite.selected_format),
+            )
+
+        async def ha_invite(invite):
+            nonlocal relay, dest_client
+            entries = [
+                roster.RosterEntry(id="HA", kind="ha", address=local, metadata={"sip_port": ha_sip}),
+                roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip}),
+            ]
+            decision = roster.resolve_target(invite.target, entries, route_via_ha=True)
+            self.assertEqual(decision.sip_uri, f"sip:Cucina@{local}:{ha_sip}")
+            self.assertIsNotNone(decision.entry)
+            dest_client = sip_client.SipCallClient(
+                local_ip=local,
+                local_name="HA",
+                local_sip_port=ha_sip,
+                local_rtp_port=ha_rtp_right,
+                supported_formats=[invite.selected_format.audio_format],
+            )
+            result = await dest_client.invite(
+                target=decision.entry.id,
+                remote_host=decision.entry.address,
+                remote_sip_port=decision.entry.metadata["sip_port"],
+            )
+            self.assertEqual(result, "streaming")
+            assert dest_client.dialog is not None
+            relay = sip_rtp_bridge.SipRtpRelay(
+                left=sip_rtp_bridge.RtpPeer(
+                    invite.remote_rtp_host,
+                    invite.remote_rtp_port,
+                    invite.selected_format.payload_type,
+                    invite.selected_format.audio_format,
+                ),
+                right=sip_rtp_bridge.RtpPeer(
+                    dest_client.dialog.remote_rtp_host,
+                    dest_client.dialog.remote_rtp_port,
+                    dest_client.dialog.selected_format.payload_type,
+                    dest_client.dialog.selected_format.audio_format,
+                ),
+                left_port=ha_rtp_left,
+                right_port=ha_rtp_right,
+            )
+            await relay.start()
+            return sip_listener.SipInviteResult(
+                200,
+                "OK",
+                answer_sdp=sdp.build_answer(local, local, ha_rtp_left, invite.selected_format),
+            )
+
+        dest_server = sip_listener.SipUdpServer(
+            host=local,
+            port=dest_sip,
+            local_ip=local,
+            local_rtp_port=dest_rtp,
+            supported_formats=[audio],
+            on_invite=dest_invite,
+        )
+        ha_server = sip_listener.SipUdpServer(
+            host=local,
+            port=ha_sip,
+            local_ip=local,
+            local_rtp_port=ha_rtp_left,
+            supported_formats=[audio],
+            on_invite=ha_invite,
+        )
+        self.assertTrue(await dest_server.start())
+        self.assertTrue(await ha_server.start())
+        loop = asyncio.get_running_loop()
+        dest_transport, _ = await loop.create_datagram_endpoint(lambda: dest_rtp_proto, local_addr=(local, dest_rtp))
+        caller_transport, _ = await loop.create_datagram_endpoint(
+            lambda: caller_rtp_proto,
+            local_addr=(local, caller_rtp),
+        )
+        tasks.append(asyncio.create_task(dest_rtp_proto.send_loop()))
+        tasks.append(asyncio.create_task(caller_rtp_proto.send_loop()))
+        caller = sip_client.SipCallClient(
+            local_ip=local,
+            local_name="Spotpear",
+            local_sip_port=5066,
+            local_rtp_port=caller_rtp,
+            supported_formats=[audio],
+        )
+        try:
+            self.assertEqual(await caller.invite(target="Cucina", remote_host=local, remote_sip_port=ha_sip), "streaming")
+            assert caller.dialog is not None
+            caller_rtp_proto.remote = (
+                caller.dialog.remote_rtp_host,
+                caller.dialog.remote_rtp_port,
+                caller.dialog.selected_format.payload_type,
+            )
+            await asyncio.sleep(0.4)
+            self.assertEqual(stats["dest_invites"], 1)
+            self.assertGreater(stats["caller_rtp_rx"], 0)
+            self.assertGreater(stats["dest_rtp_rx"], 0)
+            assert relay is not None
+            self.assertGreater(relay.forwarded, 0)
+            self.assertEqual(relay.dropped, 0)
+        finally:
+            caller.bye()
+            await caller.close()
+            if dest_client is not None:
+                dest_client.bye()
+                await dest_client.close()
+            if relay is not None:
+                await relay.stop()
+            await ha_server.stop()
+            await dest_server.stop()
+            dest_transport.close()
+            caller_transport.close()
+            for task in tasks:
+                task.cancel()
 
 
 if __name__ == "__main__":

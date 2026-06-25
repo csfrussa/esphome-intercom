@@ -1575,7 +1575,13 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
         if decision.reason == "ha_required":
             return SipInviteResult(404, "Not Found", to_tag="")
         if decision.kind in {"direct", "via_ha", "group"} and decision.entry is not None:
-            decision_uri = parse_sip_uri(decision.sip_uri) if decision.sip_uri else None
+            bridge_uri = None
+            if decision.entry.sip_uri:
+                bridge_uri = parse_sip_uri(decision.entry.sip_uri)
+            elif decision.entry.kind != "ha" and decision.entry.address:
+                bridge_port = int((decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
+                bridge_uri = parse_sip_uri(f"sip:{decision.entry.id}@{decision.entry.address}:{bridge_port}")
+            decision_uri = bridge_uri or (parse_sip_uri(decision.sip_uri) if decision.sip_uri else None)
             if decision_uri is not None and decision_uri.host != local_ip:
                 bucket = hass.data.setdefault(DOMAIN, {})
                 next_port = int(bucket.get("sip_rtp_next_port", int(cfg["rtp_port"]) + 2))
