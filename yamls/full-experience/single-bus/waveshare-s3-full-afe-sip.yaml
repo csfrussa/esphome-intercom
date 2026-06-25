@@ -1,0 +1,16 @@
+# =============================================================================
+# Waveshare ESP32-S3-AUDIO-Board: VA + Intercom + MWW (SIP/RTP)
+# =============================================================================
+#
+# SIP profile: same hardware/audio/runtime surface as the maintained UDP
+# profile, with signaling/media transported through standards-compatible
+# SIP/SDP/RTP PCM.
+# =============================================================================
+
+substitutions:
+  ext_components_source: "../../../esphome/components"
+
+packages:
+  base: !include waveshare-s3-full-afe-udp.yaml
+  ha_api: !include ../../../packages/intercom/ha_api_cpp.yaml
+  intercom_transport: !include ../../../packages/intercom/transport_sip.yaml
