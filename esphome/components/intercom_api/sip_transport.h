@@ -116,6 +116,7 @@ class SipTransport : public IntercomTransport {
   std::atomic<bool> running_{false};
   std::atomic<bool> rtp_running_{false};
   std::atomic<bool> call_active_{false};
+  std::atomic<bool> outgoing_invite_pending_{false};
   std::atomic<bool> remote_sip_tcp_{false};
 };
 

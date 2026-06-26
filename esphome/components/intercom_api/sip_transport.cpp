@@ -523,6 +523,7 @@ void SipTransport::reset_dialog_() {
   this->rtp_tx_payload_type_ = 96;
   this->rtp_rx_payload_type_ = 96;
   this->call_active_.store(false, std::memory_order_release);
+  this->outgoing_invite_pending_.store(false, std::memory_order_release);
 }
 
 bool SipTransport::local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) const {
@@ -928,7 +929,10 @@ bool SipTransport::send_invite_(const uint8_t *payload, size_t len) {
   const std::string sdp = this->build_sdp_offer_();
   if (sdp.empty()) return false;
   const bool sent = this->send_request_("INVITE", sdp, this->invite_cseq_);
-  if (sent && this->cseq_ <= this->invite_cseq_) this->cseq_ = this->invite_cseq_ + 1;
+  if (sent) {
+    this->outgoing_invite_pending_.store(true, std::memory_order_release);
+    if (this->cseq_ <= this->invite_cseq_) this->cseq_ = this->invite_cseq_ + 1;
+  }
   return sent;
 }
 
@@ -1000,9 +1004,15 @@ bool SipTransport::send_control(MessageType type, const uint8_t *payload, size_t
     case MessageType::RING:
       return this->send_response_(180, "Ringing");
     case MessageType::ANSWER:
+      this->outgoing_invite_pending_.store(false, std::memory_order_release);
       this->call_active_.store(true, std::memory_order_release);
       return this->send_response_(200, "OK", this->build_sdp_answer_());
     case MessageType::DECLINE:
+      if (this->outgoing_invite_pending_.load(std::memory_order_acquire)) {
+        const bool sent = this->send_request_("CANCEL", "", this->invite_cseq_);
+        this->reset_dialog_();
+        return sent;
+      }
       if (!this->call_active_.load(std::memory_order_acquire)) {
         const bool sent = this->send_response_(486, "Busy Here", "", decline_reason_from_payload(payload, len));
         this->reset_dialog_();
@@ -1104,6 +1114,13 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
   this->remote_ip_v4_.store(src_ip, std::memory_order_release);
   this->remote_sip_port_.store(ntohs(src.sin_port), std::memory_order_release);
   if (message.rfind("SIP/2.0 ", 0) != 0 || message.size() < 12) return false;
+  const std::string response_call_id = header_value(message, "Call-ID");
+  if (response_call_id.empty() || this->call_id_.empty() || response_call_id != this->call_id_) {
+    ESP_LOGD(TAG, "SIP response ignored for stale/unknown call_id=%s current=%s",
+             response_call_id.empty() ? "(empty)" : response_call_id.c_str(),
+             this->call_id_.empty() ? "(none)" : this->call_id_.c_str());
+    return true;
+  }
   const int status = std::atoi(message.substr(8, 3).c_str());
   const std::string method = cseq_method(header_value(message, "CSeq"));
   if (status == 180 && method == "INVITE") {
@@ -1118,10 +1135,15 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
       this->reset_dialog_();
       return true;
     }
+    if (method == "CANCEL") {
+      ESP_LOGI(TAG, "SIP CANCEL completed call_id=%s", this->call_id_.c_str());
+      return true;
+    }
     if (method != "INVITE") {
       ESP_LOGI(TAG, "SIP %u response for %s ignored", status, method.c_str());
       return true;
     }
+    this->outgoing_invite_pending_.store(false, std::memory_order_release);
     const std::string to = header_value(message, "To");
     this->remote_tag_ = tag_from_header(to);
     this->learn_remote_rtp_from_sdp_(message_body(message), src_ip);
@@ -1151,6 +1173,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
       ESP_LOGW(TAG, "SIP %u response for %s", status, method.c_str());
       return true;
     }
+    this->outgoing_invite_pending_.store(false, std::memory_order_release);
     uint8_t payload[INTERCOM_MAX_CALL_ID_LEN + INTERCOM_MAX_REASON_LEN + 8];
     size_t off = encode_call_id_prefix(payload, sizeof(payload), this->call_id_);
     std::string reason = sip_header_token(header_value(message, "X-Intercom-Decline-Reason"));
@@ -1179,6 +1202,14 @@ void SipTransport::handle_sip_datagram_(const char *data, size_t len, const sock
   if (method == "INVITE") {
     this->handle_invite_(msg, src);
   } else if (method == "ACK") {
+    const std::string request_call_id = header_value(msg, "Call-ID");
+    if (request_call_id.empty() || this->call_id_.empty() || request_call_id != this->call_id_) {
+      ESP_LOGD(TAG, "SIP ACK ignored for stale/unknown call_id=%s current=%s",
+               request_call_id.empty() ? "(empty)" : request_call_id.c_str(),
+               this->call_id_.empty() ? "(none)" : this->call_id_.c_str());
+      return;
+    }
+    this->outgoing_invite_pending_.store(false, std::memory_order_release);
     this->call_active_.store(true, std::memory_order_release);
   } else if (method == "BYE") {
     const std::string request_call_id = header_value(msg, "Call-ID");
