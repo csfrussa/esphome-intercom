@@ -36,6 +36,7 @@ from .const import (
     INTERCOM_UDP_CONTROL_PORT,
 )
 from .device_resolver import get_resolver
+from .fsm import TerminalReason
 from .audio_format import (
     AudioFormat,
     HA_BROWSER_RX_FORMATS,
