@@ -782,7 +782,7 @@ async def run_sip_probe(args: argparse.Namespace) -> int:
             target=dest_name,
             remote_host=target_host,
             remote_sip_port=args.sip_port,
-            timeout_s=args.invite_timeout,
+            timeout=args.invite_timeout,
         )
         print(
             f"SIP_RESULT result={result} target={dest_name!r}@{target_host}:{args.sip_port} "

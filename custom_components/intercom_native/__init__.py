@@ -1311,31 +1311,61 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     bucket = hass.data.get(DOMAIN, {})
     clients = bucket.setdefault("sip_clients", {})
     relays = bucket.setdefault("sip_relays", {})
+    pending = bucket.setdefault("sip_pending", {})
     if not call_id and len(clients) == 1:
         call_id = next(iter(clients))
+    if not call_id and len(pending) == 1:
+        call_id = next(iter(pending))
     client = clients.pop(call_id, None) if call_id else None
     relay = relays.pop(call_id, None) if call_id else None
+    pending_ids = [call_id] if call_id and call_id in pending else ([] if call_id else list(pending))
     server = bucket.get("sip_server")
     server_bye = False
+    pending_closed = 0
     if client is not None:
         client.bye_or_cancel()
         await client.close()
     if relay is not None:
         await relay.stop()
+    for pending_call_id in pending_ids:
+        invite = pending.pop(pending_call_id, None)
+        if invite is None:
+            continue
+        if _sip_send_final_response(
+            hass,
+            pending_call_id,
+            487,
+            "Request Terminated",
+            decline_reason=TerminalReason.LOCAL_HANGUP.value,
+        ):
+            pending_closed += 1
+        _set_ha_softphone_call_state(
+            hass,
+            "disconnected",
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=invite.target,
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=pending_call_id,
+            reason=TerminalReason.LOCAL_HANGUP.value,
+            origin="self",
+        )
     if client is None and relay is None and server is not None:
         server_bye = bool(server.send_bye(call_id))
         if server_bye and not call_id:
             call_id = "(active)"
     _fire_call_event(
         hass,
-        {"state": "ended", "scope": "sip", "call_id": call_id},
+        {"state": "ended", "scope": "sip", "call_id": call_id, "pending_closed": pending_closed},
         "sip",
     )
     _LOGGER.info(
-        "SIP hangup call_id=%s client=%s relay=%s server_bye=%s",
+        "SIP hangup call_id=%s client=%s relay=%s pending_closed=%d server_bye=%s",
         call_id,
         client is not None,
         relay is not None,
+        pending_closed,
         server_bye,
     )
 
