@@ -287,7 +287,44 @@ def _device_entity_state(hass: HomeAssistant, device: dict, key: str) -> str:
 def _sip_active_dialog_count(server: object | None) -> int:
     endpoint = getattr(server, "endpoint", None)
     dialogs = getattr(endpoint, "active_dialogs", None)
-    return len(dialogs) if isinstance(dialogs, dict) else 0
+    if isinstance(dialogs, dict):
+        return len(dialogs)
+    endpoints = getattr(server, "endpoints", None)
+    if isinstance(endpoints, set):
+        total = 0
+        for endpoint in endpoints:
+            endpoint_dialogs = getattr(endpoint, "active_dialogs", None)
+            if isinstance(endpoint_dialogs, dict):
+                total += len(endpoint_dialogs)
+        return total
+    return 0
+
+
+def _sip_servers(hass: HomeAssistant) -> list[object]:
+    bucket = hass.data.get(DOMAIN, {})
+    return [server for server in (bucket.get("sip_server"), bucket.get("sip_tcp_server")) if server is not None]
+
+
+def _sip_send_final_response(
+    hass: HomeAssistant,
+    call_id: str,
+    status: int,
+    reason: str,
+    *,
+    answer_sdp: str = "",
+    decline_reason: str = "",
+) -> bool:
+    for server in _sip_servers(hass):
+        send = getattr(server, "send_final_response", None)
+        if callable(send) and send(
+            call_id,
+            status,
+            reason,
+            answer_sdp=answer_sdp,
+            decline_reason=decline_reason,
+        ):
+            return True
+    return False
 
 
 async def _async_emit_esp_state_event(
@@ -1195,8 +1232,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
     invite = pending.pop(call_id, None) if call_id else None
-    server = hass.data.get(DOMAIN, {}).get("sip_server")
-    if invite is None or server is None:
+    if invite is None:
         _LOGGER.warning("sip_answer: no pending SIP call %s", call_id or "(current)")
         return
 
@@ -1210,7 +1246,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         invite.send_format,
         invite.recv_format,
     )
-    if not server.send_final_response(call_id, 200, "OK", answer_sdp=answer):
+    if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
         _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
         return
 
@@ -1239,8 +1275,8 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
     pending.pop(call_id, None)
-    server = hass.data.get(DOMAIN, {}).get("sip_server")
-    if not call_id or server is None or not server.send_final_response(
+    if not call_id or not _sip_send_final_response(
+        hass,
         call_id,
         status,
         reason,
@@ -1804,7 +1840,7 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
     from .sdp import build_answer_directional
     from .sip import parse_sip_uri
     from .sip_client import SipCallClient
-    from .sip_listener import SipInvite, SipInviteResult, SipUdpServer
+    from .sip_listener import SipInvite, SipInviteResult, SipTcpServer, SipUdpServer
     from .sip_rtp_bridge import RtpPeer, SipRtpRelay
 
     if hass.data.get(DOMAIN, {}).get("sip_server") is not None:
@@ -1939,16 +1975,15 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                     final = initial_result
                     if final == "ringing":
                         final = await client.wait_for_final()
-                    server = hass.data.get(DOMAIN, {}).get("sip_server")
-                    if final != "streaming" or client.dialog is None or server is None:
-                        if server is not None:
-                            decline_reason = final if final and final != "sip_486" else "busy"
-                            server.send_final_response(
-                                invite.call_id,
-                                486,
-                                "Busy Here",
-                                decline_reason=decline_reason,
-                            )
+                    if final != "streaming" or client.dialog is None:
+                        decline_reason = final if final and final != "sip_486" else "busy"
+                        _sip_send_final_response(
+                            hass,
+                            invite.call_id,
+                            486,
+                            "Busy Here",
+                            decline_reason=decline_reason,
+                        )
                         bucket.setdefault("sip_bridge_clients", {}).pop(invite.call_id, None)
                         active.pop(client.dialog_ids.call_id, None)
                         await client.close()
@@ -1982,7 +2017,7 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                         invite.send_format,
                         invite.recv_format,
                     )
-                    server.send_final_response(invite.call_id, 200, "OK", answer_sdp=answer)
+                    _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
                     _fire_call_event(
                         hass,
                         {
@@ -1998,7 +2033,7 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 hass.async_create_task(_finish_bridge(result))
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
             pending = hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending", {})
-            active_dialogs = _sip_active_dialog_count(server)
+            active_dialogs = sum(_sip_active_dialog_count(item) for item in _sip_servers(hass))
             if _sessions or pending or active_dialogs:
                 _LOGGER.info(
                     "SIP INVITE from %s rejected: HA softphone is busy (sessions=%d pending=%d active_dialogs=%d)",
@@ -2117,16 +2152,17 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 bool(dest_call_id),
             )
 
+    supported_formats = [
+        AudioFormat(48000, "s16le", 1, 10),
+        AudioFormat(32000, "s16le", 1, 10),
+        AudioFormat(16000, "s16le", 1, 20),
+    ]
     server = SipUdpServer(
         host="0.0.0.0",
         port=int(cfg["sip_port"]),
         local_ip=local_ip,
         local_rtp_port=int(cfg["rtp_port"]),
-        supported_formats=[
-            AudioFormat(48000, "s16le", 1, 10),
-            AudioFormat(32000, "s16le", 1, 10),
-            AudioFormat(16000, "s16le", 1, 20),
-        ],
+        supported_formats=supported_formats,
         supported_send_formats=list(HA_BROWSER_TX_FORMATS),
         supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
         on_invite=_on_invite,
@@ -2134,8 +2170,23 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
     )
     if not await server.start():
         return False
+    tcp_server = SipTcpServer(
+        host="0.0.0.0",
+        port=int(cfg["sip_port"]),
+        local_ip=local_ip,
+        local_rtp_port=int(cfg["rtp_port"]),
+        supported_formats=supported_formats,
+        supported_send_formats=list(HA_BROWSER_TX_FORMATS),
+        supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
+        on_invite=_on_invite,
+        on_terminated=_on_terminated,
+    )
+    if not await tcp_server.start():
+        await server.stop()
+        return False
     hass.data[DOMAIN]["sip_server"] = server
-    _LOGGER.info("SIP endpoint enabled on UDP/%s (RTP base %s)", cfg["sip_port"], cfg["rtp_port"])
+    hass.data[DOMAIN]["sip_tcp_server"] = tcp_server
+    _LOGGER.info("SIP endpoint enabled on UDP+TCP/%s (RTP base %s)", cfg["sip_port"], cfg["rtp_port"])
     return True
 
 
@@ -2157,6 +2208,9 @@ async def _async_stop_sip_udp_server(hass: HomeAssistant) -> None:
     server = hass.data.get(DOMAIN, {}).pop("sip_server", None)
     if server is not None:
         await server.stop()
+    tcp_server = hass.data.get(DOMAIN, {}).pop("sip_tcp_server", None)
+    if tcp_server is not None:
+        await tcp_server.stop()
 
 
 async def _async_start_udp_socket_manager(hass: HomeAssistant) -> bool:

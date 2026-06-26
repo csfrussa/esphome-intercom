@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import logging
 import re
@@ -65,6 +66,7 @@ class _ActiveDialog:
 
 InviteHandler = Callable[[SipInvite], Awaitable[SipInviteResult]]
 TerminateHandler = Callable[[str], Awaitable[None]]
+SendHandler = Callable[[bytes, tuple[str, int]], None]
 
 
 def _extract_tag(header: str) -> str:
@@ -93,7 +95,7 @@ def _identity_header(value: str) -> str:
 
 def _cseq_number(value: str) -> int:
     try:
-        return int((value or "").strip().split()[0])
+        return sip.parse_cseq(value).number
     except Exception:
         return 1
 
@@ -130,6 +132,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
+        send_override: SendHandler | None = None,
     ) -> None:
         self.local_ip = local_ip
         self.local_rtp_port = local_rtp_port or INTERCOM_RTP_PORT
@@ -138,6 +141,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.on_invite = on_invite
         self.on_terminated = on_terminated
+        self.send_override = send_override
         self.transport: asyncio.DatagramTransport | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
         self.active_dialogs: dict[str, _ActiveDialog] = {}
@@ -160,6 +164,9 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         _LOGGER.warning("SIP UDP socket error: %s", exc)
 
     def _send(self, data: bytes, addr) -> None:
+        if self.send_override is not None:
+            self.send_override(data, addr)
+            return
         if self.transport is not None:
             self.transport.sendto(data, addr)
 
@@ -213,7 +220,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         if request.method == "ACK":
             return
         if request.method != "INVITE":
-            self._send_response(request, addr, 481, "Call/Transaction Does Not Exist")
+            self._send_response(request, addr, 405, "Method Not Allowed")
             return
 
         self._send_response(request, addr, 100, "Trying")
@@ -419,3 +426,130 @@ class SipUdpServer:
             self.transport.close()
             self.transport = None
         self.endpoint = None
+
+
+async def _read_sip_stream_message(reader: asyncio.StreamReader) -> bytes | None:
+    try:
+        head = await reader.readuntil(b"\r\n\r\n")
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+        return None
+    content_length = 0
+    try:
+        text = head.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    for line in text.split("\r\n")[1:]:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        if key.strip().lower() == "content-length":
+            try:
+                content_length = int(value.strip())
+            except ValueError:
+                return None
+    if content_length < 0 or content_length > sip.MAX_SIP_BODY_BYTES:
+        return None
+    body = await reader.readexactly(content_length) if content_length else b""
+    return head + body
+
+
+class SipTcpServer:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        local_ip: str,
+        local_rtp_port: int,
+        supported_formats: list[AudioFormat],
+        supported_send_formats: list[AudioFormat] | None = None,
+        supported_recv_formats: list[AudioFormat] | None = None,
+        on_invite: InviteHandler,
+        on_terminated: TerminateHandler | None = None,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.local_ip = local_ip
+        self.local_rtp_port = local_rtp_port
+        self.supported_formats = supported_formats
+        self.supported_send_formats = supported_send_formats
+        self.supported_recv_formats = supported_recv_formats
+        self.on_invite = on_invite
+        self.on_terminated = on_terminated
+        self.server: asyncio.AbstractServer | None = None
+        self.endpoints: set[SipUdpEndpoint] = set()
+
+    async def start(self) -> bool:
+        if self.server is not None:
+            return True
+        try:
+            self.server = await asyncio.start_server(self._handle_client, self.host, self.port)
+        except OSError as err:
+            _LOGGER.error("Failed to bind SIP TCP %s:%s: %s", self.host, self.port, err)
+            return False
+        _LOGGER.info("SIP TCP listener ready on %s:%s", self.host, self.port)
+        return True
+
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        peer = writer.get_extra_info("peername") or ("0.0.0.0", 0)
+        addr = (str(peer[0]), int(peer[1]))
+
+        def _send(data: bytes, _addr) -> None:
+            writer.write(data)
+            asyncio.create_task(writer.drain())
+
+        endpoint = SipUdpEndpoint(
+            local_ip=self.local_ip,
+            local_rtp_port=self.local_rtp_port,
+            supported_formats=self.supported_formats,
+            supported_send_formats=self.supported_send_formats,
+            supported_recv_formats=self.supported_recv_formats,
+            on_invite=self.on_invite,
+            on_terminated=self.on_terminated,
+            send_override=_send,
+        )
+        self.endpoints.add(endpoint)
+        try:
+            while not reader.at_eof():
+                raw = await _read_sip_stream_message(reader)
+                if raw is None:
+                    break
+                await endpoint._handle_datagram(raw, addr)
+        finally:
+            self.endpoints.discard(endpoint)
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+    def send_final_response(
+        self,
+        call_id: str,
+        status: int,
+        reason: str,
+        *,
+        answer_sdp: str = "",
+        decline_reason: str = "",
+    ) -> bool:
+        for endpoint in tuple(self.endpoints):
+            if endpoint.send_final_response(
+                call_id,
+                status,
+                reason,
+                answer_sdp=answer_sdp,
+                decline_reason=decline_reason,
+            ):
+                return True
+        return False
+
+    def send_bye(self, call_id: str = "") -> bool:
+        for endpoint in tuple(self.endpoints):
+            if endpoint.send_bye(call_id):
+                return True
+        return False
+
+    async def stop(self) -> None:
+        if self.server is not None:
+            self.server.close()
+            await self.server.wait_closed()
+            self.server = None
+        self.endpoints.clear()

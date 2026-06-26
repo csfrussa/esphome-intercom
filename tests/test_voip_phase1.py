@@ -222,6 +222,24 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(via.split(";", 1)[0], "SIP/2.0/TCP 192.168.1.10:43123")
         self.assertIn(";rport", via)
 
+    def test_parse_via_and_cseq_for_transaction_matching(self) -> None:
+        via = sip.parse_via("SIP/2.0/TCP 192.168.1.10:43123;branch=z9hG4bKabc;rport=43123;received=192.168.1.10")
+        self.assertEqual(via.transport, "TCP")
+        self.assertEqual(via.host, "192.168.1.10")
+        self.assertEqual(via.port, 43123)
+        self.assertEqual(via.branch, "z9hG4bKabc")
+        self.assertEqual(via.rport, 43123)
+        self.assertEqual(via.received, "192.168.1.10")
+
+        cseq = sip.parse_cseq("42 INVITE")
+        self.assertEqual(cseq.number, 42)
+        self.assertEqual(cseq.method, "INVITE")
+
+    def test_auth_challenge_failures_have_explicit_reasons(self) -> None:
+        self.assertEqual(sip.sip_failure_reason(401), "auth_required_unsupported")
+        self.assertEqual(sip.sip_failure_reason(407), "proxy_auth_required_unsupported")
+        self.assertEqual(sip.sip_failure_reason(488), "media_incompatible")
+
 
 class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
     async def test_outbound_client_advertises_bound_socket_port(self) -> None:
@@ -806,6 +824,118 @@ class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
             caller_transport.close()
             for task in tasks:
                 task.cancel()
+
+
+class SipTcpProfileTest(unittest.IsolatedAsyncioTestCase):
+    async def test_tcp_listener_accepts_pcm_invite(self) -> None:
+        local = "127.0.0.1"
+        with _reserved_udp_ports(2) as ports:
+            sip_port, rtp_port = ports
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
+        seen = {"invite": False}
+
+        async def on_invite(invite):
+            seen["invite"] = True
+            answer = sdp.build_answer_directional(
+                local,
+                local,
+                rtp_port,
+                invite.send_format,
+                invite.recv_format,
+            )
+            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer)
+
+        server = sip_listener.SipTcpServer(
+            host=local,
+            port=sip_port,
+            local_ip=local,
+            local_rtp_port=rtp_port,
+            supported_formats=[audio],
+            on_invite=on_invite,
+        )
+        self.assertTrue(await server.start())
+        reader, writer = await asyncio.open_connection(local, sip_port)
+        try:
+            body = sdp.build_offer(local, local, rtp_port + 2, [audio]).encode()
+            raw = sip.build_request(
+                "INVITE",
+                f"sip:HA@{local}:{sip_port}",
+                [
+                    ("Via", f"SIP/2.0/TCP {local}:43210;branch=z9hG4bKtcp;rport"),
+                    ("From", f"<sip:ESP@{local}:43210>;tag=src"),
+                    ("To", f"<sip:HA@{local}:{sip_port}>"),
+                    ("Call-ID", "tcp-call-1"),
+                    ("CSeq", "1 INVITE"),
+                    ("Contact", f"<sip:ESP@{local}:43210>"),
+                    ("Content-Type", "application/sdp"),
+                    ("X-Intercom-Caller-Name", "ESP"),
+                    ("X-Intercom-Dest-Name", "HA"),
+                ],
+                body,
+            )
+            writer.write(raw)
+            await writer.drain()
+            first_raw = await sip_listener._read_sip_stream_message(reader)
+            second_raw = await sip_listener._read_sip_stream_message(reader)
+            assert first_raw is not None and second_raw is not None
+            first = sip.parse_message(first_raw)
+            second = sip.parse_message(second_raw)
+            statuses = {first.status_code, second.status_code}
+            self.assertEqual(statuses, {100, 200})
+            final = first if first.status_code == 200 else second
+            self.assertIn(b"m=audio", final.body)
+            self.assertTrue(seen["invite"])
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            await server.stop()
+
+    async def test_tcp_client_establishes_pcm_dialog(self) -> None:
+        local = "127.0.0.1"
+        with _reserved_udp_ports(3) as ports:
+            sip_port, server_rtp, client_rtp = ports
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
+
+        async def on_invite(invite):
+            answer = sdp.build_answer_directional(
+                local,
+                local,
+                server_rtp,
+                invite.send_format,
+                invite.recv_format,
+            )
+            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer)
+
+        server = sip_listener.SipTcpServer(
+            host=local,
+            port=sip_port,
+            local_ip=local,
+            local_rtp_port=server_rtp,
+            supported_formats=[audio],
+            on_invite=on_invite,
+        )
+        self.assertTrue(await server.start())
+        client = sip_client.SipCallClient(
+            local_ip=local,
+            local_name="Casa",
+            local_sip_port=5060,
+            local_rtp_port=client_rtp,
+            supported_formats=[audio],
+            signaling_transport="TCP",
+        )
+        try:
+            self.assertEqual(
+                await client.invite(target="ESP", remote_host=local, remote_sip_port=sip_port),
+                "streaming",
+            )
+            self.assertIsNotNone(client.dialog)
+            assert client.dialog is not None
+            self.assertEqual(client.dialog.remote_rtp_port, server_rtp)
+            self.assertNotEqual(client.local_sip_port, 5060)
+        finally:
+            client.bye()
+            await client.close()
+            await server.stop()
 
 
 if __name__ == "__main__":

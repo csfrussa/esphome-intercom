@@ -83,6 +83,23 @@ class SipDialogIds:
     branch: str = field(default_factory=lambda: make_branch())
 
 
+@dataclass(frozen=True, slots=True)
+class SipVia:
+    transport: str
+    host: str
+    port: int
+    branch: str = ""
+    rport: int | None = None
+    received: str = ""
+    params: tuple[tuple[str, str | None], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SipCSeq:
+    number: int
+    method: str
+
+
 def make_call_id(prefix: str = "intercom") -> str:
     return f"{prefix}-{token_hex(12)}"
 
@@ -127,6 +144,85 @@ def parse_sip_uri(value: str) -> SipUri:
     uri = SipUri(user=user.strip(), host=host.strip(), port=port, params=tuple(params))
     str(uri)
     return uri
+
+
+def _split_semicolon_params(value: str) -> tuple[str, tuple[tuple[str, str | None], ...]]:
+    parts = [part.strip() for part in value.split(";")]
+    head = parts[0] if parts else ""
+    params: list[tuple[str, str | None]] = []
+    for part in parts[1:]:
+        if not part:
+            continue
+        if "=" in part:
+            key, val = part.split("=", 1)
+            params.append((key.strip().lower(), val.strip()))
+        else:
+            params.append((part.strip().lower(), None))
+    return head, tuple(params)
+
+
+def parse_via(value: str) -> SipVia:
+    head, params = _split_semicolon_params(value.strip())
+    bits = head.split()
+    if len(bits) != 2 or not bits[0].upper().startswith("SIP/2.0/"):
+        raise SipError(f"bad Via header: {value!r}")
+    transport = bits[0].rsplit("/", 1)[1].upper()
+    if transport not in {"UDP", "TCP"}:
+        raise SipError(f"unsupported Via transport {transport!r}")
+    sent_by = bits[1]
+    host = sent_by
+    port = 5060
+    if sent_by.count(":") == 1 and not sent_by.startswith("["):
+        host, raw_port = sent_by.rsplit(":", 1)
+        port = int(raw_port)
+    if not host or not 1 <= port <= 65535:
+        raise SipError(f"bad Via sent-by: {sent_by!r}")
+    param_map = {key: val for key, val in params}
+    rport_raw = param_map.get("rport")
+    rport = None
+    if rport_raw not in (None, ""):
+        rport = int(rport_raw)
+        if not 1 <= rport <= 65535:
+            raise SipError(f"bad Via rport: {rport_raw!r}")
+    return SipVia(
+        transport=transport,
+        host=host,
+        port=port,
+        branch=param_map.get("branch") or "",
+        rport=rport,
+        received=param_map.get("received") or "",
+        params=params,
+    )
+
+
+def parse_cseq(value: str) -> SipCSeq:
+    parts = (value or "").strip().split()
+    if len(parts) != 2:
+        raise SipError(f"bad CSeq header: {value!r}")
+    number = int(parts[0])
+    method = parts[1].upper()
+    if number < 0:
+        raise SipError(f"bad CSeq number: {value!r}")
+    if method not in SUPPORTED_METHODS:
+        raise SipError(f"unsupported CSeq method {method}")
+    return SipCSeq(number=number, method=method)
+
+
+def sip_failure_reason(status_code: int) -> str:
+    code = int(status_code)
+    if code == 401:
+        return "auth_required_unsupported"
+    if code == 407:
+        return "proxy_auth_required_unsupported"
+    if code == 486:
+        return "busy"
+    if code == 487:
+        return "cancelled"
+    if code == 488:
+        return "media_incompatible"
+    if code == 603:
+        return "declined"
+    return f"sip_{code}"
 
 
 def _split_header_body(data: bytes) -> tuple[str, bytes]:

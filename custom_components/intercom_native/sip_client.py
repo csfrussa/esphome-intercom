@@ -117,6 +117,31 @@ class _SipClientProtocol(asyncio.DatagramProtocol):
         self.queue.put_nowait((data, addr))
 
 
+async def _read_sip_stream_message(reader: asyncio.StreamReader) -> bytes | None:
+    try:
+        head = await reader.readuntil(b"\r\n\r\n")
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+        return None
+    try:
+        text = head.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    content_length = 0
+    for line in text.split("\r\n")[1:]:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        if key.strip().lower() == "content-length":
+            try:
+                content_length = int(value.strip())
+            except ValueError:
+                return None
+    if content_length < 0 or content_length > sip.MAX_SIP_BODY_BYTES:
+        return None
+    body = await reader.readexactly(content_length) if content_length else b""
+    return head + body
+
+
 class SipCallClient:
     """One outbound SIP dialog.
 
@@ -134,6 +159,7 @@ class SipCallClient:
         supported_formats: list[AudioFormat] | None = None,
         supported_send_formats: list[AudioFormat] | None = None,
         supported_recv_formats: list[AudioFormat] | None = None,
+        signaling_transport: str = "UDP",
     ) -> None:
         self.local_ip = local_ip
         self.local_name = local_name
@@ -142,8 +168,11 @@ class SipCallClient:
         base_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
+        self.signaling_transport = (signaling_transport or "UDP").upper()
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: _SipClientProtocol | None = None
+        self.reader: asyncio.StreamReader | None = None
+        self.writer: asyncio.StreamWriter | None = None
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
         self.dialog_ids = sip.SipDialogIds(call_id=sip.make_call_id("ha"), local_tag=sip.make_tag())
         self.dialog: SipDialog | None = None
@@ -156,6 +185,8 @@ class SipCallClient:
         self._pending_remote_uri = ""
 
     async def start(self) -> None:
+        if self.signaling_transport == "TCP":
+            return
         if self.transport is not None:
             return
         loop = asyncio.get_running_loop()
@@ -174,6 +205,48 @@ class SipCallClient:
         if self.transport is not None:
             self.transport.close()
             self.transport = None
+        if self.writer is not None:
+            self.writer.close()
+            try:
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+            self.writer = None
+            self.reader = None
+
+    async def _connect_tcp(self, remote_host: str, remote_sip_port: int) -> None:
+        if self.writer is not None:
+            return
+        self.reader, self.writer = await asyncio.open_connection(remote_host, int(remote_sip_port))
+        sock = self.writer.get_extra_info("socket")
+        if sock is not None:
+            sockname = sock.getsockname()
+            if sockname and len(sockname) >= 2 and int(sockname[1]) > 0:
+                self.local_sip_port = int(sockname[1])
+
+    async def _send_raw(self, raw: bytes, remote_host: str, remote_sip_port: int) -> None:
+        if self.signaling_transport == "TCP":
+            await self._connect_tcp(remote_host, remote_sip_port)
+            assert self.writer is not None
+            self.writer.write(raw)
+            await self.writer.drain()
+            return
+        assert self.transport is not None
+        self.transport.sendto(raw, (remote_host, int(remote_sip_port)))
+
+    async def _read_response(self, timeout: float) -> tuple[sip.SipMessage, tuple[str, int]] | None:
+        if self.signaling_transport == "TCP":
+            if self.reader is None:
+                return None
+            try:
+                raw = await asyncio.wait_for(_read_sip_stream_message(self.reader), timeout=timeout)
+            except asyncio.TimeoutError:
+                return None
+            if raw is None:
+                return None
+            return sip.parse_message(raw), (self._pending_remote_host, self._pending_remote_sip_port)
+        data, addr = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+        return sip.parse_message(data), addr
 
     async def invite(
         self,
@@ -183,7 +256,10 @@ class SipCallClient:
         remote_sip_port: int,
         timeout: float = 8.0,
     ) -> str:
-        await self.start()
+        if self.signaling_transport == "TCP":
+            await self._connect_tcp(remote_host, int(remote_sip_port))
+        else:
+            await self.start()
         request_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port)))
         local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port))
         remote_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port)))
@@ -208,7 +284,7 @@ class SipCallClient:
             method="INVITE",
             contact_uri=local_uri,
             content_type="application/sdp",
-            transport="UDP",
+            transport=self.signaling_transport,
         )
         caller_name = _sip_header_token(self.local_name)
         dest_name = _sip_header_token(target)
@@ -220,19 +296,20 @@ class SipCallClient:
             headers.append(("X-Intercom-Dest-Route", dest_name))
         self._invite_cseq = self.dialog_ids.cseq
         raw = sip.build_request("INVITE", request_uri, headers, body)
-        assert self.transport is not None
-        self.transport.sendto(raw, (remote_host, int(remote_sip_port)))
+        await self._send_raw(raw, remote_host, int(remote_sip_port))
         _LOGGER.info("SIP TX INVITE %s@%s:%s", target, remote_host, remote_sip_port)
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return "timeout"
-            data, addr = await asyncio.wait_for(self.queue.get(), timeout=remaining)
             try:
-                msg = sip.parse_message(data)
+                received = await self._read_response(remaining)
+                if received is None:
+                    return "timeout"
+                msg, addr = received
             except Exception as err:
-                _LOGGER.info("SIP RX malformed from %s:%s: %s", addr[0], addr[1], err)
+                _LOGGER.info("SIP RX malformed: %s", err)
                 continue
             if not msg.is_response:
                 continue
@@ -244,7 +321,7 @@ class SipCallClient:
                     return "incompatible_audio_format"
                 return "streaming"
             if msg.status_code and msg.status_code >= 300:
-                return _sip_decline_reason(msg) or f"sip_{msg.status_code}"
+                return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
     async def wait_for_final(self, timeout: float = 60.0) -> str:
         """Continue an INVITE transaction after the first 180 Ringing."""
@@ -255,9 +332,11 @@ class SipCallClient:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return "timeout"
-            data, addr = await asyncio.wait_for(self.queue.get(), timeout=remaining)
             try:
-                msg = sip.parse_message(data)
+                received = await self._read_response(remaining)
+                if received is None:
+                    return "timeout"
+                msg, addr = received
             except Exception:
                 continue
             if not msg.is_response or msg.status_code is None:
@@ -278,7 +357,7 @@ class SipCallClient:
                     return "incompatible_audio_format"
                 return "streaming"
             if msg.status_code >= 300:
-                return _sip_decline_reason(msg) or f"sip_{msg.status_code}"
+                return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
     def _commit_200_ok(
         self,
@@ -338,10 +417,14 @@ class SipCallClient:
             dialog=ack_ids,
             method="ACK",
             contact_uri=local_uri,
-            transport="UDP",
+            transport=self.signaling_transport,
         )
         raw = sip.build_request("ACK", request_uri, headers, b"")
-        self.transport.sendto(raw, (host, port))
+        if self.signaling_transport == "TCP" and self.writer is not None:
+            self.writer.write(raw)
+            asyncio.create_task(self.writer.drain())
+        elif self.transport is not None:
+            self.transport.sendto(raw, (host, port))
         _LOGGER.info("SIP TX ACK %s:%s", host, port)
 
     def bye(self) -> None:
@@ -361,10 +444,14 @@ class SipCallClient:
             dialog=bye_ids,
             method="BYE",
             contact_uri=self.dialog.local_uri,
-            transport="UDP",
+            transport=self.signaling_transport,
         )
         raw = sip.build_request("BYE", self.dialog.remote_uri, headers, b"")
-        self.transport.sendto(raw, (self.dialog.remote_host, self.dialog.remote_sip_port))
+        if self.signaling_transport == "TCP" and self.writer is not None:
+            self.writer.write(raw)
+            asyncio.create_task(self.writer.drain())
+        elif self.transport is not None:
+            self.transport.sendto(raw, (self.dialog.remote_host, self.dialog.remote_sip_port))
         _LOGGER.info("SIP TX BYE %s:%s", self.dialog.remote_host, self.dialog.remote_sip_port)
 
     def cancel(self) -> None:
@@ -390,10 +477,14 @@ class SipCallClient:
             dialog=cancel_ids,
             method="CANCEL",
             contact_uri=self._pending_local_uri,
-            transport="UDP",
+            transport=self.signaling_transport,
         )
         raw = sip.build_request("CANCEL", self._pending_request_uri, headers, b"")
-        self.transport.sendto(raw, (self._pending_remote_host, self._pending_remote_sip_port))
+        if self.signaling_transport == "TCP" and self.writer is not None:
+            self.writer.write(raw)
+            asyncio.create_task(self.writer.drain())
+        elif self.transport is not None:
+            self.transport.sendto(raw, (self._pending_remote_host, self._pending_remote_sip_port))
         _LOGGER.info("SIP TX CANCEL %s:%s", self._pending_remote_host, self._pending_remote_sip_port)
 
     def bye_or_cancel(self) -> None:
