@@ -15,7 +15,7 @@ runtime_fsm:
     id: intercom
     states:
       ringing:
-        priority: 700
+        priority: 975
         policies:
           led_status: intercom_ringing
           display_status: intercom_ringing
@@ -23,14 +23,14 @@ runtime_fsm:
           ringtone: play
           va_state: idle
       outgoing:
-        priority: 690
+        priority: 974
         policies:
           led_status: intercom_outgoing
           display_status: intercom_outgoing
           audio_policy: duck
           va_state: idle
       streaming:
-        priority: 650
+        priority: 973
         policies:
           led_status: intercom_streaming
           display_status: intercom_streaming
@@ -440,7 +440,7 @@ runtime_fsm:
             - script.execute: intercom_ringing_loop
         stop:
           then:
-            - script.stop: intercom_ringing_loop
+            - script.execute: intercom_stop_ringtone
     timer_alarm:
       values:
         play:

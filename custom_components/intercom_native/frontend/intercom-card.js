@@ -1681,13 +1681,6 @@ class IntercomCard extends HTMLElement {
     }
   }
 
-  async _startP2P(deviceInfo) {
-    const peer = deviceInfo?.name || this._getDestination();
-    const callId = this._makeCallId(this._getHaName(), peer);
-    this._activeCallId = callId;
-    await intercomEngine.startP2P(deviceInfo, { call_id: callId, callee: peer });
-  }
-
   async _startHaSoftphoneCall(softphoneInfo) {
     const target = this._getSoftphoneTargetDevice();
     if (!target?.device_id || !target?.host) {
@@ -1752,20 +1745,24 @@ class IntercomCard extends HTMLElement {
 
     try {
       if (this._isHaSoftphoneMode()) {
-        const sessionDeviceId = this._sessionDeviceId();
-        const peer = this._availableDevices.find(d => d.device_id === sessionDeviceId) || deviceInfo;
         const sessionInfo = {
           ...(deviceInfo || {}),
-          device_id: sessionDeviceId,
-          audio_mode: peer?.audio_mode || "full_duplex",
-          tx_formats: peer?.tx_formats,
-          rx_formats: peer?.rx_formats,
+          device_id: HA_SOFTPHONE_DEVICE_ID,
+          audio_mode: "full_duplex",
           softphone: true,
         };
         this._activeDeviceInfo = sessionInfo;
-        this._activeSessionDeviceId = sessionDeviceId;
+        this._activeSessionDeviceId = HA_SOFTPHONE_DEVICE_ID;
         this._callMode = "softphone";
-        await intercomEngine.answer(sessionInfo, sessionDeviceId, { call_id: this._sessionCallId() });
+        const reply = await this._hass.connection.sendMessagePromise({
+          type: "intercom_native/answer",
+          device_id: HA_SOFTPHONE_DEVICE_ID,
+          call_id: this._sessionCallId(),
+        });
+        if (reply?.state !== "streaming") {
+          throw new Error(reply?.error || "Failed to answer HA softphone call");
+        }
+        await intercomEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID, reply);
         return;
       }
 
@@ -1795,7 +1792,7 @@ class IntercomCard extends HTMLElement {
       if (this._isHaSoftphoneMode()) {
         await this._hass.connection.sendMessagePromise({
           type: "intercom_native/decline",
-          device_id: this._sessionDeviceId(),
+          device_id: HA_SOFTPHONE_DEVICE_ID,
           call_id: this._sessionCallId(),
         });
       } else {
@@ -1830,7 +1827,7 @@ class IntercomCard extends HTMLElement {
             : (sessionDevice?.name || this._activeDeviceInfo?.name || this._getDestination()))
         : this._getDestination();
       if (wasSoftphone) {
-        await intercomEngine.stop(this._sessionDeviceId(), { call_id: this._sessionCallId() });
+        await intercomEngine.stop(HA_SOFTPHONE_DEVICE_ID, { call_id: this._sessionCallId() });
       } else {
         // Mirror mode: Hangup is the ESP's Decline button. Firmware maps
         // Decline during STREAMING to stop(), and idle is a no-op.
@@ -2164,8 +2161,8 @@ class IntercomCardEditor extends HTMLElement {
     const modeSelect = document.createElement("select");
     modeSelect.id = "mode-select";
     const hybridOpt = document.createElement("option");
-    hybridOpt.value = "hybrid";
-    hybridOpt.textContent = "Hybrid ESP card";
+    hybridOpt.value = "esp_mirror";
+    hybridOpt.textContent = "ESP mirror";
     const softphoneOpt = document.createElement("option");
     softphoneOpt.value = "ha_softphone";
     softphoneOpt.textContent = "Home Assistant softphone";
@@ -2232,9 +2229,9 @@ class IntercomCardEditor extends HTMLElement {
   _render() {
     if (!this._els) this._buildSkeleton();
     const els = this._els;
-    const mode = this._config.mode || this._config.card_mode || "hybrid";
+    const mode = this._config.mode || this._config.card_mode || "esp_mirror";
     const softphoneMode = mode === "ha_softphone";
-    els.modeSelect.value = softphoneMode ? "ha_softphone" : "hybrid";
+    els.modeSelect.value = softphoneMode ? "ha_softphone" : "esp_mirror";
     els.modeInfo.textContent = softphoneMode
       ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
       : "ESP mirror card: mirrors one ESP endpoint and presses that ESP's own call, answer and hangup controls.";
@@ -2263,7 +2260,7 @@ class IntercomCardEditor extends HTMLElement {
       const selected = this._devices.find(d => d.device_id === (this._config.device_id || this._config.entity_id));
       els.deviceInfo.textContent = selected
         ? `Audio: ${this._normaliseAudioMode(selected.audio_mode).replace("_", " ")}`
-        : (softphoneMode ? "Home Assistant softphone does not belong to an ESP." : "Required for hybrid mode.");
+        : (softphoneMode ? "Home Assistant softphone does not belong to an ESP." : "Required for ESP mirror mode.");
     }
 
     els.nameInput.value = this._config.name || "";
@@ -2285,7 +2282,7 @@ class IntercomCardEditor extends HTMLElement {
       delete newConfig.entity_id;
       delete newConfig.target_device_id;
     } else {
-      delete newConfig.mode;
+      newConfig.mode = "esp_mirror";
       delete newConfig.card_mode;
       delete newConfig.target_device_id;
     }

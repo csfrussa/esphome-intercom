@@ -133,6 +133,41 @@ class Phonebook {
     return changed;
   }
 
+  AddResult add_entry(const ContactEntry &entry) {
+    if (entry.name.empty()) return AddResult::Rejected;
+    if (!this->self_name_.empty() && entry.name == this->self_name_) {
+      return AddResult::Rejected;
+    }
+    return this->merge_(entry);
+  }
+
+  /// Replace the entire phonebook from an authoritative typed source while
+  /// preserving the selected contact when that name still exists.
+  bool replace_all(std::vector<ContactEntry> entries) {
+    const std::string selected = this->current_name();
+    std::vector<ContactEntry> normalized;
+    normalized.reserve(entries.size());
+    for (auto &entry : entries) {
+      if (entry.name.empty()) continue;
+      if (!this->self_name_.empty() && entry.name == this->self_name_) continue;
+      entry.missing_count = 0;
+      bool replaced = false;
+      for (auto &existing : normalized) {
+        if (existing.name != entry.name) continue;
+        existing = std::move(entry);
+        replaced = true;
+        break;
+      }
+      if (!replaced) normalized.push_back(std::move(entry));
+    }
+
+    const bool changed = !same_entries_(this->entries_, normalized);
+    this->entries_ = std::move(normalized);
+    this->index_ = 0;
+    if (!selected.empty()) this->select(selected);
+    return changed;
+  }
+
   /// Drop every entry, reset the cursor.
   void clear() {
     this->entries_.clear();
@@ -278,6 +313,21 @@ class Phonebook {
     // New name: append; cursor unchanged so the UI doesn't jump.
     this->entries_.push_back(incoming);
     return AddResult::Added;
+  }
+
+  static bool same_entry_(const ContactEntry &a, const ContactEntry &b) {
+    return a.name == b.name && a.ip == b.ip && a.protocol == b.protocol &&
+           a.port == b.port && a.control_port == b.control_port &&
+           a.audio_capability == b.audio_capability;
+  }
+
+  static bool same_entries_(const std::vector<ContactEntry> &a,
+                            const std::vector<ContactEntry> &b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); i++) {
+      if (!same_entry_(a[i], b[i])) return false;
+    }
+    return true;
   }
 
   static bool parse_entry_(const std::string &raw, ContactEntry *out) {

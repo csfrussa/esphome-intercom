@@ -28,9 +28,14 @@ class SipInvite:
     call_id: str
     cseq: str
     remote_sdp: bytes
-    selected_format: sdp.RtpPcmFormat
+    send_format: sdp.RtpPcmFormat
+    recv_format: sdp.RtpPcmFormat
     remote_rtp_host: str
     remote_rtp_port: int
+
+    @property
+    def selected_format(self) -> sdp.RtpPcmFormat:
+        return self.recv_format
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +45,7 @@ class SipInviteResult:
     answer_sdp: str = ""
     to_tag: str = ""
     defer_final: bool = False
+    decline_reason: str = ""
 
 
 @dataclass(slots=True)
@@ -49,7 +55,16 @@ class _PendingInvite:
     to_tag: str
 
 
+@dataclass(slots=True)
+class _ActiveDialog:
+    request: sip.SipMessage
+    addr: tuple[str, int]
+    to_tag: str
+    cseq: int
+
+
 InviteHandler = Callable[[SipInvite], Awaitable[SipInviteResult]]
+TerminateHandler = Callable[[str], Awaitable[None]]
 
 
 def _extract_tag(header: str) -> str:
@@ -65,6 +80,22 @@ def _uri_from_header(header: str) -> sip.SipUri | None:
         return sip.parse_sip_uri(value)
     except Exception:
         return None
+
+
+def _uri_text_from_header(header: str) -> str:
+    uri = _uri_from_header(header)
+    return str(uri) if uri is not None else ""
+
+
+def _identity_header(value: str) -> str:
+    return "".join(ch for ch in str(value or "").strip() if ch not in "\r\n").strip()
+
+
+def _cseq_number(value: str) -> int:
+    try:
+        return int((value or "").strip().split()[0])
+    except Exception:
+        return 1
 
 
 def _response_headers(request: sip.SipMessage, *, to_tag: str = "") -> list[tuple[str, str]]:
@@ -95,14 +126,21 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         local_ip: str,
         local_rtp_port: int,
         supported_formats: list[AudioFormat],
+        supported_send_formats: list[AudioFormat] | None = None,
+        supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
+        on_terminated: TerminateHandler | None = None,
     ) -> None:
         self.local_ip = local_ip
         self.local_rtp_port = local_rtp_port or INTERCOM_RTP_PORT
-        self.supported_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
+        base_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
+        self.supported_send_formats = supported_send_formats or base_formats
+        self.supported_recv_formats = supported_recv_formats or base_formats
         self.on_invite = on_invite
+        self.on_terminated = on_terminated
         self.transport: asyncio.DatagramTransport | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
+        self.active_dialogs: dict[str, _ActiveDialog] = {}
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
@@ -134,10 +172,16 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         *,
         body: bytes = b"",
         to_tag: str = "",
+        decline_reason: str = "",
     ) -> None:
         headers = _response_headers(request, to_tag=to_tag)
         if body:
             headers.append(("Content-Type", "application/sdp"))
+        clean_reason = _identity_header(decline_reason)
+        if clean_reason and int(status) >= 300:
+            quoted = clean_reason.replace("\\", "\\\\").replace('"', '\\"')
+            headers.append(("Reason", f'X-Intercom;cause={int(status)};text="{quoted}"'))
+            headers.append(("X-Intercom-Decline-Reason", clean_reason))
         raw = sip.build_response(status, reason, headers, body)
         _LOGGER.info("SIP TX %s %s to %s:%s", status, reason, addr[0], addr[1])
         self._send(raw, addr)
@@ -159,9 +203,12 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         if request.method in {"CANCEL", "BYE"}:
             call_id = request.header("Call-ID")
             pending = self.pending_invites.pop(call_id, None)
+            self.active_dialogs.pop(call_id, None)
             self._send_response(request, addr, 200, "OK")
             if pending is not None:
                 self._send_response(pending.request, pending.addr, 487, "Request Terminated", to_tag=pending.to_tag)
+            if self.on_terminated is not None:
+                await self.on_terminated(call_id)
             return
         if request.method == "ACK":
             return
@@ -190,9 +237,18 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             result.reason,
             body=body,
             to_tag=to_tag,
+            decline_reason=result.decline_reason,
         )
 
-    def send_final_response(self, call_id: str, status: int, reason: str, *, answer_sdp: str = "") -> bool:
+    def send_final_response(
+        self,
+        call_id: str,
+        status: int,
+        reason: str,
+        *,
+        answer_sdp: str = "",
+        decline_reason: str = "",
+    ) -> bool:
         pending = self.pending_invites.pop(call_id, None)
         if pending is None:
             return False
@@ -204,30 +260,79 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             reason,
             body=body,
             to_tag=pending.to_tag,
+            decline_reason=decline_reason,
         )
+        if 200 <= int(status) < 300:
+            self.active_dialogs[call_id] = _ActiveDialog(
+                request=pending.request,
+                addr=pending.addr,
+                to_tag=pending.to_tag,
+                cseq=_cseq_number(pending.request.header("CSeq")) + 1,
+            )
+        return True
+
+    def send_bye(self, call_id: str = "") -> bool:
+        if not call_id and len(self.active_dialogs) == 1:
+            call_id = next(iter(self.active_dialogs))
+        dialog = self.active_dialogs.pop(call_id, None) if call_id else None
+        if dialog is None:
+            return False
+        remote_uri = _uri_text_from_header(dialog.request.header("Contact")) or _uri_text_from_header(dialog.request.header("From"))
+        local_uri = _uri_text_from_header(dialog.request.header("To"))
+        if not remote_uri or not local_uri:
+            return False
+        remote_tag = _extract_tag(dialog.request.header("From"))
+        ids = sip.SipDialogIds(
+            call_id=call_id,
+            local_tag=dialog.to_tag,
+            remote_tag=remote_tag,
+            cseq=dialog.cseq,
+            branch=sip.make_branch(),
+        )
+        headers = sip.dialog_headers(
+            request_uri=remote_uri,
+            local_uri=local_uri,
+            remote_uri=remote_uri,
+            dialog=ids,
+            method="BYE",
+            contact_uri=local_uri,
+        )
+        raw = sip.build_request("BYE", remote_uri, headers, b"")
+        _LOGGER.info("SIP TX BYE call_id=%s to %s:%s", call_id, dialog.addr[0], dialog.addr[1])
+        self._send(raw, dialog.addr)
         return True
 
     def _parse_invite(self, request: sip.SipMessage, addr) -> SipInvite | None:
         try:
             request_uri = sip.parse_sip_uri(request.uri)
             from_uri = _uri_from_header(request.header("From"))
-            selected = sdp.negotiate(request.body, self.supported_formats)
+            selected = sdp.negotiate_directional(
+                request.body,
+                self.supported_send_formats,
+                self.supported_recv_formats,
+            )
             if selected is None:
                 _LOGGER.info("SIP INVITE rejected: no compatible PCM media in SDP")
                 return None
             remote = sdp.parse_sdp(request.body)
-            caller = from_uri.user if from_uri is not None else ""
+            caller = _identity_header(request.header("X-Intercom-Caller-Name"))
+            target = _identity_header(request.header("X-Intercom-Dest-Name"))
+            if not caller:
+                caller = from_uri.user if from_uri is not None else ""
+            if not target:
+                target = request_uri.user
             return SipInvite(
                 source_host=addr[0],
                 source_port=int(addr[1]),
                 request_uri=request_uri,
                 caller_uri=from_uri,
-                target=request_uri.user,
+                target=target,
                 caller=caller,
                 call_id=request.header("Call-ID"),
                 cseq=request.header("CSeq"),
                 remote_sdp=request.body,
-                selected_format=selected,
+                send_format=selected.send,
+                recv_format=selected.recv,
                 remote_rtp_host=remote["connection_ip"],
                 remote_rtp_port=remote["media_port"],
             )
@@ -245,14 +350,20 @@ class SipUdpServer:
         local_ip: str,
         local_rtp_port: int,
         supported_formats: list[AudioFormat],
+        supported_send_formats: list[AudioFormat] | None = None,
+        supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
+        on_terminated: TerminateHandler | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.local_ip = local_ip
         self.local_rtp_port = local_rtp_port
         self.supported_formats = supported_formats
+        self.supported_send_formats = supported_send_formats
+        self.supported_recv_formats = supported_recv_formats
         self.on_invite = on_invite
+        self.on_terminated = on_terminated
         self.transport: asyncio.DatagramTransport | None = None
         self.endpoint: SipUdpEndpoint | None = None
 
@@ -266,7 +377,10 @@ class SipUdpServer:
                     local_ip=self.local_ip,
                     local_rtp_port=self.local_rtp_port,
                     supported_formats=self.supported_formats,
+                    supported_send_formats=self.supported_send_formats,
+                    supported_recv_formats=self.supported_recv_formats,
                     on_invite=self.on_invite,
+                    on_terminated=self.on_terminated,
                 )
                 return self.endpoint
 
@@ -280,13 +394,25 @@ class SipUdpServer:
         self.transport = transport  # type: ignore[assignment]
         return True
 
-    def send_final_response(self, call_id: str, status: int, reason: str, *, answer_sdp: str = "") -> bool:
+    def send_final_response(
+        self,
+        call_id: str,
+        status: int,
+        reason: str,
+        *,
+        answer_sdp: str = "",
+        decline_reason: str = "",
+    ) -> bool:
         return self.endpoint is not None and self.endpoint.send_final_response(
             call_id,
             status,
             reason,
             answer_sdp=answer_sdp,
+            decline_reason=decline_reason,
         )
+
+    def send_bye(self, call_id: str = "") -> bool:
+        return self.endpoint is not None and self.endpoint.send_bye(call_id)
 
     async def stop(self) -> None:
         if self.transport is not None:

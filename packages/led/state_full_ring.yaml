@@ -37,10 +37,10 @@ script:
               led->turn_on().set_rgb(0.3f, 0.3f, 0.7f).set_brightness(0.6f).set_effect("None").perform();
               break;
             case 8:  // IC Ringing: red strobe
-              led->turn_on().set_effect("Ringing").perform();
+              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
               break;
             case 9:  // IC Outgoing: orange strobe
-              led->turn_on().set_effect("Calling").perform();
+              led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
               break;
             case 10: // IC Streaming: green solid
               led->turn_on().set_rgb(0.3f, 0.69f, 0.31f).set_brightness(1.0f).set_effect("None").perform();
@@ -49,6 +49,10 @@ script:
               led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.7f).set_effect("None").perform();
               break;
             case 12: // Media playing: green spin
+              if (id(g_intercom_ringtone_media_suppressed)) {
+                led->turn_off().perform();
+                break;
+              }
               led->turn_on().set_rgb(0.0f, 1.0f, 0.0f).set_brightness(1.0f).set_effect("Spin").perform();
               break;
             case 13: // Boot: red solid

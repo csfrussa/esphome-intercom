@@ -128,6 +128,135 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(parsed.header("CSeq"), "7 ACK")
         self.assertNotIn("z9hG4bKinvite", parsed.header("Via"))
 
+    def test_cancel_reuses_invite_transaction(self) -> None:
+        class FakeTransport:
+            def __init__(self) -> None:
+                self.sent: list[tuple[bytes, tuple[str, int]]] = []
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                self.sent.append((data, addr))
+
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="HA",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+        )
+        client.transport = FakeTransport()  # type: ignore[assignment]
+        client.dialog_ids = sip.SipDialogIds(
+            call_id="call-cancel",
+            local_tag="local",
+            cseq=9,
+            branch="z9hG4bKinvite",
+        )
+        client._invite_cseq = 9
+        client._pending_request_uri = "sip:Cucina@192.168.1.30:5060"
+        client._pending_local_uri = "sip:HA@192.168.1.10:5060"
+        client._pending_remote_uri = "sip:Cucina@192.168.1.30:5060"
+        client._pending_remote_host = "192.168.1.30"
+        client._pending_remote_sip_port = 5060
+
+        client.cancel()
+
+        raw, addr = client.transport.sent[0]  # type: ignore[union-attr]
+        parsed = sip.parse_message(raw)
+        self.assertEqual(addr, ("192.168.1.30", 5060))
+        self.assertEqual(parsed.method, "CANCEL")
+        self.assertEqual(parsed.header("CSeq"), "9 CANCEL")
+        self.assertIn("z9hG4bKinvite", parsed.header("Via"))
+
+    def test_invite_carries_intercom_display_identity_headers(self) -> None:
+        class FakeTransport:
+            def __init__(self) -> None:
+                self.sent: list[tuple[bytes, tuple[str, int]]] = []
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                self.sent.append((data, addr))
+
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="Casa",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+        )
+        client.transport = FakeTransport()  # type: ignore[assignment]
+        asyncio.run(client.invite(target="Cucina", remote_host="192.168.1.30", remote_sip_port=5060, timeout=0))
+
+        raw, _ = client.transport.sent[0]  # type: ignore[union-attr]
+        parsed = sip.parse_message(raw)
+        self.assertEqual(parsed.header("X-Intercom-Caller-Name"), "Casa")
+        self.assertEqual(parsed.header("X-Intercom-Caller-Route"), "Casa")
+        self.assertEqual(parsed.header("X-Intercom-Dest-Name"), "Cucina")
+
+    def test_sip_listener_prefers_intercom_display_identity_headers(self) -> None:
+        body = sdp.build_offer(
+            "192.168.1.47",
+            "192.168.1.47",
+            40000,
+            [audio_format.AudioFormat(16000, "s16le", 1, 32)],
+        ).encode()
+        raw = sip.build_request(
+            "INVITE",
+            "sip:Spotpear_Ball_v2@192.168.1.10",
+            [
+                ("Via", "SIP/2.0/UDP 192.168.1.47:5060;branch=z9hG4bKdisplay"),
+                ("From", "<sip:Waveshare_S3_Audio@192.168.1.47>;tag=src"),
+                ("To", "<sip:Spotpear_Ball_v2@192.168.1.10>"),
+                ("Call-ID", "call-display"),
+                ("CSeq", "1 INVITE"),
+                ("Contact", "<sip:Waveshare_S3_Audio@192.168.1.47:5060>"),
+                ("Content-Type", "application/sdp"),
+                ("X-Intercom-Caller-Name", "Waveshare S3 Audio"),
+                ("X-Intercom-Dest-Name", "Spotpear Ball v2"),
+            ],
+            body,
+        )
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40002,
+            supported_formats=[audio_format.AudioFormat(16000, "s16le", 1, 32)],
+            on_invite=lambda _: None,  # type: ignore[arg-type]
+        )
+        invite = endpoint._parse_invite(sip.parse_message(raw), ("192.168.1.47", 5060))
+        self.assertIsNotNone(invite)
+        assert invite is not None
+        self.assertEqual(invite.caller, "Waveshare S3 Audio")
+        self.assertEqual(invite.target, "Spotpear Ball v2")
+
+    def test_decline_reason_header_overrides_generic_status(self) -> None:
+        msg = sip.SipMessage(
+            status_code=486,
+            reason="Busy Here",
+            headers=(
+                ("Reason", 'X-Intercom;cause=486;text="DND"'),
+                ("X-Intercom-Decline-Reason", "DND"),
+            ),
+        )
+        self.assertEqual(sip_client._sip_decline_reason(msg), "DND")
+
+    def test_roster_target_matching_ignores_spaces_and_underscores(self) -> None:
+        entries = [
+            roster.RosterEntry(
+                id="Spotpear Ball v2",
+                name="Spotpear Ball v2",
+                kind="esp",
+                address="192.168.1.31",
+                metadata={"sip_port": 5060},
+            ),
+            roster.RosterEntry(
+                id="Casa",
+                name="Casa",
+                kind="ha",
+                address="192.168.1.10",
+                metadata={"sip_port": 5060},
+            ),
+        ]
+        decision = roster.resolve_target("Spotpear_Ball_v2", entries, route_via_ha=True)
+        self.assertEqual(decision.kind, "via_ha")
+        self.assertIsNotNone(decision.entry)
+        assert decision.entry is not None
+        self.assertEqual(decision.entry.address, "192.168.1.31")
+
 
 class SdpPcmProfileTest(unittest.TestCase):
     def test_negotiate_l16_48k(self) -> None:
@@ -164,6 +293,44 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertEqual(offered[0].encoding, "L24")
         self.assertEqual(offered[0].sample_rate, 48000)
 
+    def test_directional_negotiation_keeps_ha_to_esp_high_rate(self) -> None:
+        ha_to_esp = audio_format.AudioFormat(48000, "s16le", 1, 10)
+        esp_to_ha = audio_format.AudioFormat(16000, "s16le", 1, 32)
+        offer = sdp.build_offer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40020,
+            [ha_to_esp],
+            [esp_to_ha],
+        )
+        selected_by_esp = sdp.negotiate_directional(
+            offer,
+            [esp_to_ha],
+            [ha_to_esp],
+        )
+        self.assertIsNotNone(selected_by_esp)
+        assert selected_by_esp is not None
+        self.assertEqual(selected_by_esp.send.audio_format, esp_to_ha)
+        self.assertEqual(selected_by_esp.recv.audio_format, ha_to_esp)
+        self.assertNotEqual(selected_by_esp.send.payload_type, selected_by_esp.recv.payload_type)
+
+        answer = sdp.build_answer_directional(
+            "192.168.1.47",
+            "192.168.1.47",
+            40000,
+            selected_by_esp.send,
+            selected_by_esp.recv,
+        )
+        selected_by_ha = sdp.negotiate_directional(
+            answer,
+            [ha_to_esp],
+            [esp_to_ha],
+        )
+        self.assertIsNotNone(selected_by_ha)
+        assert selected_by_ha is not None
+        self.assertEqual(selected_by_ha.send.audio_format, ha_to_esp)
+        self.assertEqual(selected_by_ha.recv.audio_format, esp_to_ha)
+
     def test_rejects_compressed_only_offer(self) -> None:
         offer = (
             "v=0\r\n"
@@ -182,6 +349,43 @@ class SdpPcmProfileTest(unittest.TestCase):
     def test_rejects_s32_wire_mapping(self) -> None:
         with self.assertRaises(sdp.SdpError):
             sdp.audio_format_to_rtp(audio_format.AudioFormat(48000, "s32le", 1, 20), 96)
+
+    def test_offer_filters_non_rtp_mappable_pcm_formats(self) -> None:
+        offer = sdp.build_offer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40020,
+            [
+                audio_format.AudioFormat(48000, "s32le", 1, 10),
+                audio_format.AudioFormat(48000, "s16le", 1, 10),
+            ],
+            [
+                audio_format.AudioFormat(48000, "s16le", 2, 10),
+                audio_format.AudioFormat(16000, "s16le", 1, 32),
+            ],
+        )
+        offered = sdp.offered_pcm_formats(offer)
+        self.assertEqual(
+            [(fmt.encoding, fmt.sample_rate, fmt.channels, fmt.frame_ms) for fmt in offered],
+            [("L16", 48000, 1, 10), ("L16", 16000, 1, 32)],
+        )
+
+    def test_offer_caps_payloads_to_compact_udp_safe_profile_without_losing_esp_baseline(self) -> None:
+        offer = sdp.build_offer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40020,
+            list(audio_format.HA_BROWSER_TX_FORMATS),
+            list(audio_format.HA_BROWSER_RX_FORMATS),
+        )
+        offered = sdp.offered_pcm_formats(offer)
+        self.assertLessEqual(len(offered), 12)
+        self.assertLess(len(offer.encode()), 900)
+        self.assertEqual(offered[0].audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
+        self.assertIn(
+            audio_format.AudioFormat(16000, "s16le", 1, 32),
+            [fmt.audio_format for fmt in offered],
+        )
 
 
 class RtpProfileTest(unittest.TestCase):

@@ -18,6 +18,10 @@ globals:
     type: int
     restore_value: false
     initial_value: "-1"
+  - id: g_intercom_ringtone_media_suppressed
+    type: bool
+    restore_value: false
+    initial_value: "false"
 
 script:
   # Central reducer: collapses inputs into a single LED target index.
@@ -56,10 +60,10 @@ script:
               led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(0.3f).set_effect("None").perform();
               break;
             case 8:  // IC Ringing: red strobe
-              led->turn_on().set_effect("Ringing").perform();
+              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
               break;
             case 9:  // IC Outgoing: orange strobe
-              led->turn_on().set_effect("Calling").perform();
+              led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
               break;
             case 10: // IC Streaming: green solid
               led->turn_on().set_rgb(0.3f, 0.69f, 0.31f).set_brightness(1.0f).set_effect("None").perform();

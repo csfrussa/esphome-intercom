@@ -40,12 +40,14 @@ intercom_api:
         id: ui_ic_dest_ringing
         peer: !lambda 'return id(intercom).get_current_destination();'
   on_streaming:
+    - script.execute: intercom_stop_ringtone
     - script.execute:
         id: ui_ic_call
         peer: !lambda |-
           auto c = id(intercom).get_caller();
           return c.empty() ? id(intercom).get_current_destination() : c;
   on_hangup:
+    - script.execute: intercom_stop_ringtone
     - script.execute:
         id: ui_ic_ended
         peer: !lambda |-
@@ -53,6 +55,7 @@ intercom_api:
           return c.empty() ? id(intercom).get_current_destination() : c;
         reason: !lambda 'return reason;'
   on_call_failed:
+    - script.execute: intercom_stop_ringtone
     - script.execute:
         id: ui_ic_ended
         peer: !lambda 'return id(intercom).get_current_destination();'

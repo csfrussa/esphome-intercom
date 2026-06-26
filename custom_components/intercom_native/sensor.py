@@ -131,6 +131,7 @@ class IntercomPhonebookSensor(SensorEntity):
         from . import (
             _async_build_peer_snapshot,
             _format_entry_unified,
+            _push_roster_json_to_esps,
         )
         from .roster import RosterEntry, dump_roster_json
 
@@ -161,7 +162,8 @@ class IntercomPhonebookSensor(SensorEntity):
                 roster_entries.append(raw)
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
-        new_value = f"{len(entries)} entry" if len(entries) == 1 else f"{len(entries)} entries"
+        visible_count = len(roster_entries)
+        new_value = f"{visible_count} entry" if visible_count == 1 else f"{visible_count} entries"
         if (
             new_value != self._attr_native_value
             or phonebook != self._phonebook
@@ -170,12 +172,13 @@ class IntercomPhonebookSensor(SensorEntity):
             self._attr_native_value = new_value
             self._phonebook = phonebook
             self._roster_json = roster_json
-            self._count = len(entries)
+            self._count = visible_count
             _LOGGER.debug(
-                "Phonebook recomputed (%d entries)", len(entries)
+                "Phonebook recomputed (%d entries)", visible_count
             )
             if self.hass and self.entity_id:
                 self.async_write_ha_state()
+                self.hass.async_create_task(_push_roster_json_to_esps(self.hass, roster_json))
 
     async def async_update(self) -> None:
         await self._recompute()

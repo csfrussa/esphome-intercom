@@ -28,28 +28,36 @@ light:
           update_interval: 1200ms
           min_brightness: 20%
           max_brightness: 100%
-      - strobe:
+      - addressable_lambda:
           name: "Ringing"
-          colors:
-            - state: true
-              brightness: 100%
-              red: 100%
-              green: 0%
-              blue: 0%
-              duration: 300ms
-            - state: false
-              duration: 300ms
-      - strobe:
+          update_interval: 120ms
+          lambda: |-
+            static bool on = true;
+            static uint32_t last = 0;
+            if (initial_run) {
+              on = true;
+              last = millis();
+            }
+            if (millis() - last >= 300) {
+              last = millis();
+              on = !on;
+            }
+            it.all() = on ? current_color : Color(0, 0, 0);
+      - addressable_lambda:
           name: "Calling"
-          colors:
-            - state: true
-              brightness: 100%
-              red: 100%
-              green: 50%
-              blue: 0%
-              duration: 500ms
-            - state: false
-              duration: 500ms
+          update_interval: 120ms
+          lambda: |-
+            static bool on = true;
+            static uint32_t last = 0;
+            if (initial_run) {
+              on = true;
+              last = millis();
+            }
+            if (millis() - last >= 500) {
+              last = millis();
+              on = !on;
+            }
+            it.all() = on ? current_color : Color(0, 0, 0);
       - addressable_lambda:
           name: "Blink"
           update_interval: 120ms

@@ -71,8 +71,8 @@ static void esp_like_combinations() {
       {"muted", activity(1u << 3, 950, {policy("led_status", "mic_muted"), policy("display_status", "muted")})},
       {"media", activity(1u << 4, 100, {policy("led_status", "media"), policy("display_status", "media"), policy("audio_policy", "normal")})},
       {"announcement", activity(1u << 5, 200, {policy("led_status", "announcement"), policy("display_status", "announcement"), policy("audio_policy", "duck")})},
-      {"intercom_ringing", activity(1u << 6, 700, {policy("led_status", "ringing"), policy("display_status", "intercom_ringing"), policy("audio_policy", "duck")})},
-      {"intercom_streaming", activity(1u << 7, 650, {policy("led_status", "intercom"), policy("display_status", "intercom_streaming"), policy("audio_policy", "duck")})},
+      {"intercom_ringing", activity(1u << 6, 975, {policy("led_status", "ringing"), policy("display_status", "intercom_ringing"), policy("audio_policy", "duck")})},
+      {"intercom_streaming", activity(1u << 7, 973, {policy("led_status", "intercom"), policy("display_status", "intercom_streaming"), policy("audio_policy", "duck")})},
       {"assistant_thinking", activity(1u << 8, 600, {policy("led_status", "thinking"), policy("display_status", "thinking"), policy("audio_policy", "duck")})},
       {"assistant_response", activity(1u << 9, 800, {policy("led_status", "responding"), policy("display_status", "responding"), policy("audio_policy", "duck")})},
       {"screen_dim", activity(1u << 10, 50, {policy("screen_policy", "dim")})},
@@ -108,15 +108,15 @@ static void esp_like_combinations() {
   set(activities, "assistant_response", true);
   out = eval(activities);
   expect_mask("media+intercom+response", out, (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
-  expect_policy("media+intercom+response", out, "led_status", "responding");
-  expect_policy("media+intercom+response", out, "display_status", "responding");
+  expect_policy("intercom overrides response led", out, "led_status", "intercom");
+  expect_policy("intercom overrides response display", out, "display_status", "intercom_streaming");
   expect_policy("media+intercom+response", out, "audio_policy", "duck");
 
   set(activities, "muted", true);
   out = eval(activities);
-  expect_mask("muted overrides visual only", out, (1u << 3) | (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
-  expect_policy("muted visual", out, "led_status", "mic_muted");
-  expect_policy("muted visual", out, "display_status", "muted");
+  expect_mask("intercom overrides muted visual", out, (1u << 3) | (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
+  expect_policy("intercom muted led", out, "led_status", "intercom");
+  expect_policy("intercom muted display", out, "display_status", "intercom_streaming");
   expect_policy("muted keeps audio policy", out, "audio_policy", "duck");
 
   set(activities, "boot", true);

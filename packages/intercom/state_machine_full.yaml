@@ -94,6 +94,10 @@ globals:
     type: int
     restore_value: false
     initial_value: "-1"
+  - id: g_intercom_ringtone_media_suppressed
+    type: bool
+    restore_value: false
+    initial_value: "false"
   - id: ui_state
     type: int
     restore_value: false

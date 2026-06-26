@@ -38,6 +38,7 @@ class SipTransport : public IntercomTransport {
   void stop_audio_path() override;
   bool originate(const std::string &host, uint16_t port) override;
   void set_remote(const std::string &ip, uint16_t port, uint16_t control_port = 0) override;
+  void set_audio_formats(const AudioFormatList &tx, const AudioFormatList &rx) override;
 
  protected:
   static void sip_task_trampoline_(void *param);
@@ -48,9 +49,11 @@ class SipTransport : public IntercomTransport {
   bool parse_remote_(const std::string &host);
   bool send_sip_(const std::string &message, uint32_t ip_v4, uint16_t port);
   bool send_request_(const std::string &method, const std::string &body = "", uint32_t cseq = 0);
-  bool send_response_(uint16_t status, const char *reason, const std::string &body = "");
+  bool send_response_(uint16_t status, const char *reason, const std::string &body = "",
+                      const std::string &app_reason = "");
   bool send_stateless_response_(const std::string &request, const sockaddr_in &src,
-                                uint16_t status, const char *reason);
+                                uint16_t status, const char *reason,
+                                const std::string &app_reason = "");
   bool send_invite_(const uint8_t *payload, size_t len);
   void handle_sip_datagram_(const char *data, size_t len, const sockaddr_in &src);
   bool handle_invite_(const std::string &message, const sockaddr_in &src);
@@ -88,8 +91,10 @@ class SipTransport : public IntercomTransport {
   std::string dest_name_;
   AudioFormatList offer_tx_formats_{};
   AudioFormatList offer_rx_formats_{};
-  AudioFormat selected_format_{LEGACY_AUDIO_FORMAT};
-  uint8_t rtp_payload_type_{96};
+  AudioFormat selected_tx_format_{LEGACY_AUDIO_FORMAT};
+  AudioFormat selected_rx_format_{LEGACY_AUDIO_FORMAT};
+  uint8_t rtp_tx_payload_type_{96};
+  uint8_t rtp_rx_payload_type_{96};
   uint32_t cseq_{1};
   uint32_t invite_cseq_{1};
 

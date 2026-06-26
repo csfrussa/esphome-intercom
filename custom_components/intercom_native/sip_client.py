@@ -48,6 +48,44 @@ def rtp_payload_to_pcm(payload: bytes, fmt: AudioFormat) -> bytes:
     raise ValueError(f"{fmt.pcm_format.value} has no phase-1 RTP mapping")
 
 
+def _sip_decline_reason(msg: sip.SipMessage) -> str:
+    direct = (msg.header("X-Intercom-Decline-Reason") or "").strip()
+    if direct:
+        return direct
+    reason = msg.header("Reason")
+    marker = "text="
+    idx = reason.find(marker)
+    if idx < 0:
+        return ""
+    value = reason[idx + len(marker) :].strip()
+    if not value:
+        return ""
+    if value[0] != '"':
+        return value.split(";", 1)[0].strip()
+    out: list[str] = []
+    escaped = False
+    for ch in value[1:]:
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            break
+        out.append(ch)
+    return "".join(out).strip()
+
+
+def _sip_header_token(value: str) -> str:
+    return "".join(
+        ch
+        for ch in str(value or "").strip()
+        if ch.isalnum() or ch in " _-."
+    ).strip()
+
+
 @dataclass(slots=True)
 class SipDialog:
     target: str
@@ -59,7 +97,12 @@ class SipDialog:
     call_id: str
     local_uri: str
     remote_uri: str
-    selected_format: sdp.RtpPcmFormat
+    send_format: sdp.RtpPcmFormat
+    recv_format: sdp.RtpPcmFormat
+
+    @property
+    def selected_format(self) -> sdp.RtpPcmFormat:
+        return self.send_format
 
 
 class _SipClientProtocol(asyncio.DatagramProtocol):
@@ -89,12 +132,16 @@ class SipCallClient:
         local_sip_port: int,
         local_rtp_port: int,
         supported_formats: list[AudioFormat] | None = None,
+        supported_send_formats: list[AudioFormat] | None = None,
+        supported_recv_formats: list[AudioFormat] | None = None,
     ) -> None:
         self.local_ip = local_ip
         self.local_name = local_name
         self.local_sip_port = int(local_sip_port)
         self.local_rtp_port = int(local_rtp_port)
-        self.supported_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
+        base_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
+        self.supported_send_formats = supported_send_formats or base_formats
+        self.supported_recv_formats = supported_recv_formats or base_formats
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: _SipClientProtocol | None = None
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
@@ -143,7 +190,13 @@ class SipCallClient:
         self._pending_request_uri = request_uri
         self._pending_local_uri = local_uri
         self._pending_remote_uri = remote_uri
-        body = sdp.build_offer(self.local_ip, self.local_ip, self.local_rtp_port, self.supported_formats).encode()
+        body = sdp.build_offer_directional(
+            self.local_ip,
+            self.local_ip,
+            self.local_rtp_port,
+            self.supported_send_formats,
+            self.supported_recv_formats,
+        ).encode()
         headers = sip.dialog_headers(
             request_uri=request_uri,
             local_uri=local_uri,
@@ -153,6 +206,14 @@ class SipCallClient:
             contact_uri=local_uri,
             content_type="application/sdp",
         )
+        caller_name = _sip_header_token(self.local_name)
+        dest_name = _sip_header_token(target)
+        if caller_name:
+            headers.append(("X-Intercom-Caller-Name", caller_name))
+            headers.append(("X-Intercom-Caller-Route", caller_name))
+        if dest_name:
+            headers.append(("X-Intercom-Dest-Name", dest_name))
+            headers.append(("X-Intercom-Dest-Route", dest_name))
         self._invite_cseq = self.dialog_ids.cseq
         raw = sip.build_request("INVITE", request_uri, headers, body)
         assert self.transport is not None
@@ -179,7 +240,7 @@ class SipCallClient:
                     return "incompatible_audio_format"
                 return "streaming"
             if msg.status_code and msg.status_code >= 300:
-                return f"sip_{msg.status_code}"
+                return _sip_decline_reason(msg) or f"sip_{msg.status_code}"
 
     async def wait_for_final(self, timeout: float = 60.0) -> str:
         """Continue an INVITE transaction after the first 180 Ringing."""
@@ -213,7 +274,7 @@ class SipCallClient:
                     return "incompatible_audio_format"
                 return "streaming"
             if msg.status_code >= 300:
-                return f"sip_{msg.status_code}"
+                return _sip_decline_reason(msg) or f"sip_{msg.status_code}"
 
     def _commit_200_ok(
         self,
@@ -225,7 +286,11 @@ class SipCallClient:
         local_uri: str,
         remote_uri: str,
     ) -> bool:
-        selected = sdp.negotiate(msg.body, self.supported_formats)
+        selected = sdp.negotiate_directional(
+            msg.body,
+            self.supported_send_formats,
+            self.supported_recv_formats,
+        )
         if selected is None:
             return False
         parsed = sdp.parse_sdp(msg.body)
@@ -246,7 +311,8 @@ class SipCallClient:
             call_id=self.dialog_ids.call_id,
             local_uri=local_uri,
             remote_uri=remote_uri,
-            selected_format=selected,
+            send_format=selected.send,
+            recv_format=selected.recv,
         )
         self._send_ack(remote_host, int(remote_sip_port), request_uri, local_uri, remote_uri)
         return True
@@ -294,6 +360,40 @@ class SipCallClient:
         raw = sip.build_request("BYE", self.dialog.remote_uri, headers, b"")
         self.transport.sendto(raw, (self.dialog.remote_host, self.dialog.remote_sip_port))
         _LOGGER.info("SIP TX BYE %s:%s", self.dialog.remote_host, self.dialog.remote_sip_port)
+
+    def cancel(self) -> None:
+        """Cancel an INVITE transaction before a final 2xx response.
+
+        SIP uses CANCEL, not BYE, while the INVITE is still in early dialog.
+        The CANCEL reuses the INVITE CSeq number and top Via branch so the
+        peer can match it to the pending transaction.
+        """
+        if self.transport is None or not self._pending_request_uri:
+            return
+        cancel_ids = sip.SipDialogIds(
+            call_id=self.dialog_ids.call_id,
+            local_tag=self.dialog_ids.local_tag,
+            remote_tag="",
+            cseq=self._invite_cseq,
+            branch=self.dialog_ids.branch,
+        )
+        headers = sip.dialog_headers(
+            request_uri=self._pending_request_uri,
+            local_uri=self._pending_local_uri,
+            remote_uri=self._pending_remote_uri,
+            dialog=cancel_ids,
+            method="CANCEL",
+            contact_uri=self._pending_local_uri,
+        )
+        raw = sip.build_request("CANCEL", self._pending_request_uri, headers, b"")
+        self.transport.sendto(raw, (self._pending_remote_host, self._pending_remote_sip_port))
+        _LOGGER.info("SIP TX CANCEL %s:%s", self._pending_remote_host, self._pending_remote_sip_port)
+
+    def bye_or_cancel(self) -> None:
+        if self.dialog is not None:
+            self.bye()
+        else:
+            self.cancel()
 
 
 def _extract_tag(header: str) -> str:

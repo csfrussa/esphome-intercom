@@ -54,7 +54,7 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_esp_answer_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _answer")
         esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
-        esp_branch = esp_branch.split("catch (err)", 1)[0]
+        esp_branch = 'this._callMode = "mirror"' + esp_branch.split('this._callMode = "mirror"', 1)[1].split("catch (err)", 1)[0]
         self.assertIn('this._callMode = "mirror"', esp_branch)
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
         self.assertNotIn("answer_esp_call", esp_branch)
@@ -71,6 +71,23 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._rosterEntries", body)
         self.assertIn("_isCallableRosterEntry", body)
         self.assertNotIn("_availableDevices", body)
+
+    def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
+        answer = _method_body(self.source, "async _answer")
+        ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]
+        self.assertIn('type: "intercom_native/answer"', ha_answer)
+        self.assertIn("intercomEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID", ha_answer)
+        self.assertNotIn("this._sessionDeviceId()", ha_answer)
+
+        decline = _method_body(self.source, "async _decline")
+        ha_decline = decline.split("if (this._isHaSoftphoneMode())", 1)[1].split("} else {", 1)[0]
+        self.assertIn('device_id: HA_SOFTPHONE_DEVICE_ID', ha_decline)
+        self.assertNotIn("this._sessionDeviceId()", ha_decline)
+
+        hangup = _method_body(self.source, "async _hangup")
+        softphone_hangup = hangup.split("if (wasSoftphone)", 1)[1].split("} else {", 1)[0]
+        self.assertIn("intercomEngine.stop(HA_SOFTPHONE_DEVICE_ID", softphone_hangup)
+        self.assertNotIn("this._sessionDeviceId()", softphone_hangup)
 
 
 if __name__ == "__main__":

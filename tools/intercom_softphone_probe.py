@@ -14,6 +14,7 @@ PCM format tokens as the firmware, for example 16000:s16le:1:32.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import json
 import math
@@ -58,6 +59,8 @@ def _load_intercom_module(name: str):
 audio_format_mod = _load_intercom_module("audio_format")
 protocol_mod = _load_intercom_module("protocol")
 audio_pcm_mod = _load_intercom_module("audio_pcm")
+sip_client_mod = _load_intercom_module("sip_client")
+rtp_mod = _load_intercom_module("rtp")
 AudioFormat = audio_format_mod.AudioFormat
 parse_audio_format_token = audio_format_mod.parse_audio_format_token
 
@@ -78,6 +81,7 @@ MSG_DECLINE = 0x09
 MSG_AUDIO = 0x01
 
 DEFAULT_FORMAT = AudioFormat(16000, "s16le", 1, 32)
+DEFAULT_SIP_RX_FORMAT = AudioFormat(48000, "s16le", 1, 10)
 
 
 OP_TEXT = 0x1
@@ -566,6 +570,9 @@ class AudioSender:
 
 
 def run_probe(args: argparse.Namespace) -> int:
+    if args.transport == "sip":
+        return asyncio.run(run_sip_probe(args))
+
     token = os.environ.get("HA_TOKEN", "")
     target_host = args.target or args.ha
     ha_events = args.ha_events
@@ -742,11 +749,125 @@ def run_probe(args: argparse.Namespace) -> int:
     return 0 if ringing_events else 1
 
 
+def _local_ip_for(remote_host: str) -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect((remote_host, 9))
+        return sock.getsockname()[0]
+    finally:
+        sock.close()
+
+
+async def run_sip_probe(args: argparse.Namespace) -> int:
+    target_host = args.target or args.ha
+    local_ip = args.local_ip or _local_ip_for(target_host)
+    dest_name = args.dest_name or "intercom"
+    tx_formats = [parse_audio_format_token(token) for token in (args.tx_format or [DEFAULT_FORMAT.wire_token()])]
+    rx_formats = [parse_audio_format_token(token) for token in (args.rx_format or [DEFAULT_SIP_RX_FORMAT.wire_token()])]
+
+    rtp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    rtp_sock.bind(("", args.local_rtp_port))
+    rtp_sock.settimeout(0.0)
+    local_rtp_port = rtp_sock.getsockname()[1]
+    client = sip_client_mod.SipCallClient(
+        local_ip=local_ip,
+        local_name=args.caller_name,
+        local_sip_port=args.local_sip_port,
+        local_rtp_port=local_rtp_port,
+        supported_send_formats=tx_formats,
+        supported_recv_formats=rx_formats,
+    )
+    try:
+        result = await client.invite(
+            target=dest_name,
+            remote_host=target_host,
+            remote_sip_port=args.sip_port,
+            timeout_s=args.invite_timeout,
+        )
+        print(
+            f"SIP_RESULT result={result} target={dest_name!r}@{target_host}:{args.sip_port} "
+            f"local={local_ip}:{args.local_sip_port} rtp={local_rtp_port}"
+        )
+        observed = [result]
+        dialog = client.dialog
+        if dialog is not None:
+            print(
+                "SIP_NEGOTIATED "
+                f"send_pt={dialog.send_format.payload_type} send={dialog.send_format.audio_format.wire_token()} "
+                f"recv_pt={dialog.recv_format.payload_type} recv={dialog.recv_format.audio_format.wire_token()} "
+                f"remote_rtp={dialog.remote_rtp_host}:{dialog.remote_rtp_port}"
+            )
+
+        sent_packets = 0
+        rx_packets = 0
+        rx_bytes = 0
+        if result == "streaming" and dialog is not None:
+            chunks = _audio_chunks_from_args(args, dialog.send_format.audio_format)
+            sequence = 0
+            timestamp = 0
+            ssrc = int.from_bytes(os.urandom(4), "big")
+            deadline = time.monotonic() + args.listen_seconds
+            next_send = time.monotonic()
+            chunk_index = 0
+            while time.monotonic() < deadline:
+                if chunks and time.monotonic() >= next_send:
+                    payload = chunks[chunk_index]
+                    packet = rtp_mod.RtpPacket(
+                        payload_type=dialog.send_format.payload_type,
+                        marker=sent_packets == 0,
+                        sequence=sequence,
+                        timestamp=timestamp,
+                        ssrc=ssrc,
+                        payload=payload,
+                    )
+                    rtp_sock.sendto(
+                        rtp_mod.build_packet(packet),
+                        (dialog.remote_rtp_host, dialog.remote_rtp_port),
+                    )
+                    sent_packets += 1
+                    sequence = rtp_mod.next_sequence(sequence)
+                    timestamp = rtp_mod.next_timestamp(
+                        timestamp,
+                        dialog.send_format.audio_format.nominal_frame_samples,
+                    )
+                    chunk_index += 1
+                    if chunk_index >= len(chunks):
+                        if args.repeat_audio:
+                            chunk_index = 0
+                        else:
+                            chunks = []
+                    next_send += _frame_seconds(dialog.send_format.audio_format)
+                while True:
+                    try:
+                        data, _addr = rtp_sock.recvfrom(65535)
+                    except (BlockingIOError, socket.timeout):
+                        break
+                    try:
+                        packet = rtp_mod.parse_packet(data)
+                    except Exception:
+                        continue
+                    if packet.payload_type != dialog.recv_format.payload_type:
+                        continue
+                    rx_packets += 1
+                    rx_bytes += len(packet.payload)
+                await asyncio.sleep(0.01)
+            print(f"SIP_RTP sent_packets={sent_packets} rx_packets={rx_packets} rx_bytes={rx_bytes}")
+
+        if args.expect:
+            return 0 if args.expect.lower() in observed else 1
+        return 0 if result in {"ringing", "streaming"} else 1
+    finally:
+        if client.dialog is not None:
+            client.bye()
+        await client.close()
+        rtp_sock.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ha", default="192.168.1.10", help="HA host/IP for event subscription and default TCP target")
     parser.add_argument("--target", default="", help="TCP intercom target host/IP; defaults to --ha")
-    parser.add_argument("--transport", choices=("tcp", "udp"), default="tcp")
+    parser.add_argument("--transport", choices=("tcp", "udp", "sip"), default="tcp")
     parser.add_argument("--ha-url", default="", help="HA base URL, default http://HA:8123")
     parser.add_argument("--ha-events", choices=("auto", "on", "off"), default="auto",
                         help="Subscribe to HA intercom events. auto enables it when HA_TOKEN is set.")
@@ -755,6 +876,11 @@ def main() -> int:
     parser.add_argument("--udp-control-port", type=int, default=6055)
     parser.add_argument("--local-udp-audio-port", type=int, default=6054)
     parser.add_argument("--local-udp-control-port", type=int, default=0)
+    parser.add_argument("--sip-port", type=int, default=5060)
+    parser.add_argument("--local-sip-port", type=int, default=5078)
+    parser.add_argument("--local-rtp-port", type=int, default=0)
+    parser.add_argument("--local-ip", default="")
+    parser.add_argument("--invite-timeout", type=float, default=8.0)
     parser.add_argument("--caller-name", default="Codex Fake ESP 1")
     parser.add_argument("--caller-route", default="codex-fake-1")
     parser.add_argument("--dest-name", default="")
@@ -765,7 +891,11 @@ def main() -> int:
     parser.add_argument("--tx-format", action="append", default=None,
                         help=f"Caller TX capability token, repeatable. Default: {DEFAULT_FORMAT.wire_token()}")
     parser.add_argument("--rx-format", action="append", default=None,
-                        help=f"Caller RX capability token, repeatable. Default: {DEFAULT_FORMAT.wire_token()}")
+                        help=(
+                            "Caller RX capability token, repeatable. "
+                            f"Default TCP/UDP: {DEFAULT_FORMAT.wire_token()}; "
+                            f"SIP: {DEFAULT_SIP_RX_FORMAT.wire_token()}"
+                        ))
     parser.add_argument("--send-tone", type=float, default=0.0, metavar="HZ",
                         help="Send a generated sine tone after ANSWER, e.g. 880.")
     parser.add_argument("--tone-seconds", type=float, default=3.0)

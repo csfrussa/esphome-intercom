@@ -3,11 +3,9 @@
 # Drop-in for devices that integrate with the Home Assistant `intercom_native`
 # integration. Exposes only the call-control actions.
 #
-# Phonebook sync is no longer pushed via API actions: the ESP subscribes to the
-# protocol-aware `sensor.intercom_phonebook` and runs its own update cycles on
-# `intercom_api.update_contacts`. add_contact / remove_contact / set_contacts /
-# flush_contacts remain available as direct C++ actions for YAML scripting but
-# are no longer wrapped as HA-callable ESPHome services.
+# Phonebook sync is pushed as the canonical JSON roster through the native API.
+# The ESP consumes that JSON directly; it is not projected through CSV/text
+# sensors.
 #
 # Prerequisites in the device YAML:
 #   - id `intercom` : intercom_api component (intercom/callbacks.yaml provides this)
@@ -103,9 +101,15 @@ api:
       then:
         - intercom_api.set_ha_peer_name:
             name: !lambda 'return name;'
-    # Manual/central roster management. These are intentionally exposed as API
-    # actions so HA, scripts, and test tools can publish the same dial plan the
-    # device consumes locally.
+    # Canonical central roster management. HA publishes the same JSON document
+    # that cards/services read from sensor.intercom_phonebook.
+    - action: set_roster_json
+      variables:
+        roster_json: string
+      then:
+        - intercom_api.set_roster_json:
+            roster_json: !lambda 'return roster_json;'
+    # Local/manual compatibility actions for YAML scripts and test tools.
     - action: set_contacts
       variables:
         contacts_csv: string

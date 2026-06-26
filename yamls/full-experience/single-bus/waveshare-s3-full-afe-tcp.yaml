@@ -56,7 +56,7 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
+  core: !include ../../../packages/va_intercom_cpp.yaml
   va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/va_buttons_switches_cpp.yaml@dev
   call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
   ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api_cpp.yaml@dev
@@ -66,8 +66,8 @@ packages:
   phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
   s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
   native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@dev
+  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
+  led_state_full: !include ../../../packages/led/state_full_ring.yaml
   afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
   audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
   speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev

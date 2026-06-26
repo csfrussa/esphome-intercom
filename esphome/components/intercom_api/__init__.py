@@ -1205,6 +1205,7 @@ _register_simple_action("intercom_api.publish_entity_states", PublishEntityState
 CONF_VOLUME = "volume"
 CONF_GAIN_DB = "gain_db"
 CONF_CONTACTS_CSV = "contacts_csv"
+CONF_ROSTER_JSON = "roster_json"
 
 
 def _register_templated_action(name, action_class, key, validator, cpp_type, setter):
@@ -1247,6 +1248,14 @@ _register_templated_action(
     "intercom_api.set_contacts",
     SetContactsAction,
     CONF_CONTACTS_CSV,
+    cv.string,
+    cg.std_string,
+    lambda var, value: var.set_contacts_csv(value),
+)
+_register_templated_action(
+    "intercom_api.set_roster_json",
+    SetContactsAction,
+    CONF_ROSTER_JSON,
     cv.string,
     cg.std_string,
     lambda var, value: var.set_contacts_csv(value),

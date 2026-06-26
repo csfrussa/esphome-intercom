@@ -105,9 +105,12 @@ def dump_roster_json(entries: list[RosterEntry]) -> str:
 
 
 def find_entry(entries: list[RosterEntry], target: str) -> RosterEntry | None:
-    wanted = target.strip().lower()
+    def norm(value: str) -> str:
+        return "".join(ch for ch in value.strip().lower() if ch.isalnum())
+
+    wanted = norm(target)
     for entry in entries:
-        if entry.id.lower() == wanted or entry.name.lower() == wanted:
+        if norm(entry.id) == wanted or norm(entry.name) == wanted:
             return entry
     return None
 

@@ -63,6 +63,14 @@ class IntercomTransport {
   /// retargets sendto).
   virtual bool originate(const std::string &host, uint16_t port) { return true; }
 
+  /// Publish local media capabilities to transports that negotiate media
+  /// themselves, such as SIP/SDP. Transports with an external control protocol
+  /// can ignore it.
+  virtual void set_audio_formats(const AudioFormatList &tx, const AudioFormatList &rx) {
+    (void) tx;
+    (void) rx;
+  }
+
   /// Lazy audio path. UDP binds the audio socket and spawns recv_task
   /// only here so an idle device isn't a passive PCM listener. TCP no-op.
   virtual bool start_audio_path() { return true; }

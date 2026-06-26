@@ -82,6 +82,27 @@ def _endpoint_ports_for_host(hass: HomeAssistant, host: str) -> dict | None:
     for device in get_resolver(hass)._devices or []:
         if device.get("host") == host:
             return device
+    sensor = hass.states.get("sensor.intercom_phonebook")
+    roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
+    if roster_json:
+        try:
+            from .roster import parse_roster_json
+            for entry in parse_roster_json(roster_json):
+                if entry.address != host:
+                    continue
+                metadata = entry.metadata or {}
+                return {
+                    "name": entry.name or entry.id,
+                    "host": entry.address,
+                    "transport": metadata.get("transport") or ("sip" if entry.sip_uri else ""),
+                    "tcp_port": metadata.get("tcp_port"),
+                    "udp_audio_port": metadata.get("udp_audio_port"),
+                    "udp_control_port": metadata.get("udp_control_port"),
+                    "sip_port": metadata.get("sip_port"),
+                    "rtp_port": metadata.get("rtp_port"),
+                }
+        except Exception as err:
+            _LOGGER.debug("roster endpoint lookup failed for %s: %s", host, err)
     return None
 
 
@@ -115,6 +136,26 @@ def build_transport(
         return IntercomUdpClient(
             hass=hass,
             host=host,
+            on_audio=callbacks.on_audio,
+            on_disconnected=callbacks.on_disconnected,
+            on_ringing=callbacks.on_ringing,
+            on_answered=callbacks.on_answered,
+            on_stop_received=callbacks.on_stop_received,
+            on_decline_received=callbacks.on_decline_received,
+            on_error_received=callbacks.on_error_received,
+        )
+
+    if transport_type == "sip":
+        endpoint = _endpoint_ports_for_host(hass, host) or {}
+        cfg = hass.data.get(DOMAIN, {}).get("transport_config", {})
+        from .sip_transport import IntercomSipClient
+        return IntercomSipClient(
+            hass=hass,
+            host=host,
+            target_name=str(endpoint.get("name") or "intercom"),
+            remote_sip_port=int(endpoint.get("sip_port") or cfg.get("sip_port") or 5060),
+            local_sip_port=int(cfg.get("sip_port") or 5060),
+            local_rtp_port=int(cfg.get("rtp_port") or 40000) + 20,
             on_audio=callbacks.on_audio,
             on_disconnected=callbacks.on_disconnected,
             on_ringing=callbacks.on_ringing,

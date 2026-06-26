@@ -46,18 +46,30 @@ hangup:
 
 call:
   name: Call
-  description: Start an intercom call to the selected device (ESP-to-ESP bridge via HA).
+  description: Start an intercom call from Home Assistant or from a selected ESP source.
   fields:
     device_id:
       name: Destination Device
-      description: Intercom ESPHome device to call.
-      required: true
+      description: Optional intercom ESPHome device to call. Omit when using destination/call.
+      required: false
       selector:
         device:
           integration: esphome
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for destination, useful in scripts and automations.
+      required: false
+      selector:
+        text:
     source:
       name: Source Device
-      description: The device that initiates the call. If omitted, calls from HA (browser P2P).
+      description: Optional ESPHome device ID/name/host that actually originates the call. If omitted, Home Assistant originates it.
       required: false
       selector:
         device:
@@ -156,6 +168,13 @@ sip_decline:
       default: Busy Here
       selector:
         text:
+    decline_reason:
+      name: Decline reason
+      description: Application terminal reason propagated in SIP Reason and X-Intercom-Decline-Reason headers.
+      required: false
+      default: declined
+      selector:
+        text:
 
 sip_call:
   name: SIP Call
@@ -240,6 +259,74 @@ phonebook_add_contact:
       default: false
       selector:
         boolean:
+    protocol:
+      name: Protocol
+      description: Optional endpoint protocol metadata for manual ESP/SIP contacts.
+      required: false
+      selector:
+        select:
+          options:
+            - sip
+            - tcp
+            - udp
+            - ha
+    sip_port:
+      name: SIP Port
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    rtp_port:
+      name: RTP Port
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    tcp_port:
+      name: TCP Port
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    udp_audio_port:
+      name: UDP Audio Port
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    udp_control_port:
+      name: UDP Control Port
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    tx_rate:
+      name: TX Rate
+      description: Optional manual TX sample-rate metadata. Use auto when omitted.
+      required: false
+      selector:
+        text:
+    rx_rate:
+      name: RX Rate
+      description: Optional manual RX sample-rate metadata. Use auto when omitted.
+      required: false
+      selector:
+        text:
 
 phonebook_set_contacts:
   name: Set Phonebook Contacts
@@ -259,3 +346,7 @@ phonebook_clear:
 phonebook_export:
   name: Export Phonebook
   description: Emit the current central JSON phonebook as an intercom_native call event.
+
+phonebook_push:
+  name: Push Phonebook
+  description: Push the current central JSON phonebook to all online ESP endpoints.

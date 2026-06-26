@@ -268,11 +268,16 @@ def _ha_softphone_target_from_roster(hass: HomeAssistant, selector: str) -> dict
 
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
+    pending = hass.data.get(DOMAIN, {}).get("sip_pending", {})
+    server = hass.data.get(DOMAIN, {}).get("sip_server")
+    endpoint = getattr(server, "endpoint", None)
+    active_dialogs = getattr(endpoint, "active_dialogs", {})
+    active_dialog_count = len(active_dialogs) if isinstance(active_dialogs, dict) else 0
     state = {
         "device_id": HA_SOFTPHONE_DEVICE_ID,
         "session_device_id": store.get("session_device_id", ""),
         "dnd": _ha_softphone_dnd(hass),
-        "busy": bool(store.get("session_device_id")),
+        "busy": bool(store.get("session_device_id") or pending or active_dialog_count),
         "state": store.get("state", "idle"),
         "caller": store.get("caller", ""),
         "callee": store.get("callee", ""),
@@ -1873,15 +1878,18 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             return None
 
         if kind == "ha_softphone_start":
-            devices = await _get_intercom_devices(hass)
-            target = _find_device_by_selector(
-                devices,
-                str(payload.get("target_name") or payload.get("callee") or payload.get("peer_name") or payload.get("target_device_id") or ""),
+            target_selector = str(
+                payload.get("target_name")
+                or payload.get("callee")
+                or payload.get("peer_name")
+                or payload.get("target_device_id")
+                or ""
             )
+            target = _ha_softphone_target_from_roster(hass, target_selector)
             if target is None or not target.get("host"):
                 await _ws_send_json(ws, {"error": "target_not_found"})
                 return None
-            target_device_id = str(target.get("device_id") or "")
+            target_device_id = str(target.get("device_id") or target_selector)
             if _sessions:
                 await _ws_send_json(ws, {"error": "busy"})
                 return None
@@ -1889,7 +1897,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
                 hass=hass,
                 device_id=HA_SOFTPHONE_DEVICE_ID,
                 host=target["host"],
-                transport_type=configured_transport_type(hass, target["host"]),
+                transport_type=target.get("transport") or configured_transport_type(hass, target["host"]),
                 call_id=call_id,
                 local_name=_ha_peer_name(hass),
                 peer_name=target.get("name") or "",
@@ -2250,12 +2258,9 @@ def _is_ha_peer_name(hass: HomeAssistant, name: str) -> bool:
     return wanted in ("home assistant", ha_name)
 
 
-def _is_direct_esp_incoming(hass: HomeAssistant, device: dict) -> bool:
+def _can_answer_esp_locally(hass: HomeAssistant, device: dict) -> bool:
     state = _device_state(hass, device)
-    if state not in ("ringing", "incoming"):
-        return False
-    caller = _device_caller_name(hass, device)
-    return bool(caller and not _is_ha_peer_name(hass, caller))
+    return state in ("ringing", "incoming")
 
 
 async def _press_esp_call_button(hass: HomeAssistant, device: dict) -> bool:
@@ -2440,6 +2445,76 @@ async def websocket_answer(
     selector = call_id or device_id
     msg_id = msg["id"]
 
+    if device_id == HA_SOFTPHONE_DEVICE_ID:
+        pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+        if not call_id and len(pending) == 1:
+            call_id = next(iter(pending))
+        invite = pending.get(call_id) if call_id else None
+        server = hass.data.get(DOMAIN, {}).get("sip_server")
+        if invite is None or server is None:
+            connection.send_error(msg_id, "not_found", f"No pending HA SIP call {call_id or '(current)'}")
+            return
+        cfg = hass.data.get(DOMAIN, {}).get("transport_config", {})
+        local_ip = str(cfg.get("advertise_host") or "").strip()
+        if not local_ip:
+            from homeassistant.components import network
+
+            addresses = await network.async_get_announce_addresses(hass)
+            local_ip = addresses[0] if addresses else ""
+        if not local_ip:
+            connection.send_error(msg_id, "network", "HA advertise IP is unknown")
+            return
+        next_port = int(hass.data.setdefault(DOMAIN, {}).get("sip_rtp_next_port", int(cfg.get("rtp_port") or 40000) + 40))
+        hass.data[DOMAIN]["sip_rtp_next_port"] = next_port + 2
+        from .sip_transport import IntercomSipInbound
+
+        transport = IntercomSipInbound(
+            hass=hass,
+            invite=invite,
+            server=server,
+            local_ip=local_ip,
+            local_rtp_port=next_port,
+        )
+        session = IntercomSession(
+            hass=hass,
+            device_id=HA_SOFTPHONE_DEVICE_ID,
+            host=invite.source_host,
+            transport_type="sip",
+            transport=transport,
+            call_id=invite.call_id,
+            caller_name=invite.caller,
+            local_name=_ha_peer_name(hass),
+            peer_name=invite.caller,
+            direction="incoming",
+            audio_mode="full_duplex",
+            local_tx_formats=list(HA_BROWSER_TX_FORMATS),
+            local_rx_formats=list(HA_BROWSER_RX_FORMATS),
+            peer_tx_formats=[invite.recv_format.audio_format],
+            peer_rx_formats=[invite.send_format.audio_format],
+        )
+        if not await session.start_ringing(invite.caller):
+            connection.send_error(msg_id, "connection_failed", "Failed to prepare HA SIP softphone session")
+            return
+        ok = await session.answer()
+        if not ok:
+            await session.stop(send_signaling=False)
+            connection.send_error(msg_id, "error", "Failed to answer HA SIP call")
+            return
+        pending.pop(invite.call_id, None)
+        _session_register(HA_SOFTPHONE_DEVICE_ID, session)
+        _set_ha_softphone_call_state(
+            hass,
+            "streaming",
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=_ha_peer_name(hass),
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=invite.call_id,
+        )
+        connection.send_result(msg_id, {"success": True, **_session_audio_payload(session, "streaming")})
+        return
+
     # First check P2P sessions
     session = _session_get(selector)
     if session:
@@ -2460,13 +2535,13 @@ async def websocket_answer(
                 connection.send_error(msg_id, "error", "Failed to send answer to bridge dest")
             return
 
-    # Direct ESP->ESP calls are not HA sessions/bridges. If the mirrored ESP
-    # says it is ringing from another ESP, answer through its real Call button.
+    # Mirrored ESP calls are answered through the ESP's real Call button.
+    # This covers both direct ESP->ESP ringing and HA-originated SIP ringing.
     device = next(
         (d for d in await _get_intercom_devices(hass) if d.get("device_id") == device_id),
         None,
     )
-    if device is not None and _is_direct_esp_incoming(hass, device):
+    if device is not None and _can_answer_esp_locally(hass, device):
         if await _press_esp_call_button(hass, device):
             connection.send_result(msg_id, {"success": True, "mode": "mirror"})
         else:
@@ -2645,6 +2720,29 @@ async def websocket_decline(
     msg_id = msg["id"]
 
     _LOGGER.debug("Decline request for device=%s call_id=%s", device_id, call_id)
+
+    if device_id == HA_SOFTPHONE_DEVICE_ID:
+        pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+        if not call_id and len(pending) == 1:
+            call_id = next(iter(pending))
+        server = hass.data.get(DOMAIN, {}).get("sip_server")
+        invite = pending.pop(call_id, None) if call_id else None
+        if invite is not None and server is not None:
+            server.send_final_response(call_id, 486, "Busy Here", decline_reason=TerminalReason.DECLINED.value)
+            _set_ha_softphone_call_state(
+                hass,
+                "declined",
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=_ha_peer_name(hass),
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=call_id,
+                reason=TerminalReason.DECLINED.value,
+                origin="self",
+            )
+            connection.send_result(msg_id, {"success": True, "stopped": True})
+            return
 
     session = _session_pop(call_id or device_id)
     if session is not None:

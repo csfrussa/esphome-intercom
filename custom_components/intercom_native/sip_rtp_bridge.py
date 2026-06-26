@@ -20,9 +20,19 @@ class RtpPeer:
     port: int
     payload_type: int
     audio_format: AudioFormat
+    send_payload_type: int | None = None
+    send_audio_format: AudioFormat | None = None
     sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
     timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
     ssrc: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
+
+    @property
+    def outbound_payload_type(self) -> int:
+        return self.send_payload_type if self.send_payload_type is not None else self.payload_type
+
+    @property
+    def outbound_audio_format(self) -> AudioFormat:
+        return self.send_audio_format if self.send_audio_format is not None else self.audio_format
 
 
 class _RelayProtocol(asyncio.DatagramProtocol):
@@ -69,6 +79,13 @@ class SipRtpRelay:
         _LOGGER.info("SIP RTP relay listening left=%s right=%s", self.left_port, self.right_port)
 
     async def stop(self) -> None:
+        _LOGGER.info(
+            "SIP RTP relay stopped left=%s right=%s forwarded=%s dropped=%s",
+            self.left_port,
+            self.right_port,
+            self.forwarded,
+            self.dropped,
+        )
         if self.left_transport is not None:
             self.left_transport.close()
             self.left_transport = None
@@ -92,10 +109,11 @@ class SipRtpRelay:
             if packet.payload_type != source.payload_type:
                 raise ValueError(f"payload type {packet.payload_type} != expected {source.payload_type}")
             pcm = rtp_payload_to_pcm(packet.payload, source.audio_format)
-            payload = pcm_to_rtp_payload(pcm, dest.audio_format)
+            out_format = dest.outbound_audio_format
+            payload = pcm_to_rtp_payload(pcm, out_format)
             out = rtp.build_packet(
                 rtp.RtpPacket(
-                    payload_type=dest.payload_type,
+                    payload_type=dest.outbound_payload_type,
                     sequence=dest.sequence,
                     timestamp=dest.timestamp,
                     ssrc=dest.ssrc,
@@ -107,6 +125,6 @@ class SipRtpRelay:
             _LOGGER.debug("RTP relay drop: %s", err)
             return
         dest.sequence = rtp.next_sequence(dest.sequence)
-        dest.timestamp = rtp.next_timestamp(dest.timestamp, dest.audio_format.nominal_frame_samples)
+        dest.timestamp = rtp.next_timestamp(dest.timestamp, dest.outbound_audio_format.nominal_frame_samples)
         transport.sendto(out, (dest.host, dest.port))
         self.forwarded += 1

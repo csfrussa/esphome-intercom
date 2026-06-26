@@ -184,6 +184,8 @@ bool IntercomApi::setup_transport_() {
     return false;
   }
 
+  this->transport_->set_audio_formats(this->tx_audio_formats_, this->rx_audio_formats_);
+
   // Wire callbacks before start() so the transport task never fires into null.
   this->transport_->set_audio_callback(IntercomApi::transport_audio_callback_, this);
   this->transport_->set_control_callback(IntercomApi::transport_control_callback_, this);
