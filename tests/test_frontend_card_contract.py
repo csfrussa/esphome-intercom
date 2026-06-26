@@ -66,6 +66,21 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("this._isHaName(this._getDestination())", body)
         self.assertNotIn('this._callMode === "mirror"', body)
 
+    def test_card_default_mode_is_esp_mirror_not_hybrid(self) -> None:
+        body = _method_body(self.source, "_isHaSoftphoneMode")
+        self.assertIn('"esp_mirror"', body)
+        self.assertNotIn('"hybrid"', body)
+
+    def test_sip_events_are_rendered_through_session_mirror(self) -> None:
+        call_event = _method_body(self.source, "_onCallEvent")
+        self.assertIn('scope === "sip"', call_event)
+        self.assertIn('scope === "sip_bridge"', call_event)
+        self.assertIn("this._onSipStateEvent(event)", call_event)
+
+        sip_event = _method_body(self.source, "_onSipStateEvent")
+        self.assertIn('data.scope = "session"', sip_event)
+        self.assertIn("this._onSessionStateEvent({ data })", sip_event)
+
     def test_ha_softphone_targets_come_from_shared_roster(self) -> None:
         body = _method_body(self.source, "_softphoneTargets")
         self.assertIn("this._rosterEntries", body)

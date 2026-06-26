@@ -53,13 +53,30 @@ audio_ws = _load_intercom_module("audio_ws")
 
 
 def _install_websocket_api_fakes() -> None:
-    if "homeassistant.core" not in sys.modules:
-        ha = types.ModuleType("homeassistant")
-        components = types.ModuleType("homeassistant.components")
-        ws_api = types.ModuleType("homeassistant.components.websocket_api")
-        http = types.ModuleType("homeassistant.components.http")
-        core = types.ModuleType("homeassistant.core")
+    ha = sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
+    if not hasattr(ha, "__path__"):
+        ha.__path__ = []  # type: ignore[attr-defined]
+    components = sys.modules.setdefault(
+        "homeassistant.components",
+        types.ModuleType("homeassistant.components"),
+    )
+    if not hasattr(components, "__path__"):
+        components.__path__ = []  # type: ignore[attr-defined]
+    ws_api = sys.modules.setdefault(
+        "homeassistant.components.websocket_api",
+        types.ModuleType("homeassistant.components.websocket_api"),
+    )
+    http = sys.modules.setdefault(
+        "homeassistant.components.http",
+        types.ModuleType("homeassistant.components.http"),
+    )
+    core = sys.modules.setdefault("homeassistant.core", types.ModuleType("homeassistant.core"))
+    setattr(ha, "components", components)
+    setattr(ha, "core", core)
+    setattr(components, "websocket_api", ws_api)
+    setattr(components, "http", http)
 
+    if not hasattr(ws_api, "ActiveConnection"):
         def identity_decorator(*_args, **_kwargs):
             def _wrap(fn):
                 return fn
@@ -72,12 +89,6 @@ def _install_websocket_api_fakes() -> None:
         http.HomeAssistantView = type("HomeAssistantView", (), {})
         core.HomeAssistant = type("HomeAssistant", (), {})
         core.callback = lambda fn: fn
-
-        sys.modules["homeassistant"] = ha
-        sys.modules["homeassistant.components"] = components
-        sys.modules["homeassistant.components.websocket_api"] = ws_api
-        sys.modules["homeassistant.components.http"] = http
-        sys.modules["homeassistant.core"] = core
 
     if "aiohttp" not in sys.modules:
         aiohttp = types.ModuleType("aiohttp")

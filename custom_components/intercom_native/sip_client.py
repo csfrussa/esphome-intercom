@@ -166,6 +166,9 @@ class SipCallClient:
             family=socket.AF_INET,
         )
         self.transport = transport  # type: ignore[assignment]
+        sockname = transport.get_extra_info("sockname")
+        if sockname and len(sockname) >= 2 and int(sockname[1]) > 0:
+            self.local_sip_port = int(sockname[1])
 
     async def close(self) -> None:
         if self.transport is not None:
@@ -205,6 +208,7 @@ class SipCallClient:
             method="INVITE",
             contact_uri=local_uri,
             content_type="application/sdp",
+            transport="UDP",
         )
         caller_name = _sip_header_token(self.local_name)
         dest_name = _sip_header_token(target)
@@ -334,6 +338,7 @@ class SipCallClient:
             dialog=ack_ids,
             method="ACK",
             contact_uri=local_uri,
+            transport="UDP",
         )
         raw = sip.build_request("ACK", request_uri, headers, b"")
         self.transport.sendto(raw, (host, port))
@@ -356,6 +361,7 @@ class SipCallClient:
             dialog=bye_ids,
             method="BYE",
             contact_uri=self.dialog.local_uri,
+            transport="UDP",
         )
         raw = sip.build_request("BYE", self.dialog.remote_uri, headers, b"")
         self.transport.sendto(raw, (self.dialog.remote_host, self.dialog.remote_sip_port))
@@ -384,6 +390,7 @@ class SipCallClient:
             dialog=cancel_ids,
             method="CANCEL",
             contact_uri=self._pending_local_uri,
+            transport="UDP",
         )
         raw = sip.build_request("CANCEL", self._pending_request_uri, headers, b"")
         self.transport.sendto(raw, (self._pending_remote_host, self._pending_remote_sip_port))

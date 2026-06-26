@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .audio_format import AudioFormat, PcmFormat
+from .audio_format import AudioFormat, PcmFormat, UDP_SAFE_PAYLOAD_BYTES
 
 
 class SdpError(ValueError):
@@ -14,14 +14,12 @@ class SdpError(ValueError):
 MAX_RTP_OFFER_FORMATS = 12
 _PREFERRED_RTP_AUDIO_KEYS = {
     (48000, PcmFormat.S16LE, 1, 10): 0,
-    (48000, PcmFormat.S16LE, 1, 20): 1,
-    (32000, PcmFormat.S16LE, 1, 10): 2,
-    (32000, PcmFormat.S16LE, 1, 20): 3,
-    (24000, PcmFormat.S16LE, 1, 20): 4,
-    (16000, PcmFormat.S16LE, 1, 32): 5,
-    (16000, PcmFormat.S16LE, 1, 20): 6,
-    (16000, PcmFormat.S16LE, 1, 10): 7,
-    (8000, PcmFormat.S16LE, 1, 20): 8,
+    (32000, PcmFormat.S16LE, 1, 10): 1,
+    (24000, PcmFormat.S16LE, 1, 20): 2,
+    (16000, PcmFormat.S16LE, 1, 32): 3,
+    (16000, PcmFormat.S16LE, 1, 20): 4,
+    (16000, PcmFormat.S16LE, 1, 10): 5,
+    (8000, PcmFormat.S16LE, 1, 20): 6,
 }
 
 
@@ -62,6 +60,12 @@ def audio_format_to_rtp(fmt: AudioFormat, payload_type: int) -> RtpPcmFormat:
         raise SdpError("phase-1 PCM uses dynamic RTP payload types 96-127")
     if fmt.channels != 1:
         raise SdpError("phase-1 ESP RTP PCM is mono only")
+    if not fmt.fits_udp_payload(UDP_SAFE_PAYLOAD_BYTES):
+        raise SdpError(
+            f"RTP PCM frame too large for intercom-sip-pcm/1: "
+            f"{fmt.wire_token()} is {fmt.nominal_frame_bytes} bytes; "
+            f"max is {UDP_SAFE_PAYLOAD_BYTES}"
+        )
     if fmt.pcm_format == PcmFormat.S16LE:
         encoding = "L16"
     elif fmt.pcm_format in (PcmFormat.S24LE, PcmFormat.S24LE_IN_S32):
@@ -73,6 +77,8 @@ def audio_format_to_rtp(fmt: AudioFormat, payload_type: int) -> RtpPcmFormat:
 
 def is_rtp_pcm_mappable(fmt: AudioFormat) -> bool:
     if fmt.channels != 1:
+        return False
+    if not fmt.fits_udp_payload(UDP_SAFE_PAYLOAD_BYTES):
         return False
     return fmt.pcm_format in {PcmFormat.S16LE, PcmFormat.S24LE, PcmFormat.S24LE_IN_S32}
 
@@ -97,7 +103,12 @@ def _rtp_offer_rank(fmt: AudioFormat) -> tuple[int, int, int]:
 
 def rtp_offer_formats(formats: list[AudioFormat]) -> list[AudioFormat]:
     ranked = sorted(_dedupe_formats(rtp_mappable_formats(formats)), key=_rtp_offer_rank)
-    return ranked[:MAX_RTP_OFFER_FORMATS]
+    if not ranked:
+        return []
+    # a=ptime is media-level in the SIP/SDP profile. Keep one packetization
+    # interval per m=audio instead of smuggling per-payload ptime in fmtp.
+    frame_ms = ranked[0].frame_ms
+    return [fmt for fmt in ranked if fmt.frame_ms == frame_ms][:MAX_RTP_OFFER_FORMATS]
 
 
 def _format_key(fmt: AudioFormat) -> tuple[int, PcmFormat, int, int]:
@@ -140,9 +151,11 @@ def build_offer_directional(
     send_formats: list[AudioFormat],
     recv_formats: list[AudioFormat],
 ) -> str:
-    formats = rtp_offer_formats([*(send_formats or []), *(recv_formats or [])])
+    recv_set = set(recv_formats or [])
+    common_formats = [fmt for fmt in (send_formats or []) if fmt in recv_set]
+    formats = rtp_offer_formats(common_formats)
     if not formats:
-        raise SdpError("SDP offer requires at least one RTP-mappable PCM format")
+        raise SdpError("SDP offer requires at least one common RTP-mappable PCM format")
     rtp_formats = [audio_format_to_rtp(fmt, 96 + i) for i, fmt in enumerate(formats)]
     payloads = " ".join(str(fmt.payload_type) for fmt in rtp_formats)
     lines = [
@@ -155,8 +168,8 @@ def build_offer_directional(
     ]
     for fmt in rtp_formats:
         lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
-        lines.append(f"a=fmtp:{fmt.payload_type} ptime={fmt.frame_ms}")
     lines.append(f"a=ptime:{rtp_formats[0].frame_ms}")
+    lines.append(f"a=maxptime:{rtp_formats[0].frame_ms}")
     lines.append("a=sendrecv")
     return "\r\n".join(lines) + "\r\n"
 
@@ -244,11 +257,12 @@ def negotiate_directional(
     local_send_preferred: list[AudioFormat],
     local_recv_preferred: list[AudioFormat],
 ) -> RtpPcmDirection | None:
-    send = negotiate(remote_sdp, local_send_preferred)
-    recv = negotiate(remote_sdp, local_recv_preferred)
-    if send is None or recv is None:
+    recv_set = set(local_recv_preferred)
+    common_preferred = [fmt for fmt in local_send_preferred if fmt in recv_set]
+    selected = negotiate(remote_sdp, common_preferred)
+    if selected is None:
         return None
-    return RtpPcmDirection(send=send, recv=recv)
+    return RtpPcmDirection(send=selected, recv=selected)
 
 
 def build_answer(origin_ip: str, media_ip: str, media_port: int, selected: RtpPcmFormat) -> str:
@@ -280,9 +294,9 @@ def build_answer_directional(
     ]
     for fmt in selected:
         lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
-        lines.append(f"a=fmtp:{fmt.payload_type} ptime={fmt.frame_ms}")
     lines.extend([
         f"a=ptime:{selected[0].frame_ms}",
+        f"a=maxptime:{selected[0].frame_ms}",
         "a=sendrecv",
     ])
     return "\r\n".join(lines) + "\r\n"

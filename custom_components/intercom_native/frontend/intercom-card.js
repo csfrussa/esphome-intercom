@@ -178,13 +178,38 @@ class IntercomCard extends HTMLElement {
 
   _onCallEvent(event) {
     const scope = (event?.data?.scope || "").toLowerCase();
-    if (scope === "bridge") {
+    if (scope === "sip" || scope === "sip_bridge") {
+      this._onSipStateEvent(event);
+    } else if (scope === "bridge") {
       this._onBridgeStateEvent(event);
     } else if (scope === "session") {
       this._onSessionStateEvent(event);
     } else if (scope === "forward") {
       this._onForwardStateEvent(event);
     }
+  }
+
+  _onSipStateEvent(event) {
+    const data = { ...(event?.data || {}) };
+    if (!this._eventConcernsThisCard(data)) return;
+    let st = String(data.state || "").toLowerCase();
+    if (st === "connected") st = "streaming";
+    if (st === "ended") st = "disconnected";
+    data.state = st;
+    data.scope = "session";
+    if (!data.direction) {
+      const local = data.local_name || "";
+      const caller = data.caller || data.peer_name || "";
+      data.direction = this._samePeerName(local, this._cardPeerName()) && !this._samePeerName(caller, this._cardPeerName())
+        ? "outgoing"
+        : "incoming";
+    }
+    if (!data.peer_name) {
+      data.peer_name = data.direction === "outgoing"
+        ? (data.callee || data.dest_name || "")
+        : (data.caller || "");
+    }
+    this._onSessionStateEvent({ data });
   }
 
   _onForwardStateEvent(event) {
@@ -664,7 +689,7 @@ class IntercomCard extends HTMLElement {
   }
 
   _isHaSoftphoneMode() {
-    return (this.config?.mode || this.config?.card_mode || "hybrid") === "ha_softphone";
+    return (this.config?.mode || this.config?.card_mode || "esp_mirror") === "ha_softphone";
   }
 
   _autoAnswerStorageId() {

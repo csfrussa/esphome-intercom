@@ -233,10 +233,18 @@ def dialog_headers(
     contact_uri: str,
     max_forwards: int = 70,
     content_type: str | None = None,
+    transport: str = "UDP",
 ) -> list[tuple[str, str]]:
     """Build the common headers used by the ESP/HA phase-1 profile."""
+    contact = parse_sip_uri(contact_uri)
+    sent_by = contact.host
+    if contact.port:
+        sent_by = f"{sent_by}:{contact.port}"
+    via_transport = (transport or "UDP").strip().upper()
+    if via_transport not in {"UDP", "TCP"}:
+        raise SipError(f"unsupported SIP transport {transport!r}")
     headers = [
-        ("Via", f"SIP/2.0/UDP {parse_sip_uri(contact_uri).host};branch={dialog.branch}"),
+        ("Via", f"SIP/2.0/{via_transport} {sent_by};branch={dialog.branch};rport"),
         ("Max-Forwards", str(max_forwards)),
         ("From", f"<{local_uri}>;tag={dialog.local_tag}"),
         ("To", f"<{remote_uri}>" + (f";tag={dialog.remote_tag}" if dialog.remote_tag else "")),

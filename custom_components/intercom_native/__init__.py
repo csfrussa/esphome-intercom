@@ -1300,6 +1300,16 @@ async def _refresh_phonebook_sensor(hass: HomeAssistant) -> None:
         await sensor.async_update()
 
 
+async def _current_roster_json(hass: HomeAssistant) -> str:
+    sensor = hass.data.get(DOMAIN, {}).get("phonebook_sensor")
+    if sensor is not None:
+        return str(sensor.extra_state_attributes.get("roster_json", "") or "")
+    state = hass.states.get("sensor.intercom_phonebook")
+    if state is None:
+        return ""
+    return str(state.attributes.get("roster_json") or "")
+
+
 async def _push_roster_json_to_esps(hass: HomeAssistant, roster_json: str) -> None:
     """Push the canonical JSON roster to every online ESP endpoint."""
     if not roster_json:
@@ -1328,6 +1338,12 @@ async def _push_roster_json_to_esps(hass: HomeAssistant, roster_json: str) -> No
             _LOGGER.info("Phonebook JSON pushed to %s via esphome.%s", device.get("name"), service_name)
         except Exception as err:
             _LOGGER.error("Phonebook JSON push to %s failed: %s", device.get("name"), err)
+
+
+async def _refresh_and_push_phonebook(hass: HomeAssistant) -> None:
+    await _refresh_phonebook_sensor(hass)
+    roster_json = await _current_roster_json(hass)
+    await _push_roster_json_to_esps(hass, roster_json)
 
 
 async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
@@ -1365,7 +1381,7 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
     bucket = hass.data.setdefault(DOMAIN, {}).setdefault("manual_roster_entries", [])
     bucket[:] = [item for item in bucket if getattr(item, "id", "").lower() != entry.id.lower()]
     bucket.append(entry)
-    await _refresh_phonebook_sensor(hass)
+    await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook contact added: %s (%s)", entry.id, entry.kind)
 
 
@@ -1375,14 +1391,14 @@ async def _handle_phonebook_set_contacts_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     entries = parse_roster_json(str(call.data.get("roster_json") or "[]"))
     hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = entries
-    await _refresh_phonebook_sensor(hass)
+    await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook manual contacts replaced: %d entries", len(entries))
 
 
 async def _handle_phonebook_clear_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = []
-    await _refresh_phonebook_sensor(hass)
+    await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook manual contacts cleared")
 
 
@@ -2107,8 +2123,8 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
         local_ip=local_ip,
         local_rtp_port=int(cfg["rtp_port"]),
         supported_formats=[
-            AudioFormat(48000, "s16le", 1, 20),
-            AudioFormat(32000, "s16le", 1, 20),
+            AudioFormat(48000, "s16le", 1, 10),
+            AudioFormat(32000, "s16le", 1, 10),
             AudioFormat(16000, "s16le", 1, 20),
         ],
         supported_send_formats=list(HA_BROWSER_TX_FORMATS),

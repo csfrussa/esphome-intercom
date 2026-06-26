@@ -415,7 +415,7 @@ MDNS_DISCOVERY_SCHEMA = cv.Schema(
         # Omit protocols to scan only the local transport. Explicit override is
         # for advanced bridge/fallback builds that intentionally want both.
         cv.Optional(CONF_PROTOCOLS): cv.ensure_list(
-            cv.one_of(PROTOCOL_TCP, PROTOCOL_UDP, lower=True)
+            cv.one_of(PROTOCOL_TCP, PROTOCOL_UDP, PROTOCOL_SIP, lower=True)
         ),
     }
 )
