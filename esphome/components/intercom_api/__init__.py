@@ -628,8 +628,11 @@ def _consume_intercom_sockets(config):
         # Two UDP sockets: audio (listen_port) + control (control_port).
         socket.consume_sockets(2, "intercom_api", socket.SocketType.UDP)(config)
     elif protocol == PROTOCOL_SIP:
-        # SIP signaling + RTP media sockets.
+        # SIP signaling must support UDP and TCP on the same listen port.
+        # RTP media remains UDP.
         socket.consume_sockets(2, "intercom_api_sip", socket.SocketType.UDP)(config)
+        socket.consume_sockets(2, "intercom_api_sip_tcp")(config)
+        socket.consume_sockets(1, "intercom_api_sip", socket.SocketType.TCP_LISTEN)(config)
     else:
         socket.consume_sockets(3, "intercom_api")(config)
         socket.consume_sockets(1, "intercom_api", socket.SocketType.TCP_LISTEN)(config)

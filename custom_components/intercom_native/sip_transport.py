@@ -48,6 +48,7 @@ class IntercomSipClient(IntercomTransport):
         remote_sip_port: int = INTERCOM_SIP_PORT,
         local_sip_port: int = INTERCOM_SIP_PORT,
         local_rtp_port: int = INTERCOM_RTP_PORT + 20,
+        signaling_transport: str = "UDP",
         on_audio: Optional[Callable[[bytes], None]] = None,
         on_disconnected: Optional[Callable[[], None]] = None,
         on_ringing: Optional[Callable[[], None]] = None,
@@ -71,6 +72,7 @@ class IntercomSipClient(IntercomTransport):
         self.remote_sip_port = int(remote_sip_port or INTERCOM_SIP_PORT)
         self.local_sip_port = int(local_sip_port or INTERCOM_SIP_PORT)
         self.local_rtp_port = int(local_rtp_port or INTERCOM_RTP_PORT + 20)
+        self.signaling_transport = (signaling_transport or "UDP").upper()
         self.local_ip = ""
         self._client: SipCallClient | None = None
         self._rtp_transport: asyncio.DatagramTransport | None = None
@@ -130,6 +132,7 @@ class IntercomSipClient(IntercomTransport):
             local_rtp_port=self.local_rtp_port,
             supported_send_formats=self.local_tx_formats or [LEGACY_AUDIO_FORMAT],
             supported_recv_formats=self.local_rx_formats or [LEGACY_AUDIO_FORMAT],
+            signaling_transport=self.signaling_transport,
         )
         await self._client.start()
         self._set_connected(True, "sip_connect")

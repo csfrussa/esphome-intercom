@@ -861,6 +861,14 @@ class IntercomCard extends HTMLElement {
     return ["esp", "sip", "phone", "group"].includes(entry.kind);
   }
 
+  _formatListFromMetadata(value) {
+    if (Array.isArray(value)) return value.filter(Boolean).map(v => String(v));
+    if (typeof value === "string") {
+      return value.split(";").map(v => v.trim()).filter(Boolean);
+    }
+    return [];
+  }
+
   _targetFromRosterEntry(entry) {
     const metadata = entry.metadata || {};
     const id = entry.id || entry.name;
@@ -870,14 +878,17 @@ class IntercomCard extends HTMLElement {
       route_id: id,
       host: entry.address || "",
       transport: metadata.transport || (entry.sip_uri ? "sip" : ""),
+      sip_transport: metadata.sip_transport || metadata.signaling_transport || "",
       sip_uri: entry.sip_uri || "",
       number: entry.number || "",
       kind: entry.kind || "esp",
+      route_via_ha: !!entry.route_via_ha,
       audio_mode: metadata.audio_mode || "full_duplex",
-      tx_formats: Array.isArray(metadata.tx_formats) ? metadata.tx_formats : [],
-      rx_formats: Array.isArray(metadata.rx_formats) ? metadata.rx_formats : [],
+      tx_formats: this._formatListFromMetadata(metadata.tx_formats),
+      rx_formats: this._formatListFromMetadata(metadata.rx_formats),
       sip_port: metadata.sip_port,
       rtp_port: metadata.rtp_port,
+      max_payload_bytes: metadata.max_payload_bytes,
       roster: true,
     };
   }
@@ -951,7 +962,7 @@ class IntercomCard extends HTMLElement {
   }
 
   _isHaName(name) {
-    return (name || "").trim() === this._getHaName();
+    return String(name || "").trim().toLowerCase() === String(this._getHaName() || "").trim().toLowerCase();
   }
 
   _isSoftphoneContext() {
@@ -1717,7 +1728,7 @@ class IntercomCard extends HTMLElement {
 
   async _startHaSoftphoneCall(softphoneInfo) {
     const target = this._getSoftphoneTargetDevice();
-    if (!target?.device_id || !target?.host) {
+    if (!target?.device_id) {
       this._showError("No endpoint available");
       return;
     }
@@ -1846,6 +1857,7 @@ class IntercomCard extends HTMLElement {
     this._errorMsg = "";
     this._render();
 
+    let wasSoftphone = false;
     try {
       const deviceInfo = this._activeDeviceInfo || await this._getDeviceInfo();
       if (!deviceInfo?.device_id) {
@@ -1853,14 +1865,7 @@ class IntercomCard extends HTMLElement {
       }
       this._activeDeviceInfo = deviceInfo;
 
-      const wasSoftphone = this._isSoftphoneContext();
-      const sessionDeviceId = this._sessionDeviceId();
-      const sessionDevice = this._availableDevices.find(d => d.device_id === sessionDeviceId);
-      const peer = wasSoftphone
-        ? (this._isHaSoftphoneMode()
-            ? (this._getSoftphoneTargetDevice()?.name || this._getDestination())
-            : (sessionDevice?.name || this._activeDeviceInfo?.name || this._getDestination()))
-        : this._getDestination();
+      wasSoftphone = this._isSoftphoneContext();
       if (wasSoftphone) {
         await intercomEngine.stop(HA_SOFTPHONE_DEVICE_ID, { call_id: this._sessionCallId() });
       } else {
@@ -1868,21 +1873,11 @@ class IntercomCard extends HTMLElement {
         // Decline during STREAMING to stop(), and idle is a no-op.
         await this._pressEspButton(this._declineButtonEntityId, "Decline");
       }
-      if (wasSoftphone) {
-        this._destRinging = false;
-        this._sessionState = "idle";
-        this._sessionCaller = "";
-        this._activeSessionDeviceId = null;
-        this._activeCallId = "";
-        this._callMode = null;
-        this._captureEndReason("disconnected", "local_hangup", "self", peer);
-      }
     } catch (err) {
       console.error("Hangup error:", err);
       this._showError(err.message || String(err));
     }
 
-    if (wasSoftphone) await intercomEngine.close("hangup");
     this._stopping = false;
     this._render();
   }
@@ -2211,13 +2206,13 @@ class IntercomCardEditor extends HTMLElement {
     modeGroup.appendChild(modeLabel);
     const modeSelect = document.createElement("select");
     modeSelect.id = "mode-select";
-    const hybridOpt = document.createElement("option");
-    hybridOpt.value = "esp_mirror";
-    hybridOpt.textContent = "ESP mirror";
+    const mirrorOpt = document.createElement("option");
+    mirrorOpt.value = "esp_mirror";
+    mirrorOpt.textContent = "ESP mirror";
     const softphoneOpt = document.createElement("option");
     softphoneOpt.value = "ha_softphone";
     softphoneOpt.textContent = "Home Assistant softphone";
-    modeSelect.appendChild(hybridOpt);
+    modeSelect.appendChild(mirrorOpt);
     modeSelect.appendChild(softphoneOpt);
     modeGroup.appendChild(modeSelect);
     const modeInfo = document.createElement("div");

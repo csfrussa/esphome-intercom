@@ -29,6 +29,36 @@ async def _login(page) -> None:
     await page.wait_for_load_state("networkidle")
 
 
+async def _scroll_until_intercom_cards(page, *, min_cards: int = 1) -> int:
+    """Force Lovelace lazy-rendered cards into the DOM before snapshotting."""
+    last_count = 0
+    for _ in range(18):
+        count = await page.evaluate(
+            """() => {
+              const cards = [];
+              const visit = (root) => {
+                if (!root) return;
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+                let node;
+                while ((node = walker.nextNode())) {
+                  if (node.localName === 'intercom-card') cards.push(node);
+                  if (node.shadowRoot) visit(node.shadowRoot);
+                }
+              };
+              visit(document);
+              if (cards.length) cards[0].scrollIntoView({block: 'center', inline: 'nearest'});
+              return cards.length;
+            }"""
+        )
+        last_count = int(count or 0)
+        if last_count >= min_cards:
+            await page.wait_for_timeout(800)
+            return last_count
+        await page.mouse.wheel(0, 900)
+        await page.wait_for_timeout(500)
+    return last_count
+
+
 async def _snapshot(page, name: str) -> dict:
     await page.screenshot(path=OUT / f"{name}.png", full_page=True)
     data = await page.evaluate(
@@ -85,6 +115,9 @@ async def main() -> int:
         ):
             await page.goto(f"{BASE_URL}{path}", wait_until="networkidle")
             await page.wait_for_timeout(2000)
+            cards = await _scroll_until_intercom_cards(page)
+            if cards < 1:
+                raise AssertionError(f"{name}: no intercom-card elements rendered")
             data = await _snapshot(page, name)
             results[name] = data
             lowered = data["text"].lower()

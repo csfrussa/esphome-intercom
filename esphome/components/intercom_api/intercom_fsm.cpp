@@ -115,6 +115,23 @@ void IntercomApi::snapshot_terminal_decline_(std::string *call_id, std::string *
       : millis() - this->last_terminal_decline_ms_;
 }
 
+bool IntercomApi::recent_terminal_call_(const std::string &call_id, std::string *reason) const {
+  if (call_id.empty()) {
+    return false;
+  }
+  std::string cached_call_id;
+  std::string cached_reason;
+  uint32_t cached_age_ms = UINT32_MAX;
+  this->snapshot_terminal_decline_(&cached_call_id, &cached_reason, &cached_age_ms);
+  if (cached_call_id != call_id || cached_age_ms > TERMINAL_DECLINE_REPLAY_MS) {
+    return false;
+  }
+  if (reason != nullptr) {
+    *reason = cached_reason;
+  }
+  return true;
+}
+
 // === PBX-lite outbound helpers ===
 // Single source of truth for control-message body framing.
 
@@ -400,6 +417,9 @@ void IntercomApi::stop() {
   // instead of on_call_failed.
   // Mark the terminal reason before signaling or blocking audio teardown.
   // Otherwise a fast bridge echo can race in and mask a local cancel as remote.
+  if (!call_id.empty()) {
+    this->set_terminal_decline_(call_id, "");
+  }
   this->end_call_(CallEndReason::LOCAL_HANGUP);
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
     if (state == CallState::STREAMING) {
@@ -565,6 +585,18 @@ void IntercomApi::set_active_(bool on) {
 }
 
 void IntercomApi::set_streaming_(bool on) {
+  if (on) {
+    const std::string call_id = this->get_current_call_id_();
+    std::string terminal_reason;
+    if (this->recent_terminal_call_(call_id, &terminal_reason)) {
+      ESP_LOGD(TAG, "Refusing STREAMING for terminal call_id=%s reason=%s",
+               call_id.c_str(),
+               terminal_reason.empty() ? "(none)" : terminal_reason.c_str());
+      this->streaming_.store(false, std::memory_order_release);
+      this->publish_state_();
+      return;
+    }
+  }
   this->streaming_.store(on, std::memory_order_release);
   this->notify_audio_tasks_();
   if (on) {
@@ -703,6 +735,15 @@ void IntercomApi::on_audio_received_(const uint8_t *pcm, size_t bytes) {
     this->debug_log_pcm_level_("rx_network", pcm, bytes,
                                rx_format,
                                this->audio_debug_last_rx_log_ms_, this->audio_debug_rx_frames_);
+  }
+
+  const std::string current_call_id = this->get_current_call_id_();
+  std::string terminal_reason;
+  if (this->recent_terminal_call_(current_call_id, &terminal_reason)) {
+    ESP_LOGD(TAG, "Dropping late audio for terminal call_id=%s reason=%s",
+             current_call_id.c_str(),
+             terminal_reason.empty() ? "(none)" : terminal_reason.c_str());
+    return;
   }
 #ifdef USE_INTERCOM_API_SPEAKER
   if (this->speaker_) {
@@ -1055,6 +1096,13 @@ handle_incoming_start_in_idle:
       // STREAMING (no audio yet): peer retry hadn't seen our reply; re-echo
       //   until first_audio_received_ flips.
       if (!in_call_id.empty()) {
+        std::string terminal_reason;
+        if (this->recent_terminal_call_(in_call_id, &terminal_reason)) {
+          ESP_LOGD(TAG, "ignoring late ANSWER for terminal call_id=%s reason=%s",
+                   in_call_id.c_str(),
+                   terminal_reason.empty() ? "(none)" : terminal_reason.c_str());
+          break;
+        }
         const std::string current_cid = this->get_current_call_id_();
         if (!current_cid.empty() && in_call_id != current_cid) {
           ESP_LOGD(TAG, "ignoring stale ANSWER for call_id=%s (current=%s)",

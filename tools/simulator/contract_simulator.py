@@ -25,7 +25,7 @@ def _idle_state() -> dict[str, Any]:
         "softphone": {"state": "idle", "caller": "", "last_reason": ""},
         "bridge": {"state": "idle", "left": "", "right": ""},
         "audio": {"tx_ready": False, "rx_ready": False, "owner": "none"},
-        "sip": {"last_status": 0, "decline_reason": ""},
+        "sip": {"last_status": 0, "decline_reason": "", "auth_reason": ""},
         "led": {"color": "", "effect": None, "forbidden_effect": "Spin"},
         "media": {"state": "idle"},
         "intercom": {"state": "idle", "caller": ""},
@@ -88,16 +88,36 @@ class ContractSimulator:
             self._esp_call(str(event.get("source") or ""), str(event.get("destination") or ""), str(event.get("route") or "direct"))
         elif typ == "sip_invite":
             self._sip_invite(str(event.get("caller") or ""), str(event.get("callee") or ""), str(event.get("call_id") or ""))
+        elif typ == "sip_offer":
+            codecs = [str(item).upper() for item in event.get("codecs", []) if str(item)]
+            if not any(codec in {"L16", "L24"} for codec in codecs):
+                self.state["sip"].update({"last_status": 488, "decline_reason": "media_incompatible"})
+                self.state["softphone"].update({"state": "idle", "last_reason": "media_incompatible"})
+            else:
+                self._sip_invite(str(event.get("caller") or ""), str(event.get("callee") or ""), str(event.get("call_id") or ""))
+        elif typ == "sip_auth_challenge":
+            status = int(event.get("status") or 401)
+            reason = "proxy_auth_required_unsupported" if status == 407 else "auth_required_unsupported"
+            self.state["sip"].update({"last_status": status, "auth_reason": reason})
+            self.state["caller"].update({"state": "idle", "last_reason": reason})
+            self.state["softphone"].update({"state": "idle", "last_reason": reason})
         elif typ == "browser_audio_ready":
             self.state["audio"].update({"tx_ready": True, "rx_ready": True})
         elif typ in {"esp_bye", "remote_bye"}:
             self.state["softphone"].update({"state": "idle", "last_reason": "remote_hangup"})
+            self.state["card"].update({"rendered_state": "idle"})
+        elif typ == "remote_cancel":
+            self.state["softphone"].update({"state": "idle", "last_reason": "cancelled"})
             self.state["card"].update({"rendered_state": "idle"})
         elif typ == "ha_bye":
             self.state["esp"].update({"state": "idle"})
             self.state["led"].update({"effect": None})
         elif typ == "ha_cancel":
             self.state["esp"].update({"state": "idle"})
+            self.state["led"].update({"effect": None})
+        elif typ == "late_media_after_terminal":
+            self.state["esp"].update({"state": "idle"})
+            self.state["intercom"].update({"state": "idle"})
             self.state["led"].update({"effect": None})
         elif typ == "ha_softphone_decline":
             reason = str(event.get("reason") or "declined")

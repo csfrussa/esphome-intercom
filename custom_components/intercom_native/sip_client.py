@@ -234,6 +234,31 @@ class SipCallClient:
         assert self.transport is not None
         self.transport.sendto(raw, (remote_host, int(remote_sip_port)))
 
+    def _has_signaling_path(self) -> bool:
+        if self.signaling_transport == "TCP":
+            return self.writer is not None
+        return self.transport is not None
+
+    def _send_dialog_request(self, raw: bytes, host: str, port: int) -> None:
+        if self.signaling_transport == "TCP":
+            if self.writer is None:
+                return
+            self.writer.write(raw)
+            async def _drain() -> None:
+                try:
+                    assert self.writer is not None
+                    await self.writer.drain()
+                except (ConnectionError, RuntimeError, OSError):
+                    _LOGGER.debug("SIP TCP dialog write drain failed after peer close", exc_info=True)
+
+            try:
+                asyncio.get_running_loop().create_task(_drain())
+            except RuntimeError:
+                pass
+            return
+        if self.transport is not None:
+            self.transport.sendto(raw, (host, int(port)))
+
     async def _read_response(self, timeout: float) -> tuple[sip.SipMessage, tuple[str, int]] | None:
         if self.signaling_transport == "TCP":
             if self.reader is None:
@@ -260,9 +285,10 @@ class SipCallClient:
             await self._connect_tcp(remote_host, int(remote_sip_port))
         else:
             await self.start()
-        request_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port)))
-        local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port))
-        remote_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port)))
+        transport_param = (("transport", self.signaling_transport.lower()),)
+        request_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port), params=transport_param))
+        local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port, params=transport_param))
+        remote_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port), params=transport_param))
         self._pending_target = target
         self._pending_remote_host = remote_host
         self._pending_remote_sip_port = int(remote_sip_port)
@@ -380,8 +406,9 @@ class SipCallClient:
         self.dialog_ids.remote_tag = _extract_tag(msg.header("To"))
         if not request_uri:
             request_uri = str(sip.SipUri(target or "intercom", remote_host, remote_sip_port))
+        transport_param = (("transport", self.signaling_transport.lower()),)
         if not local_uri:
-            local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port))
+            local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port, params=transport_param))
         if not remote_uri:
             remote_uri = request_uri
         self.dialog = SipDialog(
@@ -401,7 +428,7 @@ class SipCallClient:
         return True
 
     def _send_ack(self, host: str, port: int, request_uri: str, local_uri: str, remote_uri: str) -> None:
-        if self.transport is None:
+        if not self._has_signaling_path():
             return
         ack_ids = sip.SipDialogIds(
             call_id=self.dialog_ids.call_id,
@@ -420,15 +447,11 @@ class SipCallClient:
             transport=self.signaling_transport,
         )
         raw = sip.build_request("ACK", request_uri, headers, b"")
-        if self.signaling_transport == "TCP" and self.writer is not None:
-            self.writer.write(raw)
-            asyncio.create_task(self.writer.drain())
-        elif self.transport is not None:
-            self.transport.sendto(raw, (host, port))
+        self._send_dialog_request(raw, host, port)
         _LOGGER.info("SIP TX ACK %s:%s", host, port)
 
     def bye(self) -> None:
-        if self.transport is None or self.dialog is None:
+        if not self._has_signaling_path() or self.dialog is None:
             return
         bye_ids = sip.SipDialogIds(
             call_id=self.dialog_ids.call_id,
@@ -447,11 +470,7 @@ class SipCallClient:
             transport=self.signaling_transport,
         )
         raw = sip.build_request("BYE", self.dialog.remote_uri, headers, b"")
-        if self.signaling_transport == "TCP" and self.writer is not None:
-            self.writer.write(raw)
-            asyncio.create_task(self.writer.drain())
-        elif self.transport is not None:
-            self.transport.sendto(raw, (self.dialog.remote_host, self.dialog.remote_sip_port))
+        self._send_dialog_request(raw, self.dialog.remote_host, self.dialog.remote_sip_port)
         _LOGGER.info("SIP TX BYE %s:%s", self.dialog.remote_host, self.dialog.remote_sip_port)
 
     def cancel(self) -> None:
@@ -461,7 +480,7 @@ class SipCallClient:
         The CANCEL reuses the INVITE CSeq number and top Via branch so the
         peer can match it to the pending transaction.
         """
-        if self.transport is None or not self._pending_request_uri:
+        if not self._has_signaling_path() or not self._pending_request_uri:
             return
         cancel_ids = sip.SipDialogIds(
             call_id=self.dialog_ids.call_id,
@@ -480,11 +499,7 @@ class SipCallClient:
             transport=self.signaling_transport,
         )
         raw = sip.build_request("CANCEL", self._pending_request_uri, headers, b"")
-        if self.signaling_transport == "TCP" and self.writer is not None:
-            self.writer.write(raw)
-            asyncio.create_task(self.writer.drain())
-        elif self.transport is not None:
-            self.transport.sendto(raw, (self._pending_remote_host, self._pending_remote_sip_port))
+        self._send_dialog_request(raw, self._pending_remote_host, self._pending_remote_sip_port)
         _LOGGER.info("SIP TX CANCEL %s:%s", self._pending_remote_host, self._pending_remote_sip_port)
 
     def bye_or_cancel(self) -> None:

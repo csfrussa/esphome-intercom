@@ -181,7 +181,6 @@ def parse_sdp(sdp: str | bytes) -> dict:
     media_port = 0
     payload_order: list[int] = []
     rtpmap: dict[int, tuple[str, int, int]] = {}
-    payload_ptime: dict[int, int] = {}
     ptime = 20
     in_audio = False
     for raw in sdp.replace("\r\n", "\n").split("\n"):
@@ -212,12 +211,6 @@ def parse_sdp(sdp: str | bytes) -> dict:
             rtpmap[pt] = (encoding.upper(), int(rate), channels)
         elif in_audio and line.startswith("a=ptime:"):
             ptime = int(line.removeprefix("a=ptime:").strip())
-        elif in_audio and line.startswith("a=fmtp:"):
-            left, params = line.removeprefix("a=fmtp:").split(None, 1)
-            pt = int(left)
-            for raw_param in params.replace(";", " ").split():
-                if raw_param.startswith("ptime="):
-                    payload_ptime[pt] = int(raw_param.removeprefix("ptime="))
     if not session_conn or not media_port or not payload_order:
         raise SdpError("SDP missing c=, m=audio port, or payload list")
     return {
@@ -225,7 +218,6 @@ def parse_sdp(sdp: str | bytes) -> dict:
         "media_port": media_port,
         "payload_order": payload_order,
         "rtpmap": rtpmap,
-        "payload_ptime": payload_ptime,
         "ptime": ptime,
     }
 
@@ -240,7 +232,7 @@ def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
         encoding, rate, channels = spec
         if encoding not in {"L16", "L24"}:
             continue
-        out.append(RtpPcmFormat(pt, encoding, rate, channels, parsed["payload_ptime"].get(pt, parsed["ptime"])))
+        out.append(RtpPcmFormat(pt, encoding, rate, channels, parsed["ptime"]))
     return out
 
 
@@ -276,6 +268,8 @@ def build_answer_directional(
     send: RtpPcmFormat,
     recv: RtpPcmFormat,
 ) -> str:
+    if send != recv:
+        raise SdpError("direct SIP answer requires one common RTP PCM wire format")
     selected = []
     seen: set[int] = set()
     for fmt in (send, recv):

@@ -93,13 +93,13 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(parsed.header("Call-ID"), "call-1")
         self.assertEqual(parsed.body, body)
 
-    def test_rejects_unknown_method(self) -> None:
+    def test_parser_preserves_unsupported_method_for_sip_response(self) -> None:
         raw = (
             b"REGISTER sip:ha@192.168.1.10 SIP/2.0\r\n"
             b"Content-Length: 0\r\n\r\n"
         )
-        with self.assertRaises(sip.SipError):
-            sip.parse_message(raw)
+        parsed = sip.parse_message(raw)
+        self.assertEqual(parsed.method, "REGISTER")
 
     def test_rejects_trailing_bytes_after_content_length(self) -> None:
         raw = (
@@ -184,6 +184,65 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(parsed.method, "CANCEL")
         self.assertEqual(parsed.header("CSeq"), "9 CANCEL")
         self.assertIn("z9hG4bKinvite", parsed.header("Via"))
+
+    def test_tcp_ack_and_bye_use_stream_writer(self) -> None:
+        class FakeWriter:
+            def __init__(self) -> None:
+                self.sent = bytearray()
+
+            def write(self, data: bytes) -> None:
+                self.sent.extend(data)
+
+            async def drain(self) -> None:
+                return None
+
+        writer = FakeWriter()
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="Casa",
+            local_sip_port=43123,
+            local_rtp_port=41000,
+            signaling_transport="TCP",
+        )
+        client.writer = writer  # type: ignore[assignment]
+        client.dialog_ids = sip.SipDialogIds(
+            call_id="call-tcp-dialog",
+            local_tag="local",
+            remote_tag="remote",
+            cseq=3,
+            branch="z9hG4bKinvite",
+        )
+        client._invite_cseq = 3
+        client.dialog = sip_client.SipDialog(
+            target="ESP",
+            remote_host="192.168.1.30",
+            remote_sip_port=5060,
+            remote_rtp_host="192.168.1.30",
+            remote_rtp_port=40000,
+            local_rtp_port=41000,
+            call_id="call-tcp-dialog",
+            local_uri="sip:Casa@192.168.1.10:43123",
+            remote_uri="sip:ESP@192.168.1.30:5060",
+            send_format=sdp.RtpPcmFormat(96, "L16", 16000, 1, 32),
+            recv_format=sdp.RtpPcmFormat(96, "L16", 16000, 1, 32),
+        )
+
+        client._send_ack(
+            "192.168.1.30",
+            5060,
+            "sip:ESP@192.168.1.30:5060",
+            "sip:Casa@192.168.1.10:43123",
+            "sip:ESP@192.168.1.30:5060",
+        )
+        ack = sip.parse_message(bytes(writer.sent))
+        self.assertEqual(ack.method, "ACK")
+        self.assertIn("SIP/2.0/TCP 192.168.1.10:43123", ack.header("Via"))
+
+        writer.sent.clear()
+        client.bye()
+        bye = sip.parse_message(bytes(writer.sent))
+        self.assertEqual(bye.method, "BYE")
+        self.assertIn("SIP/2.0/TCP 192.168.1.10:43123", bye.header("Via"))
 
     def test_invite_carries_intercom_display_identity_headers(self) -> None:
         class FakeTransport:
@@ -291,6 +350,33 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invite.caller, "Waveshare S3 Audio")
         self.assertEqual(invite.target, "Spotpear Ball v2")
 
+    async def test_listener_replies_405_and_501_for_unsupported_methods(self) -> None:
+        sent: list[bytes] = []
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40002,
+            supported_formats=[audio_format.AudioFormat(16000, "s16le", 1, 32)],
+            on_invite=lambda _: None,  # type: ignore[arg-type]
+            send_override=lambda data, _addr: sent.append(data),
+        )
+
+        register = (
+            b"REGISTER sip:Casa@192.168.1.10 SIP/2.0\r\n"
+            b"Via: SIP/2.0/UDP 192.168.1.20:5060;branch=z9hG4bKreg;rport\r\n"
+            b"From: <sip:ESP@192.168.1.20>;tag=src\r\n"
+            b"To: <sip:Casa@192.168.1.10>\r\n"
+            b"Call-ID: reg-1\r\n"
+            b"CSeq: 1 REGISTER\r\n"
+            b"Content-Length: 0\r\n\r\n"
+        )
+        await endpoint._handle_datagram(register, ("192.168.1.20", 5060))
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 405)
+        self.assertIn("INVITE", sip.parse_message(sent[-1]).header("Allow"))
+
+        custom = register.replace(b"REGISTER", b"BREW")
+        await endpoint._handle_datagram(custom, ("192.168.1.20", 5060))
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 501)
+
     def test_decline_reason_header_overrides_generic_status(self) -> None:
         msg = sip.SipMessage(
             status_code=486,
@@ -324,6 +410,28 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(decision.entry)
         assert decision.entry is not None
         self.assertEqual(decision.entry.address, "192.168.1.31")
+
+    def test_esp_roster_entry_without_sip_transport_does_not_become_direct_sip(self) -> None:
+        entries = [
+            roster.RosterEntry(
+                id="Casa",
+                name="Casa",
+                kind="ha",
+                address="192.168.1.10",
+                metadata={"sip_port": 5060, "sip_transport": "tcp"},
+            ),
+            roster.RosterEntry(
+                id="Cucina",
+                name="Cucina",
+                kind="esp",
+                address="192.168.1.31",
+                metadata={"transport": "sip", "sip_port": 5060},
+            ),
+        ]
+        decision = roster.resolve_target("Cucina", entries, route_via_ha=False)
+        self.assertEqual(decision.kind, "via_ha")
+        self.assertEqual(decision.reason, "missing_direct_transport")
+        self.assertIn("transport=tcp", decision.sip_uri)
 
 
 class SdpPcmProfileTest(unittest.TestCase):
@@ -541,6 +649,12 @@ class RosterResolverTest(unittest.TestCase):
                 "contacts": [
                     {"id": "HA", "kind": "ha", "address": "192.168.1.10"},
                     {"id": "Cucina", "kind": "esp", "address": "192.168.1.30"},
+                    {
+                        "id": "Studio",
+                        "kind": "esp",
+                        "address": "192.168.1.31",
+                        "metadata": {"sip_transport": "tcp"},
+                    },
                     {"id": "Corridoio", "kind": "esp"},
                     {"id": "Nonna", "kind": "phone", "number": "0574863562"},
                 ]
@@ -548,7 +662,12 @@ class RosterResolverTest(unittest.TestCase):
         )
         self.assertEqual(
             roster.resolve_target("Cucina", entries).sip_uri,
-            "sip:Cucina@192.168.1.30",
+            "sip:Cucina@192.168.1.10",
+        )
+        self.assertEqual(roster.resolve_target("Cucina", entries).reason, "missing_direct_transport")
+        self.assertEqual(
+            roster.resolve_target("Studio", entries).sip_uri,
+            "sip:Studio@192.168.1.31;transport=tcp",
         )
         self.assertEqual(
             roster.resolve_target("Cucina", entries, route_via_ha=True).sip_uri,

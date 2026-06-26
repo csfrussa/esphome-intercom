@@ -18,10 +18,29 @@ SIP_VERSION = "SIP/2.0"
 MAX_SIP_MESSAGE_BYTES = 8192
 MAX_SIP_BODY_BYTES = 4096
 SUPPORTED_METHODS = frozenset({"INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"})
+KNOWN_UNSUPPORTED_METHODS = frozenset(
+    {
+        "REGISTER",
+        "INFO",
+        "MESSAGE",
+        "NOTIFY",
+        "PRACK",
+        "PUBLISH",
+        "REFER",
+        "SUBSCRIBE",
+        "UPDATE",
+    }
+)
+_TOKEN_SEPARATORS = set("()<>@,;:\\\"/[]?={} \t")
 
 
 class SipError(ValueError):
     """Malformed or unsupported SIP message."""
+
+
+def is_sip_token(value: str) -> bool:
+    """Return true when *value* is a syntactically valid SIP token."""
+    return bool(value) and all(0x21 <= ord(ch) <= 0x7E and ch not in _TOKEN_SEPARATORS for ch in value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,8 +300,8 @@ def parse_message(data: bytes) -> SipMessage:
     if len(parts) != 3 or parts[2] != SIP_VERSION:
         raise SipError("malformed SIP request line")
     method = parts[0].upper()
-    if method not in SUPPORTED_METHODS:
-        raise SipError(f"unsupported SIP method {method}")
+    if not is_sip_token(method):
+        raise SipError(f"malformed SIP method {method!r}")
     parse_sip_uri(parts[1])
     return SipMessage(method=method, uri=parts[1], headers=tuple(headers), body=body)
 

@@ -208,6 +208,37 @@ std::string sip_user_from_header(const std::string &value) {
   return sip_header_token(uri.substr(0, at));
 }
 
+std::string response_via_with_rport(const std::string &via, uint32_t source_ip, uint16_t source_port) {
+  std::string lowered = via;
+  for (char &ch : lowered) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  if (lowered.find("rport") == std::string::npos) return via;
+  struct in_addr a{};
+  a.s_addr = htonl(source_ip);
+  char ip_text[16];
+  inet_ntoa_r(a, ip_text, sizeof(ip_text));
+  const size_t first_semicolon = via.find(';');
+  if (first_semicolon == std::string::npos) {
+    return via + ";received=" + std::string(ip_text) + ";rport=" + std::to_string(source_port);
+  }
+  std::string out = via.substr(0, first_semicolon);
+  size_t pos = first_semicolon + 1;
+  while (pos <= via.size()) {
+    const size_t end = via.find(';', pos);
+    const size_t part_end = end == std::string::npos ? via.size() : end;
+    const std::string part = trim_copy(via.substr(pos, part_end - pos));
+    const size_t eq = part.find('=');
+    std::string key = trim_copy(eq == std::string::npos ? part : part.substr(0, eq));
+    for (char &ch : key) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (!part.empty() && key != "rport" && key != "received") {
+      out += ";" + part;
+    }
+    if (end == std::string::npos) break;
+    pos = end + 1;
+  }
+  out += ";received=" + std::string(ip_text) + ";rport=" + std::to_string(source_port);
+  return out;
+}
+
 std::string make_token(const char *prefix) {
   char buf[40];
   snprintf(buf, sizeof(buf), "%s%08x%08x", prefix,
@@ -679,22 +710,21 @@ std::string SipTransport::build_sdp_answer_() const {
   const uint32_t remote_ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   std::string local_ip = "0.0.0.0";
   this->local_ip_for_peer_(remote_ip, &local_ip);
+  if (this->rtp_tx_payload_type_ != this->rtp_rx_payload_type_ ||
+      !(this->selected_tx_format_ == this->selected_rx_format_)) {
+    ESP_LOGE(TAG, "SIP SDP answer refused: direct SIP requires one common wire PCM format");
+    return "";
+  }
   const char *tx_enc = rtp_encoding(this->selected_tx_format_);
-  const char *rx_enc = rtp_encoding(this->selected_rx_format_);
-  if (tx_enc == nullptr) tx_enc = "L16";
-  if (rx_enc == nullptr) rx_enc = "L16";
-  const bool same_payload = this->rtp_tx_payload_type_ == this->rtp_rx_payload_type_;
-  std::string payloads = std::to_string(this->rtp_tx_payload_type_);
-  if (!same_payload) payloads += " " + std::to_string(this->rtp_rx_payload_type_);
+  if (tx_enc == nullptr) {
+    ESP_LOGE(TAG, "SIP SDP answer refused: selected wire PCM format is not RTP-mappable");
+    return "";
+  }
+  const std::string payloads = std::to_string(this->rtp_tx_payload_type_);
   std::string maps;
   maps += "a=rtpmap:" + std::to_string(this->rtp_tx_payload_type_) + " " + tx_enc + "/" +
           std::to_string(this->selected_tx_format_.sample_rate) + "/" +
           std::to_string(this->selected_tx_format_.channels) + "\r\n";
-  if (!same_payload) {
-    maps += "a=rtpmap:" + std::to_string(this->rtp_rx_payload_type_) + " " + rx_enc + "/" +
-            std::to_string(this->selected_rx_format_.sample_rate) + "/" +
-            std::to_string(this->selected_rx_format_.channels) + "\r\n";
-  }
   return "v=0\r\n"
          "o=- 0 0 IN IP4 " + local_ip + "\r\n"
          "s=ESPHome Intercom\r\n"
@@ -710,6 +740,7 @@ std::string SipTransport::build_sdp_answer_() const {
 bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t fallback_ip) {
   uint16_t media_port = 0;
   uint32_t media_ip = fallback_ip;
+  uint8_t media_ptime = 20;
   bool selected_tx = false;
   bool selected_rx = false;
   AudioFormat selected_tx_format;
@@ -723,6 +754,7 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t f
       if (candidate.sample_rate == remote.sample_rate &&
           candidate.pcm_format == remote.pcm_format &&
           candidate.channels == remote.channels &&
+          candidate.frame_ms == remote.frame_ms &&
           candidate.nominal_frame_bytes() <= UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
         if (local != nullptr) *local = candidate;
         return true;
@@ -730,6 +762,18 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t f
     }
     return false;
   };
+  size_t ptime_pos = 0;
+  while (ptime_pos < sdp.size()) {
+    size_t end = sdp.find("\r\n", ptime_pos);
+    if (end == std::string::npos) end = sdp.size();
+    const std::string line = sdp.substr(ptime_pos, end - ptime_pos);
+    if (line.rfind("a=ptime:", 0) == 0) {
+      const unsigned parsed = static_cast<unsigned>(std::strtoul(line.substr(8).c_str(), nullptr, 10));
+      if (parsed == 10 || parsed == 20 || parsed == 32) media_ptime = static_cast<uint8_t>(parsed);
+    }
+    if (end == sdp.size()) break;
+    ptime_pos = end + 2;
+  }
   size_t pos = 0;
   while (pos < sdp.size()) {
     size_t end = sdp.find("\r\n", pos);
@@ -744,6 +788,7 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t f
       AudioFormat fmt;
       uint8_t pt = 0;
       if (parse_rtpmap_format(line, &fmt, &pt)) {
+        fmt.frame_ms = media_ptime;
         AudioFormat local_rx;
         AudioFormat local_tx;
         const bool tx_ok = supports_wire_format(this->offer_tx_formats_, fmt, &local_tx);
@@ -836,7 +881,16 @@ bool SipTransport::send_request_(const std::string &method, const std::string &b
   const uint32_t ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   const uint16_t port = this->remote_sip_port_.load(std::memory_order_acquire);
   if (ip == 0 || port == 0 || this->call_id_.empty()) return false;
-  if (this->branch_.empty()) this->branch_ = "z9hG4bK" + make_token("");
+  std::string branch;
+  if (method == "INVITE") {
+    if (this->branch_.empty()) this->branch_ = "z9hG4bK" + make_token("");
+    branch = this->branch_;
+  } else if (method == "CANCEL") {
+    if (this->branch_.empty()) this->branch_ = "z9hG4bK" + make_token("");
+    branch = this->branch_;
+  } else {
+    branch = "z9hG4bK" + make_token("");
+  }
   std::string local_ip = "0.0.0.0";
   this->local_ip_for_peer_(ip, &local_ip);
   const std::string request_uri = this->remote_uri_.empty()
@@ -845,7 +899,7 @@ bool SipTransport::send_request_(const std::string &method, const std::string &b
   const char *transport = this->remote_sip_tcp_.load(std::memory_order_acquire) ? "TCP" : "UDP";
   std::string msg = method + " " + request_uri + " SIP/2.0\r\n";
   msg += "Via: SIP/2.0/" + std::string(transport) + " " + local_ip + ":" +
-         std::to_string(this->sip_port_) + ";branch=" + this->branch_ + ";rport\r\n";
+         std::to_string(this->sip_port_) + ";branch=" + branch + ";rport\r\n";
   msg += "Max-Forwards: 70\r\n";
   msg += "From: " + this->local_uri_ + ";tag=" + this->local_tag_ + "\r\n";
   msg += "To: " + this->remote_uri_;
@@ -874,7 +928,7 @@ bool SipTransport::send_response_(uint16_t status, const char *reason, const std
   const uint16_t port = this->remote_sip_port_.load(std::memory_order_acquire);
   if (ip == 0 || port == 0 || this->last_invite_via_.empty()) return false;
   std::string msg = "SIP/2.0 " + std::to_string(status) + " " + reason + "\r\n";
-  msg += "Via: " + this->last_invite_via_ + "\r\n";
+  msg += "Via: " + response_via_with_rport(this->last_invite_via_, ip, port) + "\r\n";
   msg += "From: " + this->last_invite_from_ + "\r\n";
   msg += "To: " + this->last_invite_to_;
   if (this->last_invite_to_.find("tag=") == std::string::npos) {
@@ -890,6 +944,9 @@ bool SipTransport::send_response_(uint16_t status, const char *reason, const std
   if (!clean_reason.empty()) {
     msg += "Reason: X-Intercom;cause=" + std::to_string(status) + ";text=" + sip_quoted(clean_reason) + "\r\n";
     msg += "X-Intercom-Decline-Reason: " + clean_reason + "\r\n";
+  }
+  if (status == 405) {
+    msg += "Allow: ACK, BYE, CANCEL, INVITE, OPTIONS\r\n";
   }
   if (!body.empty()) msg += "Content-Type: application/sdp\r\n";
   msg += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
@@ -909,7 +966,7 @@ bool SipTransport::send_stateless_response_(const std::string &request, const so
   const std::string cseq = header_value(request, "CSeq");
   if (via.empty() || from.empty() || to.empty() || call_id.empty() || cseq.empty()) return false;
   std::string msg = "SIP/2.0 " + std::to_string(status) + " " + reason + "\r\n";
-  msg += "Via: " + via + "\r\n";
+  msg += "Via: " + response_via_with_rport(via, ip, port) + "\r\n";
   msg += "From: " + from + "\r\n";
   msg += "To: " + to + "\r\n";
   msg += "Call-ID: " + call_id + "\r\n";
@@ -918,6 +975,9 @@ bool SipTransport::send_stateless_response_(const std::string &request, const so
   if (!clean_reason.empty() && status >= 300) {
     msg += "Reason: X-Intercom;cause=" + std::to_string(status) + ";text=" + sip_quoted(clean_reason) + "\r\n";
     msg += "X-Intercom-Decline-Reason: " + clean_reason + "\r\n";
+  }
+  if (status == 405) {
+    msg += "Allow: ACK, BYE, CANCEL, INVITE, OPTIONS\r\n";
   }
   msg += "Content-Length: 0\r\n\r\n";
   return this->send_sip_(msg, ip, port);
@@ -936,8 +996,12 @@ bool SipTransport::send_invite_(const uint8_t *payload, size_t len) {
   a.s_addr = htonl(ip);
   char ip_text[16];
   inet_ntoa_r(a, ip_text, sizeof(ip_text));
-  this->local_uri_ = "<sip:" + sanitize_user(this->caller_name_) + "@" + local_ip + ">";
-  this->remote_uri_ = "<sip:" + sanitize_user(this->dest_name_) + "@" + std::string(ip_text) + ">";
+  const char *uri_transport = this->remote_sip_tcp_.load(std::memory_order_acquire) ? "tcp" : "udp";
+  this->local_uri_ = "<sip:" + sanitize_user(this->caller_name_) + "@" + local_ip + ":" +
+                     std::to_string(this->sip_port_) + ";transport=" + uri_transport + ">";
+  this->remote_uri_ = "<sip:" + sanitize_user(this->dest_name_) + "@" + std::string(ip_text) + ":" +
+                      std::to_string(this->remote_sip_port_.load(std::memory_order_acquire)) +
+                      ";transport=" + uri_transport + ">";
   ESP_LOGI(TAG, "SIP INVITE call_id=%s from=%s to=%s", this->call_id_.c_str(),
            this->caller_name_.c_str(), this->dest_name_.c_str());
   const std::string sdp = this->build_sdp_offer_();
@@ -1020,7 +1084,15 @@ bool SipTransport::send_control(MessageType type, const uint8_t *payload, size_t
     case MessageType::ANSWER:
       this->outgoing_invite_pending_.store(false, std::memory_order_release);
       this->call_active_.store(true, std::memory_order_release);
-      return this->send_response_(200, "OK", this->build_sdp_answer_());
+      {
+        const std::string answer = this->build_sdp_answer_();
+        if (answer.empty()) {
+          const bool sent = this->send_response_(488, "Not Acceptable Here", "", "media_incompatible");
+          this->reset_dialog_();
+          return sent;
+        }
+        return this->send_response_(200, "OK", answer);
+      }
     case MessageType::DECLINE:
       if (this->outgoing_invite_pending_.load(std::memory_order_acquire)) {
         const bool sent = this->send_request_("CANCEL", "", this->invite_cseq_);
@@ -1071,6 +1143,12 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
     this->reset_dialog_();
     return sent;
   }
+  std::string local_contact_ip = "0.0.0.0";
+  this->local_ip_for_peer_(src_ip, &local_contact_ip);
+  const char *contact_transport = this->remote_sip_tcp_.load(std::memory_order_acquire) ? "tcp" : "udp";
+  const std::string local_contact_user = sanitize_user(sip_user_from_header(this->last_invite_to_));
+  this->local_uri_ = "<sip:" + local_contact_user + "@" + local_contact_ip + ":" +
+                     std::to_string(this->sip_port_) + ";transport=" + contact_transport + ">";
   if (!this->learn_remote_rtp_from_sdp_(body, src_ip)) {
     const bool sent = this->send_response_(488, "Not Acceptable Here");
     this->reset_dialog_();

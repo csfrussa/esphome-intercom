@@ -54,6 +54,7 @@ class _PendingInvite:
     request: sip.SipMessage
     addr: tuple[str, int]
     to_tag: str
+    transport: str
 
 
 @dataclass(slots=True)
@@ -62,10 +63,11 @@ class _ActiveDialog:
     addr: tuple[str, int]
     to_tag: str
     cseq: int
+    transport: str
 
 
 InviteHandler = Callable[[SipInvite], Awaitable[SipInviteResult]]
-TerminateHandler = Callable[[str], Awaitable[None]]
+TerminateHandler = Callable[[str, str], Awaitable[None]]
 SendHandler = Callable[[bytes, tuple[str, int]], None]
 
 
@@ -100,9 +102,36 @@ def _cseq_number(value: str) -> int:
         return 1
 
 
-def _response_headers(request: sip.SipMessage, *, to_tag: str = "") -> list[tuple[str, str]]:
+def _response_via_header(request: sip.SipMessage, addr) -> str:
+    values = request.header_values("Via")
+    value = values[0] if values else ""
+    if not value:
+        return ""
+    try:
+        parsed = sip.parse_via(value)
+    except Exception:
+        return value
+    if not any(key == "rport" for key, _ in parsed.params):
+        return value
+
+    sent_by = parsed.host
+    if parsed.port:
+        sent_by = f"{sent_by}:{parsed.port}"
+    rendered = f"SIP/2.0/{parsed.transport} {sent_by}"
+    for key, val in parsed.params:
+        if key in {"rport", "received"}:
+            continue
+        rendered += f";{key}" if val is None else f";{key}={val}"
+    rendered += f";received={addr[0]};rport={int(addr[1])}"
+    return rendered
+
+
+def _response_headers(request: sip.SipMessage, *, addr=None, to_tag: str = "") -> list[tuple[str, str]]:
     headers: list[tuple[str, str]] = []
-    for name in ("Via", "From", "Call-ID", "CSeq"):
+    via_value = _response_via_header(request, addr) if addr is not None else request.header("Via")
+    if via_value:
+        headers.append(("Via", via_value))
+    for name in ("From", "Call-ID", "CSeq"):
         value = request.header(name)
         if value:
             headers.append((name, value))
@@ -112,6 +141,12 @@ def _response_headers(request: sip.SipMessage, *, to_tag: str = "") -> list[tupl
     if to_value:
         headers.insert(2, ("To", to_value))
     return headers
+
+
+def _unsupported_method_response(method: str) -> tuple[int, str]:
+    if method in sip.KNOWN_UNSUPPORTED_METHODS:
+        return 405, "Method Not Allowed"
+    return 501, "Not Implemented"
 
 
 class SipUdpEndpoint(asyncio.DatagramProtocol):
@@ -133,6 +168,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
         send_override: SendHandler | None = None,
+        signaling_transport: str = "UDP",
     ) -> None:
         self.local_ip = local_ip
         self.local_rtp_port = local_rtp_port or INTERCOM_RTP_PORT
@@ -142,6 +178,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.on_invite = on_invite
         self.on_terminated = on_terminated
         self.send_override = send_override
+        self.signaling_transport = (signaling_transport or "UDP").upper()
         self.transport: asyncio.DatagramTransport | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
         self.active_dialogs: dict[str, _ActiveDialog] = {}
@@ -181,9 +218,11 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         to_tag: str = "",
         decline_reason: str = "",
     ) -> None:
-        headers = _response_headers(request, to_tag=to_tag)
+        headers = _response_headers(request, addr=addr, to_tag=to_tag)
         if body:
             headers.append(("Content-Type", "application/sdp"))
+        if int(status) == 405:
+            headers.append(("Allow", ", ".join(sorted(sip.SUPPORTED_METHODS))))
         clean_reason = _identity_header(decline_reason)
         if clean_reason and int(status) >= 300:
             quoted = clean_reason.replace("\\", "\\\\").replace('"', '\\"')
@@ -204,25 +243,33 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             return
 
         _LOGGER.info("SIP RX %s %s from %s:%s", request.method, request.uri, addr[0], addr[1])
+        if request.method not in sip.SUPPORTED_METHODS:
+            status, reason = _unsupported_method_response(request.method or "")
+            self._send_response(request, addr, status, reason)
+            return
         if request.method == "OPTIONS":
             self._send_response(request, addr, 200, "OK")
             return
         if request.method in {"CANCEL", "BYE"}:
             call_id = request.header("Call-ID")
+            terminal_reason = "cancelled" if request.method == "CANCEL" else "remote_hangup"
             pending = self.pending_invites.pop(call_id, None)
             self.active_dialogs.pop(call_id, None)
             self._send_response(request, addr, 200, "OK")
             if pending is not None:
-                self._send_response(pending.request, pending.addr, 487, "Request Terminated", to_tag=pending.to_tag)
+                self._send_response(
+                    pending.request,
+                    pending.addr,
+                    487,
+                    "Request Terminated",
+                    to_tag=pending.to_tag,
+                    decline_reason=terminal_reason,
+                )
             if self.on_terminated is not None:
-                await self.on_terminated(call_id)
+                await self.on_terminated(call_id, terminal_reason)
             return
         if request.method == "ACK":
             return
-        if request.method != "INVITE":
-            self._send_response(request, addr, 405, "Method Not Allowed")
-            return
-
         self._send_response(request, addr, 100, "Trying")
         invite = self._parse_invite(request, addr)
         if invite is None:
@@ -232,7 +279,12 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         result = await self.on_invite(invite)
         to_tag = result.to_tag or sip.make_tag()
         if result.defer_final:
-            self.pending_invites[invite.call_id] = _PendingInvite(request, addr, to_tag)
+            self.pending_invites[invite.call_id] = _PendingInvite(
+                request,
+                addr,
+                to_tag,
+                self.signaling_transport,
+            )
             self._send_response(request, addr, result.status, result.reason, to_tag=to_tag)
             return
 
@@ -275,6 +327,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 addr=pending.addr,
                 to_tag=pending.to_tag,
                 cseq=_cseq_number(pending.request.header("CSeq")) + 1,
+                transport=pending.transport,
             )
         return True
 
@@ -303,6 +356,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             dialog=ids,
             method="BYE",
             contact_uri=local_uri,
+            transport=dialog.transport,
         )
         raw = sip.build_request("BYE", remote_uri, headers, b"")
         _LOGGER.info("SIP TX BYE call_id=%s to %s:%s", call_id, dialog.addr[0], dialog.addr[1])
@@ -388,6 +442,7 @@ class SipUdpServer:
                     supported_recv_formats=self.supported_recv_formats,
                     on_invite=self.on_invite,
                     on_terminated=self.on_terminated,
+                    signaling_transport="UDP",
                 )
                 return self.endpoint
 
@@ -507,6 +562,7 @@ class SipTcpServer:
             on_invite=self.on_invite,
             on_terminated=self.on_terminated,
             send_override=_send,
+            signaling_transport="TCP",
         )
         self.endpoints.add(endpoint)
         try:

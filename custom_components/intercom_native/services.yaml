@@ -180,6 +180,12 @@ sip_call:
   name: SIP Call
   description: Originate a standards-SIP call from Home Assistant to a roster target or SIP URI.
   fields:
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
     target:
       name: Target
       description: Contact ID/name, number, user@host, or sip:user@host URI.
@@ -336,6 +342,28 @@ phonebook_add_contact:
       required: false
       selector:
         text:
+    tx_formats:
+      name: TX Formats
+      description: Optional TX RTP PCM format tokens, for example 16000:s16le:1:20.
+      required: false
+      selector:
+        text:
+    rx_formats:
+      name: RX Formats
+      description: Optional RX RTP PCM format tokens, for example 48000:s16le:1:10.
+      required: false
+      selector:
+        text:
+    max_payload_bytes:
+      name: Max RTP Payload Bytes
+      description: Optional RTP PCM payload limit. Default is 1200 when omitted.
+      required: false
+      selector:
+        number:
+          min: 256
+          max: 1400
+          step: 1
+          mode: box
 
 phonebook_set_contacts:
   name: Set Phonebook Contacts
@@ -359,3 +387,13 @@ phonebook_export:
 phonebook_push:
   name: Push Phonebook
   description: Push the current central JSON phonebook to all online ESP endpoints.
+
+set_dnd:
+  name: Set HA Softphone DND
+  description: Enable or disable Do Not Disturb on the Home Assistant softphone.
+  fields:
+    dnd:
+      name: DND
+      required: true
+      selector:
+        boolean:

@@ -108,6 +108,101 @@ def _default_call_id(caller: str, callee: str, fallback: str = "") -> str:
     return fallback or caller or callee
 
 
+def _sip_servers(hass: HomeAssistant) -> list[object]:
+    bucket = hass.data.get(DOMAIN, {})
+    endpoint = bucket.get("sip_endpoint")
+    if endpoint is not None:
+        return [endpoint]
+    return [server for server in (bucket.get("sip_server"), bucket.get("sip_tcp_server")) if server is not None]
+
+
+def _sip_endpoint_pending_count(endpoint: object | None) -> int:
+    pending = getattr(endpoint, "pending_invites", None)
+    return len(pending) if isinstance(pending, dict) else 0
+
+
+def _sip_endpoint_active_count(endpoint: object | None) -> int:
+    active = getattr(endpoint, "active_dialogs", None)
+    return len(active) if isinstance(active, dict) else 0
+
+
+def _sip_pending_call_ids(server: object) -> set[str]:
+    pending = getattr(server, "pending_call_ids", None)
+    if callable(pending):
+        try:
+            return set(pending())
+        except Exception:
+            return set()
+    endpoint = getattr(server, "endpoint", None)
+    pending = getattr(endpoint, "pending_invites", None)
+    if isinstance(pending, dict):
+        return set(pending)
+    ids: set[str] = set()
+    endpoints = getattr(server, "endpoints", None)
+    if isinstance(endpoints, set):
+        for item in endpoints:
+            pending = getattr(item, "pending_invites", None)
+            if isinstance(pending, dict):
+                ids.update(pending)
+    return ids
+
+
+def _sip_active_dialog_count(server: object | None) -> int:
+    count_fn = getattr(server, "active_dialog_count", None)
+    if callable(count_fn):
+        try:
+            return int(count_fn())
+        except Exception:
+            return 0
+    endpoint = getattr(server, "endpoint", None)
+    count = _sip_endpoint_active_count(endpoint)
+    endpoints = getattr(server, "endpoints", None)
+    if isinstance(endpoints, set):
+        count += sum(_sip_endpoint_active_count(item) for item in endpoints)
+    return count
+
+
+def _sip_pending_invite_count(hass: HomeAssistant) -> int:
+    return sum(len(_sip_pending_call_ids(server)) for server in _sip_servers(hass))
+
+
+def _sip_server_for_pending_call(hass: HomeAssistant, call_id: str) -> object | None:
+    if not call_id:
+        return None
+    manager = hass.data.get(DOMAIN, {}).get("sip_endpoint")
+    server_for_pending = getattr(manager, "server_for_pending_call", None)
+    if callable(server_for_pending):
+        return server_for_pending(call_id)
+    for server in _sip_servers(hass):
+        if call_id in _sip_pending_call_ids(server):
+            return server
+    return None
+
+
+def _sip_send_final_response(
+    hass: HomeAssistant,
+    call_id: str,
+    status: int,
+    reason: str,
+    *,
+    answer_sdp: str = "",
+    decline_reason: str = "",
+) -> bool:
+    server = _sip_server_for_pending_call(hass, call_id)
+    candidates = [server] if server is not None else _sip_servers(hass)
+    for item in candidates:
+        send = getattr(item, "send_final_response", None)
+        if callable(send) and send(
+            call_id,
+            status,
+            reason,
+            answer_sdp=answer_sdp,
+            decline_reason=decline_reason,
+        ):
+            return True
+    return False
+
+
 def _session_register(key: str, session: "IntercomSession") -> None:
     for call_id, indexed_key in list(_session_call_index.items()):
         if indexed_key == key:
@@ -237,6 +332,7 @@ def _ha_softphone_dnd(hass: HomeAssistant) -> bool:
 def _ha_softphone_target_from_roster(hass: HomeAssistant, selector: str) -> dict[str, Any] | None:
     """Resolve a HA softphone target from the shared JSON phonebook."""
     from .roster import find_entry, parse_roster_json
+    from .sip import parse_sip_uri, SipError
 
     wanted = str(selector or "").strip()
     if not wanted:
@@ -252,15 +348,24 @@ def _ha_softphone_target_from_roster(hass: HomeAssistant, selector: str) -> dict
     transport = str(metadata.get("transport") or ("sip" if entry.sip_uri else "")).lower()
     host = entry.address
     if not host and entry.sip_uri and "@" in entry.sip_uri:
-        host = entry.sip_uri.rsplit("@", 1)[1].split(":", 1)[0].strip()
+        try:
+            host = parse_sip_uri(entry.sip_uri).host
+        except SipError:
+            host = ""
+    def _format_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if item]
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(";") if item.strip()]
+        return []
     return {
         "device_id": entry.id,
         "name": entry.display_name,
         "host": host,
         "transport": transport,
         "audio_mode": str(metadata.get("audio_mode") or "full_duplex"),
-        "tx_formats": list(metadata.get("tx_formats") or []),
-        "rx_formats": list(metadata.get("rx_formats") or []),
+        "tx_formats": _format_list(metadata.get("tx_formats")),
+        "rx_formats": _format_list(metadata.get("rx_formats")),
         "sip_port": metadata.get("sip_port"),
         "rtp_port": metadata.get("rtp_port"),
     }
@@ -269,15 +374,13 @@ def _ha_softphone_target_from_roster(hass: HomeAssistant, selector: str) -> dict
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
     pending = hass.data.get(DOMAIN, {}).get("sip_pending", {})
-    server = hass.data.get(DOMAIN, {}).get("sip_server")
-    endpoint = getattr(server, "endpoint", None)
-    active_dialogs = getattr(endpoint, "active_dialogs", {})
-    active_dialog_count = len(active_dialogs) if isinstance(active_dialogs, dict) else 0
+    server_pending_count = _sip_pending_invite_count(hass)
+    active_dialog_count = sum(_sip_active_dialog_count(server) for server in _sip_servers(hass))
     state = {
         "device_id": HA_SOFTPHONE_DEVICE_ID,
         "session_device_id": store.get("session_device_id", ""),
         "dnd": _ha_softphone_dnd(hass),
-        "busy": bool(store.get("session_device_id") or pending or active_dialog_count),
+        "busy": bool(store.get("session_device_id") or pending or server_pending_count or active_dialog_count),
         "state": store.get("state", "idle"),
         "caller": store.get("caller", ""),
         "callee": store.get("callee", ""),
@@ -1952,7 +2055,7 @@ class IntercomAudioWebSocketView(HomeAssistantView):
                     call_id = next(iter(pending))
                     selector = call_id
                 invite = pending.get(call_id) if call_id else None
-                server = hass.data.get(DOMAIN, {}).get("sip_server")
+                server = _sip_server_for_pending_call(hass, call_id)
                 if invite is None or server is None:
                     await _ws_send_json(ws, {"state": "error", "error": "no_pending_ha_sip_call"})
                     return None
@@ -2075,6 +2178,40 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             return None
 
         if kind in ("stop", "hangup"):
+            if device_id == HA_SOFTPHONE_DEVICE_ID:
+                pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+                if not call_id and len(pending) == 1:
+                    call_id = next(iter(pending))
+                    selector = call_id
+                invite = pending.pop(call_id, None) if call_id else None
+                if invite is not None:
+                    sent = _sip_send_final_response(
+                        hass,
+                        call_id,
+                        487,
+                        "Request Terminated",
+                        decline_reason=TerminalReason.LOCAL_HANGUP.value,
+                    )
+                    _set_ha_softphone_call_state(
+                        hass,
+                        "disconnected",
+                        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                        caller=invite.caller,
+                        callee=_ha_peer_name(hass),
+                        peer_name=invite.caller,
+                        direction="incoming",
+                        call_id=call_id,
+                        reason=TerminalReason.LOCAL_HANGUP.value,
+                        origin="self",
+                    )
+                    _LOGGER.info(
+                        "HA softphone rejected pending SIP call_id=%s via %s sent=%s",
+                        call_id,
+                        kind,
+                        sent,
+                    )
+                    await _ws_send_json(ws, {"state": "idle", "success": True, "stopped": True})
+                    return None
             if call_id:
                 session = _session_pop(call_id)
                 if session is not None:
@@ -2546,7 +2683,7 @@ async def websocket_answer(
         if not call_id and len(pending) == 1:
             call_id = next(iter(pending))
         invite = pending.get(call_id) if call_id else None
-        server = hass.data.get(DOMAIN, {}).get("sip_server")
+        server = _sip_server_for_pending_call(hass, call_id)
         if invite is None or server is None:
             connection.send_error(msg_id, "not_found", f"No pending HA SIP call {call_id or '(current)'}")
             return
@@ -2821,10 +2958,16 @@ async def websocket_decline(
         pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
         if not call_id and len(pending) == 1:
             call_id = next(iter(pending))
-        server = hass.data.get(DOMAIN, {}).get("sip_server")
+        server = _sip_server_for_pending_call(hass, call_id)
         invite = pending.pop(call_id, None) if call_id else None
         if invite is not None and server is not None:
-            server.send_final_response(call_id, 486, "Busy Here", decline_reason=TerminalReason.DECLINED.value)
+            _sip_send_final_response(
+                hass,
+                call_id,
+                486,
+                "Busy Here",
+                decline_reason=TerminalReason.DECLINED.value,
+            )
             _set_ha_softphone_call_state(
                 hass,
                 "declined",

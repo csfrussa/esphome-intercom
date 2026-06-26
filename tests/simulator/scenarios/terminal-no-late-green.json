@@ -1,0 +1,39 @@
+{
+  "name": "terminal-no-late-green",
+  "description": "Late media/ACK after terminal state cannot resurrect streaming or green/spin LED.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "ha_call",
+        "target": "Virtual S3",
+        "caller": "Casa"
+      }
+    },
+    {
+      "inject_event": {
+        "type": "ha_cancel",
+        "call_id": "Casa<->Virtual S3"
+      }
+    },
+    {
+      "inject_event": {
+        "type": "late_media_after_terminal",
+        "call_id": "Casa<->Virtual S3"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "idle"
+        },
+        "intercom": {
+          "state": "idle"
+        },
+        "led": {
+          "effect": null,
+          "forbidden_effect": "Spin"
+        }
+      }
+    }
+  ]
+}

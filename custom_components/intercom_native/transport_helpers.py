@@ -100,6 +100,7 @@ def _endpoint_ports_for_host(hass: HomeAssistant, host: str) -> dict | None:
                     "udp_control_port": metadata.get("udp_control_port"),
                     "sip_port": metadata.get("sip_port"),
                     "rtp_port": metadata.get("rtp_port"),
+                    "sip_transport": metadata.get("sip_transport") or metadata.get("signaling_transport"),
                 }
         except Exception as err:
             _LOGGER.debug("roster endpoint lookup failed for %s: %s", host, err)
@@ -156,6 +157,7 @@ def build_transport(
             remote_sip_port=int(endpoint.get("sip_port") or cfg.get("sip_port") or 5060),
             local_sip_port=int(cfg.get("sip_port") or 5060),
             local_rtp_port=int(cfg.get("rtp_port") or 40000) + 20,
+            signaling_transport=str(endpoint.get("sip_transport") or "tcp"),
             on_audio=callbacks.on_audio,
             on_disconnected=callbacks.on_disconnected,
             on_ringing=callbacks.on_ringing,

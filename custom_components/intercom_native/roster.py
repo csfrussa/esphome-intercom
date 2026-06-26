@@ -47,7 +47,9 @@ def _entry_from_mapping(raw: dict[str, Any]) -> RosterEntry:
     entry_id = str(raw.get("id") or raw.get("name") or "").strip()
     if not entry_id:
         raise RosterError("roster entry missing id")
-    kind = str(raw.get("kind") or "esp").strip().lower()
+    if not raw.get("kind"):
+        raise RosterError(f"roster entry {entry_id!r} missing kind")
+    kind = str(raw.get("kind") or "").strip().lower()
     if kind not in {"ha", "esp", "phone", "sip", "group"}:
         raise RosterError(f"unsupported roster kind {kind!r}")
     return RosterEntry(
@@ -146,6 +148,15 @@ def _sip_transport(entry: RosterEntry | None) -> str:
     return ""
 
 
+def _sip_uri_transport(uri: str) -> str:
+    marker = ";transport="
+    lower = uri.lower()
+    if marker not in lower:
+        return ""
+    value = lower.split(marker, 1)[1].split(";", 1)[0].strip()
+    return value if value in {"tcp", "udp"} else ""
+
+
 def _sip_uri(user: str, host: str, port: Any = None, transport: str = "") -> str:
     suffix = f";transport={transport.lower()}" if transport.lower() in {"tcp", "udp"} else ""
     return f"sip:{user}@{host}{_port_suffix(port)}{suffix}"
@@ -196,13 +207,34 @@ def resolve_target(
                 return RouteDecision("requires_pbx", number, "", entry=entry, reason="ha_required")
             return RouteDecision("requires_pbx", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.kind == "sip" and entry.sip_uri:
+            if not _sip_uri_transport(entry.sip_uri) and not _sip_transport(entry):
+                if ha is not None:
+                    return RouteDecision(
+                        "via_ha",
+                        entry.id,
+                        _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
+                        entry=entry,
+                        reason="missing_direct_transport",
+                    )
+                return RouteDecision("via_ha", entry.id, "", entry=entry, reason="missing_direct_transport")
             return RouteDecision("direct", entry.id, entry.sip_uri, entry=entry)
         if entry.kind == "group":
             return RouteDecision("group", entry.id, "", entry=entry)
         if (route_via_ha or entry.route_via_ha or not entry.address) and ha is not None and entry.kind != "ha":
             return RouteDecision("via_ha", entry.id, _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.address:
-            return RouteDecision("direct", entry.id, _sip_uri(entry.id, entry.address, _entry_sip_port(entry), _sip_transport(entry)), entry=entry)
+            transport = _sip_transport(entry)
+            if entry.kind == "esp" and not transport:
+                if ha is not None:
+                    return RouteDecision(
+                        "via_ha",
+                        entry.id,
+                        _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
+                        entry=entry,
+                        reason="missing_direct_transport",
+                    )
+                return RouteDecision("via_ha", entry.id, "", entry=entry, reason="missing_direct_transport")
+            return RouteDecision("direct", entry.id, _sip_uri(entry.id, entry.address, _entry_sip_port(entry), transport), entry=entry)
 
     if _looks_phone(target):
         if ha is None:

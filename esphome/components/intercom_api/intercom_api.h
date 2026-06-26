@@ -669,6 +669,7 @@ class IntercomApi : public Component {
   void set_terminal_decline_(const std::string &call_id, const std::string &reason);
   void clear_terminal_decline_();
   void snapshot_terminal_decline_(std::string *call_id, std::string *reason, uint32_t *age_ms) const;
+  bool recent_terminal_call_(const std::string &call_id, std::string *reason = nullptr) const;
   bool ensure_mic_processing_buffer_();
 
   std::atomic<float> mic_gain_{1.0f};
