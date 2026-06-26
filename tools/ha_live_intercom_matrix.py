@@ -289,9 +289,7 @@ async def ha_to_esp_cancel(ha: HaClient, device: DeviceSpec) -> None:
         async with Sampler(ha, device, "ha_to_esp_cancel") as sampler:
             await ha.service("intercom_native", "call", {"device_id": device.device_id})
             await wait_state(ha, device.state_entity, {"Ringing", "Incoming"}, label=f"{device.key} ringing")
-            caller = await ha.state(device.caller_entity)
-            if str(caller.get("state")) != "Casa":
-                raise AssertionError(f"{device.key}: caller should be Casa, got {caller}")
+            await wait_text(ha, device.caller_entity, {"Casa"}, timeout=3, label=f"{device.key} caller identity")
             await asyncio.sleep(0.5)
             await ha.service("intercom_native", "sip_hangup", {})
             await wait_state(ha, device.state_entity, {"Idle"}, label=f"{device.key} cancel idle")
@@ -588,9 +586,13 @@ async def esp_to_esp_decline(
                     timeout=10,
                     label=f"{dest.key} {label} ringing",
                 )
-                caller = await ha.state(dest.caller_entity)
-                if str(caller.get("state")) != source.name:
-                    raise AssertionError(f"{label}: {dest.key} caller should be {source.name}, got {caller}")
+                await wait_text(
+                    ha,
+                    dest.caller_entity,
+                    {source.name},
+                    timeout=3,
+                    label=f"{label}: {dest.key} caller identity",
+                )
                 await asyncio.sleep(0.5)
                 await ha.service("intercom_native", "decline", {"device_id": dest.device_id, "reason": "Test Decline"})
                 await wait_state(ha, dest.state_entity, {"Idle"}, timeout=10, label=f"{dest.key} {label} idle")

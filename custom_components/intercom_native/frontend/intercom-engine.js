@@ -442,6 +442,38 @@ class IntercomEngine extends EventTarget {
     this._setState("STREAMING");
   }
 
+  async answerHaSoftphone(deviceInfo, context = {}) {
+    await this._connect(HA_SOFTPHONE_DEVICE_ID);
+    this._resetStats();
+    const mediaInfo = {
+      ...(deviceInfo || {}),
+      device_id: HA_SOFTPHONE_DEVICE_ID,
+      audio_mode: deviceInfo?.audio_mode || context.audio_mode || "full_duplex",
+    };
+    const pendingFormats = {
+      state: "ringing",
+      tx_format: context.tx_format || "",
+      rx_format: context.rx_format || "",
+    };
+    if (!await this._setupAudioOrAbort(HA_SOFTPHONE_DEVICE_ID, mediaInfo, pendingFormats)) return null;
+    const reply = await this._sendControl(
+      {
+        type: "answer",
+        device_id: HA_SOFTPHONE_DEVICE_ID,
+        call_id: context.call_id || "",
+      },
+      true,
+      (msg) => this._isTerminalControlReply(msg),
+    );
+    if (reply?.state !== "streaming") {
+      this._setState("ERROR");
+      await this.close("ha_softphone_answer_failed", { sendHangup: false });
+      return reply || { state: "error", error: "answer_failed" };
+    }
+    this._setState("STREAMING");
+    return reply;
+  }
+
   async answerEspCall(deviceInfo, context = {}) {
     await this._connect(deviceInfo.device_id);
     this._resetStats();

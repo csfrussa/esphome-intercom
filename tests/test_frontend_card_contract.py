@@ -75,8 +75,10 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")
         ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]
-        self.assertIn('type: "intercom_native/answer"', ha_answer)
-        self.assertIn("intercomEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID", ha_answer)
+        self.assertIn("intercomEngine.answerHaSoftphone(sessionInfo", ha_answer)
+        self.assertIn("tx_format: this._sessionTxFormat", ha_answer)
+        self.assertNotIn('type: "intercom_native/answer"', ha_answer)
+        self.assertNotIn("intercomEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID", ha_answer)
         self.assertNotIn("this._sessionDeviceId()", ha_answer)
 
         decline = _method_body(self.source, "async _decline")

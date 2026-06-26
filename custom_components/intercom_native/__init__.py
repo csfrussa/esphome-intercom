@@ -1906,6 +1906,15 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                     remote_host=decision_uri.host,
                     remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
                 )
+                if result != "ringing":
+                    decline_reason = result if result and result != "sip_486" else "busy"
+                    await client.close()
+                    return SipInviteResult(
+                        486,
+                        "Busy Here",
+                        to_tag="",
+                        decline_reason=decline_reason,
+                    )
                 active = bucket.setdefault("sip_clients", {})
                 active[client.dialog_ids.call_id] = client
                 bucket.setdefault("sip_bridge_clients", {})[invite.call_id] = client.dialog_ids.call_id
@@ -2023,6 +2032,9 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 peer_name=invite.caller,
                 direction="incoming",
                 call_id=invite.call_id,
+                tx_format=invite.send_format.audio_format.wire_token(),
+                rx_format=invite.recv_format.audio_format.wire_token(),
+                audio_mode="full_duplex",
                 route_kind=decision.kind,
                 sip_uri=decision.sip_uri,
             )
@@ -2038,6 +2050,30 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
 
     async def _on_terminated(call_id: str) -> None:
         bucket = hass.data.setdefault(DOMAIN, {})
+        pending = bucket.setdefault("sip_pending", {})
+        invite = pending.pop(call_id, None)
+        session = _session_pop(call_id) or _session_pop(HA_SOFTPHONE_DEVICE_ID)
+        softphone_store = bucket.get("ha_softphone", {})
+        softphone_call_id = str(softphone_store.get("call_id") or "")
+        if session is not None:
+            await session.stop(send_signaling=False)
+        if (
+            invite is not None
+            or session is not None
+            or (call_id and softphone_call_id == call_id)
+        ):
+            _set_ha_softphone_call_state(
+                hass,
+                "disconnected",
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=(invite.caller if invite is not None else ""),
+                callee=(invite.target if invite is not None else _ha_peer_name(hass)),
+                peer_name=(invite.caller if invite is not None else ""),
+                direction="incoming",
+                call_id=call_id,
+                reason="remote_hangup",
+                origin="remote",
+            )
         relay = bucket.setdefault("sip_relays", {}).pop(call_id, None)
         if relay is not None:
             await relay.stop()

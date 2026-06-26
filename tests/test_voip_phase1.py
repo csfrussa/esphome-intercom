@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 import asyncio
+import contextlib
+import socket
 import sys
 import types
 import unittest
@@ -44,6 +46,22 @@ roster = _load_intercom_module("roster")
 sip_client = _load_intercom_module("sip_client")
 sip_listener = _load_intercom_module("sip_listener")
 sip_rtp_bridge = _load_intercom_module("sip_rtp_bridge")
+
+
+@contextlib.contextmanager
+def _reserved_udp_ports(count: int):
+    sockets = []
+    try:
+        ports = []
+        for _ in range(count):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", 0))
+            sockets.append(sock)
+            ports.append(sock.getsockname()[1])
+        yield ports
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 class SipProfileTest(unittest.TestCase):
@@ -452,14 +470,91 @@ class RosterResolverTest(unittest.TestCase):
 
 
 class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_busy_bridge_target_returns_terminal_response_without_ringing(self) -> None:
+        local = "127.0.0.1"
+        with _reserved_udp_ports(3) as ports:
+            ha_sip, caller_rtp, dest_sip = ports
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
+        stats = {"dest_invites": 0}
+
+        async def dest_invite(invite):
+            stats["dest_invites"] += 1
+            return sip_listener.SipInviteResult(
+                486,
+                "Busy Here",
+                decline_reason="busy",
+            )
+
+        async def ha_invite(invite):
+            entries = [
+                roster.RosterEntry(id="HA", kind="ha", address=local, metadata={"sip_port": ha_sip}),
+                roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip}),
+            ]
+            decision = roster.resolve_target(invite.target, entries, route_via_ha=True)
+            self.assertIsNotNone(decision.entry)
+            dest_client = sip_client.SipCallClient(
+                local_ip=local,
+                local_name=invite.caller or "HA",
+                local_sip_port=ha_sip,
+                local_rtp_port=caller_rtp + 2,
+                supported_formats=[invite.selected_format.audio_format],
+            )
+            try:
+                result = await dest_client.invite(
+                    target=decision.entry.id,
+                    remote_host=decision.entry.address,
+                    remote_sip_port=decision.entry.metadata["sip_port"],
+                )
+            finally:
+                await dest_client.close()
+            self.assertNotEqual(result, "ringing")
+            return sip_listener.SipInviteResult(
+                486,
+                "Busy Here",
+                decline_reason=result if result != "sip_486" else "busy",
+            )
+
+        dest_server = sip_listener.SipUdpServer(
+            host=local,
+            port=dest_sip,
+            local_ip=local,
+            local_rtp_port=caller_rtp + 4,
+            supported_formats=[audio],
+            on_invite=dest_invite,
+        )
+        ha_server = sip_listener.SipUdpServer(
+            host=local,
+            port=ha_sip,
+            local_ip=local,
+            local_rtp_port=caller_rtp + 6,
+            supported_formats=[audio],
+            on_invite=ha_invite,
+        )
+        self.assertTrue(await dest_server.start())
+        self.assertTrue(await ha_server.start())
+        caller = sip_client.SipCallClient(
+            local_ip=local,
+            local_name="Spotpear",
+            local_sip_port=5066,
+            local_rtp_port=caller_rtp,
+            supported_formats=[audio],
+        )
+        try:
+            self.assertEqual(
+                await caller.invite(target="Cucina", remote_host=local, remote_sip_port=ha_sip),
+                "busy",
+            )
+            self.assertIsNone(caller.dialog)
+            self.assertEqual(stats["dest_invites"], 1)
+        finally:
+            await caller.close()
+            await ha_server.stop()
+            await dest_server.stop()
+
     async def test_symbolic_target_bridges_through_ha_with_rtp_relay(self) -> None:
         local = "127.0.0.1"
-        ha_sip = 5070
-        caller_rtp = 41700
-        dest_sip = 5072
-        dest_rtp = 41720
-        ha_rtp_left = 41740
-        ha_rtp_right = 41742
+        with _reserved_udp_ports(6) as ports:
+            ha_sip, caller_rtp, dest_sip, dest_rtp, ha_rtp_left, ha_rtp_right = ports
         audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
         stats = {"dest_invites": 0, "caller_rtp_rx": 0, "dest_rtp_rx": 0}
 

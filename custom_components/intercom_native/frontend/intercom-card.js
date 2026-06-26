@@ -48,6 +48,9 @@ class IntercomCard extends HTMLElement {
     this._sessionCaller = "";
     this._activeSessionDeviceId = null;
     this._activeCallId = "";
+    this._sessionTxFormat = "";
+    this._sessionRxFormat = "";
+    this._sessionAudioMode = "";
     this._softphoneDnd = false;
     this._softphoneTargetDeviceId = null;
     this._softphoneStateLoaded = false;
@@ -277,6 +280,9 @@ class IntercomCard extends HTMLElement {
     if (Object.prototype.hasOwnProperty.call(data, "dnd")) this._softphoneDnd = !!data.dnd;
     if (managedSession) {
       if (data.call_id) this._activeCallId = data.call_id;
+      if (data.tx_format) this._sessionTxFormat = data.tx_format;
+      if (data.rx_format) this._sessionRxFormat = data.rx_format;
+      if (data.audio_mode) this._sessionAudioMode = data.audio_mode;
       if (data.session_device_id || (data.device_id && data.device_id !== HA_SOFTPHONE_DEVICE_ID)) {
         this._activeSessionDeviceId = data.session_device_id || data.device_id;
       }
@@ -292,6 +298,9 @@ class IntercomCard extends HTMLElement {
         this._sessionCaller = "";
         this._activeSessionDeviceId = null;
         this._activeCallId = "";
+        this._sessionTxFormat = "";
+        this._sessionRxFormat = "";
+        this._sessionAudioMode = "";
         this._destRinging = false;
         this._callMode = null;
       }
@@ -1748,21 +1757,22 @@ class IntercomCard extends HTMLElement {
         const sessionInfo = {
           ...(deviceInfo || {}),
           device_id: HA_SOFTPHONE_DEVICE_ID,
-          audio_mode: "full_duplex",
+          audio_mode: this._sessionAudioMode || "full_duplex",
+          tx_formats: this._sessionTxFormat ? [this._sessionTxFormat] : undefined,
+          rx_formats: this._sessionRxFormat ? [this._sessionRxFormat] : undefined,
           softphone: true,
         };
         this._activeDeviceInfo = sessionInfo;
         this._activeSessionDeviceId = HA_SOFTPHONE_DEVICE_ID;
         this._callMode = "softphone";
-        const reply = await this._hass.connection.sendMessagePromise({
-          type: "intercom_native/answer",
-          device_id: HA_SOFTPHONE_DEVICE_ID,
+        const reply = await intercomEngine.answerHaSoftphone(sessionInfo, {
           call_id: this._sessionCallId(),
+          tx_format: this._sessionTxFormat,
+          rx_format: this._sessionRxFormat,
         });
         if (reply?.state !== "streaming") {
           throw new Error(reply?.error || "Failed to answer HA softphone call");
         }
-        await intercomEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID, reply);
         return;
       }
 
@@ -1861,6 +1871,10 @@ class IntercomCard extends HTMLElement {
       this._sessionState = null;
       this._sessionCaller = "";
       this._activeSessionDeviceId = null;
+      this._activeCallId = "";
+      this._sessionTxFormat = "";
+      this._sessionRxFormat = "";
+      this._sessionAudioMode = "";
     }
   }
 
@@ -1965,6 +1979,9 @@ class IntercomCard extends HTMLElement {
         this._sessionState = outgoingRinging ? "outgoing" : rawState;
         this._activeSessionDeviceId = sessionDeviceId;
         this._activeCallId = result.call_id || "";
+        this._sessionTxFormat = result.tx_format || "";
+        this._sessionRxFormat = result.rx_format || "";
+        this._sessionAudioMode = result.audio_mode || "";
         this._sessionCaller = direction === "outgoing" ? "" : (result.peer_name || result.caller || "");
         const target = result.target_device_id
           ? this._availableDevices.find(d => d.device_id === result.target_device_id)
@@ -1981,6 +1998,15 @@ class IntercomCard extends HTMLElement {
           sessionDeviceId || HA_SOFTPHONE_DEVICE_ID,
           result,
         );
+      } else {
+        this._sessionState = "idle";
+        this._sessionCaller = "";
+        this._activeSessionDeviceId = null;
+        this._activeCallId = "";
+        this._sessionTxFormat = "";
+        this._sessionRxFormat = "";
+        this._sessionAudioMode = "";
+        this._destRinging = false;
       }
       this._softphoneStateLoaded = true;
     } catch (err) {

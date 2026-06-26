@@ -287,6 +287,9 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "role": store.get("role", ""),
         "call_id": store.get("call_id", ""),
         "target_device_id": store.get("target_device_id", ""),
+        "tx_format": store.get("tx_format", ""),
+        "rx_format": store.get("rx_format", ""),
+        "audio_mode": store.get("audio_mode", ""),
     }
     session = _session_get(str(state["call_id"] or state["session_device_id"] or ""))
     if session is not None:
@@ -333,6 +336,11 @@ def _set_ha_softphone_call_state(
         store.pop("role", None)
         store.pop("call_id", None)
         store.pop("target_device_id", None)
+        store.pop("tx_format", None)
+        store.pop("rx_format", None)
+        store.pop("audio_mode", None)
+        store.pop("route_kind", None)
+        store.pop("sip_uri", None)
     else:
         canonical = _canonical_session_fields(
             state=state,
@@ -352,8 +360,16 @@ def _set_ha_softphone_call_state(
         store["direction"] = canonical["direction"]
         store["role"] = canonical["role"]
         store["call_id"] = canonical["call_id"]
-        if "target_device_id" in extra:
-            store["target_device_id"] = extra["target_device_id"]
+        for key in (
+            "target_device_id",
+            "tx_format",
+            "rx_format",
+            "audio_mode",
+            "route_kind",
+            "sip_uri",
+        ):
+            if key in extra:
+                store[key] = extra[key]
 
     payload = {
         "device_id": HA_SOFTPHONE_DEVICE_ID,
@@ -1930,6 +1946,86 @@ class IntercomAudioWebSocketView(HomeAssistantView):
             return None
 
         if kind == "answer":
+            if device_id == HA_SOFTPHONE_DEVICE_ID:
+                pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+                if not call_id and len(pending) == 1:
+                    call_id = next(iter(pending))
+                    selector = call_id
+                invite = pending.get(call_id) if call_id else None
+                server = hass.data.get(DOMAIN, {}).get("sip_server")
+                if invite is None or server is None:
+                    await _ws_send_json(ws, {"state": "error", "error": "no_pending_ha_sip_call"})
+                    return None
+                cfg = hass.data.get(DOMAIN, {}).get("transport_config", {})
+                local_ip = str(cfg.get("advertise_host") or "").strip()
+                if not local_ip:
+                    from homeassistant.components import network
+
+                    addresses = await network.async_get_announce_addresses(hass)
+                    local_ip = addresses[0] if addresses else ""
+                if not local_ip:
+                    await _ws_send_json(ws, {"state": "error", "error": "ha_advertise_ip_unknown"})
+                    return None
+                next_port = int(
+                    hass.data.setdefault(DOMAIN, {}).get(
+                        "sip_rtp_next_port",
+                        int(cfg.get("rtp_port") or 40000) + 40,
+                    )
+                )
+                hass.data[DOMAIN]["sip_rtp_next_port"] = next_port + 2
+                from .sip_transport import IntercomSipInbound
+
+                transport = IntercomSipInbound(
+                    hass=hass,
+                    invite=invite,
+                    server=server,
+                    local_ip=local_ip,
+                    local_rtp_port=next_port,
+                )
+                session = IntercomSession(
+                    hass=hass,
+                    device_id=HA_SOFTPHONE_DEVICE_ID,
+                    host=invite.source_host,
+                    transport_type="sip",
+                    transport=transport,
+                    call_id=invite.call_id,
+                    caller_name=invite.caller,
+                    local_name=_ha_peer_name(hass),
+                    peer_name=invite.caller,
+                    direction="incoming",
+                    audio_mode="full_duplex",
+                    local_tx_formats=list(HA_BROWSER_TX_FORMATS),
+                    local_rx_formats=list(HA_BROWSER_RX_FORMATS),
+                    peer_tx_formats=[invite.recv_format.audio_format],
+                    peer_rx_formats=[invite.send_format.audio_format],
+                )
+                if not await session.start_ringing(invite.caller):
+                    await _ws_send_json(ws, {"state": "error", "error": "session_prepare_failed"})
+                    return None
+                _session_register(HA_SOFTPHONE_DEVICE_ID, session)
+                session.bind_audio_ws(ws)
+                ok = await session.answer()
+                if not ok:
+                    _session_pop(HA_SOFTPHONE_DEVICE_ID)
+                    await session.stop(send_signaling=False)
+                    await _ws_send_json(ws, {"state": "error", "error": "answer_failed"})
+                    return None
+                pending.pop(invite.call_id, None)
+                _set_ha_softphone_call_state(
+                    hass,
+                    "streaming",
+                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    caller=invite.caller,
+                    callee=_ha_peer_name(hass),
+                    peer_name=invite.caller,
+                    direction="incoming",
+                    call_id=invite.call_id,
+                    tx_format=session.tx_format.wire_token(),
+                    rx_format=session.rx_format.wire_token(),
+                    audio_mode=session.audio_mode,
+                )
+                await _ws_send_json(ws, {"success": True, **_session_audio_payload(session, "streaming")})
+                return session
             session = _session_get(selector)
             ok = await session.answer() if session is not None else False
             await _ws_send_json(ws, _session_audio_payload(session, "streaming") if ok else {"state": "error"})
