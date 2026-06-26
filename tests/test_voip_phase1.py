@@ -478,6 +478,38 @@ class SdpPcmProfileTest(unittest.TestCase):
             [fmt.audio_format for fmt in offered],
         )
 
+    def test_ha_sip_profile_rejects_browser_only_sample_rates(self) -> None:
+        offer = sdp.build_offer_directional(
+            "192.168.1.48",
+            "192.168.1.48",
+            40020,
+            [audio_format.AudioFormat(44100, "s16le", 1, 10)],
+            [audio_format.AudioFormat(44100, "s16le", 1, 10)],
+        )
+        selected = sdp.negotiate_directional(
+            offer,
+            list(audio_format.HA_SIP_PCM_TX_FORMATS),
+            list(audio_format.HA_SIP_PCM_RX_FORMATS),
+        )
+        self.assertIsNone(selected)
+
+    def test_ha_sip_profile_keeps_esp_baseline_16k_32ms(self) -> None:
+        baseline = audio_format.AudioFormat(16000, "s16le", 1, 32)
+        offer = sdp.build_offer_directional(
+            "192.168.1.48",
+            "192.168.1.48",
+            40020,
+            [baseline],
+            [baseline],
+        )
+        selected = sdp.negotiate_directional(
+            offer,
+            list(audio_format.HA_SIP_PCM_TX_FORMATS),
+            list(audio_format.HA_SIP_PCM_RX_FORMATS),
+        )
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.send.audio_format, baseline)
+
 
 class RtpProfileTest(unittest.TestCase):
     def test_rtp_packet_round_trip(self) -> None:

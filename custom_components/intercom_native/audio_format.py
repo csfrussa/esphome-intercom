@@ -124,6 +124,14 @@ def _browser_formats(*, channels: tuple[int, ...]) -> tuple[AudioFormat, ...]:
 
 HA_BROWSER_TX_FORMATS = _browser_formats(channels=(1,))
 HA_BROWSER_RX_FORMATS = _browser_formats(channels=(1, 2))
+HA_SIP_PCM_FORMATS = (
+    AudioFormat(48000, PcmFormat.S16LE, 1, 10),
+    AudioFormat(32000, PcmFormat.S16LE, 1, 10),
+    AudioFormat(16000, PcmFormat.S16LE, 1, 32),
+    AudioFormat(16000, PcmFormat.S16LE, 1, 20),
+)
+HA_SIP_PCM_TX_FORMATS = HA_SIP_PCM_FORMATS
+HA_SIP_PCM_RX_FORMATS = HA_SIP_PCM_FORMATS
 
 
 def pcm_format_from_id(format_id: int) -> PcmFormat:

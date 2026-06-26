@@ -41,6 +41,9 @@ from .audio_format import (
     AudioFormat,
     HA_BROWSER_RX_FORMATS,
     HA_BROWSER_TX_FORMATS,
+    HA_SIP_PCM_FORMATS,
+    HA_SIP_PCM_RX_FORMATS,
+    HA_SIP_PCM_TX_FORMATS,
     LEGACY_AUDIO_FORMAT,
     UDP_SAFE_PAYLOAD_BYTES,
     parse_audio_format_list,
@@ -1065,8 +1068,8 @@ async def _handle_call_service(call: ServiceCall, dest_device: dict | None = Non
             local_name=_ha_peer_name(hass),
             local_sip_port=int(cfg["sip_port"]),
             local_rtp_port=int(cfg["rtp_port"]),
-            supported_send_formats=list(HA_BROWSER_TX_FORMATS),
-            supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
+            supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
+            supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
         )
         result = await client.invite(
             target=dest_device.get("name") or "intercom",
@@ -1552,8 +1555,8 @@ async def _handle_sip_call_target_service(call: ServiceCall) -> None:
         local_name=_ha_peer_name(hass),
         local_sip_port=int(cfg["sip_port"]),
         local_rtp_port=int(cfg["rtp_port"]),
-        supported_send_formats=list(HA_BROWSER_TX_FORMATS),
-        supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
+        supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
+        supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
         signaling_transport=_sip_uri_transport(uri),
     )
     result = await client.invite(
@@ -2207,19 +2210,15 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 bool(dest_call_id),
             )
 
-    supported_formats = [
-        AudioFormat(48000, "s16le", 1, 10),
-        AudioFormat(32000, "s16le", 1, 10),
-        AudioFormat(16000, "s16le", 1, 20),
-    ]
+    supported_formats = list(HA_SIP_PCM_FORMATS)
     server = SipUdpServer(
         host="0.0.0.0",
         port=int(cfg["sip_port"]),
         local_ip=local_ip,
         local_rtp_port=int(cfg["rtp_port"]),
         supported_formats=supported_formats,
-        supported_send_formats=list(HA_BROWSER_TX_FORMATS),
-        supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
+        supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
+        supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
         on_invite=_on_invite,
         on_terminated=_on_terminated,
     )
@@ -2231,8 +2230,8 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
         local_ip=local_ip,
         local_rtp_port=int(cfg["rtp_port"]),
         supported_formats=supported_formats,
-        supported_send_formats=list(HA_BROWSER_TX_FORMATS),
-        supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
+        supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
+        supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
         on_invite=_on_invite,
         on_terminated=_on_terminated,
     )
