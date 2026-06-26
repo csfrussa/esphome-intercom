@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import re
 
@@ -25,7 +26,11 @@ def _virtual_name(path: Path) -> str:
     rel = path.with_suffix("")
     name = "-".join(rel.parts[1:])
     name = re.sub(r"[^a-zA-Z0-9_-]+", "-", name)
-    return f"virtual-{name}.yaml"
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:8]
+    stem = f"virtual-{name}"
+    if len(stem) > 22:
+        stem = f"{stem[:13]}-{digest}"
+    return f"{stem}.yaml"
 
 
 def generate(limit: int | None = None) -> list[Path]:
@@ -55,6 +60,10 @@ external_components:
 
 intercom_simulator:
   source_profile: "{path}"
+  socket_path: "test_runs/simulator/intercom-sim.sock"
+  speaker_output_path: "test_runs/simulator/audio/speaker_output.pcm"
+  microphone_input_path: "tests/simulator/audio/mic_input.pcm"
+  framebuffer_path: "test_runs/simulator/framebuffer.png"
 """
         out.write_text(content, encoding="utf-8")
         written.append(out)

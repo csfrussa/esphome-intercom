@@ -63,6 +63,7 @@ _bridges: Dict[str, "BridgeSession"] = {}
 CALL_EVENT = "intercom_native.call_event"
 WS_AUDIO_RECONNECT_GRACE = 15.0
 WS_AUDIO_WATCHDOG_INTERVAL = 1.0
+HA_SOFTPHONE_BROWSER_TX_READY_TIMEOUT = 2.0
 HA_SOFTPHONE_STORE_KEY = f"{DOMAIN}_ha_softphone"
 HA_SOFTPHONE_STORE_VERSION = 1
 
@@ -636,6 +637,9 @@ class IntercomSession:
         self._audio_ws_task: asyncio.Task | None = None
         self._last_browser_audio = time.monotonic()
         self._browser_audio_frames = 0
+        self._browser_audio_ready = asyncio.Event()
+        self._browser_audio_first_frame_at: float | None = None
+        self._browser_audio_priming = False
 
     def _event_names(self) -> tuple[str, str, str, str, str]:
         """Return caller, callee, local, peer, direction for this HA session."""
@@ -769,6 +773,8 @@ class IntercomSession:
         self._audio_ws = ws
         self._last_browser_audio = time.monotonic()
         self._browser_audio_frames = 0
+        self._browser_audio_ready.clear()
+        self._browser_audio_first_frame_at = None
         _LOGGER.debug(
             "Audio WS bound: device=%s state=%s tx=%s rx=%s mode=%s",
             self.device_id,
@@ -1062,6 +1068,24 @@ class IntercomSession:
             _LOGGER.debug("ANSWER sent to ESP")
         return result
 
+    def allow_browser_audio_priming(self) -> None:
+        """Accept browser PCM before SIP 200 OK on HA softphone inbound answer."""
+        self._browser_audio_priming = True
+
+    def clear_browser_audio_priming(self) -> None:
+        self._browser_audio_priming = False
+
+    async def wait_for_browser_audio_ready(self, timeout: float) -> bool:
+        if not _has_speaker(self.audio_mode):
+            return True
+        if self._browser_audio_frames > 0:
+            return True
+        try:
+            await asyncio.wait_for(self._browser_audio_ready.wait(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     async def start_ringing(self, caller_name: str = "") -> bool:
         """RING back an ESP-initiated MSG_START without answering.
 
@@ -1111,7 +1135,9 @@ class IntercomSession:
 
     def queue_audio(self, data: bytes) -> None:
         """Non-blocking enqueue; drops oldest on full to keep latency bounded."""
-        if not self.is_active or not _has_speaker(self.audio_mode):
+        if not _has_speaker(self.audio_mode):
+            return
+        if not self.is_active and not self._browser_audio_priming:
             return
         expected = self.tx_format.nominal_frame_bytes
         if len(data) != expected:
@@ -1125,6 +1151,17 @@ class IntercomSession:
             return
         self._last_browser_audio = time.monotonic()
         self._browser_audio_frames += 1
+        if self._browser_audio_frames == 1:
+            self._browser_audio_first_frame_at = self._last_browser_audio
+            self._browser_audio_ready.set()
+            _LOGGER.info(
+                "Browser audio first frame: device=%s state=%s bytes=%d tx=%s priming=%s",
+                self.device_id,
+                self._state.value,
+                len(data),
+                self.tx_format.wire_token(),
+                self._browser_audio_priming,
+            )
         if self._browser_audio_frames in (1, 2, 3, 10, 32, 64):
             _LOGGER.debug(
                 "Browser audio frame: device=%s count=%d bytes=%d tx=%s",
@@ -1134,6 +1171,105 @@ class IntercomSession:
                 self.tx_format.wire_token(),
             )
         _put_latest(self._tx_queue, data)
+
+
+async def _finish_ha_softphone_answer_when_audio_ready(
+    hass: HomeAssistant,
+    ws: web.WebSocketResponse,
+    session: IntercomSession,
+    invite: Any,
+) -> None:
+    """Complete inbound SIP answer only after browser TX audio is real.
+
+    The browser uses the same websocket for control and PCM. Waiting inside the
+    control handler would block the server from reading the priming PCM frames,
+    so this runs as a background task while the websocket loop continues.
+    """
+    requested_at = time.monotonic()
+    call_id = invite.call_id
+    _LOGGER.info(
+        "HA softphone answer pending browser TX readiness: call_id=%s caller=%s tx=%s rx=%s timeout=%.1fs",
+        call_id,
+        invite.caller,
+        session.tx_format.wire_token(),
+        session.rx_format.wire_token(),
+        HA_SOFTPHONE_BROWSER_TX_READY_TIMEOUT,
+    )
+    ready = await session.wait_for_browser_audio_ready(HA_SOFTPHONE_BROWSER_TX_READY_TIMEOUT)
+    if _session_get(HA_SOFTPHONE_DEVICE_ID) is not session:
+        _LOGGER.info("HA softphone answer abandoned; session changed call_id=%s", call_id)
+        return
+    if not ready:
+        session.clear_browser_audio_priming()
+        pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+        pending.pop(call_id, None)
+        sent = _sip_send_final_response(
+            hass,
+            call_id,
+            480,
+            "Temporarily Unavailable",
+            decline_reason="browser_audio_not_ready",
+        )
+        _set_ha_softphone_call_state(
+            hass,
+            "error",
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=_ha_peer_name(hass),
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=call_id,
+            reason="browser_audio_not_ready",
+        )
+        _LOGGER.error(
+            "HA softphone refused SIP answer: browser TX audio not ready call_id=%s sent_480=%s",
+            call_id,
+            sent,
+        )
+        await session.stop(send_signaling=False)
+        _session_pop(HA_SOFTPHONE_DEVICE_ID)
+        await _ws_send_json(ws, {"state": "error", "error": "browser_audio_not_ready", "call_id": call_id})
+        return
+
+    latency_ms = int((time.monotonic() - requested_at) * 1000)
+    _LOGGER.info(
+        "HA softphone browser TX ready; sending SIP 200 OK call_id=%s latency_ms=%d frames=%d",
+        call_id,
+        latency_ms,
+        session._browser_audio_frames,
+    )
+    ok = await session.answer()
+    session.clear_browser_audio_priming()
+    if not ok:
+        _session_pop(HA_SOFTPHONE_DEVICE_ID)
+        await session.stop(send_signaling=False)
+        await _ws_send_json(ws, {"state": "error", "error": "answer_failed", "call_id": call_id})
+        return
+
+    pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
+    pending.pop(call_id, None)
+    _set_ha_softphone_call_state(
+        hass,
+        "streaming",
+        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        caller=invite.caller,
+        callee=_ha_peer_name(hass),
+        peer_name=invite.caller,
+        direction="incoming",
+        call_id=call_id,
+        tx_format=session.tx_format.wire_token(),
+        rx_format=session.rx_format.wire_token(),
+        audio_mode=session.audio_mode,
+        browser_tx_ready_latency_ms=latency_ms,
+    )
+    await _ws_send_json(
+        ws,
+        {
+            "success": True,
+            "browser_tx_ready_latency_ms": latency_ms,
+            **_session_audio_payload(session, "streaming"),
+        },
+    )
 
 
 class BridgeSession:
@@ -2107,27 +2243,18 @@ class IntercomAudioWebSocketView(HomeAssistantView):
                     return None
                 _session_register(HA_SOFTPHONE_DEVICE_ID, session)
                 session.bind_audio_ws(ws)
-                ok = await session.answer()
-                if not ok:
-                    _session_pop(HA_SOFTPHONE_DEVICE_ID)
-                    await session.stop(send_signaling=False)
-                    await _ws_send_json(ws, {"state": "error", "error": "answer_failed"})
-                    return None
-                pending.pop(invite.call_id, None)
-                _set_ha_softphone_call_state(
-                    hass,
-                    "streaming",
-                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                    caller=invite.caller,
-                    callee=_ha_peer_name(hass),
-                    peer_name=invite.caller,
-                    direction="incoming",
-                    call_id=invite.call_id,
-                    tx_format=session.tx_format.wire_token(),
-                    rx_format=session.rx_format.wire_token(),
-                    audio_mode=session.audio_mode,
+                session.allow_browser_audio_priming()
+                hass.async_create_task(
+                    _finish_ha_softphone_answer_when_audio_ready(hass, ws, session, invite)
                 )
-                await _ws_send_json(ws, {"success": True, **_session_audio_payload(session, "streaming")})
+                await _ws_send_json(
+                    ws,
+                    {
+                        "preparing_audio": True,
+                        "call_id": invite.call_id,
+                        **_session_audio_payload(session, "ringing"),
+                    },
+                )
                 return session
             session = _session_get(selector)
             ok = await session.answer() if session is not None else False

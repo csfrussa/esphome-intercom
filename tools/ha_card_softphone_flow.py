@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
 from pathlib import Path
 import ssl
@@ -24,6 +25,21 @@ WS3_DEVICE_ID = "35bb14eb59bd920b964b61d0b0f1b8fc"
 WS3_STATE = "sensor.waveshare_s3_audio_intercom_state"
 WS3_CALLER = "sensor.waveshare_s3_audio_caller"
 WS3_DEST = "sensor.waveshare_s3_audio_destination"
+
+DEVICE_PRESETS = {
+    "ws3": {
+        "device_id": "35bb14eb59bd920b964b61d0b0f1b8fc",
+        "state": "sensor.waveshare_s3_audio_intercom_state",
+        "caller": "sensor.waveshare_s3_audio_caller",
+        "destination": "sensor.waveshare_s3_audio_destination",
+    },
+    "spotpear": {
+        "device_id": "df18a94e7c6ebcb84b183ac7c081805d",
+        "state": "sensor.intercom_xiaozhi_intercom_state",
+        "caller": "sensor.intercom_xiaozhi_caller",
+        "destination": "sensor.intercom_xiaozhi_destination",
+    },
+}
 
 
 class HaRest:
@@ -166,8 +182,16 @@ async def open_page(page: Page, path: str) -> None:
 
 
 async def cleanup(ha: HaRest) -> None:
-    await ha.service("intercom_native", "sip_hangup", {})
-    await ha.service("intercom_native", "decline", {"device_id": WS3_DEVICE_ID})
+    try:
+        await ha.service("intercom_native", "sip_hangup", {})
+    except AssertionError as err:
+        if "400" not in str(err):
+            raise
+    try:
+        await ha.service("intercom_native", "decline", {"device_id": WS3_DEVICE_ID})
+    except AssertionError as err:
+        if "400" not in str(err):
+            raise
     await asyncio.sleep(0.5)
 
 
@@ -219,6 +243,16 @@ async def run_answer_flow(page: Page, ha: HaRest) -> None:
 
 
 async def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", choices=sorted(DEVICE_PRESETS), default="ws3")
+    args = parser.parse_args()
+    preset = DEVICE_PRESETS[args.device]
+    global WS3_DEVICE_ID, WS3_STATE, WS3_CALLER, WS3_DEST
+    WS3_DEVICE_ID = preset["device_id"]
+    WS3_STATE = preset["state"]
+    WS3_CALLER = preset["caller"]
+    WS3_DEST = preset["destination"]
+
     OUT.mkdir(parents=True, exist_ok=True)
     token = TOKEN_FILE.read_text().strip()
     ha = HaRest(token)

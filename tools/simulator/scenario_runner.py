@@ -88,16 +88,37 @@ def validate_scenario(path: Path) -> None:
     print(f"valid {path.name}")
 
 
-def run_scenario(socket_path: Path, path: Path, *, repeat: int, seed: int | None) -> None:
+def _trace_snapshot(socket_path: Path, trace_dir: Path, scenario_name: str, iteration: int, step_index: int) -> None:
+    snapshot = call(socket_path, "get_snapshot")
+    target = trace_dir / scenario_name / f"iteration-{iteration:04d}"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / f"step-{step_index:03d}.json").write_text(
+        json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def run_scenario(
+    socket_path: Path,
+    path: Path,
+    *,
+    repeat: int,
+    seed: int | None,
+    trace_dir: Path | None = None,
+) -> None:
     if seed is not None:
         random.seed(seed)
     scenario = _load(path)
     for iteration in range(repeat):
         call(socket_path, "reset")
-        for raw_step in scenario["steps"]:
+        if trace_dir is not None:
+            _trace_snapshot(socket_path, trace_dir, path.stem, iteration + 1, 0)
+        for step_index, raw_step in enumerate(scenario["steps"], start=1):
             if not isinstance(raw_step, dict):
                 raise RuntimeError(f"{path}: step must be a mapping: {raw_step!r}")
             _run_step(socket_path, raw_step)
+            if trace_dir is not None:
+                _trace_snapshot(socket_path, trace_dir, path.stem, iteration + 1, step_index)
         print(f"ok {path.name} iteration={iteration + 1}")
 
 
@@ -107,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET)
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--trace-dir", type=Path)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -114,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.validate_only:
                 validate_scenario(path)
             else:
-                run_scenario(args.socket, path, repeat=args.repeat, seed=args.seed)
+                run_scenario(args.socket, path, repeat=args.repeat, seed=args.seed, trace_dir=args.trace_dir)
         return 0
     except Exception as err:
         print(f"scenario_runner: {err}", file=sys.stderr)
