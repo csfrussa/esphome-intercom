@@ -46,8 +46,10 @@ class SipTransport : public IntercomTransport {
   void sip_task_();
   void rtp_task_();
   bool bind_udp_(int *fd, uint16_t port, const char *label);
+  bool bind_tcp_(int *fd, uint16_t port, const char *label);
   bool parse_remote_(const std::string &host);
   bool send_sip_(const std::string &message, uint32_t ip_v4, uint16_t port);
+  bool send_sip_tcp_(const std::string &message);
   bool send_request_(const std::string &method, const std::string &body = "", uint32_t cseq = 0);
   bool send_response_(uint16_t status, const char *reason, const std::string &body = "",
                       const std::string &app_reason = "");
@@ -56,6 +58,7 @@ class SipTransport : public IntercomTransport {
                                 const std::string &app_reason = "");
   bool send_invite_(const uint8_t *payload, size_t len);
   void handle_sip_datagram_(const char *data, size_t len, const sockaddr_in &src);
+  void handle_sip_stream_(int socket, const sockaddr_in &src);
   bool handle_invite_(const std::string &message, const sockaddr_in &src);
   bool handle_response_(const std::string &message, const sockaddr_in &src);
   bool parse_start_payload_(const uint8_t *payload, size_t len);
@@ -89,6 +92,7 @@ class SipTransport : public IntercomTransport {
   std::string caller_name_;
   std::string dest_route_;
   std::string dest_name_;
+  std::string sip_tcp_rx_buffer_;
   AudioFormatList offer_tx_formats_{};
   AudioFormatList offer_rx_formats_{};
   AudioFormat selected_tx_format_{LEGACY_AUDIO_FORMAT};
@@ -99,6 +103,8 @@ class SipTransport : public IntercomTransport {
   uint32_t invite_cseq_{1};
 
   int sip_socket_{-1};
+  int sip_tcp_listener_socket_{-1};
+  int sip_tcp_client_socket_{-1};
   int rtp_socket_{-1};
   TaskHandle_t sip_task_handle_{nullptr};
   StaticTask_t sip_task_tcb_{};
@@ -109,6 +115,7 @@ class SipTransport : public IntercomTransport {
   std::atomic<bool> running_{false};
   std::atomic<bool> rtp_running_{false};
   std::atomic<bool> call_active_{false};
+  std::atomic<bool> remote_sip_tcp_{false};
 };
 
 }  // namespace intercom_api

@@ -3,6 +3,7 @@
 #if defined(USE_ESP32) && defined(USE_INTERCOM_SIP_TRANSPORT)
 
 #include <cerrno>
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 
 #include <esp_system.h>
 
@@ -75,6 +77,28 @@ std::string message_body(const std::string &msg) {
   const size_t sep = msg.find("\r\n\r\n");
   if (sep == std::string::npos) return "";
   return msg.substr(sep + 4);
+}
+
+size_t sip_content_length(const std::string &msg) {
+  const size_t sep = msg.find("\r\n\r\n");
+  const size_t header_end = sep == std::string::npos ? msg.size() : sep;
+  size_t pos = 0;
+  while (pos < header_end) {
+    const size_t end = msg.find("\r\n", pos);
+    const size_t line_end = end == std::string::npos ? header_end : std::min(end, header_end);
+    const std::string line = msg.substr(pos, line_end - pos);
+    const size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      std::string key = line.substr(0, colon);
+      for (char &ch : key) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      if (trim_copy(key) == "content-length") {
+        return static_cast<size_t>(std::strtoul(trim_copy(line.substr(colon + 1)).c_str(), nullptr, 10));
+      }
+    }
+    if (end == std::string::npos || end >= header_end) break;
+    pos = end + 2;
+  }
+  return 0;
 }
 
 std::string sip_header_token(const std::string &raw) {
@@ -283,9 +307,50 @@ bool SipTransport::bind_udp_(int *fd, uint16_t port, const char *label) {
   return true;
 }
 
+bool SipTransport::bind_tcp_(int *fd, uint16_t port, const char *label) {
+  *fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (*fd < 0) {
+    const int err = errno;
+    ESP_LOGE(TAG, "Failed to create %s TCP socket: %s (%d: %s)",
+             label, socket_errno_name(err), err, socket_errno_text(err));
+    return false;
+  }
+  int opt = 1;
+  setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  setsockopt(*fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+  int flags = fcntl(*fd, F_GETFL, 0);
+  fcntl(*fd, F_SETFL, flags | O_NONBLOCK);
+  struct sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = htons(port);
+  if (bind(*fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
+    const int err = errno;
+    ESP_LOGE(TAG, "%s bind on TCP/%u failed: %s (%d: %s)",
+             label, (unsigned) port, socket_errno_name(err), err, socket_errno_text(err));
+    close(*fd);
+    *fd = -1;
+    return false;
+  }
+  if (listen(*fd, 2) < 0) {
+    const int err = errno;
+    ESP_LOGE(TAG, "%s listen on TCP/%u failed: %s (%d: %s)",
+             label, (unsigned) port, socket_errno_name(err), err, socket_errno_text(err));
+    close(*fd);
+    *fd = -1;
+    return false;
+  }
+  return true;
+}
+
 bool SipTransport::start() {
   if (this->running_.load(std::memory_order_acquire)) return true;
   if (!this->bind_udp_(&this->sip_socket_, this->sip_port_, "SIP")) return false;
+  if (!this->bind_tcp_(&this->sip_tcp_listener_socket_, this->sip_port_, "SIP")) {
+    close(this->sip_socket_);
+    this->sip_socket_ = -1;
+    return false;
+  }
   this->running_.store(true, std::memory_order_release);
   if (!audio_processor::start_pinned_task(SipTransport::sip_task_trampoline_, "intercom_sip",
                                           kSipTaskStackBytes, this, 4, 1,
@@ -295,9 +360,11 @@ bool SipTransport::start() {
     this->running_.store(false, std::memory_order_release);
     close(this->sip_socket_);
     this->sip_socket_ = -1;
+    close(this->sip_tcp_listener_socket_);
+    this->sip_tcp_listener_socket_ = -1;
     return false;
   }
-  ESP_LOGI(TAG, "SIP listening on UDP/%u, RTP base UDP/%u", (unsigned) this->sip_port_, (unsigned) this->rtp_port_);
+  ESP_LOGI(TAG, "SIP listening on UDP+TCP/%u, RTP base UDP/%u", (unsigned) this->sip_port_, (unsigned) this->rtp_port_);
   this->emit_connection_change_(true);
   return true;
 }
@@ -308,6 +375,14 @@ void SipTransport::stop() {
   if (this->sip_socket_ >= 0) {
     close(this->sip_socket_);
     this->sip_socket_ = -1;
+  }
+  if (this->sip_tcp_listener_socket_ >= 0) {
+    close(this->sip_tcp_listener_socket_);
+    this->sip_tcp_listener_socket_ = -1;
+  }
+  if (this->sip_tcp_client_socket_ >= 0) {
+    close(this->sip_tcp_client_socket_);
+    this->sip_tcp_client_socket_ = -1;
   }
   audio_processor::force_delete_pinned_task(&this->sip_task_handle_, &this->sip_task_stack_, kSipTaskStackBytes);
   this->emit_connection_change_(false);
@@ -414,6 +489,9 @@ bool SipTransport::local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) con
 }
 
 bool SipTransport::send_sip_(const std::string &message, uint32_t ip_v4, uint16_t port) {
+  if (this->remote_sip_tcp_.load(std::memory_order_acquire)) {
+    return this->send_sip_tcp_(message);
+  }
   if (this->sip_socket_ < 0 || ip_v4 == 0 || port == 0) return false;
   struct sockaddr_in dest{};
   dest.sin_family = AF_INET;
@@ -431,6 +509,23 @@ bool SipTransport::send_sip_(const std::string &message, uint32_t ip_v4, uint16_
   a.s_addr = htonl(ip_v4);
   inet_ntoa_r(a, ip, sizeof(ip));
   ESP_LOGI(TAG, "SIP TX %u bytes to %s:%u", (unsigned) message.size(), ip, (unsigned) port);
+  return true;
+}
+
+bool SipTransport::send_sip_tcp_(const std::string &message) {
+  const int socket = this->sip_tcp_client_socket_;
+  if (socket < 0 || message.empty()) return false;
+  size_t sent_total = 0;
+  while (sent_total < message.size()) {
+    const int sent = send(socket, message.data() + sent_total, message.size() - sent_total, 0);
+    if (sent <= 0) {
+      const int err = errno;
+      ESP_LOGW(TAG, "SIP TCP TX failed: %s (%d: %s)", socket_errno_name(err), err, socket_errno_text(err));
+      return false;
+    }
+    sent_total += static_cast<size_t>(sent);
+  }
+  ESP_LOGI(TAG, "SIP TCP TX %u bytes", (unsigned) message.size());
   return true;
 }
 
@@ -660,8 +755,10 @@ bool SipTransport::send_request_(const std::string &method, const std::string &b
   const std::string request_uri = this->remote_uri_.empty()
       ? ("sip:intercom@" + local_ip)
       : strip_angle_uri(this->remote_uri_);
+  const char *transport = this->remote_sip_tcp_.load(std::memory_order_acquire) ? "TCP" : "UDP";
   std::string msg = method + " " + request_uri + " SIP/2.0\r\n";
-  msg += "Via: SIP/2.0/UDP " + local_ip + ":" + std::to_string(this->sip_port_) + ";branch=" + this->branch_ + "\r\n";
+  msg += "Via: SIP/2.0/" + std::string(transport) + " " + local_ip + ":" +
+         std::to_string(this->sip_port_) + ";branch=" + this->branch_ + ";rport\r\n";
   msg += "Max-Forwards: 70\r\n";
   msg += "From: " + this->local_uri_ + ";tag=" + this->local_tag_ + "\r\n";
   msg += "To: " + this->remote_uri_;
@@ -1047,6 +1144,45 @@ void SipTransport::handle_sip_datagram_(const char *data, size_t len, const sock
   }
 }
 
+void SipTransport::handle_sip_stream_(int socket, const sockaddr_in &src) {
+  char buf[1024];
+  while (true) {
+    const int n = recv(socket, buf, sizeof(buf), 0);
+    if (n > 0) {
+      this->sip_tcp_rx_buffer_.append(buf, static_cast<size_t>(n));
+      continue;
+    }
+    if (n == 0) {
+      ESP_LOGI(TAG, "SIP TCP peer closed");
+      close(socket);
+      if (this->sip_tcp_client_socket_ == socket) this->sip_tcp_client_socket_ = -1;
+      this->remote_sip_tcp_.store(false, std::memory_order_release);
+      this->sip_tcp_rx_buffer_.clear();
+      return;
+    }
+    const int err = errno;
+    if (err == EWOULDBLOCK || err == EAGAIN) break;
+    ESP_LOGW(TAG, "SIP TCP RX failed: %s (%d: %s)", socket_errno_name(err), err, socket_errno_text(err));
+    close(socket);
+    if (this->sip_tcp_client_socket_ == socket) this->sip_tcp_client_socket_ = -1;
+    this->remote_sip_tcp_.store(false, std::memory_order_release);
+    this->sip_tcp_rx_buffer_.clear();
+    return;
+  }
+
+  while (true) {
+    const size_t sep = this->sip_tcp_rx_buffer_.find("\r\n\r\n");
+    if (sep == std::string::npos) return;
+    const size_t body_len = sip_content_length(this->sip_tcp_rx_buffer_);
+    const size_t total = sep + 4 + body_len;
+    if (this->sip_tcp_rx_buffer_.size() < total) return;
+    const std::string msg = this->sip_tcp_rx_buffer_.substr(0, total);
+    this->sip_tcp_rx_buffer_.erase(0, total);
+    this->remote_sip_tcp_.store(true, std::memory_order_release);
+    this->handle_sip_datagram_(msg.data(), msg.size(), src);
+  }
+}
+
 void SipTransport::sip_task_trampoline_(void *param) {
   static_cast<SipTransport *>(param)->sip_task_();
 }
@@ -1058,18 +1194,69 @@ void SipTransport::rtp_task_trampoline_(void *param) {
 void SipTransport::sip_task_() {
   uint8_t buf[2048];
   while (this->running_.load(std::memory_order_acquire)) {
-    struct sockaddr_in src{};
-    socklen_t slen = sizeof(src);
-    int n = recvfrom(this->sip_socket_, buf, sizeof(buf) - 1, 0,
-                     reinterpret_cast<struct sockaddr *>(&src), &slen);
-    if (n > 0) {
-      buf[n] = 0;
-      char ip[16];
-      inet_ntoa_r(src.sin_addr, ip, sizeof(ip));
-      ESP_LOGI(TAG, "SIP RX %d bytes from %s:%u", n, ip, (unsigned) ntohs(src.sin_port));
-      this->handle_sip_datagram_(reinterpret_cast<const char *>(buf), static_cast<size_t>(n), src);
-    } else {
-      delay(10);
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    int max_fd = -1;
+    if (this->sip_socket_ >= 0) {
+      FD_SET(this->sip_socket_, &readfds);
+      max_fd = std::max(max_fd, this->sip_socket_);
+    }
+    if (this->sip_tcp_listener_socket_ >= 0) {
+      FD_SET(this->sip_tcp_listener_socket_, &readfds);
+      max_fd = std::max(max_fd, this->sip_tcp_listener_socket_);
+    }
+    if (this->sip_tcp_client_socket_ >= 0) {
+      FD_SET(this->sip_tcp_client_socket_, &readfds);
+      max_fd = std::max(max_fd, this->sip_tcp_client_socket_);
+    }
+    struct timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 10000;
+    const int ready = max_fd >= 0 ? select(max_fd + 1, &readfds, nullptr, nullptr, &timeout) : 0;
+    if (ready <= 0) {
+      delay(1);
+      continue;
+    }
+
+    if (this->sip_tcp_listener_socket_ >= 0 && FD_ISSET(this->sip_tcp_listener_socket_, &readfds)) {
+      struct sockaddr_in src{};
+      socklen_t slen = sizeof(src);
+      int client = accept(this->sip_tcp_listener_socket_, reinterpret_cast<struct sockaddr *>(&src), &slen);
+      if (client >= 0) {
+        int opt = 1;
+        setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+        int flags = fcntl(client, F_GETFL, 0);
+        fcntl(client, F_SETFL, flags | O_NONBLOCK);
+        if (this->sip_tcp_client_socket_ >= 0) close(this->sip_tcp_client_socket_);
+        this->sip_tcp_client_socket_ = client;
+        this->sip_tcp_rx_buffer_.clear();
+        this->remote_sip_tcp_.store(true, std::memory_order_release);
+        char ip[16];
+        inet_ntoa_r(src.sin_addr, ip, sizeof(ip));
+        ESP_LOGI(TAG, "SIP TCP accepted from %s:%u", ip, (unsigned) ntohs(src.sin_port));
+      }
+    }
+
+    if (this->sip_socket_ >= 0 && FD_ISSET(this->sip_socket_, &readfds)) {
+      struct sockaddr_in src{};
+      socklen_t slen = sizeof(src);
+      int n = recvfrom(this->sip_socket_, buf, sizeof(buf) - 1, 0,
+                       reinterpret_cast<struct sockaddr *>(&src), &slen);
+      if (n > 0) {
+        this->remote_sip_tcp_.store(false, std::memory_order_release);
+        buf[n] = 0;
+        char ip[16];
+        inet_ntoa_r(src.sin_addr, ip, sizeof(ip));
+        ESP_LOGI(TAG, "SIP UDP RX %d bytes from %s:%u", n, ip, (unsigned) ntohs(src.sin_port));
+        this->handle_sip_datagram_(reinterpret_cast<const char *>(buf), static_cast<size_t>(n), src);
+      }
+    }
+
+    if (this->sip_tcp_client_socket_ >= 0 && FD_ISSET(this->sip_tcp_client_socket_, &readfds)) {
+      struct sockaddr_in src{};
+      socklen_t slen = sizeof(src);
+      getpeername(this->sip_tcp_client_socket_, reinterpret_cast<struct sockaddr *>(&src), &slen);
+      this->handle_sip_stream_(this->sip_tcp_client_socket_, src);
     }
   }
   vTaskDelete(nullptr);
