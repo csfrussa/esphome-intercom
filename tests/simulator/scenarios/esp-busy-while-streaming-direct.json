@@ -1,0 +1,42 @@
+{
+  "name": "esp-busy-while-streaming-direct",
+  "description": "ESP already streaming with HA rejects a direct second ESP call.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "ha_call",
+        "target": "Virtual S3",
+        "caller": "Casa"
+      }
+    },
+    {
+      "press_button": "answer"
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "streaming"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual Spotpear",
+        "destination": "Virtual S3",
+        "route": "direct"
+      }
+    },
+    {
+      "expect": {
+        "second": {
+          "state": "idle",
+          "last_reason": "busy"
+        },
+        "esp": {
+          "state": "streaming"
+        }
+      }
+    }
+  ]
+}

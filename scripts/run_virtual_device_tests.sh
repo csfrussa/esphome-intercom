@@ -47,6 +47,7 @@ mkdir -p test_runs/simulator
 
 python3 tools/simulator/generate_virtual_profiles.py --limit 3 >/tmp/intercom_virtual_profiles.txt
 python3 tools/simulator/simctl.py --socket "$SOCKET" doctor
+python3 tools/simulator/scenario_runner.py "$SCENARIO" --validate-only
 
 if [[ ! -S "$SOCKET" ]]; then
   echo "virtual device is not running: $SOCKET" >&2

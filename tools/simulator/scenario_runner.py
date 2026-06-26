@@ -10,11 +10,6 @@ import random
 import sys
 from typing import Any
 
-try:
-    import yaml
-except Exception:  # pragma: no cover - dependency diagnosed at runtime.
-    yaml = None
-
 from simctl import DEFAULT_SOCKET, call
 
 
@@ -26,9 +21,7 @@ def _load(path: Path) -> dict[str, Any]:
     if path.suffix == ".json":
         data = json.loads(text)
     else:
-        if yaml is None:
-            raise RuntimeError("PyYAML is required for YAML scenarios")
-        data = yaml.safe_load(text)
+        raise RuntimeError(f"{path}: only JSON scenarios are supported without optional YAML dependencies")
     if not isinstance(data, dict):
         raise RuntimeError(f"{path}: scenario root must be a mapping")
     steps = data.get("steps")
@@ -90,6 +83,11 @@ def _run_step(socket_path: Path, step: dict[str, Any]) -> None:
         raise RuntimeError(f"unknown step: {step!r}")
 
 
+def validate_scenario(path: Path) -> None:
+    _load(path)
+    print(f"valid {path.name}")
+
+
 def run_scenario(socket_path: Path, path: Path, *, repeat: int, seed: int | None) -> None:
     if seed is not None:
         random.seed(seed)
@@ -109,10 +107,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET)
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
     try:
         for path in _resolve(args.scenario):
-            run_scenario(args.socket, path, repeat=args.repeat, seed=args.seed)
+            if args.validate_only:
+                validate_scenario(path)
+            else:
+                run_scenario(args.socket, path, repeat=args.repeat, seed=args.seed)
         return 0
     except Exception as err:
         print(f"scenario_runner: {err}", file=sys.stderr)

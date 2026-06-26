@@ -1,0 +1,42 @@
+{
+  "name": "esp-to-ha-decline",
+  "description": "ESP calls HA softphone, HA card declines, ESP returns idle with terminal reason.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "calling",
+          "destination": "Casa"
+        },
+        "softphone": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "ha_softphone_decline",
+        "reason": "Test Decline"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "idle",
+          "last_reason": "Test Decline"
+        },
+        "softphone": {
+          "state": "idle"
+        }
+      }
+    }
+  ]
+}

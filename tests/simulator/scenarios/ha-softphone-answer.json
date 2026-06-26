@@ -1,0 +1,42 @@
+{
+  "name": "ha-softphone-answer",
+  "description": "HA softphone answer must bind bidirectional audio before SIP 200 OK.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "sip_invite",
+        "caller": "Virtual S3",
+        "callee": "Casa",
+        "call_id": "sim-virtual-ha"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "browser_audio_ready",
+        "call_id": "sim-virtual-ha"
+      }
+    },
+    {
+      "press_button": "answer"
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "streaming"
+        },
+        "audio": {
+          "tx_ready": true,
+          "rx_ready": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "esp-mirror-card-contract",
+  "description": "ESP mirror card controls only ESP entities and renders ESP state.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "card_select",
+        "card": "esp_mirror",
+        "target": "Virtual S3"
+      }
+    },
+    {
+      "press_button": "call"
+    },
+    {
+      "expect": {
+        "card": {
+          "mode": "esp_mirror",
+          "controlled_device": "Virtual S3"
+        },
+        "backend": {
+          "browser_audio": false
+        },
+        "esp": {
+          "state": "calling"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_state",
+        "state": "ringing",
+        "caller": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "card": {
+          "rendered_state": "ringing",
+          "source": "esp_snapshot"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "ha-to-esp-auto-answer",
+  "description": "ESP auto-answer accepts HA call directly into streaming.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "set_option",
+        "target": "esp",
+        "option": "auto_answer",
+        "value": true
+      }
+    },
+    {
+      "inject_event": {
+        "type": "ha_call",
+        "target": "Virtual S3",
+        "caller": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "streaming",
+          "caller": "Casa"
+        },
+        "led": {
+          "color": "green",
+          "effect": null
+        },
+        "audio": {
+          "owner": "intercom"
+        }
+      }
+    }
+  ]
+}

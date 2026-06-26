@@ -1,0 +1,43 @@
+{
+  "name": "phonebook-json-shared",
+  "description": "HA and ESP consume the same JSON roster contract without legacy list drift.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "phonebook_push",
+        "contacts": [
+          {
+            "id": "Casa",
+            "kind": "ha",
+            "address": "192.168.1.10"
+          },
+          {
+            "id": "Waveshare S3 Audio",
+            "kind": "esp",
+            "address": "192.168.1.47"
+          },
+          {
+            "id": "Spotpear Ball v2",
+            "kind": "esp",
+            "address": "192.168.1.31"
+          }
+        ]
+      }
+    },
+    {
+      "expect": {
+        "phonebook": {
+          "revision": 1,
+          "duplicate_ids": false
+        },
+        "ha": {
+          "visible_contacts": 2
+        },
+        "esp": {
+          "visible_contacts": 2,
+          "selected": "Casa"
+        }
+      }
+    }
+  ]
+}
