@@ -1691,6 +1691,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             vol.Optional("route_via_ha", default=False): cv.boolean,
             vol.Optional("protocol", default=""): vol.Any("", vol.In(["sip", "tcp", "udp", "ha"])),
             vol.Optional("transport", default=""): vol.Any("", vol.In(["sip", "tcp", "udp", "ha"])),
+            vol.Optional("sip_transport", default=""): vol.Any("", vol.In(["tcp", "udp"])),
+            vol.Optional("signaling_transport", default=""): vol.Any("", vol.In(["tcp", "udp"])),
             vol.Optional("tcp_port"): vol.Coerce(int),
             vol.Optional("udp_audio_port"): vol.Coerce(int),
             vol.Optional("udp_control_port"): vol.Coerce(int),

@@ -270,6 +270,15 @@ phonebook_add_contact:
             - tcp
             - udp
             - ha
+    sip_transport:
+      name: SIP Signaling Transport
+      description: Optional SIP signaling transport for PCM SIP endpoints. RTP remains UDP.
+      required: false
+      selector:
+        select:
+          options:
+            - tcp
+            - udp
     sip_port:
       name: SIP Port
       required: false
