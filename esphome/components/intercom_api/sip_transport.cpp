@@ -767,7 +767,6 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t f
                    (unsigned) selected_rx_format.sample_rate,
                    (unsigned) selected_rx_format.channels,
                    (unsigned) selected_rx_format.frame_ms);
-        }
         } else if (!selected_tx && !selected_rx) {
           ESP_LOGD(TAG, "SIP SDP skipping unsupported PT=%u rate=%u pcm=%u channels=%u",
                    (unsigned) pt,
@@ -1068,10 +1067,14 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
   this->local_uri_ = this->last_invite_to_;
   if (this->call_id_.empty() || this->last_invite_via_.empty() || this->last_invite_from_.empty() ||
       this->last_invite_to_.empty() || this->last_invite_cseq_.empty()) {
-    return this->send_response_(400, "Bad Request");
+    const bool sent = this->send_response_(400, "Bad Request");
+    this->reset_dialog_();
+    return sent;
   }
   if (!this->learn_remote_rtp_from_sdp_(body, src_ip)) {
-    return this->send_response_(488, "Not Acceptable Here");
+    const bool sent = this->send_response_(488, "Not Acceptable Here");
+    this->reset_dialog_();
+    return sent;
   }
   this->send_response_(100, "Trying");
 
@@ -1080,7 +1083,9 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
   if (from_user.empty()) from_user = sip_user_from_header(this->last_invite_from_);
   if (to_user.empty()) to_user = sip_user_from_header(this->last_invite_to_);
   if (from_user.empty() || to_user.empty()) {
-    return this->send_response_(400, "Bad Request");
+    const bool sent = this->send_response_(400, "Bad Request");
+    this->reset_dialog_();
+    return sent;
   }
   this->caller_name_ = from_user;
   this->dest_name_ = to_user;
@@ -1091,7 +1096,11 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
 
   uint8_t payload[INTERCOM_MAX_CALL_ID_LEN + 4 * (INTERCOM_MAX_NAME_LEN + 1) + 176];
   size_t off = encode_call_id_prefix(payload, sizeof(payload), this->call_id_);
-  if (off == 0) return this->send_response_(400, "Bad Request");
+  if (off == 0) {
+    const bool sent = this->send_response_(400, "Bad Request");
+    this->reset_dialog_();
+    return sent;
+  }
   auto enc = [&](const std::string &value, size_t max_len) -> bool {
     const size_t n = encode_lp_string(payload + off, sizeof(payload) - off, value, max_len);
     if (n == 0) return false;
@@ -1102,7 +1111,9 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
       !enc(this->caller_name_, INTERCOM_MAX_NAME_LEN) ||
       !enc(this->dest_route_, INTERCOM_MAX_ROUTE_ID_LEN) ||
       !enc(this->dest_name_, INTERCOM_MAX_NAME_LEN)) {
-    return this->send_response_(400, "Bad Request");
+    const bool sent = this->send_response_(400, "Bad Request");
+    this->reset_dialog_();
+    return sent;
   }
   static const uint8_t START_V2_MAGIC[] = {'I', 'C', 'A', 'F', '2'};
   std::memcpy(payload + off, START_V2_MAGIC, sizeof(START_V2_MAGIC));
@@ -1117,7 +1128,9 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
     return true;
   };
   if (!enc_list(this->selected_rx_format_) || !enc_list(this->selected_tx_format_)) {
-    return this->send_response_(488, "Not Acceptable Here");
+    const bool sent = this->send_response_(488, "Not Acceptable Here");
+    this->reset_dialog_();
+    return sent;
   }
   ESP_LOGI(TAG, "SIP INVITE accepted into FSM call_id=%s", this->call_id_.c_str());
   this->emit_control_(MessageType::START, payload, off);
