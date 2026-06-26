@@ -1,0 +1,14 @@
+{
+  "audio": {
+    "owner": "none"
+  },
+  "intercom": {
+    "state": "idle"
+  },
+  "media": {
+    "state": "idle"
+  },
+  "softphone": {
+    "state": "idle"
+  }
+}
