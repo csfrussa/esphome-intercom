@@ -157,6 +157,21 @@ std::string cseq_method(const std::string &cseq) {
   return trim_copy(trimmed.substr(space + 1));
 }
 
+bool sip_method_known_(const std::string &method) {
+  return method == "INVITE" || method == "ACK" || method == "CANCEL" ||
+         method == "BYE" || method == "OPTIONS" || method == "REGISTER";
+}
+
+std::string sip_failure_reason_(int status) {
+  if (status == 401) return "auth_required_unsupported";
+  if (status == 407) return "proxy_auth_required_unsupported";
+  if (status == 486) return "busy";
+  if (status == 487) return "cancelled";
+  if (status == 488) return "media_incompatible";
+  if (status == 603) return "declined";
+  return "sip_" + std::to_string(status);
+}
+
 std::string tag_from_header(const std::string &value) {
   const size_t tag = value.find("tag=");
   if (tag == std::string::npos) return "";
@@ -1178,7 +1193,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
     size_t off = encode_call_id_prefix(payload, sizeof(payload), this->call_id_);
     std::string reason = sip_header_token(header_value(message, "X-Intercom-Decline-Reason"));
     if (reason.empty()) reason = reason_text_from_header(header_value(message, "Reason"));
-    if (reason.empty()) reason = "sip_" + std::to_string(status);
+    if (reason.empty()) reason = sip_failure_reason_(status);
     const size_t n = encode_lp_string(payload + off, sizeof(payload) - off, reason, INTERCOM_MAX_REASON_LEN);
     if (off > 0 && n > 0) {
       off += n;
@@ -1244,6 +1259,10 @@ void SipTransport::handle_sip_datagram_(const char *data, size_t len, const sock
     this->reset_dialog_();
   } else if (method == "OPTIONS") {
     this->send_stateless_response_(msg, src, 200, "OK");
+  } else if (sip_method_known_(method)) {
+    this->send_stateless_response_(msg, src, 405, "Method Not Allowed");
+  } else {
+    this->send_stateless_response_(msg, src, 501, "Not Implemented");
   }
 }
 
