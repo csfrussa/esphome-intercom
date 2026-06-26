@@ -264,6 +264,7 @@ void IntercomApi::start() {
   std::string dial_ip = this->get_current_contact_ip();
   uint16_t dial_port = this->get_current_contact_port();
   uint16_t dial_control_port = this->get_current_contact_control_port();
+  bool dial_sip_tcp = this->get_current_contact_sip_transport_tcp();
   if (this->routing_mode_ == IntercomRoutingMode::HA_PBX) {
     if (this->ha_peer_name_.empty()) {
       ESP_LOGE(TAG,
@@ -285,12 +286,16 @@ void IntercomApi::start() {
     dial_ip = ha_entry->ip;
     dial_port = ha_entry->port;
     dial_control_port = ha_entry->control_port;
+    dial_sip_tcp = ha_entry->sip_transport_tcp;
   }
 
   // Datagram transports bind the transport to the resolved endpoint before
   // opening the stream. For SIP, port is signaling and control_port is RTP.
   if (this->protocol_ == TransportType::UDP || this->protocol_ == TransportType::SIP) {
     if (!dial_ip.empty() && dial_port > 0) {
+      if (this->protocol_ == TransportType::SIP) {
+        this->set_remote_sip_transport_tcp(dial_sip_tcp);
+      }
       this->set_remote_endpoint(dial_ip, dial_port, dial_control_port);
     }
   }

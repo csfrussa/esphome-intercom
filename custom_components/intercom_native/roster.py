@@ -134,8 +134,21 @@ def _port_suffix(port: Any) -> str:
     return "" if value in (0, 5060) else f":{value}"
 
 
-def _sip_uri(user: str, host: str, port: Any = None) -> str:
-    return f"sip:{user}@{host}{_port_suffix(port)}"
+def _sip_transport(entry: RosterEntry | None) -> str:
+    metadata = entry.metadata if entry is not None else {}
+    value = str(
+        metadata.get("sip_transport")
+        or metadata.get("signaling_transport")
+        or ""
+    ).strip().lower()
+    if value in {"tcp", "udp"}:
+        return value
+    return ""
+
+
+def _sip_uri(user: str, host: str, port: Any = None, transport: str = "") -> str:
+    suffix = f";transport={transport.lower()}" if transport.lower() in {"tcp", "udp"} else ""
+    return f"sip:{user}@{host}{_port_suffix(port)}{suffix}"
 
 
 def _entry_sip_port(entry: RosterEntry | None) -> Any:
@@ -181,21 +194,21 @@ def resolve_target(
             number = entry.number or entry.id
             if ha is None:
                 return RouteDecision("requires_pbx", number, "", entry=entry, reason="ha_required")
-            return RouteDecision("requires_pbx", number, _sip_uri(number, ha.address, _entry_sip_port(ha)), entry=entry)
+            return RouteDecision("requires_pbx", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.kind == "sip" and entry.sip_uri:
             return RouteDecision("direct", entry.id, entry.sip_uri, entry=entry)
         if entry.kind == "group":
             return RouteDecision("group", entry.id, "", entry=entry)
         if (route_via_ha or entry.route_via_ha or not entry.address) and ha is not None and entry.kind != "ha":
-            return RouteDecision("via_ha", entry.id, _sip_uri(entry.id, ha.address, _entry_sip_port(ha)), entry=entry)
+            return RouteDecision("via_ha", entry.id, _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.address:
-            return RouteDecision("direct", entry.id, _sip_uri(entry.id, entry.address, _entry_sip_port(entry)), entry=entry)
+            return RouteDecision("direct", entry.id, _sip_uri(entry.id, entry.address, _entry_sip_port(entry), _sip_transport(entry)), entry=entry)
 
     if _looks_phone(target):
         if ha is None:
             return RouteDecision("requires_pbx", target, "", reason="ha_required")
-        return RouteDecision("requires_pbx", target, _sip_uri(target, ha.address, _entry_sip_port(ha)))
+        return RouteDecision("requires_pbx", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))
 
     if ha is None:
         return RouteDecision("via_ha", target, "", reason="ha_required")
-    return RouteDecision("via_ha", target, _sip_uri(target, ha.address, _entry_sip_port(ha)))
+    return RouteDecision("via_ha", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))

@@ -45,7 +45,7 @@ inline const char *contact_protocol_to_str(ContactProtocol protocol) {
 /// New protocol-aware entries are:
 ///   Name|tcp|ip|port[|audio_capability]
 ///   Name|udp|ip|audio_port|control_port[|audio_capability]
-///   Name|sip|ip|sip_port|rtp_port[|audio_capability]
+///   Name|sip|ip|sip_port|rtp_port[|sip_transport][|audio_capability]
 ///   Name|ha|ip|port[|control_port]
 ///
 /// The HA-wide unified roster can also publish HA as:
@@ -62,6 +62,7 @@ struct ContactEntry {
   ContactProtocol protocol{ContactProtocol::UNKNOWN};
   uint16_t port{0};
   uint16_t control_port{0};
+  bool sip_transport_tcp{false};
   std::string audio_capability;
   uint8_t missing_count{0};
 };
@@ -307,6 +308,7 @@ class Phonebook {
       existing.protocol = incoming.protocol;
       existing.port = incoming.port;
       existing.control_port = incoming.control_port;
+      existing.sip_transport_tcp = incoming.sip_transport_tcp;
       existing.audio_capability = incoming.audio_capability;
       return was_unset ? AddResult::Upgraded : AddResult::EndpointReplaced;
     }
@@ -318,6 +320,7 @@ class Phonebook {
   static bool same_entry_(const ContactEntry &a, const ContactEntry &b) {
     return a.name == b.name && a.ip == b.ip && a.protocol == b.protocol &&
            a.port == b.port && a.control_port == b.control_port &&
+           a.sip_transport_tcp == b.sip_transport_tcp &&
            a.audio_capability == b.audio_capability;
   }
 
@@ -377,12 +380,25 @@ class Phonebook {
     }
 
     if (protocol == ContactProtocol::SIP) {
-      if (parts.size() != 5 && parts.size() != 6) return false;
+      if (parts.size() != 5 && parts.size() != 6 && parts.size() != 7) return false;
       if (!parse_u16_(trim_(parts[3]), &out->port) ||
           !parse_u16_(trim_(parts[4]), &out->control_port)) {
         return false;
       }
-      if (parts.size() == 6) out->audio_capability = trim_(parts[5]);
+      if (parts.size() >= 6) {
+        const std::string transport = trim_(parts[5]);
+        if (transport == "tcp" || transport == "TCP") {
+          out->sip_transport_tcp = true;
+        } else if (transport == "udp" || transport == "UDP" || transport.empty()) {
+          out->sip_transport_tcp = false;
+        } else if (parts.size() == 6) {
+          out->audio_capability = transport;
+          return true;
+        } else {
+          return false;
+        }
+      }
+      if (parts.size() == 7) out->audio_capability = trim_(parts[6]);
       return true;
     }
 

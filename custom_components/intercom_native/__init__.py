@@ -632,11 +632,21 @@ def _format_entry_unified(peer: Peer) -> str:
             f"{peer.udp_control_port}|{peer.audio_mode}|{tx}|{rx}"
         )
     if peer.transport == "sip":
+        sip_transport = str((peer.device or {}).get("sip_transport") or "tcp").lower()
+        if sip_transport not in {"tcp", "udp"}:
+            sip_transport = "tcp"
         return (
             f"{name}|sip|{peer_ip}|{peer.sip_port or 5060}|"
-            f"{peer.rtp_port or 40000}|{peer.audio_mode}|{tx}|{rx}"
+            f"{peer.rtp_port or 40000}|{sip_transport}|{peer.audio_mode}|{tx}|{rx}"
         )
     return f"{name}|tcp|{peer_ip}|{peer.tcp_port}|{peer.audio_mode}|{tx}|{rx}"
+
+
+def _sip_uri_transport(uri) -> str:
+    for key, value in getattr(uri, "params", ()) or ():
+        if str(key).lower() == "transport" and str(value or "").lower() in {"tcp", "udp"}:
+            return str(value).upper()
+    return "UDP"
 
 
 async def _async_build_service_info(
@@ -1391,6 +1401,8 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
         for key in (
             "protocol",
             "transport",
+            "sip_transport",
+            "signaling_transport",
             "tcp_port",
             "udp_audio_port",
             "udp_control_port",
@@ -1511,6 +1523,7 @@ async def _handle_sip_call_target_service(call: ServiceCall) -> None:
         local_rtp_port=int(cfg["rtp_port"]),
         supported_send_formats=list(HA_BROWSER_TX_FORMATS),
         supported_recv_formats=list(HA_BROWSER_RX_FORMATS),
+        signaling_transport=_sip_uri_transport(uri),
     )
     result = await client.invite(
         target=uri.user,
@@ -1863,6 +1876,11 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                     address=peer.host,
                     metadata={
                         "transport": peer.transport,
+                        "sip_transport": (
+                            str((peer.device or {}).get("sip_transport") or "tcp").lower()
+                            if peer.transport == "sip" or peer.is_ha
+                            else ""
+                        ),
                         "tcp_port": peer.tcp_port,
                         "udp_audio_port": peer.udp_audio_port,
                         "udp_control_port": peer.udp_control_port,
@@ -1930,8 +1948,11 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
             peer_target = _peer_for_target(invite.target, peers)
             bridge_uri = None
             if peer_target is not None and peer_target.host:
+                sip_transport = str((peer_target.device or {}).get("sip_transport") or "tcp").lower()
+                if sip_transport not in {"tcp", "udp"}:
+                    sip_transport = "tcp"
                 bridge_uri = parse_sip_uri(
-                    f"sip:{invite.target}@{peer_target.host}:{peer_target.sip_port or cfg['sip_port']}"
+                    f"sip:{invite.target}@{peer_target.host}:{peer_target.sip_port or cfg['sip_port']};transport={sip_transport}"
                 )
             elif decision.entry.sip_uri:
                 bridge_uri = parse_sip_uri(decision.entry.sip_uri)
@@ -1952,6 +1973,7 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                     local_rtp_port=dest_relay_port,
                     supported_send_formats=[invite.recv_format.audio_format],
                     supported_recv_formats=[invite.send_format.audio_format],
+                    signaling_transport=_sip_uri_transport(decision_uri),
                 )
                 result = await client.invite(
                     target=decision_uri.user,

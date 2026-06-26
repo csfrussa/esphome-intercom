@@ -145,6 +145,11 @@ class IntercomPhonebookSensor(SensorEntity):
                 address=p.host,
                 metadata={
                     "transport": p.transport,
+                    "sip_transport": (
+                        str((p.device or {}).get("sip_transport") or "tcp").lower()
+                        if p.transport == "sip" or p.is_ha
+                        else ""
+                    ),
                     "tcp_port": p.tcp_port,
                     "udp_audio_port": p.udp_audio_port,
                     "udp_control_port": p.udp_control_port,

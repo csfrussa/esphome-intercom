@@ -38,6 +38,7 @@ class SipTransport : public IntercomTransport {
   void stop_audio_path() override;
   bool originate(const std::string &host, uint16_t port) override;
   void set_remote(const std::string &ip, uint16_t port, uint16_t control_port = 0) override;
+  void set_sip_signaling_transport(bool tcp) override;
   void set_audio_formats(const AudioFormatList &tx, const AudioFormatList &rx) override;
 
  protected:

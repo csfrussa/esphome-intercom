@@ -419,9 +419,72 @@ void SipTransport::stop_audio_path() {
 }
 
 bool SipTransport::originate(const std::string &host, uint16_t port) {
-  this->parse_remote_(host);
-  this->remote_sip_port_.store(port ? port : 5060, std::memory_order_release);
-  ESP_LOGI(TAG, "SIP originate target set to %s:%u", host.c_str(), (unsigned) this->remote_sip_port_.load());
+  if (!this->parse_remote_(host)) return false;
+  const uint16_t sip_port = port ? port : 5060;
+  this->remote_sip_port_.store(sip_port, std::memory_order_release);
+  if (!this->remote_sip_tcp_.load(std::memory_order_acquire)) {
+    ESP_LOGI(TAG, "SIP UDP originate target set to %s:%u", host.c_str(), (unsigned) sip_port);
+    return true;
+  }
+
+  if (this->sip_tcp_client_socket_ >= 0) {
+    close(this->sip_tcp_client_socket_);
+    this->sip_tcp_client_socket_ = -1;
+  }
+
+  const uint32_t ip_v4 = this->remote_ip_v4_.load(std::memory_order_acquire);
+  if (ip_v4 == 0) return false;
+  const int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (fd < 0) {
+    const int err = errno;
+    ESP_LOGW(TAG, "SIP TCP socket create failed: %s (%d: %s)",
+             socket_errno_name(err), err, socket_errno_text(err));
+    return false;
+  }
+
+  int opt = 1;
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+  struct sockaddr_in dest{};
+  dest.sin_family = AF_INET;
+  dest.sin_addr.s_addr = htonl(ip_v4);
+  dest.sin_port = htons(sip_port);
+  int rc = connect(fd, reinterpret_cast<struct sockaddr *>(&dest), sizeof(dest));
+  if (rc != 0 && errno == EINPROGRESS) {
+    fd_set writefds;
+    FD_ZERO(&writefds);
+    FD_SET(fd, &writefds);
+    struct timeval timeout{};
+    timeout.tv_sec = 2;
+    timeout.tv_usec = 0;
+    rc = select(fd + 1, nullptr, &writefds, nullptr, &timeout);
+    if (rc > 0) {
+      int so_error = 0;
+      socklen_t len = sizeof(so_error);
+      if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) == 0) {
+        errno = so_error;
+        rc = so_error == 0 ? 0 : -1;
+      } else {
+        rc = -1;
+      }
+    } else {
+      errno = ETIMEDOUT;
+      rc = -1;
+    }
+  }
+  if (rc != 0) {
+    const int err = errno;
+    close(fd);
+    ESP_LOGW(TAG, "SIP TCP connect to %s:%u failed: %s (%d: %s)",
+             host.c_str(), (unsigned) sip_port, socket_errno_name(err), err, socket_errno_text(err));
+    return false;
+  }
+
+  this->sip_tcp_client_socket_ = fd;
+  this->sip_tcp_rx_buffer_.clear();
+  ESP_LOGI(TAG, "SIP TCP originate connected to %s:%u", host.c_str(), (unsigned) sip_port);
   return true;
 }
 
@@ -429,6 +492,15 @@ void SipTransport::set_remote(const std::string &ip, uint16_t port, uint16_t con
   this->parse_remote_(ip);
   if (port) this->remote_sip_port_.store(port, std::memory_order_release);
   if (control_port) this->remote_rtp_port_.store(control_port, std::memory_order_release);
+}
+
+void SipTransport::set_sip_signaling_transport(bool tcp) {
+  const bool was_tcp = this->remote_sip_tcp_.exchange(tcp, std::memory_order_acq_rel);
+  if (!tcp && was_tcp && this->sip_tcp_client_socket_ >= 0) {
+    close(this->sip_tcp_client_socket_);
+    this->sip_tcp_client_socket_ = -1;
+    this->sip_tcp_rx_buffer_.clear();
+  }
 }
 
 void SipTransport::reset_dialog_() {

@@ -541,6 +541,44 @@ class RosterResolverTest(unittest.TestCase):
             "sip:Cucina@192.168.1.30",
         )
 
+    def test_sip_transport_is_separate_from_endpoint_transport(self) -> None:
+        entries = roster.parse_roster_json(
+            {
+                "contacts": [
+                    {
+                        "id": "Casa",
+                        "kind": "ha",
+                        "address": "192.168.1.10",
+                        "metadata": {"transport": "tcp", "sip_transport": "tcp", "sip_port": 5060},
+                    },
+                    {
+                        "id": "Cucina",
+                        "kind": "esp",
+                        "address": "192.168.1.30",
+                        "metadata": {"transport": "sip", "sip_transport": "tcp", "sip_port": 5060},
+                    },
+                    {
+                        "id": "Salotto",
+                        "kind": "esp",
+                        "address": "192.168.1.31",
+                        "metadata": {"transport": "sip", "sip_transport": "udp", "sip_port": 5060},
+                    },
+                ]
+            }
+        )
+        self.assertEqual(
+            roster.resolve_target("Cucina", entries).sip_uri,
+            "sip:Cucina@192.168.1.30;transport=tcp",
+        )
+        self.assertEqual(
+            roster.resolve_target("Salotto", entries).sip_uri,
+            "sip:Salotto@192.168.1.31;transport=udp",
+        )
+        self.assertEqual(
+            roster.resolve_target("Salotto", entries, route_via_ha=True).sip_uri,
+            "sip:Salotto@192.168.1.10;transport=tcp",
+        )
+
 
 class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
     async def test_busy_bridge_target_returns_terminal_response_without_ringing(self) -> None:

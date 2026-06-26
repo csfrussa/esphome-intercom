@@ -188,6 +188,7 @@ class IntercomApi : public Component {
   /// transport so the next datagram targets the new peer. `port` is audio;
   /// `control_port` is optional for short contact rows. TCP no-op.
   void set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t control_port = 0);
+  void set_remote_sip_transport_tcp(bool tcp);
 
   // Runtime control
   void start();
@@ -298,6 +299,7 @@ class IntercomApi : public Component {
   const std::string &get_current_contact_ip() const;
   uint16_t get_current_contact_port() const;
   uint16_t get_current_contact_control_port() const;
+  bool get_current_contact_sip_transport_tcp() const;
   std::string get_caller() const { return this->caller_sensor_ ? this->caller_sensor_->state : ""; }
   std::string get_contacts_csv() const;
 

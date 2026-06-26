@@ -29,6 +29,7 @@ struct JsonRosterSlot {
   std::string kind;
   std::string address;
   std::string protocol;
+  std::string sip_transport;
   bool route_via_ha{false};
   uint16_t tcp_port{0};
   uint16_t udp_audio_port{0};
@@ -104,10 +105,19 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
       slot->entry = entry;
       return true;
     }
-    if (protocol == ContactProtocol::SIP && (parts.size() == 5 || parts.size() == 8)) {
+    if (protocol == ContactProtocol::SIP &&
+        (parts.size() == 5 || parts.size() == 6 || parts.size() == 8 || parts.size() == 9)) {
       if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port) ||
           !Phonebook::parse_u16(Phonebook::trim(parts[4]), &entry.control_port)) {
         return false;
+      }
+      if (parts.size() >= 6) {
+        const std::string sip_transport = Phonebook::trim(parts[5]);
+        if (sip_transport == "tcp" || sip_transport == "TCP") {
+          entry.sip_transport_tcp = true;
+        } else if (sip_transport == "udp" || sip_transport == "UDP" || sip_transport.empty()) {
+          entry.sip_transport_tcp = false;
+        }
       }
       slot->entry = entry;
       return true;
@@ -140,7 +150,7 @@ void append_csv(std::string *out, const std::string &entry) {
 
 std::string serialize_endpoint(const std::string &name, ContactProtocol protocol,
                                const std::string &ip, uint16_t port,
-                               uint16_t control_port) {
+                               uint16_t control_port, bool sip_transport_tcp = false) {
   if (name.empty()) return "";
   if (ip.empty() || port == 0) return name;
   if (protocol == ContactProtocol::TCP) {
@@ -152,7 +162,7 @@ std::string serialize_endpoint(const std::string &name, ContactProtocol protocol
   }
   if (protocol == ContactProtocol::SIP) {
     return name + "|sip|" + ip + "|" + std::to_string(port) + "|" +
-           std::to_string(control_port);
+           std::to_string(control_port) + "|" + (sip_transport_tcp ? "tcp" : "udp");
   }
   if (protocol == ContactProtocol::HA) {
     std::string out = name + "|ha|" + ip + "|" + std::to_string(port);
@@ -219,8 +229,27 @@ bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {
   slot->protocol = Phonebook::trim(json_metadata_string(obj, "transport"));
   if (slot->protocol.empty()) slot->protocol = Phonebook::trim(json_metadata_string(obj, "protocol"));
   std::transform(slot->protocol.begin(), slot->protocol.end(), slot->protocol.begin(), ::tolower);
+  slot->sip_transport = Phonebook::trim(json_metadata_string(obj, "sip_transport"));
+  if (slot->sip_transport.empty()) {
+    slot->sip_transport = Phonebook::trim(json_metadata_string(obj, "signaling_transport"));
+  }
+  if (slot->sip_transport.empty()) {
+    slot->sip_transport = Phonebook::trim(json_string(obj, "sip_transport"));
+  }
+  if (slot->sip_transport.empty()) {
+    const std::string sip_uri = Phonebook::trim(json_string(obj, "sip_uri"));
+    const std::string marker = "transport=";
+    const size_t pos = sip_uri.find(marker);
+    if (pos != std::string::npos) {
+      size_t start = pos + marker.size();
+      size_t end = sip_uri.find(';', start);
+      slot->sip_transport = sip_uri.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    }
+  }
+  std::transform(slot->sip_transport.begin(), slot->sip_transport.end(), slot->sip_transport.begin(), ::tolower);
+  if (slot->sip_transport != "tcp") slot->sip_transport = "udp";
   if (slot->protocol.empty() && slot->kind == "ha") slot->protocol = "ha";
-  if (slot->protocol.empty() && (slot->kind == "esp" || slot->kind == "sip")) slot->protocol = "sip";
+  if (slot->protocol.empty() && slot->kind == "sip") slot->protocol = "sip";
 
   slot->tcp_port = json_metadata_u16(obj, "tcp_port", json_u16(obj, "tcp_port", 6054));
   slot->udp_audio_port = json_metadata_u16(obj, "udp_audio_port", json_u16(obj, "udp_audio_port", 6054));
@@ -477,14 +506,16 @@ std::string IntercomApi::normalize_phonebook_for_transport_(const std::string &c
     if ((entry.protocol == local_protocol || entry.protocol == ContactProtocol::UNKNOWN) &&
         !(has_ha && this->routing_mode_ == IntercomRoutingMode::HA_PBX)) {
       append_csv(&out, serialize_endpoint(entry.name, entry.protocol, entry.ip,
-                                          entry.port, entry.control_port));
+                                          entry.port, entry.control_port,
+                                          entry.sip_transport_tcp));
       continue;
     }
 
     if ((entry.protocol == ContactProtocol::TCP || entry.protocol == ContactProtocol::UDP ||
          entry.protocol == ContactProtocol::SIP) && has_ha) {
       append_csv(&out, serialize_endpoint(entry.name, local_protocol, ha_slot.entry.ip,
-                                          ha_local_port, ha_local_control));
+                                          ha_local_port, ha_local_control,
+                                          ha_slot.entry.sip_transport_tcp));
       continue;
     }
 
@@ -565,7 +596,8 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
       const uint16_t control = local_protocol == ContactProtocol::UDP
                                    ? slot.udp_control_port
                                    : (local_protocol == ContactProtocol::SIP ? slot.rtp_port : 0);
-      append_csv(&out, serialize_endpoint(slot.name, local_protocol, slot.address, port, control));
+      append_csv(&out, serialize_endpoint(slot.name, local_protocol, slot.address, port, control,
+                                          slot.sip_transport == "tcp"));
       continue;
     }
 
@@ -574,7 +606,8 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
          protocol != local_protocol) &&
         has_ha) {
       append_csv(&out, serialize_endpoint(slot.name, local_protocol, ha_slot.address,
-                                          ha_local_port, ha_local_control));
+                                          ha_local_port, ha_local_control,
+                                          ha_slot.sip_transport == "tcp"));
       continue;
     }
 
@@ -585,10 +618,12 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
                                           slot.udp_audio_port, slot.udp_control_port));
     } else if (protocol == ContactProtocol::SIP) {
       append_csv(&out, serialize_endpoint(slot.name, protocol, slot.address,
-                                          slot.sip_port, slot.rtp_port));
+                                          slot.sip_port, slot.rtp_port,
+                                          slot.sip_transport == "tcp"));
     } else if (has_ha) {
       append_csv(&out, serialize_endpoint(slot.name, local_protocol, ha_slot.address,
-                                          ha_local_port, ha_local_control));
+                                          ha_local_port, ha_local_control,
+                                          ha_slot.sip_transport == "tcp"));
     } else {
       append_csv(&out, slot.name);
     }
@@ -670,6 +705,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
       entry.control_port = local_protocol == ContactProtocol::UDP
                                ? slot.udp_control_port
                                : (local_protocol == ContactProtocol::SIP ? slot.rtp_port : 0);
+      entry.sip_transport_tcp = slot.sip_transport == "tcp";
     } else if ((slot.kind == "phone" || slot.kind == "group" || slot.route_via_ha ||
                 this->routing_mode_ == IntercomRoutingMode::HA_PBX || slot.address.empty() ||
                 protocol != local_protocol) &&
@@ -678,6 +714,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
       entry.ip = ha_slot.address;
       entry.port = ha_local_port;
       entry.control_port = ha_local_control;
+      entry.sip_transport_tcp = ha_slot.sip_transport == "tcp";
     } else {
       entry.protocol = protocol;
       entry.ip = slot.address;
@@ -689,6 +726,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
       } else if (protocol == ContactProtocol::SIP) {
         entry.port = slot.sip_port;
         entry.control_port = slot.rtp_port;
+        entry.sip_transport_tcp = slot.sip_transport == "tcp";
       }
     }
 
@@ -834,6 +872,11 @@ uint16_t IntercomApi::get_current_contact_port() const {
 uint16_t IntercomApi::get_current_contact_control_port() const {
   const auto *c = this->phonebook_.current();
   return c ? c->control_port : 0;
+}
+
+bool IntercomApi::get_current_contact_sip_transport_tcp() const {
+  const auto *c = this->phonebook_.current();
+  return c != nullptr && c->protocol == ContactProtocol::SIP && c->sip_transport_tcp;
 }
 
 void IntercomApi::publish_destination_() {

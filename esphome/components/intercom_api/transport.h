@@ -58,6 +58,10 @@ class IntercomTransport {
   /// optional for short Name|IP|port contacts. TCP no-op.
   virtual void set_remote(const std::string &ip, uint16_t port, uint16_t control_port = 0) {}
 
+  /// SIP-only: select TCP or UDP for SIP signaling. RTP media remains UDP.
+  /// Other transports ignore this because their protocol is fixed by type.
+  virtual void set_sip_signaling_transport(bool tcp) { (void) tcp; }
+
   /// Open an outbound leg for an originating call. TCP connects to the
   /// peer; UDP no-op (control_socket_ is already bound, set_remote
   /// retargets sendto).

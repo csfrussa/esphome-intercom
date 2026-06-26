@@ -512,6 +512,13 @@ void IntercomApi::set_remote_endpoint(const std::string &ip, uint16_t port, uint
            (unsigned) (control_port != 0 ? control_port : this->control_port_));
 }
 
+void IntercomApi::set_remote_sip_transport_tcp(bool tcp) {
+  if (this->transport_ != nullptr) {
+    this->transport_->set_sip_signaling_transport(tcp);
+  }
+  ESP_LOGI(TAG, "Remote SIP signaling transport set to %s", tcp ? "TCP" : "UDP");
+}
+
 void IntercomApi::publish_transport_() {
   if (this->transport_sensor_ != nullptr) {
     const char *t = this->protocol_ == TransportType::UDP
