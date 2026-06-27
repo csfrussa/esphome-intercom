@@ -64,10 +64,6 @@ CONF_REASON = "reason"
 # SIP signaling transport selection. RTP media is always UDP.
 CONF_PROTOCOL = "protocol"
 CONF_SIP_TRANSPORT = "sip_transport"
-CONF_REMOTE_IP = "remote_ip"
-CONF_REMOTE_PORT = "remote_port"
-CONF_LISTEN_PORT = "listen_port"
-CONF_CONTROL_PORT = "control_port"
 CONF_SIP_PORT = "sip_port"
 CONF_RTP_PORT = "rtp_port"
 CONF_USE_HA_AS_FIRST_CONTACT = "use_ha_as_first_contact"
@@ -427,10 +423,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_PROTOCOL, default=PROTOCOL_UDP): cv.one_of(
             PROTOCOL_TCP, PROTOCOL_UDP, lower=True
         ),
-        cv.Optional(CONF_REMOTE_IP, default=""): cv.string,
-        cv.Optional(CONF_REMOTE_PORT, default=5060): cv.port,
-        cv.Optional(CONF_LISTEN_PORT, default=5060): cv.port,
-        cv.Optional(CONF_CONTROL_PORT, default=40000): cv.port,
         cv.Optional(CONF_UDP_MAX_PAYLOAD, default=UDP_SAFE_PAYLOAD_BYTES): cv.int_range(
             min=576, max=65507
         ),
@@ -719,10 +711,6 @@ def _add_transport_settings(var, config):
         cg.add(var.set_protocol(TransportType.UDP))
     else:
         cg.add(var.set_protocol(TransportType.TCP))
-    cg.add(var.set_remote_ip(config[CONF_REMOTE_IP]))
-    cg.add(var.set_remote_port(config[CONF_REMOTE_PORT]))
-    cg.add(var.set_listen_port(config[CONF_LISTEN_PORT]))
-    cg.add(var.set_control_port(config[CONF_CONTROL_PORT]))
     cg.add(var.set_udp_max_payload(config[CONF_UDP_MAX_PAYLOAD]))
     cg.add(var.set_sip_port(config[CONF_SIP_PORT]))
     cg.add(var.set_rtp_port(config[CONF_RTP_PORT]))
@@ -1130,8 +1118,8 @@ _register_templated_action(
         {
             cv.GenerateID(): cv.use_id(IntercomApi),
             cv.Required(CONF_IP): cv.templatable(cv.string),
-            cv.Optional(CONF_PORT, default=6054): cv.templatable(cv.port),
-            cv.Optional(CONF_CONTROL_PORT, default=0): cv.templatable(cv.int_range(min=0, max=65535)),
+            cv.Optional(CONF_PORT, default=5060): cv.templatable(cv.port),
+            cv.Optional(CONF_RTP_PORT_ACTION, default=0): cv.templatable(cv.int_range(min=0, max=65535)),
         }
     ),
     synchronous=True,
@@ -1142,8 +1130,8 @@ async def set_remote_endpoint_action_to_code(config, action_id, template_arg, ar
     cg.add(var.set_ip(templ_ip))
     templ_port = await cg.templatable(config[CONF_PORT], args, cg.uint16)
     cg.add(var.set_port(templ_port))
-    templ_control = await cg.templatable(config[CONF_CONTROL_PORT], args, cg.uint16)
-    cg.add(var.set_control_port(templ_control))
+    templ_rtp_port = await cg.templatable(config[CONF_RTP_PORT_ACTION], args, cg.uint16)
+    cg.add(var.set_rtp_port(templ_rtp_port))
     return var
 
 

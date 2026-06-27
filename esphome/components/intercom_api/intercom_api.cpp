@@ -148,7 +148,7 @@ bool IntercomApi::setup_audio_processor_() {
 bool IntercomApi::setup_transport_() {
 #ifdef USE_INTERCOM_SIP_TRANSPORT
   this->transport_ = std::make_unique<SipTransport>(
-      this->sip_port_, this->rtp_port_, this->remote_ip_,
+      this->sip_port_, this->rtp_port_, "",
       this->task_stacks_in_psram_);
   this->transport_->set_sip_signaling_transport(this->protocol_ == TransportType::TCP);
 #else
@@ -375,15 +375,12 @@ void IntercomApi::dump_config() {
   ESP_LOGCONFIG(TAG, "  Contacts: %zu configured", this->phonebook_.size());
 }
 
-void IntercomApi::set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t control_port) {
-  this->remote_ip_ = ip;
-  this->remote_port_ = port;
-  this->remote_control_port_ = control_port;
+void IntercomApi::set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t rtp_port) {
   if (this->transport_ != nullptr) {
-    this->transport_->set_remote(ip, port, control_port);
+    this->transport_->set_remote(ip, port, rtp_port);
   }
-  ESP_LOGI(TAG, "Remote endpoint updated to %s:%u control=%u", ip.c_str(), (unsigned) port,
-           (unsigned) (control_port != 0 ? control_port : this->control_port_));
+  ESP_LOGI(TAG, "Remote endpoint updated to SIP %s:%u RTP %u", ip.c_str(), (unsigned) port,
+           (unsigned) (rtp_port != 0 ? rtp_port : this->rtp_port_));
 }
 
 void IntercomApi::set_remote_sip_transport_tcp(bool tcp) {

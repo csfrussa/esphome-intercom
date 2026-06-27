@@ -199,7 +199,7 @@ void IntercomApi::start() {
 
   std::string dial_ip = this->get_current_contact_ip();
   uint16_t dial_port = this->get_current_contact_port();
-  uint16_t dial_control_port = this->get_current_contact_control_port();
+  uint16_t dial_rtp_port = this->get_current_contact_rtp_port();
   bool dial_sip_tcp = this->get_current_contact_sip_transport_tcp();
 
   const auto &dest = this->get_current_destination();
@@ -222,7 +222,7 @@ void IntercomApi::start() {
 
   this->clear_terminal_call_snapshot_();
   this->set_remote_sip_transport_tcp(dial_sip_tcp);
-  this->set_remote_endpoint(dial_ip, dial_port, dial_control_port);
+  this->set_remote_endpoint(dial_ip, dial_port, dial_rtp_port);
   this->set_call_identity_(call_id, caller_route, this->device_name_,
                             dest_route, dest_name);
   this->clear_terminal_response_();

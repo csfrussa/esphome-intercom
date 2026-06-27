@@ -40,7 +40,7 @@ struct ContactEntry {
   std::string ip;
   ContactEndpointKind endpoint_kind{ContactEndpointKind::UNKNOWN};
   uint16_t port{0};
-  uint16_t control_port{0};
+  uint16_t rtp_port{0};
   bool sip_transport_tcp{false};
   std::string audio_capability;
   uint8_t missing_count{0};
@@ -268,21 +268,21 @@ class Phonebook {
   AddResult merge_(const ContactEntry &incoming) {
     for (auto &existing : this->entries_) {
       if (existing.name != incoming.name) continue;
-      if (incoming.ip.empty() && incoming.port == 0 && incoming.control_port == 0) {
+      if (incoming.ip.empty() && incoming.port == 0 && incoming.rtp_port == 0) {
         return AddResult::Noop;
       }
       if (existing.ip == incoming.ip && existing.port == incoming.port &&
-          existing.control_port == incoming.control_port &&
+          existing.rtp_port == incoming.rtp_port &&
           existing.endpoint_kind == incoming.endpoint_kind &&
           existing.audio_capability == incoming.audio_capability) {
         return AddResult::Noop;
       }
       const bool was_unset = existing.ip.empty() && existing.port == 0 &&
-                             existing.control_port == 0;
+                             existing.rtp_port == 0;
       existing.ip = incoming.ip;
       existing.endpoint_kind = incoming.endpoint_kind;
       existing.port = incoming.port;
-      existing.control_port = incoming.control_port;
+      existing.rtp_port = incoming.rtp_port;
       existing.sip_transport_tcp = incoming.sip_transport_tcp;
       existing.audio_capability = incoming.audio_capability;
       return was_unset ? AddResult::Upgraded : AddResult::EndpointReplaced;
@@ -294,7 +294,7 @@ class Phonebook {
 
   static bool same_entry_(const ContactEntry &a, const ContactEntry &b) {
     return a.name == b.name && a.ip == b.ip && a.endpoint_kind == b.endpoint_kind &&
-           a.port == b.port && a.control_port == b.control_port &&
+           a.port == b.port && a.rtp_port == b.rtp_port &&
            a.sip_transport_tcp == b.sip_transport_tcp &&
            a.audio_capability == b.audio_capability;
   }
@@ -332,7 +332,7 @@ class Phonebook {
     out->ip = trim_(parts[1]);
     if (out->ip.empty()) return false;
     if (!parse_u16_(trim_(parts[2]), &out->port) ||
-        !parse_u16_(trim_(parts[3]), &out->control_port)) {
+        !parse_u16_(trim_(parts[3]), &out->rtp_port)) {
       return false;
     }
     const size_t transport_index = parts.size() == 8 ? 7 : 4;

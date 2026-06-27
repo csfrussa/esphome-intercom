@@ -136,6 +136,11 @@ class FrontendCardContractTest(unittest.TestCase):
         ):
             self.assertNotIn(token, engine)
 
+    def test_ha_softphone_browser_audio_survives_hidden_tabs(self) -> None:
+        engine = (ROOT / "custom_components" / "intercom_native" / "frontend" / "intercom-engine.js").read_text()
+        self.assertNotIn("hidden_timeout", engine)
+        self.assertNotIn('document.addEventListener("visibilitychange"', engine)
+
 
 if __name__ == "__main__":
     unittest.main()

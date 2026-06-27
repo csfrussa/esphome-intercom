@@ -16,7 +16,6 @@ substitutions:
   name: ha-voice-pe-intercom
   friendly_name: Home Assistant Voice PE Intercom
   ext_components_source: "../../../esphome/components"
-  intercom_tcp_port: "6054"
 
 packages:
   voice_pe_base: !include ../../../home-assistant-voice.yaml

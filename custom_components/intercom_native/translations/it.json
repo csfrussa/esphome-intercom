@@ -13,7 +13,7 @@
           "assist_intents": "Abilita intent Assist"
         },
         "data_description": {
-          "sip_tcp_enabled": "Ascolta il signaling SIP su TCP. Attivo di default per softphone HA e routing PBX.",
+          "sip_tcp_enabled": "Ascolta il signaling SIP su TCP. Attivo di default per softphone HA e bridge SIP.",
           "sip_udp_enabled": "Ascolta il signaling SIP su UDP. Attivalo quando ESP o softphone esterni chiamano HA via SIP UDP.",
           "sip_port": "Porta di ascolto dell'endpoint SIP HA.",
           "rtp_port": "Porta UDP RTP base per media e relay HA.",

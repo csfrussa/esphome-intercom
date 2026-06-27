@@ -171,11 +171,11 @@ class SetRemoteEndpointAction : public Action<Ts...>, public Parented<IntercomAp
  public:
   TEMPLATABLE_VALUE(std::string, ip)
   TEMPLATABLE_VALUE(uint16_t, port)
-  TEMPLATABLE_VALUE(uint16_t, control_port)
+  TEMPLATABLE_VALUE(uint16_t, rtp_port)
   void play(const Ts &...x) override {
     this->parent_->set_remote_endpoint(
         this->ip_.value(x...), this->port_.value(x...),
-        this->control_port_.value(x...));
+        this->rtp_port_.value(x...));
   }
 };
 

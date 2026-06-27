@@ -24,7 +24,7 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 
 #include "intercom_fsm.h"
-#include "intercom_protocol.h"
+#include "sip_types.h"
 #include "phonebook.h"
 #include "transport.h"
 
@@ -114,10 +114,6 @@ class IntercomApi : public Component {
       this->transport_->set_sip_signaling_transport(type == TransportType::TCP);
     }
   }
-  void set_remote_ip(const std::string &ip) { this->remote_ip_ = ip; }
-  void set_remote_port(uint16_t port) { this->remote_port_ = port; }
-  void set_listen_port(uint16_t port) { this->listen_port_ = port; }
-  void set_control_port(uint16_t port) { this->control_port_ = port; }
   void set_udp_max_payload(size_t bytes) { this->udp_max_payload_ = bytes; }
   void set_sip_port(uint16_t port) { this->sip_port_ = port; }
   void set_rtp_port(uint16_t port) { this->rtp_port_ = port; }
@@ -147,9 +143,8 @@ class IntercomApi : public Component {
                                AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms});
   }
   /// Update the selected SIP peer endpoint at runtime. `port` is SIP signaling;
-  /// `control_port` carries the peer RTP port until the internal field is
-  /// renamed throughout the audio path.
-  void set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t control_port = 0);
+  /// `rtp_port` is the peer RTP media port.
+  void set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t rtp_port = 0);
   void set_remote_sip_transport_tcp(bool tcp);
   const char *configured_sip_transport_name() const { return this->protocol_ == TransportType::TCP ? "tcp" : "udp"; }
 
@@ -256,11 +251,11 @@ class IntercomApi : public Component {
   void next_contact();
   void prev_contact();
   const std::string &get_current_destination() const;
-  // Endpoint of the selected contact. Empty/zero means start() falls back
-  // to the YAML remote_ip_/remote_port_.
+  // Endpoint of the selected SIP contact. Empty/zero makes start() fail with
+  // transport_unreachable; there is no legacy default peer.
   const std::string &get_current_contact_ip() const;
   uint16_t get_current_contact_port() const;
-  uint16_t get_current_contact_control_port() const;
+  uint16_t get_current_contact_rtp_port() const;
   bool get_current_contact_sip_transport_tcp() const;
   std::string get_caller() const { return this->caller_sensor_ ? this->caller_sensor_->state : ""; }
   std::string get_contacts_csv() const;
@@ -416,11 +411,6 @@ class IntercomApi : public Component {
 
   // Transport configuration (set from YAML before setup()). Defaults:
   TransportType protocol_{TransportType::UDP};
-  std::string remote_ip_;
-  uint16_t remote_port_{5060};
-  uint16_t remote_control_port_{0};
-  uint16_t listen_port_{5060};
-  uint16_t control_port_{40000};
   size_t udp_max_payload_{UDP_SAFE_AUDIO_PAYLOAD_BYTES};
   uint16_t sip_port_{5060};
   uint16_t rtp_port_{40000};

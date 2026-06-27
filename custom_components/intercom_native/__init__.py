@@ -1741,7 +1741,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
-    """Bind the enabled SIP signaling listeners for HA softphone/PBX calls."""
+    """Bind the enabled SIP signaling listeners for HA softphone and bridge calls."""
     from .roster import RosterEntry, resolve_target
     from .sdp import build_answer_directional
     from .sip import parse_sip_uri

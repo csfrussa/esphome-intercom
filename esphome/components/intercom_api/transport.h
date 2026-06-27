@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <string>
 
-#include "intercom_protocol.h"
+#include "sip_types.h"
 
 namespace esphome {
 namespace intercom_api {
@@ -80,9 +80,9 @@ class SipPhoneTransport {
   /// Used in dump_config / ESP_LOGCONFIG ("tcp", "udp", ...).
   virtual const char *transport_name() const = 0;
 
-  /// Retarget the selected SIP peer. `port` is SIP signaling; `control_port`
+  /// Retarget the selected SIP peer. `port` is SIP signaling; `rtp_port`
   /// carries RTP media port until the internal naming is fully collapsed.
-  virtual void set_remote(const std::string &ip, uint16_t port, uint16_t control_port = 0) {}
+  virtual void set_remote(const std::string &ip, uint16_t port, uint16_t rtp_port = 0) {}
 
   /// SIP-only: select TCP or UDP for SIP signaling. RTP media remains UDP.
   /// Other transports ignore this because their protocol is fixed by type.

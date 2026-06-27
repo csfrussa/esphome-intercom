@@ -60,12 +60,12 @@ void append_csv(std::string *out, const std::string &entry) {
 
 std::string serialize_endpoint(const std::string &name, ContactEndpointKind endpoint_kind,
                                const std::string &ip, uint16_t port,
-                               uint16_t control_port, bool sip_transport_tcp = false) {
+                               uint16_t rtp_port, bool sip_transport_tcp = false) {
   if (name.empty()) return "";
   if (ip.empty() || port == 0) return name;
   if (endpoint_kind == ContactEndpointKind::SIP) {
     return name + "|" + ip + "|" + std::to_string(port) + "|" +
-           std::to_string(control_port) + "|" + (sip_transport_tcp ? "sip_tcp" : "sip_udp");
+           std::to_string(rtp_port) + "|" + (sip_transport_tcp ? "sip_tcp" : "sip_udp");
   }
   return name;
 }
@@ -347,7 +347,7 @@ std::string IntercomApi::normalize_phonebook_for_transport_(const std::string &c
 
     if (entry.endpoint_kind == ContactEndpointKind::SIP) {
       append_csv(&out, serialize_endpoint(entry.name, entry.endpoint_kind, entry.ip,
-                                          entry.port, entry.control_port,
+                                          entry.port, entry.rtp_port,
                                           entry.sip_transport_tcp));
       continue;
     }
@@ -406,7 +406,7 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
 
   const ContactEndpointKind local_endpoint_kind = ContactEndpointKind::SIP;
   const uint16_t ha_local_port = ha_slot.sip_port;
-  const uint16_t ha_local_control = ha_slot.rtp_port;
+  const uint16_t ha_local_rtp_port = ha_slot.rtp_port;
 
   std::string out;
   for (const auto &slot : slots) {
@@ -426,7 +426,7 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
          endpoint_kind != ContactEndpointKind::SIP || missing_sip_transport) &&
         has_ha) {
       append_csv(&out, serialize_endpoint(slot.name, local_endpoint_kind, ha_slot.address,
-                                          ha_local_port, ha_local_control,
+                                          ha_local_port, ha_local_rtp_port,
                                           ha_slot.sip_transport == "tcp"));
       continue;
     }
@@ -442,7 +442,7 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
                                           slot.sip_transport == "tcp"));
     } else if (has_ha) {
       append_csv(&out, serialize_endpoint(slot.name, local_endpoint_kind, ha_slot.address,
-                                          ha_local_port, ha_local_control,
+                                          ha_local_port, ha_local_rtp_port,
                                           ha_slot.sip_transport == "tcp"));
     } else {
       append_csv(&out, slot.name);
@@ -499,7 +499,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
 
   const ContactEndpointKind local_endpoint_kind = ContactEndpointKind::SIP;
   const uint16_t ha_local_port = ha_slot.sip_port;
-  const uint16_t ha_local_control = ha_slot.rtp_port;
+  const uint16_t ha_local_rtp_port = ha_slot.rtp_port;
 
   std::vector<ContactEntry> entries;
   entries.reserve(slots.size());
@@ -515,7 +515,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
       entry.endpoint_kind = local_endpoint_kind;
       entry.ip = slot.address;
       entry.port = slot.sip_port;
-      entry.control_port = slot.rtp_port;
+      entry.rtp_port = slot.rtp_port;
       entry.sip_transport_tcp = slot.sip_transport == "tcp";
     } else if ((slot.kind == "phone" || slot.kind == "group" || slot.ha_bridge ||
                 slot.address.empty() ||
@@ -524,7 +524,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
       entry.endpoint_kind = local_endpoint_kind;
       entry.ip = ha_slot.address;
       entry.port = ha_local_port;
-      entry.control_port = ha_local_control;
+      entry.rtp_port = ha_local_rtp_port;
       entry.sip_transport_tcp = ha_slot.sip_transport == "tcp";
     } else {
       entry.endpoint_kind = endpoint_kind;
@@ -536,7 +536,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
           continue;
         }
         entry.port = slot.sip_port;
-        entry.control_port = slot.rtp_port;
+        entry.rtp_port = slot.rtp_port;
         entry.sip_transport_tcp = slot.sip_transport == "tcp";
       } else {
         continue;
@@ -672,9 +672,9 @@ uint16_t IntercomApi::get_current_contact_port() const {
   return this->phonebook_.current_port();
 }
 
-uint16_t IntercomApi::get_current_contact_control_port() const {
+uint16_t IntercomApi::get_current_contact_rtp_port() const {
   const auto *c = this->phonebook_.current();
-  return c ? c->control_port : 0;
+  return c ? c->rtp_port : 0;
 }
 
 bool IntercomApi::get_current_contact_sip_transport_tcp() const {

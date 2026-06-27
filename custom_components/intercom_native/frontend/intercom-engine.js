@@ -10,7 +10,6 @@ const MODULE_VERSION = (() => {
 })();
 const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
-const HIDDEN_HANGUP_GRACE_MS = 15000;
 const CONTROL_ACK_TIMEOUT_MS = 3000;
 const DEFAULT_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
 
@@ -36,7 +35,6 @@ class IntercomEngine extends EventTarget {
     this._busUnsub = null;
     this._callSubscribers = new Set();
     this._lastEvents = new Map();
-    this._hiddenTimer = null;
     this._controlWaiter = null;
     this._connectPromise = null;
     this._sessionAttachKey = "";
@@ -46,7 +44,6 @@ class IntercomEngine extends EventTarget {
     this._ringtoneTimer = null;
 
     window.addEventListener("pagehide", () => this.close("pagehide"));
-    document.addEventListener("visibilitychange", () => this._onVisibility());
   }
 
   configure(hass) {
@@ -123,22 +120,6 @@ class IntercomEngine extends EventTarget {
       try { cb(event); } catch (err) { console.error("intercom-engine replay", err); }
     }
     return () => this._callSubscribers.delete(cb);
-  }
-
-  _onVisibility() {
-    if (document.visibilityState === "hidden") {
-      if (this.active && this._hiddenTimer === null) {
-        this._hiddenTimer = window.setTimeout(() => {
-          this._hiddenTimer = null;
-          if (document.visibilityState === "hidden" && this.active) {
-            this.close("hidden_timeout");
-          }
-        }, HIDDEN_HANGUP_GRACE_MS);
-      }
-    } else if (this._hiddenTimer !== null) {
-      window.clearTimeout(this._hiddenTimer);
-      this._hiddenTimer = null;
-    }
   }
 
   setRingtoneRequest(key, active, enabled) {

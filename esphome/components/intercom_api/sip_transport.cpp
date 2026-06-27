@@ -628,10 +628,10 @@ bool SipTransport::originate(const std::string &host, uint16_t port) {
   return true;
 }
 
-void SipTransport::set_remote(const std::string &ip, uint16_t port, uint16_t control_port) {
+void SipTransport::set_remote(const std::string &ip, uint16_t port, uint16_t rtp_port) {
   this->parse_remote_(ip);
   if (port) this->remote_sip_port_.store(port, std::memory_order_release);
-  if (control_port) this->remote_rtp_port_.store(control_port, std::memory_order_release);
+  if (rtp_port) this->remote_rtp_port_.store(rtp_port, std::memory_order_release);
 }
 
 void SipTransport::set_sip_signaling_transport(bool tcp) {
