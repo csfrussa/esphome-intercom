@@ -1531,6 +1531,8 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
 
     await _async_load_ha_softphone_store(hass)
     async_register_websocket_api(hass)
+    from .audio_ws_view import async_register_audio_ws_view
+    async_register_audio_ws_view(hass)
     await _async_register_services(hass)
     _register_esp_state_event_bridge(hass)
 
