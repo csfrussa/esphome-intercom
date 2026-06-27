@@ -17,7 +17,7 @@ from . import rtp
 from .audio_ws import decode_audio_frame, encode_audio_frame
 from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .sip_client import SipCallClient, pcm_to_rtp_payload, rtp_payload_to_pcm
-from .websocket_api import _ha_softphone_store
+from .websocket_api import _fire_call_event, _ha_softphone_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -147,12 +147,35 @@ async def _run_audio_session(
         "ws_tx": 0,
         "rtp_rx": 0,
         "rtp_tx": 0,
+        "rtp_rx_bytes": 0,
+        "rtp_tx_bytes": 0,
         "drop_addr": 0,
         "drop_payload_type": 0,
         "drop_error": 0,
         "tx_error": 0,
     }
     logged_first_rtp = False
+    last_counter_event = 0.0
+
+    def publish_counters(*, force: bool = False) -> None:
+        nonlocal last_counter_event
+        now = loop.time()
+        if not force and now - last_counter_event < 0.5:
+            return
+        last_counter_event = now
+        store = _ha_softphone_store(hass)
+        if str(store.get("call_id") or "") != session.call_id:
+            return
+        store.update(
+            {
+                "rtp_tx_packets": counters["rtp_tx"],
+                "rtp_rx_packets": counters["rtp_rx"],
+                "rtp_tx_bytes": counters["rtp_tx_bytes"],
+                "rtp_rx_bytes": counters["rtp_rx_bytes"],
+                "last_sip_event": "rtp_media",
+            }
+        )
+        _fire_call_event(hass, dict(store, device_id=HA_SOFTPHONE_DEVICE_ID), "session")
 
     await ws.send_json(
         {
@@ -198,9 +221,11 @@ async def _run_audio_session(
                     counters["drop_payload_type"] += 1
                     continue
                 counters["rtp_rx"] += 1
+                counters["rtp_rx_bytes"] += len(data)
                 pcm = rtp_payload_to_pcm(packet.payload, session.recv_format.audio_format)
                 await ws.send_bytes(encode_audio_frame(pcm))
                 counters["ws_tx"] += 1
+                publish_counters()
             except Exception as err:  # noqa: BLE001 - media path must stay alive on bad packets.
                 counters["drop_error"] += 1
                 _LOGGER.debug("HA softphone RTP RX drop: %s", err)
@@ -224,8 +249,10 @@ async def _run_audio_session(
                     )
                     transport.sendto(packet, (session.remote_rtp_host, int(session.remote_rtp_port)))
                     counters["rtp_tx"] += 1
+                    counters["rtp_tx_bytes"] += len(packet)
                     sequence = rtp.next_sequence(sequence)
                     timestamp = rtp.next_timestamp(timestamp, session.send_format.audio_format.nominal_frame_samples)
+                    publish_counters()
                 except Exception as err:  # noqa: BLE001 - report malformed browser frames without killing HA.
                     counters["tx_error"] += 1
                     _LOGGER.debug("HA softphone browser audio TX drop: %s", err)
@@ -239,6 +266,7 @@ async def _run_audio_session(
         except asyncio.CancelledError:
             pass
         transport.close()
+        publish_counters(force=True)
         _LOGGER.info(
             "HA softphone audio websocket detached call_id=%s ws_rx=%d rtp_tx=%d rtp_rx=%d ws_tx=%d "
             "drop_addr=%d drop_pt=%d drop_error=%d tx_error=%d",
