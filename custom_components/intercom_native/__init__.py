@@ -64,6 +64,11 @@ def _pending_routes(hass: HomeAssistant) -> dict:
     return hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending_routes", {})
 
 
+def _single_pending_route_call_id(hass: HomeAssistant) -> str:
+    routes = _pending_routes(hass)
+    return next(iter(routes)) if len(routes) == 1 else ""
+
+
 def _device_formats(device: dict | None, key: str):
     if not device:
         return []
@@ -761,6 +766,8 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no answer/call button")
         return
     call_id = str(call.data.get("call_id") or "").strip()
+    if not call_id:
+        call_id = _single_pending_route_call_id(hass)
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
         return
@@ -825,6 +832,8 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     app_reason = str(call.data.get("decline_reason") or "").strip() or (
         TerminalReason.DECLINED.value if reason == "Busy Here" else reason
     )
+    if not call_id:
+        call_id = _single_pending_route_call_id(hass)
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(
             hass,
@@ -876,6 +885,8 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
             raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no hangup/decline control")
         return
     call_id = str(call.data.get("call_id") or "").strip()
+    if not call_id:
+        call_id = _single_pending_route_call_id(hass)
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(
             hass,
