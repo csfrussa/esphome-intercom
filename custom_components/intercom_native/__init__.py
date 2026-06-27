@@ -6,6 +6,7 @@ the central phonebook and routed through HA as SIP dialogs when needed.
 """
 
 import asyncio
+from dataclasses import replace
 import logging
 import time
 
@@ -1703,8 +1704,41 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 return peer
         return None
 
+    def _peer_audio_formats(peer: Peer | None, key: str) -> list[AudioFormat]:
+        if peer is None:
+            return []
+        raw = ";".join(str(item) for item in (peer.tx_formats if key == "tx_formats" else peer.rx_formats) or [])
+        if not raw.strip():
+            return []
+        try:
+            return parse_audio_format_list(raw)
+        except ValueError as err:
+            _LOGGER.warning("Ignoring invalid peer %s on %s: %s", key, peer.name, err)
+            return []
+
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
+        caller_peer = _peer_for_target(invite.caller, peers)
+        if caller_peer is not None:
+            from . import sdp as sip_sdp
+
+            send_candidates, recv_candidates = _sip_target_audio_profile(
+                remote_tx_formats=_peer_audio_formats(caller_peer, "tx_formats"),
+                remote_rx_formats=_peer_audio_formats(caller_peer, "rx_formats"),
+                target=caller_peer.name,
+            )
+            selected = sip_sdp.negotiate_directional(
+                invite.remote_sdp,
+                send_candidates,
+                recv_candidates,
+            )
+            if selected is None:
+                _LOGGER.info(
+                    "SIP INVITE from %s rejected: roster directional PCM profile is incompatible",
+                    invite.caller or invite.source_host,
+                )
+                return SipInviteResult(488, "Not Acceptable Here", to_tag="", decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value)
+            invite = replace(invite, send_format=selected.send, recv_format=selected.recv)
         decision = resolve_target(invite.target, _roster_from_peers(peers), ha_bridge=True)
         bucket = hass.data.setdefault(DOMAIN, {})
         route_bucket = _pending_routes(hass)
