@@ -89,6 +89,8 @@ class SipTransport : public SipPhoneTransport {
   std::string build_sdp_answer_() const;
   bool learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t default_ip);
   bool local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) const;
+  void request_tcp_client_close_();
+  void close_tcp_client_from_sip_task_();
   void reset_dialog_();
   void mark_sip_event_(SipEvent event, uint16_t status = 0);
   static const char *sip_event_name_(SipEvent event);
@@ -129,7 +131,7 @@ class SipTransport : public SipPhoneTransport {
 
   int sip_socket_{-1};
   int sip_tcp_listener_socket_{-1};
-  int sip_tcp_client_socket_{-1};
+  std::atomic<int> sip_tcp_client_socket_{-1};
   int rtp_socket_{-1};
   TaskHandle_t sip_task_handle_{nullptr};
   StaticTask_t sip_task_tcb_{};
@@ -142,6 +144,7 @@ class SipTransport : public SipPhoneTransport {
   std::atomic<bool> call_active_{false};
   std::atomic<bool> outgoing_invite_pending_{false};
   std::atomic<bool> remote_sip_tcp_{false};
+  std::atomic<bool> sip_tcp_client_close_requested_{false};
   std::atomic<uint32_t> rtp_tx_packets_{0};
   std::atomic<uint32_t> rtp_rx_packets_{0};
   std::atomic<uint32_t> rtp_tx_bytes_{0};

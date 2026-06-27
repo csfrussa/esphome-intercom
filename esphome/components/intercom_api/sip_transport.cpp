@@ -487,6 +487,20 @@ bool SipTransport::start() {
   return true;
 }
 
+void SipTransport::request_tcp_client_close_() {
+  const int socket = this->sip_tcp_client_socket_.load(std::memory_order_acquire);
+  if (socket < 0) return;
+  this->sip_tcp_client_close_requested_.store(true, std::memory_order_release);
+  shutdown(socket, SHUT_RDWR);
+}
+
+void SipTransport::close_tcp_client_from_sip_task_() {
+  const int socket = this->sip_tcp_client_socket_.exchange(-1, std::memory_order_acq_rel);
+  this->sip_tcp_client_close_requested_.store(false, std::memory_order_release);
+  if (socket >= 0) close(socket);
+  this->sip_tcp_rx_buffer_.clear();
+}
+
 void SipTransport::stop() {
   this->stop_audio_path();
   if (!this->running_.exchange(false, std::memory_order_acq_rel)) return;
@@ -498,11 +512,9 @@ void SipTransport::stop() {
     close(this->sip_tcp_listener_socket_);
     this->sip_tcp_listener_socket_ = -1;
   }
-  if (this->sip_tcp_client_socket_ >= 0) {
-    close(this->sip_tcp_client_socket_);
-    this->sip_tcp_client_socket_ = -1;
-  }
+  this->request_tcp_client_close_();
   audio_processor::force_delete_pinned_task(&this->sip_task_handle_, &this->sip_task_stack_, kSipTaskStackBytes);
+  this->close_tcp_client_from_sip_task_();
   this->emit_connection_change_(false);
 }
 
@@ -550,9 +562,13 @@ bool SipTransport::originate(const std::string &host, uint16_t port) {
     return true;
   }
 
-  if (this->sip_tcp_client_socket_ >= 0) {
-    close(this->sip_tcp_client_socket_);
-    this->sip_tcp_client_socket_ = -1;
+  this->request_tcp_client_close_();
+  for (uint8_t i = 0; i < 20 && this->sip_tcp_client_socket_.load(std::memory_order_acquire) >= 0; i++) {
+    delay(5);
+  }
+  if (this->sip_tcp_client_socket_.load(std::memory_order_acquire) >= 0) {
+    ESP_LOGW(TAG, "SIP TCP previous client did not close in time");
+    return false;
   }
 
   const uint32_t ip_v4 = this->remote_ip_v4_.load(std::memory_order_acquire);
@@ -605,7 +621,8 @@ bool SipTransport::originate(const std::string &host, uint16_t port) {
     return false;
   }
 
-  this->sip_tcp_client_socket_ = fd;
+  this->sip_tcp_client_socket_.store(fd, std::memory_order_release);
+  this->sip_tcp_client_close_requested_.store(false, std::memory_order_release);
   this->sip_tcp_rx_buffer_.clear();
   ESP_LOGI(TAG, "SIP TCP originate connected to %s:%u", host.c_str(), (unsigned) sip_port);
   return true;
@@ -619,11 +636,7 @@ void SipTransport::set_remote(const std::string &ip, uint16_t port, uint16_t con
 
 void SipTransport::set_sip_signaling_transport(bool tcp) {
   const bool was_tcp = this->remote_sip_tcp_.exchange(tcp, std::memory_order_acq_rel);
-  if (!tcp && was_tcp && this->sip_tcp_client_socket_ >= 0) {
-    close(this->sip_tcp_client_socket_);
-    this->sip_tcp_client_socket_ = -1;
-    this->sip_tcp_rx_buffer_.clear();
-  }
+  if (!tcp && was_tcp) this->request_tcp_client_close_();
 }
 
 void SipTransport::reset_dialog_() {
@@ -709,7 +722,7 @@ bool SipTransport::send_sip_(const std::string &message, uint32_t ip_v4, uint16_
 }
 
 bool SipTransport::send_sip_tcp_(const std::string &message) {
-  const int socket = this->sip_tcp_client_socket_;
+  const int socket = this->sip_tcp_client_socket_.load(std::memory_order_acquire);
   if (socket < 0 || message.empty()) return false;
   size_t sent_total = 0;
   while (sent_total < message.size()) {
@@ -1425,7 +1438,8 @@ void SipTransport::handle_sip_stream_(int socket, const sockaddr_in &src) {
     if (n == 0) {
       ESP_LOGI(TAG, "SIP TCP peer closed");
       close(socket);
-      if (this->sip_tcp_client_socket_ == socket) this->sip_tcp_client_socket_ = -1;
+      int expected = socket;
+      this->sip_tcp_client_socket_.compare_exchange_strong(expected, -1, std::memory_order_acq_rel);
       this->remote_sip_tcp_.store(false, std::memory_order_release);
       this->sip_tcp_rx_buffer_.clear();
       return;
@@ -1434,7 +1448,8 @@ void SipTransport::handle_sip_stream_(int socket, const sockaddr_in &src) {
     if (err == EWOULDBLOCK || err == EAGAIN || err == ENOTCONN || err == EINPROGRESS || err == EALREADY) break;
     ESP_LOGW(TAG, "SIP TCP RX failed: %s (%d: %s)", socket_errno_name(err), err, socket_errno_text(err));
     close(socket);
-    if (this->sip_tcp_client_socket_ == socket) this->sip_tcp_client_socket_ = -1;
+    int expected = socket;
+    this->sip_tcp_client_socket_.compare_exchange_strong(expected, -1, std::memory_order_acq_rel);
     this->remote_sip_tcp_.store(false, std::memory_order_release);
     this->sip_tcp_rx_buffer_.clear();
     return;
@@ -1464,6 +1479,9 @@ void SipTransport::rtp_task_trampoline_(void *param) {
 void SipTransport::sip_task_() {
   uint8_t buf[2048];
   while (this->running_.load(std::memory_order_acquire)) {
+    if (this->sip_tcp_client_close_requested_.load(std::memory_order_acquire)) {
+      this->close_tcp_client_from_sip_task_();
+    }
     fd_set readfds;
     FD_ZERO(&readfds);
     int max_fd = -1;
@@ -1475,9 +1493,10 @@ void SipTransport::sip_task_() {
       FD_SET(this->sip_tcp_listener_socket_, &readfds);
       max_fd = std::max(max_fd, this->sip_tcp_listener_socket_);
     }
-    if (this->sip_tcp_client_socket_ >= 0) {
-      FD_SET(this->sip_tcp_client_socket_, &readfds);
-      max_fd = std::max(max_fd, this->sip_tcp_client_socket_);
+    const int tcp_client = this->sip_tcp_client_socket_.load(std::memory_order_acquire);
+    if (tcp_client >= 0) {
+      FD_SET(tcp_client, &readfds);
+      max_fd = std::max(max_fd, tcp_client);
     }
     struct timeval timeout{};
     timeout.tv_sec = 0;
@@ -1497,8 +1516,9 @@ void SipTransport::sip_task_() {
         setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
         int flags = fcntl(client, F_GETFL, 0);
         fcntl(client, F_SETFL, flags | O_NONBLOCK);
-        if (this->sip_tcp_client_socket_ >= 0) close(this->sip_tcp_client_socket_);
-        this->sip_tcp_client_socket_ = client;
+        this->close_tcp_client_from_sip_task_();
+        this->sip_tcp_client_socket_.store(client, std::memory_order_release);
+        this->sip_tcp_client_close_requested_.store(false, std::memory_order_release);
         this->sip_tcp_rx_buffer_.clear();
         this->remote_sip_tcp_.store(true, std::memory_order_release);
         char ip[16];
@@ -1522,13 +1542,15 @@ void SipTransport::sip_task_() {
       }
     }
 
-    if (this->sip_tcp_client_socket_ >= 0 && FD_ISSET(this->sip_tcp_client_socket_, &readfds)) {
+    const int active_tcp_client = this->sip_tcp_client_socket_.load(std::memory_order_acquire);
+    if (active_tcp_client >= 0 && FD_ISSET(active_tcp_client, &readfds)) {
       struct sockaddr_in src{};
       socklen_t slen = sizeof(src);
-      getpeername(this->sip_tcp_client_socket_, reinterpret_cast<struct sockaddr *>(&src), &slen);
-      this->handle_sip_stream_(this->sip_tcp_client_socket_, src);
+      getpeername(active_tcp_client, reinterpret_cast<struct sockaddr *>(&src), &slen);
+      this->handle_sip_stream_(active_tcp_client, src);
     }
   }
+  this->close_tcp_client_from_sip_task_();
   vTaskDelete(nullptr);
 }
 

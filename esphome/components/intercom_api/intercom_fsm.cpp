@@ -899,11 +899,15 @@ handle_incoming_invite_in_idle:
       else if (msg.status_code == 401 || in_reason == kReasonAuthRequiredUnsupported) reason = CallEndReason::AUTH_REQUIRED_UNSUPPORTED;
       else if (msg.status_code == 407 || in_reason == kReasonProxyAuthRequiredUnsupported) reason = CallEndReason::PROXY_AUTH_REQUIRED_UNSUPPORTED;
       else if (msg.type == SipSignalType::PROTOCOL_ERROR) reason = CallEndReason::PROTOCOL_ERROR;
+      std::string detail;
+      if (reason == CallEndReason::DECLINED && !in_reason.empty() && in_reason != kReasonDeclined) {
+        detail = in_reason;
+      }
       ESP_LOGI(TAG, "%s: SIP final status %u reason=%s call_id=%s",
                this->device_name_.c_str(), (unsigned) msg.status_code,
-               in_reason.empty() ? call_end_reason_to_str(reason) : in_reason.c_str(),
+               detail.empty() ? call_end_reason_to_str(reason) : detail.c_str(),
                in_call_id.c_str());
-      this->end_call_(reason, in_reason);
+      this->end_call_(reason, detail);
       this->set_active_(false);
       if (this->transport_) this->transport_->disconnect();
       break;

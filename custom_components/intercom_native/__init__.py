@@ -829,9 +829,16 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     call_id = str(call.data.get("call_id") or "").strip()
     status = int(call.data.get("status") or 486)
     reason = str(call.data.get("reason") or "Busy Here").strip() or "Busy Here"
-    app_reason = str(call.data.get("decline_reason") or "").strip() or (
-        TerminalReason.DECLINED.value if reason == "Busy Here" else reason
-    )
+    app_reason = str(call.data.get("decline_reason") or "").strip()
+    if not app_reason:
+        if status == 486:
+            app_reason = TerminalReason.BUSY.value
+        elif status == 487:
+            app_reason = TerminalReason.CANCELLED.value
+        elif status == 603:
+            app_reason = TerminalReason.DECLINED.value
+        else:
+            app_reason = reason or TerminalReason.DECLINED.value
     if not call_id:
         call_id = _single_pending_route_call_id(hass)
     if call_id and call_id in _pending_routes(hass):
@@ -1801,11 +1808,11 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if route_action == "busy":
                 status = route_status or 486
                 reason = route_reason or "Busy Here"
-                app_reason = route_decline_reason or TerminalReason.BUSY.value
+                app_reason = TerminalReason.BUSY.value
             elif route_action == "cancel":
                 status = route_status or 487
                 reason = route_reason or "Request Terminated"
-                app_reason = route_decline_reason or TerminalReason.CANCELLED.value
+                app_reason = TerminalReason.CANCELLED.value
             else:
                 status = route_status or 603
                 reason = route_reason or "Decline"
