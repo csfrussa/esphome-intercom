@@ -65,6 +65,7 @@ class IntercomCard extends HTMLElement {
     // Entity IDs (discovered once)
     this._intercomStateEntityId = null;
     this._transportEntityId = null;
+    this._sipSnapshotEntityId = null;
     this._callerEntityId = null;
     this._destinationEntityId = null;
     this._lastReasonEntityId = null;
@@ -226,6 +227,10 @@ class IntercomCard extends HTMLElement {
       selected_tx_format: payload.selected_tx_format || payload.tx_format || "",
       selected_rx_format: payload.selected_rx_format || payload.rx_format || "",
       audio_mode: payload.audio_mode || "",
+      rtp_tx_packets: Number(payload.rtp_tx_packets || 0),
+      rtp_rx_packets: Number(payload.rtp_rx_packets || 0),
+      rtp_tx_bytes: Number(payload.rtp_tx_bytes || 0),
+      rtp_rx_bytes: Number(payload.rtp_rx_bytes || 0),
       terminal_reason: payload.terminal_reason || payload.reason || "",
     };
   }
@@ -689,6 +694,47 @@ class IntercomCard extends HTMLElement {
     return entity?.state || this._getHaName();
   }
 
+  _parseCompactSipSnapshot(raw) {
+    const text = String(raw || "");
+    if (!text || text === "unknown" || text === "unavailable") return {};
+    if (text.trim().startsWith("{")) {
+      try { return JSON.parse(text); } catch (err) { return {}; }
+    }
+    const out = {};
+    for (const part of text.split(";")) {
+      const index = part.indexOf("=");
+      if (index <= 0) continue;
+      out[part.slice(0, index)] = part.slice(index + 1).replaceAll("\\;", ";").replaceAll("\\=", "=");
+    }
+    return out;
+  }
+
+  _sipCounterSnapshot() {
+    if (this._isHaSoftphoneMode()) return this._softphoneSnapshot || {};
+    const state = this._sipSnapshotEntityId ? this._hass?.states?.[this._sipSnapshotEntityId]?.state : "";
+    const parsed = this._parseCompactSipSnapshot(state);
+    return {
+      rtp_tx_packets: Number(parsed.rtp_tx_packets ?? parsed.pt ?? 0),
+      rtp_rx_packets: Number(parsed.rtp_rx_packets ?? parsed.pr ?? 0),
+      rtp_tx_bytes: Number(parsed.rtp_tx_bytes ?? parsed.bt ?? 0),
+      rtp_rx_bytes: Number(parsed.rtp_rx_bytes ?? parsed.br ?? 0),
+      selected_tx_format: parsed.selected_tx_format || parsed.tx || "",
+      selected_rx_format: parsed.selected_rx_format || parsed.rx || "",
+    };
+  }
+
+  _formatSipStatsLine() {
+    const snap = this._sipCounterSnapshot();
+    const txPackets = Number(snap.rtp_tx_packets || 0);
+    const rxPackets = Number(snap.rtp_rx_packets || 0);
+    const txBytes = Number(snap.rtp_tx_bytes || 0);
+    const rxBytes = Number(snap.rtp_rx_bytes || 0);
+    if (!txPackets && !rxPackets && !txBytes && !rxBytes) return "";
+    const txFormat = snap.selected_tx_format ? ` ${snap.selected_tx_format}` : "";
+    const rxFormat = snap.selected_rx_format ? ` ${snap.selected_rx_format}` : "";
+    return `Send ${txPackets} pkt / ${txBytes} B${txFormat} · Recv ${rxPackets} pkt / ${rxBytes} B${rxFormat}`;
+  }
+
   _softphoneTargets() {
     return this._rosterEntries
       .filter(entry => this._isCallableRosterEntry(entry))
@@ -894,6 +940,7 @@ class IntercomCard extends HTMLElement {
       const e = deviceInfo.entities;
       this._intercomStateEntityId = e.intercom_state || null;
       this._transportEntityId = e.intercom_transport || null;
+      this._sipSnapshotEntityId = e.sip_snapshot || null;
       this._callerEntityId = e.incoming_caller || null;
       this._destinationEntityId = e.destination || null;
       this._lastReasonEntityId = e.last_reason || null;
@@ -916,6 +963,7 @@ class IntercomCard extends HTMLElement {
         if (entity.device_id !== targetDeviceId) continue;
         const id = entity.entity_id;
         if (id.includes("intercom_state")) this._intercomStateEntityId = id;
+        else if (id.includes("intercom_sip_snapshot")) this._sipSnapshotEntityId = id;
         else if (id.includes("intercom_transport")) this._transportEntityId = id;
         else if (id.includes("caller")) this._callerEntityId = id;
         else if (id.includes("destination")) this._destinationEntityId = id;
@@ -1138,7 +1186,10 @@ class IntercomCard extends HTMLElement {
     }
 
     // Stats line
-    if (this._hasBrowserAudioPath()) {
+    const sipStats = this._formatSipStatsLine();
+    if (sipStats) {
+      els.stats.textContent = sipStats;
+    } else if (this._hasBrowserAudioPath()) {
       els.stats.textContent = intercomEngine.statsText();
     } else {
       els.stats.textContent = this._formatModeLabel(destination);

@@ -319,6 +319,8 @@ class IntercomDeviceResolver:
                 out["intercom_state"] = eid
             elif "intercom_endpoint" in eid and "intercom_endpoint" not in out:
                 out["intercom_endpoint"] = eid
+            elif "intercom_sip_snapshot" in eid and "sip_snapshot" not in out:
+                out["sip_snapshot"] = eid
             elif "intercom_transport" in eid and "intercom_transport" not in out:
                 # source of truth for "udp"/"tcp".
                 out["intercom_transport"] = eid
