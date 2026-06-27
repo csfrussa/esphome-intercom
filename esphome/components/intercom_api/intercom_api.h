@@ -103,8 +103,8 @@ class IntercomApi : public Component {
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
   // Matches the slug HA uses for the esphome.{slug}_start_call action.
   void set_device_route_id(const std::string &id) { this->device_route_id_ = id; }
-  // CALLING / RINGING auto-decline timeouts (0 disables). Both fire
-  // DECLINE("timeout") and tear down locally.
+  // CALLING / RINGING timeouts (0 disables). They send CANCEL or a SIP
+  // timeout final response and tear down locally.
   void set_calling_timeout(uint32_t ms) { this->calling_timeout_ms_ = ms; }
   void set_ringing_timeout(uint32_t ms) { this->ringing_timeout_ms_ = ms; }
 
@@ -268,6 +268,15 @@ class IntercomApi : public Component {
   Trigger<> *get_idle_trigger() { return &this->idle_trigger_; }
   Trigger<> *get_calling_trigger() { return &this->calling_trigger_; }
   Trigger<> *get_dest_ringing_trigger() { return &this->dest_ringing_trigger_; }
+  Trigger<std::string, std::string, std::string, std::string> *get_incoming_call_trigger() {
+    return &this->incoming_call_trigger_;
+  }
+  Trigger<std::string, std::string, std::string, std::string> *get_outgoing_call_trigger() {
+    return &this->outgoing_call_trigger_;
+  }
+  Trigger<std::string, std::string, std::string, std::string> *get_bridge_request_trigger() {
+    return &this->bridge_request_trigger_;
+  }
   Trigger<std::string> *get_hangup_trigger() { return &this->hangup_trigger_; }
   Trigger<std::string> *get_call_failed_trigger() { return &this->call_failed_trigger_; }
   Trigger<> *get_destination_changed_trigger() { return &this->destination_changed_trigger_; }
@@ -364,6 +373,7 @@ class IntercomApi : public Component {
   void publish_transport_();
   void publish_endpoint_();
   void publish_sip_snapshot_();
+  void clear_terminal_call_snapshot_();
   void request_endpoint_publish_();
   static void ip_event_handler_(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data);
@@ -374,14 +384,14 @@ class IntercomApi : public Component {
 
   void set_call_state_(CallState new_state);
   void end_call_(CallEndReason reason, const std::string &detail = "");
-  // Shared teardown for calling/ringing timeouts: DECLINE("timeout"),
+  // Shared teardown for calling/ringing timeouts: send SIP timeout,
   // cache it as terminal, end locally.
   void fire_timeout_decline_();
 
   bool send_sip_ringing_(const std::string &call_id);
   bool send_sip_bye_(const std::string &call_id);
   bool send_sip_cancel_(const std::string &call_id);
-  bool send_sip_decline_(const std::string &call_id, const std::string &reason);
+  bool send_sip_final_response_(const std::string &call_id, const std::string &reason);
   bool send_sip_answer_(const std::string &call_id);
   bool send_sip_invite_(const std::string &call_id,
                        const std::string &caller_route, const std::string &caller_name,
@@ -428,6 +438,10 @@ class IntercomApi : public Component {
   std::string last_endpoint_;
   std::string last_sip_snapshot_;
   std::atomic<bool> endpoint_publish_requested_{false};
+  std::string last_terminal_call_id_;
+  std::string last_terminal_direction_;
+  std::string last_terminal_caller_name_;
+  std::string last_terminal_dest_name_;
   // Registered entities (for state sync after boot)
   switch_::Switch *auto_answer_switch_{nullptr};
   switch_::Switch *dnd_switch_{nullptr};
@@ -498,17 +512,18 @@ class IntercomApi : public Component {
   uint32_t audio_debug_tx_frames_{0};
   uint32_t audio_debug_rx_frames_{0};
 
-  // First peer audio frame closes the ANSWER-echo loop (avoids A->B->A storms).
+  // First peer audio frame closes the 200 OK echo loop.
   std::atomic<bool> first_audio_received_{false};
 
   bool auto_answer_{true};
   bool do_not_disturb_{false};
 
-  // Auto-decline timeouts (0 = disabled). Both fire DECLINE("timeout").
+  // SIP call timeouts (0 = disabled). Pending outbound calls send CANCEL.
   uint32_t calling_timeout_ms_{0};
   uint32_t ringing_timeout_ms_{0};
   uint32_t ringing_start_time_{0};
   uint32_t calling_start_time_{0};
+  static constexpr uint32_t INVITE_NO_RESPONSE_TIMEOUT_MS = 1000;
 
   // === SIP call state ===
   // SIP Call-ID, opaque and echoed by SIP dialogs.
@@ -520,13 +535,13 @@ class IntercomApi : public Component {
   std::string current_caller_name_;
   std::string current_dest_route_id_;
   std::string current_dest_name_;
-  // Last terminal DECLINE: replayed briefly when a START with the same
-  // call_id arrives again. The cache is time-limited so a later real call
-  // between the same two devices cannot inherit the previous decline reason.
-  static constexpr uint32_t TERMINAL_DECLINE_REPLAY_MS = 1500;
-  std::string last_terminal_decline_call_id_;
-  std::string last_terminal_decline_reason_;
-  uint32_t last_terminal_decline_ms_{0};
+  // Last terminal SIP final response: replayed briefly when an INVITE with
+  // the same Call-ID arrives again. The cache is time-limited so a later real
+  // call between the same two devices cannot inherit the previous reason.
+  static constexpr uint32_t TERMINAL_RESPONSE_REPLAY_MS = 1500;
+  std::string last_terminal_response_call_id_;
+  std::string last_terminal_response_reason_;
+  uint32_t last_terminal_response_ms_{0};
 
   struct CallSnapshot {
     std::string call_id;
@@ -543,9 +558,9 @@ class IntercomApi : public Component {
   void clear_call_identity_();
   CallSnapshot snapshot_call_identity_() const;
   std::string get_current_call_id_() const;
-  void set_terminal_decline_(const std::string &call_id, const std::string &reason);
-  void clear_terminal_decline_();
-  void snapshot_terminal_decline_(std::string *call_id, std::string *reason, uint32_t *age_ms) const;
+  void set_terminal_response_(const std::string &call_id, const std::string &reason);
+  void clear_terminal_response_();
+  void snapshot_terminal_response_(std::string *call_id, std::string *reason, uint32_t *age_ms) const;
   bool recent_terminal_call_(const std::string &call_id, std::string *reason = nullptr) const;
   bool ensure_mic_processing_buffer_();
 
@@ -584,6 +599,9 @@ class IntercomApi : public Component {
   Trigger<> idle_trigger_;
   Trigger<> calling_trigger_;
   Trigger<> dest_ringing_trigger_;
+  Trigger<std::string, std::string, std::string, std::string> incoming_call_trigger_;
+  Trigger<std::string, std::string, std::string, std::string> outgoing_call_trigger_;
+  Trigger<std::string, std::string, std::string, std::string> bridge_request_trigger_;
   Trigger<std::string> hangup_trigger_;
   Trigger<std::string> call_failed_trigger_;
   Trigger<> destination_changed_trigger_;

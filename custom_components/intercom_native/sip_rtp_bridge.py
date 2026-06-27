@@ -1,4 +1,4 @@
-"""Session-owned RTP relay for SIP phase-1 PCM calls."""
+"""Session-owned RTP relay/resampler for SIP PCM calls."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 
 from . import rtp
 from .audio_format import AudioFormat
+from .audio_pcm import PcmFrameConverter
 from .sip_client import pcm_to_rtp_payload, rtp_payload_to_pcm
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,9 +53,9 @@ class _RelayProtocol(asyncio.DatagramProtocol):
 class SipRtpRelay:
     """Bidirectional RTP relay with explicit peer ownership.
 
-    The relay does not transcode. Both legs must negotiate the same PCM shape.
-    That is intentional for phase 1: HA may bridge TCP/UDP/SIP transport types,
-    but it must not hide incompatible audio contracts.
+    Each SIP leg keeps its negotiated PCM shape. HA converts between the two
+    negotiated RTP formats when needed, including sample-rate and frame-size
+    changes that are exact for the supported PCM profile.
     """
 
     def __init__(self, *, left: RtpPeer, right: RtpPeer, left_port: int, right_port: int) -> None:
@@ -74,6 +75,8 @@ class SipRtpRelay:
         self.right_rx_bytes = 0
         self.right_tx_packets = 0
         self.right_tx_bytes = 0
+        self.left_to_right = PcmFrameConverter(left.audio_format, right.outbound_audio_format)
+        self.right_to_left = PcmFrameConverter(right.audio_format, left.outbound_audio_format)
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -85,7 +88,15 @@ class SipRtpRelay:
             lambda: _RelayProtocol(self, "right"),
             local_addr=("0.0.0.0", self.right_port),
         )
-        _LOGGER.info("SIP RTP relay listening left=%s right=%s", self.left_port, self.right_port)
+        _LOGGER.info(
+            "SIP RTP relay listening left=%s right=%s left=%s->%s right=%s->%s",
+            self.left_port,
+            self.right_port,
+            self.left.audio_format.wire_token(),
+            self.right.outbound_audio_format.wire_token(),
+            self.right.audio_format.wire_token(),
+            self.left.outbound_audio_format.wire_token(),
+        )
 
     async def stop(self) -> None:
         _LOGGER.info(
@@ -122,17 +133,26 @@ class SipRtpRelay:
             if packet.payload_type != source.payload_type:
                 raise ValueError(f"payload type {packet.payload_type} != expected {source.payload_type}")
             pcm = rtp_payload_to_pcm(packet.payload, source.audio_format)
+            converter = self.left_to_right if side == "left" else self.right_to_left
+            converted_frames = converter.convert(pcm)
             out_format = dest.outbound_audio_format
-            payload = pcm_to_rtp_payload(pcm, out_format)
-            out = rtp.build_packet(
-                rtp.RtpPacket(
-                    payload_type=dest.outbound_payload_type,
-                    sequence=dest.sequence,
-                    timestamp=dest.timestamp,
-                    ssrc=dest.ssrc,
-                    payload=payload,
+            outgoing: list[bytes] = []
+            sequence = dest.sequence
+            timestamp = dest.timestamp
+            for frame in converted_frames:
+                outgoing.append(
+                    rtp.build_packet(
+                        rtp.RtpPacket(
+                            payload_type=dest.outbound_payload_type,
+                            sequence=sequence,
+                            timestamp=timestamp,
+                            ssrc=dest.ssrc,
+                            payload=pcm_to_rtp_payload(frame, out_format),
+                        )
+                    )
                 )
-            )
+                sequence = rtp.next_sequence(sequence)
+                timestamp = rtp.next_timestamp(timestamp, out_format.nominal_frame_samples)
         except Exception as err:
             self.dropped += 1
             _LOGGER.debug("RTP relay drop: %s", err)
@@ -143,16 +163,17 @@ class SipRtpRelay:
         else:
             self.right_rx_packets += 1
             self.right_rx_bytes += len(data)
-        dest.sequence = rtp.next_sequence(dest.sequence)
-        dest.timestamp = rtp.next_timestamp(dest.timestamp, dest.outbound_audio_format.nominal_frame_samples)
-        transport.sendto(out, (dest.host, dest.port))
-        if side == "left":
-            self.right_tx_packets += 1
-            self.right_tx_bytes += len(out)
-        else:
-            self.left_tx_packets += 1
-            self.left_tx_bytes += len(out)
-        self.forwarded += 1
+        for out in outgoing:
+            transport.sendto(out, (dest.host, dest.port))
+            if side == "left":
+                self.right_tx_packets += 1
+                self.right_tx_bytes += len(out)
+            else:
+                self.left_tx_packets += 1
+                self.left_tx_bytes += len(out)
+            self.forwarded += 1
+        dest.sequence = sequence
+        dest.timestamp = timestamp
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -170,4 +191,8 @@ class SipRtpRelay:
             "right_rx_bytes": self.right_rx_bytes,
             "right_tx_packets": self.right_tx_packets,
             "right_tx_bytes": self.right_tx_bytes,
+            "left_rx_format": self.left.audio_format.wire_token(),
+            "left_tx_format": self.left.outbound_audio_format.wire_token(),
+            "right_rx_format": self.right.audio_format.wire_token(),
+            "right_tx_format": self.right.outbound_audio_format.wire_token(),
         }

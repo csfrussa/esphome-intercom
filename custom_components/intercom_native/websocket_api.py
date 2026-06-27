@@ -13,6 +13,10 @@ from .const import DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
 from .fsm import CallState, TerminalReason, sip_phone_state
 
 CALL_EVENT = "intercom_native.call_event"
+SIP_CALL_STATE_EVENT = "intercom_native.sip_call_state"
+SIP_INCOMING_CALL_EVENT = "intercom_native.sip_incoming_call"
+SIP_ROUTE_REQUEST_EVENT = "intercom_native.sip_route_request"
+SIP_CALL_ENDED_EVENT = "intercom_native.sip_call_ended"
 HA_SOFTPHONE_STORE_KEY = f"{DOMAIN}_ha_softphone"
 HA_SOFTPHONE_STORE_VERSION = 1
 
@@ -137,6 +141,16 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
     reason = event.get("reason") or event.get("terminal_reason")
     event["type"] = _call_event_type(event["state"], str(reason) if reason is not None else None)
     hass.bus.async_fire(CALL_EVENT, event)
+    hass.bus.async_fire(SIP_CALL_STATE_EVENT, event)
+    if event["state"] == "route_requested":
+        hass.bus.async_fire(SIP_ROUTE_REQUEST_EVENT, event)
+    if event.get("direction") == "incoming" and event["state"] in (
+        "route_requested",
+        CallState.RINGING.value,
+    ):
+        hass.bus.async_fire(SIP_INCOMING_CALL_EVENT, event)
+    if event["type"] in {"ended", "missed", "failed"}:
+        hass.bus.async_fire(SIP_CALL_ENDED_EVENT, event)
 
 
 def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
@@ -244,15 +258,20 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     runtime = _sip_runtime_snapshot(hass)
     last_status = store.get("sip_status_code", "") or runtime["last_sip_status_code"] or ""
     last_event = store.get("last_sip_event", "") or runtime["last_sip_event"]
+    caller = store.get("caller", "") or store.get("last_terminal_caller", "")
+    callee = store.get("callee", "") or store.get("last_terminal_callee", "")
+    peer_name = store.get("peer_name", "") or store.get("last_terminal_peer_name", "")
+    direction = store.get("direction", "") or store.get("last_terminal_direction", "")
+    call_id = store.get("call_id", "") or store.get("last_terminal_call_id", "")
     phone = sip_phone_state(
         state=store.get("state", CallState.IDLE.value),
-        call_id=store.get("call_id", ""),
-        direction=store.get("direction", ""),
-        caller=store.get("caller", ""),
-        callee=store.get("callee", ""),
+        call_id=call_id,
+        direction=direction,
+        caller=caller,
+        callee=callee,
         local_uri=store.get("local_uri", ""),
         remote_uri=store.get("remote_uri", ""),
-        contact=store.get("peer_name", ""),
+        contact=peer_name,
         sip_transport=store.get("sip_transport", "udp+tcp"),
         sip_status_code=int(last_status or 0),
         terminal_reason=store.get("terminal_reason", ""),
@@ -272,13 +291,13 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "busy": bool(store.get("session_device_id") or runtime["pending_transactions"] or runtime["active_dialogs"]),
         "state": store.get("state", CallState.IDLE.value),
         "sip_state": store.get("sip_state", store.get("state", CallState.IDLE.value)),
-        "caller": store.get("caller", ""),
-        "callee": store.get("callee", ""),
+        "caller": caller,
+        "callee": callee,
         "local_name": store.get("local_name", _ha_peer_name(hass)),
-        "peer_name": store.get("peer_name", ""),
-        "direction": store.get("direction", ""),
+        "peer_name": peer_name,
+        "direction": direction,
         "role": store.get("role", ""),
-        "call_id": store.get("call_id", ""),
+        "call_id": call_id,
         "target_device_id": store.get("target_device_id", ""),
         "selected_tx_format": store.get("selected_tx_format", ""),
         "selected_rx_format": store.get("selected_rx_format", ""),
@@ -341,6 +360,11 @@ def _set_ha_softphone_call_state(
     if terminal:
         store["terminal_reason"] = extra.get("reason") or extra.get("terminal_reason") or state
         store["sip_status_code"] = extra.get("code") or extra.get("sip_status_code") or store.get("sip_status_code", "")
+        store["last_terminal_call_id"] = canonical.get("call_id", "")
+        store["last_terminal_direction"] = canonical.get("direction", "")
+        store["last_terminal_caller"] = canonical.get("caller", "")
+        store["last_terminal_callee"] = canonical.get("callee", "")
+        store["last_terminal_peer_name"] = canonical.get("peer_name", "")
         if extra.get("last_sip_event"):
             store["last_sip_event"] = extra["last_sip_event"]
         if extra.get("last_sip_reason"):
@@ -365,6 +389,14 @@ def _set_ha_softphone_call_state(
         store["state"] = state
         store["sip_state"] = state
     else:
+        for key in (
+            "last_terminal_call_id",
+            "last_terminal_direction",
+            "last_terminal_caller",
+            "last_terminal_callee",
+            "last_terminal_peer_name",
+        ):
+            store.pop(key, None)
         store.update(canonical)
         store["session_device_id"] = session_device_id
         store["state"] = state

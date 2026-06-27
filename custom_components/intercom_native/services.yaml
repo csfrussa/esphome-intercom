@@ -112,8 +112,14 @@ sip_call:
 
 sip_forward:
   name: SIP Forward
-  description: Route a standards-SIP call through Home Assistant's SIP dial plan and bridge.
+  description: Route a standards-SIP call through Home Assistant's SIP dial plan and bridge. With Call ID, forwards a pending inbound SIP route.
   fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID from intercom_native.sip_route_request. If omitted, Home Assistant originates a new bridged call.
+      required: false
+      selector:
+        text:
     destination:
       name: Destination
       description: Contact ID/name, number, user@host, or sip:user@host URI.
@@ -133,6 +139,72 @@ sip_forward:
       selector:
         text:
 
+sip_route:
+  name: SIP Route Decision
+  description: Apply an automation dial-plan decision to a pending inbound SIP route.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID from intercom_native.sip_route_request.
+      required: true
+      selector:
+        text:
+    action:
+      name: Action
+      required: false
+      default: default
+      selector:
+        select:
+          options:
+            - answer_ha
+            - decline
+            - busy
+            - forward
+            - bridge
+            - default
+            - cancel
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI for forward/bridge.
+      required: false
+      selector:
+        text:
+    target:
+      name: Target
+      description: Alias for destination.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for destination.
+      required: false
+      selector:
+        text:
+    status:
+      name: SIP Status
+      description: Optional final SIP status for decline/cancel decisions.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 699
+          step: 1
+          mode: box
+    reason:
+      name: Reason
+      description: SIP reason phrase.
+      required: false
+      selector:
+        text:
+    decline_reason:
+      name: Decline reason
+      description: Application terminal reason propagated in SIP Reason and X-Intercom-Decline-Reason headers.
+      required: false
+      selector:
+        text:
+
 sip_hangup:
   name: SIP Hang Up
   description: Send BYE and stop any SIP RTP relay for an active SIP call.
@@ -148,13 +220,15 @@ phonebook_add_contact:
   name: Add Phonebook Contact
   description: Add or replace one manual contact in the central JSON phonebook.
   fields:
-    id:
-      name: ID
+    name:
+      name: Name
+      description: Contact name. If ID is omitted, this is also used as the contact ID.
       required: true
       selector:
         text:
-    name:
-      name: Name
+    id:
+      name: ID
+      description: Optional stable ID. Defaults to Name.
       required: false
       selector:
         text:
@@ -253,6 +327,16 @@ phonebook_add_contact:
           max: 1400
           step: 1
           mode: box
+
+phonebook_remove_contact:
+  name: Remove Phonebook Contact
+  description: Remove one manual contact from the central JSON phonebook by name.
+  fields:
+    name:
+      name: Name
+      required: true
+      selector:
+        text:
 
 phonebook_set_contacts:
   name: Set Phonebook Contacts

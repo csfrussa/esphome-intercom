@@ -14,18 +14,15 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   examples.
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
-  starts with the `2026.7.0-dev` prerelease notes for the source-based full
-  media path, Sendspin testing and native 48 kHz intercom presets, then keeps
-  older upgrade risks out of the main README. [RELEASE_2026_5_0.md](RELEASE_2026_5_0.md)
-  contains the earlier "From PBX-like to PBX-lite" release note.
+  keeps historical upgrade notes separate from the current SIP contract.
 
 - 📚 **Configuration reference**: [reference.md](reference.md) covers every
   `intercom_api`, `esp_aec` and `esp_afe` option, every action and condition,
   Home Assistant services, and worked automation examples.
 
-- 🔌 **Wire protocol**: [INTERCOM_PROTOCOL.md](INTERCOM_PROTOCOL.md) is the
-  authoritative PBX-lite frame/reason/error/audio-format contract shared by the
-  ESP C++ and HA Python implementations.
+- 🔌 **Wire protocol**: [INTERCOM_PROTOCOL.md](INTERCOM_PROTOCOL.md) is a
+  tombstone for the retired proprietary protocol. Current call control is SIP,
+  SDP and RTP.
 
 - 📒 **Phonebook protocol**: [PHONEBOOK_PROTOCOL.md](PHONEBOOK_PROTOCOL.md)
   documents canonical endpoint rows, `audio_mode`, `tx_formats`/`rx_formats`
@@ -48,7 +45,8 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:
 
-- [`intercom_api`](../esphome/components/intercom_api/README.md), the PBX-lite TCP/UDP transport, call state machine and Home Assistant bridge.
+- [`intercom_api`](../esphome/components/intercom_api/README.md), the ESP SIP
+  phone component and Home Assistant bridge integration surface.
 - [`esp_audio_stack`](../esphome/components/esp_audio_stack/README.md), the
   coordinated full-duplex audio backend for shared codec buses, dual I2S
   MEMS/amp boards that need software reference handling, Espressif

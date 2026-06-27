@@ -44,13 +44,8 @@ class IntercomCard extends HTMLElement {
     // UI transition states only
     this._starting = false;
     this._stopping = false;
-    this._sessionState = null;
-    this._sessionCaller = "";
+    this._softphoneSnapshot = null;
     this._activeSessionDeviceId = null;
-    this._activeCallId = "";
-    this._sessionTxFormat = "";
-    this._sessionRxFormat = "";
-    this._sessionAudioMode = "";
     this._softphoneDnd = false;
     this._softphoneTargetDeviceId = null;
     this._softphoneStateLoaded = false;
@@ -182,203 +177,16 @@ class IntercomCard extends HTMLElement {
 
   _onCallEvent(event) {
     const scope = (event?.data?.scope || "").toLowerCase();
-    if (scope === "sip" || scope === "sip_bridge") {
-      this._onSipStateEvent(event);
-    } else if (scope === "bridge") {
-      this._onBridgeStateEvent(event);
-    } else if (scope === "session") {
+    if (this._isHaSoftphoneMode() && scope === "session") {
       this._onSessionStateEvent(event);
-    } else if (scope === "forward") {
-      this._onForwardStateEvent(event);
     }
-  }
-
-  _onSipStateEvent(event) {
-    const data = { ...(event?.data || {}) };
-    if (!this._eventConcernsThisCard(data)) return;
-    let st = String(data.state || "").toLowerCase();
-    if (st === "ended") st = "idle";
-    data.state = st;
-    data.scope = "session";
-    if (!data.direction) {
-      const local = data.local_name || "";
-      const caller = data.caller || data.peer_name || "";
-      data.direction = this._samePeerName(local, this._cardPeerName()) && !this._samePeerName(caller, this._cardPeerName())
-        ? "outgoing"
-        : "incoming";
-    }
-    if (!data.peer_name) {
-      data.peer_name = data.direction === "outgoing"
-        ? (data.callee || data.dest_name || "")
-        : (data.caller || "");
-    }
-    this._onSessionStateEvent({ data });
-  }
-
-  _onForwardStateEvent(event) {
-    const data = event?.data;
-    if (!this._eventConcernsThisCard(data)) return;
-    const st = (data.state || "").toLowerCase();
-    const peer = data.new_dest_name || data.old_dest_name || data.peer_name || "";
-    if (st === "ringing") {
-      this._destRinging = true;
-    } else if (st === "in_call") {
-      this._destRinging = false;
-      this._clearEndReason(false);
-    } else if (st === "failed") {
-      this._destRinging = false;
-      this._captureEndReason("error", data.reason || "forward_failed", "remote", peer);
-    }
-    this._render();
-  }
-
-  _onBridgeStateEvent(event) {
-    const data = event?.data;
-    if (!this._eventConcernsThisCard(data)) return;
-    const st = (data.state || "").toLowerCase();
-    const origin = (data.origin || "").toLowerCase() || null;
-    const reason = data.reason || "";
-    const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
-
-    // Translate bridge-relative origin (source/dest) into card-relative
-    // perspective (self/remote): the same idle event must read
-    // as "Local hangup" on the leg that hung up and "Remote hangup" on
-    // the other leg.
-    const myId = this._activeDeviceInfo?.device_id || this._getConfigDeviceId();
-    let perspective = null;
-    if (origin === "source")      perspective = (data.source_device_id === myId) ? "self" : "remote";
-    else if (origin === "dest")   perspective = (data.dest_device_id   === myId) ? "self" : "remote";
-    else if (origin === "self" || origin === "remote") perspective = origin;
-    const peer = data.source_device_id === myId ? data.dest_name
-      : data.dest_device_id === myId ? data.source_name
-      : data.peer_name;
-
-    if (st === "ringing") {
-      this._destRinging = true;
-    } else if (st === "in_call") {
-      this._destRinging = false;
-      this._clearEndReason(false);
-    }
-    if (mirrorEspReason && (st === "declined" || st === "error" || st === "idle")) {
-      this._destRinging = false;
-      this._render();
-      return;
-    }
-    if (st === "declined") {
-      this._destRinging = false;
-      this._captureEndReason("declined", reason, perspective || origin, peer);
-    } else if (st === "error") {
-      this._destRinging = false;
-      this._captureEndReason("error", reason, perspective || origin, peer);
-    } else if (st === "idle") {
-      this._destRinging = false;
-      // The bridge fires `idle` twice on a normal teardown:
-      // once from `on_*_stop` with reason+origin set (the real cause),
-      // then again from `_on_idle` after the transport closes
-      // with neither field. Skip the second one so the card keeps the
-      // explicit reason on the ended-screen.
-      if (reason || origin || !this._lastEndInfo) {
-        // Bridge labels are bridge-relative (the leg that produced the
-        // signal). Flip them to card-relative: the same hangup must
-        // read "Local" on the leg that hung up and "Remote" on the
-        // other leg.
-        let localized = reason;
-        if (reason === "remote_device_lost") localized = "remote_device_lost";
-        else if (perspective === "self" && reason === "remote_hangup") localized = "local_hangup";
-        else if (perspective === "remote" && reason === "local_hangup") localized = "remote_hangup";
-        this._captureEndReason("idle", localized, perspective || origin, peer);
-      }
-    }
-    this._render();
   }
 
   _onSessionStateEvent(event) {
     const data = event?.data;
     if (!this._eventConcernsThisCard(data)) return;
-    const st = (data.state || "").toLowerCase();
-    const terminalState = this._isTerminalSessionState(st);
-    const reason = data.reason || "";
-    const origin = (data.origin || "").toLowerCase() || null;
-    const peer = data.peer_name || this._lastEndInfo?.peer || "";
-    const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
-    const direction = String(data.direction || "").toLowerCase();
-    const sessionState = ["calling", "remote_ringing", "ringing", "in_call", "idle", "declined", "busy", "cancelled", "media_incompatible", "transport_unreachable", "auth_required_unsupported", "error"].includes(st);
-    const managedSession = sessionState && !!direction;
-    const outgoingSoftphoneSession = managedSession && direction === "outgoing";
-    if (Object.prototype.hasOwnProperty.call(data, "dnd")) this._softphoneDnd = !!data.dnd;
-    if (managedSession) {
-      if (data.call_id) this._activeCallId = data.call_id;
-      if (data.tx_format) this._sessionTxFormat = data.tx_format;
-      if (data.rx_format) this._sessionRxFormat = data.rx_format;
-      if (data.audio_mode) this._sessionAudioMode = data.audio_mode;
-      if (data.session_device_id || (data.device_id && data.device_id !== HA_SOFTPHONE_DEVICE_ID)) {
-        this._activeSessionDeviceId = data.session_device_id || data.device_id;
-      }
-      const outgoingRinging = outgoingSoftphoneSession && (st === "ringing" || st === "remote_ringing");
-      this._sessionState = outgoingRinging ? "remote_ringing" : (st || "idle");
-      if (outgoingRinging) this._destRinging = true;
-      if (data.caller || data.peer_name) {
-        this._sessionCaller = direction === "outgoing" ? "" : (data.peer_name || data.caller);
-      }
-      if (terminalState) {
-        this._sessionCaller = "";
-        this._activeSessionDeviceId = null;
-        this._activeCallId = "";
-        this._sessionTxFormat = "";
-        this._sessionRxFormat = "";
-        this._sessionAudioMode = "";
-        this._destRinging = false;
-        this._callMode = null;
-      }
-      if (
-        this._isHaSoftphoneMode() &&
-        st === "ringing" &&
-        this._autoAnswer &&
-        !this._autoAnswering &&
-        !this._starting
-      ) {
-        this._autoAnswering = true;
-        this._tryAutoAnswer();
-      }
-    }
-    if (st === "in_call" || st === "ringing") {
-      this._clearEndReason(false);
-      if (st === "in_call") this._destRinging = false;
-    } else if (mirrorEspReason && terminalState) {
-      // ESP-to-ESP card mode mirrors the ESP text sensors. Bridge/session
-      // events are useful for HA softphone state, but the terminal reason
-      // shown here must come from the ESP's own last_reason sensor.
-      this._destRinging = false;
-    } else if ((st === "idle" || st === "idle") && reason) {
-      const endOrigin = (origin === "self" || origin === "remote")
-        ? origin
-        : (reason === "local_hangup" ? "self" : "remote");
-      const isDisconnectReason =
-        reason === "local_hangup" ||
-        reason === "remote_hangup" ||
-        reason === "remote_device_lost";
-      this._captureEndReason(
-        isDisconnectReason ? "idle" : "declined",
-        reason,
-        endOrigin,
-        peer,
-      );
-    } else if (st === "declined") {
-      this._captureEndReason("declined", reason, origin || "remote", peer);
-    } else if (st === "error") {
-      this._captureEndReason("error", String(data.code ?? ""), origin || "remote", peer);
-    }
-    if (terminalState && this._isSoftphoneContext()) {
-      this._cleanupAfterTerminalSession();
-    }
+    this._applySoftphoneSnapshot(data);
     this._render();
-  }
-
-  _isTerminalSessionState(state) {
-    return state === "idle" ||
-           state === "idle" ||
-           state === "declined" ||
-           state === "error";
   }
 
   _hasBrowserAudioPath() {
@@ -397,6 +205,70 @@ class IntercomCard extends HTMLElement {
         this._cleanupTask = null;
         this._render();
       });
+  }
+
+  _normaliseSoftphoneSnapshot(payload = {}) {
+    const state = String(payload.state || payload.sip_state || "idle").toLowerCase();
+    const direction = String(payload.direction || "").toLowerCase();
+    const peerName = payload.peer_name || payload.contact ||
+      (direction === "outgoing" ? payload.callee : payload.caller) || "";
+    return {
+      ...payload,
+      device_id: HA_SOFTPHONE_DEVICE_ID,
+      session_device_id: payload.session_device_id || HA_SOFTPHONE_DEVICE_ID,
+      state,
+      sip_state: String(payload.sip_state || state).toLowerCase(),
+      direction,
+      caller: payload.caller || "",
+      callee: payload.callee || "",
+      peer_name: peerName,
+      call_id: payload.call_id || "",
+      selected_tx_format: payload.selected_tx_format || payload.tx_format || "",
+      selected_rx_format: payload.selected_rx_format || payload.rx_format || "",
+      audio_mode: payload.audio_mode || "",
+      terminal_reason: payload.terminal_reason || payload.reason || "",
+    };
+  }
+
+  _applySoftphoneSnapshot(payload = {}) {
+    const snapshot = this._normaliseSoftphoneSnapshot(payload);
+    this._softphoneSnapshot = snapshot;
+    this._softphoneDnd = !!snapshot.dnd;
+    this._activeSessionDeviceId = snapshot.session_device_id || HA_SOFTPHONE_DEVICE_ID;
+    this._destRinging = snapshot.state === "remote_ringing" ||
+      (snapshot.state === "ringing" && snapshot.direction === "outgoing");
+    if (snapshot.state === "in_call" || snapshot.state === "ringing") {
+      this._clearEndReason(false);
+    }
+    const activePhoneState = ["calling", "remote_ringing", "ringing", "in_call", "connecting", "terminating"].includes(snapshot.state);
+    if (snapshot.terminal_reason && !activePhoneState) {
+      this._captureEndReason(
+        "terminal",
+        snapshot.terminal_reason,
+        snapshot.direction === "outgoing" ? "remote" : "self",
+        snapshot.peer_name,
+      );
+    }
+    const terminalType = String(payload.type || "").toLowerCase();
+    if (["ended", "missed", "failed"].includes(terminalType)) {
+      this._captureEndReason(
+        "terminal",
+        snapshot.terminal_reason || snapshot.state || terminalType,
+        snapshot.direction === "outgoing" ? "remote" : "self",
+        snapshot.peer_name,
+      );
+      this._cleanupAfterTerminalSession();
+    }
+    if (
+      snapshot.state === "ringing" &&
+      snapshot.direction === "incoming" &&
+      this._autoAnswer &&
+      !this._autoAnswering &&
+      !this._starting
+    ) {
+      this._autoAnswering = true;
+      this._tryAutoAnswer();
+    }
   }
 
   _captureEndReason(kind, reason, origin, peerOverride = "") {
@@ -424,9 +296,7 @@ class IntercomCard extends HTMLElement {
     const { kind, reason, origin } = info;
     const knownReason = this._formatKnownReason(reason);
     if (knownReason) return knownReason;
-    // origin can be "self"/"remote" (perspective from this card's
-    // device, set by _onBridgeStateEvent) or the raw bridge-relative
-    // "source"/"dest" when this card is HA itself (no device match).
+    // origin can be "self"/"remote" from the backend's phone perspective.
     const isSelf = origin === "self";
     const who = isSelf ? null
       : origin === "remote" ? "Remote"
@@ -470,7 +340,10 @@ class IntercomCard extends HTMLElement {
       "declined",
       "timeout",
       "busy",
+      "cancelled",
+      "media_incompatible",
       "transport_unreachable",
+      "auth_required_unsupported",
       "protocol_error",
       "bridge_error",
     ]);
@@ -485,10 +358,12 @@ class IntercomCard extends HTMLElement {
       case "declined": return "Declined";
       case "timeout": return "Timeout";
       case "busy": return "Busy";
+      case "cancelled": return "Cancelled";
+      case "media_incompatible": return "Media incompatible";
       case "transport_unreachable": return "Unreachable";
+      case "auth_required_unsupported": return "Authentication unsupported";
       case "protocol_error": return "Protocol error";
       case "bridge_error": return "Bridge error";
-      case "busy": return "busy";
       default: return "";
     }
   }
@@ -731,22 +606,21 @@ class IntercomCard extends HTMLElement {
   }
 
   _sessionDeviceId() {
+    if (this._isHaSoftphoneMode()) {
+      return this._softphoneSnapshot?.session_device_id || HA_SOFTPHONE_DEVICE_ID;
+    }
     return this._activeSessionDeviceId || this._activeDeviceInfo?.device_id || this._getConfigDeviceId();
   }
 
-  _makeCallId(caller, callee) {
-    const a = String(caller || "").trim();
-    const b = String(callee || "").trim();
-    return a && b ? `${a}<->${b}` : "";
-  }
-
   _sessionCallId() {
-    return this._activeCallId || "";
+    if (this._isHaSoftphoneMode()) return this._softphoneSnapshot?.call_id || "";
+    return "";
   }
 
   // Get current ESP state from entity
   _getEspState() {
-    if (this._isConfiguredSoftphone()) return this._sessionState || "idle";
+    if (this._isHaSoftphoneMode()) return this._softphoneSnapshot?.state || "idle";
+    if (this._isConfiguredSoftphone()) return "idle";
     if (!this._hass || !this._intercomStateEntityId) return "unknown";
     const entity = this._hass.states[this._intercomStateEntityId];
     return entity?.state || "unknown";
@@ -781,8 +655,10 @@ class IntercomCard extends HTMLElement {
 
   // Get caller name from entity
   _getCallerName() {
-    if (this._isConfiguredSoftphone()) {
-      return this._sessionCaller || "";
+    if (this._isHaSoftphoneMode()) {
+      const snap = this._softphoneSnapshot || {};
+      if (snap.direction === "incoming") return snap.peer_name || snap.caller || "";
+      return snap.peer_name || snap.callee || "";
     }
     if (!this._hass || !this._callerEntityId) return "";
     const entity = this._hass.states[this._callerEntityId];
@@ -803,6 +679,10 @@ class IntercomCard extends HTMLElement {
   // Get destination from entity
   _getDestination() {
     if (this._isHaSoftphoneMode()) {
+      const snap = this._softphoneSnapshot || {};
+      if (snap.state && snap.state !== "idle") {
+        return snap.peer_name || snap.callee || snap.caller || this._getSoftphoneTargetDevice()?.name || "No endpoint";
+      }
       return this._getSoftphoneTargetDevice()?.name || "No endpoint";
     }
     if (!this._hass || !this._destinationEntityId) return this._getHaName();
@@ -970,10 +850,6 @@ class IntercomCard extends HTMLElement {
     if (this._isHaSoftphoneMode()) return true;
     if (this._isConfiguredSoftphone()) return true;
     return false;
-  }
-
-  _usesEspReasonForTerminalDisplay() {
-    return !this._isSoftphoneContext();
   }
 
   async _pressEspButton(entityId, label) {
@@ -1742,11 +1618,6 @@ class IntercomCard extends HTMLElement {
       softphone: true,
     };
     this._activeDeviceInfo = sessionInfo;
-    this._activeSessionDeviceId = HA_SOFTPHONE_DEVICE_ID;
-    this._activeCallId = this._makeCallId(this._getHaName(), target.name || this._getDestination());
-    this._sessionState = "calling";
-    this._sessionCaller = "";
-    this._destRinging = false;
     this._starting = true;
     this._callMode = "softphone";
     this._errorMsg = "";
@@ -1754,13 +1625,9 @@ class IntercomCard extends HTMLElement {
 
     try {
       const reply = await intercomEngine.startHaSoftphone(target, sessionInfo, {
-        call_id: this._activeCallId,
         callee: target.name || this._getDestination(),
       });
-      const replyState = (reply?.state || "calling").toLowerCase();
-      this._sessionState = replyState === "ringing" ? "remote_ringing" : replyState;
-      this._destRinging = replyState === "ringing" || replyState === "remote_ringing";
-      this._sessionCaller = "";
+      if (reply) this._applySoftphoneSnapshot(reply);
     } catch (err) {
       this._showError(err.message || String(err));
       await intercomEngine.close("start_error");
@@ -1773,7 +1640,7 @@ class IntercomCard extends HTMLElement {
   async _answerEspCall(deviceInfo) {
     await intercomEngine.answerEspCall(deviceInfo, {
       call_id: this._sessionCallId(),
-      caller: this._sessionCaller || deviceInfo?.name || "",
+      caller: this._getCallerName() || deviceInfo?.name || "",
     });
   }
 
@@ -1796,7 +1663,6 @@ class IntercomCard extends HTMLElement {
           device_id: HA_SOFTPHONE_DEVICE_ID,
           softphone: true,
         };
-        this._activeSessionDeviceId = HA_SOFTPHONE_DEVICE_ID;
         this._callMode = "softphone";
         await this._hass.callService("intercom_native", "sip_answer", {
           call_id: this._sessionCallId(),
@@ -1883,13 +1749,8 @@ class IntercomCard extends HTMLElement {
     this._activeDeviceInfo = null;
     this._callMode = null;
     if (wasSoftphone) {
-      this._sessionState = null;
-      this._sessionCaller = "";
+      this._softphoneSnapshot = null;
       this._activeSessionDeviceId = null;
-      this._activeCallId = "";
-      this._sessionTxFormat = "";
-      this._sessionRxFormat = "";
-      this._sessionAudioMode = "";
     }
   }
 
@@ -1985,19 +1846,9 @@ class IntercomCard extends HTMLElement {
       const result = await this._hass.connection.sendMessagePromise({
         type: "intercom_native/ha_softphone_state",
       });
-      this._softphoneDnd = !!result?.dnd;
+      this._applySoftphoneSnapshot(result || { state: "idle" });
       if (result?.state && result.state !== "idle") {
-        const rawState = String(result.state || "").toLowerCase();
-        const direction = String(result.direction || "").toLowerCase();
         const sessionDeviceId = result.session_device_id || null;
-        const outgoingRinging = (rawState === "ringing" || rawState === "remote_ringing") && direction === "outgoing";
-        this._sessionState = outgoingRinging ? "remote_ringing" : rawState;
-        this._activeSessionDeviceId = sessionDeviceId;
-        this._activeCallId = result.call_id || "";
-        this._sessionTxFormat = result.tx_format || "";
-        this._sessionRxFormat = result.rx_format || "";
-        this._sessionAudioMode = result.audio_mode || "";
-        this._sessionCaller = direction === "outgoing" ? "" : (result.peer_name || result.caller || "");
         const target = result.target_device_id
           ? this._availableDevices.find(d => d.device_id === result.target_device_id)
           : this._getSoftphoneTargetDevice();
@@ -2013,15 +1864,6 @@ class IntercomCard extends HTMLElement {
           sessionDeviceId || HA_SOFTPHONE_DEVICE_ID,
           result,
         );
-      } else {
-        this._sessionState = "idle";
-        this._sessionCaller = "";
-        this._activeSessionDeviceId = null;
-        this._activeCallId = "";
-        this._sessionTxFormat = "";
-        this._sessionRxFormat = "";
-        this._sessionAudioMode = "";
-        this._destRinging = false;
       }
       this._softphoneStateLoaded = true;
     } catch (err) {

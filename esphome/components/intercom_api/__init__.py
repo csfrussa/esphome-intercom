@@ -54,6 +54,9 @@ CONF_ON_IDLE = "on_idle"
 # FSM triggers
 CONF_ON_CALLING = "on_calling"
 CONF_ON_DEST_RINGING = "on_dest_ringing"
+CONF_ON_INCOMING_CALL = "on_incoming_call"
+CONF_ON_OUTGOING_CALL = "on_outgoing_call"
+CONF_ON_BRIDGE_REQUEST = "on_bridge_request"
 CONF_ON_HANGUP = "on_hangup"
 CONF_ON_CALL_FAILED = "on_call_failed"
 CONF_REASON = "reason"
@@ -499,6 +502,9 @@ CONFIG_SCHEMA = cv.Schema(
         # FSM triggers
         cv.Optional(CONF_ON_CALLING): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_DEST_RINGING): automation.validate_automation(single=True),
+        cv.Optional(CONF_ON_INCOMING_CALL): automation.validate_automation(single=True),
+        cv.Optional(CONF_ON_OUTGOING_CALL): automation.validate_automation(single=True),
+        cv.Optional(CONF_ON_BRIDGE_REQUEST): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_HANGUP): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_CALL_FAILED): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_DESTINATION_CHANGED): automation.validate_automation(single=True),
@@ -728,7 +734,7 @@ async def _add_device_and_audio_processor_settings(var, config):
         cg.add(var.set_ringing_timeout(config[CONF_RINGING_TIMEOUT]))
 
     # Calling timeout: caller in CALLING with no final SIP response.
-    # Auto-fires DECLINE("timeout") when expired.
+    # Auto-fires SIP timeout handling when expired.
     if CONF_CALLING_TIMEOUT in config:
         cg.add(var.set_calling_timeout(config[CONF_CALLING_TIMEOUT]))
 
@@ -767,6 +773,27 @@ async def _build_intercom_automations(var, config):
     if CONF_ON_DEST_RINGING in config:
         await automation.build_automation(
             var.get_dest_ringing_trigger(), [], config[CONF_ON_DEST_RINGING]
+        )
+
+    trigger_args = [
+        (cg.std_string, "call_id"),
+        (cg.std_string, "caller"),
+        (cg.std_string, "callee"),
+        (cg.std_string, "uri"),
+    ]
+    if CONF_ON_INCOMING_CALL in config:
+        await automation.build_automation(
+            var.get_incoming_call_trigger(), trigger_args, config[CONF_ON_INCOMING_CALL]
+        )
+
+    if CONF_ON_OUTGOING_CALL in config:
+        await automation.build_automation(
+            var.get_outgoing_call_trigger(), trigger_args, config[CONF_ON_OUTGOING_CALL]
+        )
+
+    if CONF_ON_BRIDGE_REQUEST in config:
+        await automation.build_automation(
+            var.get_bridge_request_trigger(), trigger_args, config[CONF_ON_BRIDGE_REQUEST]
         )
 
     if CONF_ON_HANGUP in config:

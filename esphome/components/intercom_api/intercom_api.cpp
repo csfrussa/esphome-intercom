@@ -271,6 +271,23 @@ void IntercomApi::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeou
     return;
   }
 
+  if (state == CallState::CALLING &&
+      now_ms - this->calling_start_time_ >= INVITE_NO_RESPONSE_TIMEOUT_MS) {
+    bool saw_sip_response = false;
+#ifdef USE_INTERCOM_SIP_TRANSPORT
+    if (auto *sip = dynamic_cast<SipTransport *>(this->transport_.get())) {
+      saw_sip_response = sip->snapshot().last_sip_status_code != 0;
+    }
+#endif
+    if (!saw_sip_response) {
+      const std::string cid = this->get_current_call_id_();
+      ESP_LOGI(TAG, "SIP INVITE timeout after %u ms without response - ending call (call_id=%s)",
+               (unsigned) INVITE_NO_RESPONSE_TIMEOUT_MS, cid.c_str());
+      this->fire_timeout_decline_();
+      return;
+    }
+  }
+
   if (calling_timeout_ms > 0 && (state == CallState::CALLING || state == CallState::REMOTE_RINGING) &&
       now_ms - this->calling_start_time_ >= calling_timeout_ms) {
     const std::string cid = this->get_current_call_id_();
@@ -312,12 +329,12 @@ void IntercomApi::loop() {
 }
 
 void IntercomApi::fire_timeout_decline_() {
-  // DECLINE("timeout") + cache it so dup START replays the same response.
+  // Timeout sends CANCEL for pending outbound INVITE or a SIP final response for inbound ringing.
   const std::string call_id = this->get_current_call_id_();
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
-    this->send_sip_decline_(call_id, kReasonTimeout);
+    this->send_sip_final_response_(call_id, kReasonTimeout);
   }
-  this->set_terminal_decline_(call_id, kReasonTimeout);
+  this->set_terminal_response_(call_id, kReasonTimeout);
   this->set_active_(false);
   this->in_call_.store(false, std::memory_order_release);
   this->end_call_(CallEndReason::TIMEOUT, kReasonTimeout);
@@ -465,7 +482,7 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
     }
     return out;
   };
-  const CallSnapshot call = this->snapshot_call_identity_();
+  CallSnapshot call = this->snapshot_call_identity_();
   const std::string state = this->get_call_state_str();
   std::string direction;
   if (!call.caller_name.empty() && call.caller_name == this->device_name_) {
@@ -476,6 +493,12 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
     direction = "outgoing";
   } else if (this->call_state_.load(std::memory_order_acquire) == CallState::RINGING) {
     direction = "incoming";
+  }
+  if (call.call_id.empty() && !this->last_terminal_call_id_.empty() && !this->last_reason_.empty()) {
+    call.call_id = this->last_terminal_call_id_;
+    call.caller_name = this->last_terminal_caller_name_;
+    call.dest_name = this->last_terminal_dest_name_;
+    direction = this->last_terminal_direction_;
   }
   std::string contact = this->phonebook_.current_name();
   std::string local_uri = "sip:" + this->device_route_id_ + "@" + this->local_ip_string_() + ":" + std::to_string(this->sip_port_);

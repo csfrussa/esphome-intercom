@@ -94,27 +94,27 @@ std::string IntercomApi::get_current_call_id_() const {
   return this->current_call_id_;
 }
 
-void IntercomApi::set_terminal_decline_(const std::string &call_id, const std::string &reason) {
+void IntercomApi::set_terminal_response_(const std::string &call_id, const std::string &reason) {
   LockGuard l(this->call_state_mutex_);
-  this->last_terminal_decline_call_id_ = call_id;
-  this->last_terminal_decline_reason_ = reason;
-  this->last_terminal_decline_ms_ = millis();
+  this->last_terminal_response_call_id_ = call_id;
+  this->last_terminal_response_reason_ = reason;
+  this->last_terminal_response_ms_ = millis();
 }
 
-void IntercomApi::clear_terminal_decline_() {
+void IntercomApi::clear_terminal_response_() {
   LockGuard l(this->call_state_mutex_);
-  this->last_terminal_decline_call_id_.clear();
-  this->last_terminal_decline_reason_.clear();
-  this->last_terminal_decline_ms_ = 0;
+  this->last_terminal_response_call_id_.clear();
+  this->last_terminal_response_reason_.clear();
+  this->last_terminal_response_ms_ = 0;
 }
 
-void IntercomApi::snapshot_terminal_decline_(std::string *call_id, std::string *reason, uint32_t *age_ms) const {
+void IntercomApi::snapshot_terminal_response_(std::string *call_id, std::string *reason, uint32_t *age_ms) const {
   LockGuard l(this->call_state_mutex_);
-  if (call_id) *call_id = this->last_terminal_decline_call_id_;
-  if (reason) *reason = this->last_terminal_decline_reason_;
-  if (age_ms) *age_ms = this->last_terminal_decline_ms_ == 0
+  if (call_id) *call_id = this->last_terminal_response_call_id_;
+  if (reason) *reason = this->last_terminal_response_reason_;
+  if (age_ms) *age_ms = this->last_terminal_response_ms_ == 0
       ? UINT32_MAX
-      : millis() - this->last_terminal_decline_ms_;
+      : millis() - this->last_terminal_response_ms_;
 }
 
 bool IntercomApi::recent_terminal_call_(const std::string &call_id, std::string *reason) const {
@@ -124,8 +124,8 @@ bool IntercomApi::recent_terminal_call_(const std::string &call_id, std::string 
   std::string cached_call_id;
   std::string cached_reason;
   uint32_t cached_age_ms = UINT32_MAX;
-  this->snapshot_terminal_decline_(&cached_call_id, &cached_reason, &cached_age_ms);
-  if (cached_call_id != call_id || cached_age_ms > TERMINAL_DECLINE_REPLAY_MS) {
+  this->snapshot_terminal_response_(&cached_call_id, &cached_reason, &cached_age_ms);
+  if (cached_call_id != call_id || cached_age_ms > TERMINAL_RESPONSE_REPLAY_MS) {
     return false;
   }
   if (reason != nullptr) {
@@ -146,13 +146,13 @@ bool IntercomApi::send_sip_cancel_(const std::string &call_id) {
   return this->transport_ != nullptr && this->transport_->send_cancel(call_id);
 }
 
-bool IntercomApi::send_sip_decline_(const std::string &call_id, const std::string &reason) {
+bool IntercomApi::send_sip_final_response_(const std::string &call_id, const std::string &reason) {
   if (this->transport_ == nullptr) return false;
   uint16_t status = 486;
   if (reason == kReasonMediaIncompatible) status = 488;
   else if (reason == kReasonCancelled) status = 487;
   else if (reason == kReasonDeclined) status = 603;
-  return this->transport_->send_decline(call_id, status, reason);
+  return this->transport_->send_final_response(call_id, status, reason);
 }
 
 bool IntercomApi::send_sip_answer_(const std::string &call_id) {
@@ -219,11 +219,20 @@ void IntercomApi::start() {
                               std::to_string(static_cast<unsigned>(esp_random())) +
                               "@" + (this->device_route_id_.empty() ? std::string("esp") : this->device_route_id_);
 
+  this->clear_terminal_call_snapshot_();
   this->set_remote_sip_transport_tcp(dial_sip_tcp);
   this->set_remote_endpoint(dial_ip, dial_port, dial_control_port);
   this->set_call_identity_(call_id, caller_route, this->device_name_,
                             dest_route, dest_name);
-  this->clear_terminal_decline_();
+  this->clear_terminal_response_();
+
+  const std::string remote_uri = "sip:" + dest_route + "@" + dial_ip + ":" + std::to_string(dial_port);
+  this->defer([this, call_id, caller = this->device_name_, dest_name, remote_uri]() {
+    this->outgoing_call_trigger_.trigger(call_id, caller, dest_name, remote_uri);
+    if (!this->ha_peer_name_.empty() && dest_name == this->ha_peer_name_) {
+      this->bridge_request_trigger_.trigger(call_id, caller, dest_name, remote_uri);
+    }
+  });
 
   ESP_LOGI(TAG, "%s -> %s: calling... (call_id=%s)",
            this->device_name_.c_str(), dest_name.c_str(), call_id.c_str());
@@ -263,7 +272,7 @@ void IntercomApi::stop() {
            call_id.c_str());
 
   if (!call_id.empty()) {
-    this->set_terminal_decline_(call_id, "");
+    this->set_terminal_response_(call_id, "");
   }
   this->end_call_(CallEndReason::LOCAL_HANGUP);
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
@@ -300,7 +309,7 @@ void IntercomApi::answer_call() {
 }
 
 void IntercomApi::decline_call(const std::string &reason) {
-  // DECLINE is a pre-call rejection. Mid-call termination uses STOP, so a
+  // A SIP rejection is a pre-call final response. Mid-call termination uses BYE, so a
   // YAML decline_call() during IN_CALL falls back to stop() to avoid a
   // misleading "declined" reaching the peer after we'd already accepted.
   if (this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL) {
@@ -322,15 +331,15 @@ void IntercomApi::decline_call(const std::string &reason) {
   // Empty reason => peer treats as remote_hangup; non-empty surfaces as
   // user-visible "Call ended: X".
   const std::string call_id = this->get_current_call_id_();
-  // Cached so a retransmitted START with this call_id replays the same
-  // DECLINE instead of being seen as a fresh ring.
-  this->set_terminal_decline_(call_id, reason);
+  // Cached so a retransmitted INVITE with this Call-ID replays the same
+  // final response instead of being seen as a fresh ring.
+  this->set_terminal_response_(call_id, reason);
 
   this->end_call_(
       reason.empty() ? CallEndReason::LOCAL_HANGUP : CallEndReason::DECLINED,
       reason);
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
-    this->send_sip_decline_(call_id, reason);
+    this->send_sip_final_response_(call_id, reason);
   }
   this->set_active_(false);
   this->in_call_.store(false, std::memory_order_release);
@@ -365,6 +374,13 @@ void IntercomApi::publish_state_() {
   this->publish_sip_snapshot_();
 }
 
+void IntercomApi::clear_terminal_call_snapshot_() {
+  this->last_terminal_call_id_.clear();
+  this->last_terminal_direction_.clear();
+  this->last_terminal_caller_name_.clear();
+  this->last_terminal_dest_name_.clear();
+}
+
 void IntercomApi::publish_last_reason_(const std::string &reason) {
   if (this->last_reason_ == reason) {
     return;
@@ -382,7 +398,7 @@ void IntercomApi::set_active_(bool on) {
   this->notify_audio_tasks_();
 
   if (on) {
-    this->first_audio_received_.store(false, std::memory_order_release);  // re-arm ANSWER echo for new call
+    this->first_audio_received_.store(false, std::memory_order_release);  // re-arm 200 OK echo for new call
 
 #ifdef USE_INTERCOM_API_MIC
     if (this->microphone_) {
@@ -465,7 +481,7 @@ void IntercomApi::set_call_state_(CallState new_state) {
   if (new_state != CallState::IDLE) {
     this->enable_loop_soon_any_context();
   }
-  // Atomic exchange so concurrent callers (recv-task START vs main-loop
+  // Atomic exchange so concurrent callers (SIP receive task vs main-loop
   // ringing_timeout) can't both fire the triggers; the loser sees
   // old==new and returns.
   CallState old_state = this->call_state_.exchange(new_state, std::memory_order_acq_rel);
@@ -525,7 +541,18 @@ void IntercomApi::end_call_(CallEndReason reason, const std::string &detail) {
   if (this->call_state_.load(std::memory_order_acquire) == CallState::IDLE) return;
 
   std::string reason_str = detail.empty() ? call_end_reason_to_str(reason) : detail;
-  const std::string call_id = this->get_current_call_id_();
+  const CallSnapshot call = this->snapshot_call_identity_();
+  const std::string call_id = call.call_id;
+  this->last_terminal_call_id_ = call.call_id;
+  this->last_terminal_caller_name_ = call.caller_name;
+  this->last_terminal_dest_name_ = call.dest_name;
+  if (!call.caller_name.empty() && call.caller_name == this->device_name_) {
+    this->last_terminal_direction_ = "outgoing";
+  } else if (!call.dest_name.empty() && call.dest_name == this->device_name_) {
+    this->last_terminal_direction_ = "incoming";
+  } else {
+    this->last_terminal_direction_.clear();
+  }
   ESP_LOGI(TAG, "%s: call ended (%s) call_id=%s",
            this->device_name_.c_str(), reason_str.c_str(),
            call_id.empty() ? "(none)" : call_id.c_str());
@@ -570,8 +597,8 @@ void IntercomApi::end_call_(CallEndReason reason, const std::string &detail) {
   } else {
     this->defer([this, reason_str]() { this->hangup_trigger_.trigger(reason_str); });
   }
-  // Clear per-call identity. Terminal-decline cache stays so dup-START
-  // can replay the same DECLINE; cleared by the next accepted START.
+  // Clear per-call identity. Terminal response cache stays so a duplicate
+  // INVITE can replay the same final response; cleared by the next accepted INVITE.
   this->clear_call_identity_();
 
   this->defer([this]() { this->set_call_state_(CallState::IDLE); });
@@ -593,7 +620,7 @@ void IntercomApi::on_audio_received_(const uint8_t *pcm, size_t bytes) {
     return;
   }
   // First inbound audio is the strongest "call established" signal; gates
-  // the ANSWER-echo loop in on_sip_signal_received_(ANSWER).
+  // the 200 OK echo loop in on_sip_signal_received_().
   this->first_audio_received_.store(true, std::memory_order_release);
   if (this->audio_debug_) {
     this->debug_log_pcm_level_("rx_network", pcm, bytes,
@@ -645,7 +672,7 @@ void IntercomApi::on_sip_signal_received_(const SipSignal &msg) {
         } else {
           ESP_LOGW(TAG, "%s: another caller while RINGING - 486 Busy Here",
                    this->device_name_.c_str());
-          this->send_sip_decline_(incoming_cid, kReasonBusy);
+          this->send_sip_final_response_(incoming_cid, kReasonBusy);
         }
         break;
       }
@@ -656,7 +683,7 @@ void IntercomApi::on_sip_signal_received_(const SipSignal &msg) {
         } else {
           ESP_LOGW(TAG, "%s: another caller while IN_CALL - 486 Busy Here",
                    this->device_name_.c_str());
-          this->send_sip_decline_(incoming_cid, kReasonBusy);
+          this->send_sip_final_response_(incoming_cid, kReasonBusy);
         }
         break;
       }
@@ -667,42 +694,42 @@ void IntercomApi::on_sip_signal_received_(const SipSignal &msg) {
         }
         // Glare: both ends dialed each other. Recognised when the
         // inbound caller_name matches our current dest. Anything else is
-        // a third-party collision (DECLINE busy).
+        // a third-party collision (486 Busy Here).
         const auto active = this->snapshot_call_identity_();
         const bool is_glare = !in_caller_name.empty() &&
                               in_caller_name == active.dest_name;
         if (!is_glare) {
-          ESP_LOGW(TAG, "%s: collision (we are CALLING) - DECLINE busy",
+          ESP_LOGW(TAG, "%s: collision (we are CALLING) - sending 486 Busy Here",
                    this->device_name_.c_str());
-          this->send_sip_decline_(incoming_cid, kReasonBusy);
+          this->send_sip_final_response_(incoming_cid, kReasonBusy);
           break;
         }
         // Tie-break: lexicographically lower device_name wins. Symmetric
         // on both sides so exactly one peer survives.
         const bool we_win = this->device_name_ < in_caller_name;
         if (we_win) {
-          ESP_LOGW(TAG, "%s: glare with %s (we win), DECLINE(glare) inbound",
+          ESP_LOGW(TAG, "%s: glare with %s (we win), rejecting inbound INVITE",
                    this->device_name_.c_str(), in_caller_name.c_str());
-          this->send_sip_decline_(incoming_cid, "glare");
+          this->send_sip_final_response_(incoming_cid, "glare");
           break;
         }
         ESP_LOGW(TAG, "%s: glare with %s (we lose), aborting CALLING and accepting inbound",
                  this->device_name_.c_str(), in_caller_name.c_str());
-        // Retract silently. The peer never sees our ANSWER, so its
-        // outgoing leg dies on its own timeout; a DECLINE here would
+        // Retract silently. The peer never sees our 200 OK, so its
+        // outgoing leg dies on its own timeout; a final response here would
         // just race the peer's success.
         this->set_active_(false);
         this->set_call_state_(CallState::IDLE);
-        goto handle_incoming_start_in_idle;
+        goto handle_incoming_invite_in_idle;
       }
-handle_incoming_start_in_idle:
+handle_incoming_invite_in_idle:
       std::string cached_cid, cached_reason;
       uint32_t cached_age_ms = UINT32_MAX;
-      this->snapshot_terminal_decline_(&cached_cid, &cached_reason, &cached_age_ms);
+      this->snapshot_terminal_response_(&cached_cid, &cached_reason, &cached_age_ms);
       if (!cached_cid.empty() && incoming_cid == cached_cid &&
-          cached_age_ms <= TERMINAL_DECLINE_REPLAY_MS) {
-        ESP_LOGD(TAG, "Replaying cached terminal DECLINE for %s", incoming_cid.c_str());
-        this->send_sip_decline_(incoming_cid, cached_reason);
+          cached_age_ms <= TERMINAL_RESPONSE_REPLAY_MS) {
+        ESP_LOGD(TAG, "Replaying cached SIP final response for %s", incoming_cid.c_str());
+        this->send_sip_final_response_(incoming_cid, cached_reason);
         break;
       }
 
@@ -710,8 +737,8 @@ handle_incoming_start_in_idle:
         ESP_LOGI(TAG, "%s: do-not-disturb active - 486 Busy Here inbound call from %s",
                  this->device_name_.c_str(),
                  in_caller_name.empty() ? "(unknown caller)" : in_caller_name.c_str());
-        this->set_terminal_decline_(incoming_cid, kReasonBusy);
-        this->send_sip_decline_(incoming_cid, kReasonBusy);
+        this->set_terminal_response_(incoming_cid, kReasonBusy);
+        this->send_sip_final_response_(incoming_cid, kReasonBusy);
         if (this->transport_ != nullptr) {
           this->transport_->disconnect();
         }
@@ -726,8 +753,8 @@ handle_incoming_start_in_idle:
                  "%s: inbound INVITE from %s has no compatible audio format - 488 media_incompatible",
                  this->device_name_.c_str(),
                  in_caller_name.empty() ? "(unknown caller)" : in_caller_name.c_str());
-        this->set_terminal_decline_(incoming_cid, kReasonMediaIncompatible);
-        this->send_sip_decline_(incoming_cid, kReasonMediaIncompatible);
+        this->set_terminal_response_(incoming_cid, kReasonMediaIncompatible);
+        this->send_sip_final_response_(incoming_cid, kReasonMediaIncompatible);
         if (this->transport_ != nullptr) {
           this->transport_->disconnect();
         }
@@ -738,13 +765,14 @@ handle_incoming_start_in_idle:
       this->current_rx_audio_format_ = caller_to_dest;
       this->current_tx_audio_format_ = dest_to_caller;
 
+      this->clear_terminal_call_snapshot_();
       const std::string dest_route = in_dest_route.empty()
           ? (this->device_route_id_.empty() ? this->device_name_ : this->device_route_id_)
           : in_dest_route;
       const std::string dest_name = in_dest_name.empty() ? this->device_name_ : in_dest_name;
       this->set_call_identity_(incoming_cid, in_caller_route, in_caller_name,
                                 dest_route, dest_name);
-      this->clear_terminal_decline_();
+      this->clear_terminal_response_();
 
       const char *local = this->device_name_.c_str();
       const char *remote = in_caller_name.empty() ? "(unknown caller)" : in_caller_name.c_str();
@@ -752,6 +780,12 @@ handle_incoming_start_in_idle:
                local, remote, incoming_cid.c_str());
 
       this->publish_caller_(in_caller_name);
+      const std::string remote_uri = in_caller_route.empty()
+          ? std::string("sip:") + in_caller_name
+          : std::string("sip:") + in_caller_route;
+      this->defer([this, incoming_cid, in_caller_name, dest_name, remote_uri]() {
+        this->incoming_call_trigger_.trigger(incoming_cid, in_caller_name, dest_name, remote_uri);
+      });
 
       if (this->auto_answer_) {
         this->send_sip_answer_(incoming_cid);
@@ -780,18 +814,18 @@ handle_incoming_start_in_idle:
       break;
     }
 
-    case SipSignalType::ANSWER: {
+    case SipSignalType::STATUS_200_OK: {
       if (!in_call_id.empty()) {
         std::string terminal_reason;
         if (this->recent_terminal_call_(in_call_id, &terminal_reason)) {
-          ESP_LOGD(TAG, "ignoring late ANSWER for terminal call_id=%s reason=%s",
+          ESP_LOGD(TAG, "ignoring late 200 OK for terminal call_id=%s reason=%s",
                    in_call_id.c_str(),
                    terminal_reason.empty() ? "(none)" : terminal_reason.c_str());
           break;
         }
         const std::string current_cid = this->get_current_call_id_();
         if (!current_cid.empty() && in_call_id != current_cid) {
-          ESP_LOGD(TAG, "ignoring stale ANSWER for call_id=%s (current=%s)",
+          ESP_LOGD(TAG, "ignoring stale 200 OK for call_id=%s (current=%s)",
                    in_call_id.c_str(), current_cid.c_str());
           break;
         }
@@ -801,7 +835,7 @@ handle_incoming_start_in_idle:
         if (!audio_format_list_contains(this->tx_audio_formats_, msg.selected_tx_format) ||
             !audio_format_list_contains(this->rx_audio_formats_, msg.selected_rx_format)) {
           ESP_LOGE(TAG,
-                   "%s: ANSWER confirmed an incompatible audio format; ending call",
+                   "%s: 200 OK confirmed an incompatible audio format; ending call",
                    this->device_name_.c_str());
           this->end_call_(CallEndReason::MEDIA_INCOMPATIBLE);
           this->set_in_call_(false);
@@ -832,11 +866,11 @@ handle_incoming_start_in_idle:
         this->send_sip_answer_(this->get_current_call_id_());
       } else if (state == CallState::IN_CALL &&
                  !this->first_audio_received_.load(std::memory_order_acquire)) {
-        ESP_LOGD(TAG, "ANSWER repeat in IN_CALL (no audio yet) - re-echoing ack");
+        ESP_LOGD(TAG, "200 OK repeat in IN_CALL (no audio yet) - re-echoing ACK");
         this->send_sip_answer_(this->get_current_call_id_());
       } else {
         const bool audio_seen = this->first_audio_received_.load(std::memory_order_acquire);
-        ESP_LOGD(TAG, "ANSWER ignored in state %s (audio_seen=%d)",
+        ESP_LOGD(TAG, "200 OK ignored in state %s (audio_seen=%d)",
                  call_state_to_str(state), audio_seen);
       }
       break;
@@ -851,7 +885,7 @@ handle_incoming_start_in_idle:
       if (this->transport_) this->transport_->disconnect();
       break;
 
-    case SipSignalType::DECLINE:
+    case SipSignalType::FINAL_RESPONSE:
     case SipSignalType::MEDIA_INCOMPATIBLE:
     case SipSignalType::AUTH_REQUIRED:
     case SipSignalType::PROXY_AUTH_REQUIRED:
@@ -874,7 +908,7 @@ handle_incoming_start_in_idle:
       break;
     }
 
-    case SipSignalType::RINGING:
+    case SipSignalType::STATUS_180_RINGING:
       if (this->call_state_.load(std::memory_order_acquire) == CallState::CALLING) {
         ESP_LOGI(TAG, "%s: dest is ringing (call_id=%s)",
                  this->device_name_.c_str(),
@@ -898,7 +932,7 @@ handle_incoming_start_in_idle:
 
 void IntercomApi::on_connection_change_(bool connected) {
   if (connected) {
-    // FSM stays IDLE until START arrives; can_accept_session_ has gated.
+    // FSM stays IDLE until an INVITE arrives; can_accept_session_ has gated.
     return;
   }
 

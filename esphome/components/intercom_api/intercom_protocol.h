@@ -121,11 +121,11 @@ inline size_t decode_audio_format(const uint8_t *in, size_t in_len, AudioFormat 
 
 enum class SipSignalType : uint8_t {
   INVITE,
-  RINGING,
-  ANSWER,
+  STATUS_180_RINGING,
+  STATUS_200_OK,
   CANCEL,
   BYE,
-  DECLINE,
+  FINAL_RESPONSE,
   OPTIONS,
   AUTH_REQUIRED,
   PROXY_AUTH_REQUIRED,
@@ -136,11 +136,11 @@ enum class SipSignalType : uint8_t {
 inline const char *sip_signal_type_name(SipSignalType type) {
   switch (type) {
     case SipSignalType::INVITE: return "INVITE";
-    case SipSignalType::RINGING: return "180";
-    case SipSignalType::ANSWER: return "200";
+    case SipSignalType::STATUS_180_RINGING: return "180";
+    case SipSignalType::STATUS_200_OK: return "200";
     case SipSignalType::CANCEL: return "CANCEL";
     case SipSignalType::BYE: return "BYE";
-    case SipSignalType::DECLINE: return "DECLINE";
+    case SipSignalType::FINAL_RESPONSE: return "FINAL_RESPONSE";
     case SipSignalType::OPTIONS: return "OPTIONS";
     case SipSignalType::AUTH_REQUIRED: return "401";
     case SipSignalType::PROXY_AUTH_REQUIRED: return "407";

@@ -153,27 +153,27 @@ back to `intercom_api`.
 
 ## Transport
 
-TCP is the default:
-
-```yaml
-intercom_api:
-  id: intercom
-  protocol: tcp
-  tcp_port: 6054
-```
-
-UDP remains available for raw/low-overhead audio:
+SIP/UDP signaling:
 
 ```yaml
 intercom_api:
   id: intercom
   protocol: udp
-  listen_port: 6054
-  control_port: 6055
+  sip_port: 5060
+  rtp_port: 40000
 ```
 
-`mode: raw_udp` is a special UDP-only mode for external consumers that handle
-signaling elsewhere. Normal intercom installs should omit `mode:`.
+SIP/TCP signaling:
+
+```yaml
+intercom_api:
+  id: intercom
+  protocol: tcp
+  sip_port: 5060
+  rtp_port: 40000
+```
+
+RTP media remains UDP for both signaling transports.
 
 ## Phonebook And HA Routing
 
@@ -218,6 +218,35 @@ as the address other peers should dial.
 multihomed/LXC/NAT installs where Home Assistant would otherwise publish an
 address ESP devices cannot reach. It is not required just because ESPs and HA
 are on different routed subnets.
+
+## SIP Automation Hooks
+
+The legacy state hooks still exist, but new SIP-aware hooks expose the call
+identity directly:
+
+```yaml
+intercom_api:
+  id: intercom
+  on_incoming_call:
+    then:
+      - logger.log:
+          format: "incoming call_id=%s caller=%s callee=%s uri=%s"
+          args: [call_id.c_str(), caller.c_str(), callee.c_str(), uri.c_str()]
+  on_outgoing_call:
+    then:
+      - logger.log:
+          format: "outgoing call_id=%s caller=%s callee=%s uri=%s"
+          args: [call_id.c_str(), caller.c_str(), callee.c_str(), uri.c_str()]
+  on_bridge_request:
+    then:
+      - logger.log:
+          format: "bridge request call_id=%s caller=%s callee=%s uri=%s"
+          args: [call_id.c_str(), caller.c_str(), callee.c_str(), uri.c_str()]
+```
+
+`on_bridge_request` fires for ESP-originated routes that explicitly target the
+HA peer. HA-side dial-plan decisions are exposed as Home Assistant bus events
+and services by `intercom_native`.
 
 ## Auto Entities
 

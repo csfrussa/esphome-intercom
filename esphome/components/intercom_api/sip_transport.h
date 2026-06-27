@@ -60,9 +60,9 @@ class SipTransport : public SipPhoneTransport {
                    const AudioFormat &dest_to_caller_format) override;
   bool send_cancel(const std::string &call_id) override;
   bool send_bye(const std::string &call_id) override;
-  bool send_decline(const std::string &call_id,
-                    uint16_t status,
-                    const std::string &reason) override;
+  bool send_final_response(const std::string &call_id,
+                           uint16_t status,
+                           const std::string &reason) override;
   const char *transport_name() const override { return "sip"; }
   bool start_audio_path() override;
   void stop_audio_path() override;

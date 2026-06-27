@@ -1037,6 +1037,7 @@ bool SipTransport::send_invite(const std::string &call_id,
   this->caller_name_ = caller_name;
   this->dest_route_ = dest_route;
   this->dest_name_ = dest_name;
+  this->last_sip_status_code_.store(0, std::memory_order_release);
   const uint32_t ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   if (ip == 0) return false;
   if (this->local_tag_.empty()) this->local_tag_ = make_token("tag");
@@ -1167,9 +1168,9 @@ bool SipTransport::send_bye(const std::string &call_id) {
   return this->send_request_("BYE");
 }
 
-bool SipTransport::send_decline(const std::string &call_id,
-                                uint16_t status,
-                                const std::string &reason) {
+bool SipTransport::send_final_response(const std::string &call_id,
+                                       uint16_t status,
+                                       const std::string &reason) {
   if (!call_id.empty()) this->call_id_ = call_id;
   if (this->outgoing_invite_pending_.load(std::memory_order_acquire)) {
     const bool sent = this->send_request_("CANCEL", "", this->invite_cseq_);
@@ -1276,7 +1277,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
   const std::string method = cseq_method(header_value(message, "CSeq"));
   if (status == 180 && method == "INVITE") {
     SipSignal signal;
-    signal.type = SipSignalType::RINGING;
+    signal.type = SipSignalType::STATUS_180_RINGING;
     signal.status_code = 180;
     signal.call_id = this->call_id_;
     this->emit_sip_signal_(signal);
@@ -1303,7 +1304,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
     this->send_request_("ACK", "", this->invite_cseq_);
     this->call_active_.store(true, std::memory_order_release);
     SipSignal signal;
-    signal.type = SipSignalType::ANSWER;
+    signal.type = SipSignalType::STATUS_200_OK;
     signal.status_code = static_cast<uint16_t>(status);
     signal.call_id = this->call_id_;
     signal.selected_tx_format = this->selected_tx_format_;
@@ -1324,7 +1325,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
     signal.type = status == 401 ? SipSignalType::AUTH_REQUIRED
                 : status == 407 ? SipSignalType::PROXY_AUTH_REQUIRED
                 : status == 488 ? SipSignalType::MEDIA_INCOMPATIBLE
-                                : SipSignalType::DECLINE;
+                                : SipSignalType::FINAL_RESPONSE;
     signal.status_code = static_cast<uint16_t>(status);
     signal.call_id = this->call_id_;
     signal.reason = reason;

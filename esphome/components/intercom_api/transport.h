@@ -55,9 +55,9 @@ class SipPhoneTransport {
                            const AudioFormat &dest_to_caller_format) = 0;
   virtual bool send_cancel(const std::string &call_id) = 0;
   virtual bool send_bye(const std::string &call_id) = 0;
-  virtual bool send_decline(const std::string &call_id,
-                            uint16_t status,
-                            const std::string &reason) = 0;
+  virtual bool send_final_response(const std::string &call_id,
+                                   uint16_t status,
+                                   const std::string &reason) = 0;
 
   /// Used in dump_config / ESP_LOGCONFIG ("tcp", "udp", ...).
   virtual const char *transport_name() const = 0;

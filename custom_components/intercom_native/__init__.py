@@ -7,6 +7,7 @@ the central phonebook and routed through HA as SIP dialogs when needed.
 
 import asyncio
 import logging
+import time
 
 import voluptuous as vol
 
@@ -56,6 +57,11 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 _LOGGER = logging.getLogger(__name__)
+SIP_ROUTE_DECISION_TIMEOUT = 1.5
+
+
+def _pending_routes(hass: HomeAssistant) -> dict:
+    return hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending_routes", {})
 
 
 def _device_formats(device: dict | None, key: str):
@@ -275,7 +281,7 @@ def _bridge_for_device(device_id: str):
     """Return any live/setup bridge involving `device_id`.
 
     During bridge setup `_active` is still false, but the device is already
-    reserved. Treating setup as busy prevents a second START from stealing or
+    reserved. Treating setup as busy prevents a second INVITE from stealing or
     tearing down the in-flight call.
     """
     return next(
@@ -673,7 +679,7 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
             final = await client.wait_for_final()
         except asyncio.CancelledError:
             raise
-        except TimeoutError:
+        except asyncio.TimeoutError:
             final = "timeout"
         except Exception as err:  # noqa: BLE001 - keep detached watcher failures contained.
             _LOGGER.warning(
@@ -772,6 +778,9 @@ async def _handle_purge_devices_service(call: ServiceCall) -> None:
 async def _handle_sip_answer_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     call_id = str(call.data.get("call_id") or "").strip()
+    if call_id and call_id in _pending_routes(hass):
+        _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
+        return
     pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
@@ -819,6 +828,18 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     app_reason = str(call.data.get("decline_reason") or "").strip() or (
         TerminalReason.DECLINED.value if reason == "Busy Here" else reason
     )
+    if call_id and call_id in _pending_routes(hass):
+        _set_pending_route_decision(
+            hass,
+            {
+                "call_id": call_id,
+                "action": "busy" if status == 486 else "cancel" if status == 487 else "decline",
+                "status": status,
+                "reason": reason,
+                "decline_reason": app_reason,
+            },
+        )
+        return
     pending = hass.data.get(DOMAIN, {}).setdefault("sip_pending", {})
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
@@ -848,6 +869,17 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
 async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     call_id = str(call.data.get("call_id") or "").strip()
+    if call_id and call_id in _pending_routes(hass):
+        _set_pending_route_decision(
+            hass,
+            {
+                "call_id": call_id,
+                "action": "cancel",
+                "reason": "Request Terminated",
+                "decline_reason": TerminalReason.LOCAL_HANGUP.value,
+            },
+        )
+        return
     bucket = hass.data.get(DOMAIN, {})
     clients = bucket.setdefault("sip_clients", {})
     relays = bucket.setdefault("sip_relays", {})
@@ -977,6 +1009,9 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
     from .roster import RosterEntry
 
     hass: HomeAssistant = call.hass
+    name = str(call.data["name"]).strip()
+    entry_id = str(call.data.get("id") or name).strip()
+
     def _metadata_value(key: str):
         value = call.data.get(key)
         if value in (None, ""):
@@ -1002,8 +1037,8 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
     }
     metadata["transport"] = "sip"
     entry = RosterEntry(
-        id=str(call.data["id"]).strip(),
-        name=str(call.data.get("name") or call.data["id"]).strip(),
+        id=entry_id,
+        name=name,
         kind=str(call.data.get("kind") or "esp").strip().lower(),
         address=str(call.data.get("address") or "").strip(),
         sip_uri=str(call.data.get("sip_uri") or "").strip(),
@@ -1016,6 +1051,22 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
     bucket.append(entry)
     await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook contact added: %s (%s)", entry.id, entry.kind)
+
+
+async def _handle_phonebook_remove_contact_service(call: ServiceCall) -> None:
+    hass: HomeAssistant = call.hass
+    name = str(call.data["name"]).strip()
+    wanted = name.lower()
+    bucket = hass.data.setdefault(DOMAIN, {}).setdefault("manual_roster_entries", [])
+    before = len(bucket)
+    bucket[:] = [
+        item
+        for item in bucket
+        if getattr(item, "id", "").lower() != wanted
+        and getattr(item, "name", "").lower() != wanted
+    ]
+    await _refresh_and_push_phonebook(hass)
+    _LOGGER.info("Phonebook contact removed: %s (%d removed)", name, before - len(bucket))
 
 
 async def _handle_phonebook_set_contacts_service(call: ServiceCall) -> None:
@@ -1213,8 +1264,54 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route.sip_uri, result)
 
 
+def _set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
+    """Apply an automation dial-plan decision to a pending inbound SIP route."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    call_id = str(data.get("call_id") or "").strip()
+    if not call_id:
+        raise ServiceValidationError("call_id is required")
+    action = str(data.get("action") or "default").strip().lower()
+    destination = str(
+        data.get("destination") or data.get("target") or data.get("call") or ""
+    ).strip()
+    if action in {"forward", "bridge"} and not destination:
+        raise ServiceValidationError(f"{action} requires destination, target, or call")
+    route = _pending_routes(hass).get(call_id)
+    if route is None:
+        raise ServiceValidationError(f"no pending SIP route for call_id {call_id}")
+    future = route.get("future")
+    if future is None or future.done():
+        raise ServiceValidationError(f"SIP route for call_id {call_id} is no longer decidable")
+    future.set_result(
+        {
+            "action": action,
+            "destination": destination,
+            "status": int(data.get("status") or 0),
+            "reason": str(data.get("reason") or "").strip(),
+            "decline_reason": str(data.get("decline_reason") or "").strip(),
+        }
+    )
+    _LOGGER.info(
+        "SIP route decision call_id=%s action=%s destination=%s",
+        call_id,
+        action,
+        destination or "-",
+    )
+
+
+async def _handle_sip_route_service(call: ServiceCall) -> None:
+    _set_pending_route_decision(call.hass, dict(call.data))
+
+
 async def _handle_sip_forward_service(call: ServiceCall) -> None:
     """Forward a SIP call through HA's dial plan/B2BUA path."""
+    call_id = str(call.data.get("call_id") or "").strip()
+    if call_id and call_id in _pending_routes(call.hass):
+        data = dict(call.data)
+        data["action"] = "forward"
+        _set_pending_route_decision(call.hass, data)
+        return
     await _handle_sip_call_target_service(call, force_ha_bridge=True)
 
 
@@ -1239,6 +1336,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     async def handle_phonebook_set_contacts(call: ServiceCall) -> None:
         await _handle_phonebook_set_contacts_service(call)
 
+    async def handle_phonebook_remove_contact(call: ServiceCall) -> None:
+        await _handle_phonebook_remove_contact_service(call)
+
     async def handle_phonebook_clear(call: ServiceCall) -> None:
         await _handle_phonebook_clear_service(call)
 
@@ -1256,6 +1356,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_sip_forward(call: ServiceCall) -> None:
         await _handle_sip_forward_service(call)
+
+    async def handle_sip_route(call: ServiceCall) -> None:
+        await _handle_sip_route_service(call)
 
     target_fields = {
         vol.Optional("device_id"): vol.Any(cv.string, [cv.string]),
@@ -1286,6 +1389,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     sip_call_schema = vol.Schema(
         {
+            vol.Optional("call_id", default=""): cv.string,
             vol.Optional("destination"): cv.string,
             vol.Optional("target"): cv.string,
             vol.Optional("call"): cv.string,
@@ -1293,10 +1397,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         },
         extra=vol.PREVENT_EXTRA,
     )
+    sip_route_schema = vol.Schema(
+        {
+            vol.Required("call_id"): cv.string,
+            vol.Optional("action", default="default"): vol.In(
+                ["answer_ha", "decline", "busy", "forward", "bridge", "default", "cancel"]
+            ),
+            vol.Optional("destination"): cv.string,
+            vol.Optional("target"): cv.string,
+            vol.Optional("call"): cv.string,
+            vol.Optional("status", default=0): vol.Coerce(int),
+            vol.Optional("reason", default=""): cv.string,
+            vol.Optional("decline_reason", default=""): cv.string,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
     phonebook_add_schema = vol.Schema(
         {
-            vol.Required("id"): cv.string,
-            vol.Optional("name", default=""): cv.string,
+            vol.Required("name"): cv.string,
+            vol.Optional("id", default=""): cv.string,
             vol.Optional("kind", default="esp"): vol.In(["ha", "esp", "phone", "sip", "group"]),
             vol.Optional("address", default=""): cv.string,
             vol.Optional("sip_uri", default=""): cv.string,
@@ -1316,6 +1435,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         },
         extra=vol.PREVENT_EXTRA,
     )
+    phonebook_remove_schema = vol.Schema(
+        {vol.Required("name"): cv.string},
+        extra=vol.PREVENT_EXTRA,
+    )
     phonebook_set_schema = vol.Schema(
         {vol.Required("roster_json"): cv.string},
         extra=vol.PREVENT_EXTRA,
@@ -1330,8 +1453,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "sip_hangup", handle_sip_hangup, schema=sip_hangup_schema)
     hass.services.async_register(DOMAIN, "sip_call", handle_sip_call, schema=sip_call_schema)
     hass.services.async_register(DOMAIN, "sip_forward", handle_sip_forward, schema=sip_call_schema)
+    hass.services.async_register(DOMAIN, "sip_route", handle_sip_route, schema=sip_route_schema)
     hass.services.async_register(
         DOMAIN, "phonebook_add_contact", handle_phonebook_add_contact, schema=phonebook_add_schema
+    )
+    hass.services.async_register(
+        DOMAIN, "phonebook_remove_contact", handle_phonebook_remove_contact, schema=phonebook_remove_schema
     )
     hass.services.async_register(
         DOMAIN, "phonebook_set_contacts", handle_phonebook_set_contacts, schema=phonebook_set_schema
@@ -1495,6 +1622,17 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
         decision = resolve_target(invite.target, _roster_from_peers(peers), ha_bridge=True)
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT
+        route_bucket = _pending_routes(hass)
+        route_bucket[invite.call_id] = {
+            "future": future,
+            "invite": invite,
+            "decision": decision,
+            "created_at": time.time(),
+            "expires_at": expires_at,
+        }
         _fire_call_event(
             hass,
             {
@@ -1508,7 +1646,12 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 "source_host": invite.source_host,
                 "target": decision.target,
                 "route_kind": decision.kind,
+                "default_destination": decision.target,
                 "sip_uri": decision.sip_uri,
+                "expires_at": expires_at,
+                "decision_timeout_ms": int(SIP_ROUTE_DECISION_TIMEOUT * 1000),
+                "selected_tx_format": invite.send_format.audio_format.wire_token(),
+                "selected_rx_format": invite.recv_format.audio_format.wire_token(),
                 "rtp_format": (
                     f"{invite.selected_format.encoding}/"
                     f"{invite.selected_format.sample_rate}/"
@@ -1526,19 +1669,80 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
             invite.selected_format.encoding,
             invite.selected_format.sample_rate,
         )
-        if decision.kind == "requires_bridge":
+        route_action = "default"
+        route_destination = ""
+        route_status = 0
+        route_reason = ""
+        route_decline_reason = ""
+        try:
+            route_decision = await asyncio.wait_for(future, timeout=SIP_ROUTE_DECISION_TIMEOUT)
+        except asyncio.TimeoutError:
+            route_decision = {}
+        finally:
+            route_bucket.pop(invite.call_id, None)
+        if isinstance(route_decision, dict):
+            route_action = str(route_decision.get("action") or "default").strip().lower()
+            route_destination = str(route_decision.get("destination") or "").strip()
+            route_status = int(route_decision.get("status") or 0)
+            route_reason = str(route_decision.get("reason") or "").strip()
+            route_decline_reason = str(route_decision.get("decline_reason") or "").strip()
+
+        if route_action in {"decline", "busy", "cancel"}:
+            if route_action == "busy":
+                status = route_status or 486
+                reason = route_reason or "Busy Here"
+                app_reason = route_decline_reason or TerminalReason.BUSY.value
+            elif route_action == "cancel":
+                status = route_status or 487
+                reason = route_reason or "Request Terminated"
+                app_reason = route_decline_reason or TerminalReason.CANCELLED.value
+            else:
+                status = route_status or 603
+                reason = route_reason or "Decline"
+                app_reason = route_decline_reason or TerminalReason.DECLINED.value
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.BUSY.value if app_reason == TerminalReason.BUSY.value
+                else CallState.CANCELLED.value if status == 487
+                else "declined",
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=invite.target,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason=app_reason,
+                origin="self",
+                sip_status_code=status,
+                last_sip_event="SIP_RESPONSE",
+            )
+            return SipInviteResult(status, reason, to_tag="", decline_reason=app_reason)
+
+        if route_action in {"forward", "bridge"} and route_destination:
+            decision = resolve_target(route_destination, _roster_from_peers(peers), ha_bridge=False)
+            _LOGGER.info(
+                "SIP route override call_id=%s action=%s destination=%s route=%s uri=%s",
+                invite.call_id,
+                route_action,
+                route_destination,
+                decision.kind,
+                decision.sip_uri or "-",
+            )
+
+        force_ha_softphone = route_action == "answer_ha"
+        if not force_ha_softphone and decision.kind == "requires_bridge":
             return SipInviteResult(503, "Service Unavailable", to_tag="")
-        if decision.reason == "ha_required":
+        if not force_ha_softphone and decision.reason == "ha_required":
             return SipInviteResult(404, "Not Found", to_tag="")
-        if decision.kind in {"direct", "bridge", "group"} and decision.entry is not None:
-            peer_target = _peer_for_target(invite.target, peers)
+        if not force_ha_softphone and decision.kind in {"direct", "bridge", "group"} and decision.entry is not None:
+            peer_target = _peer_for_target(decision.target or invite.target, peers)
             bridge_uri = None
             if peer_target is not None and peer_target.host:
                 sip_transport = str((peer_target.device or {}).get("sip_transport") or "tcp").lower()
                 if sip_transport not in {"tcp", "udp"}:
                     sip_transport = "tcp"
                 bridge_uri = parse_sip_uri(
-                    f"sip:{invite.target}@{peer_target.host}:{peer_target.sip_port or cfg['sip_port']};transport={sip_transport}"
+                    f"sip:{decision.target or invite.target}@{peer_target.host}:{peer_target.sip_port or cfg['sip_port']};transport={sip_transport}"
                 )
             elif decision.entry.sip_uri:
                 bridge_uri = parse_sip_uri(decision.entry.sip_uri)
@@ -1602,27 +1806,41 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                         active.pop(client.dialog_ids.call_id, None)
                         await client.close()
                         return
-                    relay = SipRtpRelay(
-                        left=RtpPeer(
-                            host=invite.remote_rtp_host,
-                            port=invite.remote_rtp_port,
-                            payload_type=invite.recv_format.payload_type,
-                            audio_format=invite.recv_format.audio_format,
-                            send_payload_type=invite.send_format.payload_type,
-                            send_audio_format=invite.send_format.audio_format,
-                        ),
-                        right=RtpPeer(
-                            host=client.dialog.remote_rtp_host,
-                            port=client.dialog.remote_rtp_port,
-                            payload_type=client.dialog.recv_format.payload_type,
-                            audio_format=client.dialog.recv_format.audio_format,
-                            send_payload_type=client.dialog.send_format.payload_type,
-                            send_audio_format=client.dialog.send_format.audio_format,
-                        ),
-                        left_port=source_relay_port,
-                        right_port=dest_relay_port,
-                    )
-                    await relay.start()
+                    try:
+                        relay = SipRtpRelay(
+                            left=RtpPeer(
+                                host=invite.remote_rtp_host,
+                                port=invite.remote_rtp_port,
+                                payload_type=invite.recv_format.payload_type,
+                                audio_format=invite.recv_format.audio_format,
+                                send_payload_type=invite.send_format.payload_type,
+                                send_audio_format=invite.send_format.audio_format,
+                            ),
+                            right=RtpPeer(
+                                host=client.dialog.remote_rtp_host,
+                                port=client.dialog.remote_rtp_port,
+                                payload_type=client.dialog.recv_format.payload_type,
+                                audio_format=client.dialog.recv_format.audio_format,
+                                send_payload_type=client.dialog.send_format.payload_type,
+                                send_audio_format=client.dialog.send_format.audio_format,
+                            ),
+                            left_port=source_relay_port,
+                            right_port=dest_relay_port,
+                        )
+                        await relay.start()
+                    except Exception as err:
+                        _LOGGER.warning("SIP RTP bridge media conversion unavailable: %s", err)
+                        _sip_send_final_response(
+                            hass,
+                            invite.call_id,
+                            488,
+                            "Not Acceptable Here",
+                            decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                        )
+                        bucket.setdefault("sip_bridge_clients", {}).pop(invite.call_id, None)
+                        active.pop(client.dialog_ids.call_id, None)
+                        await client.close()
+                        return
                     bucket.setdefault("sip_relays", {})[invite.call_id] = relay
                     answer = build_answer_directional(
                         local_ip,
@@ -1737,6 +1955,17 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
 
     async def _on_terminated(call_id: str, reason: str = "remote_hangup") -> None:
         bucket = hass.data.setdefault(DOMAIN, {})
+        route = _pending_routes(hass).pop(call_id, None)
+        if route is not None:
+            future = route.get("future")
+            if future is not None and not future.done():
+                future.set_result(
+                    {
+                        "action": "cancel",
+                        "reason": "Request Terminated",
+                        "decline_reason": reason or TerminalReason.CANCELLED.value,
+                    }
+                )
         pending = bucket.setdefault("sip_pending", {})
         invite = pending.pop(call_id, None)
         session = _session_pop(call_id) or _session_pop(HA_SOFTPHONE_DEVICE_ID)
