@@ -126,8 +126,24 @@ def _call_event_type(state: str, reason: str | None = None) -> str:
     return state or "state"
 
 
+def _json_event_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_json_event_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_event_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): clean
+            for key, item in value.items()
+            if (clean := _json_event_value(item)) is not None
+        }
+    return None
+
+
 def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -> None:
-    event = dict(payload)
+    event = _json_event_value(payload) or {}
     event["scope"] = scope
     event["state"] = _sip_public_state(str(event.get("state") or ""))
     event["sip_state"] = event["state"]

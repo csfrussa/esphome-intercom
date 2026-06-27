@@ -73,8 +73,10 @@ def _pending_routes(hass: HomeAssistant) -> dict:
     return hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending_routes", {})
 
 
-def _ha_softphone_has_active_call(hass: HomeAssistant) -> bool:
+def _ha_softphone_has_active_call(hass: HomeAssistant, *, ignore_call_id: str = "") -> bool:
     store = _ha_softphone_store(hass)
+    if ignore_call_id and str(store.get("call_id") or "") == ignore_call_id:
+        return False
     state = str(store.get("state") or CallState.IDLE.value)
     return bool(store.get("session_device_id") or state in HA_SOFTPHONE_ACTIVE_STATES)
 
@@ -184,10 +186,9 @@ def _sip_target_audio_profile(
         [fmt for fmt in HA_SIP_PCM_RX_FORMATS if fmt in set(remote_tx)]
         if remote_tx else list(HA_SIP_PCM_RX_FORMATS)
     )
-    common = [fmt for fmt in send_candidates if fmt in set(recv_candidates)]
-    if not common:
+    if not send_candidates or not recv_candidates:
         _LOGGER.warning(
-            "No common direct SIP PCM wire format for %s "
+            "No compatible directional SIP PCM profile for %s "
             "(ha_send=%s ha_recv=%s remote_tx=%s remote_rx=%s)",
             target,
             [fmt.wire_token() for fmt in HA_SIP_PCM_TX_FORMATS],
@@ -196,10 +197,9 @@ def _sip_target_audio_profile(
             [fmt.wire_token() for fmt in remote_rx],
         )
     else:
-        _LOGGER.info(
-            "Direct SIP PCM profile for %s: common=%s send=%s recv=%s",
+        _LOGGER.debug(
+            "Directional SIP PCM profile for %s: send=%s recv=%s",
             target,
-            [fmt.wire_token() for fmt in common],
             [fmt.wire_token() for fmt in send_candidates],
             [fmt.wire_token() for fmt in recv_candidates],
         )
@@ -1385,6 +1385,69 @@ def _set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             "decline_reason": str(data.get("decline_reason") or "").strip(),
         }
     )
+    invite = route.get("invite")
+    if action in {"decline", "busy", "cancel"} and invite is not None:
+        status = int(data.get("status") or 0)
+        app_reason = str(data.get("decline_reason") or "").strip()
+        if action == "busy":
+            status = status or 486
+            app_reason = app_reason or TerminalReason.BUSY.value
+            state = CallState.BUSY.value
+        elif action == "cancel":
+            status = status or 487
+            app_reason = app_reason or TerminalReason.CANCELLED.value
+            state = CallState.CANCELLED.value
+        else:
+            status = status or 603
+            app_reason = app_reason or TerminalReason.DECLINED.value
+            state = "declined"
+        _set_ha_softphone_call_state(
+            hass,
+            state,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=getattr(invite, "caller", ""),
+            callee=getattr(invite, "target", ""),
+            peer_name=getattr(invite, "caller", ""),
+            direction="incoming",
+            call_id=call_id,
+            reason=app_reason,
+            terminal_reason=app_reason,
+            origin="self",
+            sip_status_code=status,
+            last_sip_event="SIP_RESPONSE",
+        )
+    elif action in {"answer_ha", "default"} and invite is not None:
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.CONNECTING.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=getattr(invite, "caller", ""),
+            callee=getattr(invite, "target", ""),
+            peer_name=getattr(invite, "caller", ""),
+            direction="incoming",
+            call_id=call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            audio_mode="full_duplex",
+            sip_status_code=180,
+            last_sip_event="SIP_RESPONSE",
+        )
+    elif action in {"forward", "bridge"} and invite is not None:
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.CONNECTING.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=getattr(invite, "caller", ""),
+            callee=destination or getattr(invite, "target", ""),
+            peer_name=getattr(invite, "caller", ""),
+            direction="incoming",
+            call_id=call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            audio_mode="full_duplex",
+            sip_status_code=180,
+            last_sip_event="SIP_RESPONSE",
+        )
     _LOGGER.info(
         "SIP route decision call_id=%s action=%s destination=%s",
         call_id,
@@ -1816,6 +1879,23 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             "created_at": time.time(),
             "expires_at": expires_at,
         }
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.RINGING.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=invite.target,
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=invite.call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            audio_mode="full_duplex",
+            route_kind=decision.kind,
+            sip_uri=decision.sip_uri,
+            sip_status_code=100,
+            last_sip_event="INVITE",
+        )
         _fire_call_event(
             hass,
             {
@@ -2063,7 +2143,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
                 hass.async_create_task(_finish_bridge(result))
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
-            ha_softphone_active = _ha_softphone_has_active_call(hass)
+            ha_softphone_active = _ha_softphone_has_active_call(hass, ignore_call_id=invite.call_id)
             if pending or active_dialogs or active_clients or active_relays or ha_softphone_active:
                 _LOGGER.info(
                     "SIP INVITE from %s rejected: HA softphone is busy "

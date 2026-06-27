@@ -254,6 +254,50 @@ def negotiate_directional(
     return RtpPcmDirection(send=send, recv=recv)
 
 
+def negotiate_answer_directional(
+    remote_sdp: str | bytes,
+    local_send_preferred: list[AudioFormat],
+    local_recv_preferred: list[AudioFormat],
+) -> RtpPcmDirection | None:
+    """Negotiate an SDP answer for an outbound call.
+
+    Our ESP SIP phones answer asymmetric PCM offers with the payload they
+    receive first and the payload they transmit second. Prefer that answer
+    order for RX so a 48k-to-ESP / 16k-from-ESP call does not drop the remote
+    RTP stream by expecting the first payload in both directions.
+    """
+    offered = offered_pcm_formats(remote_sdp)
+    send = None
+    for offered_fmt in offered:
+        for local in local_send_preferred:
+            if _rtp_matches_audio(offered_fmt, local):
+                send = offered_fmt
+                break
+        if send is not None:
+            break
+    if send is None:
+        return None
+
+    recv = None
+    for offered_fmt in offered:
+        if offered_fmt.payload_type == send.payload_type and len(offered) > 1:
+            continue
+        for local in local_recv_preferred:
+            if _rtp_matches_audio(offered_fmt, local):
+                recv = offered_fmt
+                break
+        if recv is not None:
+            break
+    if recv is None:
+        for local in local_recv_preferred:
+            if _rtp_matches_audio(send, local):
+                recv = send
+                break
+    if recv is None:
+        return None
+    return RtpPcmDirection(send=send, recv=recv)
+
+
 def build_answer(origin_ip: str, media_ip: str, media_port: int, selected: RtpPcmFormat) -> str:
     return build_answer_directional(origin_ip, media_ip, media_port, selected, selected)
 

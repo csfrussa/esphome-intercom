@@ -432,7 +432,7 @@ class SipCallClient:
         local_uri: str,
         remote_uri: str,
     ) -> bool:
-        selected = sdp.negotiate_directional(
+        selected = sdp.negotiate_answer_directional(
             msg.body,
             self.supported_send_formats,
             self.supported_recv_formats,

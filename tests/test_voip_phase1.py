@@ -540,7 +540,7 @@ class SdpPcmProfileTest(unittest.TestCase):
             selected_by_esp.send,
             selected_by_esp.recv,
         )
-        selected_by_ha = sdp.negotiate_directional(
+        selected_by_ha = sdp.negotiate_answer_directional(
             answer,
             [ha_to_esp],
             [esp_to_ha],
@@ -553,6 +553,34 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertIn("L16/16000/1", answer)
         self.assertNotIn("a=fmtp:", answer)
         self.assertIn("a=maxptime:10", answer)
+
+    def test_answer_negotiation_preserves_asymmetric_payload_direction(self) -> None:
+        ha_to_esp = audio_format.AudioFormat(48000, "s16le", 1, 10)
+        esp_to_ha = audio_format.AudioFormat(16000, "s16le", 1, 10)
+        answer = (
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 192.168.1.47\r\n"
+            "s=ESPHome Intercom\r\n"
+            "c=IN IP4 192.168.1.47\r\n"
+            "t=0 0\r\n"
+            "m=audio 40000 RTP/AVP 96 97\r\n"
+            "a=rtpmap:96 L16/48000/1\r\n"
+            "a=rtpmap:97 L16/16000/1\r\n"
+            "a=ptime:10\r\n"
+            "a=maxptime:10\r\n"
+            "a=sendrecv\r\n"
+        )
+        selected = sdp.negotiate_answer_directional(
+            answer,
+            [ha_to_esp, esp_to_ha],
+            [ha_to_esp, esp_to_ha],
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.send.payload_type, 96)
+        self.assertEqual(selected.send.audio_format, ha_to_esp)
+        self.assertEqual(selected.recv.payload_type, 97)
+        self.assertEqual(selected.recv.audio_format, esp_to_ha)
 
     def test_rejects_oversized_pcm_rtp_frame(self) -> None:
         with self.assertRaises(sdp.SdpError):
