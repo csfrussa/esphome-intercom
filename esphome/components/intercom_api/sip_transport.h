@@ -29,6 +29,7 @@ class SipTransport : public SipPhoneTransport {
 
   bool start() override;
   void stop() override;
+  void disconnect() override;
   bool is_connected() const override;
   void send_audio_frame(const uint8_t *pcm, size_t bytes) override;
   bool send_invite(const std::string &call_id,

@@ -13,7 +13,7 @@ INIT = ROOT / "custom_components" / "intercom_native" / "__init__.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
-    match = re.search(rf"\nasync def {re.escape(function_name)}\([^)]*\) -> [^:]+:", source)
+    match = re.search(rf"\n(?:async def|def) {re.escape(function_name)}\([^)]*\)(?: -> [^:]+)?:", source)
     if not match:
         raise AssertionError(f"function {function_name} not found")
     start = match.end()
@@ -40,6 +40,13 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         body = _function_body(self.source, "_handle_sip_hangup_service")
         self.assertNotIn("card", body.lower())
         self.assertNotIn("frontend", body.lower())
+
+    def test_missing_roster_formats_do_not_force_legacy_16k_default(self) -> None:
+        body = _function_body(self.source, "_roster_entry_formats")
+        self.assertIn("if entry is None:", body)
+        self.assertIn("return []", body)
+        self.assertIn("if value in (None, \"\"):", body)
+        self.assertIn("if not raw.strip():", body)
 
 
 if __name__ == "__main__":

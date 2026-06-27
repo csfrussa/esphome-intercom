@@ -66,12 +66,16 @@ def _pending_routes(hass: HomeAssistant) -> dict:
 
 def _device_formats(device: dict | None, key: str):
     if not device:
-        return [DEFAULT_AUDIO_FORMAT]
+        return []
     value = device.get(key)
+    if value in (None, ""):
+        return []
     if isinstance(value, str):
         raw = value
     else:
         raw = ";".join(value or [])
+    if not raw.strip():
+        return []
     try:
         return parse_audio_format_list(raw)
     except ValueError as err:
@@ -87,13 +91,17 @@ def _device_formats(device: dict | None, key: str):
 def _roster_entry_formats(entry, key: str) -> list[AudioFormat]:
     """Return audio formats from a canonical roster entry metadata field."""
     if entry is None:
-        return [DEFAULT_AUDIO_FORMAT]
+        return []
     metadata = getattr(entry, "metadata", {}) or {}
     value = metadata.get(key)
+    if value in (None, ""):
+        return []
     if isinstance(value, list):
         raw = ";".join(str(item) for item in value)
     else:
         raw = str(value or "")
+    if not raw.strip():
+        return []
     try:
         return parse_audio_format_list(raw)
     except ValueError as err:
@@ -160,9 +168,11 @@ def _sip_target_audio_profile(
         )
     else:
         _LOGGER.info(
-            "Direct SIP PCM profile for %s: wire candidates=%s",
+            "Direct SIP PCM profile for %s: common=%s send=%s recv=%s",
             target,
             [fmt.wire_token() for fmt in common],
+            [fmt.wire_token() for fmt in send_candidates],
+            [fmt.wire_token() for fmt in recv_candidates],
         )
     return send_candidates, recv_candidates
 
@@ -1188,9 +1198,19 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     if route.kind not in {"direct", "bridge"} or not route.sip_uri:
         raise ServiceValidationError(f"cannot resolve SIP target: {target}")
     uri = parse_sip_uri(route.sip_uri)
+    remote_tx_formats = (
+        _device_formats(dest_device, "tx_formats")
+        if dest_device is not None
+        else _roster_entry_formats(route.entry, "tx_formats")
+    )
+    remote_rx_formats = (
+        _device_formats(dest_device, "rx_formats")
+        if dest_device is not None
+        else _roster_entry_formats(route.entry, "rx_formats")
+    )
     sip_send_formats, sip_recv_formats = _sip_target_audio_profile(
-        remote_tx_formats=_roster_entry_formats(route.entry, "tx_formats"),
-        remote_rx_formats=_roster_entry_formats(route.entry, "rx_formats"),
+        remote_tx_formats=remote_tx_formats,
+        remote_rx_formats=remote_rx_formats,
         target=target,
     )
     client = SipCallClient(

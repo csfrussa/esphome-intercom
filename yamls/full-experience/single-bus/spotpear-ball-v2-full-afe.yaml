@@ -451,8 +451,14 @@ intercom_api:
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: intercom
   audio:
-    # Primary/preferred RX format: 48 kHz improves HA/browser audio. TX remains
-    # the microphone/AFE format unless audio.tx is overridden.
+    # Primary/preferred TX/RX formats for SIP/RTP. Spotpear records at 16 kHz
+    # but can receive 48 kHz through the speaker resampler, so HA/browser calls
+    # negotiate asymmetric PCM instead of lowering both directions to 16 kHz.
+    tx:
+      sample_rate: 16000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
     rx:
       sample_rate: 48000
       pcm_format: s16le

@@ -510,6 +510,11 @@ bool SipTransport::is_connected() const {
   return this->running_.load(std::memory_order_acquire);
 }
 
+void SipTransport::disconnect() {
+  this->stop_audio_path();
+  this->reset_dialog_();
+}
+
 bool SipTransport::start_audio_path() {
   if (this->rtp_running_.load(std::memory_order_acquire)) return true;
   if (!this->bind_udp_(&this->rtp_socket_, this->rtp_port_, "RTP")) return false;
@@ -755,11 +760,12 @@ std::string SipTransport::build_sdp_offer_() const {
     }
     return false;
   };
+  for (uint8_t i = 0; i < this->offer_rx_formats_.count && pt < 120; i++) {
+    append_format(this->offer_rx_formats_.formats[i]);
+  }
   for (uint8_t i = 0; i < this->offer_tx_formats_.count && pt < 120; i++) {
-    if (!list_contains(this->offer_rx_formats_, this->offer_rx_formats_.count,
-                       this->offer_tx_formats_.formats[i])) {
-      continue;
-    }
+    if (list_contains(this->offer_rx_formats_, this->offer_rx_formats_.count,
+                      this->offer_tx_formats_.formats[i])) continue;
     append_format(this->offer_tx_formats_.formats[i]);
   }
   if (payloads.empty()) {
@@ -782,21 +788,23 @@ std::string SipTransport::build_sdp_answer_() const {
   const uint32_t remote_ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   std::string local_ip = "0.0.0.0";
   this->local_ip_for_peer_(remote_ip, &local_ip);
-  if (this->rtp_tx_payload_type_ != this->rtp_rx_payload_type_ ||
-      !(this->selected_tx_format_ == this->selected_rx_format_)) {
-    ESP_LOGE(TAG, "SIP SDP answer refused: direct SIP requires one common wire PCM format");
-    return "";
-  }
   const char *tx_enc = rtp_encoding(this->selected_tx_format_);
-  if (tx_enc == nullptr) {
+  const char *rx_enc = rtp_encoding(this->selected_rx_format_);
+  if (tx_enc == nullptr || rx_enc == nullptr) {
     ESP_LOGE(TAG, "SIP SDP answer refused: selected wire PCM format is not RTP-mappable");
     return "";
   }
-  const std::string payloads = std::to_string(this->rtp_tx_payload_type_);
+  std::string payloads = std::to_string(this->rtp_rx_payload_type_);
   std::string maps;
-  maps += "a=rtpmap:" + std::to_string(this->rtp_tx_payload_type_) + " " + tx_enc + "/" +
+  maps += "a=rtpmap:" + std::to_string(this->rtp_rx_payload_type_) + " " + rx_enc + "/" +
+          std::to_string(this->selected_rx_format_.sample_rate) + "/" +
+          std::to_string(this->selected_rx_format_.channels) + "\r\n";
+  if (this->rtp_tx_payload_type_ != this->rtp_rx_payload_type_) {
+    payloads += " " + std::to_string(this->rtp_tx_payload_type_);
+    maps += "a=rtpmap:" + std::to_string(this->rtp_tx_payload_type_) + " " + tx_enc + "/" +
           std::to_string(this->selected_tx_format_.sample_rate) + "/" +
           std::to_string(this->selected_tx_format_.channels) + "\r\n";
+  }
   return "v=0\r\n"
          "o=- 0 0 IN IP4 " + local_ip + "\r\n"
          "s=ESPHome Intercom\r\n"
@@ -804,8 +812,8 @@ std::string SipTransport::build_sdp_answer_() const {
          "t=0 0\r\n"
          "m=audio " + std::to_string(this->rtp_port_) + " RTP/AVP " + payloads + "\r\n" +
          maps +
-         "a=ptime:" + std::to_string(this->selected_tx_format_.frame_ms) + "\r\n"
-         "a=maxptime:" + std::to_string(this->selected_tx_format_.frame_ms) + "\r\n"
+         "a=ptime:" + std::to_string(this->selected_rx_format_.frame_ms) + "\r\n"
+         "a=maxptime:" + std::to_string(this->selected_rx_format_.frame_ms) + "\r\n"
          "a=sendrecv\r\n";
 }
 
@@ -865,25 +873,27 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
         AudioFormat local_tx;
         const bool tx_ok = supports_wire_format(this->offer_tx_formats_, fmt, &local_tx);
         const bool rx_ok = supports_wire_format(this->offer_rx_formats_, fmt, &local_rx);
-        if (!selected_tx && !selected_rx && tx_ok && rx_ok) {
-          selected_tx_format = local_tx;
+        if (!selected_rx && rx_ok) {
           selected_rx_format = local_rx;
-          selected_tx_payload_type = pt;
           selected_rx_payload_type = pt;
-          selected_tx = true;
           selected_rx = true;
-          ESP_LOGI(TAG, "SIP SDP selected TX PT=%u L%u/%u/%u frame=%ums",
-                   (unsigned) pt,
-                   fmt.pcm_format == PcmFormat::S24LE ? 24u : 16u,
-                   (unsigned) selected_tx_format.sample_rate,
-                   (unsigned) selected_tx_format.channels,
-                   (unsigned) selected_tx_format.frame_ms);
           ESP_LOGI(TAG, "SIP SDP selected RX PT=%u L%u/%u/%u frame=%ums",
                    (unsigned) pt,
                    fmt.pcm_format == PcmFormat::S24LE ? 24u : 16u,
                    (unsigned) selected_rx_format.sample_rate,
                    (unsigned) selected_rx_format.channels,
                    (unsigned) selected_rx_format.frame_ms);
+        }
+        if (!selected_tx && tx_ok) {
+          selected_tx_format = local_tx;
+          selected_tx_payload_type = pt;
+          selected_tx = true;
+          ESP_LOGI(TAG, "SIP SDP selected TX PT=%u L%u/%u/%u frame=%ums",
+                   (unsigned) pt,
+                   fmt.pcm_format == PcmFormat::S24LE ? 24u : 16u,
+                   (unsigned) selected_tx_format.sample_rate,
+                   (unsigned) selected_tx_format.channels,
+                   (unsigned) selected_tx_format.frame_ms);
         } else if (!selected_tx && !selected_rx) {
           ESP_LOGD(TAG, "SIP SDP skipping unsupported PT=%u rate=%u pcm=%u channels=%u",
                    (unsigned) pt,

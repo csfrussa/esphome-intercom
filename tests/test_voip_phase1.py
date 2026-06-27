@@ -512,34 +512,26 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertEqual(offered[0].encoding, "L24")
         self.assertEqual(offered[0].sample_rate, 16000)
 
-    def test_directional_negotiation_uses_one_common_wire_format_per_stream(self) -> None:
+    def test_directional_negotiation_allows_asymmetric_pcm_rates_per_direction(self) -> None:
         ha_to_esp = audio_format.AudioFormat(48000, "s16le", 1, 10)
-        esp_to_ha = audio_format.AudioFormat(16000, "s16le", 1, 32)
-        with self.assertRaises(sdp.SdpError):
-            sdp.build_offer_directional(
-                "192.168.1.10",
-                "192.168.1.10",
-                40020,
-                [ha_to_esp],
-                [esp_to_ha],
-            )
+        esp_to_ha = audio_format.AudioFormat(16000, "s16le", 1, 10)
         offer = sdp.build_offer_directional(
             "192.168.1.10",
             "192.168.1.10",
             40020,
-            [ha_to_esp, esp_to_ha],
-            [ha_to_esp, esp_to_ha],
+            [ha_to_esp],
+            [esp_to_ha],
         )
         selected_by_esp = sdp.negotiate_directional(
             offer,
-            [esp_to_ha, ha_to_esp],
-            [ha_to_esp, esp_to_ha],
+            [esp_to_ha],
+            [ha_to_esp],
         )
         self.assertIsNotNone(selected_by_esp)
         assert selected_by_esp is not None
-        self.assertEqual(selected_by_esp.send.audio_format, ha_to_esp)
+        self.assertEqual(selected_by_esp.send.audio_format, esp_to_ha)
         self.assertEqual(selected_by_esp.recv.audio_format, ha_to_esp)
-        self.assertEqual(selected_by_esp.send.payload_type, selected_by_esp.recv.payload_type)
+        self.assertNotEqual(selected_by_esp.send.payload_type, selected_by_esp.recv.payload_type)
 
         answer = sdp.build_answer_directional(
             "192.168.1.47",
@@ -550,13 +542,15 @@ class SdpPcmProfileTest(unittest.TestCase):
         )
         selected_by_ha = sdp.negotiate_directional(
             answer,
-            [ha_to_esp, esp_to_ha],
-            [esp_to_ha, ha_to_esp],
+            [ha_to_esp],
+            [esp_to_ha],
         )
         self.assertIsNotNone(selected_by_ha)
         assert selected_by_ha is not None
         self.assertEqual(selected_by_ha.send.audio_format, ha_to_esp)
-        self.assertEqual(selected_by_ha.recv.audio_format, ha_to_esp)
+        self.assertEqual(selected_by_ha.recv.audio_format, esp_to_ha)
+        self.assertIn("L16/48000/1", answer)
+        self.assertIn("L16/16000/1", answer)
         self.assertNotIn("a=fmtp:", answer)
         self.assertIn("a=maxptime:10", answer)
 

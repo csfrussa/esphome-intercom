@@ -151,11 +151,9 @@ def build_offer_directional(
     send_formats: list[AudioFormat],
     recv_formats: list[AudioFormat],
 ) -> str:
-    recv_set = set(recv_formats or [])
-    common_formats = [fmt for fmt in (send_formats or []) if fmt in recv_set]
-    formats = rtp_offer_formats(common_formats)
+    formats = rtp_offer_formats([*(send_formats or []), *(recv_formats or [])])
     if not formats:
-        raise SdpError("SDP offer requires at least one common RTP-mappable PCM format")
+        raise SdpError("SDP offer requires at least one RTP-mappable PCM format")
     rtp_formats = [audio_format_to_rtp(fmt, 96 + i) for i, fmt in enumerate(formats)]
     payloads = " ".join(str(fmt.payload_type) for fmt in rtp_formats)
     lines = [
@@ -249,12 +247,11 @@ def negotiate_directional(
     local_send_preferred: list[AudioFormat],
     local_recv_preferred: list[AudioFormat],
 ) -> RtpPcmDirection | None:
-    recv_set = set(local_recv_preferred)
-    common_preferred = [fmt for fmt in local_send_preferred if fmt in recv_set]
-    selected = negotiate(remote_sdp, common_preferred)
-    if selected is None:
+    send = negotiate(remote_sdp, local_send_preferred)
+    recv = negotiate(remote_sdp, local_recv_preferred)
+    if send is None or recv is None:
         return None
-    return RtpPcmDirection(send=selected, recv=selected)
+    return RtpPcmDirection(send=send, recv=recv)
 
 
 def build_answer(origin_ip: str, media_ip: str, media_port: int, selected: RtpPcmFormat) -> str:
@@ -268,8 +265,6 @@ def build_answer_directional(
     send: RtpPcmFormat,
     recv: RtpPcmFormat,
 ) -> str:
-    if send != recv:
-        raise SdpError("direct SIP answer requires one common RTP PCM wire format")
     selected = []
     seen: set[int] = set()
     for fmt in (send, recv):
