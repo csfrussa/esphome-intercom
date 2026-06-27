@@ -62,17 +62,17 @@ uintmax_t file_size_or_zero(const std::string &path) {
   return ec ? 0 : size;
 }
 
-std::string find_json_string(const std::string &json, const std::string &key, const std::string &fallback = "") {
+std::string find_json_string(const std::string &json, const std::string &key, const std::string &default_value = "") {
   const std::string needle = "\"" + key + "\"";
   size_t pos = json.find(needle);
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   pos = json.find(':', pos + needle.size());
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   pos = json.find('"', pos + 1);
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   std::string out;
   bool escaped = false;
   for (size_t i = pos + 1; i < json.size(); i++) {
@@ -90,17 +90,17 @@ std::string find_json_string(const std::string &json, const std::string &key, co
       return out;
     out += ch;
   }
-  return fallback;
+  return default_value;
 }
 
-bool find_json_bool(const std::string &json, const std::string &key, bool fallback = false) {
+bool find_json_bool(const std::string &json, const std::string &key, bool default_value = false) {
   const std::string needle = "\"" + key + "\"";
   size_t pos = json.find(needle);
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   pos = json.find(':', pos + needle.size());
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   pos++;
   while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos])))
     pos++;
@@ -108,23 +108,23 @@ bool find_json_bool(const std::string &json, const std::string &key, bool fallba
     return true;
   if (json.compare(pos, 5, "false") == 0)
     return false;
-  return fallback;
+  return default_value;
 }
 
-int find_json_int(const std::string &json, const std::string &key, int fallback = 0) {
+int find_json_int(const std::string &json, const std::string &key, int default_value = 0) {
   const std::string needle = "\"" + key + "\"";
   size_t pos = json.find(needle);
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   pos = json.find(':', pos + needle.size());
   if (pos == std::string::npos)
-    return fallback;
+    return default_value;
   pos++;
   while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos])))
     pos++;
   char *end = nullptr;
   long value = std::strtol(json.c_str() + pos, &end, 10);
-  return end == json.c_str() + pos ? fallback : static_cast<int>(value);
+  return end == json.c_str() + pos ? default_value : static_cast<int>(value);
 }
 
 std::string endpoint_json(const IntercomSimulator::EndpointState &endpoint, bool include_visible = false) {

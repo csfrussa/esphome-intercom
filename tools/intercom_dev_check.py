@@ -33,6 +33,7 @@ def main() -> int:
     run([py, "tests/test_voip_phase1.py"])
     run([py, "tests/test_device_resolver_sip.py"])
     run([py, "tests/test_frontend_card_contract.py"])
+    run([py, "-m", "pytest", "-q", "tests/test_ha_softphone_backend_contract.py"])
     run([py, "tests/test_qualification_matrix.py"])
     run([py, "tests/test_runtime_fsm_target_model.py"])
     run([py, "tests/support/qualification_matrix.py", "--validate", "--summary"])

@@ -209,7 +209,7 @@ def _sip_target_audio_profile(
 def _ha_peer_name(hass: HomeAssistant) -> str:
     """Return the HA phonebook peer name.
 
-    HA normally always has a configured location_name. The fallback is only for
+    HA normally always has a configured location_name. The default is only for
     malformed/empty local config and avoids a hardcoded "Home Assistant" peer
     identity.
     """

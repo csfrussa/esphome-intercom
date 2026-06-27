@@ -289,7 +289,7 @@ regressions would be a problem.
 - 📡 Native intercom-only UDP at 48 kHz/10 ms, verifying HA accepts the endpoint
   and the frame size stays below `udp_max_payload`.
 - 🔀 ESP-to-ESP direct calls with matching formats.
-- 🌉 ESP-to-ESP calls through HA PBX bridging with different TX/RX formats.
+- 🌉 ESP-to-ESP calls through HA SIP bridging with different TX/RX formats.
 - ✅ Auto Answer on/off from both sides: ESP ringing, HA ringing, Answer,
   Decline and Hangup.
 - 📥 Inbound TCP and UDP calls from callers not present in the callee phonebook:

@@ -80,7 +80,7 @@ bool json_bool(const cJSON *obj, const char *key) {
   return cJSON_IsTrue(item);
 }
 
-uint16_t json_u16(const cJSON *obj, const char *key, uint16_t fallback = 0) {
+uint16_t json_u16(const cJSON *obj, const char *key, uint16_t default_value = 0) {
   const cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
   if (cJSON_IsNumber(item) && item->valuedouble >= 0 && item->valuedouble <= 65535) {
     return static_cast<uint16_t>(item->valuedouble);
@@ -89,7 +89,7 @@ uint16_t json_u16(const cJSON *obj, const char *key, uint16_t fallback = 0) {
     uint16_t parsed = 0;
     if (Phonebook::parse_u16(Phonebook::trim(item->valuestring), &parsed)) return parsed;
   }
-  return fallback;
+  return default_value;
 }
 
 std::string json_metadata_string(const cJSON *obj, const char *key) {
@@ -98,10 +98,10 @@ std::string json_metadata_string(const cJSON *obj, const char *key) {
   return json_string(meta, key);
 }
 
-uint16_t json_metadata_u16(const cJSON *obj, const char *key, uint16_t fallback = 0) {
+uint16_t json_metadata_u16(const cJSON *obj, const char *key, uint16_t default_value = 0) {
   const cJSON *meta = cJSON_GetObjectItemCaseSensitive(obj, "metadata");
-  if (!cJSON_IsObject(meta)) return fallback;
-  return json_u16(meta, key, fallback);
+  if (!cJSON_IsObject(meta)) return default_value;
+  return json_u16(meta, key, default_value);
 }
 
 bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {

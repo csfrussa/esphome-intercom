@@ -85,7 +85,7 @@ Direct calls use SIP URIs such as:
 - `sip:Cucina@192.168.1.51:5060;transport=tcp`
 - `sip:Salotto@192.168.1.52:5060;transport=udp`
 
-Phone numbers and unresolved names route through Home Assistant/PBX when
+Phone numbers and unresolved names route through the Home Assistant SIP bridge when
 configured. Missing endpoint metadata must not invent a direct SIP route.
 
 ## State

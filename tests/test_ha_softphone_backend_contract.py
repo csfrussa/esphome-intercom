@@ -36,7 +36,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("TerminalReason.LOCAL_HANGUP.value", state_update)
         self.assertIn("last_sip_event=", state_update)
 
-    def test_hangup_does_not_depend_on_card_side_fallback(self) -> None:
+    def test_hangup_does_not_depend_on_card_side_inference(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
         self.assertNotIn("card", body.lower())
         self.assertNotIn("frontend", body.lower())

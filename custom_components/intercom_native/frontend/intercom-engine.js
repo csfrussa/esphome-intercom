@@ -279,21 +279,21 @@ class IntercomEngine extends EventTarget {
     return new Ctor();
   }
 
-  _parseFormat(token, fallback = DEFAULT_FORMAT) {
+  _parseFormat(token, defaultFormat = DEFAULT_FORMAT) {
     const parts = String(token || "").split(":");
-    if (parts.length !== 4) return fallback;
+    if (parts.length !== 4) return defaultFormat;
     const sampleRate = Number(parts[0]);
     const pcmFormat = parts[1];
     const channels = Number(parts[2]);
     const frameMs = Number(parts[3]);
-    if (!Number.isFinite(sampleRate) || !Number.isFinite(channels) || !Number.isFinite(frameMs)) return fallback;
-    if (!["s16le", "s24le", "s24le_in_s32", "s32le"].includes(pcmFormat)) return fallback;
+    if (!Number.isFinite(sampleRate) || !Number.isFinite(channels) || !Number.isFinite(frameMs)) return defaultFormat;
+    if (!["s16le", "s24le", "s24le_in_s32", "s32le"].includes(pcmFormat)) return defaultFormat;
     return { sampleRate, pcmFormat, channels, frameMs };
   }
 
-  _chooseDeviceFormat(deviceInfo, key, fallback = DEFAULT_FORMAT) {
+  _chooseDeviceFormat(deviceInfo, key, defaultFormat = DEFAULT_FORMAT) {
     const formats = Array.isArray(deviceInfo?.[key]) ? deviceInfo[key] : [];
-    return this._parseFormat(formats[0], fallback);
+    return this._parseFormat(formats[0], defaultFormat);
   }
 
   _resolveSessionFormats(deviceInfo, negotiated = null) {
