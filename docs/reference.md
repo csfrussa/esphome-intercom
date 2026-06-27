@@ -11,6 +11,7 @@ intercom_api:
   phonebook:
     - name: Kitchen
       ip: 192.168.1.42
+      sip_transport: udp
       port: 5060
       rtp_port: 40000
 ```
@@ -45,6 +46,9 @@ Runtime actions:
 - `intercom_api.remove_contact`
 - `intercom_api.set_contacts`
 - `intercom_api.set_roster_json`
+
+Local phonebook contacts accept `sip_transport: udp|tcp` when one contact must
+use a different signaling transport from the phone's own `protocol`.
 
 Conditions:
 
@@ -87,7 +91,7 @@ force the HA bridge path.
 - `intercom_native.sip_incoming_call`: inbound call or route request.
 - `intercom_native.sip_route_request`: HA dial-plan lookup request.
 - `intercom_native.sip_call_ended`: terminal `ended`, `missed`, or `failed`.
-- `intercom_native.call_event`: compatibility event used by the frontend.
+- `intercom_native.call_event`: aggregate SIP call event for frontend and automations.
 
 The payload includes the canonical SIP fields when available: `state`,
 `sip_state`, `type`, `call_id`, `caller`, `callee`, `peer_name`, `direction`,

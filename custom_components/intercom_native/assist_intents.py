@@ -180,14 +180,13 @@ async def _start_call_to_ha_peer(
     dest_name: str,
 ) -> None:
     """Ask the originating ESP to call HA by its phonebook peer name."""
-    from . import _available_esphome_services, _resolve_esphome_service_slug
+    from . import _available_esphome_services
 
     route_id = str(origin.get("route_id") or "").strip()
     if not route_id:
         raise ValueError(f"No route_id for intercom device {origin.get('name')}")
 
-    service_slug = _resolve_esphome_service_slug(hass, route_id, "start_call")
-    service_name = f"{service_slug}_start_call"
+    service_name = f"{route_id}_start_call"
     if service_name not in _available_esphome_services(hass):
         raise ValueError(f"ESPHome service esphome.{service_name} is not registered")
 

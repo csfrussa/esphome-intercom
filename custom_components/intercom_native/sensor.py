@@ -1,10 +1,11 @@
 """Sensor platform for Intercom Native.
 
-HA publishes one protocol-aware roster.
+HA publishes one SIP dial-plan roster.
 
 Entity names:
   - sensor.intercom_phonebook       format per row:
-      name|sip|ip|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_transport
+      name|ip|sip_port|rtp_port|sip_udp
+      name|ip|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
 
 ESP YAMLs subscribe to the unified sensor and normalize it locally into their
 SIP dial plan.
@@ -37,7 +38,7 @@ async def async_setup_entry(
 
 
 class IntercomPhonebookSensor(SensorEntity):
-    """Authoritative protocol-aware phonebook publisher."""
+    """Authoritative SIP phonebook publisher."""
 
     _attr_has_entity_name = False
     _attr_should_poll = False
@@ -141,10 +142,9 @@ class IntercomPhonebookSensor(SensorEntity):
                 kind="ha" if p.is_ha else "esp",
                 address=p.host,
                 metadata={
-                    "transport": p.transport,
                     "sip_transport": (
                         str((p.device or {}).get("sip_transport") or "tcp").lower()
-                        if p.transport == "sip" or p.is_ha
+                        if p.is_ha or p.device is not None
                         else ""
                     ),
                     "sip_port": p.sip_port,

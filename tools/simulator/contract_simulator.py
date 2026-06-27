@@ -24,13 +24,36 @@ def _idle_state() -> dict[str, Any]:
         "second": {"state": "idle", "last_reason": ""},
         "softphone": {"state": "idle", "caller": "", "last_reason": ""},
         "bridge": {"state": "idle", "left": "", "right": ""},
-        "audio": {"tx_ready": False, "rx_ready": False, "owner": "none"},
+        "audio": {
+            "tx_ready": False,
+            "rx_ready": False,
+            "owner": "none",
+            "tx_frames": 0,
+            "rx_frames": 0,
+            "browser_tx_ready_latency_ms": -1,
+            "mic_input_path": "tests/simulator/audio/mic_input.pcm",
+            "mic_input_bytes": 80000,
+            "speaker_output_path": "test_runs/simulator/spotpear-voip-host_speaker_output.pcm",
+            "speaker_output_bytes": 0,
+            "speaker_output_markers": "",
+        },
         "sip": {"last_status": 0, "decline_reason": "", "auth_reason": ""},
         "led": {"color": "", "effect": None, "forbidden_effect": "Spin"},
         "media": {"state": "idle"},
         "intercom": {"state": "idle", "caller": ""},
+        "voice_assistant": {"state": "idle", "phase": "idle", "wake_word": "", "events": 0},
+        "aec": {"frames": 0, "last_processing_us": 0, "max_processing_us": 0},
+        "afe": {"frames": 0, "last_latency_us": 0, "max_latency_us": 0},
+        "display": {"page": "idle", "status": "idle", "backlight_on": True},
+        "controls": {"mic_muted": False, "speaker_muted": False},
+        "runtime": {
+            "now_ms": 0,
+            "source_profile": "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml",
+            "device_profile": "spotpear_ball_v2_full_afe",
+        },
         "card": {"mode": "", "controlled_device": "", "rendered_state": "idle", "source": ""},
         "backend": {"browser_audio": False},
+        "ha_answer_pending": False,
         "phonebook": {"revision": 0, "duplicate_ids": False},
         "ha": {"visible_contacts": 0},
         "options": {"esp": {}, "caller": {}},
@@ -40,9 +63,24 @@ def _idle_state() -> dict[str, Any]:
 class ContractSimulator:
     def __init__(self) -> None:
         self.state = _idle_state()
+        self._reset_files()
+
+    def _reset_files(self) -> None:
+        path = Path(self.state["audio"]["speaker_output_path"])
+        path.unlink(missing_ok=True)
+
+    def _write_audio_marker(self, label: str) -> None:
+        path = Path(self.state["audio"]["speaker_output_path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        marker = f"intercom_simulator:{label}\n"
+        with path.open("ab") as out:
+            out.write(marker.encode("utf-8"))
+        self.state["audio"]["speaker_output_markers"] += marker
+        self.state["audio"]["speaker_output_bytes"] = path.stat().st_size
 
     def reset(self) -> dict[str, Any]:
         self.state = _idle_state()
+        self._reset_files()
         return self.get_snapshot()
 
     def get_snapshot(self) -> dict[str, Any]:
@@ -57,9 +95,14 @@ class ContractSimulator:
             self.state["backend"]["browser_audio"] = False
         elif button == "answer":
             if self.state["softphone"]["state"] == "ringing":
-                self.state["softphone"]["state"] = "in_call"
-                self.state["audio"].update({"tx_ready": True, "rx_ready": True, "owner": "intercom"})
-                self.state["sip"]["last_status"] = 200
+                if not self.state["audio"].get("tx_ready"):
+                    self.state["ha_answer_pending"] = True
+                    self.state["sip"]["last_status"] = 0
+                else:
+                    self.state["softphone"]["state"] = "in_call"
+                    self.state["audio"].update({"rx_ready": True, "owner": "intercom", "browser_tx_ready_latency_ms": 0})
+                    self.state["sip"]["last_status"] = 200
+                    self.state["ha_answer_pending"] = False
             if self.state["esp"]["state"] == "ringing":
                 self.state["esp"]["state"] = "in_call"
                 self.state["audio"].update({"tx_ready": True, "rx_ready": True, "owner": "intercom"})
@@ -74,6 +117,12 @@ class ContractSimulator:
 
     def inject_fault(self, name: str) -> dict[str, Any]:
         self.state["fault"] = {"name": name}
+        return self.get_snapshot()
+
+    def inject_pcm(self) -> dict[str, Any]:
+        self.state["audio"]["tx_ready"] = True
+        self.state["audio"]["tx_frames"] += 1
+        self._write_audio_marker("inject_pcm")
         return self.get_snapshot()
 
     def inject_event(self, **event: Any) -> dict[str, Any]:
@@ -103,6 +152,14 @@ class ContractSimulator:
             self.state["softphone"].update({"state": "idle", "last_reason": reason})
         elif typ == "browser_audio_ready":
             self.state["audio"].update({"tx_ready": True, "rx_ready": True})
+            self.state["audio"]["tx_frames"] += 1
+            self.state["audio"]["browser_tx_ready_latency_ms"] = 0
+            self._write_audio_marker("browser_audio_ready")
+            if self.state.get("ha_answer_pending") and self.state["softphone"]["state"] == "ringing":
+                self.state["softphone"]["state"] = "in_call"
+                self.state["audio"]["owner"] = "intercom"
+                self.state["sip"]["last_status"] = 200
+                self.state["ha_answer_pending"] = False
         elif typ in {"esp_bye", "remote_bye"}:
             self.state["softphone"].update({"state": "idle", "last_reason": "remote_hangup"})
             self.state["card"].update({"rendered_state": "idle"})
@@ -123,6 +180,61 @@ class ContractSimulator:
             reason = str(event.get("reason") or "declined")
             self.state["esp"].update({"state": "idle", "last_reason": reason})
             self.state["softphone"].update({"state": "idle", "last_reason": reason})
+        elif typ == "mww_detected":
+            self.state["voice_assistant"].update(
+                {"state": "running", "phase": "wake", "wake_word": str(event.get("wake_word") or "okay_nabu")}
+            )
+            self.state["display"].update({"page": "voice_assistant", "status": "va_wake"})
+            self.state["voice_assistant"]["events"] += 1
+        elif typ == "va_start":
+            self.state["voice_assistant"].update({"state": "running", "phase": "starting"})
+            self.state["display"].update({"page": "voice_assistant", "status": "va_starting"})
+            self.state["voice_assistant"]["events"] += 1
+        elif typ == "va_listening":
+            self.state["voice_assistant"].update({"state": "running", "phase": "listening"})
+            self.state["display"].update({"page": "voice_assistant", "status": "va_listening"})
+            self.state["voice_assistant"]["events"] += 1
+        elif typ == "va_thinking":
+            self.state["voice_assistant"].update({"state": "running", "phase": "thinking"})
+            self.state["display"].update({"page": "voice_assistant", "status": "va_thinking"})
+            self.state["voice_assistant"]["events"] += 1
+        elif typ == "va_responding":
+            self.state["voice_assistant"].update({"state": "running", "phase": "responding"})
+            self.state["media"]["state"] = "playing"
+            self.state["display"].update({"page": "voice_assistant", "status": "va_responding"})
+            self.state["voice_assistant"]["events"] += 1
+        elif typ == "va_end":
+            self.state["voice_assistant"].update({"state": "idle", "phase": "idle", "wake_word": ""})
+            self.state["media"]["state"] = "idle"
+            self.state["audio"]["owner"] = "none"
+            self.state["display"].update({"page": "idle", "status": "idle"})
+            self.state["voice_assistant"]["events"] += 1
+        elif typ == "aec_frame":
+            value = int(event.get("processing_us") or 0)
+            self.state["aec"]["frames"] += 1
+            self.state["aec"]["last_processing_us"] = value
+            self.state["aec"]["max_processing_us"] = max(self.state["aec"]["max_processing_us"], value)
+        elif typ == "afe_frame":
+            value = int(event.get("latency_us") or 0)
+            self.state["afe"]["frames"] += 1
+            self.state["afe"]["last_latency_us"] = value
+            self.state["afe"]["max_latency_us"] = max(self.state["afe"]["max_latency_us"], value)
+        elif typ == "set_control":
+            control = str(event.get("control") or "")
+            value = bool(event.get("value"))
+            if control == "mic_muted":
+                self.state["controls"]["mic_muted"] = value
+            elif control == "speaker_muted":
+                self.state["controls"]["speaker_muted"] = value
+            elif control == "backlight":
+                self.state["display"]["backlight_on"] = value
+        elif typ == "display_page":
+            self.state["display"].update(
+                {
+                    "page": str(event.get("page") or self.state["display"]["page"]),
+                    "status": str(event.get("status") or self.state["display"]["status"]),
+                }
+            )
         elif typ == "callee_decline":
             reason = str(event.get("reason") or "declined")
             self.state["caller"].update({"state": "idle", "last_reason": reason})
@@ -183,6 +295,8 @@ class ContractSimulator:
             self.state["intercom"].update({"state": "ringing", "caller": caller})
             self.state["media"]["state"] = "paused"
             self.state["audio"]["owner"] = "intercom"
+            self.state["voice_assistant"].update({"state": "idle", "phase": "idle"})
+            self.state["display"].update({"page": "intercom", "status": "intercom_ringing"})
 
 
 def serve(socket_path: Path) -> int:

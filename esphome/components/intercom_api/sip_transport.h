@@ -18,24 +18,6 @@
 namespace esphome {
 namespace intercom_api {
 
-struct SipTransportSnapshot {
-  bool running{false};
-  bool rtp_running{false};
-  bool call_active{false};
-  bool pending_invite{false};
-  bool sip_tcp{false};
-  uint16_t remote_sip_port{0};
-  uint16_t remote_rtp_port{0};
-  AudioFormat selected_tx_format{DEFAULT_AUDIO_FORMAT};
-  AudioFormat selected_rx_format{DEFAULT_AUDIO_FORMAT};
-  uint32_t rtp_tx_packets{0};
-  uint32_t rtp_rx_packets{0};
-  uint32_t rtp_tx_bytes{0};
-  uint32_t rtp_rx_bytes{0};
-  uint16_t last_sip_status_code{0};
-  const char *last_sip_event{""};
-};
-
 class SipTransport : public SipPhoneTransport {
  public:
   static constexpr uint32_t kSipTaskStackBytes = 8192;
@@ -70,7 +52,7 @@ class SipTransport : public SipPhoneTransport {
   void set_remote(const std::string &ip, uint16_t port, uint16_t control_port = 0) override;
   void set_sip_signaling_transport(bool tcp) override;
   void set_audio_formats(const AudioFormatList &tx, const AudioFormatList &rx) override;
-  SipTransportSnapshot snapshot() const;
+  SipTransportSnapshot snapshot() const override;
 
  protected:
   enum class SipEvent : uint8_t {
@@ -104,7 +86,7 @@ class SipTransport : public SipPhoneTransport {
   bool handle_response_(const std::string &message, const sockaddr_in &src);
   std::string build_sdp_offer_() const;
   std::string build_sdp_answer_() const;
-  bool learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t fallback_ip);
+  bool learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t default_ip);
   bool local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) const;
   void reset_dialog_();
   void mark_sip_event_(SipEvent event, uint16_t status = 0);

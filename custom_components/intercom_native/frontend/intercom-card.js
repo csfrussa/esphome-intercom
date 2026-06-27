@@ -620,7 +620,6 @@ class IntercomCard extends HTMLElement {
   // Get current ESP state from entity
   _getEspState() {
     if (this._isHaSoftphoneMode()) return this._softphoneSnapshot?.state || "idle";
-    if (this._isConfiguredSoftphone()) return "idle";
     if (!this._hass || !this._intercomStateEntityId) return "unknown";
     const entity = this._hass.states[this._intercomStateEntityId];
     return entity?.state || "unknown";
@@ -753,13 +752,13 @@ class IntercomCard extends HTMLElement {
   _targetFromRosterEntry(entry) {
     const metadata = entry.metadata || {};
     const id = entry.id || entry.name;
+    const signaling = metadata.sip_transport || metadata.signaling_transport || "";
     return {
       device_id: id,
       name: entry.name || id,
       route_id: id,
       host: entry.address || "",
-      transport: metadata.transport || (entry.sip_uri ? "sip" : ""),
-      sip_transport: metadata.sip_transport || metadata.signaling_transport || "",
+      sip_transport: signaling,
       sip_uri: entry.sip_uri || "",
       number: entry.number || "",
       kind: entry.kind || "esp",
@@ -776,7 +775,9 @@ class IntercomCard extends HTMLElement {
 
   _normaliseTransport(value) {
     const v = String(value || "").trim().toLowerCase();
-    return (v === "tcp" || v === "udp" || v === "sip") ? v.toUpperCase() : "";
+    return (v === "tcp" || v === "udp" || v === "sip_tcp" || v === "sip_udp")
+      ? v.replace(/^sip_/, "").toUpperCase()
+      : "";
   }
 
   _transportFromEntity(entityId) {
@@ -810,7 +811,7 @@ class IntercomCard extends HTMLElement {
     if (direct) return direct;
     const device = this._activeDeviceInfo || this._availableDevices.find(d => this._deviceMatchesConfig(d));
     return this._transportFromEntity(device?.entities?.intercom_transport) ||
-           this._normaliseTransport(device?.transport);
+           this._normaliseTransport(device?.sip_transport);
   }
 
   _getOwnAudioMode() {
@@ -831,7 +832,7 @@ class IntercomCard extends HTMLElement {
       if (!this.config?.show_extended_info) return "HA - ESP";
       const target = this._getSoftphoneTargetDevice();
       const destTransport = this._transportFromEntity(target?.entities?.intercom_transport) ||
-                            this._normaliseTransport(target?.transport);
+                            this._normaliseTransport(target?.sip_transport);
       const destMode = this._audioModeLabel(this._normaliseAudioMode(target?.audio_mode));
       return destTransport ? `HA - ESP ${destTransport} ${destMode}` : `HA - ESP ${destMode}`;
     }
@@ -847,9 +848,7 @@ class IntercomCard extends HTMLElement {
   }
 
   _isSoftphoneContext() {
-    if (this._isHaSoftphoneMode()) return true;
-    if (this._isConfiguredSoftphone()) return true;
-    return false;
+    return this._isHaSoftphoneMode();
   }
 
   async _pressEspButton(entityId, label) {

@@ -101,18 +101,6 @@ Public call state is `SipPhoneState`:
 Snapshots include Call-ID/dialog identity, selected SDP/RTP formats, SIP status,
 terminal reason, RTP counters, and last SIP event.
 
-## Tools
-
-`tools/intercom_softphone` is the project SIP/RTP softphone for manual testing:
-
-```bash
-tools/intercom_softphone --call --name bench --address 192.168.1.47 --port 5060 \
-  --send tone --receive-file /tmp/rx.wav --log-file /tmp/sip.log
-```
-
-It can send tone or WAV audio, receive RTP to WAV, send `OPTIONS`, and log SIP/RTP
-traffic.
-
 ## Documentation
 
 Current operational docs:

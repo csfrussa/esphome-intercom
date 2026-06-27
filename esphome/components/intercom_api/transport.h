@@ -16,6 +16,24 @@ using TransportSipSignalCallback = void (*)(void *ctx, const SipSignal &signal);
 using TransportConnectionCallback = void (*)(void *ctx, bool connected);
 using TransportAcceptCallback = bool (*)(void *ctx);
 
+struct SipTransportSnapshot {
+  bool running{false};
+  bool rtp_running{false};
+  bool call_active{false};
+  bool pending_invite{false};
+  bool sip_tcp{false};
+  uint16_t remote_sip_port{0};
+  uint16_t remote_rtp_port{0};
+  AudioFormat selected_tx_format{DEFAULT_AUDIO_FORMAT};
+  AudioFormat selected_rx_format{DEFAULT_AUDIO_FORMAT};
+  uint32_t rtp_tx_packets{0};
+  uint32_t rtp_rx_packets{0};
+  uint32_t rtp_tx_bytes{0};
+  uint32_t rtp_rx_bytes{0};
+  uint16_t last_sip_status_code{0};
+  const char *last_sip_event{""};
+};
+
 /// Abstract SIP phone transport. IntercomApi composes one and never touches
 /// sockets directly.
 ///
@@ -62,8 +80,8 @@ class SipPhoneTransport {
   /// Used in dump_config / ESP_LOGCONFIG ("tcp", "udp", ...).
   virtual const char *transport_name() const = 0;
 
-  /// UDP retargets sendto. `port` is the audio port; `control_port` is
-  /// optional for short Name|IP|port contacts. TCP no-op.
+  /// Retarget the selected SIP peer. `port` is SIP signaling; `control_port`
+  /// carries RTP media port until the internal naming is fully collapsed.
   virtual void set_remote(const std::string &ip, uint16_t port, uint16_t control_port = 0) {}
 
   /// SIP-only: select TCP or UDP for SIP signaling. RTP media remains UDP.
@@ -85,6 +103,8 @@ class SipPhoneTransport {
   /// only here so an idle device isn't a passive PCM listener. TCP no-op.
   virtual bool start_audio_path() { return true; }
   virtual void stop_audio_path() {}
+
+  virtual SipTransportSnapshot snapshot() const { return {}; }
 
   // === Callbacks (set by IntercomApi before start()) ===
 

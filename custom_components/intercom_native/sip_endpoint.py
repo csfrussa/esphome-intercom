@@ -48,6 +48,8 @@ class SipEndpointManager:
         supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
+        udp_enabled: bool = True,
+        tcp_enabled: bool = True,
     ) -> None:
         self.host = host
         self.port = int(port)
@@ -58,45 +60,63 @@ class SipEndpointManager:
         self.supported_recv_formats = supported_recv_formats
         self.on_invite = on_invite
         self.on_terminated = on_terminated
+        self.udp_enabled = bool(udp_enabled)
+        self.tcp_enabled = bool(tcp_enabled)
         self.udp_server: SipUdpServer | None = None
         self.tcp_server: SipTcpServer | None = None
 
     async def start(self) -> bool:
-        if self.udp_server is not None and self.tcp_server is not None:
+        if not self.udp_enabled and not self.tcp_enabled:
+            _LOGGER.error("Cannot start SIP endpoint manager: no signaling transport is enabled")
+            return False
+        if (
+            (not self.udp_enabled or self.udp_server is not None)
+            and (not self.tcp_enabled or self.tcp_server is not None)
+        ):
             return True
 
-        udp = SipUdpServer(
-            host=self.host,
-            port=self.port,
-            local_ip=self.local_ip,
-            local_rtp_port=self.local_rtp_port,
-            supported_formats=self.supported_formats,
-            supported_send_formats=self.supported_send_formats,
-            supported_recv_formats=self.supported_recv_formats,
-            on_invite=self.on_invite,
-            on_terminated=self.on_terminated,
-        )
-        if not await udp.start():
-            return False
+        udp: SipUdpServer | None = None
+        tcp: SipTcpServer | None = None
+        if self.udp_enabled:
+            udp = SipUdpServer(
+                host=self.host,
+                port=self.port,
+                local_ip=self.local_ip,
+                local_rtp_port=self.local_rtp_port,
+                supported_formats=self.supported_formats,
+                supported_send_formats=self.supported_send_formats,
+                supported_recv_formats=self.supported_recv_formats,
+                on_invite=self.on_invite,
+                on_terminated=self.on_terminated,
+            )
+            if not await udp.start():
+                return False
 
-        tcp = SipTcpServer(
-            host=self.host,
-            port=self.port,
-            local_ip=self.local_ip,
-            local_rtp_port=self.local_rtp_port,
-            supported_formats=self.supported_formats,
-            supported_send_formats=self.supported_send_formats,
-            supported_recv_formats=self.supported_recv_formats,
-            on_invite=self.on_invite,
-            on_terminated=self.on_terminated,
-        )
-        if not await tcp.start():
-            await udp.stop()
-            return False
+        if self.tcp_enabled:
+            tcp = SipTcpServer(
+                host=self.host,
+                port=self.port,
+                local_ip=self.local_ip,
+                local_rtp_port=self.local_rtp_port,
+                supported_formats=self.supported_formats,
+                supported_send_formats=self.supported_send_formats,
+                supported_recv_formats=self.supported_recv_formats,
+                on_invite=self.on_invite,
+                on_terminated=self.on_terminated,
+            )
+            if not await tcp.start():
+                if udp is not None:
+                    await udp.stop()
+                return False
 
         self.udp_server = udp
         self.tcp_server = tcp
-        _LOGGER.info("SIP endpoint manager ready on UDP+TCP/%s", self.port)
+        transports = "+".join(
+            name
+            for name, enabled in (("UDP", self.udp_enabled), ("TCP", self.tcp_enabled))
+            if enabled
+        )
+        _LOGGER.info("SIP endpoint manager ready on %s/%s", transports, self.port)
         return True
 
     async def stop(self) -> None:

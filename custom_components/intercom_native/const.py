@@ -5,6 +5,8 @@ from pathlib import Path
 
 DOMAIN = "intercom_native"
 CONF_ASSIST_INTENTS = "assist_intents"
+CONF_SIP_TCP_ENABLED = "sip_tcp_enabled"
+CONF_SIP_UDP_ENABLED = "sip_udp_enabled"
 
 # Version from manifest.json
 _MANIFEST = Path(__file__).parent / "manifest.json"

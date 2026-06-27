@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include <esp_random.h>
 #include <esp_system.h>
 
 #include "esphome/core/hal.h"

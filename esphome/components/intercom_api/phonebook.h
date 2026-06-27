@@ -12,25 +12,16 @@
 namespace esphome {
 namespace intercom_api {
 
-enum class ContactProtocol : uint8_t {
+enum class ContactEndpointKind : uint8_t {
   UNKNOWN,
-  TCP,
-  UDP,
   SIP,
-  HA,
 };
 
-inline const char *contact_protocol_to_str(ContactProtocol protocol) {
-  switch (protocol) {
-    case ContactProtocol::TCP:
-      return "tcp";
-    case ContactProtocol::UDP:
-      return "udp";
-    case ContactProtocol::SIP:
+inline const char *contact_endpoint_kind_to_str(ContactEndpointKind endpoint_kind) {
+  switch (endpoint_kind) {
+    case ContactEndpointKind::SIP:
       return "sip";
-    case ContactProtocol::HA:
-      return "ha";
-    case ContactProtocol::UNKNOWN:
+    case ContactEndpointKind::UNKNOWN:
     default:
       return "unknown";
   }
@@ -38,16 +29,16 @@ inline const char *contact_protocol_to_str(ContactProtocol protocol) {
 
 /// One phonebook slot. Empty ip/port = no endpoint yet (name-only placeholder).
 /// SIP phonebook entries:
-///   Name|sip|ip|sip_port|rtp_port[|audio_capability[|tx_formats|rx_formats[|sip_transport]]]
-/// Short explicit SIP rows are also accepted:
-///   Name|sip|ip|sip_port|rtp_port|sip_transport
+///   Name
+///   Name|host|sip_port|rtp_port|sip_udp
+///   Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
 /// missing_count tracks consecutive update cycles where this slot was not seen
 /// by any source; commit_cycle() advances/resets it and prunes once the
 /// configured threshold is hit. Default 0 keeps pruning disabled.
 struct ContactEntry {
   std::string name;
   std::string ip;
-  ContactProtocol protocol{ContactProtocol::UNKNOWN};
+  ContactEndpointKind endpoint_kind{ContactEndpointKind::UNKNOWN};
   uint16_t port{0};
   uint16_t control_port{0};
   bool sip_transport_tcp{false};
@@ -73,11 +64,8 @@ class Phonebook {
 
   /// `entry` grammar:
   ///   "Name"
-  ///   "Name|ip|port"
-  ///   "Name|ip|audio_port|control_port" (UDP complete endpoint)
-  ///   "Name|tcp|ip|port[|audio_capability]"
-  ///   "Name|udp|ip|audio_port|control_port[|audio_capability]"
-  ///   "Name|ha|ip|port[|control_port]"
+  ///   "Name|host|sip_port|rtp_port|sip_udp"
+  ///   "Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp"
   AddResult add_one(const std::string &entry) {
     ContactEntry incoming;
     if (!parse_entry_(entry, &incoming)) return AddResult::Rejected;
@@ -88,13 +76,13 @@ class Phonebook {
   }
 
   /// Parse one CSV slot without mutating the phonebook. Used by IntercomApi to
-  /// normalize the protocol-aware HA phonebook into a transport-local dial plan
+  /// normalize the HA phonebook into a transport-local dial plan
   /// before merge.
   static bool parse_entry(const std::string &entry, ContactEntry *out) {
     return parse_entry_(entry, out);
   }
-  static bool parse_protocol(const std::string &s, ContactProtocol *out) {
-    return parse_protocol_(s, out);
+  static bool parse_endpoint_kind(const std::string &s, ContactEndpointKind *out) {
+    return parse_endpoint_kind_(s, out);
   }
   static bool parse_u16(const std::string &s, uint16_t *out) {
     return parse_u16_(s, out);
@@ -254,9 +242,9 @@ class Phonebook {
     const auto *c = this->current();
     return c ? c->port : 0;
   }
-  ContactProtocol current_protocol() const {
+  ContactEndpointKind current_endpoint_kind() const {
     const auto *c = this->current();
-    return c ? c->protocol : ContactProtocol::UNKNOWN;
+    return c ? c->endpoint_kind : ContactEndpointKind::UNKNOWN;
   }
 
   /// Comma-separated list of names (no endpoints) for diagnostic publishing.
@@ -285,14 +273,14 @@ class Phonebook {
       }
       if (existing.ip == incoming.ip && existing.port == incoming.port &&
           existing.control_port == incoming.control_port &&
-          existing.protocol == incoming.protocol &&
+          existing.endpoint_kind == incoming.endpoint_kind &&
           existing.audio_capability == incoming.audio_capability) {
         return AddResult::Noop;
       }
       const bool was_unset = existing.ip.empty() && existing.port == 0 &&
                              existing.control_port == 0;
       existing.ip = incoming.ip;
-      existing.protocol = incoming.protocol;
+      existing.endpoint_kind = incoming.endpoint_kind;
       existing.port = incoming.port;
       existing.control_port = incoming.control_port;
       existing.sip_transport_tcp = incoming.sip_transport_tcp;
@@ -305,7 +293,7 @@ class Phonebook {
   }
 
   static bool same_entry_(const ContactEntry &a, const ContactEntry &b) {
-    return a.name == b.name && a.ip == b.ip && a.protocol == b.protocol &&
+    return a.name == b.name && a.ip == b.ip && a.endpoint_kind == b.endpoint_kind &&
            a.port == b.port && a.control_port == b.control_port &&
            a.sip_transport_tcp == b.sip_transport_tcp &&
            a.audio_capability == b.audio_capability;
@@ -331,116 +319,39 @@ class Phonebook {
     c.name = trim_(parts[0]);
     if (c.name.empty()) return false;
 
-    ContactProtocol protocol = ContactProtocol::UNKNOWN;
-    if (parts.size() >= 2 && parse_protocol_(trim_(parts[1]), &protocol)) {
-      if (!parse_typed_entry_(parts, protocol, &c)) return false;
-    } else {
-      if (!parse_short_entry_(parts, &c)) return false;
-    }
+    if (!parse_short_entry_(parts, &c)) return false;
 
     *out = std::move(c);
     return true;
   }
 
-  static bool parse_typed_entry_(const std::vector<std::string> &parts,
-                                 ContactProtocol protocol, ContactEntry *out) {
-    if (parts.size() < 4) return false;
-    out->protocol = protocol;
-    out->ip = trim_(parts[2]);
+  static bool parse_short_entry_(const std::vector<std::string> &parts, ContactEntry *out) {
+    if (parts.size() == 1) return true;
+    if (parts.size() != 5 && parts.size() != 8) return false;
+    out->endpoint_kind = ContactEndpointKind::SIP;
+    out->ip = trim_(parts[1]);
     if (out->ip.empty()) return false;
-
-    if (protocol == ContactProtocol::TCP) {
-      if (parts.size() != 4 && parts.size() != 5) return false;
-      if (!parse_u16_(trim_(parts[3]), &out->port)) return false;
-      if (parts.size() == 5) out->audio_capability = trim_(parts[4]);
+    if (!parse_u16_(trim_(parts[2]), &out->port) ||
+        !parse_u16_(trim_(parts[3]), &out->control_port)) {
+      return false;
+    }
+    const size_t transport_index = parts.size() == 8 ? 7 : 4;
+    if (parts.size() == 8) out->audio_capability = trim_(parts[4]);
+    const std::string transport = trim_(parts[transport_index]);
+    if (transport == "sip_tcp" || transport == "SIP_TCP") {
+      out->sip_transport_tcp = true;
       return true;
     }
-
-    if (protocol == ContactProtocol::UDP) {
-      if (parts.size() != 5 && parts.size() != 6) return false;
-      if (!parse_u16_(trim_(parts[3]), &out->port) ||
-          !parse_u16_(trim_(parts[4]), &out->control_port)) {
-        return false;
-      }
-      if (parts.size() == 6) out->audio_capability = trim_(parts[5]);
+    if (transport == "sip_udp" || transport == "SIP_UDP") {
+      out->sip_transport_tcp = false;
       return true;
     }
-
-    if (protocol == ContactProtocol::SIP) {
-      if (parts.size() < 5 || parts.size() > 9) return false;
-      if (!parse_u16_(trim_(parts[3]), &out->port) ||
-          !parse_u16_(trim_(parts[4]), &out->control_port)) {
-        return false;
-      }
-      if (parts.size() == 6) {
-        const std::string transport = trim_(parts[5]);
-        if (transport == "tcp" || transport == "TCP") {
-          out->sip_transport_tcp = true;
-        } else if (transport == "udp" || transport == "UDP" || transport.empty()) {
-          out->sip_transport_tcp = false;
-        } else {
-          out->audio_capability = transport;
-        }
-        return true;
-      }
-      if (parts.size() >= 6) out->audio_capability = trim_(parts[5]);
-      if (parts.size() >= 9) {
-        const std::string transport = trim_(parts[8]);
-        if (transport == "tcp" || transport == "TCP") {
-          out->sip_transport_tcp = true;
-        } else if (transport == "udp" || transport == "UDP" || transport.empty()) {
-          out->sip_transport_tcp = false;
-        } else {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (protocol == ContactProtocol::HA) {
-      if (parts.size() != 4 && parts.size() != 5 && parts.size() != 6) return false;
-      if (!parse_u16_(trim_(parts[3]), &out->port)) return false;
-      if (parts.size() == 5 && !parse_u16_(trim_(parts[4]), &out->control_port)) {
-        return false;
-      }
-      if (parts.size() == 6 && !parse_u16_(trim_(parts[5]), &out->control_port)) {
-        return false;
-      }
-      return true;
-    }
-
     return false;
   }
 
-  static bool parse_short_entry_(const std::vector<std::string> &parts, ContactEntry *out) {
-    if (parts.size() == 1) return true;
-    if (parts.size() < 2 || parts.size() > 4) return false;
-
-    out->ip = trim_(parts[1]);
-    if (parts.size() == 2) return true;
-    if (!parse_u16_(trim_(parts[2]), &out->port)) return false;
-    if (parts.size() == 4) {
-      if (!parse_u16_(trim_(parts[3]), &out->control_port)) return false;
-      out->protocol = ContactProtocol::UDP;
-    }
-    return true;
-  }
-
-  static bool parse_protocol_(const std::string &s, ContactProtocol *out) {
-    if (s == "tcp" || s == "TCP") {
-      *out = ContactProtocol::TCP;
-      return true;
-    }
-    if (s == "udp" || s == "UDP") {
-      *out = ContactProtocol::UDP;
-      return true;
-    }
+  static bool parse_endpoint_kind_(const std::string &s, ContactEndpointKind *out) {
     if (s == "sip" || s == "SIP") {
-      *out = ContactProtocol::SIP;
-      return true;
-    }
-    if (s == "ha" || s == "HA") {
-      *out = ContactProtocol::HA;
+      *out = ContactEndpointKind::SIP;
       return true;
     }
     return false;

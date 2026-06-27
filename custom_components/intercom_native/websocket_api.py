@@ -27,16 +27,6 @@ WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
 WS_TYPE_SET_HA_SOFTPHONE_DND = f"{DOMAIN}/set_ha_softphone_dnd"
 WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
 
-# Kept only as inert compatibility imports for __init__.py while the SIP
-# endpoint owns all real dialog/session state.
-_sessions: dict[str, object] = {}
-_bridges: dict[str, object] = {}
-
-
-def _session_pop(_selector: str) -> None:
-    return None
-
-
 def _ha_peer_name(hass: HomeAssistant) -> str:
     return (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
 
@@ -420,7 +410,6 @@ def _ha_softphone_device(hass: HomeAssistant) -> dict[str, Any]:
         "device_id": HA_SOFTPHONE_DEVICE_ID,
         "name": _ha_peer_name(hass),
         "host": "",
-        "transport": "sip",
         "sip_transport": "udp+tcp",
         "softphone": True,
         "ha_softphone": state,
@@ -430,7 +419,7 @@ def _ha_softphone_device(hass: HomeAssistant) -> dict[str, Any]:
 async def _get_intercom_devices(hass: HomeAssistant) -> list[dict[str, Any]]:
     from .device_resolver import get_resolver
 
-    return await get_resolver(hass).async_devices()
+    return await get_resolver(hass).list_devices()
 
 
 def async_register_websocket_api(hass: HomeAssistant) -> None:

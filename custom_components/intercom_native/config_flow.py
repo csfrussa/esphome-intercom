@@ -7,6 +7,8 @@ from homeassistant.helpers.selector import BooleanSelector, NumberSelector, Numb
 
 from .const import (
     CONF_ASSIST_INTENTS,
+    CONF_SIP_TCP_ENABLED,
+    CONF_SIP_UDP_ENABLED,
     DOMAIN,
     INTERCOM_RTP_PORT,
     INTERCOM_SIP_PORT,
@@ -25,14 +27,15 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input=None):
         """Handle install/reconfigure of the single Intercom Native entry.
 
-        SIP is the only HA call-control transport. HA listens as a SIP
-        softphone/B2BUA; ESP devices choose SIP UDP or SIP TCP in their own
-        `intercom_api.protocol` option.
+        SIP is the only HA call-control protocol. HA is always both a
+        softphone and SIP router/B2BUA; these toggles only choose which SIP
+        signaling transports HA listens on.
         """
         current_entry = next(iter(self._async_current_entries()), None)
         existing = current_entry.data if current_entry else {}
         defaults = {
-            "use_sip": existing.get("use_sip", True),
+            CONF_SIP_TCP_ENABLED: existing.get(CONF_SIP_TCP_ENABLED, True),
+            CONF_SIP_UDP_ENABLED: existing.get(CONF_SIP_UDP_ENABLED, False),
             "sip_port": existing.get("sip_port", INTERCOM_SIP_PORT),
             "rtp_port": existing.get("rtp_port", INTERCOM_RTP_PORT),
             "advertise_host": existing.get("advertise_host", ""),
@@ -40,7 +43,14 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         schema = vol.Schema(
             {
-                vol.Required("use_sip", default=defaults["use_sip"]): BooleanSelector(),
+                vol.Required(
+                    CONF_SIP_TCP_ENABLED,
+                    default=defaults[CONF_SIP_TCP_ENABLED],
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_SIP_UDP_ENABLED,
+                    default=defaults[CONF_SIP_UDP_ENABLED],
+                ): BooleanSelector(),
                 vol.Required("sip_port", default=defaults["sip_port"]): _port_selector(),
                 vol.Required("rtp_port", default=defaults["rtp_port"]): _port_selector(),
                 vol.Optional("advertise_host", default=defaults["advertise_host"]): str,
@@ -58,8 +68,8 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input[k] = int(user_input[k])
             user_input["advertise_host"] = (user_input.get("advertise_host") or "").strip()
 
-            if not user_input["use_sip"]:
-                errors["base"] = "sip_required"
+            if not (user_input[CONF_SIP_TCP_ENABLED] or user_input[CONF_SIP_UDP_ENABLED]):
+                errors["base"] = "sip_transport_required"
             elif current_entry is not None:
                 return self.async_update_reload_and_abort(
                     current_entry,

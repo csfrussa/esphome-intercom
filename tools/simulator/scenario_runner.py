@@ -59,6 +59,27 @@ def _expect(snapshot: dict[str, Any], expected: dict[str, Any], prefix: str = ""
                 raise AssertionError(f"{path}: expected {value!r}, got {actual!r}")
 
 
+def _expect_file(spec: dict[str, Any]) -> None:
+    path = Path(str(spec.get("path") or ""))
+    if not path:
+        raise RuntimeError("expect_file requires path")
+    if bool(spec.get("exists", True)) and not path.exists():
+        raise AssertionError(f"{path}: expected file to exist")
+    if not path.exists():
+        return
+    size = path.stat().st_size
+    if "min_bytes" in spec and size < int(spec["min_bytes"]):
+        raise AssertionError(f"{path}: expected at least {spec['min_bytes']} bytes, got {size}")
+    if "max_bytes" in spec and size > int(spec["max_bytes"]):
+        raise AssertionError(f"{path}: expected at most {spec['max_bytes']} bytes, got {size}")
+    contains = spec.get("contains")
+    if contains is not None:
+        data = path.read_bytes()
+        needle = str(contains).encode("utf-8")
+        if needle not in data:
+            raise AssertionError(f"{path}: expected to contain {contains!r}")
+
+
 def _run_step(socket_path: Path, step: dict[str, Any]) -> None:
     if "press_button" in step:
         call(socket_path, "press_button", button=step["press_button"])
@@ -73,12 +94,19 @@ def _run_step(socket_path: Path, step: dict[str, Any]) -> None:
         if not isinstance(event, dict):
             raise RuntimeError("inject_event must be a mapping")
         call(socket_path, "inject_event", **event)
+    elif "inject_pcm" in step:
+        call(socket_path, "inject_pcm")
     elif "expect" in step:
         expected = step["expect"]
         if not isinstance(expected, dict):
             raise RuntimeError("expect must be a mapping")
         snapshot = call(socket_path, "get_snapshot")
         _expect(snapshot, expected)
+    elif "expect_file" in step:
+        spec = step["expect_file"]
+        if not isinstance(spec, dict):
+            raise RuntimeError("expect_file must be a mapping")
+        _expect_file(spec)
     else:
         raise RuntimeError(f"unknown step: {step!r}")
 

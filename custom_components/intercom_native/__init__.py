@@ -22,6 +22,8 @@ from homeassistant.components import network
 
 from .const import (
     CONF_ASSIST_INTENTS,
+    CONF_SIP_TCP_ENABLED,
+    CONF_SIP_UDP_ENABLED,
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
@@ -49,8 +51,6 @@ from .websocket_api import (
     _ha_softphone_state,
     _ha_softphone_store,
     _set_ha_softphone_call_state,
-    _session_pop,
-    _sessions,
 )
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -181,7 +181,8 @@ def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
     """Normalised SIP/RTP config."""
     data = entry.data if entry is not None else {}
     return {
-        "use_sip": data.get("use_sip", True),
+        CONF_SIP_TCP_ENABLED: bool(data.get(CONF_SIP_TCP_ENABLED, True)),
+        CONF_SIP_UDP_ENABLED: bool(data.get(CONF_SIP_UDP_ENABLED, False)),
         "sip_port": int(data.get("sip_port", INTERCOM_SIP_PORT)),
         "rtp_port": int(data.get("rtp_port", INTERCOM_RTP_PORT)),
         "advertise_host": (data.get("advertise_host") or "").strip(),
@@ -193,7 +194,8 @@ def _get_transport_config(hass: HomeAssistant) -> dict:
     return hass.data.get(DOMAIN, {}).get(
         "transport_config",
         {
-            "use_sip": True,
+            CONF_SIP_TCP_ENABLED: True,
+            CONF_SIP_UDP_ENABLED: False,
             "sip_port": INTERCOM_SIP_PORT,
             "rtp_port": INTERCOM_RTP_PORT,
             "advertise_host": "",
@@ -235,63 +237,6 @@ def _available_esphome_services(hass: HomeAssistant) -> set[str]:
     if isinstance(services, dict):
         return set(services)
     return set(services or [])
-
-
-def _resolve_esphome_service_slug(
-    hass: HomeAssistant,
-    route_slug: str,
-    action: str,
-) -> str:
-    """Map a route_id slug to the actual ESPHome action service prefix.
-
-    ESPHome service prefixes can lag behind a flashed node-name change until
-    HA's ESPHome config entry is cleaned up. Keep the phonebook/control path
-    resilient by falling back to a compatible registered service prefix.
-    """
-    if not route_slug:
-        return ""
-    services = _available_esphome_services(hass)
-    direct = f"{route_slug}_{action}"
-    if direct in services:
-        return route_slug
-
-    suffix = f"_{action}"
-    candidates: list[str] = []
-    for service in services:
-        if not service.endswith(suffix):
-            continue
-        candidate = service[:-len(suffix)]
-        if candidate == route_slug or candidate.startswith(f"{route_slug}_"):
-            candidates.append(candidate)
-
-    if not candidates:
-        return route_slug
-
-    candidates.sort(key=lambda item: (abs(len(item) - len(route_slug)), len(item), item))
-    resolved = candidates[0]
-    _LOGGER.warning(
-        "ESPHome service esphome.%s not registered; using esphome.%s instead",
-        direct,
-        f"{resolved}_{action}",
-    )
-    return resolved
-
-
-def _bridge_for_device(device_id: str):
-    """Return any live/setup bridge involving `device_id`.
-
-    During bridge setup `_active` is still false, but the device is already
-    reserved. Treating setup as busy prevents a second INVITE from stealing or
-    tearing down the in-flight call.
-    """
-    return next(
-        (
-            bridge
-            for bridge in _bridges.values()
-            if bridge.source_device_id == device_id or bridge.dest_device_id == device_id
-        ),
-        None,
-    )
 
 
 def _state_entity_is_busy(hass: HomeAssistant, device: dict) -> bool:
@@ -497,14 +442,41 @@ async def _press_device_button(hass: HomeAssistant, device: dict, key: str, labe
         return False
 
 
-def _device_has_ha_call(device_id: str) -> bool:
-    """True when HA already owns a session/bridge leg for this device."""
-    return device_id in _sessions or _bridge_for_device(device_id) is not None
+async def _call_esphome_action(hass: HomeAssistant, device: dict, action: str, data: dict | None = None) -> None:
+    """Invoke a native ESPHome action exposed by the selected SIP phone."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    route_id = str(device.get("route_id") or "").strip()
+    if not route_id:
+        raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no ESPHome service route")
+    service = f"{route_id}_{action}"
+    if not hass.services.has_service("esphome", service):
+        raise ServiceValidationError(f"ESPHome service esphome.{service} is not available")
+    await hass.services.async_call("esphome", service, data or {}, blocking=True)
+    _LOGGER.info("ESP SIP phone %s action=%s data=%s", device.get("name"), action, data or {})
+
+
+def _has_esphome_action(hass: HomeAssistant, device: dict, action: str) -> bool:
+    route_id = str(device.get("route_id") or "").strip()
+    return bool(route_id and hass.services.has_service("esphome", f"{route_id}_{action}"))
+
+
+async def _resolve_command_phone(hass: HomeAssistant, call: ServiceCall) -> dict | None:
+    """Resolve an optional ESP phone selector for sip_* services.
+
+    No selector means the command targets the HA softphone. A selector in
+    source/source_device_id/source_name or the usual HA target fields means the
+    command is a mirror action on that ESP SIP phone.
+    """
+    source = await _resolve_source_device_from_call(hass, call)
+    if source is not None:
+        return source
+    return await _resolve_target_device(hass, call)
 
 
 def _device_transport(hass: HomeAssistant, d: dict, udp_manager=None) -> str:
     """Read the endpoint-declared SIP signaling transport."""
-    value = str(d.get("sip_transport") or d.get("transport") or "").lower()
+    value = str(d.get("sip_transport") or "").lower()
     return value if value in ("udp", "tcp") else _select_transport_type(hass, d.get("host"))
 
 
@@ -531,10 +503,6 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             device=d,
             name=name,
             host=host,
-            transport="sip",
-            tcp_port=0,
-            udp_audio_port=0,
-            udp_control_port=0,
             sip_port=int(d.get("sip_port") or cfg["sip_port"]),
             rtp_port=int(d.get("rtp_port") or cfg["rtp_port"]),
             audio_mode=d.get("audio_mode", "full_duplex"),
@@ -549,10 +517,6 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             device=None,
             name=_ha_peer_name(hass),
             host=ha_host,
-            transport="sip",
-            tcp_port=0,
-            udp_audio_port=0,
-            udp_control_port=0,
             sip_port=cfg["sip_port"],
             rtp_port=cfg["rtp_port"],
             audio_mode="full_duplex",
@@ -576,9 +540,10 @@ def _format_entry_unified(peer: Peer) -> str:
     sip_transport = str((peer.device or {}).get("sip_transport") or "tcp").lower()
     if sip_transport not in {"tcp", "udp"}:
         sip_transport = "tcp"
+    sip_transport_token = "sip_tcp" if sip_transport == "tcp" else "sip_udp"
     return (
-        f"{name}|sip|{peer_ip}|{peer.sip_port or 5060}|"
-        f"{peer.rtp_port or 40000}|{peer.audio_mode}|{tx}|{rx}|{sip_transport}"
+        f"{name}|{peer_ip}|{peer.sip_port or 5060}|"
+        f"{peer.rtp_port or 40000}|{peer.audio_mode}|{tx}|{rx}|{sip_transport_token}"
     )
 
 
@@ -777,6 +742,14 @@ async def _handle_purge_devices_service(call: ServiceCall) -> None:
 
 async def _handle_sip_answer_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
+    device = await _resolve_command_phone(hass, call)
+    if device is not None:
+        # On ESP phones the Call button is the local answer control while ringing.
+        if not await _press_device_button(hass, device, "call", "SIP answer"):
+            from homeassistant.exceptions import ServiceValidationError
+
+            raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no answer/call button")
+        return
     call_id = str(call.data.get("call_id") or "").strip()
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
@@ -822,6 +795,16 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
 
 async def _handle_sip_decline_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
+    device = await _resolve_command_phone(hass, call)
+    if device is not None:
+        reason = str(call.data.get("reason") or call.data.get("decline_reason") or "").strip()
+        if _has_esphome_action(hass, device, "decline_call"):
+            await _call_esphome_action(hass, device, "decline_call", {"reason": reason})
+        elif not await _press_device_button(hass, device, "decline", "SIP decline"):
+            from homeassistant.exceptions import ServiceValidationError
+
+            raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no decline control")
+        return
     call_id = str(call.data.get("call_id") or "").strip()
     status = int(call.data.get("status") or 486)
     reason = str(call.data.get("reason") or "Busy Here").strip() or "Busy Here"
@@ -868,6 +851,16 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
 
 async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
+    device = await _resolve_command_phone(hass, call)
+    if device is not None:
+        reason = str(call.data.get("reason") or "local_hangup").strip()
+        if _has_esphome_action(hass, device, "decline_call"):
+            await _call_esphome_action(hass, device, "decline_call", {"reason": reason})
+        elif not await _press_device_button(hass, device, "decline", "SIP hangup"):
+            from homeassistant.exceptions import ServiceValidationError
+
+            raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no hangup/decline control")
+        return
     call_id = str(call.data.get("call_id") or "").strip()
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(
@@ -884,10 +877,17 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     clients = bucket.setdefault("sip_clients", {})
     relays = bucket.setdefault("sip_relays", {})
     pending = bucket.setdefault("sip_pending", {})
+    softphone_store = _ha_softphone_store(hass)
     if not call_id and len(clients) == 1:
         call_id = next(iter(clients))
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
+    if not call_id:
+        call_id = str(softphone_store.get("call_id") or softphone_store.get("last_terminal_call_id") or "").strip()
+    caller = str(softphone_store.get("caller") or softphone_store.get("last_terminal_caller") or "")
+    callee = str(softphone_store.get("callee") or softphone_store.get("last_terminal_callee") or "")
+    peer_name = str(softphone_store.get("peer_name") or softphone_store.get("last_terminal_peer_name") or "")
+    direction = str(softphone_store.get("direction") or softphone_store.get("last_terminal_direction") or "")
     client = clients.pop(call_id, None) if call_id else None
     relay = relays.pop(call_id, None) if call_id else None
     pending_ids = [call_id] if call_id and call_id in pending else ([] if call_id else list(pending))
@@ -932,6 +932,19 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
                 if not call_id:
                     call_id = "(active)"
                 break
+    _set_ha_softphone_call_state(
+        hass,
+        CallState.IDLE.value,
+        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        caller=caller,
+        callee=callee,
+        peer_name=peer_name,
+        direction=direction,
+        call_id=call_id,
+        reason=TerminalReason.LOCAL_HANGUP.value,
+        origin="self",
+        last_sip_event="SIP_BYE" if (client is not None or relay is not None or server_bye) else "SIP_HANGUP",
+    )
     _fire_call_event(
         hass,
         {
@@ -982,8 +995,7 @@ async def _push_roster_json_to_esps(hass: HomeAssistant, roster_json: str) -> No
         if not slug:
             _LOGGER.debug("Phonebook push skipped for %s: no ESPHome route id", device.get("name"))
             continue
-        service_slug = _resolve_esphome_service_slug(hass, slug, "set_roster_json")
-        service_name = f"{service_slug}_set_roster_json"
+        service_name = f"{slug}_set_roster_json"
         if service_name not in services:
             _LOGGER.debug("Phonebook push skipped for %s: missing esphome.%s", device.get("name"), service_name)
             continue
@@ -1021,7 +1033,6 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
     metadata = {
         key: _metadata_value(key)
         for key in (
-            "transport",
             "sip_transport",
             "signaling_transport",
             "sip_port",
@@ -1035,7 +1046,6 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
         )
         if key in call.data and _metadata_value(key) is not None
     }
-    metadata["transport"] = "sip"
     entry = RosterEntry(
         id=entry_id,
         name=name,
@@ -1139,11 +1149,19 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     from .sip_client import SipCallClient
 
     hass: HomeAssistant = call.hass
+    source = await _resolve_source_device_from_call(hass, call)
+    dest_device = None if source is not None else await _resolve_target_device(hass, call)
     target = str(
         call.data.get("destination") or call.data.get("target") or call.data.get("call") or ""
     ).strip()
+    if not target and dest_device is not None:
+        target = str(dest_device.get("name") or "").strip()
     if not target:
         raise ServiceValidationError("target is required")
+    if source is not None:
+        await _call_esphome_action(hass, source, "start_call", {"dest": target})
+        _LOGGER.info("ESP SIP phone %s originating call to %s", source.get("name"), target)
+        return
     cfg = _get_transport_config(hass)
     local_ip = await _ha_advertise_host(hass)
     if not local_ip:
@@ -1371,11 +1389,21 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         extra=vol.PREVENT_EXTRA,
     )
     sip_answer_schema = vol.Schema(
-        {vol.Optional("call_id", default=""): cv.string},
+        {
+            **target_fields,
+            vol.Optional("source"): cv.string,
+            vol.Optional("source_device_id"): cv.string,
+            vol.Optional("source_name"): cv.string,
+            vol.Optional("call_id", default=""): cv.string,
+        },
         extra=vol.PREVENT_EXTRA,
     )
     sip_decline_schema = vol.Schema(
         {
+            **target_fields,
+            vol.Optional("source"): cv.string,
+            vol.Optional("source_device_id"): cv.string,
+            vol.Optional("source_name"): cv.string,
             vol.Optional("call_id", default=""): cv.string,
             vol.Optional("status", default=486): vol.Coerce(int),
             vol.Optional("reason", default="Busy Here"): cv.string,
@@ -1384,11 +1412,22 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         extra=vol.PREVENT_EXTRA,
     )
     sip_hangup_schema = vol.Schema(
-        {vol.Optional("call_id", default=""): cv.string},
+        {
+            **target_fields,
+            vol.Optional("source"): cv.string,
+            vol.Optional("source_device_id"): cv.string,
+            vol.Optional("source_name"): cv.string,
+            vol.Optional("call_id", default=""): cv.string,
+            vol.Optional("reason", default="local_hangup"): cv.string,
+        },
         extra=vol.PREVENT_EXTRA,
     )
     sip_call_schema = vol.Schema(
         {
+            **target_fields,
+            vol.Optional("source"): cv.string,
+            vol.Optional("source_device_id"): cv.string,
+            vol.Optional("source_name"): cv.string,
             vol.Optional("call_id", default=""): cv.string,
             vol.Optional("destination"): cv.string,
             vol.Optional("target"): cv.string,
@@ -1421,7 +1460,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             vol.Optional("sip_uri", default=""): cv.string,
             vol.Optional("number", default=""): cv.string,
             vol.Optional("ha_bridge", default=False): cv.boolean,
-            vol.Optional("transport", default="sip"): vol.Any("", vol.In(["sip"])),
             vol.Optional("sip_transport", default=""): vol.Any("", vol.In(["tcp", "udp"])),
             vol.Optional("signaling_transport", default=""): vol.Any("", vol.In(["tcp", "udp"])),
             vol.Optional("sip_port"): vol.Coerce(int),
@@ -1515,7 +1553,8 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Intercom Native defaults from configuration.yaml."""
     hass.data.setdefault(DOMAIN, {})["transport_config"] = {
-        "use_sip": True,
+        CONF_SIP_TCP_ENABLED: True,
+        CONF_SIP_UDP_ENABLED: False,
         "sip_port": INTERCOM_SIP_PORT,
         "rtp_port": INTERCOM_RTP_PORT,
     }
@@ -1534,12 +1573,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         bool(entry.data.get(CONF_ASSIST_INTENTS, False)),
     )
-    if cfg["use_sip"]:
-        if not await _async_start_sip_udp_server(hass):
-            raise ConfigEntryError(
-                f"Failed to bind SIP port {cfg['sip_port']}. Another SIP "
-                "endpoint may already be listening on that port."
-            )
+    if not await _async_start_sip_endpoint(hass):
+        raise ConfigEntryError(
+            f"Failed to bind SIP port {cfg['sip_port']}. Another SIP "
+            "endpoint may already be listening on that port."
+        )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -1554,7 +1592,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .websocket_api import _async_shutdown_all
     await _async_shutdown_all()
 
-    await _async_stop_sip_udp_server(hass)
+    await _async_stop_sip_endpoint(hass)
     unsub = hass.data.get(DOMAIN, {}).pop("esp_state_event_bridge_unsub", None)
     if unsub is not None:
         unsub()
@@ -1562,8 +1600,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
-    """Bind the SIP/UDP endpoint for standards-compatible phase-1 calls."""
+async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
+    """Bind the enabled SIP signaling listeners for HA softphone/PBX calls."""
     from .roster import RosterEntry, resolve_target
     from .sdp import build_answer_directional
     from .sip import parse_sip_uri
@@ -1591,10 +1629,9 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                     kind="ha" if peer.is_ha else "esp",
                     address=peer.host,
                     metadata={
-                        "transport": "sip",
                         "sip_transport": (
                             str((peer.device or {}).get("sip_transport") or "tcp").lower()
-                            if peer.is_ha or peer.transport == "sip"
+                            if peer.is_ha or peer.device is not None
                             else ""
                         ),
                         "sip_port": peer.sip_port,
@@ -1882,13 +1919,17 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
             pending = hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending", {})
             active_dialogs = sum(_sip_active_dialog_count(item) for item in _sip_servers(hass))
-            if _sessions or pending or active_dialogs:
+            active_clients = len(hass.data.get(DOMAIN, {}).get("sip_clients", {}) or {})
+            active_relays = len(hass.data.get(DOMAIN, {}).get("sip_relays", {}) or {})
+            if pending or active_dialogs or active_clients or active_relays:
                 _LOGGER.info(
-                    "SIP INVITE from %s rejected: HA softphone is busy (sessions=%d pending=%d active_dialogs=%d)",
+                    "SIP INVITE from %s rejected: HA softphone is busy "
+                    "(pending=%d active_dialogs=%d clients=%d relays=%d)",
                     invite.caller or invite.source_host,
-                    len(_sessions),
                     len(pending),
                     active_dialogs,
+                    active_clients,
+                    active_relays,
                 )
                 _set_ha_softphone_call_state(
                     hass,
@@ -1968,7 +2009,6 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
                 )
         pending = bucket.setdefault("sip_pending", {})
         invite = pending.pop(call_id, None)
-        session = _session_pop(call_id) or _session_pop(HA_SOFTPHONE_DEVICE_ID)
         softphone_store = bucket.get("ha_softphone", {})
         softphone_call_id = str(softphone_store.get("call_id") or "")
         terminal_reason = reason or "remote_hangup"
@@ -1977,11 +2017,8 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
             if terminal_reason == TerminalReason.CANCELLED.value
             else CallState.IDLE.value
         )
-        if session is not None:
-            await session.stop(send_signaling=False)
         if (
             invite is not None
-            or session is not None
             or (call_id and softphone_call_id == call_id)
         ):
             _set_ha_softphone_call_state(
@@ -2036,17 +2073,27 @@ async def _async_start_sip_udp_server(hass: HomeAssistant) -> bool:
         supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
         on_invite=_on_invite,
         on_terminated=_on_terminated,
+        udp_enabled=bool(cfg.get(CONF_SIP_UDP_ENABLED, False)),
+        tcp_enabled=bool(cfg.get(CONF_SIP_TCP_ENABLED, True)),
     )
     if not await endpoint.start():
         return False
     hass.data[DOMAIN]["sip_endpoint"] = endpoint
     hass.data[DOMAIN]["sip_server"] = endpoint.udp_server
     hass.data[DOMAIN]["sip_tcp_server"] = endpoint.tcp_server
-    _LOGGER.info("SIP endpoint enabled on UDP+TCP/%s (RTP base %s)", cfg["sip_port"], cfg["rtp_port"])
+    transports = "+".join(
+        name
+        for name, enabled in (
+            ("UDP", bool(cfg.get(CONF_SIP_UDP_ENABLED, False))),
+            ("TCP", bool(cfg.get(CONF_SIP_TCP_ENABLED, True))),
+        )
+        if enabled
+    )
+    _LOGGER.info("SIP endpoint enabled on %s/%s (RTP base %s)", transports, cfg["sip_port"], cfg["rtp_port"])
     return True
 
 
-async def _async_stop_sip_udp_server(hass: HomeAssistant) -> None:
+async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
     hass.data.get(DOMAIN, {}).pop("sip_bridge_clients", None)
     relays = hass.data.get(DOMAIN, {}).pop("sip_relays", {})
     for relay in list(relays.values()):

@@ -5,14 +5,16 @@
         "title": "Intercom Native",
         "description": "Softphone SIP e bridge/router SIP per telefoni VoIP ESPHome.",
         "data": {
-          "use_sip": "Abilita endpoint SIP",
+          "sip_tcp_enabled": "Abilita SIP TCP",
+          "sip_udp_enabled": "Abilita SIP UDP",
           "sip_port": "Porta SIP",
           "rtp_port": "Porta RTP",
           "advertise_host": "Host/IP HA annunciato",
           "assist_intents": "Abilita intent Assist"
         },
         "data_description": {
-          "use_sip": "Ascolta SIP standard INVITE/OPTIONS/BYE/CANCEL su UDP e TCP.",
+          "sip_tcp_enabled": "Ascolta il signaling SIP su TCP. Attivo di default per softphone HA e routing PBX.",
+          "sip_udp_enabled": "Ascolta il signaling SIP su UDP. Attivalo quando ESP o softphone esterni chiamano HA via SIP UDP.",
           "sip_port": "Porta di ascolto dell'endpoint SIP HA.",
           "rtp_port": "Porta UDP RTP base per media e relay HA.",
           "advertise_host": "Override opzionale pubblicato nelle rubriche ESP. Usalo quando HA è dietro routing, NAT, LXC, VPN o più subnet e l'indirizzo annunciato automaticamente non è raggiungibile dagli ESP.",
@@ -21,7 +23,7 @@
       }
     },
     "error": {
-      "sip_required": "L'endpoint SIP deve essere abilitato."
+      "sip_transport_required": "Deve essere abilitato almeno un transport di signaling SIP."
     },
     "abort": {
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",

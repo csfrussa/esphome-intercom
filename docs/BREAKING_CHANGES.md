@@ -55,12 +55,12 @@ ESP endpoint publication now waits for a valid IPv4 address from ESPHome's
 network API and republishes on Wi-Fi or Ethernet IP events. Endpoint sensors
 should no longer publish incomplete rows before the board has a usable address.
 
-Inbound calls are now treated consistently across TCP and UDP: the callee does
-not require the caller to be present in its local phonebook. The phonebook is
-the outbound dial plan; inbound START already contains caller and destination
-identity. This matters for HA PBX bridges, routed subnets, VPN callers and
-manual protocol clients. If a custom automation previously assumed that an
-unknown inbound caller would be rejected by missing phonebook state, replace
+Inbound SIP calls are now treated consistently across SIP/TCP and SIP/UDP: the
+callee does not require the caller to be present in its local phonebook. The
+phonebook is the outbound dial plan; inbound INVITE already carries caller and
+destination identity. This matters for HA SIP bridges, routed subnets, VPN
+callers and direct SIP clients. If a custom automation previously assumed that
+an unknown inbound caller would be rejected by missing phonebook state, replace
 that policy with DND, routing rules or an explicit bridge/service check.
 
 Call-ended UI now preserves the real incoming caller through the terminal

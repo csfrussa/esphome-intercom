@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .audio_format import UDP_SAFE_PAYLOAD_BYTES, parse_audio_format_list
+from .audio_format import parse_audio_format_list
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,7 +69,8 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_intercom_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP intercom_api.
 
-    SIP: Name|sip|IP|sip_port|rtp_port[|audio_mode[|tx_formats|rx_formats[|sip_transport]]]
+    Name|host|sip_port|rtp_port|sip_udp
+    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
     """
     if not value:
         return None
@@ -77,11 +78,11 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
     if not text or text.lower() in ("unknown", "unavailable"):
         return None
     parts = [part.strip() for part in text.split("|")]
-    if len(parts) < 4:
+    if len(parts) not in (5, 8):
         return None
 
-    name, transport, host = parts[0], parts[1].lower(), parts[2]
-    if not name or not host or transport != "sip":
+    name, host = parts[0], parts[1]
+    if not name or not host:
         return None
 
     def parse_formats(first: int) -> tuple[str, list, list] | None:
@@ -94,27 +95,26 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
             return None
         return mode, tx_formats, rx_formats
 
-    if len(parts) not in (5, 6, 7, 8, 9):
-        return None
-    primary_port = _valid_port(parts[3])
-    secondary_port = _valid_port(parts[4])
+    primary_port = _valid_port(parts[2])
+    secondary_port = _valid_port(parts[3])
     if primary_port is None or secondary_port is None:
         return None
-    parsed_tail = parse_formats(5)
+    parsed_tail = parse_formats(4) if len(parts) == 8 else (
+        "full_duplex",
+        parse_audio_format_list(None),
+        parse_audio_format_list(None),
+    )
     if parsed_tail is None:
         return None
     mode, tx_formats, rx_formats = parsed_tail
-    sip_transport = parts[8].lower() if len(parts) > 8 else ""
-    if sip_transport not in ("tcp", "udp"):
-        sip_transport = ""
+    transport_token = parts[7].lower() if len(parts) == 8 else parts[4].lower()
+    if transport_token not in ("sip_tcp", "sip_udp"):
+        return None
+    sip_transport = "tcp" if transport_token == "sip_tcp" else "udp"
     return {
         "name": name,
-        "transport": "sip",
         "sip_transport": sip_transport,
         "host": host,
-        "tcp_port": None,
-        "udp_audio_port": None,
-        "udp_control_port": None,
         "sip_port": primary_port,
         "rtp_port": secondary_port,
         "audio_mode": mode,
@@ -238,14 +238,9 @@ class IntercomDeviceResolver:
                 "name": endpoint["name"],
                 "route_id": route_id,
                 "host": endpoint["host"],
-                "transport": endpoint["transport"],
-                "tcp_port": endpoint["tcp_port"],
-                "udp_audio_port": endpoint["udp_audio_port"],
-                "udp_control_port": endpoint["udp_control_port"],
                 "sip_port": endpoint.get("sip_port"),
                 "rtp_port": endpoint.get("rtp_port"),
                 "sip_transport": endpoint.get("sip_transport") or "",
-                "udp_max_payload": UDP_SAFE_PAYLOAD_BYTES,
                 "audio_mode": endpoint["audio_mode"],
                 "tx_formats": _format_tokens(endpoint["tx_formats"]),
                 "rx_formats": _format_tokens(endpoint["rx_formats"]),

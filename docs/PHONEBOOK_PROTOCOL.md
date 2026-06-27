@@ -13,6 +13,7 @@ intercom_api:
   phonebook:
     - name: Kitchen
       ip: 192.168.1.42
+      sip_transport: udp
       port: 5060
       rtp_port: 40000
     - name: Gate
@@ -25,13 +26,14 @@ on_press:
   - intercom_api.add_contacts:
       name: Kitchen
       ip: 192.168.1.42
+      sip_transport: udp
 ```
 
 Rules:
 
 - `name` is required.
-- `ip`, `port`, `rtp_port`, and `protocol` are optional.
-- If `protocol` is omitted, the contact uses the ESP phone signaling transport.
+- `ip`, `port`, `rtp_port`, and `sip_transport` are optional.
+- If `sip_transport` is omitted, the contact uses the ESP phone signaling transport.
 - Name-only entries are logical SIP targets and can be resolved or bridged by HA.
 
 ## HA Roster

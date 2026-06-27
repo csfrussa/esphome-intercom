@@ -85,7 +85,7 @@ preserves feature/package composition and replaces only the hardware layer:
 - MIPI/LVGL/touch/GPIO -> virtual display/input;
 - AFE/AEC hardware -> deterministic audio model.
 
-Initial generated outputs are stored under `yamls/generated/virtual/`.
+Generated local Host outputs are stored under `yamls/host/`.
 
 ## Required Commands
 

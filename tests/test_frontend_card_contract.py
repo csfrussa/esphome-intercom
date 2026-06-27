@@ -63,6 +63,7 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_ha_softphone_mode_is_the_only_softphone_context(self) -> None:
         body = _method_body(self.source, "_isSoftphoneContext")
         self.assertIn("this._isHaSoftphoneMode()", body)
+        self.assertNotIn("this._isConfiguredSoftphone()", body)
         self.assertNotIn("this._isHaName(this._getDestination())", body)
         self.assertNotIn('this._callMode === "mirror"', body)
 
@@ -71,15 +72,11 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('"esp_mirror"', body)
         self.assertNotIn('"hybrid"', body)
 
-    def test_sip_events_are_rendered_through_session_mirror(self) -> None:
+    def test_call_events_are_rendered_through_softphone_session_mirror(self) -> None:
         call_event = _method_body(self.source, "_onCallEvent")
-        self.assertIn('scope === "sip"', call_event)
-        self.assertIn('scope === "sip_bridge"', call_event)
-        self.assertIn("this._onSipStateEvent(event)", call_event)
-
-        sip_event = _method_body(self.source, "_onSipStateEvent")
-        self.assertIn('data.scope = "session"', sip_event)
-        self.assertIn("this._onSessionStateEvent({ data })", sip_event)
+        self.assertIn('scope === "session"', call_event)
+        self.assertIn("this._onSessionStateEvent(event)", call_event)
+        self.assertNotIn("_onSipStateEvent", self.source)
 
     def test_ha_softphone_targets_come_from_shared_roster(self) -> None:
         body = _method_body(self.source, "_softphoneTargets")
@@ -90,20 +87,22 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")
         ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]
-        self.assertIn("intercomEngine.answerHaSoftphone(sessionInfo", ha_answer)
-        self.assertIn("tx_format: this._sessionTxFormat", ha_answer)
+        self.assertIn('"intercom_native", "sip_answer"', ha_answer)
+        self.assertIn("call_id: this._sessionCallId()", ha_answer)
         self.assertNotIn('type: "intercom_native/answer"', ha_answer)
         self.assertNotIn("intercomEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID", ha_answer)
         self.assertNotIn("this._sessionDeviceId()", ha_answer)
 
         decline = _method_body(self.source, "async _decline")
         ha_decline = decline.split("if (this._isHaSoftphoneMode())", 1)[1].split("} else {", 1)[0]
-        self.assertIn('device_id: HA_SOFTPHONE_DEVICE_ID', ha_decline)
+        self.assertIn('"intercom_native", "sip_decline"', ha_decline)
+        self.assertIn("call_id: this._sessionCallId()", ha_decline)
         self.assertNotIn("this._sessionDeviceId()", ha_decline)
 
         hangup = _method_body(self.source, "async _hangup")
         softphone_hangup = hangup.split("if (wasSoftphone)", 1)[1].split("} else {", 1)[0]
-        self.assertIn("intercomEngine.stop(HA_SOFTPHONE_DEVICE_ID", softphone_hangup)
+        self.assertIn('"intercom_native", "sip_hangup"', softphone_hangup)
+        self.assertIn("call_id: this._sessionCallId()", softphone_hangup)
         self.assertNotIn("this._sessionDeviceId()", softphone_hangup)
 
 

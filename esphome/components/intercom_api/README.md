@@ -1,7 +1,8 @@
 # intercom_api
 
-`intercom_api` is the call-signaling and network transport component for the
-project intercom protocol. It does not own echo cancellation anymore.
+`intercom_api` is the ESP SIP phone component. It owns SIP signaling, SDP
+offer/answer, RTP media, phonebook selection and call snapshots. It does not
+own echo cancellation.
 
 It can run in two supported shapes:
 
@@ -30,23 +31,23 @@ The endpoint capability is inferred from the YAML wiring:
 | `speaker` only | `speaker_only` | Plays incoming audio; no mic TX task is created. |
 | neither mic nor speaker | `control_only` | Signaling/phonebook only. |
 
-The endpoint sensor appends the mode:
+The endpoint sensor publishes a SIP phone row. SIP is implicit; the final token
+selects signaling transport:
 
 ```text
-Name|tcp|192.168.1.40|6054|full_duplex
-Name|udp|192.168.1.41|6054|6055|speaker_only
+Name|192.168.1.40|5060|40000|sip_tcp
+Name|192.168.1.41|5060|40000|sip_udp
 ```
 
 It may also append per-direction audio capabilities:
 
 ```text
-Name|tcp|192.168.1.40|6054|full_duplex|16000:s16le:1:32|48000:s32le:1:20
-Name|udp|192.168.1.41|6054|6055|speaker_only|16000:s16le:1:32|16000:s16le:1:32
+Name|192.168.1.40|5060|40000|full_duplex|16000:s16le:1:32|48000:s32le:1:20|sip_tcp
+Name|192.168.1.41|5060|40000|speaker_only|16000:s16le:1:32|16000:s16le:1:32|sip_udp
 ```
 
 Home Assistant consumes these fields for routing/card display, format
-negotiation and avoiding audio directions that cannot exist. UDP formats must
-fit one complete PCM frame in one safe datagram; larger formats should use TCP.
+negotiation and avoiding audio directions that cannot exist.
 
 ## Compile-Time Shape
 
@@ -130,7 +131,7 @@ intercom_api:
   speaker: local_speaker
 ```
 
-These are first-class modes, not fallback hacks. They are useful for split
+These are first-class modes, not degraded modes. They are useful for split
 installations, paging speakers, monitor/listen devices, and hardware that
 already exposes only one audio direction.
 
@@ -192,10 +193,11 @@ intercom_api:
     - name: Cancello
 ```
 
-`name` is required. `ip`, `port`, `rtp_port`, and `protocol` are optional.
-When `protocol` is omitted, the contact uses the component SIP signaling
-transport (`protocol: udp` or `protocol: tcp`). A name-only contact is a logical
-target that can later be upgraded by the HA phonebook or routed through HA.
+`name` is required. `ip`, `port`, `rtp_port`, and `sip_transport` are optional.
+When `sip_transport` is omitted, the contact uses the component SIP signaling
+transport (`protocol: udp` or `protocol: tcp` on `intercom_api`). A name-only
+contact is a logical target that can later be upgraded by the HA phonebook or
+routed through HA.
 
 Each ESP publishes an `intercom_endpoint` text sensor. Home Assistant builds the
 central `sensor.intercom_phonebook` from those endpoints and adds itself as the
@@ -221,8 +223,7 @@ are on different routed subnets.
 
 ## SIP Automation Hooks
 
-The legacy state hooks still exist, but new SIP-aware hooks expose the call
-identity directly:
+SIP-aware hooks expose the call identity directly:
 
 ```yaml
 intercom_api:
@@ -275,7 +276,7 @@ stable names and UI layout.
 See:
 
 ```text
-yamls/experimental/native-dual-bus/generic-s3-native-dual-bus-intercom-tcp.yaml
+yamls/intercom-only/dual-bus/generic-s3-intercom.yaml
 ```
 
 That profile intentionally avoids `esp_audio_stack` and binds `intercom_api` to

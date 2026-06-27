@@ -387,8 +387,7 @@ async def to_code(config):
         if not data.wav_support:
             add_idf_sdkconfig_option("CONFIG_MICRO_DECODER_CODEC_WAV", False)
 
-    # Configure each codec library.
-    # Adds a define and IDF component for legacy `audio_decoder.cpp`.
+    # Configure each codec library for `audio_decoder.cpp`.
     if data.flac_support:
         cg.add_define("USE_AUDIO_FLAC_SUPPORT")
         add_idf_component(name="esphome/micro-flac", ref="0.2.0")

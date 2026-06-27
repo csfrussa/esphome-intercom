@@ -274,11 +274,9 @@ void IntercomApi::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeou
   if (state == CallState::CALLING &&
       now_ms - this->calling_start_time_ >= INVITE_NO_RESPONSE_TIMEOUT_MS) {
     bool saw_sip_response = false;
-#ifdef USE_INTERCOM_SIP_TRANSPORT
-    if (auto *sip = dynamic_cast<SipTransport *>(this->transport_.get())) {
-      saw_sip_response = sip->snapshot().last_sip_status_code != 0;
+    if (this->transport_ != nullptr) {
+      saw_sip_response = this->transport_->snapshot().last_sip_status_code != 0;
     }
-#endif
     if (!saw_sip_response) {
       const std::string cid = this->get_current_call_id_();
       ESP_LOGI(TAG, "SIP INVITE timeout after %u ms without response - ending call (call_id=%s)",
@@ -381,7 +379,6 @@ void IntercomApi::set_remote_endpoint(const std::string &ip, uint16_t port, uint
   this->remote_ip_ = ip;
   this->remote_port_ = port;
   this->remote_control_port_ = control_port;
-  // No-op on TCP.
   if (this->transport_ != nullptr) {
     this->transport_->set_remote(ip, port, control_port);
   }
@@ -460,25 +457,23 @@ std::string IntercomApi::build_endpoint_string_() const {
   const std::string tx = format_list_token(this->tx_audio_formats_);
   const std::string rx = format_list_token(this->rx_audio_formats_);
   char buf[768];
-  snprintf(buf, sizeof(buf), "%s | sip | %s | %u | %u | %s | %s | %s | %s", name.c_str(), ip.c_str(),
+  snprintf(buf, sizeof(buf), "%s|%s|%u|%u|%s|%s|%s|%s", name.c_str(), ip.c_str(),
            (unsigned) this->sip_port_, (unsigned) this->rtp_port_,
            this->audio_capability_(), tx.c_str(), rx.c_str(),
-           this->protocol_ == TransportType::TCP ? "tcp" : "udp");
+           this->protocol_ == TransportType::TCP ? "sip_tcp" : "sip_udp");
   return buf;
 }
 
 std::string IntercomApi::build_sip_snapshot_string_() const {
-  auto json_escape = [](const std::string &in) -> std::string {
+  auto field_escape = [](const std::string &in, size_t max_len = 32) -> std::string {
     std::string out;
     for (char ch : in) {
-      if (ch == '"' || ch == '\\') {
-        out.push_back('\\');
-        out.push_back(ch);
-      } else if (ch == '\r' || ch == '\n') {
+      if (ch == '\r' || ch == '\n' || ch == ';' || ch == '|') {
         out.push_back(' ');
       } else {
         out.push_back(ch);
       }
+      if (out.size() >= max_len) break;
     }
     return out;
   };
@@ -501,12 +496,6 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
     direction = this->last_terminal_direction_;
   }
   std::string contact = this->phonebook_.current_name();
-  std::string local_uri = "sip:" + this->device_route_id_ + "@" + this->local_ip_string_() + ":" + std::to_string(this->sip_port_);
-  std::string remote_uri;
-  if (!call.dest_name.empty() || !call.caller_name.empty()) {
-    const std::string remote = direction == "outgoing" ? call.dest_name : call.caller_name;
-    remote_uri = "sip:" + remote;
-  }
   uint32_t rtp_tx_packets = 0;
   uint32_t rtp_rx_packets = 0;
   uint32_t rtp_tx_bytes = 0;
@@ -515,9 +504,8 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
   const char *last_event = "";
   std::string selected_tx = IntercomApi::audio_format_token_(this->current_tx_audio_format_);
   std::string selected_rx = IntercomApi::audio_format_token_(this->current_rx_audio_format_);
-#ifdef USE_INTERCOM_SIP_TRANSPORT
-  if (auto *sip = dynamic_cast<SipTransport *>(this->transport_.get())) {
-    const SipTransportSnapshot snap = sip->snapshot();
+  if (this->transport_ != nullptr) {
+    const SipTransportSnapshot snap = this->transport_->snapshot();
     rtp_tx_packets = snap.rtp_tx_packets;
     rtp_rx_packets = snap.rtp_rx_packets;
     rtp_tx_bytes = snap.rtp_tx_bytes;
@@ -527,33 +515,26 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
     selected_tx = IntercomApi::audio_format_token_(snap.selected_tx_format);
     selected_rx = IntercomApi::audio_format_token_(snap.selected_rx_format);
   }
-#endif
-  char numeric[192];
-  snprintf(numeric, sizeof(numeric),
-           "\"sip_status_code\":%u,\"rtp_tx_packets\":%u,\"rtp_rx_packets\":%u,"
-           "\"rtp_tx_bytes\":%u,\"rtp_rx_bytes\":%u",
+  char out[256];
+  snprintf(out, sizeof(out),
+           "st=%s;id=%s;dir=%s;from=%s;to=%s;ct=%s;tr=%s;sc=%u;"
+           "tx=%s;rx=%s;pt=%u;pr=%u;bt=%u;br=%u;rs=%s;ev=%s",
+           field_escape(state, 18).c_str(),
+           field_escape(call.call_id, 24).c_str(),
+           field_escape(direction, 8).c_str(),
+           field_escape(call.caller_name, 20).c_str(),
+           field_escape(call.dest_name, 20).c_str(),
+           field_escape(contact, 20).c_str(),
+           this->protocol_ == TransportType::TCP ? "tcp" : "udp",
            (unsigned) sip_status,
+           field_escape(selected_tx, 20).c_str(),
+           field_escape(selected_rx, 20).c_str(),
            (unsigned) rtp_tx_packets,
            (unsigned) rtp_rx_packets,
            (unsigned) rtp_tx_bytes,
-           (unsigned) rtp_rx_bytes);
-  std::string out = "{";
-  out += "\"state\":\"" + json_escape(state) + "\"";
-  out += ",\"call_id\":\"" + json_escape(call.call_id) + "\"";
-  out += ",\"direction\":\"" + json_escape(direction) + "\"";
-  out += ",\"caller\":\"" + json_escape(call.caller_name) + "\"";
-  out += ",\"callee\":\"" + json_escape(call.dest_name) + "\"";
-  out += ",\"local_uri\":\"" + json_escape(local_uri) + "\"";
-  out += ",\"remote_uri\":\"" + json_escape(remote_uri) + "\"";
-  out += ",\"contact\":\"" + json_escape(contact) + "\"";
-  out += ",\"sip_transport\":\"" + std::string(this->protocol_ == TransportType::TCP ? "tcp" : "udp") + "\"";
-  out += ",";
-  out += numeric;
-  out += ",\"terminal_reason\":\"" + json_escape(this->last_reason_) + "\"";
-  out += ",\"selected_tx_format\":\"" + json_escape(selected_tx) + "\"";
-  out += ",\"selected_rx_format\":\"" + json_escape(selected_rx) + "\"";
-  out += ",\"last_sip_event\":\"" + json_escape(last_event) + "\"";
-  out += "}";
+           (unsigned) rtp_rx_bytes,
+           field_escape(this->last_reason_, 22).c_str(),
+           field_escape(last_event, 22).c_str());
   return out;
 }
 

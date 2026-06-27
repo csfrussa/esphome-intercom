@@ -95,8 +95,8 @@ SIP events are the source of truth for intercom state.
 - outgoing `INVITE` -> calling
 - incoming `INVITE` accepted -> ringing
 - `180` -> remote ringing
-- `200` + `ACK` -> connecting/streaming
-- `CANCEL` before answer -> cancelled, never streaming
+- `200` + `ACK` -> connecting/in_call
+- `CANCEL` before answer -> cancelled, never in_call
 - `BYE` -> disconnected
 - `486` -> busy
 - `488` -> media incompatible

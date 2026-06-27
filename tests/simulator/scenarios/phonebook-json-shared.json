@@ -1,6 +1,6 @@
 {
   "name": "phonebook-json-shared",
-  "description": "HA and ESP consume the same JSON roster contract without legacy list drift.",
+  "description": "HA and ESP consume the same JSON SIP roster contract without duplicate list drift.",
   "steps": [
     {
       "inject_event": {

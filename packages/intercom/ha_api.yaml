@@ -21,7 +21,7 @@ api:
     - delay: 1s
     - intercom_api.publish_entity_states: intercom
   actions:
-    # Card -> intercom_native.call(source=this) ends up here. Sets the
+    # Card/HA -> intercom_native.sip_call(source=this) ends up here. Sets the
     # current phonebook entry to `dest` and sends a SIP INVITE locally.
     - action: start_call
       variables:

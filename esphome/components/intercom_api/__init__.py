@@ -44,9 +44,9 @@ CONF_ON_UPDATE_CONTACTS = "on_update_contacts"
 CONF_DELETE_CONTACT_MISSING_FROM = "delete_contact_missing_from"
 CONF_UPDATES_NUMBER = "updates_number"
 CONF_HA_PHONEBOOK_TEXT_SENSOR_ID = "ha_phonebook_text_sensor_id"
-# HA publishes one protocol-aware roster at `sensor.intercom_phonebook`. The
-# shipped subscription package binds that HA text_sensor here; intercom_api then
-# normalizes each protocol-tagged slot into the local TCP or UDP dial plan.
+# HA publishes one SIP roster at `sensor.intercom_phonebook`. The shipped
+# subscription package binds that HA text_sensor here; intercom_api then
+# normalizes each contact into the local SIP/UDP or SIP/TCP dial plan.
 
 CONF_ON_RINGING = "on_ringing"
 CONF_ON_IN_CALL = "on_in_call"
@@ -63,6 +63,7 @@ CONF_REASON = "reason"
 
 # SIP signaling transport selection. RTP media is always UDP.
 CONF_PROTOCOL = "protocol"
+CONF_SIP_TRANSPORT = "sip_transport"
 CONF_REMOTE_IP = "remote_ip"
 CONF_REMOTE_PORT = "remote_port"
 CONF_LISTEN_PORT = "listen_port"
@@ -313,6 +314,18 @@ def _resolve_audio_format(config: dict, direction: str, value) -> dict:
 
     resolved = dict(value)
     if any(_is_auto(resolved[key]) for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS, CONF_FRAME_MS)):
+        if derived is None and all(
+            _is_auto(resolved[key]) for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS, CONF_FRAME_MS)
+        ) and (
+            (direction == CONF_TX and CONF_MICROPHONE not in config and CONF_MICROPHONE_SOURCE not in config) or
+            (direction == CONF_RX and CONF_SPEAKER not in config)
+        ):
+            return {
+                CONF_SAMPLE_RATE: 16000,
+                CONF_PCM_FORMAT: "s16le",
+                CONF_CHANNELS: 1,
+                CONF_FRAME_MS: 32,
+            }
         if derived is None:
             source = "microphone/source" if direction == CONF_TX else "speaker"
             raise cv.Invalid(
@@ -381,7 +394,7 @@ PHONEBOOK_CONTACT_SCHEMA = cv.Schema(
         cv.Optional(CONF_IP): cv.string,
         cv.Optional(CONF_PORT, default=5060): cv.port,
         cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.port,
-        cv.Optional(CONF_PROTOCOL): cv.one_of(PROTOCOL_UDP, PROTOCOL_TCP, lower=True),
+        cv.Optional(CONF_SIP_TRANSPORT): cv.one_of(PROTOCOL_UDP, PROTOCOL_TCP, lower=True),
     }
 )
 
@@ -402,8 +415,9 @@ def _phonebook_contact_entry(contact, default_protocol: str) -> str:
     ip = contact.get(CONF_IP, "")
     if not ip:
         return name
-    protocol = contact.get(CONF_PROTOCOL) or default_protocol
-    return f"{name}|sip|{ip}|{contact[CONF_PORT]}|{contact[CONF_RTP_PORT_ACTION]}|{protocol}"
+    transport = contact.get(CONF_SIP_TRANSPORT) or default_protocol
+    transport = "sip_tcp" if transport == PROTOCOL_TCP else "sip_udp"
+    return f"{name}|{ip}|{contact[CONF_PORT]}|{contact[CONF_RTP_PORT_ACTION]}|{transport}"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -426,9 +440,8 @@ CONFIG_SCHEMA = cv.Schema(
             _validate_phonebook_contact
         ),
         # On the first post-boot phonebook population, select the HA peer row
-        # learned from `Name|ha|...` as the current destination. This keeps a
-        # freshly booted ESP tuned to HA instead of whichever contact happens
-        # to be first in the HA-published CSV order.
+        # as the current destination so a freshly booted ESP is tuned to HA
+        # instead of whichever contact happens to be first in the roster order.
         cv.Optional(CONF_USE_HA_AS_FIRST_CONTACT, default=False): cv.boolean,
         # Targeted diagnostics: logs PCM peak/RMS on intercom TX/RX.
         # Keep disabled by default; enable only on devices under audio-level test.
@@ -629,7 +642,7 @@ def _final_validate(config):
             )
 
     # Check if esp_audio_stack is also configured
-    audio_stack_configs = full_config.get("esp_audio_stack", [])
+    audio_stack_configs = fv.full_config.get().get("esp_audio_stack", [])
 
     if audio_stack_configs:
         # Warn about DC offset double-filtering
@@ -1145,7 +1158,7 @@ ADD_CONTACT_SCHEMA = cv.Schema(
         cv.Optional(CONF_IP): cv.templatable(cv.string),
         cv.Optional(CONF_PORT, default=5060): cv.templatable(cv.port),
         cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.templatable(cv.port),
-        cv.Optional(CONF_PROTOCOL): cv.templatable(cv.one_of(PROTOCOL_UDP, PROTOCOL_TCP, lower=True)),
+        cv.Optional(CONF_SIP_TRANSPORT): cv.templatable(cv.one_of(PROTOCOL_UDP, PROTOCOL_TCP, lower=True)),
     }
 )
 
@@ -1173,9 +1186,9 @@ async def _add_contact_action_to_code(config, action_id, template_arg, args):
     cg.add(var.set_port(templ_port))
     templ_rtp_port = await cg.templatable(config[CONF_RTP_PORT_ACTION], args, cg.uint16)
     cg.add(var.set_rtp_port(templ_rtp_port))
-    if CONF_PROTOCOL in config:
-        templ_protocol = await cg.templatable(config[CONF_PROTOCOL], args, cg.std_string)
-        cg.add(var.set_protocol(templ_protocol))
+    if CONF_SIP_TRANSPORT in config:
+        templ_protocol = await cg.templatable(config[CONF_SIP_TRANSPORT], args, cg.std_string)
+        cg.add(var.set_sip_transport(templ_protocol))
     return var
 
 

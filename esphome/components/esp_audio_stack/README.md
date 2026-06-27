@@ -282,7 +282,7 @@ external_components:
 `speaker_source` keeps one media player as the media/announcement owner and
 feeds the same mixer/output graph that `esp_audio_stack` already arbitrates for
 intercom, Voice Assistant and local files. The project-local
-[`speaker`](../speaker/README.md) fork is only for legacy/custom YAMLs that
+[`speaker`](../speaker/README.md) fork is only for custom YAMLs that
 still use `platform: speaker`.
 
 ### Component Boundaries
@@ -940,7 +940,7 @@ binary_sensor:
   `on_start`/`on_idle` for speaker power if wake word or VA can keep the mic
   path active.
 - **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/intercom/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, including zero as a `memset()` fast path. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. **Clipping warning**: positive gain can still saturate the PCM stream. On loud speech with gain > +6 dB, peak samples can clip and produce harmonic distortion that degrades STT and intercom audio. If you need gain > +6 dB to bring a weak MEMS mic up to working levels, pair this component with `esp_afe` and `agc_enabled: true`; with standalone `esp_aec` there is no automatic ceiling.
-- **Cross-Component Validation**: `FINAL_VALIDATE_SCHEMA` rejects legacy copied
+- **Cross-Component Validation**: `FINAL_VALIDATE_SCHEMA` rejects stale copied
   YAMLs that try to put audio processing or DC-offset correction on
   `intercom_api`. If both components are present, `esp_audio_stack` owns
   software AEC/AFE and DC-offset correction; `intercom_api` consumes the stack's

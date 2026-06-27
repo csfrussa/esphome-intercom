@@ -59,8 +59,8 @@
     {
       "expect": {
         "runtime": {
-          "device_profile": "spotpear_ball_v2_full_afe_sip",
-          "source_profile": "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-sip.yaml"
+          "device_profile": "spotpear_ball_v2_full_afe",
+          "source_profile": "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml"
         },
         "intercom": {
           "state": "ringing",

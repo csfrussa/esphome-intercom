@@ -59,7 +59,7 @@ def doctor(socket_path: Path) -> int:
         "scenarios": Path("tests/simulator/scenarios").is_dir(),
         "audio": Path("tests/simulator/audio").is_dir(),
         "golden": Path("tests/simulator/golden").is_dir(),
-        "virtual_yamls": Path("yamls/generated/virtual").is_dir(),
+        "host_yamls": Path("yamls/host").is_dir(),
     }
     print(json.dumps(checks, indent=2, sort_keys=True))
     return 0 if all(value for key, value in checks.items() if key != "socket") else 2

@@ -22,18 +22,18 @@ runtime_fsm:
           audio_policy: duck
           ringtone: play
           va_state: idle
-      outgoing:
+      calling:
         priority: 974
         policies:
-          led_status: intercom_outgoing
-          display_status: intercom_outgoing
+          led_status: intercom_calling
+          display_status: intercom_calling
           audio_policy: duck
           va_state: idle
-      streaming:
+      in_call:
         priority: 973
         policies:
-          led_status: intercom_streaming
-          display_status: intercom_streaming
+          led_status: intercom_in_call
+          display_status: intercom_in_call
           audio_policy: duck
           va_state: idle
   groups:
@@ -374,8 +374,8 @@ runtime_fsm:
         thinking: 6
         responding: 7
         intercom_ringing: 8
-        intercom_outgoing: 9
-        intercom_streaming: 10
+        intercom_calling: 9
+        intercom_in_call: 10
         error: 11
         media: 12
         boot: 13
@@ -397,8 +397,8 @@ runtime_fsm:
         thinking: ${ui_state_va_thinking}
         responding: ${ui_state_va_replying}
         intercom_ringing: ${ui_state_ic_ringing}
-        intercom_outgoing: ${ui_state_ic_outgoing}
-        intercom_streaming: ${ui_state_ic_streaming}
+        intercom_calling: ${ui_state_ic_calling}
+        intercom_in_call: ${ui_state_ic_in_call}
         error: ${ui_state_va_error}
         media: ${ui_state_media}
         no_va: ${ui_state_no_va}

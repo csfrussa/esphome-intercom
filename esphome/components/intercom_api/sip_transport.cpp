@@ -28,6 +28,8 @@ static const char *const TAG = "intercom_api.sip";
 
 namespace {
 
+std::string sip_header_token(const std::string &raw);
+
 std::string trim_copy(const std::string &s) {
   size_t begin = 0;
   while (begin < s.size() && (s[begin] == ' ' || s[begin] == '\t' || s[begin] == '\r' || s[begin] == '\n')) begin++;
@@ -670,7 +672,7 @@ bool SipTransport::local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) con
     address.str_to(ip);
     if (std::strcmp(ip, "0.0.0.0") != 0) {
       *out = ip;
-      ESP_LOGW(TAG, "SIP local IP fallback selected %s for peer %08x", ip, (unsigned) peer_ip_v4);
+      ESP_LOGW(TAG, "SIP local IP selected %s for peer %08x", ip, (unsigned) peer_ip_v4);
       return true;
     }
   }
@@ -807,9 +809,9 @@ std::string SipTransport::build_sdp_answer_() const {
          "a=sendrecv\r\n";
 }
 
-bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t fallback_ip) {
+bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t default_ip) {
   uint16_t media_port = 0;
-  uint32_t media_ip = fallback_ip;
+  uint32_t media_ip = default_ip;
   uint8_t media_ptime = 20;
   bool selected_tx = false;
   bool selected_rx = false;

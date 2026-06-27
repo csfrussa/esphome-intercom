@@ -54,6 +54,14 @@ std::string json_escape(const std::string &value) {
 std::string q(const std::string &value) { return "\"" + json_escape(value) + "\""; }
 std::string b(bool value) { return value ? "true" : "false"; }
 
+uintmax_t file_size_or_zero(const std::string &path) {
+  if (path.empty())
+    return 0;
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(path, ec);
+  return ec ? 0 : size;
+}
+
 std::string find_json_string(const std::string &json, const std::string &key, const std::string &fallback = "") {
   const std::string needle = "\"" + key + "\"";
   size_t pos = json.find(needle);
@@ -182,6 +190,10 @@ void IntercomSimulator::dump_config() {
 void IntercomSimulator::reset_state_() {
   std::lock_guard<std::mutex> lock(this->mutex_);
   this->state_ = SimulatorState{};
+  if (!this->speaker_output_path_.empty()) {
+    std::error_code ec;
+    std::filesystem::remove(this->speaker_output_path_, ec);
+  }
 }
 
 void IntercomSimulator::server_main_() {
@@ -310,7 +322,11 @@ std::string IntercomSimulator::snapshot_json_() const {
       << ",\"owner\":" << q(this->state_.audio_owner)
       << ",\"tx_frames\":" << this->state_.audio_tx_frames
       << ",\"rx_frames\":" << this->state_.audio_rx_frames
-      << ",\"browser_tx_ready_latency_ms\":" << this->state_.browser_tx_ready_latency_ms << "},";
+      << ",\"browser_tx_ready_latency_ms\":" << this->state_.browser_tx_ready_latency_ms
+      << ",\"mic_input_path\":" << q(this->microphone_input_path_)
+      << ",\"mic_input_bytes\":" << file_size_or_zero(this->microphone_input_path_)
+      << ",\"speaker_output_path\":" << q(this->speaker_output_path_)
+      << ",\"speaker_output_bytes\":" << file_size_or_zero(this->speaker_output_path_) << "},";
   out << "\"sip\":{\"last_status\":" << this->state_.sip_last_status
       << ",\"decline_reason\":" << q(this->state_.sip_decline_reason)
       << ",\"auth_reason\":" << q(this->state_.sip_auth_reason) << "},";

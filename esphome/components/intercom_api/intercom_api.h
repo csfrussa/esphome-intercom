@@ -48,8 +48,7 @@ enum class TransportType : uint8_t {
   UDP,
 };
 
-// Connection state, derived from transport_->is_connected() and in_call_.
-// Kept as a public type for back-compat with users that read get_state().
+// Connection state, derived from the SIP transport and call state.
 enum class ConnectionState : uint8_t {
   DISCONNECTED,
   CONNECTED,
@@ -147,9 +146,9 @@ class IntercomApi : public Component {
     this->append_audio_format_(&this->rx_audio_formats_,
                                AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms});
   }
-  /// Update the UDP peer endpoint at runtime; propagates to the live
-  /// transport so the next datagram targets the new peer. `port` is audio;
-  /// `control_port` is optional for short contact rows. TCP no-op.
+  /// Update the selected SIP peer endpoint at runtime. `port` is SIP signaling;
+  /// `control_port` carries the peer RTP port until the internal field is
+  /// renamed throughout the audio path.
   void set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t control_port = 0);
   void set_remote_sip_transport_tcp(bool tcp);
   const char *configured_sip_transport_name() const { return this->protocol_ == TransportType::TCP ? "tcp" : "udp"; }
@@ -221,7 +220,7 @@ class IntercomApi : public Component {
   void set_sip_snapshot_sensor(text_sensor::TextSensor *sensor) { this->sip_snapshot_sensor_ = sensor; }
   // Phonebook source from HA: shipped YAMLs wire a homeassistant text_sensor
   // through ha_phonebook_text_sensor_id. Current firmware consumes the unified
-  // protocol-aware sensor.intercom_phonebook and normalizes it locally.
+  // SIP roster sensor.intercom_phonebook and normalizes it locally.
   void set_ha_phonebook_sensor(text_sensor::TextSensor *sensor) { this->ha_phonebook_sensor_ = sensor; }
   // Prune threshold (1..10). 0 disables pruning entirely.
   void set_prune_threshold(uint8_t t) { this->prune_threshold_ = t; }
@@ -234,7 +233,8 @@ class IntercomApi : public Component {
   // SIP dial-plan contact management.
   // Entry grammar:
   //   "Name"                                      bare name placeholder
-  //   "Name|sip|ip|sip_port|rtp_port|udp|tcp"     SIP endpoint
+  //   "Name|ip|sip_port|rtp_port|sip_udp"     SIP endpoint
+  //   "Name|ip|sip_port|rtp_port|audio_mode|tx|rx|sip_tcp"
   // add_contact and set_contacts run the same idempotent merge: same shape
   // = no-op, missing endpoint upgraded in place, mismatched endpoint
   // replaced. Slot order is stable; only flush_contacts() trims.
@@ -431,7 +431,7 @@ class IntercomApi : public Component {
   text_sensor::TextSensor *caller_sensor_{nullptr};       // full: who is calling
   text_sensor::TextSensor *contacts_sensor_{nullptr};     // full: contact count (e.g. "3 contacts")
   text_sensor::TextSensor *transport_sensor_{nullptr};    // SIP signaling transport: "udp" or "tcp"
-  text_sensor::TextSensor *endpoint_sensor_{nullptr};     // route source: Name|protocol|ip|ports
+  text_sensor::TextSensor *endpoint_sensor_{nullptr};     // route source: Name|host|sip_port|rtp_port|sip_udp
   text_sensor::TextSensor *last_reason_sensor_{nullptr};  // terminal reason for HA/card mirroring
   text_sensor::TextSensor *sip_snapshot_sensor_{nullptr};  // diagnostic SipPhoneState JSON
   std::string last_reason_;

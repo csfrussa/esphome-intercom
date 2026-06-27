@@ -20,8 +20,6 @@ def run(cmd: list[str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--visual", action="store_true", help="Run Playwright HA card visual smoke.")
-    parser.add_argument("--live", action="store_true", help="Run live HA/ESP call matrix.")
     parser.add_argument("--compile-profiles", action="store_true", help="Compile maintained SIP ESPHome profiles.")
     args = parser.parse_args()
 
@@ -31,12 +29,13 @@ def main() -> int:
          "custom_components/intercom_native/sip_client.py",
          "custom_components/intercom_native/sip_listener.py",
          "custom_components/intercom_native/websocket_api.py",
-         "tools/ha_live_intercom_matrix.py",
-         "tools/ha_card_visual_smoke.py"])
+         "tests/support/qualification_matrix.py"])
     run([py, "tests/test_voip_phase1.py"])
     run([py, "tests/test_device_resolver_sip.py"])
     run([py, "tests/test_frontend_card_contract.py"])
+    run([py, "tests/test_qualification_matrix.py"])
     run([py, "tests/test_runtime_fsm_target_model.py"])
+    run([py, "tests/support/qualification_matrix.py", "--validate", "--summary"])
     run(["node", "--check", "custom_components/intercom_native/frontend/intercom-card.js"])
     run([
         "g++", "-std=c++17",
@@ -47,13 +46,9 @@ def main() -> int:
     run(["/tmp/runtime_fsm_state_test"])
     run(["git", "diff", "--check"])
 
-    if args.visual:
-        run([py, "tools/ha_card_visual_smoke.py"])
-    if args.live:
-        run([py, "tools/ha_live_intercom_matrix.py", "--device", "ws3", "--device", "spotpear", "--full"])
     if args.compile_profiles:
-        run(["esphome", "compile", "yamls/full-experience/single-bus/waveshare-s3-full-afe-sip.yaml"])
-        run(["esphome", "compile", "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-sip.yaml"])
+        run(["esphome", "compile", "yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml"])
+        run(["esphome", "compile", "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml"])
     return 0
 
 

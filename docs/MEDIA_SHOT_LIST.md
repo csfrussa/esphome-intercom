@@ -21,7 +21,7 @@ This is the working list for refreshing README and documentation media for the
 | `docs/images/call-from-home-assistant-to-esp.gif` | GIF | Browser card or HA calls an ESP | Captured: target ESP card only, ring, answer, hangup |
 | `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Casa, HA rings, answer or hangup sequence visible |
 | `docs/images/mobile-notification-answer.gif` | GIF | Android notification answers an ESP call | Captured: notification actions, HA app opening, card in full-duplex call |
-| `docs/images/cross-protocol-bridge.gif` | GIF | HA PBX-lite bridge | Captured: WS3 UDP calls Spotpear TCP through HA, ringing, answer, hangup |
+| `docs/images/cross-transport-bridge.gif` | GIF | HA SIP bridge | Captured: WS3 SIP/UDP calls Spotpear SIP/TCP through HA, ringing, answer, hangup |
 | `docs/images/decline-reason.png` | Screenshot | Reason propagation | Decline with custom reason, DND or busy visible in card/sensor |
 | `docs/images/busy-reason.png` | Screenshot | Busy behavior | One call active, second caller rejected with `busy` |
 
@@ -57,8 +57,8 @@ replace individual photos or GIFs if the UI changes before release.
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/pbx-lite-topology.png` | Diagram | Simple mental model | Created: ESP extensions, HA peer, browser card, direct and bridged calls |
-| `docs/images/phonebook-endpoint.png` | Diagram | Endpoint-first phonebook | Created: `Name|protocol|ip|ports`, HA row, subscribers |
+| `docs/images/sip-topology.png` | Diagram | Simple mental model | Created: ESP SIP phones, HA softphone/bridge, browser card, direct and bridged calls |
+| `docs/images/phonebook-endpoint.png` | Diagram | Endpoint-first phonebook | Created: `Name|host|sip_port|rtp_port|sip_udp`, HA row, subscribers |
 | `docs/images/tcp-udp-choice.png` | Diagram | Transport guidance | Created: TCP for routed/filtered networks, UDP for simple LAN latency |
 | `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |
 
@@ -82,7 +82,7 @@ ESPHome actions or the Lovelace card.
 | Scene | Trigger | Expected visible state |
 |---|---|---|
 | P4 to Spotpear ringing | P4 selects Spotpear and calls | P4 shows outgoing, Spotpear shows incoming caller, HA card shows ringing |
-| Spotpear answers P4 | Spotpear answer button or HA card answer | Both ESPs show in-call, call duration advances, protocol label visible |
+| Spotpear answers P4 | Spotpear answer button or HA card answer | Both ESPs show in-call, call duration advances, SIP transport label visible |
 | Spotpear declines P4 | Spotpear decline button | P4 returns idle with decline reason, HA card reason updates |
 | P4 TCP to WS3 UDP | P4 calls WS3 through HA | HA bridge state visible, both endpoints show correct remote name |
 | DND rejection | Enable DND on target, then call it | Caller receives `dnd` or equivalent reason, target does not enter in-call |

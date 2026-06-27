@@ -32,6 +32,9 @@ __pycache__/
 *-test.yaml
 *-test-*.yaml
 yamls/debug/
+yamls/host/
+debug/
+tools/debug/
 
 # Brand images (submitted to home-assistant/brands repo)
 brands/

@@ -66,7 +66,7 @@ def _load_sip_transport_with_homeassistant_stubs():
 
     network.async_get_announce_addresses = async_get_announce_addresses
     sys.modules["homeassistant.components.network"] = network
-    return _load_intercom_module("sip_transport")
+    return _load_intercom_module("fsm")
 
 
 @contextlib.contextmanager
@@ -446,7 +446,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 metadata={"sip_port": 5060},
             ),
         ]
-        decision = roster.resolve_target("Spotpear_Ball_v2", entries, route_bridge=True)
+        decision = roster.resolve_target("Spotpear_Ball_v2", entries, ha_bridge=True)
         self.assertEqual(decision.kind, "bridge")
         self.assertIsNotNone(decision.entry)
         assert decision.entry is not None
@@ -466,10 +466,10 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 name="Cucina",
                 kind="esp",
                 address="192.168.1.31",
-                metadata={"transport": "sip", "sip_port": 5060},
+                metadata={"sip_port": 5060},
             ),
         ]
-        decision = roster.resolve_target("Cucina", entries, route_bridge=False)
+        decision = roster.resolve_target("Cucina", entries, ha_bridge=False)
         self.assertEqual(decision.kind, "bridge")
         self.assertEqual(decision.reason, "missing_direct_transport")
         self.assertIn("transport=tcp", decision.sip_uri)
@@ -711,7 +711,7 @@ class RosterResolverTest(unittest.TestCase):
             "sip:Studio@192.168.1.31;transport=tcp",
         )
         self.assertEqual(
-            roster.resolve_target("Cucina", entries, route_bridge=True).sip_uri,
+            roster.resolve_target("Cucina", entries, ha_bridge=True).sip_uri,
             "sip:Cucina@192.168.1.10",
         )
         self.assertEqual(
@@ -741,19 +741,19 @@ class RosterResolverTest(unittest.TestCase):
                         "id": "Casa",
                         "kind": "ha",
                         "address": "192.168.1.10",
-                        "metadata": {"transport": "tcp", "sip_transport": "tcp", "sip_port": 5060},
+                        "metadata": {"sip_transport": "tcp", "sip_port": 5060},
                     },
                     {
                         "id": "Cucina",
                         "kind": "esp",
                         "address": "192.168.1.30",
-                        "metadata": {"transport": "sip", "sip_transport": "tcp", "sip_port": 5060},
+                        "metadata": {"sip_transport": "tcp", "sip_port": 5060},
                     },
                     {
                         "id": "Salotto",
                         "kind": "esp",
                         "address": "192.168.1.31",
-                        "metadata": {"transport": "sip", "sip_transport": "udp", "sip_port": 5060},
+                        "metadata": {"sip_transport": "udp", "sip_port": 5060},
                     },
                 ]
             }
@@ -767,12 +767,12 @@ class RosterResolverTest(unittest.TestCase):
             "sip:Salotto@192.168.1.31;transport=udp",
         )
         self.assertEqual(
-            roster.resolve_target("Salotto", entries, route_bridge=True).sip_uri,
+            roster.resolve_target("Salotto", entries, ha_bridge=True).sip_uri,
             "sip:Salotto@192.168.1.10;transport=tcp",
         )
 
 
-class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
+class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
     async def test_busy_bridge_target_returns_terminal_response_without_ringing(self) -> None:
         local = "127.0.0.1"
         with _reserved_udp_ports(3) as ports:
@@ -793,7 +793,7 @@ class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
                 roster.RosterEntry(id="HA", kind="ha", address=local, metadata={"sip_port": ha_sip}),
                 roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip}),
             ]
-            decision = roster.resolve_target(invite.target, entries, route_bridge=True)
+            decision = roster.resolve_target(invite.target, entries, ha_bridge=True)
             self.assertIsNotNone(decision.entry)
             dest_client = sip_client.SipCallClient(
                 local_ip=local,
@@ -952,7 +952,7 @@ class PbxLiteBridgeTest(unittest.IsolatedAsyncioTestCase):
                 roster.RosterEntry(id="HA", kind="ha", address=local, metadata={"sip_port": ha_sip}),
                 roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip}),
             ]
-            decision = roster.resolve_target(invite.target, entries, route_bridge=True)
+            decision = roster.resolve_target(invite.target, entries, ha_bridge=True)
             self.assertEqual(decision.sip_uri, f"sip:Cucina@{local}:{ha_sip}")
             self.assertIsNotNone(decision.entry)
             dest_client = sip_client.SipCallClient(

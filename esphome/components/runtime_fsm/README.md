@@ -39,7 +39,7 @@ happened:
 ```text
 media started
 assistant is responding
-intercom is streaming
+intercom is in_call
 speaker is muted
 ```
 
@@ -138,7 +138,7 @@ voice_assistant:
         decibel_reduction: 0
 
 intercom_api:
-  on_streaming:
+  on_in_call:
     - light.turn_on:
         id: status_led
         effect: intercom_green
@@ -148,7 +148,7 @@ intercom_api:
 
 The problem is ownership. If media is playing, then TTS starts, then TTS ends,
 `on_end` turns the LED off even though media is still playing. If intercom is
-streaming and a media callback fires, media can steal the LED from the call.
+in_call and a media callback fires, media can steal the LED from the call.
 Every callback has to remember every other feature.
 
 ### With `runtime_fsm`
@@ -178,7 +178,7 @@ voice_assistant:
         event: assistant_finished
 
 intercom_api:
-  on_streaming:
+  on_in_call:
     - runtime_fsm.event:
         id: runtime
         event: call_started
@@ -207,7 +207,7 @@ runtime_fsm:
         led_state: assistant_blue
         audio_policy: duck
 
-    intercom_streaming:
+    intercom_in_call:
       priority: 900
       policies:
         led_state: intercom_green
@@ -223,9 +223,9 @@ runtime_fsm:
     assistant_finished:
       deactivate: assistant_response
     call_started:
-      activate: intercom_streaming
+      activate: intercom_in_call
     call_ended:
-      deactivate: intercom_streaming
+      deactivate: intercom_in_call
 ```
 
 Now the callback order does not need to encode the whole product state. If
@@ -243,7 +243,7 @@ An activity is a named boolean fact:
 activities:
   media:
     priority: 100
-  intercom_streaming:
+  intercom_in_call:
     priority: 700
   va_responding:
     priority: 800
@@ -606,7 +606,7 @@ runtime_fsm:
         led_state: assistant
         audio_policy: duck
 
-    intercom_streaming:
+    intercom_in_call:
       priority: 900
       policies:
         led_state: intercom
@@ -618,9 +618,9 @@ runtime_fsm:
     assistant_finished:
       deactivate: assistant_response
     call_started:
-      activate: intercom_streaming
+      activate: intercom_in_call
     call_ended:
-      deactivate: intercom_streaming
+      deactivate: intercom_in_call
 ```
 
 If media is playing and the assistant starts speaking, both facts are active:
@@ -699,7 +699,7 @@ media
 announcement
 timer_ringing
 intercom_ringing
-intercom_streaming
+intercom_in_call
 va_listening
 va_thinking
 va_responding
@@ -728,7 +728,7 @@ Typical full-device ordering is:
 boot / connectivity / fatal error
 mute
 voice assistant listening / thinking / responding
-intercom ringing / streaming
+intercom ringing / calling / in_call
 timer ringing
 announcement
 media
@@ -761,7 +761,7 @@ runtime_fsm:
 
 When an activity in a group is activated, the reducer automatically deactivates
 the other activities in that same group. Other activities outside the group,
-such as `media` or `intercom:streaming`, are not touched.
+such as `media` or `intercom:in_call`, are not touched.
 
 ### Step 3: Define output policies
 
@@ -957,17 +957,17 @@ runtime_fsm:
           display_status: intercom_ringing
           audio_policy: duck
           ringtone: play
-      streaming:
+      in_call:
         priority: 650
         policies:
-          led_status: intercom_streaming
-          display_status: intercom_streaming
+          led_status: intercom_in_call
+          display_status: intercom_in_call
           audio_policy: duck
           ringtone: stop
 ```
 
 This automatically creates activities named `intercom:ringing`,
-`intercom:outgoing`, `intercom:streaming`, etc. If `intercom:` is omitted, no
+`intercom:calling`, `intercom:in_call`, etc. If `intercom:` is omitted, no
 intercom observer code is compiled.
 
 Intercom signaling and transport still belong to `intercom_api`; `runtime_fsm`
@@ -1055,7 +1055,7 @@ if:
   condition:
     runtime_fsm.is_active:
       id: runtime
-      activity: intercom:streaming
+      activity: intercom:in_call
   then:
     - logger.log: "Intercom is active"
 ```

@@ -13,10 +13,6 @@ class Peer:
     kind: Literal["esp", "ha"]
     name: str
     host: str
-    transport: Literal["tcp", "udp", "sip"]
-    tcp_port: int
-    udp_audio_port: int
-    udp_control_port: int
     sip_port: int | None = None
     rtp_port: int | None = None
     audio_mode: Literal["full_duplex", "mic_only", "speaker_only", "control_only"] = "full_duplex"

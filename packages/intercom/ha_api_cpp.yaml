@@ -75,7 +75,7 @@ api:
         - runtime_fsm.dump:
             id: runtime_controller
             reason: !lambda 'return reason;'
-    # Card -> intercom_native.call(source=this) ends up here. Sets the
+    # Card/HA -> intercom_native.sip_call(source=this) ends up here. Sets the
     # current phonebook entry to `dest` and sends a SIP INVITE locally.
     - action: start_call
       variables:

@@ -3,7 +3,7 @@
 This directory carries a small project-local fork of ESPHome's `speaker` and
 `speaker.media_player` components.
 
-The fork exists for legacy/custom YAMLs that still use ESPHome's
+The fork exists for custom YAMLs that still use ESPHome's
 `platform: speaker` media player and need media pause to release the playback
 pipeline cleanly. Maintained full-experience YAMLs now use the source-based
 `speaker_source` media path instead; see

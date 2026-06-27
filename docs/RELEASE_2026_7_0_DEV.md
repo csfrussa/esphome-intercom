@@ -2,8 +2,8 @@
 
 This is a **development prerelease** for field testing the next intercom and
 media generation before it becomes a stable release. It contains large changes
-in Home Assistant, the Lovelace card, the ESP intercom protocol and the
-full-experience audio path.
+in Home Assistant, the Lovelace card, the ESP SIP phone and the full-experience
+audio path.
 
 Use it if you want to help test. Stay on the latest stable release if the
 device is installed somewhere where temporary audio glitches or call-routing
@@ -22,7 +22,7 @@ regressions would be a problem.
   the single intercom device assigned to a matching Home Assistant area name.
   Multiple intercom devices per area are intentionally not voice-dialed in this
   prerelease; group/area calls are left for a later release.
-- 🧬 Added negotiated PCM audio formats to the HA side of the PBX-lite stack.
+- 🧬 Added negotiated PCM audio formats to the HA SIP softphone/bridge stack.
 - 🔁 Audio formats are now **per direction**, not one global device format:
   `tx_format` describes device-to-wire audio and `rx_format` describes
   wire-to-device audio.
@@ -30,21 +30,19 @@ regressions would be a problem.
   audio explicitly instead of pretending every call is 16 kHz/s16/mono.
 - 🧮 HA bridge conversion is vectorized through NumPy and uses anti-aliased
   sample-rate conversion for downsampling.
-- 🧩 START and ANSWER now carry versioned trailing audio-format blocks. Legacy
-  16 kHz/s16/mono endpoints remain wire-compatible because the extension is
-  omitted on pure legacy calls.
+- 🧩 SIP/SDP offer-answer now carries explicit PCM audio capabilities.
 - 🧭 HA now validates endpoint-declared formats before routing calls. Incompatible
   peers fail with a readable `incompatible_audio_format` reason instead of
   producing distorted audio.
-- 📡 TCP and UDP clients/managers understand the negotiated format selected for
-  each call leg.
-- 🌉 HA PBX bridge legs preserve the original call identity when routing toward
+- 📡 SIP/TCP and SIP/UDP endpoints understand the negotiated format selected
+  for each call leg.
+- 🌉 HA SIP bridge legs preserve the original call identity when routing toward
   the destination, so caller/destination labels stay stable across TCP ↔ UDP
   and mixed-format bridges.
-- 🚪 Inbound TCP and UDP START messages do **not** require the caller to exist
-  in the callee phonebook. The phonebook is the outbound dial plan; inbound
-  caller/destination identity comes from START. This keeps VPN/routed callers
-  and HA PBX bridges working without pre-seeding every callee phonebook.
+- 🚪 Inbound SIP INVITE messages do **not** require the caller to exist in the
+  callee phonebook. The phonebook is the outbound dial plan; inbound
+  caller/destination identity comes from SIP headers. This keeps VPN/routed
+  callers and HA bridges working without pre-seeding every callee phonebook.
 - 🛡️ Browser audio WebSocket sessions remain server-authoritative: if the socket
   is truly gone, the server ends the call.
 - 🔄 Browser/card reload during an active HA softphone call can explicitly rebind
@@ -61,9 +59,8 @@ regressions would be a problem.
   playback format.
 - 🚫 Duplicate terminal/bridge events were tightened so cards should see one
   final reason instead of compensating for repeated `disconnected` events.
-- 🧪 `tools/intercom_softphone_probe.py` was expanded for negotiated-format
-  testing, tone/WAV injection, received-audio WAV capture and direct ESP/HA
-  endpoint probes.
+- 🧪 SIP negotiated-format testing now expects a standard external softphone or
+  private local debug helper, rather than a distributed project softphone.
 
 ## 🎛️ Lovelace Card
 
@@ -83,7 +80,7 @@ regressions would be a problem.
   browser ringtone. Ringtone is a per-browser preference; HA softphone DND is
   stored in HA state.
 - 🪞 Hybrid cards keep the original mirror semantics: the card represents the
-  selected ESP, mirrors ESP ringing/streaming state, and becomes the HA
+  selected ESP, mirrors ESP ringing/in_call state, and becomes the HA
   softphone leg only when that ESP is calling Home Assistant. A separate
   `ha_softphone` card represents HA itself and shows Answer/Decline only for
   calls addressed to HA.
@@ -96,18 +93,17 @@ regressions would be a problem.
   constant during prerelease testing.
 - 🧪 The card version exposed in Lovelace is `v2026.7.0-dev`.
 
-## 📞 Intercom Protocol
+## 📞 SIP Phone Profile
 
-- 🧾 Protocol audio capability is now described with explicit PCM tokens such as
+- 🧾 SIP/SDP audio capability is described with explicit PCM tokens such as
   `16000:s16le:1:32` and `48000:s16le:1:20`.
 - 🔀 TX and RX capabilities are advertised separately, so a device can expose
   16 kHz microphone audio while accepting 48 kHz speaker audio.
 - ✅ ANSWER confirms the effective caller-to-destination and
   destination-to-caller formats. The caller no longer has to guess how the
   remote side will send audio.
-- 🧯 Mixed old/new fleets are handled conservatively: pure legacy calls stay
-  legacy, while unsupported high-rate calls are declined or ended instead of
-  playing garbage.
+- 🧯 Unsupported high-rate or oversized media profiles are rejected with a SIP
+  terminal reason instead of playing garbage.
 - 📚 `docs/INTERCOM_PROTOCOL.md` and `docs/PHONEBOOK_PROTOCOL.md` were updated
   for the format-aware endpoint rows and negotiated call setup.
 
@@ -176,7 +172,7 @@ regressions would be a problem.
 - 🧯 Runtime reducer state dumps are disabled by default in production package
   callbacks. Enable `debug: true` or call the diagnostic dump service when
   developing a profile.
-- 🧹 The project-local speaker fork remains available for legacy/custom YAMLs,
+- 🧹 The project-local speaker fork remains available for custom YAMLs,
   but maintained full profiles are moving to the `speaker_source` path.
 - 🔇 Mute paths and source priority rules were kept aligned with the full UI
   state machine.
@@ -262,7 +258,7 @@ regressions would be a problem.
 ## ⚠️ Compatibility / Upgrade Notes from 2026.6.3
 
 - Custom ESP YAMLs using `intercom_api` should review the new `audio.tx` and
-  `audio.rx` settings if they want anything other than legacy 16 kHz/s16/mono.
+  `audio.rx` settings if they want anything other than the default 16 kHz/s16/mono.
 - AFE/AEC TX remains 16 kHz/s16/mono. This is expected and should not be treated
   as an intercom transport limitation.
 - HA bridging is the supported way to connect devices with incompatible direct
@@ -275,11 +271,12 @@ regressions would be a problem.
 - The HA custom integration now requires NumPy. HA OS wheel availability was
   checked for modern Python/aarch64/x86_64 targets, but this remains one of the
   areas to watch during prerelease testing.
-- Legacy mixed-fleet behavior is conservative: a new high-rate endpoint calling
-  an old firmware endpoint may fall back only when both sides are legacy; if the
-  format cannot be confirmed safely, the call is rejected or ended.
-- Receiving ESPs do not reject valid inbound START messages just because the
-  caller is absent from the local phonebook. Custom security/policy behavior
+- Mixed transport behavior is explicit: direct SIP calls require a compatible
+  signaling transport, while HA bridging is the supported route for SIP/UDP to
+  SIP/TCP calls. If the media format cannot be confirmed safely, the call is
+  rejected or ended.
+- Receiving ESPs do not reject valid inbound SIP INVITE messages just because
+  the caller is absent from the local phonebook. Custom security/policy behavior
   should be implemented explicitly; missing phonebook rows are not an inbound
   access-control mechanism.
 

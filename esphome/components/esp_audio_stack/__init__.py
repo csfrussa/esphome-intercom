@@ -520,7 +520,7 @@ def _final_validate(config):
             "or esp_aec (standalone echo cancellation), not both."
         )
 
-    # Cross-component validation for legacy copied YAMLs. Software processing
+    # Cross-component validation for stale copied YAMLs. Software processing
     # belongs on esp_audio_stack; intercom_api consumes the stack facade.
 
     intercom_configs = full_config.get("intercom_api", [])

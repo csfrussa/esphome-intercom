@@ -264,7 +264,7 @@ script:
   # `reason` is whatever end_call_(...) emitted: a canonical token
   # (`local_hangup` / `remote_hangup` / `declined` / `timeout` /
   # `busy` / `unreachable` / `protocol_error` / `bridge_error`) or
-  # a free-form DECLINE payload text.
+  # a free-form SIP terminal reason.
   - id: ui_ic_ended
     parameters:
       peer: string

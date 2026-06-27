@@ -58,7 +58,7 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   HA media, announcements, local files and optional Sendspin streams feed one
   media player before the mixer arbitrates with intercom and Voice Assistant.
   The local [`speaker`](../esphome/components/speaker/README.md) fork remains
-  documented for legacy/custom YAMLs that still use `platform: speaker`.
+  documented for custom YAMLs that still use `platform: speaker`.
 - [`runtime_fsm`](../esphome/components/runtime_fsm/README.md), a generic
   YAML-programmed reducer used by maintained full-experience profiles to derive
   LED, LVGL/display, audio ducking, ringtone and timer policies from one state
