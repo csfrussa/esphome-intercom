@@ -105,6 +105,37 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("call_id: this._sessionCallId()", softphone_hangup)
         self.assertNotIn("this._sessionDeviceId()", softphone_hangup)
 
+    def test_esp_mirror_does_not_render_sip_rtp_counters(self) -> None:
+        render = _method_body(self.source, "_render")
+        stats_branch = render.split("// Stats line", 1)[1].split("// Error", 1)[0]
+        self.assertIn("this._isHaSoftphoneMode()", stats_branch)
+        self.assertIn("intercomEngine.statsText()", stats_branch)
+        self.assertNotIn("intercom_sip_snapshot", self.source)
+        self.assertNotIn("rtp_tx_packets", self.source)
+        self.assertNotIn("rtp_rx_packets", self.source)
+
+    def test_ha_softphone_in_call_state_attaches_browser_audio(self) -> None:
+        body = _method_body(self.source, "_onSessionStateEvent")
+        self.assertIn("this._applySoftphoneSnapshot(data)", body)
+        self.assertIn("this._ensureHaSoftphoneAudioPath(data)", body)
+
+    def test_frontend_has_no_legacy_esp_call_control_ws_commands(self) -> None:
+        engine = (ROOT / "custom_components" / "intercom_native" / "frontend" / "intercom-engine.js").read_text()
+        for token in (
+            "ENGINE_TRANSITIONS",
+            "startP2P",
+            "answerEspCall",
+            "answerHaSoftphone",
+            'this._setState("CALLING")',
+            'this._setState("RINGING")',
+            'type: "start"',
+            'type: "answer"',
+            'type: "stop"',
+            'type: "hangup"',
+            "answer_esp_call",
+        ):
+            self.assertNotIn(token, engine)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,13 +12,6 @@ const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const HIDDEN_HANGUP_GRACE_MS = 15000;
 const CONTROL_ACK_TIMEOUT_MS = 3000;
-const ENGINE_TRANSITIONS = {
-  IDLE: ["CALLING", "RINGING", "IN_CALL", "ERROR"],
-  CALLING: ["RINGING", "IN_CALL", "ERROR"],
-  RINGING: ["IN_CALL", "ERROR"],
-  IN_CALL: ["ERROR"],
-  ERROR: ["CALLING", "RINGING", "IN_CALL"],
-};
 const DEFAULT_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
 
 class IntercomEngine extends EventTarget {
@@ -49,7 +42,7 @@ class IntercomEngine extends EventTarget {
     this._ringtoneContext = null;
     this._ringtoneTimer = null;
 
-    window.addEventListener("pagehide", () => this.close("pagehide", { sendHangup: false }));
+    window.addEventListener("pagehide", () => this.close("pagehide"));
     document.addEventListener("visibilitychange", () => this._onVisibility());
   }
 
@@ -100,10 +93,6 @@ class IntercomEngine extends EventTarget {
   _setState(state) {
     const target = String(state || "").toUpperCase();
     if (target === this._state) return;
-    if (target !== "IDLE" && !(ENGINE_TRANSITIONS[this._state] || []).includes(target)) {
-      console.warn(`intercom-engine: ignored transition ${this._state} -> ${target}`);
-      return;
-    }
     this._state = target;
     this._emit();
   }
@@ -311,9 +300,11 @@ class IntercomEngine extends EventTarget {
   }
 
   _resolveSessionFormats(deviceInfo, negotiated = null) {
+    const txFormat = negotiated?.selected_tx_format || negotiated?.tx_format;
+    const rxFormat = negotiated?.selected_rx_format || negotiated?.rx_format;
     return {
-      tx: this._parseFormat(negotiated?.tx_format, this._chooseDeviceFormat(deviceInfo, "rx_formats")),
-      rx: this._parseFormat(negotiated?.rx_format, this._chooseDeviceFormat(deviceInfo, "tx_formats")),
+      tx: this._parseFormat(txFormat, this._chooseDeviceFormat(deviceInfo, "rx_formats")),
+      rx: this._parseFormat(rxFormat, this._chooseDeviceFormat(deviceInfo, "tx_formats")),
     };
   }
 
@@ -374,35 +365,20 @@ class IntercomEngine extends EventTarget {
     } catch (err) {
       console.error("intercom-engine: audio setup failed", err);
       this.dispatchEvent(new CustomEvent("error", { detail: err?.message || String(err) }));
-      await this.stop(deviceId).catch(() => this.close("audio_setup_failed"));
+      if (deviceId === HA_SOFTPHONE_DEVICE_ID && this._hass) {
+        await this._hass.callService("intercom_native", "sip_hangup", {
+          call_id: reply?.call_id || "",
+          reason: "media_incompatible",
+        }).catch(() => {});
+      }
+      await this.close("audio_setup_failed");
       this._setState("ERROR");
       return false;
     }
   }
 
-  async startP2P(deviceInfo, context = {}) {
-    await this._connect(deviceInfo.device_id);
-    this._resetStats();
-    this._setState("CALLING");
-    const reply = await this._sendControl({
-      type: "start",
-      device_id: deviceInfo.device_id,
-      host: deviceInfo.host,
-      target_name: context.callee || deviceInfo.name || "",
-      callee: context.callee || deviceInfo.name || "",
-      call_id: context.call_id || "",
-    }, true);
-    if (!["in_call", "ringing"].includes(reply?.state)) {
-      this._setState("ERROR");
-      return;
-    }
-    if (!await this._setupAudioOrAbort(deviceInfo.device_id, deviceInfo, reply)) return;
-    this._setState(reply.state);
-  }
-
   async startHaSoftphone(target, softphoneInfo, context = {}) {
     this._resetStats();
-    this._setState("CALLING");
     const reply = await this._hass.callWS({
       type: "intercom_native/ha_softphone_start",
       target_name: context.callee || target.name || "",
@@ -413,86 +389,23 @@ class IntercomEngine extends EventTarget {
       this._setState("ERROR");
       return;
     }
-    this._setState(String(reply.state || "calling").toUpperCase());
-    return reply;
-  }
-
-  async answer(deviceInfo, sessionDeviceId, context = {}) {
-    const deviceId = sessionDeviceId || deviceInfo.device_id;
-    await this._connect(deviceId);
-    this._resetStats();
-    const reply = await this._sendControl(
-      { type: "answer", device_id: deviceId, host: deviceInfo?.host || "", call_id: context.call_id || "" },
-      true,
-      (msg) => this._isTerminalControlReply(msg),
-    );
-    if (reply?.state !== "in_call") {
-      this._setState("ERROR");
-      await this.stop(deviceId).catch(() => this.close("answer_failed"));
-      return;
-    }
-    if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, reply)) return;
-    this._setState("IN_CALL");
-  }
-
-  async answerHaSoftphone(deviceInfo, context = {}) {
-    await this._connect(HA_SOFTPHONE_DEVICE_ID);
-    this._resetStats();
-    const mediaInfo = {
-      ...(deviceInfo || {}),
-      device_id: HA_SOFTPHONE_DEVICE_ID,
-      audio_mode: deviceInfo?.audio_mode || context.audio_mode || "full_duplex",
-    };
-    const pendingFormats = {
-      state: "ringing",
-      tx_format: context.tx_format || "",
-      rx_format: context.rx_format || "",
-    };
-    if (!await this._setupAudioOrAbort(HA_SOFTPHONE_DEVICE_ID, mediaInfo, pendingFormats)) return null;
-    const reply = await this._sendControl(
-      {
-        type: "answer",
+    const state = String(reply.state || "calling").toLowerCase();
+    if (state === "in_call") {
+      const mediaInfo = {
+        ...(softphoneInfo || {}),
+        ...(target || {}),
         device_id: HA_SOFTPHONE_DEVICE_ID,
-        call_id: context.call_id || "",
-      },
-      true,
-      (msg) => this._isTerminalControlReply(msg),
-    );
-    if (reply?.state !== "in_call") {
-      this._setState("ERROR");
-      await this.close("ha_softphone_answer_failed", { sendHangup: false });
-      return reply || { state: "error", error: "answer_failed" };
+        audio_mode: target?.audio_mode || softphoneInfo?.audio_mode || "full_duplex",
+      };
+      if (!await this._setupAudioOrAbort(HA_SOFTPHONE_DEVICE_ID, mediaInfo, reply)) return;
+      this._setState("IN_CALL");
     }
-    this._setState("IN_CALL");
     return reply;
-  }
-
-  async answerEspCall(deviceInfo, context = {}) {
-    await this._connect(deviceInfo.device_id);
-    this._resetStats();
-    const reply = await this._sendControl(
-      {
-        type: "answer_esp_call",
-        device_id: deviceInfo.device_id,
-        host: deviceInfo.host,
-        target_name: context.caller || deviceInfo.name || "",
-        caller: context.caller || deviceInfo.name || "",
-        call_id: context.call_id || "",
-      },
-      true,
-      (msg) => this._isTerminalControlReply(msg),
-    );
-    if (reply?.state !== "in_call") {
-      this._setState("ERROR");
-      return;
-    }
-    if (!await this._setupAudioOrAbort(deviceInfo.device_id, deviceInfo, reply)) return;
-    this._setState("IN_CALL");
   }
 
   async resumeSession(deviceInfo, sessionDeviceId, statePayload) {
     const state = String(statePayload?.state || "").toLowerCase();
-    if (!["calling", "remote_ringing", "ringing", "in_call"].includes(state)) return;
+    if (state !== "in_call") return;
     const deviceId = sessionDeviceId || statePayload?.session_device_id || statePayload?.device_id || this._deviceId;
     if (!deviceId) return;
     if (this._ws && this._deviceId === deviceId && this._ws.readyState === WebSocket.OPEN) {
@@ -504,24 +417,15 @@ class IntercomEngine extends EventTarget {
     if (state === "in_call") {
       if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, statePayload)) return;
       this._setState("IN_CALL");
-    } else {
-      this._setState(state === "ringing" ? "RINGING" : "CALLING");
     }
-  }
-
-  async stop(deviceId = this._deviceId, context = {}) {
-    await this._sendControl({ type: "stop", device_id: deviceId, call_id: context.call_id || "" }, true);
-    await this.close("stop", { sendHangup: false });
   }
 
   _resetStats() {
     this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0 };
   }
 
-  async close(_reason = "", options = {}) {
-    const sendHangup = options.sendHangup !== false;
+  async close(_reason = "") {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      if (sendHangup) this._sendControl({ type: "hangup" });
       this._ws.close();
     }
     this._ws = null;

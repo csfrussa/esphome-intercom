@@ -65,7 +65,6 @@ class IntercomCard extends HTMLElement {
     // Entity IDs (discovered once)
     this._intercomStateEntityId = null;
     this._transportEntityId = null;
-    this._sipSnapshotEntityId = null;
     this._callerEntityId = null;
     this._destinationEntityId = null;
     this._lastReasonEntityId = null;
@@ -85,11 +84,9 @@ class IntercomCard extends HTMLElement {
     this._ringtoneRequestKey = `intercom-card-${Math.random().toString(36).slice(2)}`;
     this._deepLinkAnswerConsumed = false;
 
-    // Remote-end progress / ended-call surface comes from the unified HA
-    // `intercom_native.call_event` bus event. We mirror it here so _render()
-    // can switch the outgoing label to "X is ringing..."
-    // and pop a brief "Call ended. Reason: ..." panel without polling.
-    this._destRinging = false;
+    // ESP mirror cards keep a short local display copy of the ESP terminal
+    // reason text sensor. HA softphone cards render terminal data directly
+    // from the backend snapshot pushed on the event bus.
     this._lastEndInfo = null;          // {peer, reason, until_ms} | null
     this._lastEndClearTimer = null;
     this._unsubCallEvents = null;
@@ -187,6 +184,7 @@ class IntercomCard extends HTMLElement {
     const data = event?.data;
     if (!this._eventConcernsThisCard(data)) return;
     this._applySoftphoneSnapshot(data);
+    this._ensureHaSoftphoneAudioPath(data);
     this._render();
   }
 
@@ -227,10 +225,6 @@ class IntercomCard extends HTMLElement {
       selected_tx_format: payload.selected_tx_format || payload.tx_format || "",
       selected_rx_format: payload.selected_rx_format || payload.rx_format || "",
       audio_mode: payload.audio_mode || "",
-      rtp_tx_packets: Number(payload.rtp_tx_packets || 0),
-      rtp_rx_packets: Number(payload.rtp_rx_packets || 0),
-      rtp_tx_bytes: Number(payload.rtp_tx_bytes || 0),
-      rtp_rx_bytes: Number(payload.rtp_rx_bytes || 0),
       terminal_reason: payload.terminal_reason || payload.reason || "",
     };
   }
@@ -240,28 +234,10 @@ class IntercomCard extends HTMLElement {
     this._softphoneSnapshot = snapshot;
     this._softphoneDnd = !!snapshot.dnd;
     this._activeSessionDeviceId = snapshot.session_device_id || HA_SOFTPHONE_DEVICE_ID;
-    this._destRinging = snapshot.state === "remote_ringing" ||
-      (snapshot.state === "ringing" && snapshot.direction === "outgoing");
-    if (snapshot.state === "in_call" || snapshot.state === "ringing") {
-      this._clearEndReason(false);
-    }
     const activePhoneState = ["calling", "remote_ringing", "ringing", "in_call", "connecting", "terminating"].includes(snapshot.state);
-    if (snapshot.terminal_reason && !activePhoneState) {
-      this._captureEndReason(
-        "terminal",
-        snapshot.terminal_reason,
-        snapshot.direction === "outgoing" ? "remote" : "self",
-        snapshot.peer_name,
-      );
-    }
-    const terminalType = String(payload.type || "").toLowerCase();
-    if (["ended", "missed", "failed"].includes(terminalType)) {
-      this._captureEndReason(
-        "terminal",
-        snapshot.terminal_reason || snapshot.state || terminalType,
-        snapshot.direction === "outgoing" ? "remote" : "self",
-        snapshot.peer_name,
-      );
+    if (activePhoneState) {
+      this._clearEndReason(false);
+    } else {
       this._cleanupAfterTerminalSession();
     }
     if (
@@ -274,6 +250,29 @@ class IntercomCard extends HTMLElement {
       this._autoAnswering = true;
       this._tryAutoAnswer();
     }
+  }
+
+  _ensureHaSoftphoneAudioPath(snapshot = {}) {
+    if (!this._isHaSoftphoneMode()) return;
+    if (String(snapshot.state || "").toLowerCase() !== "in_call") return;
+    if (this._hasBrowserAudioPath() || this._starting || this._cleanupTask) return;
+    const sessionDeviceId = snapshot.session_device_id || HA_SOFTPHONE_DEVICE_ID;
+    const target = snapshot.target_device_id
+      ? this._availableDevices.find(d => d.device_id === snapshot.target_device_id)
+      : this._getSoftphoneTargetDevice();
+    intercomEngine.resumeSession(
+      {
+        ...(target || {}),
+        device_id: sessionDeviceId,
+        audio_mode: snapshot.audio_mode || target?.audio_mode || "full_duplex",
+        softphone: true,
+      },
+      sessionDeviceId,
+      snapshot,
+    ).catch((err) => {
+      console.warn("intercom-card: failed to attach HA softphone audio", err);
+      this._showError(err.message || String(err));
+    });
   }
 
   _captureEndReason(kind, reason, origin, peerOverride = "") {
@@ -694,47 +693,6 @@ class IntercomCard extends HTMLElement {
     return entity?.state || this._getHaName();
   }
 
-  _parseCompactSipSnapshot(raw) {
-    const text = String(raw || "");
-    if (!text || text === "unknown" || text === "unavailable") return {};
-    if (text.trim().startsWith("{")) {
-      try { return JSON.parse(text); } catch (err) { return {}; }
-    }
-    const out = {};
-    for (const part of text.split(";")) {
-      const index = part.indexOf("=");
-      if (index <= 0) continue;
-      out[part.slice(0, index)] = part.slice(index + 1).replaceAll("\\;", ";").replaceAll("\\=", "=");
-    }
-    return out;
-  }
-
-  _sipCounterSnapshot() {
-    if (this._isHaSoftphoneMode()) return this._softphoneSnapshot || {};
-    const state = this._sipSnapshotEntityId ? this._hass?.states?.[this._sipSnapshotEntityId]?.state : "";
-    const parsed = this._parseCompactSipSnapshot(state);
-    return {
-      rtp_tx_packets: Number(parsed.rtp_tx_packets ?? parsed.pt ?? 0),
-      rtp_rx_packets: Number(parsed.rtp_rx_packets ?? parsed.pr ?? 0),
-      rtp_tx_bytes: Number(parsed.rtp_tx_bytes ?? parsed.bt ?? 0),
-      rtp_rx_bytes: Number(parsed.rtp_rx_bytes ?? parsed.br ?? 0),
-      selected_tx_format: parsed.selected_tx_format || parsed.tx || "",
-      selected_rx_format: parsed.selected_rx_format || parsed.rx || "",
-    };
-  }
-
-  _formatSipStatsLine() {
-    const snap = this._sipCounterSnapshot();
-    const txPackets = Number(snap.rtp_tx_packets || 0);
-    const rxPackets = Number(snap.rtp_rx_packets || 0);
-    const txBytes = Number(snap.rtp_tx_bytes || 0);
-    const rxBytes = Number(snap.rtp_rx_bytes || 0);
-    if (!txPackets && !rxPackets && !txBytes && !rxBytes) return "";
-    const txFormat = snap.selected_tx_format ? ` ${snap.selected_tx_format}` : "";
-    const rxFormat = snap.selected_rx_format ? ` ${snap.selected_rx_format}` : "";
-    return `Send ${txPackets} pkt / ${txBytes} B${txFormat} · Recv ${rxPackets} pkt / ${rxBytes} B${rxFormat}`;
-  }
-
   _softphoneTargets() {
     return this._rosterEntries
       .filter(entry => this._isCallableRosterEntry(entry))
@@ -940,7 +898,6 @@ class IntercomCard extends HTMLElement {
       const e = deviceInfo.entities;
       this._intercomStateEntityId = e.intercom_state || null;
       this._transportEntityId = e.intercom_transport || null;
-      this._sipSnapshotEntityId = e.sip_snapshot || null;
       this._callerEntityId = e.incoming_caller || null;
       this._destinationEntityId = e.destination || null;
       this._lastReasonEntityId = e.last_reason || null;
@@ -963,7 +920,6 @@ class IntercomCard extends HTMLElement {
         if (entity.device_id !== targetDeviceId) continue;
         const id = entity.entity_id;
         if (id.includes("intercom_state")) this._intercomStateEntityId = id;
-        else if (id.includes("intercom_sip_snapshot")) this._sipSnapshotEntityId = id;
         else if (id.includes("intercom_transport")) this._transportEntityId = id;
         else if (id.includes("caller")) this._callerEntityId = id;
         else if (id.includes("destination")) this._destinationEntityId = id;
@@ -1083,7 +1039,14 @@ class IntercomCard extends HTMLElement {
 
     switch (espState.toLowerCase()) {
       case "idle":
-        if (this._lastEndInfo) {
+        if (this._isHaSoftphoneMode() && this._softphoneSnapshot?.terminal_reason) {
+          const reason = this._softphoneSnapshot.terminal_reason;
+          const peerLabel = this._softphoneSnapshot.peer_name ? ` with ${this._softphoneSnapshot.peer_name}` : "";
+          statusText = `Call${peerLabel} ended.`;
+          statusReason = `Reason: ${this._formatKnownReason(reason) || reason}`;
+          statusClass = "idle";
+          showCall = true;
+        } else if (!this._isHaSoftphoneMode() && this._lastEndInfo) {
           const reasonLabel = this._formatEndReason(this._lastEndInfo);
           const peerLabel = this._lastEndInfo.peer ? ` with ${this._lastEndInfo.peer}` : "";
           statusText = `Call${peerLabel} ended.`;
@@ -1103,10 +1066,10 @@ class IntercomCard extends HTMLElement {
         break;
       case "calling":
       case "remote_ringing":
-        statusText = this._destRinging
+        statusText = espState.toLowerCase() === "remote_ringing"
           ? `${destination} is ringing...`
           : `Calling ${destination}...`;
-        statusClass = this._destRinging ? "ringing" : "transitioning";
+        statusClass = espState.toLowerCase() === "remote_ringing" ? "ringing" : "transitioning";
         showHangup = true;
         break;
       case "ringing":
@@ -1186,10 +1149,7 @@ class IntercomCard extends HTMLElement {
     }
 
     // Stats line
-    const sipStats = this._formatSipStatsLine();
-    if (sipStats) {
-      els.stats.textContent = sipStats;
-    } else if (this._hasBrowserAudioPath()) {
+    if (this._isHaSoftphoneMode() && this._hasBrowserAudioPath()) {
       els.stats.textContent = intercomEngine.statsText();
     } else {
       els.stats.textContent = this._formatModeLabel(destination);
@@ -1685,13 +1645,6 @@ class IntercomCard extends HTMLElement {
       this._starting = false;
       this._render();
     }
-  }
-
-  async _answerEspCall(deviceInfo) {
-    await intercomEngine.answerEspCall(deviceInfo, {
-      call_id: this._sessionCallId(),
-      caller: this._getCallerName() || deviceInfo?.name || "",
-    });
   }
 
   async _answer() {
