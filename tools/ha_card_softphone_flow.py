@@ -201,7 +201,7 @@ async def run_decline_flow(page: Page, ha: HaRest) -> None:
     await open_page(page, "/dashboard-intercom/0")
     await snapshot(page, "decline_01_dashboard_idle", {"ws3": await ha.state(WS3_STATE), "dest": await ha.state(WS3_DEST)})
     await ha.service("intercom_native", "call", {"source": WS3_DEVICE_ID, "destination": "Casa"})
-    await wait_entity(ha, WS3_STATE, {"Outgoing", "Calling"}, 8, "ws3 outgoing to HA")
+    await wait_entity(ha, WS3_STATE, {"Calling"}, 8, "ws3 outgoing to HA")
     await open_page(page, "/lovelace/default_view")
     state = await ha_softphone_state(page)
     if str(state.get("state")).lower() not in {"ringing", "incoming"}:
@@ -220,19 +220,19 @@ async def run_answer_flow(page: Page, ha: HaRest) -> None:
     await cleanup(ha)
     await wait_entity(ha, WS3_STATE, {"Idle"}, 8, "ws3 initial idle")
     await ha.service("intercom_native", "call", {"source": WS3_DEVICE_ID, "destination": "Casa"})
-    await wait_entity(ha, WS3_STATE, {"Outgoing", "Calling"}, 8, "ws3 outgoing before answer")
+    await wait_entity(ha, WS3_STATE, {"Calling"}, 8, "ws3 outgoing before answer")
     await open_page(page, "/lovelace/default_view")
     state = await ha_softphone_state(page)
     if str(state.get("state")).lower() not in {"ringing", "incoming"}:
         raise AssertionError(f"HA softphone did not enter ringing before answer: {state}")
     await snapshot(page, "answer_01_ha_ringing", {"ha_softphone": state, "ws3": await ha.state(WS3_STATE)})
     await click_card_button(page, mode="ha_softphone", text="Answer")
-    await wait_entity(ha, WS3_STATE, {"Streaming"}, 12, "ws3 streaming after HA card answer")
+    await wait_entity(ha, WS3_STATE, {"In Call"}, 12, "ws3 in_call after HA card answer")
     await asyncio.sleep(1.0)
     state = await ha_softphone_state(page)
-    await snapshot(page, "answer_02_streaming", {"ha_softphone": state, "ws3": await ha.state(WS3_STATE)})
-    if str(state.get("state")).lower() != "streaming":
-        raise AssertionError(f"HA softphone did not enter streaming after answer: {state}")
+    await snapshot(page, "answer_02_in_call", {"ha_softphone": state, "ws3": await ha.state(WS3_STATE)})
+    if str(state.get("state")).lower() != "in_call":
+        raise AssertionError(f"HA softphone did not enter in_call after answer: {state}")
     await click_card_button(page, mode="ha_softphone", text="Hangup")
     await wait_entity(ha, WS3_STATE, {"Idle"}, 12, "ws3 idle after HA card hangup")
     await asyncio.sleep(0.8)

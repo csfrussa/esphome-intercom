@@ -178,7 +178,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps PBX-lite signaling + AEC/i2s lifecycle visible.
+  # DEBUG keeps SIP signaling + AEC/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -188,7 +188,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -640,7 +639,7 @@ script:
             case 9:  // IC Outgoing: orange strobe
               led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
               break;
-            case 10: // IC Streaming: green solid
+            case 10: // IC In Call: green solid
               led->turn_on().set_rgb(0.0f, 1.0f, 0.0f).set_brightness(1.0f).set_effect("None").perform();
               break;
             case 11: // VA Error: red solid
@@ -973,7 +972,7 @@ script:
           auto s = id(intercom).get_state_str();
           bool in_call = (s == "Ringing" || s == "Incoming" ||
                           s == "Calling" || s == "Outgoing" ||
-                          s == "Streaming" || s == "Answering");
+                          s == "In Call" || s == "Connecting");
           if (in_call) {
             id(ic_settings_active) = false;  // call interrupts settings view
           }
@@ -1002,7 +1001,7 @@ script:
               target = id(ic_ringing_in_page)->obj;
             } else if (s == "Calling" || s == "Outgoing") {
               target = id(ic_ringing_out_page)->obj;
-            } else if (s == "Streaming" || s == "Answering") {
+            } else if (s == "In Call" || s == "Connecting") {
               target = id(ic_in_call_page)->obj;
             } else {
               target = id(ic_idle_page)->obj;

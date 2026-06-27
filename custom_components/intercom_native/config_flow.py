@@ -8,12 +8,9 @@ from homeassistant.helpers.selector import BooleanSelector, NumberSelector, Numb
 from .const import (
     CONF_ASSIST_INTENTS,
     DOMAIN,
-    INTERCOM_PORT,
+    INTERCOM_RTP_PORT,
     INTERCOM_SIP_PORT,
-    INTERCOM_UDP_AUDIO_PORT,
-    INTERCOM_UDP_CONTROL_PORT,
 )
-from .audio_format import UDP_SAFE_PAYLOAD_BYTES
 
 
 def _port_selector():
@@ -28,36 +25,24 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input=None):
         """Handle install/reconfigure of the single Intercom Native entry.
 
-        Two transport toggles, four port knobs. Defaults follow the
-        project standard: 6054 for the data plane (TCP and UDP audio
-        share the number on different protocols), 6055 for UDP control.
+        SIP is the only HA call-control transport. HA listens as a SIP
+        softphone/B2BUA; ESP devices choose SIP UDP or SIP TCP in their own
+        `intercom_api.protocol` option.
         """
         current_entry = next(iter(self._async_current_entries()), None)
         existing = current_entry.data if current_entry else {}
         defaults = {
-            "use_tcp": existing.get("use_tcp", True),
             "use_sip": existing.get("use_sip", True),
             "sip_port": existing.get("sip_port", INTERCOM_SIP_PORT),
-            "use_udp": existing.get("use_udp", False),
-            "tcp_port": existing.get("tcp_port", INTERCOM_PORT),
-            "udp_audio_port": existing.get("udp_audio_port", INTERCOM_UDP_AUDIO_PORT),
-            "udp_control_port": existing.get("udp_control_port", INTERCOM_UDP_CONTROL_PORT),
-            "udp_max_payload": existing.get("udp_max_payload", UDP_SAFE_PAYLOAD_BYTES),
+            "rtp_port": existing.get("rtp_port", INTERCOM_RTP_PORT),
             "advertise_host": existing.get("advertise_host", ""),
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
         }
         schema = vol.Schema(
             {
-                vol.Required("use_tcp", default=defaults["use_tcp"]): BooleanSelector(),
-                vol.Required("tcp_port", default=defaults["tcp_port"]): _port_selector(),
                 vol.Required("use_sip", default=defaults["use_sip"]): BooleanSelector(),
                 vol.Required("sip_port", default=defaults["sip_port"]): _port_selector(),
-                vol.Required("use_udp", default=defaults["use_udp"]): BooleanSelector(),
-                vol.Required("udp_audio_port", default=defaults["udp_audio_port"]): _port_selector(),
-                vol.Required("udp_control_port", default=defaults["udp_control_port"]): _port_selector(),
-                vol.Required("udp_max_payload", default=defaults["udp_max_payload"]): NumberSelector(
-                    NumberSelectorConfig(min=576, max=65507, step=1, mode="box")
-                ),
+                vol.Required("rtp_port", default=defaults["rtp_port"]): _port_selector(),
                 vol.Optional("advertise_host", default=defaults["advertise_host"]): str,
                 vol.Required(
                     CONF_ASSIST_INTENTS,
@@ -69,14 +54,12 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # Number selectors hand floats; coerce to int once on the boundary.
-            for k in ("tcp_port", "sip_port", "udp_audio_port", "udp_control_port", "udp_max_payload"):
+            for k in ("sip_port", "rtp_port"):
                 user_input[k] = int(user_input[k])
             user_input["advertise_host"] = (user_input.get("advertise_host") or "").strip()
 
-            if not user_input["use_tcp"] and not user_input["use_udp"] and not user_input["use_sip"]:
-                errors["base"] = "at_least_one_transport"
-            elif user_input["use_udp"] and user_input["udp_audio_port"] == user_input["udp_control_port"]:
-                errors["base"] = "udp_ports_must_differ"
+            if not user_input["use_sip"]:
+                errors["base"] = "sip_required"
             elif current_entry is not None:
                 return self.async_update_reload_and_abort(
                     current_entry,

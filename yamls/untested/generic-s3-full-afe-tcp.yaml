@@ -41,8 +41,7 @@ substitutions:
   # Microphone ID for package mute switch
   mic_id: mic_main
 
-  # Non-default port used by the integration test matrix to prove that mDNS,
-  # HA phonebook generation, and TCP bridge dialing do not assume 6054.
+  # Non-default port used by the integration test matrix to prove that # HA phonebook generation, and TCP bridge dialing do not assume 6054.
   intercom_tcp_port: "6154"
 
 # =============================================================================
@@ -106,7 +105,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # DEBUG keeps SIP bridge signaling + AEC/AFE/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -129,7 +128,6 @@ logger:
     media_player: INFO
     resampler: INFO
     mixer_speaker: INFO
-    mdns: INFO
     wifi: INFO
     json: INFO
     intercom_api: INFO

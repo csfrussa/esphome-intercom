@@ -13,13 +13,13 @@ const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
 const HIDDEN_HANGUP_GRACE_MS = 15000;
 const CONTROL_ACK_TIMEOUT_MS = 3000;
 const ENGINE_TRANSITIONS = {
-  IDLE: ["CALLING", "RINGING", "STREAMING", "ERROR"],
-  CALLING: ["RINGING", "STREAMING", "ERROR"],
-  RINGING: ["STREAMING", "ERROR"],
-  STREAMING: ["ERROR"],
-  ERROR: ["CALLING", "RINGING", "STREAMING"],
+  IDLE: ["CALLING", "RINGING", "IN_CALL", "ERROR"],
+  CALLING: ["RINGING", "IN_CALL", "ERROR"],
+  RINGING: ["IN_CALL", "ERROR"],
+  IN_CALL: ["ERROR"],
+  ERROR: ["CALLING", "RINGING", "IN_CALL"],
 };
-const LEGACY_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
+const DEFAULT_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
 
 class IntercomEngine extends EventTarget {
   constructor() {
@@ -29,8 +29,8 @@ class IntercomEngine extends EventTarget {
     this._state = "IDLE";
     this._deviceId = "";
     this._audioMode = "full_duplex";
-    this._txFormat = LEGACY_FORMAT;
-    this._rxFormat = LEGACY_FORMAT;
+    this._txFormat = DEFAULT_FORMAT;
+    this._rxFormat = DEFAULT_FORMAT;
     this._lastSessionPayload = null;
     this._mediaStream = null;
     this._audioContext = null;
@@ -254,7 +254,7 @@ class IntercomEngine extends EventTarget {
   }
 
   _isTerminalControlReply(msg) {
-    return !!msg?.error || ["streaming", "idle", "error"].includes(String(msg?.state || "").toLowerCase());
+    return !!msg?.error || ["in_call", "idle", "error"].includes(String(msg?.state || "").toLowerCase());
   }
 
   _sendAudio(buffer) {
@@ -293,7 +293,7 @@ class IntercomEngine extends EventTarget {
     return new Ctor();
   }
 
-  _parseFormat(token, fallback = LEGACY_FORMAT) {
+  _parseFormat(token, fallback = DEFAULT_FORMAT) {
     const parts = String(token || "").split(":");
     if (parts.length !== 4) return fallback;
     const sampleRate = Number(parts[0]);
@@ -305,7 +305,7 @@ class IntercomEngine extends EventTarget {
     return { sampleRate, pcmFormat, channels, frameMs };
   }
 
-  _chooseDeviceFormat(deviceInfo, key, fallback = LEGACY_FORMAT) {
+  _chooseDeviceFormat(deviceInfo, key, fallback = DEFAULT_FORMAT) {
     const formats = Array.isArray(deviceInfo?.[key]) ? deviceInfo[key] : [];
     return this._parseFormat(formats[0], fallback);
   }
@@ -392,7 +392,7 @@ class IntercomEngine extends EventTarget {
       callee: context.callee || deviceInfo.name || "",
       call_id: context.call_id || "",
     }, true);
-    if (!["streaming", "ringing"].includes(reply?.state)) {
+    if (!["in_call", "ringing"].includes(reply?.state)) {
       this._setState("ERROR");
       return;
     }
@@ -401,26 +401,19 @@ class IntercomEngine extends EventTarget {
   }
 
   async startHaSoftphone(target, softphoneInfo, context = {}) {
-    const info = { ...(softphoneInfo || {}), device_id: HA_SOFTPHONE_DEVICE_ID, audio_mode: target.audio_mode || "full_duplex" };
-    await this._connect(HA_SOFTPHONE_DEVICE_ID);
     this._resetStats();
     this._setState("CALLING");
-    const reply = await this._sendControl({
-      type: "ha_softphone_start",
+    const reply = await this._hass.callWS({
+      type: "intercom_native/ha_softphone_start",
       target_name: context.callee || target.name || "",
       callee: context.callee || target.name || "",
       call_id: context.call_id || "",
-    }, true);
-    if (!["streaming", "ringing"].includes(reply?.state)) {
+    });
+    if (!["calling", "remote_ringing", "ringing", "in_call"].includes(String(reply?.state || "").toLowerCase())) {
       this._setState("ERROR");
       return;
     }
-    if (!await this._setupAudioOrAbort(
-      HA_SOFTPHONE_DEVICE_ID,
-      { ...info, tx_formats: target.tx_formats, rx_formats: target.rx_formats },
-      reply,
-    )) return;
-    this._setState(reply.state);
+    this._setState(String(reply.state || "calling").toUpperCase());
     return reply;
   }
 
@@ -433,13 +426,13 @@ class IntercomEngine extends EventTarget {
       true,
       (msg) => this._isTerminalControlReply(msg),
     );
-    if (reply?.state !== "streaming") {
+    if (reply?.state !== "in_call") {
       this._setState("ERROR");
       await this.stop(deviceId).catch(() => this.close("answer_failed"));
       return;
     }
     if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, reply)) return;
-    this._setState("STREAMING");
+    this._setState("IN_CALL");
   }
 
   async answerHaSoftphone(deviceInfo, context = {}) {
@@ -465,12 +458,12 @@ class IntercomEngine extends EventTarget {
       true,
       (msg) => this._isTerminalControlReply(msg),
     );
-    if (reply?.state !== "streaming") {
+    if (reply?.state !== "in_call") {
       this._setState("ERROR");
       await this.close("ha_softphone_answer_failed", { sendHangup: false });
       return reply || { state: "error", error: "answer_failed" };
     }
-    this._setState("STREAMING");
+    this._setState("IN_CALL");
     return reply;
   }
 
@@ -489,28 +482,28 @@ class IntercomEngine extends EventTarget {
       true,
       (msg) => this._isTerminalControlReply(msg),
     );
-    if (reply?.state !== "streaming") {
+    if (reply?.state !== "in_call") {
       this._setState("ERROR");
       return;
     }
     if (!await this._setupAudioOrAbort(deviceInfo.device_id, deviceInfo, reply)) return;
-    this._setState("STREAMING");
+    this._setState("IN_CALL");
   }
 
   async resumeSession(deviceInfo, sessionDeviceId, statePayload) {
     const state = String(statePayload?.state || "").toLowerCase();
-    if (!["calling", "outgoing", "ringing", "streaming"].includes(state)) return;
+    if (!["calling", "remote_ringing", "ringing", "in_call"].includes(state)) return;
     const deviceId = sessionDeviceId || statePayload?.session_device_id || statePayload?.device_id || this._deviceId;
     if (!deviceId) return;
     if (this._ws && this._deviceId === deviceId && this._ws.readyState === WebSocket.OPEN) {
-      this._setState(state === "streaming" ? "STREAMING" : state === "ringing" ? "RINGING" : "CALLING");
+      this._setState(state === "in_call" ? "IN_CALL" : state === "ringing" ? "RINGING" : "CALLING");
       return;
     }
     await this._connect(deviceId);
     this._resetStats();
-    if (state === "streaming") {
+    if (state === "in_call") {
       if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, statePayload)) return;
-      this._setState("STREAMING");
+      this._setState("IN_CALL");
     } else {
       this._setState(state === "ringing" ? "RINGING" : "CALLING");
     }

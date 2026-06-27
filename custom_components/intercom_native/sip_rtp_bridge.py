@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 import logging
 import secrets
+from typing import Any
 
 from . import rtp
 from .audio_format import AudioFormat
@@ -65,6 +66,14 @@ class SipRtpRelay:
         self.right_transport: asyncio.DatagramTransport | None = None
         self.forwarded = 0
         self.dropped = 0
+        self.left_rx_packets = 0
+        self.left_rx_bytes = 0
+        self.left_tx_packets = 0
+        self.left_tx_bytes = 0
+        self.right_rx_packets = 0
+        self.right_rx_bytes = 0
+        self.right_tx_packets = 0
+        self.right_tx_bytes = 0
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -80,11 +89,15 @@ class SipRtpRelay:
 
     async def stop(self) -> None:
         _LOGGER.info(
-            "SIP RTP relay stopped left=%s right=%s forwarded=%s dropped=%s",
+            "SIP RTP relay stopped left=%s right=%s forwarded=%s dropped=%s left_rx=%s right_rx=%s left_tx=%s right_tx=%s",
             self.left_port,
             self.right_port,
             self.forwarded,
             self.dropped,
+            self.left_rx_packets,
+            self.right_rx_packets,
+            self.left_tx_packets,
+            self.right_tx_packets,
         )
         if self.left_transport is not None:
             self.left_transport.close()
@@ -124,7 +137,37 @@ class SipRtpRelay:
             self.dropped += 1
             _LOGGER.debug("RTP relay drop: %s", err)
             return
+        if side == "left":
+            self.left_rx_packets += 1
+            self.left_rx_bytes += len(data)
+        else:
+            self.right_rx_packets += 1
+            self.right_rx_bytes += len(data)
         dest.sequence = rtp.next_sequence(dest.sequence)
         dest.timestamp = rtp.next_timestamp(dest.timestamp, dest.outbound_audio_format.nominal_frame_samples)
         transport.sendto(out, (dest.host, dest.port))
+        if side == "left":
+            self.right_tx_packets += 1
+            self.right_tx_bytes += len(out)
+        else:
+            self.left_tx_packets += 1
+            self.left_tx_bytes += len(out)
         self.forwarded += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "left_port": self.left_port,
+            "right_port": self.right_port,
+            "left_peer": f"{self.left.host}:{self.left.port}",
+            "right_peer": f"{self.right.host}:{self.right.port}",
+            "forwarded_packets": self.forwarded,
+            "dropped_packets": self.dropped,
+            "left_rx_packets": self.left_rx_packets,
+            "left_rx_bytes": self.left_rx_bytes,
+            "left_tx_packets": self.left_tx_packets,
+            "left_tx_bytes": self.left_tx_bytes,
+            "right_rx_packets": self.right_rx_packets,
+            "right_rx_bytes": self.right_rx_bytes,
+            "right_tx_packets": self.right_tx_packets,
+            "right_tx_bytes": self.right_tx_bytes,
+        }

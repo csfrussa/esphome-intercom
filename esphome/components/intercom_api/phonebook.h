@@ -37,22 +37,10 @@ inline const char *contact_protocol_to_str(ContactProtocol protocol) {
 }
 
 /// One phonebook slot. Empty ip/port = no endpoint yet (name-only placeholder).
-/// Legacy entries are still accepted:
-///   Name
-///   Name|ip
-///   Name|ip|port
-///   Name|ip|audio_port|control_port
-/// New protocol-aware entries are:
-///   Name|tcp|ip|port[|audio_capability]
-///   Name|udp|ip|audio_port|control_port[|audio_capability]
-///   Name|sip|ip|sip_port|rtp_port[|sip_transport][|audio_capability]
-///   Name|ha|ip|port[|control_port]
-///
-/// The HA-wide unified roster can also publish HA as:
-///   Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
-/// IntercomApi normalizes that six-field HA row into a local TCP/UDP endpoint
-/// before it reaches Phonebook, because Phonebook stores one dialable endpoint
-/// per slot.
+/// SIP phonebook entries:
+///   Name|sip|ip|sip_port|rtp_port[|audio_capability[|tx_formats|rx_formats[|sip_transport]]]
+/// Short explicit SIP rows are also accepted:
+///   Name|sip|ip|sip_port|rtp_port|sip_transport
 /// missing_count tracks consecutive update cycles where this slot was not seen
 /// by any source; commit_cycle() advances/resets it and prunes once the
 /// configured threshold is hit. Default 0 keeps pruning disabled.
@@ -286,10 +274,9 @@ class Phonebook {
   size_t cursor() const { return this->index_; }
 
  protected:
-  /// Dedup by name; on endpoint conflict the last writer wins. Same-transport
-  /// peers can arrive from HA sensor and mDNS with the same endpoint;
-  /// cross-transport peers arrive target-shaped from HA because local mDNS
-  /// never crosses protocols. DHCP IP changes resolve on the next batch.
+  /// Dedup by name; on endpoint conflict the last writer wins. HA is the
+  /// authority for cross-device SIP routing, including cross-transport peers.
+  /// DHCP IP changes resolve on the next batch.
   AddResult merge_(const ContactEntry &incoming) {
     for (auto &existing : this->entries_) {
       if (existing.name != incoming.name) continue;
@@ -380,25 +367,33 @@ class Phonebook {
     }
 
     if (protocol == ContactProtocol::SIP) {
-      if (parts.size() != 5 && parts.size() != 6 && parts.size() != 7) return false;
+      if (parts.size() < 5 || parts.size() > 9) return false;
       if (!parse_u16_(trim_(parts[3]), &out->port) ||
           !parse_u16_(trim_(parts[4]), &out->control_port)) {
         return false;
       }
-      if (parts.size() >= 6) {
+      if (parts.size() == 6) {
         const std::string transport = trim_(parts[5]);
         if (transport == "tcp" || transport == "TCP") {
           out->sip_transport_tcp = true;
         } else if (transport == "udp" || transport == "UDP" || transport.empty()) {
           out->sip_transport_tcp = false;
-        } else if (parts.size() == 6) {
+        } else {
           out->audio_capability = transport;
-          return true;
+        }
+        return true;
+      }
+      if (parts.size() >= 6) out->audio_capability = trim_(parts[5]);
+      if (parts.size() >= 9) {
+        const std::string transport = trim_(parts[8]);
+        if (transport == "tcp" || transport == "TCP") {
+          out->sip_transport_tcp = true;
+        } else if (transport == "udp" || transport == "UDP" || transport.empty()) {
+          out->sip_transport_tcp = false;
         } else {
           return false;
         }
       }
-      if (parts.size() == 7) out->audio_capability = trim_(parts[6]);
       return true;
     }
 

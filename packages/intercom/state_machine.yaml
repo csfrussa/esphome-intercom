@@ -4,7 +4,7 @@
 #
 # g_applied_led values (intercom subset):
 #   0=off, 1=both_muted, 2=mic_muted, 3=spk_muted,
-#   8=ic_ringing, 9=ic_outgoing, 10=ic_streaming
+#   8=ic_ringing, 9=ic_calling, 10=ic_in_call
 #
 # Prerequisites in the device YAML:
 #   - id `intercom`     : intercom_api component
@@ -34,8 +34,8 @@ script:
           else if (id(mute).state) target = 2;
           else if (id(speaker_mute).state) target = 3;
           else if (id(intercom).is_ringing()) target = 8;
-          else if (id(intercom).is_outgoing()) target = 9;
-          else if (id(intercom).is_streaming()) target = 10;
+          else if (id(intercom).is_calling()) target = 9;
+          else if (id(intercom).is_in_call()) target = 10;
           id(g_applied_led) = target;
       - script.execute: update_led
 
@@ -62,10 +62,10 @@ script:
             case 8:  // IC Ringing: red strobe
               led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
               break;
-            case 9:  // IC Outgoing: orange strobe
+            case 9:  // IC Calling: orange strobe
               led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
               break;
-            case 10: // IC Streaming: green solid
+            case 10: // IC In Call: green solid
               led->turn_on().set_rgb(0.3f, 0.69f, 0.31f).set_brightness(1.0f).set_effect("None").perform();
               break;
             default: // Off

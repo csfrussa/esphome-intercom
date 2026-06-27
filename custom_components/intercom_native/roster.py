@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 
 RosterKind = Literal["ha", "esp", "phone", "sip", "group"]
-RouteKind = Literal["direct", "via_ha", "requires_pbx", "group"]
+RouteKind = Literal["direct", "bridge", "requires_bridge", "group"]
 _PHONE_RE = re.compile(r"^[+0-9][0-9 .()/-]{2,}$")
 
 
@@ -25,7 +25,7 @@ class RosterEntry:
     address: str = ""
     sip_uri: str = ""
     number: str = ""
-    route_via_ha: bool = False
+    ha_bridge: bool = False
     enabled: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -59,7 +59,7 @@ def _entry_from_mapping(raw: dict[str, Any]) -> RosterEntry:
         address=str(raw.get("address") or raw.get("host") or "").strip(),
         sip_uri=str(raw.get("sip_uri") or "").strip(),
         number=str(raw.get("number") or "").strip(),
-        route_via_ha=bool(raw.get("route_via_ha", False)),
+        ha_bridge=bool(raw.get("ha_bridge", False)),
         enabled=bool(raw.get("enabled", True)),
         metadata=dict(raw.get("metadata") or {}),
     )
@@ -96,7 +96,7 @@ def dump_roster_json(entries: list[RosterEntry]) -> str:
                 "address": entry.address,
                 "sip_uri": entry.sip_uri,
                 "number": entry.number,
-                "route_via_ha": entry.route_via_ha,
+                "ha_bridge": entry.ha_bridge,
                 "enabled": entry.enabled,
                 "metadata": entry.metadata,
             }
@@ -170,7 +170,7 @@ def resolve_target(
     target: str,
     entries: list[RosterEntry],
     *,
-    route_via_ha: bool = False,
+    ha_bridge: bool = False,
     ha_host: str = "",
     ha_sip_port: int = 5060,
     force_ha: bool | None = None,
@@ -179,7 +179,7 @@ def resolve_target(
     if not target:
         raise RosterError("empty call target")
     if force_ha is not None:
-        route_via_ha = bool(force_ha)
+        ha_bridge = bool(force_ha)
     if target.lower().startswith("sip:") and "@" in target:
         return RouteDecision("direct", target, target)
 
@@ -198,49 +198,49 @@ def resolve_target(
     if ha is None and ha_host:
         ha = RosterEntry(id="HA", name="HA", kind="ha", address=ha_host, metadata={"sip_port": ha_sip_port})
     if entry is not None and not entry.enabled:
-        return RouteDecision("via_ha", target, "", entry=entry, reason="disabled")
+        return RouteDecision("bridge", target, "", entry=entry, reason="disabled")
 
     if entry is not None:
         if entry.kind == "phone":
             number = entry.number or entry.id
             if ha is None:
-                return RouteDecision("requires_pbx", number, "", entry=entry, reason="ha_required")
-            return RouteDecision("requires_pbx", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
+                return RouteDecision("requires_bridge", number, "", entry=entry, reason="ha_required")
+            return RouteDecision("requires_bridge", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.kind == "sip" and entry.sip_uri:
             if not _sip_uri_transport(entry.sip_uri) and not _sip_transport(entry):
                 if ha is not None:
                     return RouteDecision(
-                        "via_ha",
+                        "bridge",
                         entry.id,
                         _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
                         entry=entry,
                         reason="missing_direct_transport",
                     )
-                return RouteDecision("via_ha", entry.id, "", entry=entry, reason="missing_direct_transport")
+                return RouteDecision("bridge", entry.id, "", entry=entry, reason="missing_direct_transport")
             return RouteDecision("direct", entry.id, entry.sip_uri, entry=entry)
         if entry.kind == "group":
             return RouteDecision("group", entry.id, "", entry=entry)
-        if (route_via_ha or entry.route_via_ha or not entry.address) and ha is not None and entry.kind != "ha":
-            return RouteDecision("via_ha", entry.id, _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
+        if (ha_bridge or entry.ha_bridge or not entry.address) and ha is not None and entry.kind != "ha":
+            return RouteDecision("bridge", entry.id, _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.address:
             transport = _sip_transport(entry)
             if entry.kind == "esp" and not transport:
                 if ha is not None:
                     return RouteDecision(
-                        "via_ha",
+                        "bridge",
                         entry.id,
                         _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
                         entry=entry,
                         reason="missing_direct_transport",
                     )
-                return RouteDecision("via_ha", entry.id, "", entry=entry, reason="missing_direct_transport")
+                return RouteDecision("bridge", entry.id, "", entry=entry, reason="missing_direct_transport")
             return RouteDecision("direct", entry.id, _sip_uri(entry.id, entry.address, _entry_sip_port(entry), transport), entry=entry)
 
     if _looks_phone(target):
         if ha is None:
-            return RouteDecision("requires_pbx", target, "", reason="ha_required")
-        return RouteDecision("requires_pbx", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))
+            return RouteDecision("requires_bridge", target, "", reason="ha_required")
+        return RouteDecision("requires_bridge", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))
 
     if ha is None:
-        return RouteDecision("via_ha", target, "", reason="ha_required")
-    return RouteDecision("via_ha", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))
+        return RouteDecision("bridge", target, "", reason="ha_required")
+    return RouteDecision("bridge", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))

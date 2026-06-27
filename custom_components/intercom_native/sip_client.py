@@ -6,11 +6,15 @@ import asyncio
 from dataclasses import dataclass
 import logging
 import socket
+from typing import Any
 
-from .audio_format import AudioFormat, LEGACY_AUDIO_FORMAT, PcmFormat
+from .audio_format import AudioFormat, DEFAULT_AUDIO_FORMAT, PcmFormat
 from . import rtp, sdp, sip
 
 _LOGGER = logging.getLogger(__name__)
+
+SIP_T1 = 0.5
+SIP_T2 = 4.0
 
 
 def pcm_to_rtp_payload(data: bytes, fmt: AudioFormat) -> bytes:
@@ -165,7 +169,7 @@ class SipCallClient:
         self.local_name = local_name
         self.local_sip_port = int(local_sip_port)
         self.local_rtp_port = int(local_rtp_port)
-        base_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
+        base_formats = supported_formats or [DEFAULT_AUDIO_FORMAT]
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.signaling_transport = (signaling_transport or "UDP").upper()
@@ -183,6 +187,15 @@ class SipCallClient:
         self._pending_request_uri = ""
         self._pending_local_uri = ""
         self._pending_remote_uri = ""
+        self.last_sip_event = ""
+        self.last_sip_status_code = 0
+        self.last_sip_reason = ""
+
+    def _mark_sip_event(self, event: str, status: int = 0, reason: str = "") -> None:
+        self.last_sip_event = event
+        if status:
+            self.last_sip_status_code = int(status)
+            self.last_sip_reason = reason or ""
 
     async def start(self) -> None:
         if self.signaling_transport == "TCP":
@@ -322,16 +335,38 @@ class SipCallClient:
             headers.append(("X-Intercom-Dest-Route", dest_name))
         self._invite_cseq = self.dialog_ids.cseq
         raw = sip.build_request("INVITE", request_uri, headers, body)
+        self._mark_sip_event("INVITE")
         await self._send_raw(raw, remote_host, int(remote_sip_port))
         _LOGGER.info("SIP TX INVITE %s@%s:%s", target, remote_host, remote_sip_port)
-        deadline = asyncio.get_running_loop().time() + timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        retransmit_interval = SIP_T1
+        next_retransmit = loop.time() + retransmit_interval
+        udp_invite_retransmits = 0
         while True:
-            remaining = deadline - asyncio.get_running_loop().time()
+            now = loop.time()
+            remaining = deadline - now
             if remaining <= 0:
                 return "timeout"
+            read_timeout = remaining
+            if self.signaling_transport != "TCP":
+                read_timeout = min(read_timeout, max(0.0, next_retransmit - now))
             try:
-                received = await self._read_response(remaining)
+                received = await self._read_response(read_timeout)
                 if received is None:
+                    if self.signaling_transport != "TCP" and loop.time() < deadline:
+                        await self._send_raw(raw, remote_host, int(remote_sip_port))
+                        udp_invite_retransmits += 1
+                        _LOGGER.debug(
+                            "SIP UDP retransmit INVITE #%d %s@%s:%s",
+                            udp_invite_retransmits,
+                            target,
+                            remote_host,
+                            remote_sip_port,
+                        )
+                        retransmit_interval = min(retransmit_interval * 2, SIP_T2)
+                        next_retransmit = loop.time() + retransmit_interval
+                        continue
                     return "timeout"
                 msg, addr = received
             except Exception as err:
@@ -339,20 +374,21 @@ class SipCallClient:
                 continue
             if not msg.is_response:
                 continue
+            self._mark_sip_event("SIP_RESPONSE", int(msg.status_code or 0), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
             if msg.status_code == 180:
                 return "ringing"
             if msg.status_code and 200 <= msg.status_code < 300:
                 if not self._commit_200_ok(msg, target, remote_host, int(remote_sip_port), request_uri, local_uri, remote_uri):
-                    return "incompatible_audio_format"
-                return "streaming"
+                    return "media_incompatible"
+                return "in_call"
             if msg.status_code and msg.status_code >= 300:
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
     async def wait_for_final(self, timeout: float = 60.0) -> str:
         """Continue an INVITE transaction after the first 180 Ringing."""
         if self.dialog is not None:
-            return "streaming"
+            return "in_call"
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -367,6 +403,7 @@ class SipCallClient:
                 continue
             if not msg.is_response or msg.status_code is None:
                 continue
+            self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
             if msg.status_code == 180:
                 continue
@@ -380,8 +417,8 @@ class SipCallClient:
                     self._pending_local_uri,
                     self._pending_remote_uri,
                 ):
-                    return "incompatible_audio_format"
-                return "streaming"
+                    return "media_incompatible"
+                return "in_call"
             if msg.status_code >= 300:
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
@@ -448,6 +485,7 @@ class SipCallClient:
         )
         raw = sip.build_request("ACK", request_uri, headers, b"")
         self._send_dialog_request(raw, host, port)
+        self._mark_sip_event("ACK")
         _LOGGER.info("SIP TX ACK %s:%s", host, port)
 
     def bye(self) -> None:
@@ -471,6 +509,7 @@ class SipCallClient:
         )
         raw = sip.build_request("BYE", self.dialog.remote_uri, headers, b"")
         self._send_dialog_request(raw, self.dialog.remote_host, self.dialog.remote_sip_port)
+        self._mark_sip_event("BYE")
         _LOGGER.info("SIP TX BYE %s:%s", self.dialog.remote_host, self.dialog.remote_sip_port)
 
     def cancel(self) -> None:
@@ -500,6 +539,7 @@ class SipCallClient:
         )
         raw = sip.build_request("CANCEL", self._pending_request_uri, headers, b"")
         self._send_dialog_request(raw, self._pending_remote_host, self._pending_remote_sip_port)
+        self._mark_sip_event("CANCEL")
         _LOGGER.info("SIP TX CANCEL %s:%s", self._pending_remote_host, self._pending_remote_sip_port)
 
     def bye_or_cancel(self) -> None:
@@ -507,6 +547,27 @@ class SipCallClient:
             self.bye()
         else:
             self.cancel()
+
+    def snapshot(self) -> dict[str, Any]:
+        dialog = self.dialog
+        return {
+            "call_id": self.dialog_ids.call_id,
+            "local_uri": dialog.local_uri if dialog is not None else self._pending_local_uri,
+            "remote_uri": dialog.remote_uri if dialog is not None else self._pending_remote_uri,
+            "remote_host": dialog.remote_host if dialog is not None else self._pending_remote_host,
+            "remote_sip_port": dialog.remote_sip_port if dialog is not None else self._pending_remote_sip_port,
+            "remote_rtp_host": dialog.remote_rtp_host if dialog is not None else "",
+            "remote_rtp_port": dialog.remote_rtp_port if dialog is not None else 0,
+            "local_rtp_port": dialog.local_rtp_port if dialog is not None else self.local_rtp_port,
+            "selected_tx_format": dialog.send_format.audio_format.wire_token() if dialog is not None else "",
+            "selected_rx_format": dialog.recv_format.audio_format.wire_token() if dialog is not None else "",
+            "dialog_active": dialog is not None,
+            "pending_invite": bool(self._pending_request_uri and dialog is None),
+            "sip_transport": self.signaling_transport.lower(),
+            "last_sip_event": self.last_sip_event,
+            "last_sip_status_code": self.last_sip_status_code,
+            "last_sip_reason": self.last_sip_reason,
+        }
 
 
 def _extract_tag(header: str) -> str:

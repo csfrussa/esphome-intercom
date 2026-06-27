@@ -1,73 +1,99 @@
-"""PBX-lite FSM vocabulary shared by HA sessions and bridges.
-
-This mirrors the ESP-side `intercom_fsm.h` state/reason vocabulary. The enum
-names are implementation detail; the string values are the wire/UI contract.
-"""
+"""SIP call-state vocabulary shared by HA sessions and bridges."""
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 
 
 class CallState(StrEnum):
     IDLE = "idle"
-    OUTGOING = "outgoing"
+    CALLING = "calling"
+    REMOTE_RINGING = "remote_ringing"
     RINGING = "ringing"
-    STREAMING = "streaming"
+    CONNECTING = "connecting"
+    IN_CALL = "in_call"
+    TERMINATING = "terminating"
+    BUSY = "busy"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    MEDIA_INCOMPATIBLE = "media_incompatible"
+    TRANSPORT_UNREACHABLE = "transport_unreachable"
+    AUTH_REQUIRED_UNSUPPORTED = "auth_required_unsupported"
 
 
 class TerminalReason(StrEnum):
     LOCAL_HANGUP = "local_hangup"
     REMOTE_HANGUP = "remote_hangup"
-    REMOTE_DEVICE_LOST = "remote_device_lost"
     DECLINED = "declined"
+    CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     BUSY = "busy"
-    UNREACHABLE = "unreachable"
+    TRANSPORT_UNREACHABLE = "transport_unreachable"
+    MEDIA_INCOMPATIBLE = "media_incompatible"
+    AUTH_REQUIRED_UNSUPPORTED = "auth_required_unsupported"
+    PROXY_AUTH_REQUIRED_UNSUPPORTED = "proxy_auth_required_unsupported"
     PROTOCOL_ERROR = "protocol_error"
-    BRIDGE_ERROR = "bridge_error"
-    DND = "DND"
 
 
-class SessionState(StrEnum):
-    """Internal lifecycle of one HA-owned session."""
+@dataclass(slots=True)
+class SipPhoneState:
+    """Public SIP phone state exposed by HA and mirrored by ESP snapshots."""
 
-    IDLE = "s_idle"
-    CONNECTING = "s_connecting"
-    RINGING_IN = "s_ringing_in"
-    RINGING_OUT = "s_ringing_out"
-    STREAMING = "s_streaming"
-    ENDED = "s_ended"
+    state: str = CallState.IDLE.value
+    call_id: str = ""
+    direction: str = ""
+    caller: str = ""
+    callee: str = ""
+    local_uri: str = ""
+    remote_uri: str = ""
+    contact: str = ""
+    sip_transport: str = "udp"
+    sip_status_code: int = 0
+    terminal_reason: str = ""
+    selected_tx_format: str = ""
+    selected_rx_format: str = ""
+    rtp_tx_packets: int = 0
+    rtp_rx_packets: int = 0
+    rtp_tx_bytes: int = 0
+    rtp_rx_bytes: int = 0
+    last_sip_event: str = ""
+
+    def as_dict(self) -> dict[str, str | int]:
+        return asdict(self)
 
 
-SESSION_TRANSITIONS: dict[SessionState, frozenset[SessionState]] = {
-    SessionState.IDLE: frozenset(
-        {SessionState.CONNECTING, SessionState.RINGING_IN, SessionState.ENDED}
-    ),
-    SessionState.CONNECTING: frozenset(
-        {SessionState.STREAMING, SessionState.RINGING_OUT, SessionState.ENDED}
-    ),
-    SessionState.RINGING_IN: frozenset({SessionState.STREAMING, SessionState.ENDED}),
-    SessionState.RINGING_OUT: frozenset(
-        {SessionState.RINGING_OUT, SessionState.STREAMING, SessionState.ENDED}
-    ),
-    SessionState.STREAMING: frozenset({SessionState.ENDED}),
-    SessionState.ENDED: frozenset(),
-}
+def sip_phone_state(**values: object) -> dict[str, str | int]:
+    """Return a complete SipPhoneState dict, ignoring unknown keys."""
 
-
-def can_transition(current: SessionState, target: SessionState) -> bool:
-    """True when the session transition is legal."""
-    return target in SESSION_TRANSITIONS[current]
+    allowed = SipPhoneState.__dataclass_fields__
+    clean = {key: value for key, value in values.items() if key in allowed}
+    return SipPhoneState(**clean).as_dict()
 
 
 def terminal_state_for_decline(reason: str) -> str:
-    """Empty DECLINE is normal remote hangup; non-empty is declined."""
-    return "declined" if reason else "idle"
+    """Map SIP final/terminal reasons to public SIP call states."""
+    reason = (reason or "").strip()
+    if not reason:
+        return CallState.IDLE.value
+    if reason == TerminalReason.BUSY.value:
+        return CallState.BUSY.value
+    if reason == TerminalReason.CANCELLED.value:
+        return CallState.CANCELLED.value
+    if reason == TerminalReason.MEDIA_INCOMPATIBLE.value:
+        return CallState.MEDIA_INCOMPATIBLE.value
+    if reason in (
+        TerminalReason.AUTH_REQUIRED_UNSUPPORTED.value,
+        TerminalReason.PROXY_AUTH_REQUIRED_UNSUPPORTED.value,
+    ):
+        return CallState.AUTH_REQUIRED_UNSUPPORTED.value
+    if reason == TerminalReason.TRANSPORT_UNREACHABLE.value:
+        return CallState.TRANSPORT_UNREACHABLE.value
+    return CallState.DECLINED.value
 
 
 def terminal_reason_for_decline(reason: str) -> str:
-    """Normalize DECLINE reason for HA events."""
+    """Normalize SIP terminal reason for HA events."""
     return reason or TerminalReason.REMOTE_HANGUP.value
 
 
@@ -75,7 +101,6 @@ def is_hangup_reason(reason: str) -> bool:
     return reason in (
         TerminalReason.LOCAL_HANGUP.value,
         TerminalReason.REMOTE_HANGUP.value,
-        TerminalReason.REMOTE_DEVICE_LOST.value,
     )
 
 

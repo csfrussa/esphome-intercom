@@ -1,99 +1,3 @@
-answer:
-  name: Answer Call
-  description: Answer an incoming intercom call on the selected device.
-  fields:
-    device_id:
-      name: Device
-      description: Intercom ESPHome device to answer.
-      required: true
-      selector:
-        device:
-          integration: esphome
-
-decline:
-  name: Decline Call
-  description: Decline an incoming intercom call on the selected device.
-  fields:
-    device_id:
-      name: Device
-      description: Intercom ESPHome device to decline.
-      required: true
-      selector:
-        device:
-          integration: esphome
-    reason:
-      name: Reason
-      description: >-
-        Optional free-form decline reason propagated to the caller (shown
-        on its card and LVGL ended-screen). Leave empty for a plain
-        decline.
-      required: false
-      example: "Do not disturb"
-      selector:
-        text:
-
-hangup:
-  name: Hangup
-  description: End the active intercom call on the selected device.
-  fields:
-    device_id:
-      name: Device
-      description: Intercom ESPHome device to hang up.
-      required: true
-      selector:
-        device:
-          integration: esphome
-
-call:
-  name: Call
-  description: Start an intercom call from Home Assistant or from a selected ESP source.
-  fields:
-    device_id:
-      name: Destination Device
-      description: Optional intercom ESPHome device to call. Omit when using destination/call.
-      required: false
-      selector:
-        device:
-          integration: esphome
-    destination:
-      name: Destination
-      description: Contact ID/name, number, user@host, or sip:user@host URI.
-      required: false
-      selector:
-        text:
-    call:
-      name: Call
-      description: Alias for destination, useful in scripts and automations.
-      required: false
-      selector:
-        text:
-    source:
-      name: Source Device
-      description: Optional ESPHome device ID/name/host that actually originates the call. If omitted, Home Assistant originates it.
-      required: false
-      selector:
-        device:
-          integration: esphome
-
-forward:
-  name: Forward Call
-  description: Forward an active or ringing call to another device. Target is the caller device.
-  fields:
-    device_id:
-      name: Source Device
-      description: Intercom ESPHome device whose active call should be forwarded.
-      required: true
-      selector:
-        device:
-          integration: esphome
-    forward_to:
-      name: Forward To
-      description: The device to forward the call to.
-      required: true
-      selector:
-        device:
-          integration: esphome
-
 purge_devices:
   name: Purge Stale Devices
   description: >-
@@ -198,13 +102,36 @@ sip_call:
       required: false
       selector:
         text:
-    route_via_ha:
-      name: Route Via HA
+    ha_bridge:
+      name: Bridge Via HA
       description: Force HA as the SIP destination even if the contact has a direct endpoint.
       required: false
       default: false
       selector:
         boolean:
+
+sip_forward:
+  name: SIP Forward
+  description: Route a standards-SIP call through Home Assistant's SIP dial plan and bridge.
+  fields:
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    target:
+      name: Target
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for target, useful in scripts and automations.
+      required: false
+      selector:
+        text:
 
 sip_hangup:
   name: SIP Hang Up
@@ -259,23 +186,12 @@ phonebook_add_contact:
       required: false
       selector:
         text:
-    route_via_ha:
-      name: Route Via HA
+    ha_bridge:
+      name: Bridge Via HA
       required: false
       default: false
       selector:
         boolean:
-    protocol:
-      name: Protocol
-      description: Optional endpoint protocol metadata for manual ESP/SIP contacts.
-      required: false
-      selector:
-        select:
-          options:
-            - sip
-            - tcp
-            - udp
-            - ha
     sip_transport:
       name: SIP Signaling Transport
       description: Optional SIP signaling transport for PCM SIP endpoints. RTP remains UDP.
@@ -296,33 +212,6 @@ phonebook_add_contact:
           mode: box
     rtp_port:
       name: RTP Port
-      required: false
-      selector:
-        number:
-          min: 1
-          max: 65535
-          step: 1
-          mode: box
-    tcp_port:
-      name: TCP Port
-      required: false
-      selector:
-        number:
-          min: 1
-          max: 65535
-          step: 1
-          mode: box
-    udp_audio_port:
-      name: UDP Audio Port
-      required: false
-      selector:
-        number:
-          min: 1
-          max: 65535
-          step: 1
-          mode: box
-    udp_control_port:
-      name: UDP Control Port
       required: false
       selector:
         number:
@@ -388,8 +277,8 @@ phonebook_push:
   name: Push Phonebook
   description: Push the current central JSON phonebook to all online ESP endpoints.
 
-set_dnd:
-  name: Set HA Softphone DND
+sip_set_dnd:
+  name: Set SIP DND
   description: Enable or disable Do Not Disturb on the Home Assistant softphone.
   fields:
     dnd:

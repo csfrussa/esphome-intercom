@@ -64,7 +64,7 @@ intercom_api:
   ringing_timeout: 30s
   calling_timeout: 30s
 
-  on_streaming:
+  on_in_call:
     - mixer_speaker.apply_ducking:
         id: media_mixing_input
         decibel_reduction: 20

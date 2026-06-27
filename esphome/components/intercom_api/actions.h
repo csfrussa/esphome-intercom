@@ -27,9 +27,6 @@ class StartAction : public Action<Ts...>, public Parented<IntercomApi> {
  public:
   void play(const Ts &...x) override { this->parent_->start(); }
 };
-// raw_udp callers chain set_remote_endpoint before start. Keeping endpoint
-// selection separate avoids templated string expansion inside sync actions.
-
 template<typename... Ts>
 class StopAction : public Action<Ts...>, public Parented<IntercomApi> {
  public:
@@ -118,8 +115,35 @@ template<typename... Ts>
 class AddContactAction : public Action<Ts...>, public Parented<IntercomApi> {
  public:
   TEMPLATABLE_VALUE(std::string, entry)
+  TEMPLATABLE_VALUE(std::string, name)
+  TEMPLATABLE_VALUE(std::string, ip)
+  TEMPLATABLE_VALUE(std::string, protocol)
+  TEMPLATABLE_VALUE(uint16_t, port)
+  TEMPLATABLE_VALUE(uint16_t, rtp_port)
   void play(const Ts &...x) override {
-    this->parent_->add_contact(this->entry_.value(x...));
+    const auto raw = this->entry_.optional_value(x...);
+    if (raw.has_value() && !raw.value().empty()) {
+      this->parent_->add_contact(raw.value());
+      return;
+    }
+
+    const std::string name = this->name_.value(x...);
+    const auto ip = this->ip_.optional_value(x...);
+    if (!ip.has_value() || ip.value().empty()) {
+      this->parent_->add_contact(name);
+      return;
+    }
+
+    const auto explicit_protocol = this->protocol_.optional_value(x...);
+    const std::string protocol =
+        explicit_protocol.has_value() && !explicit_protocol.value().empty()
+            ? explicit_protocol.value()
+            : this->parent_->configured_sip_transport_name();
+    const uint16_t port = this->port_.optional_value(x...).value_or(5060);
+    const uint16_t rtp_port = this->rtp_port_.optional_value(x...).value_or(40000);
+    this->parent_->add_contact(name + "|sip|" + ip.value() + "|" +
+                               std::to_string(port) + "|" +
+                               std::to_string(rtp_port) + "|" + protocol);
   }
 };
 
@@ -138,15 +162,6 @@ class SetHaPeerNameAction : public Action<Ts...>, public Parented<IntercomApi> {
   TEMPLATABLE_VALUE(std::string, name)
   void play(const Ts &...x) override {
     this->parent_->set_ha_peer_name(this->name_.value(x...));
-  }
-};
-
-template<typename... Ts>
-class SimulateIncomingCallAction : public Action<Ts...>, public Parented<IntercomApi> {
- public:
-  TEMPLATABLE_VALUE(std::string, caller)
-  void play(const Ts &...x) override {
-    this->parent_->simulate_incoming_call(this->caller_.value(x...));
   }
 };
 
@@ -182,15 +197,15 @@ class IntercomIsRingingCondition : public Condition<Ts...>, public Parented<Inte
 };
 
 template<typename... Ts>
-class IntercomIsStreamingCondition : public Condition<Ts...>, public Parented<IntercomApi> {
+class IntercomIsInCallCondition : public Condition<Ts...>, public Parented<IntercomApi> {
  public:
-  bool check(const Ts &...x) override { return this->parent_->is_streaming(); }
+  bool check(const Ts &...x) override { return this->parent_->is_in_call(); }
 };
 
 template<typename... Ts>
 class IntercomIsCallingCondition : public Condition<Ts...>, public Parented<IntercomApi> {
  public:
-  bool check(const Ts &...x) override { return this->parent_->get_call_state() == CallState::OUTGOING; }
+  bool check(const Ts &...x) override { return this->parent_->get_call_state() == CallState::CALLING; }
 };
 
 template<typename... Ts>
@@ -205,7 +220,7 @@ template<typename... Ts>
 class IntercomIsInCallCondition : public Condition<Ts...>, public Parented<IntercomApi> {
  public:
   bool check(const Ts &...x) override {
-    return this->parent_->get_call_state() == CallState::STREAMING;
+    return this->parent_->get_call_state() == CallState::IN_CALL;
   }
 };
 

@@ -6,7 +6,7 @@
       "inject_event": {
         "type": "set_option",
         "target": "caller",
-        "option": "ha_pbx",
+        "option": "sip_bridge",
         "value": false
       }
     },

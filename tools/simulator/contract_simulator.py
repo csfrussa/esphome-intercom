@@ -57,11 +57,11 @@ class ContractSimulator:
             self.state["backend"]["browser_audio"] = False
         elif button == "answer":
             if self.state["softphone"]["state"] == "ringing":
-                self.state["softphone"]["state"] = "streaming"
+                self.state["softphone"]["state"] = "in_call"
                 self.state["audio"].update({"tx_ready": True, "rx_ready": True, "owner": "intercom"})
                 self.state["sip"]["last_status"] = 200
             if self.state["esp"]["state"] == "ringing":
-                self.state["esp"]["state"] = "streaming"
+                self.state["esp"]["state"] = "in_call"
                 self.state["audio"].update({"tx_ready": True, "rx_ready": True, "owner": "intercom"})
                 self.state["led"].update({"color": "green", "effect": None})
         return self.get_snapshot()
@@ -150,7 +150,7 @@ class ContractSimulator:
             self.state["sip"].update({"last_status": 486, "decline_reason": "DND"})
             return
         if self.state["options"]["esp"].get("auto_answer"):
-            self.state["esp"].update({"state": "streaming", "caller": caller})
+            self.state["esp"].update({"state": "in_call", "caller": caller})
             self.state["audio"].update({"owner": "intercom"})
             self.state["led"].update({"color": "green", "effect": None})
             return
@@ -159,18 +159,18 @@ class ContractSimulator:
 
     def _esp_call(self, source: str, destination: str, route: str) -> None:
         if destination == "Casa":
-            if self.state["softphone"]["state"] in {"ringing", "streaming"}:
+            if self.state["softphone"]["state"] in {"ringing", "in_call"}:
                 self.state["second"].update({"state": "idle", "last_reason": "busy"})
                 self.state["sip"]["last_status"] = 486
                 return
             self.state["esp"].update({"state": "calling", "destination": "Casa"})
             self.state["softphone"].update({"state": "ringing", "caller": source})
             return
-        if destination == "Virtual S3" and self.state["esp"]["state"] in {"ringing", "streaming"}:
+        if destination == "Virtual S3" and self.state["esp"]["state"] in {"ringing", "in_call"}:
             self.state["second"].update({"state": "idle", "last_reason": "busy"})
             self.state["bridge"].update({"state": "idle"})
             return
-        if route == "via_ha" or self.state["options"]["caller"].get("ha_pbx"):
+        if route == "bridge" or self.state["options"]["caller"].get("sip_bridge"):
             self.state["bridge"].update({"state": "ringing", "left": source, "right": destination})
         self.state["caller"].update({"state": "calling"})
         self.state["callee"].update({"state": "ringing", "caller": source})

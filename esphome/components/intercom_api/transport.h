@@ -12,23 +12,21 @@ namespace esphome {
 namespace intercom_api {
 
 using TransportAudioCallback = void (*)(void *ctx, const uint8_t *pcm, size_t bytes);
-using TransportControlCallback = void (*)(void *ctx, MessageType type, const uint8_t *payload, size_t len);
+using TransportSipSignalCallback = void (*)(void *ctx, const SipSignal &signal);
 using TransportConnectionCallback = void (*)(void *ctx, bool connected);
 using TransportAcceptCallback = bool (*)(void *ctx);
 
-/// Abstract transport for audio + control. IntercomApi composes one and
-/// never touches sockets directly.
+/// Abstract SIP phone transport. IntercomApi composes one and never touches
+/// sockets directly.
 ///
 /// Threading contract:
 ///   - Implementations may spawn FreeRTOS tasks.
 ///   - send_audio_frame must be safe from a Core 0 audio-priority task.
 ///   - Callbacks fire from the transport's own task; handlers must
 ///     marshal work via ring buffers / atomics and never block.
-///   - PING/PONG keepalive is transport-internal and never crosses
-///     on_control; only protocol-semantic messages do.
-class IntercomTransport {
+class SipPhoneTransport {
  public:
-  virtual ~IntercomTransport() = default;
+  virtual ~SipPhoneTransport() = default;
 
   /// Idempotent.
   virtual bool start() = 0;
@@ -41,15 +39,25 @@ class IntercomTransport {
   /// TCP: a client is accepted. UDP: mirrors start()/stop().
   virtual bool is_connected() const = 0;
 
-  /// Best-effort send. Payload is one PCM frame in the negotiated intercom format.
+  /// Best-effort send. Payload is one PCM frame in the negotiated RTP format.
   /// Safe from a high-priority audio task; may drop on backpressure.
   virtual void send_audio_frame(const uint8_t *pcm, size_t bytes) = 0;
 
-  /// Returns true when the message was committed to the wire. The FSM
-  /// uses the return value to detect "leg silently dropped".
-  virtual bool send_control(MessageType type,
-                            const uint8_t *payload = nullptr,
-                            size_t len = 0) = 0;
+  /// SIP dialog commands. Return true when the message was committed to the wire.
+  virtual bool send_invite(const std::string &call_id,
+                           const std::string &caller_route,
+                           const std::string &caller_name,
+                           const std::string &dest_route,
+                           const std::string &dest_name) = 0;
+  virtual bool send_ringing(const std::string &call_id) = 0;
+  virtual bool send_answer(const std::string &call_id,
+                           const AudioFormat &caller_to_dest_format,
+                           const AudioFormat &dest_to_caller_format) = 0;
+  virtual bool send_cancel(const std::string &call_id) = 0;
+  virtual bool send_bye(const std::string &call_id) = 0;
+  virtual bool send_decline(const std::string &call_id,
+                            uint16_t status,
+                            const std::string &reason) = 0;
 
   /// Used in dump_config / ESP_LOGCONFIG ("tcp", "udp", ...).
   virtual const char *transport_name() const = 0;
@@ -67,9 +75,7 @@ class IntercomTransport {
   /// retargets sendto).
   virtual bool originate(const std::string &host, uint16_t port) { return true; }
 
-  /// Publish local media capabilities to transports that negotiate media
-  /// themselves, such as SIP/SDP. Transports with an external control protocol
-  /// can ignore it.
+  /// Publish local media capabilities for SIP/SDP offer/answer negotiation.
   virtual void set_audio_formats(const AudioFormatList &tx, const AudioFormatList &rx) {
     (void) tx;
     (void) rx;
@@ -87,9 +93,9 @@ class IntercomTransport {
     this->on_audio_frame_ctx_ = ctx;
   }
 
-  void set_control_callback(TransportControlCallback cb, void *ctx) {
-    this->on_control_ = cb;
-    this->on_control_ctx_ = ctx;
+  void set_sip_signal_callback(TransportSipSignalCallback cb, void *ctx) {
+    this->on_sip_signal_ = cb;
+    this->on_sip_signal_ctx_ = ctx;
   }
 
   void set_connection_callback(TransportConnectionCallback cb, void *ctx) {
@@ -108,9 +114,8 @@ class IntercomTransport {
     if (this->on_audio_frame_ != nullptr) this->on_audio_frame_(this->on_audio_frame_ctx_, pcm, bytes);
   }
 
-  /// Protocol messages only; PING/PONG never cross.
-  void emit_control_(MessageType type, const uint8_t *payload, size_t len) {
-    if (this->on_control_ != nullptr) this->on_control_(this->on_control_ctx_, type, payload, len);
+  void emit_sip_signal_(const SipSignal &signal) {
+    if (this->on_sip_signal_ != nullptr) this->on_sip_signal_(this->on_sip_signal_ctx_, signal);
   }
 
   /// TCP: per accept/disconnect. UDP: once per start/stop.
@@ -129,8 +134,8 @@ class IntercomTransport {
  private:
   TransportAudioCallback on_audio_frame_{nullptr};
   void *on_audio_frame_ctx_{nullptr};
-  TransportControlCallback on_control_{nullptr};
-  void *on_control_ctx_{nullptr};
+  TransportSipSignalCallback on_sip_signal_{nullptr};
+  void *on_sip_signal_ctx_{nullptr};
   TransportConnectionCallback on_connection_change_{nullptr};
   void *on_connection_change_ctx_{nullptr};
   TransportAcceptCallback should_accept_session_cb_{nullptr};

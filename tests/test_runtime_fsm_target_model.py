@@ -15,9 +15,9 @@ import unittest
 
 class CallState(str, Enum):
     IDLE = "idle"
-    OUTGOING = "outgoing"
+    CALLING = "calling"
     RINGING = "ringing"
-    STREAMING = "streaming"
+    IN_CALL = "in_call"
 
 
 class VaState(str, Enum):
@@ -87,18 +87,18 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
             "play",
             False,
         )
-    if facts.call_state == CallState.OUTGOING:
+    if facts.call_state == CallState.CALLING:
         return RuntimeSnapshot(
-            "intercom_outgoing",
-            LedSnapshot("intercom_outgoing", (255, 150, 0), "Calling", "intercom"),
+            "intercom_calling",
+            LedSnapshot("intercom_calling", (255, 150, 0), "Calling", "intercom"),
             "duck",
             "stop",
             False,
         )
-    if facts.call_state == CallState.STREAMING:
+    if facts.call_state == CallState.IN_CALL:
         return RuntimeSnapshot(
-            "intercom_streaming",
-            LedSnapshot("intercom_streaming", (111, 255, 115), None, "intercom"),
+            "intercom_in_call",
+            LedSnapshot("intercom_in_call", (111, 255, 115), None, "intercom"),
             "duck",
             "stop",
             False,
@@ -150,10 +150,10 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
         self.assertEqual(snap.ringtone, "play")
         self.assertNoMediaSpin(snap)
 
-    def test_intercom_streaming_is_fixed_green_even_if_ringtone_media_is_still_draining(self) -> None:
+    def test_intercom_in_call_is_fixed_green_even_if_ringtone_media_is_still_draining(self) -> None:
         snap = reduce_runtime(
             RuntimeFacts(
-                call_state=CallState.STREAMING,
+                call_state=CallState.IN_CALL,
                 call_generation=7,
                 media_playing=True,
                 media_owner=MediaOwner.INTERCOM_RINGTONE,
@@ -161,7 +161,7 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
                 ringtone_stopping_generation=7,
             )
         )
-        self.assertEqual(snap.public_state, "intercom_streaming")
+        self.assertEqual(snap.public_state, "intercom_in_call")
         self.assertEqual(snap.led.rgb, (111, 255, 115))
         self.assertIsNone(snap.led.effect)
         self.assertNoMediaSpin(snap)
@@ -198,9 +198,9 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
         self.assertEqual(snap.led.owner, "intercom")
 
     def test_mww_is_disabled_during_call_and_reenabled_when_idle(self) -> None:
-        self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.OUTGOING)).mww_allowed)
+        self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.CALLING)).mww_allowed)
         self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.RINGING)).mww_allowed)
-        self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.STREAMING)).mww_allowed)
+        self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.IN_CALL)).mww_allowed)
         self.assertTrue(reduce_runtime(RuntimeFacts()).mww_allowed)
 
 

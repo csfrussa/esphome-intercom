@@ -13,6 +13,7 @@ namespace intercom_simulator {
 class IntercomSimulator : public Component {
  public:
   void set_source_profile(const std::string &source_profile) { this->source_profile_ = source_profile; }
+  void set_device_profile(const std::string &device_profile) { this->device_profile_ = device_profile; }
   void set_socket_path(const std::string &socket_path) { this->socket_path_ = socket_path; }
   void set_speaker_output_path(const std::string &speaker_output_path) { this->speaker_output_path_ = speaker_output_path; }
   void set_microphone_input_path(const std::string &microphone_input_path) { this->microphone_input_path_ = microphone_input_path; }
@@ -54,6 +55,22 @@ class IntercomSimulator : public Component {
     std::string media_state{"idle"};
     std::string intercom_state{"idle"};
     std::string intercom_caller;
+    std::string voice_assistant_state{"idle"};
+    std::string voice_assistant_phase{"idle"};
+    std::string wake_word;
+    int voice_assistant_events{0};
+    int aec_frames{0};
+    int aec_last_processing_us{0};
+    int aec_max_processing_us{0};
+    int afe_frames{0};
+    int afe_last_latency_us{0};
+    int afe_max_latency_us{0};
+    std::string display_page{"idle"};
+    std::string display_status{"idle"};
+    std::string touch_last;
+    bool backlight_on{true};
+    bool mic_muted{false};
+    bool speaker_muted{false};
     std::string card_mode;
     std::string card_controlled_device;
     std::string card_rendered_state{"idle"};
@@ -64,7 +81,7 @@ class IntercomSimulator : public Component {
     int ha_visible_contacts{0};
     bool opt_esp_dnd{false};
     bool opt_esp_auto_answer{false};
-    bool opt_caller_ha_pbx{false};
+    bool opt_caller_sip_bridge{false};
     bool ha_answer_pending{false};
     uint64_t now_ms{0};
     bool shutdown{false};
@@ -85,6 +102,7 @@ class IntercomSimulator : public Component {
   void sip_invite_(const std::string &caller, const std::string &callee, const std::string &call_id);
 
   std::string source_profile_;
+  std::string device_profile_{"generic"};
   std::string socket_path_{"test_runs/simulator/intercom-sim.sock"};
   std::string speaker_output_path_{"test_runs/simulator/audio/speaker_output.pcm"};
   std::string microphone_input_path_{"tests/simulator/audio/mic_input.pcm"};

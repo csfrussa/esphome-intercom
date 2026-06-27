@@ -8,13 +8,13 @@
 #   0=idle, 1=init, 2=no_wifi, 3=no_ha,
 #   4=both_muted, 5=mic_muted, 6=spk_muted,
 #   7=mww_recent_or_barge, 8=va_listening, 9=va_thinking,
-#   10=va_responding, 11=ic_ringing, 12=ic_outgoing,
-#   13=ic_streaming, 14=va_error, 15=media
+#   10=va_responding, 11=ic_ringing, 12=ic_calling,
+#   13=ic_in_call, 14=va_error, 15=media
 #
 # g_applied_led values, derived from ui_state for LED rendering:
 #   0=off, 1=both_muted, 2=mic_muted, 3=spk_muted, 4=mww_recent_or_barge,
 #   5=va_listening, 6=va_thinking, 7=va_responding,
-#   8=ic_ringing, 9=ic_outgoing, 10=ic_streaming, 11=va_error, 12=media
+#   8=ic_ringing, 9=ic_calling, 10=ic_in_call, 11=va_error, 12=media
 #
 # Prerequisites in the device YAML:
 #   - id `intercom`              : intercom_api component
@@ -40,8 +40,8 @@ substitutions:
   ui_state_va_thinking: "9"
   ui_state_va_replying: "10"
   ui_state_ic_ringing: "11"
-  ui_state_ic_outgoing: "12"
-  ui_state_ic_streaming: "13"
+  ui_state_ic_calling: "12"
+  ui_state_ic_in_call: "13"
   ui_state_va_error: "14"
   ui_state_media: "15"
 
@@ -176,11 +176,11 @@ script:
           } else if (id(intercom).is_ringing()) {
             state = ${ui_state_ic_ringing};
             led = 8;
-          } else if (id(intercom).is_outgoing()) {
-            state = ${ui_state_ic_outgoing};
+          } else if (id(intercom).is_calling()) {
+            state = ${ui_state_ic_calling};
             led = 9;
-          } else if (id(intercom).is_streaming()) {
-            state = ${ui_state_ic_streaming};
+          } else if (id(intercom).is_in_call()) {
+            state = ${ui_state_ic_in_call};
             led = 10;
           } else if (id(g_va_phase) == 6) {
             state = ${ui_state_va_error};
@@ -254,7 +254,7 @@ script:
     parameters:
       peer: string
     then: []
-  # Caller path: dest acked with RING. Same outgoing screen, label
+  # Caller path: dest acked with RING. Same calling screen, label
   # flips. Devices with display !extend this to update LVGL widgets.
   - id: ui_ic_dest_ringing
     parameters:

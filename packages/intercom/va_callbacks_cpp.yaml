@@ -10,12 +10,12 @@
 #      !extends them to drive LVGL)
 #
 # Required substitutions:
-#   ${friendly_name} - used in the homeassistant.event payload on outgoing call
+#   ${friendly_name} - used in the homeassistant.event payload on calling call
 # =============================================================================
 
 intercom_api:
   id: intercom
-  on_outgoing_call:
+  on_calling:
     - script.execute:
         id: ui_ic_call
         peer: !lambda 'return id(intercom).get_current_destination();'
@@ -34,12 +34,12 @@ intercom_api:
         id: ui_ic_call
         peer: !lambda 'return id(intercom).get_caller();'
   on_dest_ringing:
-    # Caller path: dest acked with RING. Same outgoing screen, the
+    # Caller path: dest acked with RING. Same calling screen, the
     # device YAML flips its label inside ui_ic_dest_ringing.
     - script.execute:
         id: ui_ic_dest_ringing
         peer: !lambda 'return id(intercom).get_current_destination();'
-  on_streaming:
+  on_in_call:
     - script.execute: intercom_stop_ringtone
     - script.execute:
         id: ui_ic_call

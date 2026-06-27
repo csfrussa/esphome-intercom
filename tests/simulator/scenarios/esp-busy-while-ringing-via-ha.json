@@ -14,7 +14,7 @@
         "type": "esp_call",
         "source": "Virtual Spotpear",
         "destination": "Virtual S3",
-        "route": "via_ha"
+        "route": "bridge"
       }
     },
     {

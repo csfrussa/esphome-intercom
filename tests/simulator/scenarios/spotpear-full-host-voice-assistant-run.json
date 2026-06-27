@@ -1,0 +1,125 @@
+{
+  "name": "spotpear-full-host-voice-assistant-run",
+  "description": "Spotpear full host profile: complete Micro Wake Word + Voice Assistant run with AEC/AFE visibility.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "aec_frame",
+        "processing_us": 3900
+      }
+    },
+    {
+      "inject_event": {
+        "type": "afe_frame",
+        "latency_us": 8100
+      }
+    },
+    {
+      "inject_event": {
+        "type": "mww_detected",
+        "wake_word": "okay_nabu"
+      }
+    },
+    {
+      "expect": {
+        "voice_assistant": {
+          "state": "running",
+          "phase": "wake",
+          "wake_word": "okay_nabu"
+        },
+        "display": {
+          "page": "voice_assistant",
+          "status": "va_wake"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "va_start"
+      }
+    },
+    {
+      "inject_event": {
+        "type": "va_listening"
+      }
+    },
+    {
+      "expect": {
+        "voice_assistant": {
+          "state": "running",
+          "phase": "listening"
+        },
+        "display": {
+          "status": "va_listening"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "va_thinking"
+      }
+    },
+    {
+      "expect": {
+        "voice_assistant": {
+          "state": "running",
+          "phase": "thinking"
+        },
+        "display": {
+          "status": "va_thinking"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "va_responding"
+      }
+    },
+    {
+      "expect": {
+        "voice_assistant": {
+          "state": "running",
+          "phase": "responding"
+        },
+        "media": {
+          "state": "playing"
+        },
+        "display": {
+          "status": "va_responding"
+        },
+        "aec": {
+          "frames": 1,
+          "max_processing_us": 3900
+        },
+        "afe": {
+          "frames": 1,
+          "max_latency_us": 8100
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "va_end"
+      }
+    },
+    {
+      "expect": {
+        "voice_assistant": {
+          "state": "idle",
+          "phase": "idle",
+          "wake_word": ""
+        },
+        "media": {
+          "state": "idle"
+        },
+        "audio": {
+          "owner": "none"
+        },
+        "display": {
+          "page": "idle",
+          "status": "idle"
+        }
+      }
+    }
+  ]
+}

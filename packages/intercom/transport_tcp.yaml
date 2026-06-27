@@ -1,15 +1,16 @@
 # =============================================================================
-# Intercom TCP transport
+# Intercom SIP/RTP transport over TCP signaling
 # =============================================================================
 #
-# Configures intercom_api for TCP only. Peer announcement/discovery is opt-in via
-# packages/intercom/mdns_discovery.yaml for ESP-only deployments without HA.
+# Configures intercom_api for SIP/2.0 over TCP signaling. Media remains RTP/UDP.
 # =============================================================================
 
 substitutions:
-  intercom_tcp_port: "6054"
+  intercom_sip_port: "5060"
+  intercom_rtp_port: "40000"
 
 intercom_api:
   id: intercom
   protocol: tcp
-  tcp_port: ${intercom_tcp_port}
+  sip_port: ${intercom_sip_port}
+  rtp_port: ${intercom_rtp_port}

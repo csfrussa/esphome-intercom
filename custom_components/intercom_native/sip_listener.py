@@ -7,9 +7,9 @@ import contextlib
 from dataclasses import dataclass
 import logging
 import re
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
-from .audio_format import AudioFormat, LEGACY_AUDIO_FORMAT
+from .audio_format import AudioFormat, DEFAULT_AUDIO_FORMAT
 from .const import INTERCOM_RTP_PORT
 from . import sdp, sip
 
@@ -172,7 +172,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
     ) -> None:
         self.local_ip = local_ip
         self.local_rtp_port = local_rtp_port or INTERCOM_RTP_PORT
-        base_formats = supported_formats or [LEGACY_AUDIO_FORMAT]
+        base_formats = supported_formats or [DEFAULT_AUDIO_FORMAT]
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.on_invite = on_invite
@@ -182,6 +182,15 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.transport: asyncio.DatagramTransport | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
         self.active_dialogs: dict[str, _ActiveDialog] = {}
+        self.last_sip_event = ""
+        self.last_sip_status_code = 0
+        self.last_sip_reason = ""
+
+    def _mark_sip_event(self, event: str, status: int = 0, reason: str = "") -> None:
+        self.last_sip_event = event
+        if status:
+            self.last_sip_status_code = int(status)
+            self.last_sip_reason = reason or ""
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
@@ -230,6 +239,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             headers.append(("X-Intercom-Decline-Reason", clean_reason))
         raw = sip.build_response(status, reason, headers, body)
         _LOGGER.info("SIP TX %s %s to %s:%s", status, reason, addr[0], addr[1])
+        self._mark_sip_event("SIP_RESPONSE", int(status), reason)
         self._send(raw, addr)
 
     async def _handle_datagram(self, data: bytes, addr) -> None:
@@ -240,9 +250,11 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             return
         if not request.is_request:
             _LOGGER.info("SIP RX response ignored from %s:%s", addr[0], addr[1])
+            self._mark_sip_event("SIP_RESPONSE", int(request.status_code or 0), request.reason)
             return
 
         _LOGGER.info("SIP RX %s %s from %s:%s", request.method, request.uri, addr[0], addr[1])
+        self._mark_sip_event(request.method or "SIP_REQUEST")
         if request.method not in sip.SUPPORTED_METHODS:
             status, reason = _unsupported_method_response(request.method or "")
             self._send_response(request, addr, status, reason)
@@ -360,8 +372,21 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         )
         raw = sip.build_request("BYE", remote_uri, headers, b"")
         _LOGGER.info("SIP TX BYE call_id=%s to %s:%s", call_id, dialog.addr[0], dialog.addr[1])
+        self._mark_sip_event("BYE")
         self._send(raw, dialog.addr)
         return True
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "transport": self.signaling_transport.lower(),
+            "pending_transactions": len(self.pending_invites),
+            "active_dialogs": len(self.active_dialogs),
+            "pending_call_ids": sorted(self.pending_invites),
+            "active_call_ids": sorted(self.active_dialogs),
+            "last_sip_event": self.last_sip_event,
+            "last_sip_status_code": self.last_sip_status_code,
+            "last_sip_reason": self.last_sip_reason,
+        }
 
     def _parse_invite(self, request: sip.SipMessage, addr) -> SipInvite | None:
         try:

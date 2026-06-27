@@ -12,7 +12,6 @@ CONF_ACTIVE = "active"
 CONF_AUTO_ANSWER = "auto_answer"
 CONF_DND = "dnd"
 CONF_AEC = "aec"
-CONF_HA_PBX_MODE = "ha_pbx_mode"
 
 # C++ classes (simple - parent syncs state after boot)
 IntercomApiSwitch = intercom_api_ns.class_(
@@ -24,10 +23,6 @@ IntercomApiAutoAnswer = intercom_api_ns.class_(
 IntercomApiDndSwitch = intercom_api_ns.class_(
     "IntercomApiDndSwitch", switch.Switch, cg.Parented.template(IntercomApi)
 )
-IntercomRoutingModeSwitch = intercom_api_ns.class_(
-    "IntercomRoutingModeSwitch", switch.Switch, cg.Parented.template(IntercomApi)
-)
-
 
 def _switch_schema(switch_class, icon, entity_category=None):
     """Create switch schema for a specific switch type."""
@@ -53,21 +48,13 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_AUTO_ANSWER): _switch_schema(
             IntercomApiAutoAnswer, "mdi:phone-in-talk", entity_category=ENTITY_CATEGORY_CONFIG
         ),
-        # Do-not-disturb: reject incoming START with DECLINE("DND").
+        # Do-not-disturb: reject incoming SIP INVITE with 486 Busy Here.
         cv.Optional(CONF_DND): _switch_schema(
             IntercomApiDndSwitch, "mdi:minus-circle", entity_category=ENTITY_CATEGORY_CONFIG
         ),
         cv.Optional(CONF_AEC): cv.invalid(
             "intercom_api AEC switch was removed with standalone intercom AEC. "
             "Use esp_audio_stack/esp_afe/esp_aec controls for software AEC."
-        ),
-        # Routing mode runtime toggle: ON = ha_pbx (HA bridges every call),
-        # OFF = device_independent (peer-to-peer dial). Mirrors the YAML
-        # `intercom_api.routing_mode` option so users can A/B test from
-        # the HA frontend without re-flashing.
-        cv.Optional(CONF_HA_PBX_MODE): _switch_schema(
-            IntercomRoutingModeSwitch, "mdi:phone-forward",
-            entity_category=ENTITY_CATEGORY_CONFIG,
         ),
     }
 )
@@ -93,9 +80,3 @@ async def to_code(config):
         var = await switch.new_switch(conf)
         cg.add(var.set_parent(parent))
         cg.add(parent.register_dnd_switch(var))
-
-    if CONF_HA_PBX_MODE in config:
-        conf = config[CONF_HA_PBX_MODE]
-        var = await switch.new_switch(conf)
-        cg.add(var.set_parent(parent))
-        cg.add(parent.register_routing_mode_switch(var))

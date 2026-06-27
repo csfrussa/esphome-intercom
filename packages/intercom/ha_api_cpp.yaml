@@ -76,7 +76,7 @@ api:
             id: runtime_controller
             reason: !lambda 'return reason;'
     # Card -> intercom_native.call(source=this) ends up here. Sets the
-    # current phonebook entry to `dest` and enters OUTGOING locally.
+    # current phonebook entry to `dest` and sends a SIP INVITE locally.
     - action: start_call
       variables:
         dest: string
@@ -92,9 +92,8 @@ api:
       then:
         - intercom_api.decline_call:
             reason: !lambda 'return reason;'
-    # Set by intercom_native at config-entry setup so ha_pbx routing finds
-    # the live HA name (hass.config.location_name) in the phonebook instead
-    # of a hardcoded "Home Assistant".
+    # Set by intercom_native at config-entry setup so logical SIP targets can
+    # route through the live HA bridge name from hass.config.location_name.
     - action: set_ha_peer_name
       variables:
         name: string
@@ -109,7 +108,7 @@ api:
       then:
         - intercom_api.set_roster_json:
             roster_json: !lambda 'return roster_json;'
-    # Local/manual compatibility actions for YAML scripts and test tools.
+    # Local/manual SIP phonebook actions for YAML scripts and test tools.
     - action: set_contacts
       variables:
         contacts_csv: string

@@ -1,5 +1,5 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM (PBX-lite UDP) - Dual I2S bus, no hardware codec
+# GENERIC ESP32-S3 INTERCOM (SIP UDP) - Dual I2S bus, no hardware codec
 # =============================================================================
 # Drop-in UDP variant of generic-s3-intercom-tcp.yaml. It keeps the same AEC-only
 # audio pipeline as the TCP file, but uses intercom_api's UDP transport:
@@ -90,7 +90,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # DEBUG keeps SIP signaling + AEC/AFE/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -100,7 +100,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -126,13 +125,12 @@ output:
     pin: ${speaker_enable_pin}
 
 # =============================================================================
-# UDP signaling is owned by intercom_api. START/HANGUP/RING/ANSWER/DECLINE
-# flow through the UDP control socket (control_port 6055), with the same
-# MessageHeader as the TCP path. C++ side:
-#  - intercom_api.start() -> udp_transport.send_control(MSG_START, caller_name)
-#  - peer receives START -> FSM goes to RINGING/STREAMING as on TCP
-#  - intercom_api.stop() -> send_control(MSG_HANGUP) or DECLINE during setup
-# No YAML signaling lambdas, no external UDP helper component.
+# SIP signaling is owned by intercom_api. `protocol: udp` means SIP over UDP;
+# RTP media remains UDP. C++ side:
+#  - intercom_api.start() sends SIP INVITE
+#  - peer receives INVITE and enters ringing/in_call from SIP status
+#  - intercom_api.stop() sends CANCEL or BYE depending on dialog state
+# No YAML signaling lambdas and no external helper component.
 # =============================================================================
 
 # =============================================================================
@@ -200,7 +198,7 @@ speaker:
 # =============================================================================
 # Intercom API: Device part (merged with package callbacks)
 # =============================================================================
-# PBX-lite UDP: the HA phonebook subscription provides target-shaped UDP
+# SIP UDP: the HA phonebook subscription provides target-shaped UDP
 # contacts in the unified roster. intercom_api.start auto-binds the transport
 # to the selected contact endpoint.
 intercom_api:

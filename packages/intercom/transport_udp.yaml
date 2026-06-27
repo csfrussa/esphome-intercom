@@ -1,18 +1,16 @@
 # =============================================================================
-# Intercom UDP transport
+# Intercom SIP/RTP transport over UDP signaling
 # =============================================================================
 #
-# Configures intercom_api for UDP only. Peer announcement/discovery is opt-in via
-# packages/intercom/mdns_discovery.yaml for ESP-only deployments without HA.
+# Configures intercom_api for SIP/2.0 over UDP signaling. Media remains RTP/UDP.
 # =============================================================================
 
 substitutions:
-  intercom_udp_audio_port: "6054"
-  intercom_udp_control_port: "6055"
+  intercom_sip_port: "5060"
+  intercom_rtp_port: "40000"
 
 intercom_api:
   id: intercom
   protocol: udp
-  listen_port: ${intercom_udp_audio_port}
-  remote_port: ${intercom_udp_audio_port}
-  control_port: ${intercom_udp_control_port}
+  sip_port: ${intercom_sip_port}
+  rtp_port: ${intercom_rtp_port}

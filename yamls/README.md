@@ -62,9 +62,9 @@ published. Reusable debug building blocks are public packages under
 
 ## Product mode
 
-Each ESP flashed with these YAMLs is an independent extension on a peer-to-peer fabric. Same-transport devices can call each other directly from their local phonebook; in the current standard YAMLs HA is the stable phonebook authority. When HA is on the network it joins the fabric as one more extension and can also act as a PBX-style switchboard via `routing_mode: ha_pbx`.
+Each ESP flashed with these YAMLs is an independent extension on a peer-to-peer fabric. Same-transport devices can call each other directly from their local phonebook; in the current standard YAMLs HA is the stable phonebook authority. When HA is on the network it joins the fabric as one more extension and can also act as a SIP bridge via `ha_bridge: true`.
 
-There is one product mode: PBX-lite (implicit default). Phonebook / contacts / destination / caller entities are always exposed. The `mode:` key on `intercom_api` is optional and only takes one value: `raw_udp` (audio-only UDP, no signaling, used for go2rtc / two-room direct links). Routing policy lives on the ESP as `routing_mode: device_independent` (default; ESP dials peers from its phonebook, true peer-to-peer) or `routing_mode: ha_pbx` (ESP dials the HA peer named by `hass.config.location_name`, HA bridges).
+There is one product mode: SIP-only phone mode. Phonebook / contacts / destination / caller entities are always exposed. The `mode:` key on `intercom_api` is optional and only takes one value: `raw_udp` (audio-only UDP, no signaling, used for go2rtc / two-room direct links). Routing policy lives on the ESP as `routing_mode: device_independent` (default; ESP dials peers from its phonebook, true peer-to-peer) or `ha_bridge: true` (ESP dials the HA peer named by `hass.config.location_name`, HA bridges).
 
 ## Optional packages
 

@@ -121,7 +121,7 @@ ota:
   - platform: esphome
 
 logger:
-  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # DEBUG keeps SIP signaling + AEC/AFE/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -131,7 +131,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -334,7 +333,7 @@ intercom_api:
   speaker: intercom_speaker_input
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
-  # via the "HA PBX Mode" switch in the device-specific switch block below.
+  # via the "SIP bridge" switch in the device-specific switch block below.
   delete_contact_missing_from:
     updates_number: 1
 

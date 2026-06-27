@@ -11,6 +11,9 @@ MODE="all"
 SOCKET="${SIM_SOCKET:-test_runs/simulator/intercom-sim.sock}"
 CONTRACT=0
 TRACE_DIR=""
+PROFILE="${SIM_PROFILE:-}"
+PYTHON_BIN="${PYTHON_BIN:-/home/codex/.venv/bin/python}"
+ESPHOME_BIN="${ESPHOME_BIN:-/home/codex/.venv/bin/esphome}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,6 +45,10 @@ while [[ $# -gt 0 ]]; do
       TRACE_DIR="${2:?missing trace dir}"
       shift 2
       ;;
+    --profile)
+      PROFILE="${2:?missing ESPHome Host profile path}"
+      shift 2
+      ;;
     --contract)
       CONTRACT=1
       shift
@@ -55,34 +62,41 @@ done
 
 mkdir -p test_runs/simulator
 
-python3 tools/simulator/generate_virtual_profiles.py --limit 3 >/tmp/intercom_virtual_profiles.txt
-HOST_PROFILE="$(head -n 1 /tmp/intercom_virtual_profiles.txt)"
-ESPHOME_BIN="${ESPHOME_BIN:-/home/codex/.venv/bin/esphome}"
-python3 tools/simulator/simctl.py --socket "$SOCKET" doctor
-python3 tools/simulator/scenario_runner.py "$SCENARIO" --validate-only
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "python executable not found: $PYTHON_BIN" >&2
+  exit 2
+fi
+
+if [[ -z "$PROFILE" ]]; then
+  "$PYTHON_BIN" tools/simulator/generate_virtual_profiles.py --limit 3 >/tmp/intercom_virtual_profiles.txt
+  PROFILE="$(head -n 1 /tmp/intercom_virtual_profiles.txt)"
+fi
+
+"$PYTHON_BIN" tools/simulator/simctl.py --socket "$SOCKET" doctor
+"$PYTHON_BIN" tools/simulator/scenario_runner.py "$SCENARIO" --validate-only
 
 CONTRACT_PID=""
 HOST_PID=""
 if [[ "$CONTRACT" == "1" ]]; then
   rm -f "$SOCKET"
-  python3 tools/simulator/contract_simulator.py --socket "$SOCKET" &
+  "$PYTHON_BIN" tools/simulator/contract_simulator.py --socket "$SOCKET" &
   CONTRACT_PID="$!"
   for _ in $(seq 1 50); do
     [[ -S "$SOCKET" ]] && break
     sleep 0.1
   done
-  trap '[[ -n "$CONTRACT_PID" ]] && python3 tools/simulator/simctl.py --socket "$SOCKET" shutdown >/dev/null 2>&1 || true; [[ -n "$CONTRACT_PID" ]] && wait "$CONTRACT_PID" >/dev/null 2>&1 || true' EXIT
+  trap '[[ -n "$CONTRACT_PID" ]] && "$PYTHON_BIN" tools/simulator/simctl.py --socket "$SOCKET" shutdown >/dev/null 2>&1 || true; [[ -n "$CONTRACT_PID" ]] && wait "$CONTRACT_PID" >/dev/null 2>&1 || true' EXIT
 else
   if [[ ! -x "$ESPHOME_BIN" ]]; then
     echo "esphome executable not found: $ESPHOME_BIN" >&2
     exit 2
   fi
-  if [[ -z "$HOST_PROFILE" || ! -f "$HOST_PROFILE" ]]; then
-    echo "generated host profile not found" >&2
+  if [[ -z "$PROFILE" || ! -f "$PROFILE" ]]; then
+    echo "ESPHome Host profile not found: $PROFILE" >&2
     exit 2
   fi
   rm -f "$SOCKET"
-  "$ESPHOME_BIN" run "$HOST_PROFILE" >test_runs/simulator/esphome-host.log 2>&1 &
+  "$ESPHOME_BIN" run "$PROFILE" >test_runs/simulator/esphome-host.log 2>&1 &
   HOST_PID="$!"
   for _ in $(seq 1 1200); do
     if [[ -S "$SOCKET" ]]; then
@@ -95,7 +109,7 @@ else
     fi
     sleep 0.1
   done
-  trap 'python3 tools/simulator/simctl.py --socket "$SOCKET" shutdown >/dev/null 2>&1 || true; [[ -n "$HOST_PID" ]] && wait "$HOST_PID" >/dev/null 2>&1 || true' EXIT
+  trap '"$PYTHON_BIN" tools/simulator/simctl.py --socket "$SOCKET" shutdown >/dev/null 2>&1 || true; [[ -n "$HOST_PID" ]] && wait "$HOST_PID" >/dev/null 2>&1 || true' EXIT
 fi
 
 if [[ ! -S "$SOCKET" ]]; then
@@ -114,4 +128,4 @@ if [[ -n "$TRACE_DIR" ]]; then
 fi
 
 echo "mode=$MODE scenario=$SCENARIO repeat=$REPEAT seed=${SEED:-none}"
-python3 "${args[@]}"
+"$PYTHON_BIN" "${args[@]}"

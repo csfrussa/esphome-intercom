@@ -65,7 +65,7 @@ void IntercomApi::tx_task(void *param) {
 
 bool IntercomApi::is_tx_stream_ready_() const {
   return this->active_.load(std::memory_order_acquire) &&
-         this->streaming_.load(std::memory_order_acquire) &&
+         this->in_call_.load(std::memory_order_acquire) &&
          this->transport_ != nullptr && this->transport_->is_connected();
 }
 

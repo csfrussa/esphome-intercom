@@ -1,12 +1,12 @@
 {
   "name": "esp-to-esp-via-ha-decline",
-  "description": "ESP calls ESP through HA PBX-lite bridge; decline propagates through both SIP legs.",
+  "description": "ESP calls ESP through HA SIP bridge bridge; decline propagates through both SIP legs.",
   "steps": [
     {
       "inject_event": {
         "type": "set_option",
         "target": "caller",
-        "option": "ha_pbx",
+        "option": "sip_bridge",
         "value": true
       }
     },

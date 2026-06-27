@@ -14,7 +14,7 @@ It can run in two supported shapes:
   routing, TDM reference, dual-bus sync, media player, Voice Assistant or Micro
   Wake Word share the same audio backend.
 
-The component negotiates PCM per direction. The legacy/default wire format is
+The component negotiates PCM per direction. The default wire format is
 `16000:s16le:1:32`, but native ESPHome microphone/speaker paths may advertise
 their actual format up to 48 kHz and 32-bit containers. AFE/AEC-backed branches
 remain 16 kHz/s16/mono because Espressif esp-sr exposes that surface.
@@ -177,18 +177,38 @@ signaling elsewhere. Normal intercom installs should omit `mode:`.
 
 ## Phonebook And HA Routing
 
+Contacts can be declared directly in `intercom_api` for installs that do not
+want HA to be the only phonebook source:
+
+```yaml
+intercom_api:
+  id: intercom
+  protocol: udp
+  phonebook:
+    - name: Casa di nonna
+      ip: 192.168.1.44
+      port: 5060
+      rtp_port: 40000
+    - name: Cancello
+```
+
+`name` is required. `ip`, `port`, `rtp_port`, and `protocol` are optional.
+When `protocol` is omitted, the contact uses the component SIP signaling
+transport (`protocol: udp` or `protocol: tcp`). A name-only contact is a logical
+target that can later be upgraded by the HA phonebook or routed through HA.
+
 Each ESP publishes an `intercom_endpoint` text sensor. Home Assistant builds the
 central `sensor.intercom_phonebook` from those endpoints and adds itself as the
 HA peer.
 
 Inbound ESP calls are not rejected just because the caller is missing from the
-callee phonebook. The phonebook is the outbound dial plan; inbound START carries
-caller and destination identity. When HA is in the path, it resolves inbound TCP
-callers by:
+callee phonebook. The phonebook is the outbound SIP dial plan; inbound INVITE
+carries caller and destination identity. When HA is in the path, it resolves
+inbound SIP callers by:
 
 1. socket source IP when it matches the endpoint host;
-2. `caller_route` from the PBX-lite START payload;
-3. caller friendly name from the same START payload.
+2. SIP From URI user/name;
+3. caller friendly name from SIP headers.
 
 That keeps routed subnet/NAT/VPN installs working when HA sees a socket source
 address that differs from the ESP endpoint IP, while preserving the endpoint IP
@@ -205,7 +225,6 @@ are on different routed subnets.
 
 - `auto_answer`
 - `dnd`
-- `ha_pbx_mode`
 - `master_volume`, only when a speaker is configured
 - `mic_gain`, only when a mic is configured
 

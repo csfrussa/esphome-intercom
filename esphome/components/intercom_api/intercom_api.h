@@ -5,6 +5,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/helpers.h"
+#include "esphome/core/log.h"
 #include "esphome/core/preferences.h"
 #include "../audio_processor/audio_utils.h"
 #include "../audio_processor/ring_buffer_caps.h"
@@ -41,33 +42,24 @@
 namespace esphome {
 namespace intercom_api {
 
-// Network transport selected via YAML `protocol:` (default tcp).
+// SIP signaling transport. Media is always RTP/UDP.
 enum class TransportType : uint8_t {
-  TCP,  // Framed binary protocol on port 6054 (audio + signaling on a single connection).
-  UDP,  // Raw PCM datagram audio + framed signaling, ESP <-> ESP and go2rtc-compatible.
-  SIP,  // SIP/SDP/RTP profile, PCM-only media.
+  TCP,
+  UDP,
 };
 
-// Connection state, derived from transport_->is_connected() and streaming_.
+// Connection state, derived from transport_->is_connected() and in_call_.
 // Kept as a public type for back-compat with users that read get_state().
 enum class ConnectionState : uint8_t {
   DISCONNECTED,
   CONNECTED,
-  STREAMING,
+  IN_CALL,
 };
 
-/// Transport-agnostic intercom peer.
+/// SIP phone exposed through the historical `intercom_api` component name.
 ///
-/// Bi-directional audio between devices on the same LAN, complementing
-/// voice_assistant and micro_wake_word. Network protocol is delegated to
-/// an IntercomTransport implementation: `TcpTransport` (framed PBX-lite
-/// on port 6054) or `UdpTransport` (raw PCM datagrams + framed control,
-/// opt-in via `protocol: udp`).
-///
-/// intercom_api is transport/FSM glue. It accepts any ESPHome-compatible
-/// microphone/speaker pair: native ESPHome components, hardware-processed
-/// devices such as XMOS, or the microphone/speaker facade exposed by
-/// esp_audio_stack when software AEC/AFE is needed.
+/// The phone speaks SIP signaling, SDP offer/answer and RTP PCM media.
+/// Proprietary intercom transports are not selected by this class anymore.
 ///
 /// The recv task is owned by the transport. A TX FreeRTOS task is created only
 /// when a microphone is configured; speaker-only devices play RX audio directly
@@ -81,8 +73,6 @@ class IntercomApi : public Component {
   static constexpr uint32_t kTxTaskStackBytes = 12288;
 
   enum SchedulerId : uint32_t {
-    SCHED_MDNS_STARTUP_SCAN = 1,
-    SCHED_MDNS_PERIODIC_SCAN = 2,
     SCHED_PUBLISH_INITIAL_STATE = 3,
     SCHED_SAVE_SETTINGS = 4,
   };
@@ -113,35 +103,30 @@ class IntercomApi : public Component {
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
   // Matches the slug HA uses for the esphome.{slug}_start_call action.
   void set_device_route_id(const std::string &id) { this->device_route_id_ = id; }
-  // OUTGOING / RINGING auto-decline timeouts (0 disables). Both fire
+  // CALLING / RINGING auto-decline timeouts (0 disables). Both fire
   // DECLINE("timeout") and tear down locally.
   void set_calling_timeout(uint32_t ms) { this->calling_timeout_ms_ = ms; }
   void set_ringing_timeout(uint32_t ms) { this->ringing_timeout_ms_ = ms; }
 
   // Transport configuration (set by codegen from YAML before setup()).
-  void set_protocol(TransportType type) { this->protocol_ = type; }
+  void set_protocol(TransportType type) {
+    this->protocol_ = type;
+    if (this->transport_ != nullptr) {
+      this->transport_->set_sip_signaling_transport(type == TransportType::TCP);
+    }
+  }
   void set_remote_ip(const std::string &ip) { this->remote_ip_ = ip; }
   void set_remote_port(uint16_t port) { this->remote_port_ = port; }
   void set_listen_port(uint16_t port) { this->listen_port_ = port; }
   void set_control_port(uint16_t port) { this->control_port_ = port; }
   void set_udp_max_payload(size_t bytes) { this->udp_max_payload_ = bytes; }
-  void set_tcp_port(uint16_t port) { this->tcp_port_ = port; }
   void set_sip_port(uint16_t port) { this->sip_port_ = port; }
   void set_rtp_port(uint16_t port) { this->rtp_port_ = port; }
-  uint16_t get_tcp_port() const { return this->tcp_port_; }
   std::string get_endpoint() const { return this->build_endpoint_string_(); }
   const char *get_audio_capability() const { return this->audio_capability_(); }
 
-  // device_independent (default): true peer-to-peer, ESP dials the phonebook
-  // entry. ha_pbx: every outbound call dials the HA entry instead, HA
-  // bridges to the real dest_name (lets HA log calls and keep
-  // intercom_native.forward functional even with direct reachability).
-  enum class IntercomRoutingMode : uint8_t {
-    DEVICE_INDEPENDENT = 0,
-    HA_PBX = 1,
-  };
-  void set_routing_mode(IntercomRoutingMode mode) { this->routing_mode_ = mode; }
-  IntercomRoutingMode routing_mode() const { return this->routing_mode_; }
+  // Direct SIP URIs are dialed peer-to-peer. Logical names without host/port
+  // are routed through HA as a SIP B2BUA bridge.
   void set_use_ha_as_first_contact(bool enabled) { this->use_ha_as_first_contact_ = enabled; }
   void set_audio_debug(bool enabled) { this->audio_debug_ = enabled; }
   void set_tx_audio_format(uint32_t sample_rate, uint8_t pcm_format, uint8_t channels, uint16_t frame_ms) {
@@ -162,40 +147,21 @@ class IntercomApi : public Component {
     this->append_audio_format_(&this->rx_audio_formats_,
                                AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms});
   }
-  void set_mdns_announce_enabled(bool enabled) { this->mdns_announce_enabled_ = enabled; }
-
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  void set_mdns_discovery_enabled(bool enabled) { this->mdns_discovery_enabled_ = enabled; }
-  void set_mdns_discovery_scan_tcp(bool enabled) { this->mdns_discovery_scan_tcp_ = enabled; }
-  void set_mdns_discovery_scan_udp(bool enabled) { this->mdns_discovery_scan_udp_ = enabled; }
-  void set_mdns_discovery_scan_sip(bool enabled) { this->mdns_discovery_scan_sip_ = enabled; }
-  void set_mdns_discovery_startup_scan(bool enabled) { this->mdns_discovery_startup_scan_ = enabled; }
-  void set_mdns_discovery_interval_ms(uint32_t ms) { this->mdns_discovery_interval_ms_ = ms; }
-  void set_mdns_discovery_query_timeout_ms(uint32_t ms) { this->mdns_discovery_query_timeout_ms_ = ms; }
-  void set_mdns_discovery_max_results(uint8_t max_results) { this->mdns_discovery_max_results_ = max_results; }
-#else
-  void set_mdns_discovery_enabled(bool enabled) { (void) enabled; }
-  void set_mdns_discovery_scan_tcp(bool enabled) { (void) enabled; }
-  void set_mdns_discovery_scan_udp(bool enabled) { (void) enabled; }
-  void set_mdns_discovery_scan_sip(bool enabled) { (void) enabled; }
-  void set_mdns_discovery_startup_scan(bool enabled) { (void) enabled; }
-  void set_mdns_discovery_interval_ms(uint32_t ms) { (void) ms; }
-  void set_mdns_discovery_query_timeout_ms(uint32_t ms) { (void) ms; }
-  void set_mdns_discovery_max_results(uint8_t max_results) { (void) max_results; }
-#endif
-
   /// Update the UDP peer endpoint at runtime; propagates to the live
   /// transport so the next datagram targets the new peer. `port` is audio;
   /// `control_port` is optional for short contact rows. TCP no-op.
   void set_remote_endpoint(const std::string &ip, uint16_t port, uint16_t control_port = 0);
   void set_remote_sip_transport_tcp(bool tcp);
+  const char *configured_sip_transport_name() const { return this->protocol_ == TransportType::TCP ? "tcp" : "udp"; }
 
   // Runtime control
   void start();
   void stop();
   bool is_active() const {
     CallState cs = this->call_state_.load(std::memory_order_acquire);
-    return cs == CallState::STREAMING || cs == CallState::OUTGOING;
+    return cs == CallState::IN_CALL || cs == CallState::CALLING ||
+           cs == CallState::REMOTE_RINGING || cs == CallState::RINGING ||
+           cs == CallState::CONNECTING;
   }
   bool is_connected() const {
     return this->transport_ != nullptr && this->transport_->is_connected();
@@ -215,9 +181,9 @@ class IntercomApi : public Component {
   void answer_call();
   void decline_call(const std::string &reason = "");
   bool is_ringing() const { return this->call_state_.load(std::memory_order_acquire) == CallState::RINGING; }
-  bool is_outgoing() const { return this->call_state_.load(std::memory_order_acquire) == CallState::OUTGOING; }
+  bool is_calling() const { return this->call_state_.load(std::memory_order_acquire) == CallState::CALLING; }
   bool is_idle() const { return this->call_state_.load(std::memory_order_acquire) == CallState::IDLE; }
-  bool is_streaming() const { return this->call_state_.load(std::memory_order_acquire) == CallState::STREAMING; }
+  bool is_in_call() const { return this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL; }
   // True when the selected contact name matches the configured HA peer.
   // Empty ha_peer_name_ disables the check (treated as "no HA configured").
   bool is_ha_destination() const {
@@ -234,21 +200,15 @@ class IntercomApi : public Component {
   float get_mic_gain() const { return this->mic_gain_.load(std::memory_order_relaxed); }
 
   // ConnectionState is derived: DISCONNECTED if no transport / peer,
-  // STREAMING when audio is flowing, CONNECTED otherwise.
+  // IN_CALL when audio is flowing, CONNECTED otherwise.
   ConnectionState get_state() const {
     if (this->transport_ == nullptr || !this->transport_->is_connected())
       return ConnectionState::DISCONNECTED;
-    return this->streaming_.load(std::memory_order_acquire)
-               ? ConnectionState::STREAMING
+    return this->in_call_.load(std::memory_order_acquire)
+               ? ConnectionState::IN_CALL
                : ConnectionState::CONNECTED;
   }
   const char *get_state_str() const;
-
-  // mode: raw_udp - UDP-only raw audio path. start() opens the audio path
-  // to peer+port (set at runtime via the start action) and skips all
-  // signaling (no MSG_START/RING/ANSWER/DECLINE/STOP). Use case: go2rtc
-  // / browser RTC consumer that handles offer/answer externally.
-  void set_raw_udp_mode(bool on) { this->raw_udp_mode_ = on; }
 
   // Sensor registration
   void set_state_sensor(text_sensor::TextSensor *sensor) { this->state_sensor_ = sensor; }
@@ -258,6 +218,7 @@ class IntercomApi : public Component {
   void set_transport_sensor(text_sensor::TextSensor *sensor) { this->transport_sensor_ = sensor; }
   void set_endpoint_sensor(text_sensor::TextSensor *sensor) { this->endpoint_sensor_ = sensor; }
   void set_last_reason_sensor(text_sensor::TextSensor *sensor) { this->last_reason_sensor_ = sensor; }
+  void set_sip_snapshot_sensor(text_sensor::TextSensor *sensor) { this->sip_snapshot_sensor_ = sensor; }
   // Phonebook source from HA: shipped YAMLs wire a homeassistant text_sensor
   // through ha_phonebook_text_sensor_id. Current firmware consumes the unified
   // protocol-aware sensor.intercom_phonebook and normalizes it locally.
@@ -268,14 +229,12 @@ class IntercomApi : public Component {
   // Entity registration (for state sync after boot)
   void register_auto_answer_switch(switch_::Switch *sw) { this->auto_answer_switch_ = sw; }
   void register_dnd_switch(switch_::Switch *sw) { this->dnd_switch_ = sw; }
-  void register_routing_mode_switch(switch_::Switch *sw) { this->routing_mode_switch_ = sw; }
   void register_volume_number(number::Number *num) { this->volume_number_ = num; }
   void register_mic_gain_number(number::Number *num) { this->mic_gain_number_ = num; }
-  // Contacts management. No-op in raw_udp mode.
+  // SIP dial-plan contact management.
   // Entry grammar:
-  //   "Name"                       bare name placeholder
-  //   "Name|ip|port"               TCP port or short UDP audio port
-  //   "Name|ip|audio|control"      complete UDP endpoint
+  //   "Name"                                      bare name placeholder
+  //   "Name|sip|ip|sip_port|rtp_port|udp|tcp"     SIP endpoint
   // add_contact and set_contacts run the same idempotent merge: same shape
   // = no-op, missing endpoint upgraded in place, mismatched endpoint
   // replaced. Slot order is stable; only flush_contacts() trims.
@@ -285,7 +244,7 @@ class IntercomApi : public Component {
   void flush_contacts();
   // Open a phonebook update cycle: commit any previously-open cycle (counter
   // advance + prune), then read the HA sensor (if configured + non-empty)
-  // and fire the on_update_contacts trigger for downstream sources (mDNS).
+  // and fire the on_update_contacts trigger for any HA-driven refresh work.
   // The cycle remains open until the next update_contacts() call or
   // CYCLE_TIMEOUT_MS elapses (loop() safety net).
   void update_contacts();
@@ -303,22 +262,17 @@ class IntercomApi : public Component {
   std::string get_caller() const { return this->caller_sensor_ ? this->caller_sensor_->state : ""; }
   std::string get_contacts_csv() const;
 
-  // Synthetic incoming-call trigger for transports without native signaling
-  // (raw_udp). Drives the FSM into RINGING and starts the ringing timeout.
-  void simulate_incoming_call(const std::string &caller);
-
   // Call state triggers (exposed to YAML)
   Trigger<> *get_ringing_trigger() { return &this->ringing_trigger_; }
-  Trigger<> *get_streaming_trigger() { return &this->streaming_trigger_; }
+  Trigger<> *get_in_call_trigger() { return &this->in_call_trigger_; }
   Trigger<> *get_idle_trigger() { return &this->idle_trigger_; }
-  Trigger<> *get_outgoing_call_trigger() { return &this->outgoing_call_trigger_; }
+  Trigger<> *get_calling_trigger() { return &this->calling_trigger_; }
   Trigger<> *get_dest_ringing_trigger() { return &this->dest_ringing_trigger_; }
   Trigger<std::string> *get_hangup_trigger() { return &this->hangup_trigger_; }
   Trigger<std::string> *get_call_failed_trigger() { return &this->call_failed_trigger_; }
   Trigger<> *get_destination_changed_trigger() { return &this->destination_changed_trigger_; }
   // Fires once per update_contacts() call after the HA-side merge completes
-  // (or immediately if HA sensor is empty/absent). YAML hooks here to chain
-  // additional sources (e.g. mDNS scan) that feed the same open cycle.
+  // (or immediately if HA sensor is empty/absent).
   Trigger<> *get_update_contacts_trigger() { return &this->update_contacts_trigger_; }
 
   // Call state getter
@@ -333,13 +287,6 @@ class IntercomApi : public Component {
   std::string normalize_roster_json_for_transport_(const std::string &roster_json);
   bool apply_roster_json_contacts_(const std::string &roster_json);
   bool maybe_auto_select_ha_first_();
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  void request_mdns_discovery_scan_();
-  void process_pending_mdns_discovery_();
-  std::string run_mdns_discovery_query_();
-  static void mdns_discovery_task(void *param);
-  void mdns_discovery_task_();
-#endif
 
   bool has_microphone_() const {
 #ifdef USE_INTERCOM_API_MIC
@@ -372,13 +319,9 @@ class IntercomApi : public Component {
   bool setup_transport_();
   bool start_runtime_tasks_();
   void append_audio_format_(AudioFormatList *list, const AudioFormat &format);
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  void start_mdns_discovery_();
-#endif
   void publish_initial_state_later_();
   void fail_setup_();
   void handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_ms);
-  void handle_udp_keepalive_(uint32_t now_ms);
 
 #ifdef USE_INTERCOM_API_MIC
   // TX task: mic capture + send (Core 0). Created only when a microphone is
@@ -396,29 +339,11 @@ class IntercomApi : public Component {
 
   // Transport callbacks (registered in setup()).
   static void transport_audio_callback_(void *ctx, const uint8_t *pcm, size_t bytes);
-  static void transport_control_callback_(void *ctx, MessageType type,
-                                          const uint8_t *payload, size_t len);
+  static void transport_sip_signal_callback_(void *ctx, const SipSignal &signal);
   static void transport_connection_callback_(void *ctx, bool connected);
   static bool transport_accept_callback_(void *ctx);
   void on_audio_received_(const uint8_t *pcm, size_t bytes);
-  void on_control_received_(MessageType type,
-                            const uint8_t *payload, size_t len);
-  struct ControlMessageFields {
-    std::string call_id;
-    std::string caller_route;
-    std::string caller_name;
-    std::string dest_route;
-    std::string dest_name;
-    AudioFormatList caller_tx_formats;
-    AudioFormatList caller_rx_formats;
-    AudioFormat caller_to_dest_format{LEGACY_AUDIO_FORMAT};
-    AudioFormat dest_to_caller_format{LEGACY_AUDIO_FORMAT};
-    std::string reason;
-    uint8_t error_code{0};
-    std::string error_detail;
-  };
-  bool decode_control_fields_(MessageType type, const uint8_t *data, size_t len,
-                              ControlMessageFields *out) const;
+  void on_sip_signal_received_(const SipSignal &signal);
   bool ignore_if_idle_or_stale_(const char *message_name, const std::string &call_id) const;
   void on_connection_change_(bool connected);
   bool can_accept_session_() const;
@@ -428,7 +353,7 @@ class IntercomApi : public Component {
 #endif
 
   void set_active_(bool on);
-  void set_streaming_(bool on);
+  void set_in_call_(bool on);
   void notify_audio_tasks_();
 
   void publish_state_();
@@ -438,17 +363,14 @@ class IntercomApi : public Component {
   void publish_contacts_();
   void publish_transport_();
   void publish_endpoint_();
+  void publish_sip_snapshot_();
   void request_endpoint_publish_();
   static void ip_event_handler_(void *arg, esp_event_base_t event_base,
                                 int32_t event_id, void *event_data);
-#ifdef USE_INTERCOM_MDNS_ANNOUNCE
-  void publish_mdns_endpoint_(const std::string &endpoint);
-  bool ensure_mdns_announce_registered_(const std::string &endpoint);
-#else
-  void publish_mdns_endpoint_(const std::string &) {}
-#endif
   std::string local_ip_string_() const;
   std::string build_endpoint_string_() const;
+  std::string build_sip_snapshot_string_() const;
+  static std::string audio_format_token_(const AudioFormat &fmt);
 
   void set_call_state_(CallState new_state);
   void end_call_(CallEndReason reason, const std::string &detail = "");
@@ -456,13 +378,12 @@ class IntercomApi : public Component {
   // cache it as terminal, end locally.
   void fire_timeout_decline_();
 
-  // === PBX-lite outbound helpers ===
-  // Build body (call_id prefix + per-type tail) and dispatch to
-  // transport_->send_control. False on missing transport / overflow.
-  bool send_pbx_simple_(MessageType type, const std::string &call_id);
-  bool send_pbx_decline_(const std::string &call_id, const std::string &reason);
-  bool send_pbx_answer_(const std::string &call_id);
-  bool send_pbx_start_(const std::string &call_id,
+  bool send_sip_ringing_(const std::string &call_id);
+  bool send_sip_bye_(const std::string &call_id);
+  bool send_sip_cancel_(const std::string &call_id);
+  bool send_sip_decline_(const std::string &call_id, const std::string &reason);
+  bool send_sip_answer_(const std::string &call_id);
+  bool send_sip_invite_(const std::string &call_id,
                        const std::string &caller_route, const std::string &caller_name,
                        const std::string &dest_route, const std::string &dest_name);
 
@@ -476,59 +397,45 @@ class IntercomApi : public Component {
 #endif
 
   // Mode and state
-  bool raw_udp_mode_{false};
   std::atomic<bool> active_{false};
-  std::atomic<bool> streaming_{false};
+  std::atomic<bool> in_call_{false};
   std::atomic<CallState> call_state_{CallState::IDLE};  // FSM source of truth
 
   // Transport configuration (set from YAML before setup()). Defaults:
-  // 6054 data plane (TCP and UDP share the number on different stacks),
-  // 6055 UDP control plane. TCP carries signaling on the framed socket.
-  TransportType protocol_{TransportType::TCP};
-  std::string remote_ip_;          // UDP: peer endpoint IP
-  uint16_t remote_port_{6054};     // UDP: peer audio port
-  uint16_t remote_control_port_{0};  // UDP: peer control port, 0 = local control_port_
-  uint16_t listen_port_{6054};     // UDP: local audio listen port
-  uint16_t control_port_{6055};    // UDP: local control listen port
+  TransportType protocol_{TransportType::UDP};
+  std::string remote_ip_;
+  uint16_t remote_port_{5060};
+  uint16_t remote_control_port_{0};
+  uint16_t listen_port_{5060};
+  uint16_t control_port_{40000};
   size_t udp_max_payload_{UDP_SAFE_AUDIO_PAYLOAD_BYTES};
-  uint16_t tcp_port_{6054};        // TCP: server listen + outbound originate
-  uint16_t sip_port_{5060};        // SIP/UDP signaling
-  uint16_t rtp_port_{40000};       // RTP/UDP media
-  IntercomRoutingMode routing_mode_{IntercomRoutingMode::DEVICE_INDEPENDENT};
+  uint16_t sip_port_{5060};
+  uint16_t rtp_port_{40000};
 
-  // Active network transport (created in setup() based on protocol_).
-  std::unique_ptr<IntercomTransport> transport_;
+  // Active SIP phone transport (created in setup() based on protocol_).
+  std::unique_ptr<SipPhoneTransport> transport_;
 
   // Sensors
   text_sensor::TextSensor *state_sensor_{nullptr};
   text_sensor::TextSensor *destination_sensor_{nullptr};  // full: selected contact
   text_sensor::TextSensor *caller_sensor_{nullptr};       // full: who is calling
   text_sensor::TextSensor *contacts_sensor_{nullptr};     // full: contact count (e.g. "3 contacts")
-  text_sensor::TextSensor *transport_sensor_{nullptr};    // diagnostic: "udp" or "tcp"
+  text_sensor::TextSensor *transport_sensor_{nullptr};    // SIP signaling transport: "udp" or "tcp"
   text_sensor::TextSensor *endpoint_sensor_{nullptr};     // route source: Name|protocol|ip|ports
   text_sensor::TextSensor *last_reason_sensor_{nullptr};  // terminal reason for HA/card mirroring
+  text_sensor::TextSensor *sip_snapshot_sensor_{nullptr};  // diagnostic SipPhoneState JSON
   std::string last_reason_;
   std::string last_endpoint_;
+  std::string last_sip_snapshot_;
   std::atomic<bool> endpoint_publish_requested_{false};
-#ifdef USE_INTERCOM_MDNS_ANNOUNCE
-  std::string last_mdns_endpoint_;
-  bool mdns_endpoint_warning_logged_{false};
-  bool mdns_announce_enabled_{false};
-  bool mdns_announce_registered_{false};
-#else
-  bool mdns_announce_enabled_{false};
-#endif
-
   // Registered entities (for state sync after boot)
   switch_::Switch *auto_answer_switch_{nullptr};
   switch_::Switch *dnd_switch_{nullptr};
-  switch_::Switch *routing_mode_switch_{nullptr};
   bool entity_restore_applied_{false};
   number::Number *volume_number_{nullptr};
   number::Number *mic_gain_number_{nullptr};
   // Contacts management. Empty at boot; fed by the optional HA text_sensor
-  // subscription unless ESP-side mDNS discovery is enabled, plus any YAML
-  // sources wired on the on_update_contacts trigger.
+  // subscription plus any YAML sources wired on the on_update_contacts trigger.
   // Slot order is stable:
   // re-add keeps the slot, only the endpoint may upgrade or replace. The
   // cycle counter on each ContactEntry advances/resets in commit_cycle()
@@ -544,7 +451,7 @@ class IntercomApi : public Component {
   uint8_t prune_threshold_{0};  // 0 = pruning disabled (default)
   static constexpr uint32_t CYCLE_TIMEOUT_MS = 10000;  // safety net for stuck cycles
   // Empty by default. HA-facing YAML should set this to hass.config.location_name
-  // through intercom_api.set_ha_peer_name so HA_PBX routing can locate the HA
+  // through intercom_api.set_ha_peer_name for default dial-plan selection.
   // phonebook entry. Direct P2P usage can leave it empty.
   std::string ha_peer_name_;
   bool use_ha_as_first_contact_{false};
@@ -552,27 +459,6 @@ class IntercomApi : public Component {
   std::string device_name_;  // This device's friendly name (to exclude from contacts)
   std::string last_published_destination_;
   std::string device_route_id_;  // routing key (yaml node name slug)
-
-  // Optional ESP-side peer discovery. It is intentionally narrow: query only
-  // _intercom-tcp/_intercom-udp, parse existing TXT keys, and merge into the
-  // normal phonebook on the ESPHome loop thread.
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  bool mdns_discovery_enabled_{false};
-  bool mdns_discovery_scan_tcp_{false};
-  bool mdns_discovery_scan_udp_{false};
-  bool mdns_discovery_scan_sip_{false};
-  bool mdns_discovery_startup_scan_{true};
-  uint32_t mdns_discovery_interval_ms_{60000};
-  uint32_t mdns_discovery_query_timeout_ms_{1000};
-  uint8_t mdns_discovery_max_results_{8};
-  TaskHandle_t mdns_discovery_task_handle_{nullptr};
-  StaticTask_t mdns_discovery_task_tcb_{};
-  StackType_t *mdns_discovery_task_stack_{nullptr};
-  std::atomic<bool> mdns_discovery_scan_requested_{false};
-  std::atomic<bool> mdns_discovery_pending_{false};
-  Mutex mdns_discovery_mutex_;
-  std::string mdns_discovery_pending_csv_;
-#endif
 
 #ifdef USE_INTERCOM_API_MIC
   // Audio buffers
@@ -582,10 +468,6 @@ class IntercomApi : public Component {
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.
   size_t tx_audio_chunk_bytes_() const { return this->tx_audio_format_.nominal_frame_bytes(); }
   size_t mic_processing_samples_() const { return this->tx_audio_chunk_bytes_() / sizeof(int16_t); }
-#endif
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  static constexpr uint32_t kMdnsDiscoveryTaskStackBytes = 6144;
-  static constexpr uint32_t kMdnsDiscoveryStartupDelayMs = 3000;
 #endif
 #ifdef USE_INTERCOM_API_MIC
   uint8_t *tx_audio_chunk_{nullptr};
@@ -603,14 +485,14 @@ class IntercomApi : public Component {
 
   std::atomic<float> volume_{1.0f};
   bool audio_debug_{false};
-  AudioFormat tx_audio_format_{LEGACY_AUDIO_FORMAT};
-  AudioFormat rx_audio_format_{LEGACY_AUDIO_FORMAT};
+  AudioFormat tx_audio_format_{DEFAULT_AUDIO_FORMAT};
+  AudioFormat rx_audio_format_{DEFAULT_AUDIO_FORMAT};
   AudioFormatList tx_audio_formats_{};
   AudioFormatList rx_audio_formats_{};
-  AudioFormat current_caller_to_dest_format_{LEGACY_AUDIO_FORMAT};
-  AudioFormat current_dest_to_caller_format_{LEGACY_AUDIO_FORMAT};
-  AudioFormat current_tx_audio_format_{LEGACY_AUDIO_FORMAT};
-  AudioFormat current_rx_audio_format_{LEGACY_AUDIO_FORMAT};
+  AudioFormat current_caller_to_dest_format_{DEFAULT_AUDIO_FORMAT};
+  AudioFormat current_dest_to_caller_format_{DEFAULT_AUDIO_FORMAT};
+  AudioFormat current_tx_audio_format_{DEFAULT_AUDIO_FORMAT};
+  AudioFormat current_rx_audio_format_{DEFAULT_AUDIO_FORMAT};
   uint32_t audio_debug_last_tx_log_ms_{0};
   uint32_t audio_debug_last_rx_log_ms_{0};
   uint32_t audio_debug_tx_frames_{0};
@@ -619,10 +501,6 @@ class IntercomApi : public Component {
   // First peer audio frame closes the ANSWER-echo loop (avoids A->B->A storms).
   std::atomic<bool> first_audio_received_{false};
 
-  // UDP control keepalive. TCP owns its keepalive in tcp_transport.
-  std::atomic<uint32_t> udp_last_peer_activity_ms_{0};
-  std::atomic<uint32_t> udp_last_ping_sent_ms_{0};
-
   bool auto_answer_{true};
   bool do_not_disturb_{false};
 
@@ -630,10 +508,10 @@ class IntercomApi : public Component {
   uint32_t calling_timeout_ms_{0};
   uint32_t ringing_timeout_ms_{0};
   uint32_t ringing_start_time_{0};
-  uint32_t outgoing_start_time_{0};
+  uint32_t calling_start_time_{0};
 
-  // === PBX-lite call state ===
-  // call_id format: "<caller_name><->dest_name>", echoed in every packet.
+  // === SIP call state ===
+  // SIP Call-ID, opaque and echoed by SIP dialogs.
   // All fields are accessed from main loop AND transport recv task; only
   // the helpers below (set/snapshot/clear) are allowed to touch them.
   mutable Mutex call_state_mutex_;
@@ -643,9 +521,8 @@ class IntercomApi : public Component {
   std::string current_dest_route_id_;
   std::string current_dest_name_;
   // Last terminal DECLINE: replayed briefly when a START with the same
-  // call_id arrives again. The call_id is intentionally human readable
-  // ("caller<->dest"), so this cache must be time-limited or a later real
-  // call between the same two devices would inherit the previous decline reason.
+  // call_id arrives again. The cache is time-limited so a later real call
+  // between the same two devices cannot inherit the previous decline reason.
   static constexpr uint32_t TERMINAL_DECLINE_REPLAY_MS = 1500;
   std::string last_terminal_decline_call_id_;
   std::string last_terminal_decline_reason_;
@@ -703,9 +580,9 @@ class IntercomApi : public Component {
 #endif
 
   Trigger<> ringing_trigger_;
-  Trigger<> streaming_trigger_;
+  Trigger<> in_call_trigger_;
   Trigger<> idle_trigger_;
-  Trigger<> outgoing_call_trigger_;
+  Trigger<> calling_trigger_;
   Trigger<> dest_ringing_trigger_;
   Trigger<std::string> hangup_trigger_;
   Trigger<std::string> call_failed_trigger_;
@@ -759,16 +636,6 @@ class IntercomApiDndSwitch : public switch_::Switch, public Parented<IntercomApi
  public:
   void write_state(bool state) override {
     this->parent_->set_do_not_disturb(state);
-    this->publish_state(state);
-  }
-};
-
-class IntercomRoutingModeSwitch : public switch_::Switch, public Parented<IntercomApi> {
- public:
-  void write_state(bool state) override {
-    this->parent_->set_routing_mode(
-        state ? IntercomApi::IntercomRoutingMode::HA_PBX
-              : IntercomApi::IntercomRoutingMode::DEVICE_INDEPENDENT);
     this->publish_state(state);
   }
 };

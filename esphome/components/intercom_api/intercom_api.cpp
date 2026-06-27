@@ -12,21 +12,12 @@
 #include "esphome/core/log.h"
 #include "../audio_processor/ring_buffer_caps.h"
 #include "../audio_processor/task_utils.h"
-#ifdef USE_INTERCOM_TCP_TRANSPORT
-#include "tcp_transport.h"
-#endif
-#ifdef USE_INTERCOM_UDP_TRANSPORT
-#include "udp_transport.h"
-#endif
 #ifdef USE_INTERCOM_SIP_TRANSPORT
 #include "sip_transport.h"
 #endif
 
 #include "esp_event.h"
 #include "esp_netif.h"
-#ifdef USE_INTERCOM_MDNS_ANNOUNCE
-#include "mdns.h"
-#endif
 
 namespace esphome {
 namespace intercom_api {
@@ -156,29 +147,14 @@ bool IntercomApi::setup_audio_processor_() {
 
 bool IntercomApi::setup_transport_() {
 #ifdef USE_INTERCOM_SIP_TRANSPORT
-  if (this->protocol_ == TransportType::SIP) {
-    this->transport_ = std::make_unique<SipTransport>(
-        this->sip_port_, this->rtp_port_, this->remote_ip_,
-        this->task_stacks_in_psram_);
-  } else
+  this->transport_ = std::make_unique<SipTransport>(
+      this->sip_port_, this->rtp_port_, this->remote_ip_,
+      this->task_stacks_in_psram_);
+  this->transport_->set_sip_signaling_transport(this->protocol_ == TransportType::TCP);
+#else
+  ESP_LOGE(TAG, "SIP transport was not compiled into this firmware");
+  return false;
 #endif
-#ifdef USE_INTERCOM_UDP_TRANSPORT
-  if (this->protocol_ == TransportType::UDP) {
-    this->transport_ = std::make_unique<UdpTransport>(
-        this->listen_port_, this->remote_ip_, this->remote_port_,
-        this->control_port_, this->remote_control_port_,
-        this->udp_max_payload_, this->task_stacks_in_psram_);
-  } else
-#endif
-#ifdef USE_INTERCOM_TCP_TRANSPORT
-  if (this->protocol_ == TransportType::TCP) {
-    this->transport_ = std::make_unique<TcpTransport>(this->tcp_port_, this->task_stacks_in_psram_);
-  } else
-#endif
-  {
-    ESP_LOGE(TAG, "Configured intercom transport was not compiled into this firmware");
-    return false;
-  }
   if (!this->transport_) {
     ESP_LOGE(TAG, "Failed to allocate transport");
     return false;
@@ -188,7 +164,7 @@ bool IntercomApi::setup_transport_() {
 
   // Wire callbacks before start() so the transport task never fires into null.
   this->transport_->set_audio_callback(IntercomApi::transport_audio_callback_, this);
-  this->transport_->set_control_callback(IntercomApi::transport_control_callback_, this);
+  this->transport_->set_sip_signal_callback(IntercomApi::transport_sip_signal_callback_, this);
   this->transport_->set_connection_callback(IntercomApi::transport_connection_callback_, this);
   this->transport_->set_accept_callback(IntercomApi::transport_accept_callback_, this);
 
@@ -203,9 +179,8 @@ void IntercomApi::transport_audio_callback_(void *ctx, const uint8_t *pcm, size_
   static_cast<IntercomApi *>(ctx)->on_audio_received_(pcm, bytes);
 }
 
-void IntercomApi::transport_control_callback_(void *ctx, MessageType type,
-                                              const uint8_t *payload, size_t len) {
-  static_cast<IntercomApi *>(ctx)->on_control_received_(type, payload, len);
+void IntercomApi::transport_sip_signal_callback_(void *ctx, const SipSignal &signal) {
+  static_cast<IntercomApi *>(ctx)->on_sip_signal_received_(signal);
 }
 
 void IntercomApi::transport_connection_callback_(void *ctx, bool connected) {
@@ -233,33 +208,6 @@ bool IntercomApi::start_runtime_tasks_() {
   return true;
 }
 
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-void IntercomApi::start_mdns_discovery_() {
-  if (this->mdns_discovery_enabled_) {
-    if (!audio_processor::start_pinned_task(IntercomApi::mdns_discovery_task, "intercom_mdns",
-                                             IntercomApi::kMdnsDiscoveryTaskStackBytes, this, 3, 0,
-                                             this->task_stacks_in_psram_, TAG,
-                                             &this->mdns_discovery_task_handle_,
-                                             &this->mdns_discovery_task_tcb_,
-                                             &this->mdns_discovery_task_stack_)) {
-      ESP_LOGW(TAG, "mDNS discovery disabled: failed to create discovery task");
-      this->mdns_discovery_enabled_ = false;
-    } else {
-      if (this->mdns_discovery_startup_scan_) {
-        this->set_timeout(SCHED_MDNS_STARTUP_SCAN, kMdnsDiscoveryStartupDelayMs, [this]() {
-          this->request_mdns_discovery_scan_();
-        });
-      }
-      if (this->mdns_discovery_interval_ms_ > 0) {
-        this->set_interval(SCHED_MDNS_PERIODIC_SCAN, this->mdns_discovery_interval_ms_, [this]() {
-          this->request_mdns_discovery_scan_();
-        });
-      }
-    }
-  }
-}
-#endif
-
 void IntercomApi::publish_initial_state_later_() {
   // Deferred so sensors are fully wired before the first publish.
   this->set_timeout(SCHED_PUBLISH_INITIAL_STATE, 250, [this]() {
@@ -267,6 +215,7 @@ void IntercomApi::publish_initial_state_later_() {
     this->publish_destination_();
     this->publish_transport_();
     this->publish_endpoint_();
+    this->publish_sip_snapshot_();
   });
 }
 
@@ -278,12 +227,9 @@ void IntercomApi::fail_setup_() {
 void IntercomApi::setup() {
   ESP_LOGI(TAG, "Setting up Intercom API...");
 
-  const char *transport_name = this->protocol_ == TransportType::UDP
-      ? "udp"
-      : (this->protocol_ == TransportType::SIP ? "sip" : "tcp");
-  ESP_LOGI(TAG, "Audio capability: %s (transport: %s, tasks: %s)",
+  ESP_LOGI(TAG, "Audio capability: %s (SIP/%s, tasks: %s)",
            this->audio_capability_(),
-           transport_name,
+           this->protocol_ == TransportType::TCP ? "TCP" : "UDP",
            this->has_microphone_() ? "tx+rx/control" : "rx/control");
 
   if (!this->allocate_setup_buffers_()) {
@@ -307,21 +253,11 @@ void IntercomApi::setup() {
   esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID,
                                       &IntercomApi::ip_event_handler_,
                                       this, nullptr);
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  this->start_mdns_discovery_();
-#endif
   this->publish_initial_state_later_();
 
-  if (this->protocol_ == TransportType::UDP) {
-    ESP_LOGI(TAG, "Intercom API ready on UDP port %u (peer %s:%u)",
-             (unsigned) this->listen_port_, this->remote_ip_.c_str(),
-             (unsigned) this->remote_port_);
-  } else if (this->protocol_ == TransportType::SIP) {
-    ESP_LOGI(TAG, "Intercom API ready on SIP UDP/%u RTP UDP/%u",
-             (unsigned) this->sip_port_, (unsigned) this->rtp_port_);
-  } else {
-    ESP_LOGI(TAG, "Intercom API ready on TCP port %u", (unsigned) this->tcp_port_);
-  }
+  ESP_LOGI(TAG, "Intercom API ready as SIP phone on %s/%u RTP UDP/%u",
+           this->protocol_ == TransportType::TCP ? "TCP" : "UDP",
+           (unsigned) this->sip_port_, (unsigned) this->rtp_port_);
 }
 
 void IntercomApi::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_ms) {
@@ -335,58 +271,12 @@ void IntercomApi::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeou
     return;
   }
 
-  if (calling_timeout_ms > 0 && state == CallState::OUTGOING &&
-      now_ms - this->outgoing_start_time_ >= calling_timeout_ms) {
+  if (calling_timeout_ms > 0 && (state == CallState::CALLING || state == CallState::REMOTE_RINGING) &&
+      now_ms - this->calling_start_time_ >= calling_timeout_ms) {
     const std::string cid = this->get_current_call_id_();
-    ESP_LOGI(TAG, "Calling timeout after %u ms - cancelling outgoing (call_id=%s)",
+    ESP_LOGI(TAG, "Calling timeout after %u ms - sending CANCEL (call_id=%s)",
              calling_timeout_ms, cid.c_str());
     this->fire_timeout_decline_();
-  }
-}
-
-void IntercomApi::handle_udp_keepalive_(uint32_t now_ms) {
-  if (this->protocol_ != TransportType::UDP || this->raw_udp_mode_ ||
-      this->call_state_.load(std::memory_order_acquire) != CallState::STREAMING ||
-      this->transport_ == nullptr || !this->transport_->is_connected()) {
-    return;
-  }
-
-  const uint32_t last_activity = this->udp_last_peer_activity_ms_.load(std::memory_order_acquire);
-  if (last_activity == 0) {
-    this->udp_last_peer_activity_ms_.store(now_ms, std::memory_order_release);
-    return;
-  }
-
-  uint32_t effective_now = now_ms;
-  const uint32_t silence = now_ms - last_activity;
-  if (silence > KEEPALIVE_DEADLINE_MS) {
-    // Re-read before tearing down: UDP audio/control callbacks update this
-    // from transport tasks, and using a stale sample can kill a live call.
-    const uint32_t fresh_activity = this->udp_last_peer_activity_ms_.load(std::memory_order_acquire);
-    const uint32_t fresh_now = millis();
-    const uint32_t fresh_silence = fresh_now - fresh_activity;
-    if (fresh_activity != 0 && fresh_silence <= KEEPALIVE_DEADLINE_MS) {
-      effective_now = fresh_now;
-    } else {
-      const std::string call_id = this->get_current_call_id_();
-      ESP_LOGW(TAG, "UDP peer keepalive timeout after %u ms",
-               (unsigned) (fresh_activity != 0 ? fresh_silence : silence));
-      this->end_call_(CallEndReason::REMOTE_DEVICE_LOST);
-      if (!call_id.empty()) {
-        this->send_pbx_simple_(MessageType::HANGUP, call_id);
-      }
-      this->set_active_(false);
-      this->set_streaming_(false);
-      this->transport_->disconnect();
-      return;
-    }
-  }
-
-  const uint32_t last_ping = this->udp_last_ping_sent_ms_.load(std::memory_order_acquire);
-  if (last_ping == 0 || effective_now - last_ping >= PING_INTERVAL_MS) {
-    if (this->send_pbx_simple_(MessageType::PING, "")) {
-      this->udp_last_ping_sent_ms_.store(effective_now, std::memory_order_release);
-    }
   }
 }
 
@@ -394,9 +284,6 @@ void IntercomApi::loop() {
   if (this->endpoint_publish_requested_.exchange(false, std::memory_order_acq_rel)) {
     this->publish_endpoint_();
   }
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  this->process_pending_mdns_discovery_();
-#endif
 
   // Phonebook cycle timeout safeguard: a stuck on_update_contacts chain (e.g.
   // an external update source never completes) would otherwise leave the cycle open forever
@@ -408,7 +295,7 @@ void IntercomApi::loop() {
     this->commit_cycle_();
   }
 
-  // Auto-decline timeouts (0 = disabled). OUTGOING falls back to
+  // Auto-decline timeouts (0 = disabled). CALLING falls back to
   // ringing_timeout when calling_timeout is unset.
   uint32_t now = millis();
   const uint32_t calling_to = this->calling_timeout_ms_ > 0
@@ -416,14 +303,9 @@ void IntercomApi::loop() {
                                 : this->ringing_timeout_ms_;
 
   this->handle_call_timeouts_(now, calling_to);
-  this->handle_udp_keepalive_(now);
-
   bool keep_loop = this->cycle_active_ ||
                    this->call_state_.load(std::memory_order_acquire) != CallState::IDLE;
   keep_loop = keep_loop || this->endpoint_publish_requested_.load(std::memory_order_acquire);
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  keep_loop = keep_loop || this->mdns_discovery_pending_.load(std::memory_order_acquire);
-#endif
   if (!keep_loop) {
     this->disable_loop();
   }
@@ -433,11 +315,11 @@ void IntercomApi::fire_timeout_decline_() {
   // DECLINE("timeout") + cache it so dup START replays the same response.
   const std::string call_id = this->get_current_call_id_();
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
-    this->send_pbx_decline_(call_id, kReasonTimeout);
+    this->send_sip_decline_(call_id, kReasonTimeout);
   }
   this->set_terminal_decline_(call_id, kReasonTimeout);
   this->set_active_(false);
-  this->streaming_.store(false, std::memory_order_release);
+  this->in_call_.store(false, std::memory_order_release);
   this->end_call_(CallEndReason::TIMEOUT, kReasonTimeout);
   if (this->transport_) this->transport_->disconnect();
 }
@@ -449,35 +331,13 @@ void IntercomApi::dump_config() {
   } else {
     ESP_LOGCONFIG(TAG, "  Transport: (not initialised)");
   }
-  if (this->protocol_ == TransportType::UDP) {
-    ESP_LOGCONFIG(TAG, "  Audio listen port: %u", (unsigned) this->listen_port_);
-    ESP_LOGCONFIG(TAG, "  Control port: %u", (unsigned) this->control_port_);
-    ESP_LOGCONFIG(TAG, "  Remote: %s:%u control=%u", this->remote_ip_.c_str(),
-                  (unsigned) this->remote_port_,
-                  (unsigned) (this->remote_control_port_ != 0
-                                  ? this->remote_control_port_
-                                  : this->control_port_));
-  } else {
-    ESP_LOGCONFIG(TAG, "  Port: %u", (unsigned) this->tcp_port_);
-  }
-  ESP_LOGCONFIG(TAG, "  Routing mode: %s",
-                this->routing_mode_ == IntercomRoutingMode::HA_PBX
-                    ? "HA_PBX"
-                    : "DEVICE_INDEPENDENT");
+  ESP_LOGCONFIG(TAG, "  SIP listen port: %u", (unsigned) this->sip_port_);
+  ESP_LOGCONFIG(TAG, "  RTP port: %u", (unsigned) this->rtp_port_);
+  ESP_LOGCONFIG(TAG, "  Routing: SIP dial plan");
   ESP_LOGCONFIG(TAG, "  HA peer name: %s", this->ha_peer_name_.c_str());
   ESP_LOGCONFIG(TAG, "  Audio capability: %s", this->audio_capability_());
   ESP_LOGCONFIG(TAG, "  HA as first contact: %s", YESNO(this->use_ha_as_first_contact_));
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  ESP_LOGCONFIG(TAG, "  mDNS discovery: %s%s%s interval=%u ms timeout=%u ms max=%u",
-                YESNO(this->mdns_discovery_enabled_),
-                this->mdns_discovery_scan_tcp_ ? " tcp" : "",
-                this->mdns_discovery_scan_udp_ ? " udp" : "",
-                (unsigned) this->mdns_discovery_interval_ms_,
-                (unsigned) this->mdns_discovery_query_timeout_ms_,
-                (unsigned) this->mdns_discovery_max_results_);
-#else
-  ESP_LOGCONFIG(TAG, "  mDNS discovery: NO");
-#endif
+  ESP_LOGCONFIG(TAG, "  Phonebook source: HA SIP phonebook");
 #ifdef USE_INTERCOM_API_MIC
   ESP_LOGCONFIG(TAG, "  Microphone: %s", this->microphone_ ? "direct" : (this->microphone_source_ ? "source" : "none"));
 #endif
@@ -521,11 +381,34 @@ void IntercomApi::set_remote_sip_transport_tcp(bool tcp) {
 
 void IntercomApi::publish_transport_() {
   if (this->transport_sensor_ != nullptr) {
-    const char *t = this->protocol_ == TransportType::UDP
-        ? "udp"
-        : (this->protocol_ == TransportType::SIP ? "sip" : "tcp");
-    this->transport_sensor_->publish_state(t);
+    this->transport_sensor_->publish_state(this->protocol_ == TransportType::TCP ? "tcp" : "udp");
   }
+}
+
+std::string IntercomApi::audio_format_token_(const AudioFormat &fmt) {
+  const char *pcm = "s16le";
+  switch (fmt.pcm_format) {
+    case PcmFormat::S16LE:
+      pcm = "s16le";
+      break;
+    case PcmFormat::S24LE:
+      pcm = "s24le";
+      break;
+    case PcmFormat::S24LE_IN_S32:
+      pcm = "s24le_in_s32";
+      break;
+    case PcmFormat::S32LE:
+      pcm = "s32le";
+      break;
+    default:
+      pcm = "s16le";
+      break;
+  }
+  char token[48];
+  snprintf(token, sizeof(token), "%u:%s:%u:%u",
+           (unsigned) fmt.sample_rate, pcm,
+           (unsigned) fmt.channels, (unsigned) fmt.frame_ms);
+  return token;
 }
 
 std::string IntercomApi::local_ip_string_() const {
@@ -549,55 +432,114 @@ std::string IntercomApi::build_endpoint_string_() const {
     return "";
   }
 
-  auto format_token = [](const AudioFormat &fmt) -> std::string {
-    const char *pcm = "s16le";
-    switch (fmt.pcm_format) {
-      case PcmFormat::S16LE:
-        pcm = "s16le";
-        break;
-      case PcmFormat::S24LE:
-        pcm = "s24le";
-        break;
-      case PcmFormat::S24LE_IN_S32:
-        pcm = "s24le_in_s32";
-        break;
-      case PcmFormat::S32LE:
-        pcm = "s32le";
-        break;
-      default:
-        pcm = "s16le";
-        break;
-    }
-    char token[48];
-    snprintf(token, sizeof(token), "%u:%s:%u:%u",
-             (unsigned) fmt.sample_rate, pcm,
-             (unsigned) fmt.channels, (unsigned) fmt.frame_ms);
-    return token;
-  };
   auto format_list_token = [&](const AudioFormatList &list) -> std::string {
     std::string out;
     for (uint8_t i = 0; i < list.count; i++) {
       if (!out.empty()) out += ";";
-      out += format_token(list.formats[i]);
+      out += IntercomApi::audio_format_token_(list.formats[i]);
     }
     return out;
   };
   const std::string tx = format_list_token(this->tx_audio_formats_);
   const std::string rx = format_list_token(this->rx_audio_formats_);
   char buf[768];
-  if (this->protocol_ == TransportType::UDP) {
-    snprintf(buf, sizeof(buf), "%s | udp | %s | %u | %u | %s | %s | %s", name.c_str(), ip.c_str(),
-             (unsigned) this->listen_port_, (unsigned) this->control_port_,
-             this->audio_capability_(), tx.c_str(), rx.c_str());
-  } else if (this->protocol_ == TransportType::SIP) {
-    snprintf(buf, sizeof(buf), "%s | sip | %s | %u | %u | %s | %s | %s", name.c_str(), ip.c_str(),
-             (unsigned) this->sip_port_, (unsigned) this->rtp_port_,
-             this->audio_capability_(), tx.c_str(), rx.c_str());
-  } else {
-    snprintf(buf, sizeof(buf), "%s | tcp | %s | %u | %s | %s | %s", name.c_str(), ip.c_str(),
-             (unsigned) this->tcp_port_, this->audio_capability_(), tx.c_str(), rx.c_str());
-  }
+  snprintf(buf, sizeof(buf), "%s | sip | %s | %u | %u | %s | %s | %s | %s", name.c_str(), ip.c_str(),
+           (unsigned) this->sip_port_, (unsigned) this->rtp_port_,
+           this->audio_capability_(), tx.c_str(), rx.c_str(),
+           this->protocol_ == TransportType::TCP ? "tcp" : "udp");
   return buf;
+}
+
+std::string IntercomApi::build_sip_snapshot_string_() const {
+  auto json_escape = [](const std::string &in) -> std::string {
+    std::string out;
+    for (char ch : in) {
+      if (ch == '"' || ch == '\\') {
+        out.push_back('\\');
+        out.push_back(ch);
+      } else if (ch == '\r' || ch == '\n') {
+        out.push_back(' ');
+      } else {
+        out.push_back(ch);
+      }
+    }
+    return out;
+  };
+  const CallSnapshot call = this->snapshot_call_identity_();
+  const std::string state = this->get_call_state_str();
+  std::string direction;
+  if (!call.caller_name.empty() && call.caller_name == this->device_name_) {
+    direction = "outgoing";
+  } else if (!call.dest_name.empty() && call.dest_name == this->device_name_) {
+    direction = "incoming";
+  } else if (this->call_state_.load(std::memory_order_acquire) == CallState::CALLING) {
+    direction = "outgoing";
+  } else if (this->call_state_.load(std::memory_order_acquire) == CallState::RINGING) {
+    direction = "incoming";
+  }
+  std::string contact = this->phonebook_.current_name();
+  std::string local_uri = "sip:" + this->device_route_id_ + "@" + this->local_ip_string_() + ":" + std::to_string(this->sip_port_);
+  std::string remote_uri;
+  if (!call.dest_name.empty() || !call.caller_name.empty()) {
+    const std::string remote = direction == "outgoing" ? call.dest_name : call.caller_name;
+    remote_uri = "sip:" + remote;
+  }
+  uint32_t rtp_tx_packets = 0;
+  uint32_t rtp_rx_packets = 0;
+  uint32_t rtp_tx_bytes = 0;
+  uint32_t rtp_rx_bytes = 0;
+  uint16_t sip_status = 0;
+  const char *last_event = "";
+  std::string selected_tx = IntercomApi::audio_format_token_(this->current_tx_audio_format_);
+  std::string selected_rx = IntercomApi::audio_format_token_(this->current_rx_audio_format_);
+#ifdef USE_INTERCOM_SIP_TRANSPORT
+  if (auto *sip = dynamic_cast<SipTransport *>(this->transport_.get())) {
+    const SipTransportSnapshot snap = sip->snapshot();
+    rtp_tx_packets = snap.rtp_tx_packets;
+    rtp_rx_packets = snap.rtp_rx_packets;
+    rtp_tx_bytes = snap.rtp_tx_bytes;
+    rtp_rx_bytes = snap.rtp_rx_bytes;
+    sip_status = snap.last_sip_status_code;
+    last_event = snap.last_sip_event;
+    selected_tx = IntercomApi::audio_format_token_(snap.selected_tx_format);
+    selected_rx = IntercomApi::audio_format_token_(snap.selected_rx_format);
+  }
+#endif
+  char numeric[192];
+  snprintf(numeric, sizeof(numeric),
+           "\"sip_status_code\":%u,\"rtp_tx_packets\":%u,\"rtp_rx_packets\":%u,"
+           "\"rtp_tx_bytes\":%u,\"rtp_rx_bytes\":%u",
+           (unsigned) sip_status,
+           (unsigned) rtp_tx_packets,
+           (unsigned) rtp_rx_packets,
+           (unsigned) rtp_tx_bytes,
+           (unsigned) rtp_rx_bytes);
+  std::string out = "{";
+  out += "\"state\":\"" + json_escape(state) + "\"";
+  out += ",\"call_id\":\"" + json_escape(call.call_id) + "\"";
+  out += ",\"direction\":\"" + json_escape(direction) + "\"";
+  out += ",\"caller\":\"" + json_escape(call.caller_name) + "\"";
+  out += ",\"callee\":\"" + json_escape(call.dest_name) + "\"";
+  out += ",\"local_uri\":\"" + json_escape(local_uri) + "\"";
+  out += ",\"remote_uri\":\"" + json_escape(remote_uri) + "\"";
+  out += ",\"contact\":\"" + json_escape(contact) + "\"";
+  out += ",\"sip_transport\":\"" + std::string(this->protocol_ == TransportType::TCP ? "tcp" : "udp") + "\"";
+  out += ",";
+  out += numeric;
+  out += ",\"terminal_reason\":\"" + json_escape(this->last_reason_) + "\"";
+  out += ",\"selected_tx_format\":\"" + json_escape(selected_tx) + "\"";
+  out += ",\"selected_rx_format\":\"" + json_escape(selected_rx) + "\"";
+  out += ",\"last_sip_event\":\"" + json_escape(last_event) + "\"";
+  out += "}";
+  return out;
+}
+
+void IntercomApi::publish_sip_snapshot_() {
+  if (this->sip_snapshot_sensor_ == nullptr) return;
+  const std::string snapshot = this->build_sip_snapshot_string_();
+  if (snapshot == this->last_sip_snapshot_) return;
+  this->last_sip_snapshot_ = snapshot;
+  this->sip_snapshot_sensor_->publish_state(snapshot);
 }
 
 void IntercomApi::publish_endpoint_() {
@@ -610,7 +552,7 @@ void IntercomApi::publish_endpoint_() {
     this->last_endpoint_ = endpoint;
     this->endpoint_sensor_->publish_state(endpoint);
   }
-  this->publish_mdns_endpoint_(endpoint);
+  this->publish_sip_snapshot_();
 }
 
 void IntercomApi::request_endpoint_publish_() {
@@ -625,82 +567,6 @@ void IntercomApi::ip_event_handler_(void *arg, esp_event_base_t event_base,
   static_cast<IntercomApi *>(arg)->request_endpoint_publish_();
 }
 
-#ifdef USE_INTERCOM_MDNS_ANNOUNCE
-bool IntercomApi::ensure_mdns_announce_registered_(const std::string &endpoint) {
-  if (this->mdns_announce_registered_) return true;
-
-  const esp_err_t init_err = mdns_init();
-  if (init_err != ESP_OK) {
-    if (!this->mdns_endpoint_warning_logged_) {
-      ESP_LOGW(TAG, "mDNS announce init failed: %s", esp_err_to_name(init_err));
-      this->mdns_endpoint_warning_logged_ = true;
-    }
-    return false;
-  }
-
-  mdns_hostname_set(App.get_name().c_str());
-  const std::string instance = !this->device_name_.empty()
-                                   ? this->device_name_
-                                   : App.get_friendly_name().str();
-  const char *service = this->protocol_ == TransportType::UDP
-      ? "_intercom-udp"
-      : (this->protocol_ == TransportType::SIP ? "_sip" : "_intercom-tcp");
-  const char *proto = (this->protocol_ == TransportType::UDP || this->protocol_ == TransportType::SIP)
-      ? "_udp"
-      : "_tcp";
-  const uint16_t port = this->protocol_ == TransportType::UDP
-      ? this->listen_port_
-      : (this->protocol_ == TransportType::SIP ? this->sip_port_ : this->tcp_port_);
-  mdns_txt_item_t txt[] = {
-      {"endpoint", endpoint.c_str()},
-      {"friendly_name", instance.c_str()},
-  };
-
-  esp_err_t err = mdns_service_add(instance.c_str(), service, proto, port, txt, 2);
-  if (err == ESP_ERR_INVALID_ARG) {
-    // Service may already exist; refresh its mutable parts below.
-    mdns_service_port_set(service, proto, port);
-    err = mdns_service_txt_item_set(service, proto, "friendly_name", instance.c_str());
-  }
-  if (err != ESP_OK) {
-    if (!this->mdns_endpoint_warning_logged_) {
-      ESP_LOGW(TAG, "mDNS announce service %s.%s failed: %s", service, proto,
-               esp_err_to_name(err));
-      this->mdns_endpoint_warning_logged_ = true;
-    }
-    return false;
-  }
-  this->mdns_announce_registered_ = true;
-  this->mdns_endpoint_warning_logged_ = false;
-  return true;
-}
-
-void IntercomApi::publish_mdns_endpoint_(const std::string &endpoint) {
-  if (!this->mdns_announce_enabled_ || endpoint.empty()) return;
-  if (!this->ensure_mdns_announce_registered_(endpoint)) return;
-  if (endpoint == this->last_mdns_endpoint_) return;
-
-  const char *service = this->protocol_ == TransportType::UDP
-      ? "_intercom-udp"
-      : (this->protocol_ == TransportType::SIP ? "_sip" : "_intercom-tcp");
-  const char *proto = (this->protocol_ == TransportType::UDP || this->protocol_ == TransportType::SIP)
-      ? "_udp"
-      : "_tcp";
-  const esp_err_t err = mdns_service_txt_item_set(service, proto, "endpoint", endpoint.c_str());
-  if (err != ESP_OK) {
-    this->mdns_announce_registered_ = false;
-    if (!this->mdns_endpoint_warning_logged_) {
-      ESP_LOGW(TAG, "mDNS endpoint update failed: %s", esp_err_to_name(err));
-      this->mdns_endpoint_warning_logged_ = true;
-    }
-    return;
-  }
-  this->last_mdns_endpoint_ = endpoint;
-  this->mdns_endpoint_warning_logged_ = false;
-  ESP_LOGD(TAG, "mDNS endpoint announced: %s", endpoint.c_str());
-}
-#endif
-
 // Wired from YAML via `api.on_client_connected:`.
 void IntercomApi::publish_entity_states() {
   // Re-publish on every HA reconnect so intercom_native sees it without
@@ -711,6 +577,7 @@ void IntercomApi::publish_entity_states() {
 
   this->publish_transport_();
   this->publish_endpoint_();
+  this->publish_sip_snapshot_();
   if (this->last_reason_sensor_ != nullptr) {
     this->last_reason_sensor_->publish_state(this->last_reason_);
   }
@@ -733,18 +600,6 @@ void IntercomApi::publish_entity_states() {
       }
     }
     this->dnd_switch_->publish_state(this->do_not_disturb_);
-  }
-
-  if (this->routing_mode_switch_ != nullptr) {
-    if (apply_restore) {
-      auto initial = this->routing_mode_switch_->get_initial_state_with_restore_mode();
-      if (initial.has_value()) {
-        this->routing_mode_ = *initial ? IntercomRoutingMode::HA_PBX
-                                       : IntercomRoutingMode::DEVICE_INDEPENDENT;
-      }
-    }
-    const bool ha_pbx_now = this->routing_mode_ == IntercomRoutingMode::HA_PBX;
-    this->routing_mode_switch_->publish_state(ha_pbx_now);
   }
 
   ESP_LOGD(TAG, "Entity states synced (vol=%.0f%%, mic=%.1fdB, auto=%s, dnd=%s)",

@@ -1,6 +1,6 @@
 {
-  "name": "esp-busy-while-streaming-direct",
-  "description": "ESP already streaming with HA rejects a direct second ESP call.",
+  "name": "esp-busy-while-in_call-direct",
+  "description": "ESP already in_call with HA rejects a direct second ESP call.",
   "steps": [
     {
       "inject_event": {
@@ -15,7 +15,7 @@
     {
       "expect": {
         "esp": {
-          "state": "streaming"
+          "state": "in_call"
         }
       }
     },
@@ -34,7 +34,7 @@
           "last_reason": "busy"
         },
         "esp": {
-          "state": "streaming"
+          "state": "in_call"
         }
       }
     }

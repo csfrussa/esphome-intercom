@@ -105,11 +105,11 @@ class AudioFormat:
         return f"{self.sample_rate}:{self.pcm_format.value}:{self.channels}:{self.frame_ms}"
 
 
-LEGACY_AUDIO_FORMAT = AudioFormat()
+DEFAULT_AUDIO_FORMAT = AudioFormat()
 
 
 def _browser_formats(*, channels: tuple[int, ...]) -> tuple[AudioFormat, ...]:
-    formats: list[AudioFormat] = [LEGACY_AUDIO_FORMAT]
+    formats: list[AudioFormat] = [DEFAULT_AUDIO_FORMAT]
     for rate in sorted(SUPPORTED_SAMPLE_RATES):
         for frame_ms in sorted(SUPPORTED_FRAME_MS):
             if (rate * frame_ms) % 1000 != 0:
@@ -157,7 +157,7 @@ def audio_format_from_wire(
 
 def parse_audio_format_token(token: str | None) -> AudioFormat:
     if not token:
-        return LEGACY_AUDIO_FORMAT
+        return DEFAULT_AUDIO_FORMAT
     parts = [part.strip() for part in token.split(":")]
     if len(parts) != 4:
         raise ValueError(f"invalid audio format token '{token}'")
@@ -172,10 +172,10 @@ def parse_audio_format_token(token: str | None) -> AudioFormat:
 
 def parse_audio_format_list(value: str | None) -> list[AudioFormat]:
     if not value:
-        return [LEGACY_AUDIO_FORMAT]
+        return [DEFAULT_AUDIO_FORMAT]
     formats = [parse_audio_format_token(part.strip()) for part in value.split(";") if part.strip()]
     if not formats:
-        return [LEGACY_AUDIO_FORMAT]
+        return [DEFAULT_AUDIO_FORMAT]
     if len(formats) > 8:
         raise ValueError("too many audio formats (max 8)")
     return formats

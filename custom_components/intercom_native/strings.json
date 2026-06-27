@@ -3,32 +3,25 @@
     "step": {
       "user": {
         "title": "Intercom Native",
-        "description": "PBX-lite intercom between ESPHome peers and Home Assistant. Routes calls peer-to-peer or via HA as a switchboard.",
+        "description": "SIP softphone and SIP bridge/router for ESPHome VoIP phones.",
         "data": {
-          "use_tcp": "Enable TCP transport",
-          "tcp_port": "TCP port",
-          "use_udp": "Enable UDP transport",
-          "udp_audio_port": "UDP audio port",
-          "udp_control_port": "UDP control port",
-          "udp_max_payload": "UDP max audio payload",
+          "use_sip": "Enable SIP endpoint",
+          "sip_port": "SIP port",
+          "rtp_port": "RTP port",
           "advertise_host": "Advertised HA host/IP",
           "assist_intents": "Enable Assist intents"
         },
         "data_description": {
-          "use_tcp": "Framed binary protocol (audio + signaling on a single connection).",
-          "tcp_port": "Listen port for TCP intercom (default 6054).",
-          "use_udp": "Raw PCM audio with framed control signaling on a separate port.",
-          "udp_audio_port": "Listen port for UDP audio (default 6054).",
-          "udp_control_port": "Listen port for UDP signaling (default 6055). Must differ from the audio port.",
-          "udp_max_payload": "Maximum raw PCM bytes accepted per UDP audio datagram. Default 1200 avoids IP fragmentation; raise only on LANs where you intentionally allow larger packets.",
+          "use_sip": "Listen for standard SIP INVITE/OPTIONS/BYE/CANCEL over UDP and TCP.",
+          "sip_port": "Listen port for the HA SIP endpoint.",
+          "rtp_port": "Base RTP UDP port for HA media and relays.",
           "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices.",
           "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live intercom phonebook."
         }
       }
     },
     "error": {
-      "at_least_one_transport": "Enable at least one transport.",
-      "udp_ports_must_differ": "UDP audio port and UDP control port must differ."
+      "sip_required": "SIP endpoint must be enabled."
     },
     "abort": {
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",

@@ -1,6 +1,6 @@
 {
   "name": "ha-to-esp-auto-answer",
-  "description": "ESP auto-answer accepts HA call directly into streaming.",
+  "description": "ESP auto-answer accepts HA call directly into in_call.",
   "steps": [
     {
       "inject_event": {
@@ -20,7 +20,7 @@
     {
       "expect": {
         "esp": {
-          "state": "streaming",
+          "state": "in_call",
           "caller": "Casa"
         },
         "led": {

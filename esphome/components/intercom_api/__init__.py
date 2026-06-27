@@ -24,13 +24,7 @@ DEPENDENCIES = ["esp32"]
 def AUTO_LOAD(config):
     # audio_processor is still an internal helper provider for task/ring-buffer
     # utilities used by the transport. It is not an intercom DSP mode.
-    base = ["audio_processor", "button", "switch", "number", "text_sensor"]
-    discovery = (config or {}).get("discovery") or {}
-    if (config or {}).get("announce", False) or (
-        isinstance(discovery, dict) and discovery.get("mdns", False)
-    ):
-        base.append("mdns")
-    return base
+    return ["audio_processor", "button", "switch", "number", "text_sensor"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,26 +49,23 @@ CONF_HA_PHONEBOOK_TEXT_SENSOR_ID = "ha_phonebook_text_sensor_id"
 # normalizes each protocol-tagged slot into the local TCP or UDP dial plan.
 
 CONF_ON_RINGING = "on_ringing"
-CONF_ON_STREAMING = "on_streaming"
+CONF_ON_IN_CALL = "on_in_call"
 CONF_ON_IDLE = "on_idle"
 # FSM triggers
-CONF_ON_OUTGOING_CALL = "on_outgoing_call"
+CONF_ON_CALLING = "on_calling"
 CONF_ON_DEST_RINGING = "on_dest_ringing"
 CONF_ON_HANGUP = "on_hangup"
 CONF_ON_CALL_FAILED = "on_call_failed"
 CONF_REASON = "reason"
 
-# PBX-lite transport selection. TCP is default; UDP uses the same control
-# protocol with separate audio/control ports.
+# SIP signaling transport selection. RTP media is always UDP.
 CONF_PROTOCOL = "protocol"
 CONF_REMOTE_IP = "remote_ip"
 CONF_REMOTE_PORT = "remote_port"
 CONF_LISTEN_PORT = "listen_port"
 CONF_CONTROL_PORT = "control_port"
-CONF_TCP_PORT = "tcp_port"
 CONF_SIP_PORT = "sip_port"
 CONF_RTP_PORT = "rtp_port"
-CONF_ROUTING_MODE = "routing_mode"
 CONF_USE_HA_AS_FIRST_CONTACT = "use_ha_as_first_contact"
 CONF_AUDIO_DEBUG = "audio_debug"
 CONF_AUDIO = "audio"
@@ -86,29 +77,18 @@ CONF_SAMPLE_RATE = "sample_rate"
 CONF_PCM_FORMAT = "pcm_format"
 CONF_CHANNELS = "channels"
 CONF_FRAME_MS = "frame_ms"
-CONF_ANNOUNCE = "announce"
-CONF_DISCOVERY = "discovery"
-CONF_MDNS = "mdns"
-CONF_ENABLED = "enabled"
-CONF_STARTUP_SCAN = "startup_scan"
-CONF_INTERVAL = "interval"
-CONF_QUERY_TIMEOUT = "query_timeout"
-CONF_MAX_RESULTS = "max_results"
-CONF_PROTOCOLS = "protocols"
 CONF_NETWORK_SOCKET_HEADROOM = "network_socket_headroom"
 CONF_UDP_MAX_PAYLOAD = "udp_max_payload"
 CONF_AUTO = "auto"
+CONF_PHONEBOOK = "phonebook"
+CONF_ENTRY = "entry"
+CONF_CONTACT = "contact"
+CONF_IP = "ip"
+CONF_PORT = "port"
+CONF_RTP_PORT_ACTION = "rtp_port"
 
-ROUTING_DEVICE_INDEPENDENT = "device_independent"
-ROUTING_HA_PBX = "ha_pbx"
 PROTOCOL_TCP = "tcp"
 PROTOCOL_UDP = "udp"
-PROTOCOL_SIP = "sip"
-
-# Mode constants. PBX-lite is the implicit default (phonebook / contacts /
-# destination / caller entities always exposed); explicit `mode:` is only
-# needed to opt into raw-UDP-no-signaling.
-MODE_RAW_UDP = "raw_udp"  # raw UDP audio, no PBX-lite signaling
 
 intercom_api_ns = cg.esphome_ns.namespace("intercom_api")
 IntercomApi = intercom_api_ns.class_("IntercomApi", cg.Component)
@@ -363,15 +343,13 @@ RemoveContactAction = intercom_api_ns.class_("RemoveContactAction", automation.A
 FlushContactsAction = intercom_api_ns.class_("FlushContactsAction", automation.Action)
 UpdateContactsAction = intercom_api_ns.class_("UpdateContactsAction", automation.Action)
 SetHaPeerNameAction = intercom_api_ns.class_("SetHaPeerNameAction", automation.Action)
-SimulateIncomingCallAction = intercom_api_ns.class_("SimulateIncomingCallAction", automation.Action)
 
 # === Condition classes (for YAML: intercom_api.is_idle, etc.) ===
 IntercomIsIdleCondition = intercom_api_ns.class_("IntercomIsIdleCondition", automation.Condition)
 IntercomIsRingingCondition = intercom_api_ns.class_("IntercomIsRingingCondition", automation.Condition)
-IntercomIsStreamingCondition = intercom_api_ns.class_("IntercomIsStreamingCondition", automation.Condition)
+IntercomIsInCallCondition = intercom_api_ns.class_("IntercomIsInCallCondition", automation.Condition)
 IntercomIsCallingCondition = intercom_api_ns.class_("IntercomIsCallingCondition", automation.Condition)
 IntercomIsIncomingCondition = intercom_api_ns.class_("IntercomIsIncomingCondition", automation.Condition)
-IntercomIsInCallCondition = intercom_api_ns.class_("IntercomIsInCallCondition", automation.Condition)
 IntercomDestinationIsCondition = intercom_api_ns.class_("IntercomDestinationIsCondition", automation.Condition)
 IntercomIsHaDestinationCondition = intercom_api_ns.class_("IntercomIsHaDestinationCondition", automation.Condition)
 
@@ -385,9 +363,6 @@ IntercomApiAutoAnswerCls = intercom_api_ns.class_(
 IntercomApiDndSwitchCls = intercom_api_ns.class_(
     "IntercomApiDndSwitch", _switch_ns.Switch, cg.Parented.template(IntercomApi)
 )
-IntercomRoutingModeSwitchCls = intercom_api_ns.class_(
-    "IntercomRoutingModeSwitch", _switch_ns.Switch, cg.Parented.template(IntercomApi)
-)
 IntercomApiVolumeCls = intercom_api_ns.class_(
     "IntercomApiVolume", _number_ns.Number, cg.Parented.template(IntercomApi)
 )
@@ -395,98 +370,57 @@ IntercomApiMicGainCls = intercom_api_ns.class_(
     "IntercomApiMicGain", _number_ns.Number, cg.Parented.template(IntercomApi)
 )
 
-MDNS_DISCOVERY_DEFAULTS = {
-    CONF_ENABLED: True,
-    CONF_STARTUP_SCAN: True,
-    CONF_INTERVAL: TimePeriod(seconds=60),
-    CONF_QUERY_TIMEOUT: TimePeriod(milliseconds=1000),
-    CONF_MAX_RESULTS: 8,
-    CONF_PROTOCOLS: None,
-}
 
-
-MDNS_DISCOVERY_SCHEMA = cv.Schema(
+PHONEBOOK_CONTACT_SCHEMA = cv.Schema(
     {
-        cv.Optional(CONF_ENABLED, default=True): cv.boolean,
-        cv.Optional(CONF_STARTUP_SCAN, default=True): cv.boolean,
-        cv.Optional(CONF_INTERVAL, default="60s"): cv.positive_time_period_milliseconds,
-        cv.Optional(CONF_QUERY_TIMEOUT, default="1000ms"): cv.positive_time_period_milliseconds,
-        cv.Optional(CONF_MAX_RESULTS, default=8): cv.int_range(min=1, max=32),
-        # Omit protocols to scan only the local transport. Explicit override is
-        # for advanced bridge/fallback builds that intentionally want both.
-        cv.Optional(CONF_PROTOCOLS): cv.ensure_list(
-            cv.one_of(PROTOCOL_TCP, PROTOCOL_UDP, PROTOCOL_SIP, lower=True)
-        ),
+        cv.Optional(CONF_ENTRY): cv.string,
+        cv.Optional(CONF_NAME): cv.string,
+        cv.Optional(CONF_IP): cv.string,
+        cv.Optional(CONF_PORT, default=5060): cv.port,
+        cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.port,
+        cv.Optional(CONF_PROTOCOL): cv.one_of(PROTOCOL_UDP, PROTOCOL_TCP, lower=True),
     }
 )
 
 
-def _mdns_discovery_config(config):
-    discovery = config.get(CONF_DISCOVERY) or {}
-    mdns_cfg = discovery.get(CONF_MDNS, False) if isinstance(discovery, dict) else False
-    if mdns_cfg is False:
-        return None
-    if mdns_cfg is True:
-        out = MDNS_DISCOVERY_DEFAULTS.copy()
-    else:
-        out = MDNS_DISCOVERY_DEFAULTS.copy()
-        out.update(mdns_cfg)
-        if not out[CONF_ENABLED]:
-            return None
+def _validate_phonebook_contact(value):
+    value = PHONEBOOK_CONTACT_SCHEMA(value)
+    if CONF_ENTRY in value:
+        return value
+    if CONF_NAME not in value:
+        raise cv.Invalid("phonebook contact requires name")
+    return value
 
-    protocols = out.get(CONF_PROTOCOLS)
-    if protocols is None:
-        protocols = [config.get(CONF_PROTOCOL, PROTOCOL_TCP)]
-    out[CONF_PROTOCOLS] = protocols
-    return out
 
+def _phonebook_contact_entry(contact, default_protocol: str) -> str:
+    if CONF_ENTRY in contact:
+        return contact[CONF_ENTRY]
+    name = contact[CONF_NAME]
+    ip = contact.get(CONF_IP, "")
+    if not ip:
+        return name
+    protocol = contact.get(CONF_PROTOCOL) or default_protocol
+    return f"{name}|sip|{ip}|{contact[CONF_PORT]}|{contact[CONF_RTP_PORT_ACTION]}|{protocol}"
 
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(IntercomApi),
-        # Mode: optional opt-in for raw UDP audio without PBX-lite signaling.
-        # Omit the key for the default PBX-lite behaviour.
-        cv.Optional(CONF_MODE): cv.one_of(MODE_RAW_UDP, lower=True),
-        # Transport: tcp (default, one PBX-lite socket for signaling+audio)
-        # or udp (PBX-lite control socket + raw PCM audio socket).
-        cv.Optional(CONF_PROTOCOL, default=PROTOCOL_TCP): cv.one_of(
-            PROTOCOL_TCP, PROTOCOL_UDP, PROTOCOL_SIP, lower=True
+        # SIP signaling transport. Use protocol: tcp for SIP/TCP or
+        # protocol: udp for SIP/UDP. RTP media remains UDP.
+        cv.Optional(CONF_PROTOCOL, default=PROTOCOL_UDP): cv.one_of(
+            PROTOCOL_TCP, PROTOCOL_UDP, lower=True
         ),
-        # PBX-lite project default: 6054 for the data plane on both TCP and
-        # UDP, 6055 for the UDP control plane (framed signaling). TCP and
-        # UDP can share 6054 because they live on different protocol stacks.
-        # Override per-device when the host LAN already routes those ports
-        # to other services - HA's config flow exposes the matching knobs
-        # so endpoint rows and listener binds stay coherent.
-        #
-        # UDP-only options (ignored for tcp).
         cv.Optional(CONF_REMOTE_IP, default=""): cv.string,
-        cv.Optional(CONF_REMOTE_PORT, default=6054): cv.port,
-        cv.Optional(CONF_LISTEN_PORT, default=6054): cv.port,
-        # UDP signaling port (MessageHeader frames). Must differ from
-        # listen_port so audio (raw PCM) and control (framed) stay on
-        # separate sockets. UDP contacts may carry a per-peer control port
-        # as Name|IP|audio_port|control_port; short Name|IP|audio_port
-        # falls back to this local control_port.
-        cv.Optional(CONF_CONTROL_PORT, default=6055): cv.port,
+        cv.Optional(CONF_REMOTE_PORT, default=5060): cv.port,
+        cv.Optional(CONF_LISTEN_PORT, default=5060): cv.port,
+        cv.Optional(CONF_CONTROL_PORT, default=40000): cv.port,
         cv.Optional(CONF_UDP_MAX_PAYLOAD, default=UDP_SAFE_PAYLOAD_BYTES): cv.int_range(
             min=576, max=65507
         ),
-        # TCP-only option (ignored for udp). Both server (accept inbound
-        # calls from peers) and client (originate to dest's tcp_port) use
-        # the same number.
-        cv.Optional(CONF_TCP_PORT, default=6054): cv.port,
         cv.Optional(CONF_SIP_PORT, default=5060): cv.port,
         cv.Optional(CONF_RTP_PORT, default=40000): cv.port,
-        # Routing mode for outgoing calls:
-        #  - device_independent (default): dial the phonebook entry directly.
-        #    True peer-to-peer; HA only sees the call when it is the dest.
-        #  - ha_pbx: dial the HA peer IP+port instead, leaving HA to bridge to
-        #    the real dest_name. Lets HA log every call and keep services
-        #    like intercom_native.forward functional even with otherwise
-        #    direct ESP<->ESP reachability.
-        cv.Optional(CONF_ROUTING_MODE, default=ROUTING_DEVICE_INDEPENDENT): cv.one_of(
-            ROUTING_DEVICE_INDEPENDENT, ROUTING_HA_PBX, lower=True
+        cv.Optional(CONF_PHONEBOOK, default=[]): cv.ensure_list(
+            _validate_phonebook_contact
         ),
         # On the first post-boot phonebook population, select the HA peer row
         # learned from `Name|ha|...` as the current destination. This keeps a
@@ -511,23 +445,6 @@ CONFIG_SCHEMA = cv.Schema(
                 ),
             }
         ), _validate_intercom_audio_config),
-        # Publish this device's canonical endpoint as an mDNS TXT record:
-        #   endpoint=Name|tcp|ip|tcp_port
-        #   endpoint=Name|udp|ip|audio_port|control_port
-        # Compile-time opt-in for ESP-only installs. HA-managed devices do not
-        # need this: they publish intercom_endpoint over the native API and HA
-        # builds the central phonebook from that sensor.
-        cv.Optional(CONF_ANNOUNCE, default=False): cv.boolean,
-        cv.Optional(CONF_DISCOVERY, default={}): cv.Schema(
-            {
-                # Opt-in ESP-side discovery for direct ESP peers. It scans only
-                # _intercom-* services and merges endpoint TXT rows into the
-                # phonebook.
-                cv.Optional(CONF_MDNS, default=False): cv.Any(
-                    cv.boolean, MDNS_DISCOVERY_SCHEMA
-                ),
-            }
-        ),
         # Preferred path: use the native ESPHome microphone directly. Maintained
         # esp_audio_stack profiles already expose 16 kHz / 16-bit / mono audio,
         # so MicrophoneSource would only add an avoidable copy/conversion pass.
@@ -550,8 +467,8 @@ CONFIG_SCHEMA = cv.Schema(
         # builds when PSRAM stacks are enabled in sdkconfig.
         cv.Optional(CONF_TASK_STACKS_IN_PSRAM, default=False): cv.boolean,
         # Auto-create the boilerplate switches/numbers (auto_answer, volume,
-        # mic_gain). Default false for backward compatibility with yamls that
-        # already declare them via `switch:`/`number: - platform: intercom_api`.
+        # mic_gain). Default false for YAMLs that already declare them via
+        # `switch:`/`number: - platform: intercom_api`.
         # Set to true on a minimal new yaml to skip that boilerplate.
         cv.Optional(CONF_AUTO_ENTITIES, default=False): cv.boolean,
         # Standalone intercom DSP/AEC was removed. Use native ESPHome mic/speaker
@@ -575,23 +492,21 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_CALLING_TIMEOUT): cv.positive_time_period_milliseconds,
         # Trigger when incoming call (auto_answer OFF)
         cv.Optional(CONF_ON_RINGING): automation.validate_automation(single=True),
-        # Trigger when streaming starts
-        cv.Optional(CONF_ON_STREAMING): automation.validate_automation(single=True),
+        # Trigger when in_call starts
+        cv.Optional(CONF_ON_IN_CALL): automation.validate_automation(single=True),
         # Trigger when state returns to idle
         cv.Optional(CONF_ON_IDLE): automation.validate_automation(single=True),
         # FSM triggers
-        cv.Optional(CONF_ON_OUTGOING_CALL): automation.validate_automation(single=True),
+        cv.Optional(CONF_ON_CALLING): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_DEST_RINGING): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_HANGUP): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_CALL_FAILED): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_DESTINATION_CHANGED): automation.validate_automation(single=True),
-        # Phonebook update cycle hook (fires on update_contacts() action). Wire
-        # mDNS scan or any other source here so it feeds the same open cycle.
+        # Phonebook update cycle hook (fires on update_contacts() action).
         cv.Optional(CONF_ON_UPDATE_CONTACTS): automation.validate_automation(single=True),
         # Bind a YAML-declared `homeassistant` text_sensor (typically via
         # packages/intercom/phonebook_subscribe.yaml) as the authoritative
-        # HA-side source. Optional: when absent the HA path is skipped and
-        # update_contacts() only fires the trigger for any mDNS chain.
+        # HA-side source. Optional: when absent the HA path is skipped.
         cv.Optional(CONF_HA_PHONEBOOK_TEXT_SENSOR_ID): cv.use_id(
             text_sensor.TextSensor
         ),
@@ -623,19 +538,10 @@ def _consume_intercom_sockets(config):
     """
     from esphome.components import socket
 
-    protocol = config.get(CONF_PROTOCOL, PROTOCOL_TCP)
-    if protocol == PROTOCOL_UDP:
-        # Two UDP sockets: audio (listen_port) + control (control_port).
-        socket.consume_sockets(2, "intercom_api", socket.SocketType.UDP)(config)
-    elif protocol == PROTOCOL_SIP:
-        # SIP signaling must support UDP and TCP on the same listen port.
-        # RTP media remains UDP.
-        socket.consume_sockets(2, "intercom_api_sip", socket.SocketType.UDP)(config)
-        socket.consume_sockets(2, "intercom_api_sip_tcp")(config)
-        socket.consume_sockets(1, "intercom_api_sip", socket.SocketType.TCP_LISTEN)(config)
-    else:
-        socket.consume_sockets(3, "intercom_api")(config)
-        socket.consume_sockets(1, "intercom_api", socket.SocketType.TCP_LISTEN)(config)
+    # SIP signaling can be UDP or TCP; RTP media remains UDP.
+    socket.consume_sockets(2, "intercom_api_sip", socket.SocketType.UDP)(config)
+    socket.consume_sockets(2, "intercom_api_sip_tcp")(config)
+    socket.consume_sockets(1, "intercom_api_sip", socket.SocketType.TCP_LISTEN)(config)
     extra = config.get(CONF_NETWORK_SOCKET_HEADROOM, 0)
     if extra:
         socket.consume_sockets(extra, "intercom_api_headroom")(config)
@@ -644,32 +550,7 @@ def _consume_intercom_sockets(config):
 
 def _final_validate(config):
     """Cross-component validation + socket reservation."""
-    from esphome.core import CORE
-    full_config = CORE.config or {}
-
-    protocol = config.get(CONF_PROTOCOL, PROTOCOL_TCP)
-    mode = config.get(CONF_MODE)
-    is_raw = mode == MODE_RAW_UDP
-    mdns_discovery = _mdns_discovery_config(config)
-    if is_raw and protocol != PROTOCOL_UDP:
-        raise cv.Invalid(
-            "intercom_api.mode: raw_udp requires protocol: udp "
-            "(raw UDP consumers expect bare datagrams; TCP framing is unsupported)."
-        )
-    if is_raw and config.get(CONF_USE_HA_AS_FIRST_CONTACT):
-        raise cv.Invalid(
-            "intercom_api.use_ha_as_first_contact is not valid with mode: raw_udp "
-            "(raw UDP has no PBX-lite phonebook)."
-        )
-    if is_raw and mdns_discovery is not None:
-        raise cv.Invalid(
-            "intercom_api.discovery.mdns is not valid with mode: raw_udp "
-            "(raw UDP has no PBX-lite phonebook)."
-        )
-    mdns_config = full_config.get("mdns")
-    if (mdns_discovery is not None or config.get(CONF_ANNOUNCE)) and isinstance(mdns_config, dict) and mdns_config.get("disabled"):
-        raise cv.Invalid("intercom_api mDNS announce/discovery requires mdns to be enabled.")
-
+    protocol = config.get(CONF_PROTOCOL, PROTOCOL_UDP)
     if CONF_MICROPHONE in config and CONF_MICROPHONE_SOURCE in config:
         raise cv.Invalid(
             "Use only one of intercom_api.microphone or intercom_api.microphone_source."
@@ -681,15 +562,7 @@ def _final_validate(config):
     tx_fmt = audio_cfg[CONF_TX]
     rx_fmt = audio_cfg[CONF_RX]
 
-    if protocol == PROTOCOL_UDP:
-        # remote_ip used to be required at compile-time; it's now an optional
-        # YAML-pinned fallback. Runtime start() refuses if neither phonebook nor
-        # YAML fallback resolves a peer.
-        if config[CONF_LISTEN_PORT] == config[CONF_CONTROL_PORT]:
-            raise cv.Invalid(
-                "intercom_api.control_port must differ from listen_port "
-                "(audio and control travel on separate UDP sockets)."
-            )
+    if protocol in (PROTOCOL_UDP, PROTOCOL_TCP):
         audio_cfg = config[CONF_AUDIO]
         max_payload = config[CONF_UDP_MAX_PAYLOAD]
         checks = [
@@ -702,10 +575,10 @@ def _final_validate(config):
             frame_bytes = _format_frame_bytes(fmt)
             if frame_bytes > max_payload:
                 raise cv.Invalid(
-                    f"intercom_api UDP audio.{direction} frame is {frame_bytes} bytes, "
-                    f"above the configured UDP payload limit of {max_payload}. "
+                    f"intercom_api RTP audio.{direction} frame is {frame_bytes} bytes, "
+                    f"above the configured RTP payload limit of {max_payload}. "
                     "ESPHome editor action required: lower audio sample_rate, channels, pcm_format, "
-                    "or frame_ms for this UDP profile. Only raise udp_max_payload when this LAN is "
+                    "or frame_ms for this SIP/RTP profile. Only raise udp_max_payload when this LAN is "
                     "intentionally configured for larger datagrams; the default limit is 1200 bytes."
                 )
 
@@ -770,9 +643,7 @@ def _final_validate(config):
 FINAL_VALIDATE_SCHEMA = _final_validate
 
 
-async def _add_core_settings(var, config, is_raw_udp: bool):
-    cg.add(var.set_raw_udp_mode(is_raw_udp))
-
+async def _add_core_settings(var, config):
     if CONF_MICROPHONE in config:
         cg.add_define("USE_INTERCOM_API_MIC")
         mic = await cg.get_variable(config[CONF_MICROPHONE])
@@ -820,87 +691,43 @@ async def _add_core_settings(var, config, is_raw_udp: bool):
                     fmt[CONF_FRAME_MS],
                 )
             )
-    if config[CONF_PROTOCOL] == PROTOCOL_UDP:
-        cg.add_define("USE_INTERCOM_UDP_TRANSPORT")
-    elif config[CONF_PROTOCOL] == PROTOCOL_SIP:
-        cg.add_define("USE_INTERCOM_SIP_TRANSPORT")
-    else:
-        cg.add_define("USE_INTERCOM_TCP_TRANSPORT")
-    if config[CONF_ANNOUNCE]:
-        cg.add_define("USE_INTERCOM_MDNS_ANNOUNCE")
-        cg.add(var.set_mdns_announce_enabled(True))
+    cg.add_define("USE_INTERCOM_SIP_TRANSPORT")
 
 
 def _add_transport_settings(var, config):
-    # Transport: TCP default, or UDP PBX-lite with separate audio/control ports.
+    # SIP signaling transport: UDP or TCP. RTP media remains UDP.
     if config[CONF_PROTOCOL] == PROTOCOL_UDP:
         cg.add(var.set_protocol(TransportType.UDP))
-        cg.add(var.set_remote_ip(config[CONF_REMOTE_IP]))
-        cg.add(var.set_remote_port(config[CONF_REMOTE_PORT]))
-        cg.add(var.set_listen_port(config[CONF_LISTEN_PORT]))
-        cg.add(var.set_control_port(config[CONF_CONTROL_PORT]))
-        cg.add(var.set_udp_max_payload(config[CONF_UDP_MAX_PAYLOAD]))
-    elif config[CONF_PROTOCOL] == PROTOCOL_SIP:
-        cg.add(var.set_protocol(TransportType.SIP))
-        cg.add(var.set_remote_ip(config[CONF_REMOTE_IP]))
-        cg.add(var.set_sip_port(config[CONF_SIP_PORT]))
-        cg.add(var.set_rtp_port(config[CONF_RTP_PORT]))
     else:
         cg.add(var.set_protocol(TransportType.TCP))
-        cg.add(var.set_tcp_port(config[CONF_TCP_PORT]))
+    cg.add(var.set_remote_ip(config[CONF_REMOTE_IP]))
+    cg.add(var.set_remote_port(config[CONF_REMOTE_PORT]))
+    cg.add(var.set_listen_port(config[CONF_LISTEN_PORT]))
+    cg.add(var.set_control_port(config[CONF_CONTROL_PORT]))
+    cg.add(var.set_udp_max_payload(config[CONF_UDP_MAX_PAYLOAD]))
+    cg.add(var.set_sip_port(config[CONF_SIP_PORT]))
+    cg.add(var.set_rtp_port(config[CONF_RTP_PORT]))
 
-    # Routing mode: enum on the C++ side, string on the YAML side.
-    routing_enum = cg.RawExpression(
-        "esphome::intercom_api::IntercomApi::IntercomRoutingMode::"
-        + ("HA_PBX" if config[CONF_ROUTING_MODE] == ROUTING_HA_PBX else "DEVICE_INDEPENDENT")
-    )
-    cg.add(var.set_routing_mode(routing_enum))
 
-
-def _add_mdns_discovery_settings(var, config):
-    mdns_discovery = _mdns_discovery_config(config)
-    if mdns_discovery is not None:
-        cg.add_define("USE_INTERCOM_MDNS_DISCOVERY")
-        _LOGGER.warning(
-            "intercom_api discovery.mdns is intended for ESP-only installs without "
-            "Home Assistant phonebook management. In HA-managed installs, use "
-            "packages/intercom/phonebook_subscribe.yaml instead; running ESP-side "
-            "mDNS discovery together with HA API/intercom sockets adds lwIP/socket "
-            "load and can make devices less resilient during HA disconnects."
-        )
-        protocols = set(mdns_discovery[CONF_PROTOCOLS])
-        cg.add(var.set_mdns_discovery_enabled(True))
-        cg.add(var.set_mdns_discovery_scan_tcp(PROTOCOL_TCP in protocols))
-        cg.add(var.set_mdns_discovery_scan_udp(PROTOCOL_UDP in protocols))
-        cg.add(var.set_mdns_discovery_scan_sip(PROTOCOL_SIP in protocols))
-        cg.add(var.set_mdns_discovery_startup_scan(mdns_discovery[CONF_STARTUP_SCAN]))
-        cg.add(
-            var.set_mdns_discovery_interval_ms(
-                mdns_discovery[CONF_INTERVAL].total_milliseconds
-            )
-        )
-        cg.add(
-            var.set_mdns_discovery_query_timeout_ms(
-                mdns_discovery[CONF_QUERY_TIMEOUT].total_milliseconds
-            )
-        )
-        cg.add(var.set_mdns_discovery_max_results(mdns_discovery[CONF_MAX_RESULTS]))
+def _add_phonebook_contacts(var, config):
+    contacts = config.get(CONF_PHONEBOOK, [])
+    default_protocol = config.get(CONF_PROTOCOL, PROTOCOL_UDP)
+    for contact in contacts:
+        cg.add(var.add_contact(_phonebook_contact_entry(contact, default_protocol)))
 
 
 async def _add_device_and_audio_processor_settings(var, config):
     # Set device name (used to exclude self from the contacts list)
     from esphome.core import CORE
     cg.add(var.set_device_name(CORE.friendly_name or CORE.name))
-    # PBX-lite routing key (yaml node name slug, e.g. "spotpear-ball-v2"). Used
-    # as caller_route_id in MSG_START payloads and matches the slug HA uses
-    # for the esphome.{slug}_start_call action registration.
+    # Stable SIP caller route id (yaml node name slug).
     cg.add(var.set_device_route_id(CORE.name))
 
     # Ringing timeout (auto-decline if not answered)
     if CONF_RINGING_TIMEOUT in config:
         cg.add(var.set_ringing_timeout(config[CONF_RINGING_TIMEOUT]))
 
-    # Calling timeout: caller in OUTGOING with no peer ANSWER/DECLINE.
+    # Calling timeout: caller in CALLING with no final SIP response.
     # Auto-fires DECLINE("timeout") when expired.
     if CONF_CALLING_TIMEOUT in config:
         cg.add(var.set_calling_timeout(config[CONF_CALLING_TIMEOUT]))
@@ -919,10 +746,10 @@ async def _build_intercom_automations(var, config):
             var.get_ringing_trigger(), [], config[CONF_ON_RINGING]
         )
 
-    # on_streaming automation
-    if CONF_ON_STREAMING in config:
+    # on_in_call automation
+    if CONF_ON_IN_CALL in config:
         await automation.build_automation(
-            var.get_streaming_trigger(), [], config[CONF_ON_STREAMING]
+            var.get_in_call_trigger(), [], config[CONF_ON_IN_CALL]
         )
 
     # on_idle automation
@@ -932,9 +759,9 @@ async def _build_intercom_automations(var, config):
         )
 
     # FSM triggers.
-    if CONF_ON_OUTGOING_CALL in config:
+    if CONF_ON_CALLING in config:
         await automation.build_automation(
-            var.get_outgoing_call_trigger(), [], config[CONF_ON_OUTGOING_CALL]
+            var.get_calling_trigger(), [], config[CONF_ON_CALLING]
         )
 
     if CONF_ON_DEST_RINGING in config:
@@ -975,7 +802,7 @@ async def _new_intercom_text_sensor(config, suffix: str, name: str, icon: str):
     )
 
 
-async def _build_intercom_text_sensors(var, config, is_raw_udp: bool):
+async def _build_intercom_text_sensors(var, config):
     # === Auto-create sensors ===
 
     # State sensor: always created.
@@ -1008,38 +835,31 @@ async def _build_intercom_text_sensors(var, config, is_raw_udp: bool):
     )
     cg.add(var.set_last_reason_sensor(last_reason_sensor))
 
-    # PBX-lite is the single product mode now: phonebook / destination /
-    # caller entities are always exposed. Empty phonebook is normal at boot
-    # (HA sensor subscription or YAML script populates it). raw_udp skips them: it has
-    # no signaling and no phonebook concept.
-    if not is_raw_udp:
-        dest_sensor = await _new_intercom_text_sensor(
-            config, "dest", "Destination", "mdi:phone-forward"
-        )
-        cg.add(var.set_destination_sensor(dest_sensor))
+    sip_snapshot_sensor = await _new_intercom_text_sensor(
+        config, "sip_snapshot", "Intercom SIP Snapshot", "mdi:phone-log"
+    )
+    cg.add(var.set_sip_snapshot_sensor(sip_snapshot_sensor))
 
-        caller_sensor = await _new_intercom_text_sensor(
-            config, "caller", "Caller", "mdi:phone-incoming"
-        )
-        cg.add(var.set_caller_sensor(caller_sensor))
+    dest_sensor = await _new_intercom_text_sensor(
+        config, "dest", "Destination", "mdi:phone-forward"
+    )
+    cg.add(var.set_destination_sensor(dest_sensor))
 
-        contacts_sensor = await _new_intercom_text_sensor(
-            config, "contacts", "Contacts", "mdi:account-group"
-        )
-        cg.add(var.set_contacts_sensor(contacts_sensor))
+    caller_sensor = await _new_intercom_text_sensor(
+        config, "caller", "Caller", "mdi:phone-incoming"
+    )
+    cg.add(var.set_caller_sensor(caller_sensor))
 
-        # HA-side phonebook subscription is wired via the optional
-        # `ha_phonebook_text_sensor_id` config option (see schema). Codegen
-        # cannot reliably auto-create a `homeassistant` text_sensor here
-        # because its build-time include chain depends on the platform being
-        # discovered through the regular `text_sensor:` block. The shipped
-        # device YAMLs declare the subscription in
-        # packages/intercom/phonebook_subscribe.yaml and pass its id back.
-        if CONF_HA_PHONEBOOK_TEXT_SENSOR_ID in config:
-            ha_sensor = await cg.get_variable(
-                config[CONF_HA_PHONEBOOK_TEXT_SENSOR_ID]
-            )
-            cg.add(var.set_ha_phonebook_sensor(ha_sensor))
+    contacts_sensor = await _new_intercom_text_sensor(
+        config, "contacts", "Contacts", "mdi:account-group"
+    )
+    cg.add(var.set_contacts_sensor(contacts_sensor))
+
+    if CONF_HA_PHONEBOOK_TEXT_SENSOR_ID in config:
+        ha_sensor = await cg.get_variable(
+            config[CONF_HA_PHONEBOOK_TEXT_SENSOR_ID]
+        )
+        cg.add(var.set_ha_phonebook_sensor(ha_sensor))
 
 
 async def _build_intercom_auto_entities(var, config):
@@ -1109,37 +929,17 @@ async def _build_intercom_auto_entities(var, config):
             cg.add(mg.set_parent(var))
             cg.add(var.register_mic_gain_number(mg))
 
-        # Runtime routing-mode toggle. RESTORE_DEFAULT_OFF means a fresh
-        # device starts in device_independent unless the user overrode it
-        # via the YAML option (the parent will sync the published state
-        # at boot using routing_mode_ as the source of truth for the
-        # initial publish when restore is disabled).
-        rm_id = cv.declare_id(IntercomRoutingModeSwitchCls)(
-            f"{config[CONF_ID].id}_ha_pbx_mode"
-        )
-        rm_sw = await switch_module.new_switch({
-            CONF_ID: rm_id,
-            CONF_NAME: "HA PBX Mode",
-            CONF_ICON: "mdi:phone-forward",
-            CONF_DISABLED_BY_DEFAULT: False,
-            CONF_RESTORE_MODE: switch_module.RESTORE_MODES["RESTORE_DEFAULT_OFF"],
-            CONF_ENTITY_CATEGORY: "config",
-        })
-        cg.add(rm_sw.set_parent(var))
-        cg.add(var.register_routing_mode_switch(rm_sw))
-
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    is_raw_udp = config.get(CONF_MODE) == MODE_RAW_UDP
-    await _add_core_settings(var, config, is_raw_udp)
+    await _add_core_settings(var, config)
     _add_transport_settings(var, config)
-    _add_mdns_discovery_settings(var, config)
     await _add_device_and_audio_processor_settings(var, config)
+    _add_phonebook_contacts(var, config)
     await _build_intercom_automations(var, config)
-    await _build_intercom_text_sensors(var, config, is_raw_udp)
+    await _build_intercom_text_sensors(var, config)
     await _build_intercom_auto_entities(var, config)
 
 
@@ -1265,9 +1065,6 @@ _register_templated_action(
 )
 
 
-CONF_CONTACT = "contact"
-
-
 _register_templated_action(
     "intercom_api.set_contact",
     SetContactAction,
@@ -1284,10 +1081,6 @@ _register_templated_action(
     cg.std_string,
     lambda var, value: var.set_contact(value),
 )
-
-
-CONF_IP = "ip"
-CONF_PORT = "port"
 
 
 @automation.register_action(
@@ -1314,18 +1107,59 @@ async def set_remote_endpoint_action_to_code(config, action_id, template_arg, ar
     return var
 
 
-CONF_ENTRY = "entry"
 CONF_CALLER = "caller"
 
 
-_register_templated_action(
-    "intercom_api.add_contact",
-    AddContactAction,
-    CONF_ENTRY,
-    cv.string,
-    cg.std_string,
-    lambda var, value: var.set_entry(value),
+ADD_CONTACT_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(IntercomApi),
+        cv.Optional(CONF_ENTRY): cv.templatable(cv.string),
+        cv.Optional(CONF_NAME): cv.templatable(cv.string),
+        cv.Optional(CONF_IP): cv.templatable(cv.string),
+        cv.Optional(CONF_PORT, default=5060): cv.templatable(cv.port),
+        cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.templatable(cv.port),
+        cv.Optional(CONF_PROTOCOL): cv.templatable(cv.one_of(PROTOCOL_UDP, PROTOCOL_TCP, lower=True)),
+    }
 )
+
+
+def _validate_add_contact_action(config):
+    if CONF_ENTRY in config:
+        return config
+    if CONF_NAME not in config:
+        raise cv.Invalid("intercom_api.add_contact requires either entry or name")
+    return config
+
+
+async def _add_contact_action_to_code(config, action_id, template_arg, args):
+    var = await _new_parented_action(config, action_id, template_arg)
+    if CONF_ENTRY in config:
+        templ = await cg.templatable(config[CONF_ENTRY], args, cg.std_string)
+        cg.add(var.set_entry(templ))
+        return var
+    templ_name = await cg.templatable(config[CONF_NAME], args, cg.std_string)
+    cg.add(var.set_name(templ_name))
+    if CONF_IP in config:
+        templ_ip = await cg.templatable(config[CONF_IP], args, cg.std_string)
+        cg.add(var.set_ip(templ_ip))
+    templ_port = await cg.templatable(config[CONF_PORT], args, cg.uint16)
+    cg.add(var.set_port(templ_port))
+    templ_rtp_port = await cg.templatable(config[CONF_RTP_PORT_ACTION], args, cg.uint16)
+    cg.add(var.set_rtp_port(templ_rtp_port))
+    if CONF_PROTOCOL in config:
+        templ_protocol = await cg.templatable(config[CONF_PROTOCOL], args, cg.std_string)
+        cg.add(var.set_protocol(templ_protocol))
+    return var
+
+
+for _add_contact_action_name in ("intercom_api.add_contact", "intercom_api.add_contacts"):
+    automation.register_action(
+        _add_contact_action_name,
+        AddContactAction,
+        cv.All(ADD_CONTACT_SCHEMA, _validate_add_contact_action),
+        synchronous=True,
+    )(_add_contact_action_to_code)
+
 _register_templated_action(
     "intercom_api.remove_contact",
     RemoveContactAction,
@@ -1346,25 +1180,6 @@ _register_templated_action(
 
 _register_simple_action("intercom_api.flush_contacts", FlushContactsAction)
 _register_simple_action("intercom_api.update_contacts", UpdateContactsAction)
-
-
-@automation.register_action(
-    "intercom_api.simulate_incoming_call",
-    SimulateIncomingCallAction,
-    cv.Schema(
-        {
-            cv.GenerateID(): cv.use_id(IntercomApi),
-            cv.Required(CONF_CALLER): cv.templatable(cv.string),
-        }
-    ),
-    synchronous=True,
-)
-async def simulate_incoming_call_action_to_code(config, action_id, template_arg, args):
-    var = await _new_parented_action(config, action_id, template_arg)
-    templ = await cg.templatable(config[CONF_CALLER], args, cg.std_string)
-    cg.add(var.set_caller(templ))
-    return var
-
 
 # === Condition registrations ===
 # Simple condition schema that just references the intercom_api component
@@ -1388,10 +1203,9 @@ def _register_simple_condition(name, condition_class):
 
 _register_simple_condition("intercom_api.is_idle", IntercomIsIdleCondition)
 _register_simple_condition("intercom_api.is_ringing", IntercomIsRingingCondition)
-_register_simple_condition("intercom_api.is_streaming", IntercomIsStreamingCondition)
+_register_simple_condition("intercom_api.is_in_call", IntercomIsInCallCondition)
 _register_simple_condition("intercom_api.is_calling", IntercomIsCallingCondition)
 _register_simple_condition("intercom_api.is_incoming", IntercomIsIncomingCondition)
-_register_simple_condition("intercom_api.is_in_call", IntercomIsInCallCondition)
 
 
 CONF_DESTINATION = "destination"

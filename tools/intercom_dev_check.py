@@ -34,7 +34,6 @@ def main() -> int:
          "tools/ha_live_intercom_matrix.py",
          "tools/ha_card_visual_smoke.py"])
     run([py, "tests/test_voip_phase1.py"])
-    run([py, "tests/test_intercom_protocol.py"])
     run([py, "tests/test_device_resolver_sip.py"])
     run([py, "tests/test_frontend_card_contract.py"])
     run([py, "tests/test_runtime_fsm_target_model.py"])

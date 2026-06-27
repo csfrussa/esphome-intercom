@@ -199,7 +199,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -532,7 +531,7 @@ intercom_api:
   speaker: intercom_speaker_input
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
-  # via the "HA PBX Mode" switch in the SWITCHES block below.
+  # via the "SIP bridge" switch in the SWITCHES block below.
   delete_contact_missing_from:
     updates_number: 1
   on_update_contacts:
@@ -1484,8 +1483,8 @@ lvgl:
                             id: ic_ringing_out_status_label
                             align: TOP_MID
                             y: 40
-                            # CALLING by default, switches to RINGING via
-                            # ui_ic_dest_ringing when MSG_RING from dest arrives.
+                            # CALLING by default, switches to RINGING when
+                            # SIP 180 arrives from the destination.
                             text: "CALLING"
                             text_color: 0xF39C12
                             text_font: font_title
@@ -2396,7 +2395,7 @@ script:
       - script.execute: draw_display
 
   # Intercom call display (extends package placeholder). Resets the
-  # outgoing-status label to "CALLING" so a fresh start() doesn't leak
+  # calling-status label to "CALLING" so a fresh start() doesn't leak
   # the "RINGING" text from a previous call.
   - id: !extend ui_ic_call
     then:
@@ -2410,7 +2409,7 @@ script:
       - script.execute: backlight_timer
       - script.execute: draw_display
 
-  # Caller path: dest acked with RING. Same outgoing tile, label flips
+  # Caller path: dest acked with RING. Same calling tile, label flips
   # from "CALLING" to "RINGING".
   - id: !extend ui_ic_dest_ringing
     then:
@@ -2587,7 +2586,7 @@ script:
             set_label(id(ic_ringing_out_peer_label), id(peer_name).c_str());
             set_hidden(id(ic_ringing_out_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "Streaming" || ic_state == "Answering") {
+          } else if (ic_state == "In Call" || ic_state == "Connecting") {
             set_label(id(ic_in_call_peer_label), id(peer_name).c_str());
             set_hidden(id(ic_in_call_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
@@ -2666,7 +2665,7 @@ script:
           if (id(ic_ended_active) ||
               ic_state == "Ringing" || ic_state == "Incoming" ||
               ic_state == "Calling" || ic_state == "Outgoing" ||
-              ic_state == "Streaming" || ic_state == "Answering") {
+              ic_state == "In Call" || ic_state == "Connecting") {
             return;
           }
 

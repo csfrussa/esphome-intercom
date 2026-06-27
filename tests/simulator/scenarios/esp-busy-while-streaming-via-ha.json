@@ -1,6 +1,6 @@
 {
-  "name": "esp-busy-while-streaming-via-ha",
-  "description": "ESP already streaming with HA rejects a second ESP call routed through HA.",
+  "name": "esp-busy-while-in_call-via-ha",
+  "description": "ESP already in_call with HA rejects a second ESP call routed through HA.",
   "steps": [
     {
       "inject_event": {
@@ -17,7 +17,7 @@
         "type": "esp_call",
         "source": "Virtual Spotpear",
         "destination": "Virtual S3",
-        "route": "via_ha"
+        "route": "bridge"
       }
     },
     {
@@ -30,7 +30,7 @@
           "state": "idle"
         },
         "esp": {
-          "state": "streaming"
+          "state": "in_call"
         }
       }
     }

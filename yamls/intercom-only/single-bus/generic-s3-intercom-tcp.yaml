@@ -91,7 +91,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # DEBUG keeps SIP signaling + AEC/AFE/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -101,7 +101,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN

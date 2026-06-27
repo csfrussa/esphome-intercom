@@ -15,8 +15,17 @@ _LOGGER = logging.getLogger(__name__)
 class SipEndpointSnapshot:
     udp_ready: bool
     tcp_ready: bool
-    pending_invites: int
+    pending_transactions: int
     active_dialogs: int
+    pending_call_ids: tuple[str, ...]
+    active_call_ids: tuple[str, ...]
+    last_sip_event: str
+    last_sip_status_code: int
+    last_sip_reason: str
+
+    @property
+    def pending_invites(self) -> int:
+        return self.pending_transactions
 
 
 class SipEndpointManager:
@@ -172,6 +181,33 @@ class SipEndpointManager:
                     count += len(active)
         return count
 
+    def _active_call_ids(self, server: object) -> set[str]:
+        endpoint = getattr(server, "endpoint", None)
+        active = getattr(endpoint, "active_dialogs", None)
+        ids = set(active) if isinstance(active, dict) else set()
+        endpoints = getattr(server, "endpoints", None)
+        if isinstance(endpoints, set):
+            for endpoint in endpoints:
+                active = getattr(endpoint, "active_dialogs", None)
+                if isinstance(active, dict):
+                    ids.update(active)
+        return ids
+
+    def _endpoint_snapshots(self) -> list[dict]:
+        snapshots: list[dict] = []
+        for server in self.servers:
+            endpoint = getattr(server, "endpoint", None)
+            snap = getattr(endpoint, "snapshot", None)
+            if callable(snap):
+                snapshots.append(dict(snap()))
+            endpoints = getattr(server, "endpoints", None)
+            if isinstance(endpoints, set):
+                for endpoint in endpoints:
+                    snap = getattr(endpoint, "snapshot", None)
+                    if callable(snap):
+                        snapshots.append(dict(snap()))
+        return snapshots
+
     def pending_invite_count(self) -> int:
         return sum(len(self._pending_call_ids(server)) for server in self.servers)
 
@@ -179,9 +215,27 @@ class SipEndpointManager:
         return sum(self._active_dialog_count_for(server) for server in self.servers)
 
     def snapshot(self) -> SipEndpointSnapshot:
+        pending_ids: set[str] = set()
+        active_ids: set[str] = set()
+        for server in self.servers:
+            pending_ids.update(self._pending_call_ids(server))
+            active_ids.update(self._active_call_ids(server))
+        last_event = ""
+        last_status = 0
+        last_reason = ""
+        for snap in self._endpoint_snapshots():
+            if snap.get("last_sip_event"):
+                last_event = str(snap.get("last_sip_event") or "")
+                last_status = int(snap.get("last_sip_status_code") or 0)
+                last_reason = str(snap.get("last_sip_reason") or "")
         return SipEndpointSnapshot(
             udp_ready=self.udp_server is not None,
             tcp_ready=self.tcp_server is not None,
-            pending_invites=self.pending_invite_count(),
+            pending_transactions=len(pending_ids),
             active_dialogs=self.active_dialog_count(),
+            pending_call_ids=tuple(sorted(pending_ids)),
+            active_call_ids=tuple(sorted(active_ids)),
+            last_sip_event=last_event,
+            last_sip_status_code=last_status,
+            last_sip_reason=last_reason,
         )

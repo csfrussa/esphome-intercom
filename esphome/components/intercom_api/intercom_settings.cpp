@@ -19,9 +19,6 @@ namespace {
 
 struct ParsedPhonebookSlot {
   ContactEntry entry;
-  uint16_t ha_udp_audio_port{0};
-  uint16_t ha_sip_port{0};
-  uint16_t ha_rtp_port{0};
 };
 
 struct JsonRosterSlot {
@@ -30,10 +27,7 @@ struct JsonRosterSlot {
   std::string address;
   std::string protocol;
   std::string sip_transport;
-  bool route_via_ha{false};
-  uint16_t tcp_port{0};
-  uint16_t udp_audio_port{0};
-  uint16_t udp_control_port{0};
+  bool ha_bridge{false};
   uint16_t sip_port{0};
   uint16_t rtp_port{0};
 };
@@ -56,90 +50,37 @@ bool parse_slot_for_normalize(const std::string &raw, ParsedPhonebookSlot *slot)
   const auto parts = Phonebook::split(raw, '|');
   ContactProtocol protocol = ContactProtocol::UNKNOWN;
 
-  // Unified HA rows carry HA transport ports:
-  //   HA Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
-  //   HA Name|ha|ip|tcp_port|udp_audio_port|udp_control_port|sip_port|rtp_port
-  // Phonebook::ContactEntry only stores one primary port, so keep the UDP
-  // and SIP media ports beside the parsed slot for local transport shaping.
   if (parts.size() >= 2 &&
       Phonebook::parse_protocol(Phonebook::trim(parts[1]), &protocol) &&
-      protocol == ContactProtocol::HA && (parts.size() == 6 || parts.size() == 8)) {
+      protocol == ContactProtocol::SIP) {
     ContactEntry entry;
     entry.name = Phonebook::trim(parts[0]);
-    entry.protocol = ContactProtocol::HA;
+    entry.protocol = ContactProtocol::SIP;
     entry.ip = Phonebook::trim(parts[2]);
     if (entry.name.empty() || entry.ip.empty()) return false;
-    if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port)) return false;
-    if (!Phonebook::parse_u16(Phonebook::trim(parts[4]), &slot->ha_udp_audio_port)) return false;
-    if (!Phonebook::parse_u16(Phonebook::trim(parts[5]), &entry.control_port)) return false;
-    if (parts.size() == 8) {
-      if (!Phonebook::parse_u16(Phonebook::trim(parts[6]), &slot->ha_sip_port)) return false;
-      if (!Phonebook::parse_u16(Phonebook::trim(parts[7]), &slot->ha_rtp_port)) return false;
+    if (!(parts.size() == 5 || parts.size() == 6 || parts.size() == 8 || parts.size() == 9)) return false;
+    if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port) ||
+        !Phonebook::parse_u16(Phonebook::trim(parts[4]), &entry.control_port)) {
+      return false;
+    }
+    const size_t transport_index = parts.size() >= 9 ? 8 : 5;
+    if (parts.size() > transport_index) {
+      const std::string sip_transport = Phonebook::trim(parts[transport_index]);
+      if (sip_transport == "tcp" || sip_transport == "TCP") {
+        entry.sip_transport_tcp = true;
+      } else if (sip_transport == "udp" || sip_transport == "UDP" || sip_transport.empty()) {
+        entry.sip_transport_tcp = false;
+      } else {
+        return false;
+      }
     }
     slot->entry = entry;
     return true;
   }
 
-  // Extended HA phonebook rows may include audio_mode, tx_formats and
-  // rx_formats after the route fields. The phonebook stores only the dialable
-  // endpoint; START/ANSWER negotiate audio formats per call.
-  if (parts.size() >= 2 &&
-      Phonebook::parse_protocol(Phonebook::trim(parts[1]), &protocol) &&
-      (protocol == ContactProtocol::TCP || protocol == ContactProtocol::UDP ||
-       protocol == ContactProtocol::SIP)) {
-    ContactEntry entry;
-    entry.name = Phonebook::trim(parts[0]);
-    entry.protocol = protocol;
-    entry.ip = Phonebook::trim(parts[2]);
-    if (entry.name.empty() || entry.ip.empty()) return false;
-    if (protocol == ContactProtocol::TCP && (parts.size() == 4 || parts.size() == 7)) {
-      if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port)) return false;
-      slot->entry = entry;
-      return true;
-    }
-    if (protocol == ContactProtocol::UDP && (parts.size() == 5 || parts.size() == 8)) {
-      if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port) ||
-          !Phonebook::parse_u16(Phonebook::trim(parts[4]), &entry.control_port)) {
-        return false;
-      }
-      slot->entry = entry;
-      return true;
-    }
-    if (protocol == ContactProtocol::SIP &&
-        (parts.size() == 5 || parts.size() == 6 || parts.size() == 8 || parts.size() == 9)) {
-      if (!Phonebook::parse_u16(Phonebook::trim(parts[3]), &entry.port) ||
-          !Phonebook::parse_u16(Phonebook::trim(parts[4]), &entry.control_port)) {
-        return false;
-      }
-      if (parts.size() >= 6) {
-        const std::string sip_transport = Phonebook::trim(parts[5]);
-        if (sip_transport == "tcp" || sip_transport == "TCP") {
-          entry.sip_transport_tcp = true;
-        } else if (sip_transport == "udp" || sip_transport == "UDP" || sip_transport.empty()) {
-          entry.sip_transport_tcp = false;
-        }
-      }
-      slot->entry = entry;
-      return true;
-    }
-  }
-
   if (!Phonebook::parse_entry(raw, &slot->entry)) return false;
-  if (slot->entry.protocol == ContactProtocol::HA) {
-    // Short HA row: use the primary port for both TCP and UDP audio. This is
-    // correct for the default 6054/6055 config; canonical HA rows can carry
-    // distinct TCP, UDP and SIP ports.
-    slot->ha_udp_audio_port = slot->entry.port;
-    slot->ha_sip_port = slot->entry.port;
-    slot->ha_rtp_port = slot->entry.control_port;
-  }
-  return true;
-}
-
-ContactProtocol local_contact_protocol(TransportType transport) {
-  if (transport == TransportType::UDP) return ContactProtocol::UDP;
-  if (transport == TransportType::SIP) return ContactProtocol::SIP;
-  return ContactProtocol::TCP;
+  return slot->entry.protocol == ContactProtocol::UNKNOWN ||
+         slot->entry.protocol == ContactProtocol::SIP;
 }
 
 void append_csv(std::string *out, const std::string &entry) {
@@ -153,28 +94,11 @@ std::string serialize_endpoint(const std::string &name, ContactProtocol protocol
                                uint16_t control_port, bool sip_transport_tcp = false) {
   if (name.empty()) return "";
   if (ip.empty() || port == 0) return name;
-  if (protocol == ContactProtocol::TCP) {
-    return name + "|tcp|" + ip + "|" + std::to_string(port);
-  }
-  if (protocol == ContactProtocol::UDP) {
-    return name + "|udp|" + ip + "|" + std::to_string(port) + "|" +
-           std::to_string(control_port);
-  }
   if (protocol == ContactProtocol::SIP) {
     return name + "|sip|" + ip + "|" + std::to_string(port) + "|" +
-           std::to_string(control_port) + "|" + (sip_transport_tcp ? "tcp" : "udp");
+           std::to_string(control_port) + "||||" + (sip_transport_tcp ? "tcp" : "udp");
   }
-  if (protocol == ContactProtocol::HA) {
-    std::string out = name + "|ha|" + ip + "|" + std::to_string(port);
-    if (control_port != 0) out += "|" + std::to_string(control_port);
-    return out;
-  }
-
-  std::string out = name;
-  if (!ip.empty()) out += "|" + ip;
-  if (port != 0) out += "|" + std::to_string(port);
-  if (control_port != 0) out += "|" + std::to_string(control_port);
-  return out;
+  return name;
 }
 
 const char *json_string(const cJSON *obj, const char *key) {
@@ -228,7 +152,7 @@ bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {
   std::transform(slot->kind.begin(), slot->kind.end(), slot->kind.begin(), ::tolower);
   slot->address = Phonebook::trim(json_string(obj, "address"));
   if (slot->address.empty()) slot->address = Phonebook::trim(json_string(obj, "host"));
-  slot->route_via_ha = json_bool(obj, "route_via_ha");
+  slot->ha_bridge = json_bool(obj, "ha_bridge");
   slot->protocol = Phonebook::trim(json_metadata_string(obj, "transport"));
   if (slot->protocol.empty()) slot->protocol = Phonebook::trim(json_metadata_string(obj, "protocol"));
   std::transform(slot->protocol.begin(), slot->protocol.end(), slot->protocol.begin(), ::tolower);
@@ -254,9 +178,6 @@ bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {
   if (slot->protocol.empty() && slot->kind == "ha") slot->protocol = "ha";
   if (slot->protocol.empty() && slot->kind == "sip") slot->protocol = "sip";
 
-  slot->tcp_port = json_metadata_u16(obj, "tcp_port", json_u16(obj, "tcp_port", 6054));
-  slot->udp_audio_port = json_metadata_u16(obj, "udp_audio_port", json_u16(obj, "udp_audio_port", 6054));
-  slot->udp_control_port = json_metadata_u16(obj, "udp_control_port", json_u16(obj, "udp_control_port", 6055));
   slot->sip_port = json_metadata_u16(obj, "sip_port", json_u16(obj, "sip_port", 5060));
   slot->rtp_port = json_metadata_u16(obj, "rtp_port", json_u16(obj, "rtp_port", 40000));
   return true;
@@ -443,87 +364,27 @@ std::string IntercomApi::normalize_phonebook_for_transport_(const std::string &c
   std::vector<ParsedPhonebookSlot> slots;
   slots.reserve(raw_entries.size());
 
-  ParsedPhonebookSlot ha_slot;
-  bool has_ha = false;
-
   for (const auto &raw : raw_entries) {
     ParsedPhonebookSlot slot;
     if (!parse_slot_for_normalize(raw, &slot)) {
       continue;
-    }
-    if (slot.entry.protocol == ContactProtocol::HA && !slot.entry.ip.empty() &&
-        slot.entry.port != 0) {
-      ha_slot = slot;
-      has_ha = true;
     }
     slots.push_back(slot);
   }
 
   if (slots.empty()) return contacts_csv;
 
-  if (has_ha && this->ha_peer_name_ != ha_slot.entry.name) {
-    this->ha_peer_name_ = ha_slot.entry.name;
-    ESP_LOGI(TAG, "HA peer name learned from phonebook: %s", this->ha_peer_name_.c_str());
-  }
-
-  const ContactProtocol local_protocol = local_contact_protocol(this->protocol_);
-  const uint16_t ha_local_port = local_protocol == ContactProtocol::UDP
-                                     ? (ha_slot.ha_udp_audio_port != 0
-                                            ? ha_slot.ha_udp_audio_port
-                                            : ha_slot.entry.port)
-                                     : (local_protocol == ContactProtocol::SIP
-                                            ? (ha_slot.ha_sip_port != 0
-                                                   ? ha_slot.ha_sip_port
-                                                   : ha_slot.entry.port)
-                                            : ha_slot.entry.port);
-  const uint16_t ha_local_control = local_protocol == ContactProtocol::UDP
-                                        ? ha_slot.entry.control_port
-                                        : (local_protocol == ContactProtocol::SIP
-                                               ? ha_slot.ha_rtp_port
-                                               : 0);
-
   std::string out;
   for (const auto &slot : slots) {
     const auto &entry = slot.entry;
 
-    if (entry.protocol == ContactProtocol::HA) {
-      const uint16_t local_port = local_protocol == ContactProtocol::UDP
-                                      ? (slot.ha_udp_audio_port != 0
-                                             ? slot.ha_udp_audio_port
-                                             : entry.port)
-                                      : (local_protocol == ContactProtocol::SIP
-                                             ? (slot.ha_sip_port != 0
-                                                    ? slot.ha_sip_port
-                                                    : entry.port)
-                                             : entry.port);
-      const uint16_t local_control = local_protocol == ContactProtocol::UDP
-                                         ? entry.control_port
-                                         : (local_protocol == ContactProtocol::SIP
-                                                ? slot.ha_rtp_port
-                                                : 0);
-      append_csv(&out, serialize_endpoint(entry.name, local_protocol, entry.ip,
-                                          local_port, local_control));
-      continue;
-    }
-
-    if ((entry.protocol == local_protocol || entry.protocol == ContactProtocol::UNKNOWN) &&
-        !(has_ha && this->routing_mode_ == IntercomRoutingMode::HA_PBX)) {
+    if (entry.protocol == ContactProtocol::SIP) {
       append_csv(&out, serialize_endpoint(entry.name, entry.protocol, entry.ip,
                                           entry.port, entry.control_port,
                                           entry.sip_transport_tcp));
       continue;
     }
 
-    if ((entry.protocol == ContactProtocol::TCP || entry.protocol == ContactProtocol::UDP ||
-         entry.protocol == ContactProtocol::SIP) && has_ha) {
-      append_csv(&out, serialize_endpoint(entry.name, local_protocol, ha_slot.entry.ip,
-                                          ha_local_port, ha_local_control,
-                                          ha_slot.entry.sip_transport_tcp));
-      continue;
-    }
-
-    // Cross-protocol contact without an HA row: keep the name visible but avoid
-    // writing a wrong direct endpoint into the phonebook.
     append_csv(&out, entry.name);
   }
 
@@ -576,15 +437,9 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
     ESP_LOGI(TAG, "HA peer name learned from roster JSON: %s", this->ha_peer_name_.c_str());
   }
 
-  const ContactProtocol local_protocol = local_contact_protocol(this->protocol_);
-  const uint16_t ha_local_port = local_protocol == ContactProtocol::UDP
-                                     ? ha_slot.udp_audio_port
-                                     : (local_protocol == ContactProtocol::SIP
-                                            ? ha_slot.sip_port
-                                            : ha_slot.tcp_port);
-  const uint16_t ha_local_control = local_protocol == ContactProtocol::UDP
-                                        ? ha_slot.udp_control_port
-                                        : (local_protocol == ContactProtocol::SIP ? ha_slot.rtp_port : 0);
+  const ContactProtocol local_protocol = ContactProtocol::SIP;
+  const uint16_t ha_local_port = ha_slot.sip_port;
+  const uint16_t ha_local_control = ha_slot.rtp_port;
 
   std::string out;
   for (const auto &slot : slots) {
@@ -594,20 +449,14 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
 
     if (slot.kind == "ha") {
       if (slot.address.empty()) continue;
-      const uint16_t port = local_protocol == ContactProtocol::UDP
-                                ? slot.udp_audio_port
-                                : (local_protocol == ContactProtocol::SIP ? slot.sip_port : slot.tcp_port);
-      const uint16_t control = local_protocol == ContactProtocol::UDP
-                                   ? slot.udp_control_port
-                                   : (local_protocol == ContactProtocol::SIP ? slot.rtp_port : 0);
-      append_csv(&out, serialize_endpoint(slot.name, local_protocol, slot.address, port, control,
+      append_csv(&out, serialize_endpoint(slot.name, local_protocol, slot.address, slot.sip_port, slot.rtp_port,
                                           slot.sip_transport == "tcp"));
       continue;
     }
 
-    if ((slot.kind == "phone" || slot.kind == "group" || slot.route_via_ha ||
-         this->routing_mode_ == IntercomRoutingMode::HA_PBX || slot.address.empty() ||
-         protocol != local_protocol || missing_sip_transport) &&
+    if ((slot.kind == "phone" || slot.kind == "group" || slot.ha_bridge ||
+         slot.address.empty() ||
+         protocol != ContactProtocol::SIP || missing_sip_transport) &&
         has_ha) {
       append_csv(&out, serialize_endpoint(slot.name, local_protocol, ha_slot.address,
                                           ha_local_port, ha_local_control,
@@ -615,12 +464,7 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
       continue;
     }
 
-    if (protocol == ContactProtocol::TCP) {
-      append_csv(&out, serialize_endpoint(slot.name, protocol, slot.address, slot.tcp_port, 0));
-    } else if (protocol == ContactProtocol::UDP) {
-      append_csv(&out, serialize_endpoint(slot.name, protocol, slot.address,
-                                          slot.udp_audio_port, slot.udp_control_port));
-    } else if (protocol == ContactProtocol::SIP) {
+    if (protocol == ContactProtocol::SIP) {
       if (missing_sip_transport) {
         ESP_LOGW(TAG, "Ignoring SIP roster entry '%s': metadata.sip_transport is required for direct SIP",
                  slot.name.c_str());
@@ -686,15 +530,9 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
     ESP_LOGI(TAG, "HA peer name learned from roster JSON: %s", this->ha_peer_name_.c_str());
   }
 
-  const ContactProtocol local_protocol = local_contact_protocol(this->protocol_);
-  const uint16_t ha_local_port = local_protocol == ContactProtocol::UDP
-                                     ? ha_slot.udp_audio_port
-                                     : (local_protocol == ContactProtocol::SIP
-                                            ? ha_slot.sip_port
-                                            : ha_slot.tcp_port);
-  const uint16_t ha_local_control = local_protocol == ContactProtocol::UDP
-                                        ? ha_slot.udp_control_port
-                                        : (local_protocol == ContactProtocol::SIP ? ha_slot.rtp_port : 0);
+  const ContactProtocol local_protocol = ContactProtocol::SIP;
+  const uint16_t ha_local_port = ha_slot.sip_port;
+  const uint16_t ha_local_control = ha_slot.rtp_port;
 
   std::vector<ContactEntry> entries;
   entries.reserve(slots.size());
@@ -709,16 +547,12 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
     if (slot.kind == "ha") {
       entry.protocol = local_protocol;
       entry.ip = slot.address;
-      entry.port = local_protocol == ContactProtocol::UDP
-                       ? slot.udp_audio_port
-                       : (local_protocol == ContactProtocol::SIP ? slot.sip_port : slot.tcp_port);
-      entry.control_port = local_protocol == ContactProtocol::UDP
-                               ? slot.udp_control_port
-                               : (local_protocol == ContactProtocol::SIP ? slot.rtp_port : 0);
+      entry.port = slot.sip_port;
+      entry.control_port = slot.rtp_port;
       entry.sip_transport_tcp = slot.sip_transport == "tcp";
-    } else if ((slot.kind == "phone" || slot.kind == "group" || slot.route_via_ha ||
-                this->routing_mode_ == IntercomRoutingMode::HA_PBX || slot.address.empty() ||
-                protocol != local_protocol || missing_sip_transport) &&
+    } else if ((slot.kind == "phone" || slot.kind == "group" || slot.ha_bridge ||
+                slot.address.empty() ||
+                protocol != ContactProtocol::SIP || missing_sip_transport) &&
                has_ha) {
       entry.protocol = local_protocol;
       entry.ip = ha_slot.address;
@@ -728,12 +562,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
     } else {
       entry.protocol = protocol;
       entry.ip = slot.address;
-      if (protocol == ContactProtocol::TCP) {
-        entry.port = slot.tcp_port;
-      } else if (protocol == ContactProtocol::UDP) {
-        entry.port = slot.udp_audio_port;
-        entry.control_port = slot.udp_control_port;
-      } else if (protocol == ContactProtocol::SIP) {
+      if (protocol == ContactProtocol::SIP) {
         if (missing_sip_transport) {
           ESP_LOGW(TAG, "Ignoring SIP roster entry '%s': metadata.sip_transport is required for direct SIP",
                    slot.name.c_str());
@@ -742,6 +571,8 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
         entry.port = slot.sip_port;
         entry.control_port = slot.rtp_port;
         entry.sip_transport_tcp = slot.sip_transport == "tcp";
+      } else {
+        continue;
       }
     }
 
@@ -763,14 +594,7 @@ void IntercomApi::update_contacts() {
   this->seen_in_cycle_.clear();
   this->enable_loop_soon_any_context();
 
-  // HA path: read the codegen-internal homeassistant text_sensor. When ESP-side
-  // mDNS discovery is enabled, this device is in ESP-only phonebook mode and
-  // deliberately ignores HA's central roster even if the package is present.
-  if (this->ha_phonebook_sensor_ != nullptr
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-      && !this->mdns_discovery_enabled_
-#endif
-  ) {
+  if (this->ha_phonebook_sensor_ != nullptr) {
     const std::string &raw_phonebook = this->ha_phonebook_sensor_->state;
     if (!raw_phonebook.empty()) {
       const std::string trimmed = Phonebook::trim(raw_phonebook);
@@ -782,12 +606,9 @@ void IntercomApi::update_contacts() {
     }
   }
 
-  // Fire trigger for downstream sources (mDNS scan etc). If nothing is wired,
-  // the loop() timeout will commit the cycle in CYCLE_TIMEOUT_MS.
+  // Fire trigger for downstream YAML sources. If nothing is wired, the loop()
+  // timeout will commit the cycle in CYCLE_TIMEOUT_MS.
   this->update_contacts_trigger_.trigger();
-#ifdef USE_INTERCOM_MDNS_DISCOVERY
-  this->request_mdns_discovery_scan_();
-#endif
 }
 
 void IntercomApi::track_csv_(const std::string &csv) {
@@ -903,12 +724,14 @@ void IntercomApi::publish_destination_() {
     this->last_published_destination_ = current;
     this->destination_changed_trigger_.trigger();
   }
+  this->publish_sip_snapshot_();
 }
 
 void IntercomApi::publish_caller_(const std::string &caller_name) {
   if (this->caller_sensor_ != nullptr) {
     this->caller_sensor_->publish_state(caller_name);
   }
+  this->publish_sip_snapshot_();
 }
 
 void IntercomApi::publish_contacts_() {

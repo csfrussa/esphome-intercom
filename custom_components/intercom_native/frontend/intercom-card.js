@@ -8,7 +8,7 @@
  * - Idle       -> Show destination + Call button
  * - Calling    -> Show "Calling [dest]..." + Hangup
  * - Ringing    -> Show "Incoming [caller]" + Answer/Decline
- * - Streaming  -> Show "In Call [peer]" + Hangup
+ * - In Call  -> Show "In Call [peer]" + Hangup
  */
 
 const INTERCOM_MODULE_VERSION = (() => {
@@ -124,6 +124,10 @@ class IntercomCard extends HTMLElement {
       clearTimeout(this._availableDevicesRetryTimer);
       this._availableDevicesRetryTimer = null;
     }
+    if (this._devicesRetryTimer) {
+      clearTimeout(this._devicesRetryTimer);
+      this._devicesRetryTimer = null;
+    }
     intercomEngine.removeEventListener("state", this._engineListener);
     intercomEngine.clearRingtoneRequest(this._ringtoneRequestKey);
   }
@@ -193,8 +197,7 @@ class IntercomCard extends HTMLElement {
     const data = { ...(event?.data || {}) };
     if (!this._eventConcernsThisCard(data)) return;
     let st = String(data.state || "").toLowerCase();
-    if (st === "connected") st = "streaming";
-    if (st === "ended") st = "disconnected";
+    if (st === "ended") st = "idle";
     data.state = st;
     data.scope = "session";
     if (!data.direction) {
@@ -219,7 +222,7 @@ class IntercomCard extends HTMLElement {
     const peer = data.new_dest_name || data.old_dest_name || data.peer_name || "";
     if (st === "ringing") {
       this._destRinging = true;
-    } else if (st === "connected") {
+    } else if (st === "in_call") {
       this._destRinging = false;
       this._clearEndReason(false);
     } else if (st === "failed") {
@@ -238,7 +241,7 @@ class IntercomCard extends HTMLElement {
     const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
 
     // Translate bridge-relative origin (source/dest) into card-relative
-    // perspective (self/remote): the same disconnected event must read
+    // perspective (self/remote): the same idle event must read
     // as "Local hangup" on the leg that hung up and "Remote hangup" on
     // the other leg.
     const myId = this._activeDeviceInfo?.device_id || this._getConfigDeviceId();
@@ -252,11 +255,11 @@ class IntercomCard extends HTMLElement {
 
     if (st === "ringing") {
       this._destRinging = true;
-    } else if (st === "connected" || st === "streaming") {
+    } else if (st === "in_call") {
       this._destRinging = false;
       this._clearEndReason(false);
     }
-    if (mirrorEspReason && (st === "declined" || st === "error" || st === "disconnected")) {
+    if (mirrorEspReason && (st === "declined" || st === "error" || st === "idle")) {
       this._destRinging = false;
       this._render();
       return;
@@ -267,11 +270,11 @@ class IntercomCard extends HTMLElement {
     } else if (st === "error") {
       this._destRinging = false;
       this._captureEndReason("error", reason, perspective || origin, peer);
-    } else if (st === "disconnected") {
+    } else if (st === "idle") {
       this._destRinging = false;
-      // The bridge fires `disconnected` twice on a normal teardown:
+      // The bridge fires `idle` twice on a normal teardown:
       // once from `on_*_stop` with reason+origin set (the real cause),
-      // then again from `_on_disconnected` after the transport closes
+      // then again from `_on_idle` after the transport closes
       // with neither field. Skip the second one so the card keeps the
       // explicit reason on the ended-screen.
       if (reason || origin || !this._lastEndInfo) {
@@ -283,7 +286,7 @@ class IntercomCard extends HTMLElement {
         if (reason === "remote_device_lost") localized = "remote_device_lost";
         else if (perspective === "self" && reason === "remote_hangup") localized = "local_hangup";
         else if (perspective === "remote" && reason === "local_hangup") localized = "remote_hangup";
-        this._captureEndReason("disconnected", localized, perspective || origin, peer);
+        this._captureEndReason("idle", localized, perspective || origin, peer);
       }
     }
     this._render();
@@ -299,7 +302,7 @@ class IntercomCard extends HTMLElement {
     const peer = data.peer_name || this._lastEndInfo?.peer || "";
     const mirrorEspReason = this._usesEspReasonForTerminalDisplay();
     const direction = String(data.direction || "").toLowerCase();
-    const sessionState = ["calling", "outgoing", "ringing", "streaming", "idle", "disconnected", "declined", "error"].includes(st);
+    const sessionState = ["calling", "remote_ringing", "ringing", "in_call", "idle", "declined", "busy", "cancelled", "media_incompatible", "transport_unreachable", "auth_required_unsupported", "error"].includes(st);
     const managedSession = sessionState && !!direction;
     const outgoingSoftphoneSession = managedSession && direction === "outgoing";
     if (Object.prototype.hasOwnProperty.call(data, "dnd")) this._softphoneDnd = !!data.dnd;
@@ -311,10 +314,8 @@ class IntercomCard extends HTMLElement {
       if (data.session_device_id || (data.device_id && data.device_id !== HA_SOFTPHONE_DEVICE_ID)) {
         this._activeSessionDeviceId = data.session_device_id || data.device_id;
       }
-      const outgoingRinging = outgoingSoftphoneSession && st === "ringing";
-      this._sessionState = outgoingRinging
-        ? "outgoing"
-        : (st === "disconnected" ? "idle" : (st || "idle"));
+      const outgoingRinging = outgoingSoftphoneSession && (st === "ringing" || st === "remote_ringing");
+      this._sessionState = outgoingRinging ? "remote_ringing" : (st || "idle");
       if (outgoingRinging) this._destRinging = true;
       if (data.caller || data.peer_name) {
         this._sessionCaller = direction === "outgoing" ? "" : (data.peer_name || data.caller);
@@ -340,15 +341,15 @@ class IntercomCard extends HTMLElement {
         this._tryAutoAnswer();
       }
     }
-    if (st === "streaming" || st === "ringing") {
+    if (st === "in_call" || st === "ringing") {
       this._clearEndReason(false);
-      if (st === "streaming") this._destRinging = false;
+      if (st === "in_call") this._destRinging = false;
     } else if (mirrorEspReason && terminalState) {
       // ESP-to-ESP card mode mirrors the ESP text sensors. Bridge/session
       // events are useful for HA softphone state, but the terminal reason
       // shown here must come from the ESP's own last_reason sensor.
       this._destRinging = false;
-    } else if ((st === "idle" || st === "disconnected") && reason) {
+    } else if ((st === "idle" || st === "idle") && reason) {
       const endOrigin = (origin === "self" || origin === "remote")
         ? origin
         : (reason === "local_hangup" ? "self" : "remote");
@@ -357,7 +358,7 @@ class IntercomCard extends HTMLElement {
         reason === "remote_hangup" ||
         reason === "remote_device_lost";
       this._captureEndReason(
-        isDisconnectReason ? "disconnected" : "declined",
+        isDisconnectReason ? "idle" : "declined",
         reason,
         endOrigin,
         peer,
@@ -375,7 +376,7 @@ class IntercomCard extends HTMLElement {
 
   _isTerminalSessionState(state) {
     return state === "idle" ||
-           state === "disconnected" ||
+           state === "idle" ||
            state === "declined" ||
            state === "error";
   }
@@ -433,11 +434,11 @@ class IntercomCard extends HTMLElement {
       : origin === "dest"   ? "Callee"
       : null;
 
-    if (kind === "disconnected") {
+    if (kind === "idle") {
       if (reason === "local_hangup")  return "Local hangup";
       if (reason === "remote_hangup") return who ? `${who} hung up` : "Remote hangup";
       if (reason === "remote_device_lost") return who ? `${who} lost` : "Remote device lost";
-      return reason || "Disconnected";
+      return reason || "Idle";
     }
     if (kind === "declined") {
       if (isSelf) return reason ? `Local decline: "${reason}"` : "Local decline";
@@ -460,7 +461,7 @@ class IntercomCard extends HTMLElement {
   _reasonKey(reason) {
     const text = String(reason || "").trim();
     if (!text) return "";
-    if (text === "DND") return "DND";
+    if (text === "busy") return "busy";
     const normalized = text.toLowerCase().replace(/[\s-]+/g, "_");
     const known = new Set([
       "local_hangup",
@@ -469,7 +470,7 @@ class IntercomCard extends HTMLElement {
       "declined",
       "timeout",
       "busy",
-      "unreachable",
+      "transport_unreachable",
       "protocol_error",
       "bridge_error",
     ]);
@@ -484,10 +485,10 @@ class IntercomCard extends HTMLElement {
       case "declined": return "Declined";
       case "timeout": return "Timeout";
       case "busy": return "Busy";
-      case "unreachable": return "Unreachable";
+      case "transport_unreachable": return "Unreachable";
       case "protocol_error": return "Protocol error";
       case "bridge_error": return "Bridge error";
-      case "DND": return "DND";
+      case "busy": return "busy";
       default: return "";
     }
   }
@@ -843,7 +844,7 @@ class IntercomCard extends HTMLElement {
         address: String(entry.address || entry.host || "").trim(),
         sip_uri: String(entry.sip_uri || "").trim(),
         number: String(entry.number || "").trim(),
-        route_via_ha: !!entry.route_via_ha,
+        ha_bridge: !!entry.ha_bridge,
         enabled: entry.enabled !== false,
         metadata: entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {},
       }))
@@ -882,7 +883,7 @@ class IntercomCard extends HTMLElement {
       sip_uri: entry.sip_uri || "",
       number: entry.number || "",
       kind: entry.kind || "esp",
-      route_via_ha: !!entry.route_via_ha,
+      ha_bridge: !!entry.ha_bridge,
       audio_mode: metadata.audio_mode || "full_duplex",
       tx_formats: this._formatListFromMetadata(metadata.tx_formats),
       rx_formats: this._formatListFromMetadata(metadata.rx_formats),
@@ -998,7 +999,7 @@ class IntercomCard extends HTMLElement {
     // Mirror mode shows the ESP terminal reason as-is. If the card is a
     // HA/browser softphone, terminal direction comes from call_event instead.
     this._captureEndReason(
-      isHangup ? "disconnected" : "declined",
+      isHangup ? "idle" : "declined",
       reason,
       reasonKey === "local_hangup" ? "self" : "remote",
     );
@@ -1120,7 +1121,7 @@ class IntercomCard extends HTMLElement {
 
     let statusText = "";
     let statusReason = "";
-    let statusClass = "disconnected";
+    let statusClass = "idle";
     let showAnswer = false;
     let showHangup = false;
     let showCall = false;
@@ -1164,21 +1165,21 @@ class IntercomCard extends HTMLElement {
           const peerLabel = this._lastEndInfo.peer ? ` with ${this._lastEndInfo.peer}` : "";
           statusText = `Call${peerLabel} ended.`;
           statusReason = `Reason: ${reasonLabel}`;
-          statusClass = "disconnected";
+          statusClass = "idle";
           showCall = true;
         } else if (this._isHaSoftphoneMode() && this._softphoneDnd) {
           statusText = "Do Not Disturb";
           statusReason = "Incoming calls to Home Assistant are declined.";
-          statusClass = "disconnected";
+          statusClass = "idle";
           showCall = true;
         } else {
           statusText = "Ready";
-          statusClass = "disconnected";
+          statusClass = "idle";
           showCall = true;
         }
         break;
       case "calling":
-      case "outgoing":
+      case "remote_ringing":
         statusText = this._destRinging
           ? `${destination} is ringing...`
           : `Calling ${destination}...`;
@@ -1191,15 +1192,15 @@ class IntercomCard extends HTMLElement {
         statusClass = "ringing";
         showAnswer = true;
         break;
-      case "streaming":
+      case "in_call":
       case "answering":
         statusText = `In Call: ${caller || destination || "Active"}`;
-        statusClass = "connected";
+        statusClass = "in_call";
         showHangup = true;
         break;
       default:
         statusText = espState;
-        statusClass = "disconnected";
+        statusClass = "idle";
         showCall = true;
     }
 
@@ -1244,7 +1245,7 @@ class IntercomCard extends HTMLElement {
     els.statusReason.hidden = !statusReason;
 
     // Runtime options are idle-only and live behind a compact settings panel.
-    // During ringing/streaming the card shows only call actions, so toggles
+    // During ringing/in_call the card shows only call actions, so toggles
     // cannot be changed mid-call.
     const showRuntimeOptions = showCall && !this._starting && !this._stopping;
     const showSettingsPanel = showRuntimeOptions && this._settingsOpen;
@@ -1368,8 +1369,8 @@ class IntercomCard extends HTMLElement {
       .status-reason { text-align: center; color: var(--secondary-text-color); font-size: 0.85em; margin-top: 4px; padding: 0 12px; word-wrap: break-word; }
       .status-reason[hidden] { display: none; }
       .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-      .status-indicator.connected { background: #4caf50; }
-      .status-indicator.disconnected { background: #9e9e9e; }
+      .status-indicator.in_call { background: #4caf50; }
+      .status-indicator.idle { background: #9e9e9e; }
       .status-indicator.unavailable { background: #f44336; }
       .status-indicator.transitioning { background: #ff9800; animation: blink 0.5s infinite; }
       .status-indicator.ringing { background: #ff9800; animation: blink 0.5s infinite; }
@@ -1499,7 +1500,7 @@ class IntercomCard extends HTMLElement {
     const statusRow = document.createElement("div");
     statusRow.className = "status";
     const statusIndicator = document.createElement("span");
-    statusIndicator.className = "status-indicator disconnected";
+    statusIndicator.className = "status-indicator idle";
     statusRow.appendChild(statusIndicator);
     statusRow.appendChild(document.createTextNode(" "));
     const statusText = document.createTextNode("");
@@ -1757,8 +1758,8 @@ class IntercomCard extends HTMLElement {
         callee: target.name || this._getDestination(),
       });
       const replyState = (reply?.state || "calling").toLowerCase();
-      this._sessionState = replyState === "ringing" ? "outgoing" : replyState;
-      this._destRinging = replyState === "ringing";
+      this._sessionState = replyState === "ringing" ? "remote_ringing" : replyState;
+      this._destRinging = replyState === "ringing" || replyState === "remote_ringing";
       this._sessionCaller = "";
     } catch (err) {
       this._showError(err.message || String(err));
@@ -1790,25 +1791,16 @@ class IntercomCard extends HTMLElement {
 
     try {
       if (this._isHaSoftphoneMode()) {
-        const sessionInfo = {
+        this._activeDeviceInfo = {
           ...(deviceInfo || {}),
           device_id: HA_SOFTPHONE_DEVICE_ID,
-          audio_mode: this._sessionAudioMode || "full_duplex",
-          tx_formats: this._sessionTxFormat ? [this._sessionTxFormat] : undefined,
-          rx_formats: this._sessionRxFormat ? [this._sessionRxFormat] : undefined,
           softphone: true,
         };
-        this._activeDeviceInfo = sessionInfo;
         this._activeSessionDeviceId = HA_SOFTPHONE_DEVICE_ID;
         this._callMode = "softphone";
-        const reply = await intercomEngine.answerHaSoftphone(sessionInfo, {
+        await this._hass.callService("intercom_native", "sip_answer", {
           call_id: this._sessionCallId(),
-          tx_format: this._sessionTxFormat,
-          rx_format: this._sessionRxFormat,
         });
-        if (reply?.state !== "streaming") {
-          throw new Error(reply?.error || "Failed to answer HA softphone call");
-        }
         return;
       }
 
@@ -1836,10 +1828,11 @@ class IntercomCard extends HTMLElement {
 
     try {
       if (this._isHaSoftphoneMode()) {
-        await this._hass.connection.sendMessagePromise({
-          type: "intercom_native/decline",
-          device_id: HA_SOFTPHONE_DEVICE_ID,
+        await this._hass.callService("intercom_native", "sip_decline", {
           call_id: this._sessionCallId(),
+          status: 603,
+          reason: "Decline",
+          decline_reason: "declined",
         });
       } else {
         await this._pressEspButton(this._declineButtonEntityId, "Decline");
@@ -1867,10 +1860,12 @@ class IntercomCard extends HTMLElement {
 
       wasSoftphone = this._isSoftphoneContext();
       if (wasSoftphone) {
-        await intercomEngine.stop(HA_SOFTPHONE_DEVICE_ID, { call_id: this._sessionCallId() });
+        await this._hass.callService("intercom_native", "sip_hangup", {
+          call_id: this._sessionCallId(),
+        });
       } else {
         // Mirror mode: Hangup is the ESP's Decline button. Firmware maps
-        // Decline during STREAMING to stop(), and idle is a no-op.
+        // decline during in_call to stop(), and idle is a no-op.
         await this._pressEspButton(this._declineButtonEntityId, "Decline");
       }
     } catch (err) {
@@ -1995,8 +1990,8 @@ class IntercomCard extends HTMLElement {
         const rawState = String(result.state || "").toLowerCase();
         const direction = String(result.direction || "").toLowerCase();
         const sessionDeviceId = result.session_device_id || null;
-        const outgoingRinging = rawState === "ringing" && direction === "outgoing";
-        this._sessionState = outgoingRinging ? "outgoing" : rawState;
+        const outgoingRinging = (rawState === "ringing" || rawState === "remote_ringing") && direction === "outgoing";
+        this._sessionState = outgoingRinging ? "remote_ringing" : rawState;
         this._activeSessionDeviceId = sessionDeviceId;
         this._activeCallId = result.call_id || "";
         this._sessionTxFormat = result.tx_format || "";
@@ -2106,13 +2101,6 @@ class IntercomCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (hass && !this._devicesLoaded) this._loadDevices();
-  }
-
-  disconnectedCallback() {
-    if (this._devicesRetryTimer) {
-      clearTimeout(this._devicesRetryTimer);
-      this._devicesRetryTimer = null;
-    }
   }
 
   _normaliseAudioMode(value) {
@@ -2355,6 +2343,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "intercom-card",
   name: "Intercom Card",
-  description: "ESP intercom control - PBX-lite mirror of ESP state",
+  description: "ESP SIP phone mirror and HA SIP softphone controls",
   preview: true,
 });

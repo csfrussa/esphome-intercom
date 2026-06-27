@@ -1,6 +1,6 @@
 {
-  "name": "esp-to-ha-busy-while-streaming",
-  "description": "Second ESP calling HA while HA softphone is streaming receives Busy.",
+  "name": "esp-to-ha-busy-while-in_call",
+  "description": "Second ESP calling HA while HA softphone is in_call receives Busy.",
   "steps": [
     {
       "inject_event": {
@@ -21,7 +21,7 @@
     {
       "expect": {
         "softphone": {
-          "state": "streaming"
+          "state": "in_call"
         }
       }
     },
@@ -39,7 +39,7 @@
           "last_reason": "busy"
         },
         "softphone": {
-          "state": "streaming"
+          "state": "in_call"
         }
       }
     }

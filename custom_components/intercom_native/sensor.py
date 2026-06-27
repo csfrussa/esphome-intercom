@@ -4,13 +4,10 @@ HA publishes one protocol-aware roster.
 
 Entity names:
   - sensor.intercom_phonebook       format per row:
-      ESP TCP: name|tcp|ip|tcp_port
-      ESP UDP: name|udp|ip|audio_port|control_port
-      ESP SIP: name|sip|ip|sip_port|rtp_port
-      HA:      name|ha|ip|tcp_port|udp_audio_port|udp_control_port|sip_port|rtp_port
+      name|sip|ip|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_transport
 
 ESP YAMLs subscribe to the unified sensor and normalize it locally into their
-own transport dial plan.
+SIP dial plan.
 """
 import logging
 
@@ -150,9 +147,6 @@ class IntercomPhonebookSensor(SensorEntity):
                         if p.transport == "sip" or p.is_ha
                         else ""
                     ),
-                    "tcp_port": p.tcp_port,
-                    "udp_audio_port": p.udp_audio_port,
-                    "udp_control_port": p.udp_control_port,
                     "sip_port": p.sip_port,
                     "rtp_port": p.rtp_port,
                     "audio_mode": p.audio_mode,

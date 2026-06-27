@@ -125,7 +125,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -147,7 +146,6 @@ logger:
     media_player: INFO
     resampler: INFO
     mixer_speaker: INFO
-    mdns: INFO
     wifi: INFO
     json: INFO
     intercom_api: INFO

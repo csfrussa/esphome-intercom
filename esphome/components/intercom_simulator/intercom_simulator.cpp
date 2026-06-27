@@ -172,6 +172,7 @@ void IntercomSimulator::on_shutdown() {
 void IntercomSimulator::dump_config() {
   ESP_LOGCONFIG(TAG, "Intercom Simulator:");
   ESP_LOGCONFIG(TAG, "  Source profile: %s", this->source_profile_.c_str());
+  ESP_LOGCONFIG(TAG, "  Device profile: %s", this->device_profile_.c_str());
   ESP_LOGCONFIG(TAG, "  Socket path: %s", this->socket_path_.c_str());
   ESP_LOGCONFIG(TAG, "  Mic input: %s", this->microphone_input_path_.c_str());
   ESP_LOGCONFIG(TAG, "  Speaker output: %s", this->speaker_output_path_.c_str());
@@ -252,8 +253,13 @@ std::string IntercomSimulator::dispatch_(const std::string &method, const std::s
     this->press_button_(find_json_string(params, "button"));
     return this->snapshot_json_();
   }
-  if (method == "touch")
-    return "{\"ok\":true,\"target\":" + q(find_json_string(params, "target")) + "}";
+  if (method == "touch") {
+    {
+      std::lock_guard<std::mutex> lock(this->mutex_);
+      this->state_.touch_last = find_json_string(params, "target");
+    }
+    return this->snapshot_json_();
+  }
   if (method == "advance_time") {
     int duration = find_json_int(params, "duration_ms", 0);
     {
@@ -314,6 +320,25 @@ std::string IntercomSimulator::snapshot_json_() const {
   out << "\"media\":{\"state\":" << q(this->state_.media_state) << "},";
   out << "\"intercom\":{\"state\":" << q(this->state_.intercom_state)
       << ",\"caller\":" << q(this->state_.intercom_caller) << "},";
+  out << "\"voice_assistant\":{\"state\":" << q(this->state_.voice_assistant_state)
+      << ",\"phase\":" << q(this->state_.voice_assistant_phase)
+      << ",\"wake_word\":" << q(this->state_.wake_word)
+      << ",\"events\":" << this->state_.voice_assistant_events << "},";
+  out << "\"aec\":{\"frames\":" << this->state_.aec_frames
+      << ",\"last_processing_us\":" << this->state_.aec_last_processing_us
+      << ",\"max_processing_us\":" << this->state_.aec_max_processing_us << "},";
+  out << "\"afe\":{\"frames\":" << this->state_.afe_frames
+      << ",\"last_latency_us\":" << this->state_.afe_last_latency_us
+      << ",\"max_latency_us\":" << this->state_.afe_max_latency_us << "},";
+  out << "\"display\":{\"page\":" << q(this->state_.display_page)
+      << ",\"status\":" << q(this->state_.display_status)
+      << ",\"backlight_on\":" << b(this->state_.backlight_on)
+      << ",\"framebuffer\":" << q(this->framebuffer_path_) << "},";
+  out << "\"touch\":{\"last\":" << q(this->state_.touch_last) << "},";
+  out << "\"controls\":{\"mic_muted\":" << b(this->state_.mic_muted)
+      << ",\"speaker_muted\":" << b(this->state_.speaker_muted)
+      << ",\"auto_answer\":" << b(this->state_.opt_esp_auto_answer)
+      << ",\"dnd\":" << b(this->state_.opt_esp_dnd) << "},";
   out << "\"card\":{\"mode\":" << q(this->state_.card_mode)
       << ",\"controlled_device\":" << q(this->state_.card_controlled_device)
       << ",\"rendered_state\":" << q(this->state_.card_rendered_state)
@@ -324,7 +349,8 @@ std::string IntercomSimulator::snapshot_json_() const {
   out << "\"ha\":{\"visible_contacts\":" << this->state_.ha_visible_contacts << "},";
   out << "\"framebuffer\":{\"path\":" << q(this->framebuffer_path_) << "},";
   out << "\"runtime\":{\"now_ms\":" << this->state_.now_ms
-      << ",\"source_profile\":" << q(this->source_profile_) << "}";
+      << ",\"source_profile\":" << q(this->source_profile_)
+      << ",\"device_profile\":" << q(this->device_profile_) << "}";
   out << "}";
   return out.str();
 }
@@ -360,7 +386,7 @@ void IntercomSimulator::press_button_(const std::string &button) {
         this->state_.browser_tx_ready_latency_ms = -1;
         this->state_.ha_answer_pending = true;
       } else {
-        this->state_.softphone.state = "streaming";
+        this->state_.softphone.state = "in_call";
         this->state_.audio_rx_ready = true;
         this->state_.audio_owner = "intercom";
         this->state_.sip_last_status = 200;
@@ -369,7 +395,7 @@ void IntercomSimulator::press_button_(const std::string &button) {
       }
     }
     if (this->state_.esp.state == "ringing") {
-      this->state_.esp.state = "streaming";
+      this->state_.esp.state = "in_call";
       this->state_.audio_tx_ready = true;
       this->state_.audio_rx_ready = true;
       this->state_.audio_owner = "intercom";
@@ -390,8 +416,8 @@ void IntercomSimulator::inject_event_(const std::string &params) {
       this->state_.opt_esp_dnd = value;
     else if (target == "esp" && option == "auto_answer")
       this->state_.opt_esp_auto_answer = value;
-    else if (target == "caller" && option == "ha_pbx")
-      this->state_.opt_caller_ha_pbx = value;
+    else if (target == "caller" && option == "sip_bridge")
+      this->state_.opt_caller_sip_bridge = value;
   } else if (type == "ha_call") {
     this->ha_call_(find_json_string(params, "target"), find_json_string(params, "caller", "Casa"));
   } else if (type == "esp_call") {
@@ -427,7 +453,7 @@ void IntercomSimulator::inject_event_(const std::string &params) {
     this->state_.audio_tx_frames++;
     this->state_.browser_tx_ready_latency_ms = 0;
     if (this->state_.ha_answer_pending && this->state_.softphone.state == "ringing") {
-      this->state_.softphone.state = "streaming";
+      this->state_.softphone.state = "in_call";
       this->state_.audio_owner = "intercom";
       this->state_.sip_last_status = 200;
       this->state_.ha_answer_pending = false;
@@ -440,12 +466,86 @@ void IntercomSimulator::inject_event_(const std::string &params) {
     this->state_.audio_tx_frames++;
     this->state_.browser_tx_ready_latency_ms = delay;
     if (this->state_.ha_answer_pending && this->state_.softphone.state == "ringing") {
-      this->state_.softphone.state = "streaming";
+      this->state_.softphone.state = "in_call";
       this->state_.audio_owner = "intercom";
       this->state_.sip_last_status = 200;
       this->state_.ha_answer_pending = false;
     }
     this->write_audio_marker_("browser_audio_delayed");
+  } else if (type == "mww_detected") {
+    this->state_.wake_word = find_json_string(params, "wake_word", "okay_nabu");
+    this->state_.voice_assistant_state = "running";
+    this->state_.voice_assistant_phase = "wake";
+    this->state_.display_page = "voice_assistant";
+    this->state_.display_status = "va_wake";
+    this->state_.voice_assistant_events++;
+  } else if (type == "va_start") {
+    this->state_.voice_assistant_state = "running";
+    this->state_.voice_assistant_phase = "starting";
+    this->state_.display_page = "voice_assistant";
+    this->state_.display_status = "va_starting";
+    this->state_.voice_assistant_events++;
+  } else if (type == "va_listening") {
+    this->state_.voice_assistant_state = "running";
+    this->state_.voice_assistant_phase = "listening";
+    this->state_.display_page = "voice_assistant";
+    this->state_.display_status = "va_listening";
+    this->state_.voice_assistant_events++;
+  } else if (type == "va_thinking") {
+    this->state_.voice_assistant_state = "running";
+    this->state_.voice_assistant_phase = "thinking";
+    this->state_.display_page = "voice_assistant";
+    this->state_.display_status = "va_thinking";
+    this->state_.voice_assistant_events++;
+  } else if (type == "va_responding") {
+    this->state_.voice_assistant_state = "running";
+    this->state_.voice_assistant_phase = "responding";
+    this->state_.media_state = "playing";
+    this->state_.display_page = "voice_assistant";
+    this->state_.display_status = "va_responding";
+    this->state_.voice_assistant_events++;
+  } else if (type == "va_end") {
+    this->state_.voice_assistant_state = "idle";
+    this->state_.voice_assistant_phase = "idle";
+    this->state_.display_page = "idle";
+    this->state_.display_status = "idle";
+    this->state_.media_state = "idle";
+    this->state_.audio_owner = "none";
+    this->state_.wake_word.clear();
+    this->state_.voice_assistant_events++;
+  } else if (type == "va_error") {
+    this->state_.voice_assistant_state = "idle";
+    this->state_.voice_assistant_phase = "error";
+    this->state_.display_page = "voice_assistant";
+    this->state_.display_status = "va_error";
+    this->state_.media_state = "idle";
+    this->state_.voice_assistant_events++;
+  } else if (type == "set_control") {
+    const std::string control = find_json_string(params, "control");
+    const bool value = find_json_bool(params, "value");
+    if (control == "mic_muted")
+      this->state_.mic_muted = value;
+    else if (control == "speaker_muted")
+      this->state_.speaker_muted = value;
+    else if (control == "backlight")
+      this->state_.backlight_on = value;
+    else if (control == "auto_answer")
+      this->state_.opt_esp_auto_answer = value;
+    else if (control == "dnd")
+      this->state_.opt_esp_dnd = value;
+  } else if (type == "display_page") {
+    this->state_.display_page = find_json_string(params, "page", this->state_.display_page);
+    this->state_.display_status = find_json_string(params, "status", this->state_.display_status);
+  } else if (type == "aec_frame") {
+    int processing_us = find_json_int(params, "processing_us", 0);
+    this->state_.aec_frames++;
+    this->state_.aec_last_processing_us = processing_us;
+    this->state_.aec_max_processing_us = std::max(this->state_.aec_max_processing_us, processing_us);
+  } else if (type == "afe_frame") {
+    int latency_us = find_json_int(params, "latency_us", 0);
+    this->state_.afe_frames++;
+    this->state_.afe_last_latency_us = latency_us;
+    this->state_.afe_max_latency_us = std::max(this->state_.afe_max_latency_us, latency_us);
   } else if (type == "esp_bye" || type == "remote_bye") {
     this->state_.softphone.state = "idle";
     this->state_.softphone.last_reason = "remote_hangup";
@@ -508,7 +608,7 @@ void IntercomSimulator::ha_call_(const std::string &target, const std::string &c
     return;
   }
   if (this->state_.opt_esp_auto_answer) {
-    this->state_.esp.state = "streaming";
+    this->state_.esp.state = "in_call";
     this->state_.esp.caller = caller;
     this->state_.audio_owner = "intercom";
     this->state_.led_color = "green";
@@ -524,7 +624,7 @@ void IntercomSimulator::ha_call_(const std::string &target, const std::string &c
 
 void IntercomSimulator::esp_call_(const std::string &source, const std::string &destination, const std::string &route) {
   if (destination == "Casa") {
-    if (this->state_.softphone.state == "ringing" || this->state_.softphone.state == "streaming") {
+    if (this->state_.softphone.state == "ringing" || this->state_.softphone.state == "in_call") {
       this->state_.second.state = "idle";
       this->state_.second.last_reason = "busy";
       this->state_.sip_last_status = 486;
@@ -539,13 +639,13 @@ void IntercomSimulator::esp_call_(const std::string &source, const std::string &
     this->state_.card_source = "ha_softphone_snapshot";
     return;
   }
-  if (destination == "Virtual S3" && (this->state_.esp.state == "ringing" || this->state_.esp.state == "streaming")) {
+  if (destination == "Virtual S3" && (this->state_.esp.state == "ringing" || this->state_.esp.state == "in_call")) {
     this->state_.second.state = "idle";
     this->state_.second.last_reason = "busy";
     this->state_.bridge_state = "idle";
     return;
   }
-  if (route == "via_ha" || this->state_.opt_caller_ha_pbx) {
+  if (route == "bridge" || this->state_.opt_caller_sip_bridge) {
     this->state_.bridge_state = "ringing";
     this->state_.bridge_left = source;
     this->state_.bridge_right = destination;
@@ -567,6 +667,10 @@ void IntercomSimulator::sip_invite_(const std::string &caller, const std::string
     this->state_.intercom_caller = caller;
     this->state_.media_state = "paused";
     this->state_.audio_owner = "intercom";
+    this->state_.voice_assistant_state = "idle";
+    this->state_.voice_assistant_phase = "idle";
+    this->state_.display_page = "intercom";
+    this->state_.display_status = "intercom_ringing";
   }
   (void) call_id;
 }

@@ -23,7 +23,7 @@
     {
       "expect": {
         "esp": {
-          "state": "streaming"
+          "state": "in_call"
         },
         "audio": {
           "tx_ready": true,

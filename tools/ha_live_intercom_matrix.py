@@ -38,7 +38,7 @@ class DeviceSpec:
     led_entity: str
     auto_answer_switch: str
     dnd_switch: str
-    ha_pbx_switch: str
+    sip_bridge_switch: str
     mic_mute_switch: str = ""
     speaker_mute_switch: str = ""
 
@@ -55,7 +55,7 @@ DEVICES = {
         led_entity="light.waveshare_s3_audio_status_led",
         auto_answer_switch="switch.waveshare_s3_audio_auto_answer",
         dnd_switch="switch.waveshare_s3_audio_do_not_disturb",
-        ha_pbx_switch="switch.waveshare_s3_audio_ha_pbx_mode",
+        sip_bridge_switch="switch.waveshare_s3_audio_sip_bridge_mode",
         mic_mute_switch="switch.waveshare_s3_audio_mic_mute",
         speaker_mute_switch="switch.waveshare_s3_audio_speaker_mute",
     ),
@@ -70,7 +70,7 @@ DEVICES = {
         led_entity="light.spotpear_ball_v2",
         auto_answer_switch="switch.intercom_xiaozhi_auto_answer",
         dnd_switch="switch.spotpear_ball_v2_do_not_disturb",
-        ha_pbx_switch="switch.xiaozhi_udp_ha_pbx_mode",
+        sip_bridge_switch="switch.xiaozhi_udp_sip_bridge_mode",
     ),
 }
 
@@ -256,13 +256,13 @@ def assert_led_red(samples: list[dict[str, Any]], label: str) -> None:
 
 def assert_led_green_fixed(samples: list[dict[str, Any]], label: str) -> None:
     for sample in samples:
-        if sample.get("intercom_state") != "Streaming":
+        if sample.get("intercom_state") != "In Call":
             continue
         rgb = sample.get("led_rgb") or []
         effect = sample.get("led_effect")
         if len(rgb) == 3 and rgb[1] >= 150 and rgb[0] <= 160 and rgb[2] <= 180 and effect in (None, "None", ""):
             return
-    raise AssertionError(f"{label}: no fixed green Streaming LED sample")
+    raise AssertionError(f"{label}: no fixed green In Call LED sample")
 
 
 async def test_phonebook_json(ha: HaClient) -> None:
@@ -310,7 +310,7 @@ async def ha_to_esp_answer_hangup(ha: HaClient, device: DeviceSpec) -> None:
             await ha.service("intercom_native", "call", {"device_id": device.device_id})
             await wait_state(ha, device.state_entity, {"Ringing", "Incoming"}, label=f"{device.key} ringing")
             await ha.service("intercom_native", "answer", {"device_id": device.device_id})
-            await wait_state(ha, device.state_entity, {"Streaming"}, timeout=10, label=f"{device.key} streaming")
+            await wait_state(ha, device.state_entity, {"In Call"}, timeout=10, label=f"{device.key} in_call")
             await asyncio.sleep(0.7)
             await ha.service("intercom_native", "sip_hangup", {})
             await wait_state(ha, device.state_entity, {"Idle"}, timeout=10, label=f"{device.key} idle after bye")
@@ -330,7 +330,7 @@ async def ha_to_esp_auto_answer(ha: HaClient, device: DeviceSpec) -> None:
         await set_switch(ha, device.auto_answer_switch, True)
         async with Sampler(ha, device, "ha_to_esp_auto_answer") as sampler:
             await ha.service("intercom_native", "call", {"device_id": device.device_id})
-            await wait_state(ha, device.state_entity, {"Streaming"}, timeout=10, label=f"{device.key} auto streaming")
+            await wait_state(ha, device.state_entity, {"In Call"}, timeout=10, label=f"{device.key} auto in_call")
             await asyncio.sleep(0.7)
             await ha.service("intercom_native", "sip_hangup", {})
             await wait_state(ha, device.state_entity, {"Idle"}, timeout=10, label=f"{device.key} auto idle")
@@ -395,7 +395,7 @@ async def esp_to_ha_decline(ha: HaClient, source: DeviceSpec) -> None:
             "call",
             {"source": source.device_id, "destination": "Casa"},
         )
-        await wait_state(ha, source.state_entity, {"Outgoing", "Calling"}, timeout=8, label=f"{source.key} outgoing HA")
+        await wait_state(ha, source.state_entity, {"Calling"}, timeout=8, label=f"{source.key} calling HA")
         await asyncio.sleep(0.5)
         await ha.service("intercom_native", "sip_decline", {"status": 486, "reason": "Test Decline"})
         await wait_state(ha, source.state_entity, {"Idle"}, timeout=10, label=f"{source.key} ESP->HA idle")
@@ -414,14 +414,14 @@ async def esp_to_ha_busy_while_ha_ringing(
     async with Sampler(ha, first, f"{label}_first") as first_sampler:
         async with Sampler(ha, second, f"{label}_second") as second_sampler:
             await ha.service("intercom_native", "call", {"source": first.device_id, "destination": "Casa"})
-            await wait_state(ha, first.state_entity, {"Outgoing", "Calling"}, timeout=8, label=f"{first.key} first HA ringing")
+            await wait_state(ha, first.state_entity, {"Calling"}, timeout=8, label=f"{first.key} first HA ringing")
             await asyncio.sleep(0.5)
             await ha.service("intercom_native", "call", {"source": second.device_id, "destination": "Casa"})
             await wait_state(ha, second.state_entity, {"Idle"}, timeout=10, label=f"{second.key} HA busy idle")
             await wait_text(ha, second.last_reason_entity, {"busy"}, timeout=4, label=f"{second.key} HA busy reason")
             still = await ha.state(first.state_entity)
-            if str(still.get("state")) not in {"Outgoing", "Calling"}:
-                raise AssertionError(f"{label}: first caller should remain outgoing, got {still}")
+            if str(still.get("state")) not in {"Calling"}:
+                raise AssertionError(f"{label}: first caller should remain calling, got {still}")
             await ha.service(
                 "intercom_native",
                 "sip_decline",
@@ -435,28 +435,28 @@ async def esp_to_ha_busy_while_ha_ringing(
     second_sampler.assert_no_spin(label)
 
 
-async def esp_to_ha_busy_while_ha_streaming(
+async def esp_to_ha_busy_while_ha_in_call(
     ha: HaClient,
     first: DeviceSpec,
     second: DeviceSpec,
 ) -> None:
     await cleanup_all(ha, first, second)
-    label = "esp_to_ha_busy_while_ha_streaming"
+    label = "esp_to_ha_busy_while_ha_in_call"
     async with Sampler(ha, first, f"{label}_first") as first_sampler:
         async with Sampler(ha, second, f"{label}_second") as second_sampler:
             await ha.service("intercom_native", "call", {"source": first.device_id, "destination": "Casa"})
-            await wait_state(ha, first.state_entity, {"Outgoing", "Calling"}, timeout=8, label=f"{first.key} first outgoing")
+            await wait_state(ha, first.state_entity, {"Calling"}, timeout=8, label=f"{first.key} first calling")
             await ha.service("intercom_native", "sip_answer", {})
-            await wait_state(ha, first.state_entity, {"Streaming"}, timeout=12, label=f"{first.key} HA streaming")
+            await wait_state(ha, first.state_entity, {"In Call"}, timeout=12, label=f"{first.key} HA in_call")
             await asyncio.sleep(0.6)
             await ha.service("intercom_native", "call", {"source": second.device_id, "destination": "Casa"})
-            await wait_state(ha, second.state_entity, {"Idle"}, timeout=10, label=f"{second.key} HA streaming busy idle")
-            await wait_text(ha, second.last_reason_entity, {"busy"}, timeout=4, label=f"{second.key} HA streaming busy reason")
+            await wait_state(ha, second.state_entity, {"Idle"}, timeout=10, label=f"{second.key} HA in_call busy idle")
+            await wait_text(ha, second.last_reason_entity, {"busy"}, timeout=4, label=f"{second.key} HA in_call busy reason")
             still = await ha.state(first.state_entity)
-            if str(still.get("state")) != "Streaming":
-                raise AssertionError(f"{label}: first caller should remain streaming, got {still}")
+            if str(still.get("state")) != "In Call":
+                raise AssertionError(f"{label}: first caller should remain in_call, got {still}")
             await ha.service("intercom_native", "sip_hangup", {})
-            await wait_state(ha, first.state_entity, {"Idle"}, timeout=12, label=f"{first.key} streaming cleanup")
+            await wait_state(ha, first.state_entity, {"Idle"}, timeout=12, label=f"{first.key} in_call cleanup")
     first_sampler.write()
     second_sampler.write()
     assert_led_green_fixed(first_sampler.samples, label)
@@ -469,15 +469,15 @@ async def esp_busy_while_ringing(
     busy_dest: DeviceSpec,
     second: DeviceSpec,
     *,
-    via_ha: bool,
+    bridge: bool,
 ) -> None:
     await cleanup_all(ha, busy_dest, second)
     aa = await switch_state(ha, busy_dest.auto_answer_switch)
-    second_pbx = await switch_state(ha, second.ha_pbx_switch)
-    label = f"esp_busy_while_ringing_{'via_ha' if via_ha else 'direct'}"
+    second_bridge = await switch_state(ha, second.sip_bridge_switch)
+    label = f"esp_busy_while_ringing_{'bridge' if bridge else 'direct'}"
     try:
         await set_switch(ha, busy_dest.auto_answer_switch, False)
-        await set_switch(ha, second.ha_pbx_switch, via_ha)
+        await set_switch(ha, second.sip_bridge_switch, bridge)
         async with Sampler(ha, busy_dest, f"{label}_dest") as dest_sampler:
             async with Sampler(ha, second, f"{label}_second") as second_sampler:
                 await ha.service("intercom_native", "call", {"device_id": busy_dest.device_id})
@@ -501,50 +501,50 @@ async def esp_busy_while_ringing(
         dest_sampler.assert_no_spin(label)
         second_sampler.assert_no_spin(label)
     finally:
-        await restore_switch(ha, second.ha_pbx_switch, second_pbx)
+        await restore_switch(ha, second.sip_bridge_switch, second_bridge)
         await restore_switch(ha, busy_dest.auto_answer_switch, aa)
 
 
-async def esp_busy_while_streaming(
+async def esp_busy_while_in_call(
     ha: HaClient,
     busy_dest: DeviceSpec,
     second: DeviceSpec,
     *,
-    via_ha: bool,
+    bridge: bool,
 ) -> None:
     await cleanup_all(ha, busy_dest, second)
     aa = await switch_state(ha, busy_dest.auto_answer_switch)
-    second_pbx = await switch_state(ha, second.ha_pbx_switch)
-    label = f"esp_busy_while_streaming_{'via_ha' if via_ha else 'direct'}"
+    second_bridge = await switch_state(ha, second.sip_bridge_switch)
+    label = f"esp_busy_while_in_call_{'bridge' if bridge else 'direct'}"
     try:
         await set_switch(ha, busy_dest.auto_answer_switch, False)
-        await set_switch(ha, second.ha_pbx_switch, via_ha)
+        await set_switch(ha, second.sip_bridge_switch, bridge)
         async with Sampler(ha, busy_dest, f"{label}_dest") as dest_sampler:
             async with Sampler(ha, second, f"{label}_second") as second_sampler:
                 await ha.service("intercom_native", "call", {"device_id": busy_dest.device_id})
                 await wait_state(ha, busy_dest.state_entity, {"Ringing", "Incoming"}, timeout=8, label=f"{busy_dest.key} HA incoming")
                 await ha.service("intercom_native", "answer", {"device_id": busy_dest.device_id})
-                await wait_state(ha, busy_dest.state_entity, {"Streaming"}, timeout=12, label=f"{busy_dest.key} HA streaming")
+                await wait_state(ha, busy_dest.state_entity, {"In Call"}, timeout=12, label=f"{busy_dest.key} HA in_call")
                 await asyncio.sleep(0.6)
                 await ha.service(
                     "intercom_native",
                     "call",
                     {"source": second.device_id, "destination": busy_dest.name},
                 )
-                await wait_state(ha, second.state_entity, {"Idle"}, timeout=10, label=f"{second.key} ESP streaming busy idle")
-                await wait_text(ha, second.last_reason_entity, {"busy"}, timeout=4, label=f"{second.key} ESP streaming busy reason")
+                await wait_state(ha, second.state_entity, {"Idle"}, timeout=10, label=f"{second.key} ESP in_call busy idle")
+                await wait_text(ha, second.last_reason_entity, {"busy"}, timeout=4, label=f"{second.key} ESP in_call busy reason")
                 still = await ha.state(busy_dest.state_entity)
-                if str(still.get("state")) != "Streaming":
-                    raise AssertionError(f"{label}: busy destination should remain streaming, got {still}")
+                if str(still.get("state")) != "In Call":
+                    raise AssertionError(f"{label}: busy destination should remain in_call, got {still}")
                 await ha.service("intercom_native", "sip_hangup", {})
-                await wait_state(ha, busy_dest.state_entity, {"Idle"}, timeout=12, label=f"{busy_dest.key} streaming cleanup")
+                await wait_state(ha, busy_dest.state_entity, {"Idle"}, timeout=12, label=f"{busy_dest.key} in_call cleanup")
         dest_sampler.write()
         second_sampler.write()
         assert_led_green_fixed(dest_sampler.samples, label)
         dest_sampler.assert_no_spin(label)
         second_sampler.assert_no_spin(label)
     finally:
-        await restore_switch(ha, second.ha_pbx_switch, second_pbx)
+        await restore_switch(ha, second.sip_bridge_switch, second_bridge)
         await restore_switch(ha, busy_dest.auto_answer_switch, aa)
 
 
@@ -553,16 +553,16 @@ async def esp_to_esp_decline(
     source: DeviceSpec,
     dest: DeviceSpec,
     *,
-    via_ha: bool,
+    bridge: bool,
 ) -> None:
     await ensure_idle(ha, source)
     await ensure_idle(ha, dest)
-    source_pbx = await switch_state(ha, source.ha_pbx_switch)
+    source_bridge = await switch_state(ha, source.sip_bridge_switch)
     dest_aa = await switch_state(ha, dest.auto_answer_switch)
     dest_dnd = await switch_state(ha, dest.dnd_switch)
-    label = "esp_to_esp_via_ha_decline" if via_ha else "esp_to_esp_direct_decline"
+    label = "esp_to_esp_bridge_decline" if bridge else "esp_to_esp_direct_decline"
     try:
-        await force_switch(ha, source.ha_pbx_switch, via_ha)
+        await force_switch(ha, source.sip_bridge_switch, bridge)
         await force_switch(ha, dest.auto_answer_switch, False)
         await force_switch(ha, dest.dnd_switch, False)
         async with Sampler(ha, source, f"{label}_source") as source_sampler:
@@ -575,9 +575,9 @@ async def esp_to_esp_decline(
                 await wait_state(
                     ha,
                     source.state_entity,
-                    {"Outgoing", "Calling"},
+                    {"Calling"},
                     timeout=8,
-                    label=f"{source.key} {label} outgoing",
+                    label=f"{source.key} {label} calling",
                 )
                 await wait_state(
                     ha,
@@ -606,7 +606,7 @@ async def esp_to_esp_decline(
     finally:
         await restore_switch(ha, dest.dnd_switch, dest_dnd)
         await restore_switch(ha, dest.auto_answer_switch, dest_aa)
-        await restore_switch(ha, source.ha_pbx_switch, source_pbx)
+        await restore_switch(ha, source.sip_bridge_switch, source_bridge)
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -624,20 +624,20 @@ async def run(args: argparse.Namespace) -> int:
                 await ha_to_esp_muted_ringing(ha, device)
             await esp_to_ha_decline(ha, device)
     if args.full and len(selected) >= 2:
-        await esp_to_esp_decline(ha, selected[0], selected[1], via_ha=False)
-        await esp_to_esp_decline(ha, selected[0], selected[1], via_ha=True)
+        await esp_to_esp_decline(ha, selected[0], selected[1], bridge=False)
+        await esp_to_esp_decline(ha, selected[0], selected[1], bridge=True)
         await esp_to_ha_busy_while_ha_ringing(ha, selected[0], selected[1])
-        await esp_to_ha_busy_while_ha_streaming(ha, selected[0], selected[1])
-        await esp_busy_while_ringing(ha, selected[0], selected[1], via_ha=False)
-        await esp_busy_while_ringing(ha, selected[0], selected[1], via_ha=True)
-        await esp_busy_while_streaming(ha, selected[0], selected[1], via_ha=False)
-        await esp_busy_while_streaming(ha, selected[0], selected[1], via_ha=True)
+        await esp_to_ha_busy_while_ha_in_call(ha, selected[0], selected[1])
+        await esp_busy_while_ringing(ha, selected[0], selected[1], bridge=False)
+        await esp_busy_while_ringing(ha, selected[0], selected[1], bridge=True)
+        await esp_busy_while_in_call(ha, selected[0], selected[1], bridge=False)
+        await esp_busy_while_in_call(ha, selected[0], selected[1], bridge=True)
         await esp_to_ha_busy_while_ha_ringing(ha, selected[1], selected[0])
-        await esp_to_ha_busy_while_ha_streaming(ha, selected[1], selected[0])
-        await esp_busy_while_ringing(ha, selected[1], selected[0], via_ha=False)
-        await esp_busy_while_ringing(ha, selected[1], selected[0], via_ha=True)
-        await esp_busy_while_streaming(ha, selected[1], selected[0], via_ha=False)
-        await esp_busy_while_streaming(ha, selected[1], selected[0], via_ha=True)
+        await esp_to_ha_busy_while_ha_in_call(ha, selected[1], selected[0])
+        await esp_busy_while_ringing(ha, selected[1], selected[0], bridge=False)
+        await esp_busy_while_ringing(ha, selected[1], selected[0], bridge=True)
+        await esp_busy_while_in_call(ha, selected[1], selected[0], bridge=False)
+        await esp_busy_while_in_call(ha, selected[1], selected[0], bridge=True)
     return 0
 
 

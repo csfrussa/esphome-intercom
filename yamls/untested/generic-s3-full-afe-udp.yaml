@@ -39,8 +39,7 @@ substitutions:
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Microphone ID for package mute switch
-  # Non-default ports used by the integration test matrix to prove that mDNS,
-  # HA phonebook generation, and UDP bridge dialing do not assume 6054/6055.
+  # Non-default ports used by the integration test matrix to prove that # HA phonebook generation, and UDP bridge dialing do not assume 6054/6055.
   intercom_udp_audio_port: "6156"
   intercom_udp_control_port: "6157"
   mic_id: mic_main
@@ -107,7 +106,7 @@ ota:
 
 logger:
   hardware_uart: USB_SERIAL_JTAG
-  # DEBUG keeps PBX-lite signaling + AEC/AFE/i2s lifecycle visible.
+  # DEBUG keeps SIP bridge signaling + AEC/AFE/i2s lifecycle visible.
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
@@ -130,7 +129,6 @@ logger:
     media_player: INFO
     resampler: INFO
     mixer_speaker: INFO
-    mdns: INFO
     wifi: INFO
     json: INFO
     intercom_api: INFO

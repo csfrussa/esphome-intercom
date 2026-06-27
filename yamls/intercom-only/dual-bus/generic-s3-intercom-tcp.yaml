@@ -1,5 +1,5 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM (PBX-lite TCP) - Dual I2S bus, no hardware codec
+# GENERIC ESP32-S3 INTERCOM (SIP TCP) - Dual I2S bus, no hardware codec
 # =============================================================================
 # TCP variant of the dual-bus esp_audio_stack profile. It keeps one audio owner
 # for both I2S controllers, so intercom_api stays transport/FSM glue and does
@@ -88,7 +88,6 @@ logger:
     intercom_api.udp: INFO
     intercom_api.audio: INFO
     intercom_api.settings: INFO
-    intercom_api.discovery: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN

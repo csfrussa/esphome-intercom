@@ -4,8 +4,8 @@
 # Shared intercom_api switches exposed by every intercom device.
 #
 # `Auto Answer` controls whether incoming calls are answered immediately.
-# `Do Not Disturb` rejects incoming START with DECLINE("DND"), so the caller,
-# HA bridge, and card can show the real terminal reason.
+# `Do Not Disturb` rejects incoming SIP INVITE with 486 Busy Here, so the
+# caller, HA bridge, and card can show the real terminal reason.
 #
 # Required IDs:
 #   intercom - intercom_api component
@@ -23,9 +23,4 @@ switch:
       id: dnd_switch
       name: Do Not Disturb
       icon: mdi:minus-circle
-      restore_mode: RESTORE_DEFAULT_OFF
-    ha_pbx_mode:
-      id: ha_pbx_mode_switch
-      name: HA PBX Mode
-      icon: mdi:phone-forward
       restore_mode: RESTORE_DEFAULT_OFF

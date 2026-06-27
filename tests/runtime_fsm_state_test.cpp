@@ -72,7 +72,7 @@ static void esp_like_combinations() {
       {"media", activity(1u << 4, 100, {policy("led_status", "media"), policy("display_status", "media"), policy("audio_policy", "normal")})},
       {"announcement", activity(1u << 5, 200, {policy("led_status", "announcement"), policy("display_status", "announcement"), policy("audio_policy", "duck")})},
       {"intercom_ringing", activity(1u << 6, 975, {policy("led_status", "ringing"), policy("display_status", "intercom_ringing"), policy("audio_policy", "duck")})},
-      {"intercom_streaming", activity(1u << 7, 973, {policy("led_status", "intercom"), policy("display_status", "intercom_streaming"), policy("audio_policy", "duck")})},
+      {"intercom_in_call", activity(1u << 7, 973, {policy("led_status", "intercom"), policy("display_status", "intercom_in_call"), policy("audio_policy", "duck")})},
       {"assistant_thinking", activity(1u << 8, 600, {policy("led_status", "thinking"), policy("display_status", "thinking"), policy("audio_policy", "duck")})},
       {"assistant_response", activity(1u << 9, 800, {policy("led_status", "responding"), policy("display_status", "responding"), policy("audio_policy", "duck")})},
       {"screen_dim", activity(1u << 10, 50, {policy("screen_policy", "dim")})},
@@ -97,11 +97,11 @@ static void esp_like_combinations() {
   expect_policy("media+screen", out, "led_status", "media");
   expect_policy("media+screen", out, "screen_policy", "dim");
 
-  set(activities, "intercom_streaming", true);
+  set(activities, "intercom_in_call", true);
   out = eval(activities);
   expect_mask("media+intercom", out, (1u << 4) | (1u << 7) | (1u << 10));
   expect_policy("media+intercom", out, "led_status", "intercom");
-  expect_policy("media+intercom", out, "display_status", "intercom_streaming");
+  expect_policy("media+intercom", out, "display_status", "intercom_in_call");
   expect_policy("media+intercom", out, "audio_policy", "duck");
   expect_policy("media+intercom", out, "screen_policy", "dim");
 
@@ -109,14 +109,14 @@ static void esp_like_combinations() {
   out = eval(activities);
   expect_mask("media+intercom+response", out, (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
   expect_policy("intercom overrides response led", out, "led_status", "intercom");
-  expect_policy("intercom overrides response display", out, "display_status", "intercom_streaming");
+  expect_policy("intercom overrides response display", out, "display_status", "intercom_in_call");
   expect_policy("media+intercom+response", out, "audio_policy", "duck");
 
   set(activities, "muted", true);
   out = eval(activities);
   expect_mask("intercom overrides muted visual", out, (1u << 3) | (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
   expect_policy("intercom muted led", out, "led_status", "intercom");
-  expect_policy("intercom muted display", out, "display_status", "intercom_streaming");
+  expect_policy("intercom muted display", out, "display_status", "intercom_in_call");
   expect_policy("muted keeps audio policy", out, "audio_policy", "duck");
 
   set(activities, "boot", true);
@@ -134,7 +134,7 @@ static void esp_like_combinations() {
   set(activities, "no_ha", false);
   set(activities, "muted", false);
   set(activities, "assistant_response", false);
-  set(activities, "intercom_streaming", false);
+  set(activities, "intercom_in_call", false);
   set(activities, "intercom_ringing", true);
   out = eval(activities);
   expect_mask("ringing+media+screen", out, (1u << 4) | (1u << 6) | (1u << 10));

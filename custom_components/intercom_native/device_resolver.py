@@ -1,4 +1,4 @@
-"""Cached intercom-device discovery; one scan per HA instance, cache
+"""Cached SIP phone device resolver; one registry pass per HA instance, cache
 invalidated on registry change."""
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .audio_format import UDP_SAFE_PAYLOAD_BYTES, parse_audio_format_list, require_udp_safe_formats
+from .audio_format import UDP_SAFE_PAYLOAD_BYTES, parse_audio_format_list
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,9 +69,7 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_intercom_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP intercom_api.
 
-    TCP: Name|tcp|IP|tcp_port[|audio_mode[|tx_formats|rx_formats]]
-    UDP: Name|udp|IP|audio_port|control_port[|audio_mode[|tx_formats|rx_formats]]
-    SIP: Name|sip|IP|sip_port|rtp_port[|audio_mode[|tx_formats|rx_formats]]
+    SIP: Name|sip|IP|sip_port|rtp_port[|audio_mode[|tx_formats|rx_formats[|sip_transport]]]
     """
     if not value:
         return None
@@ -83,7 +81,7 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
         return None
 
     name, transport, host = parts[0], parts[1].lower(), parts[2]
-    if not name or not host or transport not in ("tcp", "udp", "sip"):
+    if not name or not host or transport != "sip":
         return None
 
     def parse_formats(first: int) -> tuple[str, list, list] | None:
@@ -96,29 +94,7 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
             return None
         return mode, tx_formats, rx_formats
 
-    if transport == "tcp":
-        tcp_port = _valid_port(parts[3])
-        if tcp_port is None or len(parts) not in (4, 5, 6, 7):
-            return None
-        parsed_tail = parse_formats(4)
-        if parsed_tail is None:
-            return None
-        mode, tx_formats, rx_formats = parsed_tail
-        return {
-            "name": name,
-            "transport": "tcp",
-            "host": host,
-            "tcp_port": tcp_port,
-            "udp_audio_port": None,
-            "udp_control_port": None,
-            "sip_port": None,
-            "rtp_port": None,
-            "audio_mode": mode,
-            "tx_formats": tx_formats,
-            "rx_formats": rx_formats,
-        }
-
-    if len(parts) not in (5, 6, 7, 8):
+    if len(parts) not in (5, 6, 7, 8, 9):
         return None
     primary_port = _valid_port(parts[3])
     secondary_port = _valid_port(parts[4])
@@ -128,29 +104,19 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
     if parsed_tail is None:
         return None
     mode, tx_formats, rx_formats = parsed_tail
-    if transport == "sip":
-        return {
-            "name": name,
-            "transport": "sip",
-            "host": host,
-            "tcp_port": None,
-            "udp_audio_port": None,
-            "udp_control_port": None,
-            "sip_port": primary_port,
-            "rtp_port": secondary_port,
-            "audio_mode": mode,
-            "tx_formats": tx_formats,
-            "rx_formats": rx_formats,
-        }
+    sip_transport = parts[8].lower() if len(parts) > 8 else ""
+    if sip_transport not in ("tcp", "udp"):
+        sip_transport = ""
     return {
         "name": name,
-        "transport": "udp",
+        "transport": "sip",
+        "sip_transport": sip_transport,
         "host": host,
         "tcp_port": None,
-        "udp_audio_port": primary_port,
-        "udp_control_port": secondary_port,
-        "sip_port": None,
-        "rtp_port": None,
+        "udp_audio_port": None,
+        "udp_control_port": None,
+        "sip_port": primary_port,
+        "rtp_port": secondary_port,
         "audio_mode": mode,
         "tx_formats": tx_formats,
         "rx_formats": rx_formats,
@@ -201,8 +167,7 @@ class IntercomDeviceResolver:
         self._devices = None
 
     def route_id_for_host(self, host: str) -> str:
-        """ESPHome node_name slug for `host`. Used as PBX-lite route_id and
-        as the prefix for `esphome.{slug}_start_call`."""
+        """ESPHome node_name slug for `host`, used as ESPHome service prefix."""
         entry = _esphome_entry_for_host(self.hass, host)
         if entry is None:
             # Fallback: hostname (.local) in entry.data["host"] vs IP from
@@ -264,27 +229,6 @@ class IntercomDeviceResolver:
                     device.name or esphome_id or device_id,
                 )
                 continue
-            if endpoint["transport"] == "udp":
-                max_payload = int(
-                    self.hass.data.get(DOMAIN, {})
-                    .get("transport_config", {})
-                    .get("udp_max_payload", UDP_SAFE_PAYLOAD_BYTES)
-                )
-                try:
-                    require_udp_safe_formats(
-                        endpoint["tx_formats"],
-                        context=f"{endpoint['name']} UDP tx_formats",
-                        max_payload=max_payload,
-                    )
-                    require_udp_safe_formats(
-                        endpoint["rx_formats"],
-                        context=f"{endpoint['name']} UDP rx_formats",
-                        max_payload=max_payload,
-                    )
-                except ValueError as err:
-                    _LOGGER.warning("Skipping UDP intercom device %s: %s", endpoint["name"], err)
-                    continue
-
             route_id = self.route_id_for_host(endpoint["host"])
             if not route_id:
                 route_id = self._route_id_from_device(device)
@@ -300,15 +244,8 @@ class IntercomDeviceResolver:
                 "udp_control_port": endpoint["udp_control_port"],
                 "sip_port": endpoint.get("sip_port"),
                 "rtp_port": endpoint.get("rtp_port"),
-                "udp_max_payload": (
-                    int(
-                        self.hass.data.get(DOMAIN, {})
-                        .get("transport_config", {})
-                        .get("udp_max_payload", UDP_SAFE_PAYLOAD_BYTES)
-                    )
-                    if endpoint["transport"] == "udp"
-                    else UDP_SAFE_PAYLOAD_BYTES
-                ),
+                "sip_transport": endpoint.get("sip_transport") or "",
+                "udp_max_payload": UDP_SAFE_PAYLOAD_BYTES,
                 "audio_mode": endpoint["audio_mode"],
                 "tx_formats": _format_tokens(endpoint["tx_formats"]),
                 "rx_formats": _format_tokens(endpoint["rx_formats"]),
@@ -351,7 +288,7 @@ class IntercomDeviceResolver:
         return None
 
     async def resolve_selector(self, selector: str | None) -> Optional[dict]:
-        """Resolve a legacy card selector once and return the canonical device."""
+        """Resolve a card selector once and return the canonical device."""
         wanted = (selector or "").strip()
         if not wanted:
             return None
@@ -388,7 +325,7 @@ class IntercomDeviceResolver:
             elif "intercom_endpoint" in eid and "intercom_endpoint" not in out:
                 out["intercom_endpoint"] = eid
             elif "intercom_transport" in eid and "intercom_transport" not in out:
-                # source of truth for "udp"/"tcp" (no mDNS-timing dep).
+                # source of truth for "udp"/"tcp".
                 out["intercom_transport"] = eid
             elif ("incoming_caller" in eid or eid.endswith("_caller")) and "incoming_caller" not in out:
                 out["incoming_caller"] = eid
