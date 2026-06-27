@@ -2282,7 +2282,7 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // Intercom idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "Idle") {
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "idle") {
             id(peer_name) = id(intercom).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
@@ -2348,7 +2348,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(intercom).get_state_str() == "Idle";
+                     && id(intercom).get_state_str() == "idle";
           then:
             - script.execute: update_ic_idle_labels
       - script.execute: draw_display
@@ -2578,15 +2578,15 @@ script:
             // state already returning to IDLE.
             set_hidden(id(ic_ended_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "Ringing" || ic_state == "Incoming") {
+          } else if (ic_state == "ringing") {
             set_label(id(ic_ringing_in_peer_label), id(peer_name).c_str());
             set_hidden(id(ic_ringing_in_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "Calling" || ic_state == "Outgoing") {
+          } else if (ic_state == "calling" || ic_state == "remote_ringing") {
             set_label(id(ic_ringing_out_peer_label), id(peer_name).c_str());
             set_hidden(id(ic_ringing_out_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "In Call" || ic_state == "Connecting") {
+          } else if (ic_state == "in_call" || ic_state == "connecting") {
             set_label(id(ic_in_call_peer_label), id(peer_name).c_str());
             set_hidden(id(ic_in_call_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
@@ -2608,7 +2608,7 @@ script:
               return id(current_mode) == 0 &&
                      id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
                      !id(init_in_progress) &&
-                     (ic_state == "Idle" || ic_state.empty());
+                     (ic_state == "idle" || ic_state.empty());
           then:
             - if:
                 condition:
@@ -2630,7 +2630,7 @@ script:
                          !id(init_in_progress);
               - lambda: |-
                   std::string ic_state = id(intercom).get_state_str();
-                  return ic_state == "Idle" || ic_state.empty();
+                  return ic_state == "idle" || ic_state.empty();
               - switch.is_off: mute
               - not:
                   micro_wake_word.is_running:
@@ -2663,9 +2663,9 @@ script:
       - lambda: |-
           std::string ic_state = id(intercom).get_state_str();
           if (id(ic_ended_active) ||
-              ic_state == "Ringing" || ic_state == "Incoming" ||
-              ic_state == "Calling" || ic_state == "Outgoing" ||
-              ic_state == "In Call" || ic_state == "Connecting") {
+              ic_state == "ringing" ||
+              ic_state == "calling" || ic_state == "remote_ringing" ||
+              ic_state == "in_call" || ic_state == "connecting") {
             return;
           }
 
@@ -3186,6 +3186,6 @@ interval:
                   std::string ic_state = id(intercom).get_state_str();
                   return !id(init_in_progress) &&
                          !id(ic_ended_active) &&
-                         (ic_state == "Idle" || ic_state.empty());
+                         (ic_state == "idle" || ic_state.empty());
           then:
             - script.execute: fetch_forecast

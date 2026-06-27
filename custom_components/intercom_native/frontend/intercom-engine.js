@@ -38,6 +38,9 @@ class IntercomEngine extends EventTarget {
     this._lastEvents = new Map();
     this._hiddenTimer = null;
     this._controlWaiter = null;
+    this._connectPromise = null;
+    this._sessionAttachKey = "";
+    this._sessionAttachPromise = null;
     this._ringtoneRequests = new Map();
     this._ringtoneContext = null;
     this._ringtoneTimer = null;
@@ -197,6 +200,14 @@ class IntercomEngine extends EventTarget {
 
   async _connect(deviceId) {
     if (this._ws && this._deviceId === deviceId && this._ws.readyState === WebSocket.OPEN) return;
+    if (
+      this._connectPromise &&
+      this._deviceId === deviceId &&
+      this._ws &&
+      this._ws.readyState === WebSocket.CONNECTING
+    ) {
+      return this._connectPromise;
+    }
     await this.close("switch");
     this._deviceId = deviceId;
     this._lastSessionPayload = null;
@@ -204,10 +215,15 @@ class IntercomEngine extends EventTarget {
     this._ws.binaryType = "arraybuffer";
     this._ws.onmessage = (event) => this._handleMessage(event);
     this._ws.onclose = () => this._cleanupAudio("ws_close");
-    await new Promise((resolve, reject) => {
+    this._connectPromise = new Promise((resolve, reject) => {
       this._ws.onopen = resolve;
       this._ws.onerror = () => reject(new Error("Audio WebSocket failed"));
     });
+    try {
+      await this._connectPromise;
+    } finally {
+      this._connectPromise = null;
+    }
   }
 
   _sendControl(payload, waitForReply = false, acceptReply = null) {
@@ -408,16 +424,30 @@ class IntercomEngine extends EventTarget {
     if (state !== "in_call") return;
     const deviceId = sessionDeviceId || statePayload?.session_device_id || statePayload?.device_id || this._deviceId;
     if (!deviceId) return;
+    const attachKey = `${deviceId}|${statePayload?.call_id || ""}`;
+    if (this._sessionAttachPromise && this._sessionAttachKey === attachKey) {
+      return this._sessionAttachPromise;
+    }
+    this._sessionAttachKey = attachKey;
+    this._sessionAttachPromise = this._resumeSessionLocked(deviceInfo, deviceId, statePayload)
+      .finally(() => {
+        if (this._sessionAttachKey === attachKey) {
+          this._sessionAttachKey = "";
+          this._sessionAttachPromise = null;
+        }
+      });
+    return this._sessionAttachPromise;
+  }
+
+  async _resumeSessionLocked(deviceInfo, deviceId, statePayload) {
     if (this._ws && this._deviceId === deviceId && this._ws.readyState === WebSocket.OPEN) {
-      this._setState(state === "in_call" ? "IN_CALL" : state === "ringing" ? "RINGING" : "CALLING");
+      this._setState("IN_CALL");
       return;
     }
     await this._connect(deviceId);
     this._resetStats();
-    if (state === "in_call") {
-      if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, statePayload)) return;
-      this._setState("IN_CALL");
-    }
+    if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, statePayload)) return;
+    this._setState("IN_CALL");
   }
 
   _resetStats() {

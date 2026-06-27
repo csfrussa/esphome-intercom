@@ -776,6 +776,10 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
         return
 
+    hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone_media", {})[call_id] = {
+        "invite": invite,
+        "local_rtp_port": int(cfg["rtp_port"]),
+    }
     _LOGGER.info("SIP answered call_id=%s", call_id)
     _set_ha_softphone_call_state(
         hass,
@@ -877,6 +881,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     clients = bucket.setdefault("sip_clients", {})
     relays = bucket.setdefault("sip_relays", {})
     pending = bucket.setdefault("sip_pending", {})
+    media_sessions = bucket.setdefault("ha_softphone_media", {})
     softphone_store = _ha_softphone_store(hass)
     if not call_id and len(clients) == 1:
         call_id = next(iter(clients))
@@ -890,6 +895,8 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     direction = str(softphone_store.get("direction") or softphone_store.get("last_terminal_direction") or "")
     client = clients.pop(call_id, None) if call_id else None
     relay = relays.pop(call_id, None) if call_id else None
+    if call_id:
+        media_sessions.pop(call_id, None)
     pending_ids = [call_id] if call_id and call_id in pending else ([] if call_id else list(pending))
     server_bye = False
     pending_closed = 0
@@ -2011,6 +2018,9 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
         pending = bucket.setdefault("sip_pending", {})
         invite = pending.pop(call_id, None)
+        active_media_invite = bucket.setdefault("ha_softphone_media", {}).pop(call_id, {}).get("invite")
+        if invite is None:
+            invite = active_media_invite
         softphone_store = bucket.get("ha_softphone", {})
         softphone_call_id = str(softphone_store.get("call_id") or "")
         terminal_reason = reason or "remote_hangup"

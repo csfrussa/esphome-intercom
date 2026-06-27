@@ -52,6 +52,8 @@ class IntercomCard extends HTMLElement {
     this._softphoneStateLoading = false;
 
     this._cleanupTask = null;
+    this._audioAttachTask = null;
+    this._ownedSoftphoneCallId = "";
 
     // Device info
     this._activeDeviceInfo = null;
@@ -193,6 +195,16 @@ class IntercomCard extends HTMLElement {
     return intercomEngine.active && (!id || intercomEngine.deviceId === id);
   }
 
+  _ownsSoftphoneMedia(snapshot = this._softphoneSnapshot || {}) {
+    if (!this._isHaSoftphoneMode()) return false;
+    const callId = String(snapshot.call_id || this._sessionCallId() || "");
+    return !!callId && callId === this._ownedSoftphoneCallId;
+  }
+
+  _markSoftphoneMediaOwner(callId) {
+    this._ownedSoftphoneCallId = String(callId || "");
+  }
+
   _cleanupAfterTerminalSession() {
     this._autoAnswering = false;
     this._starting = false;
@@ -238,6 +250,7 @@ class IntercomCard extends HTMLElement {
     if (activePhoneState) {
       this._clearEndReason(false);
     } else {
+      this._markSoftphoneMediaOwner("");
       this._cleanupAfterTerminalSession();
     }
     if (
@@ -255,12 +268,13 @@ class IntercomCard extends HTMLElement {
   _ensureHaSoftphoneAudioPath(snapshot = {}) {
     if (!this._isHaSoftphoneMode()) return;
     if (String(snapshot.state || "").toLowerCase() !== "in_call") return;
-    if (this._hasBrowserAudioPath() || this._starting || this._cleanupTask) return;
+    if (!this._ownsSoftphoneMedia(snapshot)) return;
+    if (this._hasBrowserAudioPath() || this._starting || this._cleanupTask || this._audioAttachTask) return;
     const sessionDeviceId = snapshot.session_device_id || HA_SOFTPHONE_DEVICE_ID;
     const target = snapshot.target_device_id
       ? this._availableDevices.find(d => d.device_id === snapshot.target_device_id)
       : this._getSoftphoneTargetDevice();
-    intercomEngine.resumeSession(
+    this._audioAttachTask = intercomEngine.resumeSession(
       {
         ...(target || {}),
         device_id: sessionDeviceId,
@@ -272,6 +286,9 @@ class IntercomCard extends HTMLElement {
     ).catch((err) => {
       console.warn("intercom-card: failed to attach HA softphone audio", err);
       this._showError(err.message || String(err));
+    }).finally(() => {
+      this._audioAttachTask = null;
+      this._render();
     });
   }
 
@@ -1609,6 +1626,7 @@ class IntercomCard extends HTMLElement {
       await this._cleanup();
     } finally {
       this._starting = false;
+      this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
       this._render();
     }
   }
@@ -1637,12 +1655,16 @@ class IntercomCard extends HTMLElement {
       const reply = await intercomEngine.startHaSoftphone(target, sessionInfo, {
         callee: target.name || this._getDestination(),
       });
-      if (reply) this._applySoftphoneSnapshot(reply);
+      if (reply) {
+        this._markSoftphoneMediaOwner(reply.call_id || "");
+        this._applySoftphoneSnapshot(reply);
+      }
     } catch (err) {
       this._showError(err.message || String(err));
       await intercomEngine.close("start_error");
     } finally {
       this._starting = false;
+      this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
       this._render();
     }
   }
@@ -1661,12 +1683,14 @@ class IntercomCard extends HTMLElement {
 
     try {
       if (this._isHaSoftphoneMode()) {
+        const callId = this._sessionCallId();
         this._activeDeviceInfo = {
           ...(deviceInfo || {}),
           device_id: HA_SOFTPHONE_DEVICE_ID,
           softphone: true,
         };
         this._callMode = "softphone";
+        this._markSoftphoneMediaOwner(callId);
         await this._hass.callService("intercom_native", "sip_answer", {
           call_id: this._sessionCallId(),
         });

@@ -665,7 +665,7 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // Intercom idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "Idle") {
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "idle") {
             id(peer_name) = id(intercom).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
@@ -732,7 +732,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(intercom).get_state_str() == "Idle";
+                     && id(intercom).get_state_str() == "idle";
           then:
             - script.execute: update_ic_idle_labels
       - script.execute: draw_display
@@ -974,9 +974,9 @@ script:
           // Determine target page
           lv_obj_t* target = nullptr;
           auto s = id(intercom).get_state_str();
-          bool in_call = (s == "Ringing" || s == "Incoming" ||
-                          s == "Calling" || s == "Outgoing" ||
-                          s == "In Call" || s == "Connecting");
+          bool in_call = (s == "ringing" || s == "calling" ||
+                          s == "remote_ringing" || s == "connecting" ||
+                          s == "in_call");
           if (in_call) {
             id(ic_settings_active) = false;  // call interrupts settings view
           }
@@ -1001,11 +1001,11 @@ script:
           } else if (id(current_mode) == 1) {
             // Intercom mode
             auto s = id(intercom).get_state_str();
-            if (s == "Ringing" || s == "Incoming") {
+            if (s == "ringing") {
               target = id(ic_ringing_in_page)->obj;
-            } else if (s == "Calling" || s == "Outgoing") {
+            } else if (s == "calling" || s == "remote_ringing") {
               target = id(ic_ringing_out_page)->obj;
-            } else if (s == "In Call" || s == "Connecting") {
+            } else if (s == "in_call" || s == "connecting") {
               target = id(ic_in_call_page)->obj;
             } else {
               target = id(ic_idle_page)->obj;
@@ -1113,7 +1113,7 @@ script:
       - if:
           condition:
             lambda: |-
-              return id(current_mode) == 1 && id(intercom).get_state_str() == "Idle"
+              return id(current_mode) == 1 && id(intercom).get_state_str() == "idle"
                      && !id(init_in_progress);
           then:
             - script.execute: update_ic_idle_labels
@@ -1510,7 +1510,7 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(intercom).get_state_str() == "Idle";
+                      lambda: return id(current_mode) == 1 && id(intercom).get_state_str() == "idle";
                     then:
                       - intercom_api.call_toggle: intercom
                     else:
@@ -1519,7 +1519,7 @@ binary_sensor:
                             lambda: |-
                               if (id(current_mode) != 1) return false;
                               auto s = id(intercom).get_state_str();
-                              return s != "Idle";
+                              return s != "idle";
                           then:
                             - intercom_api.call_toggle: intercom
                           else:
@@ -1538,13 +1538,13 @@ binary_sensor:
                 lambda: |-
                   if (id(current_mode) != 1) return false;
                   auto s = id(intercom).get_state_str();
-                  return s == "Ringing" || s == "Incoming";
+                  return s == "ringing";
               then:
                 - intercom_api.decline_call: intercom
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(intercom).get_state_str() == "Idle";
+                      lambda: return id(current_mode) == 1 && id(intercom).get_state_str() == "idle";
                     then:
                       - intercom_api.next_contact: intercom
       # Long press (3s): switch VA <-> Intercom
@@ -1553,7 +1553,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return id(current_mode) == 1 && id(intercom).get_state_str() == "Idle";
+                lambda: return id(current_mode) == 1 && id(intercom).get_state_str() == "idle";
               then:
                 - script.execute: switch_to_va
               else:

@@ -505,9 +505,9 @@ script:
           lv_obj_t* target = nullptr;
           // Active call always wins so we don't hide an incoming/calling screen.
           auto s = id(intercom).get_state_str();
-          bool in_call = (s == "Ringing" || s == "Incoming" ||
-                          s == "Calling" || s == "Outgoing" ||
-                          s == "In Call" || s == "Connecting");
+          bool in_call = (s == "ringing" || s == "calling" ||
+                          s == "remote_ringing" || s == "connecting" ||
+                          s == "in_call");
           if (in_call) {
             id(ic_settings_active) = false;  // call interrupts settings view
           }
@@ -527,11 +527,11 @@ script:
             target = id(no_ha_page)->obj;
           } else {
             auto s = id(intercom).get_state_str();
-            if (s == "Ringing" || s == "Incoming") {
+            if (s == "ringing") {
               target = id(ic_ringing_in_page)->obj;
-            } else if (s == "Calling" || s == "Outgoing") {
+            } else if (s == "calling" || s == "remote_ringing") {
               target = id(ic_ringing_out_page)->obj;
-            } else if (s == "In Call" || s == "Connecting") {
+            } else if (s == "in_call" || s == "connecting") {
               target = id(ic_in_call_page)->obj;
             } else {
               target = id(ic_idle_page)->obj;
@@ -544,7 +544,7 @@ script:
           }
       - if:
           condition:
-            lambda: 'return id(intercom).get_state_str() == "Idle";'
+            lambda: 'return id(intercom).get_state_str() == "idle";'
           then:
             - script.execute: update_ic_idle_labels
             - script.execute: update_idle_labels
