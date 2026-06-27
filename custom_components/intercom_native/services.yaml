@@ -58,7 +58,7 @@ sip_decline:
       name: SIP Status
       description: Final SIP status code to send.
       required: false
-      default: 486
+      default: 603
       selector:
         number:
           min: 400
@@ -69,7 +69,7 @@ sip_decline:
       name: Reason
       description: SIP reason phrase.
       required: false
-      default: Busy Here
+      default: Decline
       selector:
         text:
     decline_reason:
