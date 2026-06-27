@@ -1431,7 +1431,7 @@ void SipTransport::handle_sip_stream_(int socket, const sockaddr_in &src) {
       return;
     }
     const int err = errno;
-    if (err == EWOULDBLOCK || err == EAGAIN) break;
+    if (err == EWOULDBLOCK || err == EAGAIN || err == ENOTCONN || err == EINPROGRESS || err == EALREADY) break;
     ESP_LOGW(TAG, "SIP TCP RX failed: %s (%d: %s)", socket_errno_name(err), err, socket_errno_text(err));
     close(socket);
     if (this->sip_tcp_client_socket_ == socket) this->sip_tcp_client_socket_ = -1;

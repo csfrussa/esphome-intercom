@@ -180,7 +180,10 @@ class IntercomApi : public Component {
   void answer_call();
   void decline_call(const std::string &reason = "");
   bool is_ringing() const { return this->call_state_.load(std::memory_order_acquire) == CallState::RINGING; }
-  bool is_calling() const { return this->call_state_.load(std::memory_order_acquire) == CallState::CALLING; }
+  bool is_calling() const {
+    const CallState state = this->call_state_.load(std::memory_order_acquire);
+    return state == CallState::CALLING || state == CallState::REMOTE_RINGING;
+  }
   bool is_idle() const { return this->call_state_.load(std::memory_order_acquire) == CallState::IDLE; }
   bool is_in_call() const { return this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL; }
   // True when the selected contact name matches the configured HA peer.
