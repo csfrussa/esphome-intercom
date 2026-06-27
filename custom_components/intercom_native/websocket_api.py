@@ -47,6 +47,9 @@ def _sip_public_state(state: str) -> str:
         "cancelled": CallState.CANCELLED.value,
         "media_incompatible": CallState.MEDIA_INCOMPATIBLE.value,
         "transport_unreachable": CallState.TRANSPORT_UNREACHABLE.value,
+        "timeout": CallState.TRANSPORT_UNREACHABLE.value,
+        "error": CallState.TRANSPORT_UNREACHABLE.value,
+        "protocol_error": CallState.TRANSPORT_UNREACHABLE.value,
         "auth_required_unsupported": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
         "proxy_auth_required_unsupported": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
     }

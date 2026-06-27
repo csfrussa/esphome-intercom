@@ -1704,6 +1704,7 @@ class IntercomCard extends HTMLElement {
       await intercomEngine.close("answer_error");
     } finally {
       this._starting = false;
+      this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
       this._render();
     }
   }

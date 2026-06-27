@@ -152,10 +152,19 @@ def _sip_public_state(state: str) -> str:
     if value in {"sip_401", "sip_407"}:
         return CallState.AUTH_REQUIRED_UNSUPPORTED.value
     if value == "timeout":
-        return TerminalReason.TIMEOUT.value
-    if value == "error":
-        return TerminalReason.PROTOCOL_ERROR.value
+        return CallState.TRANSPORT_UNREACHABLE.value
+    if value in {"error", "protocol_error"}:
+        return CallState.TRANSPORT_UNREACHABLE.value
     return value or CallState.IDLE.value
+
+
+def _sip_terminal_reason(result: str, public_state: str) -> str:
+    value = (result or "").strip().lower()
+    if value == "timeout":
+        return TerminalReason.TIMEOUT.value
+    if value in {"error", "protocol_error"}:
+        return TerminalReason.PROTOCOL_ERROR.value
+    return public_state
 
 
 def _sip_target_audio_profile(
@@ -702,6 +711,7 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
                 sip_uri=sip_uri,
             )
         elif public_final not in {CallState.RINGING.value, CallState.IN_CALL.value}:
+            terminal_reason = _sip_terminal_reason(final, public_final)
             _set_ha_softphone_call_state(
                 hass,
                 public_final,
@@ -711,18 +721,19 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
                 peer_name=target,
                 direction="outgoing",
                 call_id=client.dialog_ids.call_id,
-                reason=public_final,
-                terminal_reason=public_final,
+                reason=terminal_reason,
+                terminal_reason=terminal_reason,
                 sip_status_code=client.last_sip_status_code,
                 last_sip_event=client.last_sip_event or "SIP_RESPONSE",
                 sip_uri=sip_uri,
             )
+        terminal_reason = "" if public_final in {CallState.RINGING.value, CallState.IN_CALL.value} else _sip_terminal_reason(final, public_final)
         payload = {
             "state": public_final,
             "scope": "sip",
             "call_id": client.dialog_ids.call_id,
             "target": target,
-            "terminal_reason": "" if public_final in {CallState.RINGING.value, CallState.IN_CALL.value} else public_final,
+            "terminal_reason": terminal_reason,
         }
         if sip_uri:
             payload["sip_uri"] = sip_uri
@@ -1314,6 +1325,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             sip_uri=route.sip_uri,
         )
     elif public_result not in {CallState.REMOTE_RINGING.value, CallState.IN_CALL.value}:
+        terminal_reason = _sip_terminal_reason(result, public_result)
         _set_ha_softphone_call_state(
             hass,
             public_result,
@@ -1323,12 +1335,13 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             peer_name=target,
             direction="outgoing",
             call_id=client.dialog_ids.call_id,
-            reason=public_result,
-            terminal_reason=public_result,
+            reason=terminal_reason,
+            terminal_reason=terminal_reason,
             sip_status_code=client.last_sip_status_code,
             last_sip_event=client.last_sip_event or "SIP_RESPONSE",
             sip_uri=route.sip_uri,
         )
+    terminal_reason = "" if public_result in {CallState.RINGING.value, CallState.IN_CALL.value} else _sip_terminal_reason(result, public_result)
     _fire_call_event(
         hass,
         {
@@ -1337,7 +1350,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             "call_id": client.dialog_ids.call_id,
             "target": target,
             "sip_uri": route.sip_uri,
-            "terminal_reason": "" if public_result in {CallState.RINGING.value, CallState.IN_CALL.value} else public_result,
+            "terminal_reason": terminal_reason,
         },
         "sip",
     )
