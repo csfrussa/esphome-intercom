@@ -310,6 +310,14 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             to_tag=to_tag,
             decline_reason=result.decline_reason,
         )
+        if 200 <= int(result.status) < 300:
+            self.active_dialogs[invite.call_id] = _ActiveDialog(
+                request=request,
+                addr=addr,
+                to_tag=to_tag,
+                cseq=_cseq_number(request.header("CSeq")) + 1,
+                transport=self.signaling_transport,
+            )
 
     def send_final_response(
         self,

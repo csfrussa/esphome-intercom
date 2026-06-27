@@ -59,10 +59,24 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = logging.getLogger(__name__)
 SIP_ROUTE_DECISION_TIMEOUT = 1.5
+HA_SOFTPHONE_ACTIVE_STATES = {
+    CallState.CALLING.value,
+    CallState.REMOTE_RINGING.value,
+    CallState.RINGING.value,
+    CallState.CONNECTING.value,
+    CallState.IN_CALL.value,
+    CallState.TERMINATING.value,
+}
 
 
 def _pending_routes(hass: HomeAssistant) -> dict:
     return hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending_routes", {})
+
+
+def _ha_softphone_has_active_call(hass: HomeAssistant) -> bool:
+    store = _ha_softphone_store(hass)
+    state = str(store.get("state") or CallState.IDLE.value)
+    return bool(store.get("session_device_id") or state in HA_SOFTPHONE_ACTIVE_STATES)
 
 
 def _single_pending_route_call_id(hass: HomeAssistant) -> str:
@@ -916,8 +930,10 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         call_id = next(iter(clients))
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
+    if not call_id and len(media_sessions) == 1:
+        call_id = next(iter(media_sessions))
     if not call_id:
-        call_id = str(softphone_store.get("call_id") or softphone_store.get("last_terminal_call_id") or "").strip()
+        call_id = str(softphone_store.get("call_id") or "").strip()
     caller = str(softphone_store.get("caller") or softphone_store.get("last_terminal_caller") or "")
     callee = str(softphone_store.get("callee") or softphone_store.get("last_terminal_callee") or "")
     peer_name = str(softphone_store.get("peer_name") or softphone_store.get("last_terminal_peer_name") or "")
@@ -1747,10 +1763,11 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         active_clients = len(bucket.get("sip_clients", {}) or {})
         active_relays = len(bucket.get("sip_relays", {}) or {})
         active_media = len(bucket.get("ha_softphone_media", {}) or {})
-        if route_bucket or pending or active_dialogs or active_clients or active_relays or active_media:
+        ha_softphone_active = _ha_softphone_has_active_call(hass)
+        if route_bucket or pending or active_dialogs or active_clients or active_relays or active_media or ha_softphone_active:
             _LOGGER.info(
                 "SIP INVITE from %s rejected: HA SIP endpoint is busy "
-                "(routes=%d pending=%d active_dialogs=%d clients=%d relays=%d media=%d)",
+                "(routes=%d pending=%d active_dialogs=%d clients=%d relays=%d media=%d ha_softphone=%s)",
                 invite.caller or invite.source_host,
                 len(route_bucket),
                 len(pending),
@@ -1758,20 +1775,22 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 active_clients,
                 active_relays,
                 active_media,
+                ha_softphone_active,
             )
-            _set_ha_softphone_call_state(
+            _fire_call_event(
                 hass,
-                CallState.BUSY.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=invite.caller,
-                callee=invite.target,
-                peer_name=invite.caller,
-                direction="incoming",
-                call_id=invite.call_id,
-                reason=TerminalReason.BUSY.value,
-                origin="self",
-                sip_status_code=486,
-                last_sip_event="SIP_RESPONSE",
+                {
+                    "state": CallState.BUSY.value,
+                    "call_id": invite.call_id,
+                    "caller": invite.caller,
+                    "callee": invite.target,
+                    "peer_name": invite.caller,
+                    "direction": "incoming",
+                    "terminal_reason": TerminalReason.BUSY.value,
+                    "sip_status_code": 486,
+                    "last_sip_event": "SIP_RESPONSE",
+                },
+                "sip",
             )
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         loop = asyncio.get_running_loop()
@@ -2031,29 +2050,32 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
                 hass.async_create_task(_finish_bridge(result))
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
-            if pending or active_dialogs or active_clients or active_relays:
+            ha_softphone_active = _ha_softphone_has_active_call(hass)
+            if pending or active_dialogs or active_clients or active_relays or ha_softphone_active:
                 _LOGGER.info(
                     "SIP INVITE from %s rejected: HA softphone is busy "
-                    "(pending=%d active_dialogs=%d clients=%d relays=%d)",
+                    "(pending=%d active_dialogs=%d clients=%d relays=%d ha_softphone=%s)",
                     invite.caller or invite.source_host,
                     len(pending),
                     active_dialogs,
                     active_clients,
                     active_relays,
+                    ha_softphone_active,
                 )
-                _set_ha_softphone_call_state(
+                _fire_call_event(
                     hass,
-                    "declined",
-                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                    caller=invite.caller,
-                    callee=invite.target,
-                    peer_name=invite.caller,
-                    direction="incoming",
-                    call_id=invite.call_id,
-                    reason="busy",
-                    origin="self",
-                    sip_status_code=486,
-                    last_sip_event="SIP_RESPONSE",
+                    {
+                        "state": CallState.BUSY.value,
+                        "call_id": invite.call_id,
+                        "caller": invite.caller,
+                        "callee": invite.target,
+                        "peer_name": invite.caller,
+                        "direction": "incoming",
+                        "terminal_reason": TerminalReason.BUSY.value,
+                        "sip_status_code": 486,
+                        "last_sip_event": "SIP_RESPONSE",
+                    },
+                    "sip",
                 )
                 return SipInviteResult(486, "Busy Here", to_tag="", decline_reason="busy")
             if _ha_softphone_dnd(hass):
@@ -2101,6 +2123,27 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             int(cfg["rtp_port"]),
             invite.send_format,
             invite.recv_format,
+        )
+        bucket.setdefault("ha_softphone_media", {})[invite.call_id] = {
+            "invite": invite,
+            "local_rtp_port": int(cfg["rtp_port"]),
+        }
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.IN_CALL.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=invite.target,
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=invite.call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            audio_mode="full_duplex",
+            route_kind=decision.kind,
+            sip_uri=decision.sip_uri,
+            sip_status_code=200,
+            last_sip_event="SIP_RESPONSE",
         )
         return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
 
