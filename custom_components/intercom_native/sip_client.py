@@ -217,6 +217,7 @@ class SipCallClient:
         username: str = "",
         password: str = "",
         outbound_proxy: str = "",
+        include_common_codecs: bool = False,
     ) -> None:
         self.local_ip = local_ip
         self.local_name = local_name
@@ -230,6 +231,7 @@ class SipCallClient:
         self.username = username or local_name
         self.password = password
         self.outbound_proxy = outbound_proxy
+        self.include_common_codecs = bool(include_common_codecs)
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: _SipClientProtocol | None = None
         self.reader: asyncio.StreamReader | None = None
@@ -424,6 +426,7 @@ class SipCallClient:
             self.local_rtp_port,
             self.supported_send_formats,
             self.supported_recv_formats,
+            include_common_codecs=self.include_common_codecs,
         ).encode()
         headers = sip.dialog_headers(
             request_uri=request_uri,

@@ -138,6 +138,12 @@ HA_SIP_PCM_FORMATS = (
 )
 HA_SIP_PCM_TX_FORMATS = HA_SIP_PCM_FORMATS
 HA_SIP_PCM_RX_FORMATS = HA_SIP_PCM_FORMATS
+HA_TRUNK_AUDIO_FORMATS = (
+    AudioFormat(48000, PcmFormat.S16LE, 2, 20),
+    AudioFormat(48000, PcmFormat.S16LE, 1, 20),
+    AudioFormat(16000, PcmFormat.S16LE, 1, 20),
+    AudioFormat(8000, PcmFormat.S16LE, 1, 20),
+)
 
 
 def pcm_format_from_id(format_id: int) -> PcmFormat:

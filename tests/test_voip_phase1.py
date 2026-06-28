@@ -127,6 +127,61 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(parsed.header("Call-ID"), "call-1")
         self.assertEqual(parsed.body, body)
 
+    def test_standard_offer_does_not_include_trunk_codecs_by_default(self) -> None:
+        body = sdp.build_offer_directional(
+            "192.168.1.20",
+            "192.168.1.20",
+            40000,
+            [
+                audio_format.AudioFormat(48000, "s16le", 2, 20),
+                audio_format.AudioFormat(8000, "s16le", 1, 20),
+            ],
+            [
+                audio_format.AudioFormat(48000, "s16le", 2, 20),
+                audio_format.AudioFormat(8000, "s16le", 1, 20),
+            ],
+        )
+        self.assertNotIn("OPUS/48000/2", body)
+        self.assertNotIn("PCMA/8000", body)
+        self.assertNotIn("PCMU/8000", body)
+
+    def test_trunk_offer_includes_opus_and_g711_fallbacks(self) -> None:
+        body = sdp.build_offer_directional(
+            "192.168.1.20",
+            "192.168.1.20",
+            40000,
+            list(audio_format.HA_TRUNK_AUDIO_FORMATS),
+            list(audio_format.HA_TRUNK_AUDIO_FORMATS),
+            include_common_codecs=True,
+        )
+        self.assertIn("m=audio 40000 RTP/AVP 98 8 0", body)
+        self.assertIn("a=rtpmap:98 OPUS/48000/2", body)
+        self.assertIn("a=rtpmap:8 PCMA/8000/1", body)
+        self.assertIn("a=rtpmap:0 PCMU/8000/1", body)
+        self.assertIn("a=ptime:20", body)
+
+    def test_trunk_opus_answer_negotiates_48k_stereo_20ms(self) -> None:
+        answer = (
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 192.168.1.30\r\n"
+            "s=-\r\n"
+            "c=IN IP4 192.168.1.30\r\n"
+            "t=0 0\r\n"
+            "m=audio 41000 RTP/AVP 98\r\n"
+            "a=rtpmap:98 opus/48000/2\r\n"
+            "a=ptime:20\r\n"
+            "a=sendrecv\r\n"
+        )
+        selected = sdp.negotiate_answer_directional(
+            answer,
+            list(audio_format.HA_TRUNK_AUDIO_FORMATS),
+            list(audio_format.HA_TRUNK_AUDIO_FORMATS),
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.send.wire_token(), "pt=98:OPUS/48000/2/20ms")
+        self.assertEqual(selected.recv.wire_token(), "pt=98:OPUS/48000/2/20ms")
+
     def test_parser_preserves_unsupported_method_for_sip_response(self) -> None:
         raw = (
             b"REGISTER sip:ha@192.168.1.10 SIP/2.0\r\n"

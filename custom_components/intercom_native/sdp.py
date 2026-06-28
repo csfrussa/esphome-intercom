@@ -242,11 +242,22 @@ def build_offer_directional(
     media_port: int,
     send_formats: list[AudioFormat],
     recv_formats: list[AudioFormat],
+    *,
+    include_common_codecs: bool = False,
 ) -> str:
-    formats = rtp_offer_formats(_common_ptime_formats(send_formats or [], recv_formats or []))
+    common_formats = _common_ptime_formats(send_formats or [], recv_formats or [])
+    formats = rtp_offer_formats(common_formats)
     if not formats:
         raise SdpError("SDP offer requires at least one RTP-mappable PCM format")
-    rtp_formats = [audio_format_to_rtp(fmt, 96 + i) for i, fmt in enumerate(formats)]
+    rtp_formats = _common_codec_offer_formats(common_formats) if include_common_codecs else []
+    next_payload = 96
+    used_payloads = {fmt.payload_type for fmt in rtp_formats}
+    for fmt in formats:
+        while next_payload in used_payloads:
+            next_payload += 1
+        rtp_formats.append(audio_format_to_rtp(fmt, next_payload))
+        used_payloads.add(next_payload)
+        next_payload += 1
     payloads = " ".join(str(fmt.payload_type) for fmt in rtp_formats)
     lines = [
         "v=0",
@@ -258,10 +269,25 @@ def build_offer_directional(
     ]
     for fmt in rtp_formats:
         lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
+        if fmt.encoding == "OPUS":
+            lines.append(f"a=fmtp:{fmt.payload_type} stereo=1;sprop-stereo=1;maxaveragebitrate=28000")
     lines.append(f"a=ptime:{rtp_formats[0].frame_ms}")
     lines.append(f"a=maxptime:{rtp_formats[0].frame_ms}")
     lines.append("a=sendrecv")
     return "\r\n".join(lines) + "\r\n"
+
+
+def _common_codec_offer_formats(formats: list[AudioFormat]) -> list[RtpPcmFormat]:
+    format_set = set(formats)
+    out: list[RtpPcmFormat] = []
+    if AudioFormat(48000, PcmFormat.S16LE, 2, 20) in format_set:
+        out.append(RtpPcmFormat(98, "OPUS", 48000, 2, 20))
+    if AudioFormat(8000, PcmFormat.S16LE, 1, 20) in format_set:
+        out.extend((
+            RtpPcmFormat(8, "PCMA", 8000, 1, 20),
+            RtpPcmFormat(0, "PCMU", 8000, 1, 20),
+        ))
+    return out
 
 
 def parse_sdp(sdp: str | bytes) -> dict:

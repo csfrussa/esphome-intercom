@@ -59,6 +59,7 @@ from .audio_format import (
     HA_SIP_PCM_FORMATS,
     HA_SIP_PCM_RX_FORMATS,
     HA_SIP_PCM_TX_FORMATS,
+    HA_TRUNK_AUDIO_FORMATS,
     choose_common_frame_ms,
     parse_audio_format_list,
 )
@@ -1503,6 +1504,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         remote_rx_formats=remote_rx_formats,
         target=target,
     )
+    if use_trunk:
+        sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
+        sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
     local_rtp_port = _allocate_sip_rtp_port(hass)
     client = SipCallClient(
         local_ip=local_ip,
@@ -1516,6 +1520,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or ""),
         password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if use_trunk else "",
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
+        include_common_codecs=use_trunk,
     )
     if _sip_uri_transport(uri).upper() == "TCP" and not use_trunk:
         endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
