@@ -42,7 +42,7 @@ _SIGNIFICANT_BITS = {
 
 SUPPORTED_SAMPLE_RATES = frozenset({8000, 12000, 16000, 24000, 32000, 44100, 48000})
 SUPPORTED_CHANNELS = frozenset({1, 2})
-SUPPORTED_FRAME_MS = frozenset({10, 20, 32})
+SUPPORTED_FRAME_MS = frozenset({10, 16, 20, 32})
 COMMON_FRAME_MS = 20
 UDP_SAFE_PAYLOAD_BYTES = 1200
 
@@ -125,6 +125,8 @@ def _browser_formats(*, channels: tuple[int, ...]) -> tuple[AudioFormat, ...]:
 HA_BROWSER_TX_FORMATS = _browser_formats(channels=(1,))
 HA_BROWSER_RX_FORMATS = _browser_formats(channels=(1, 2))
 HA_SIP_PCM_FORMATS = (
+    AudioFormat(32000, PcmFormat.S16LE, 1, 16),
+    AudioFormat(16000, PcmFormat.S16LE, 1, 16),
     AudioFormat(48000, PcmFormat.S16LE, 1, 10),
     AudioFormat(32000, PcmFormat.S16LE, 1, 10),
     AudioFormat(16000, PcmFormat.S16LE, 1, 10),

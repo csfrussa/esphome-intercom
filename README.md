@@ -5,14 +5,15 @@ This project turns ESPHome devices into standards-oriented SIP intercom phones.
 The current functional contract is SIP/SDP/RTP only:
 
 - ESP devices are SIP phones.
-- Home Assistant is a SIP softphone, dial-plan authority, and optional SIP/RTP bridge.
-- Call control is expressed as `INVITE`, `ACK`, `CANCEL`, `BYE`, `OPTIONS`, and SIP final/provisional status codes.
+- Home Assistant is a SIP softphone, dial-plan authority, SIP/RTP bridge, and optional SIP trunk endpoint.
+- Call control is expressed as `INVITE`, `ACK`, `CANCEL`, `BYE`, `OPTIONS`, `REGISTER` where applicable, and SIP final/provisional status codes.
 - Media is negotiated with SDP and carried as RTP PCM.
-- The former proprietary intercom control protocol is not a public contract or fallback.
+- The former proprietary intercom control protocol is not a public contract or compatibility layer.
 
 ## ESP Configuration
 
-`intercom_api.protocol` selects SIP signaling transport:
+`intercom_api.protocol` selects SIP signaling transport. SIP itself is implicit;
+there is no alternate intercom protocol behind this option:
 
 ```yaml
 intercom_api:
@@ -42,8 +43,8 @@ intercom_api:
     - name: Front Gate
 ```
 
-`name` is required. `ip`, `port`, `rtp_port`, and `protocol` are optional. A
-name-only contact is a logical SIP target that HA can resolve or bridge later.
+`name` is required. `ip`, `port`, `rtp_port`, and `sip_transport` are optional.
+A name-only contact is a logical SIP target that HA can resolve or bridge later.
 
 Runtime automations can mutate the same phonebook:
 
@@ -76,12 +77,21 @@ HA publishes the central `sensor.intercom_phonebook` roster and can bridge
 logical targets. Use `ha_bridge: true` when a call should route through HA even
 if a direct endpoint exists.
 
+The HA setup flow also supports an optional SIP trunk. When disabled, trunk
+registration, external routing, and DTMF collection are not started. When
+enabled, unresolved outbound numbers can route through the trunk, and inbound
+provider calls can select a local target by DTMF digits such as `100`.
+
 ## Routing Model
 
 - `sip:name@host[:port]` or `name@host[:port]` dials a direct SIP endpoint.
 - `name` dials a phonebook target.
 - Name-only targets can be resolved or bridged by HA.
 - Explicit `ha_bridge` uses HA as a SIP bridge, not a proprietary PBX.
+- If an optional SIP trunk is configured and registered, unresolved external
+  numbers can be sent to the provider trunk.
+- Inbound trunk calls answer at HA, collect RFC2833/telephone-event DTMF for a
+  short window, then route to HA or a local SIP phonebook target.
 
 ## Public State
 
@@ -109,7 +119,9 @@ Current operational docs:
 - `docs/reference.md`
 - `docs/PHONEBOOK_PROTOCOL.md`
 - `docs/DEPLOYMENT_GUIDE.md`
+- `docs/SIP_TRUNK.md`
 - `docs/troubleshooting.md`
+- `docs/MIGRATION_AUDIT.md`
 
 Historical release notes may mention earlier proprietary intercom terminology.
 Those notes are not the current public contract.

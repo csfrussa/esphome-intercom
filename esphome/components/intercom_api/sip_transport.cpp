@@ -862,7 +862,7 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
     const std::string line = sdp.substr(ptime_pos, end - ptime_pos);
     if (line.rfind("a=ptime:", 0) == 0) {
       const unsigned parsed = static_cast<unsigned>(std::strtoul(line.substr(8).c_str(), nullptr, 10));
-      if (parsed == 10 || parsed == 20 || parsed == 32) media_ptime = static_cast<uint8_t>(parsed);
+      if (parsed == 10 || parsed == 16 || parsed == 20 || parsed == 32) media_ptime = static_cast<uint8_t>(parsed);
     }
     if (end == sdp.size()) break;
     ptime_pos = end + 2;

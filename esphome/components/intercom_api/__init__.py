@@ -153,7 +153,7 @@ INTERCOM_AUDIO_FORMAT_SCHEMA = cv.All(cv.Any(cv.one_of(CONF_AUTO, lower=True), c
             cv.one_of(CONF_AUTO, lower=True), cv.one_of(1, 2, int=True)
         ),
         cv.Optional(CONF_FRAME_MS, default=CONF_AUTO): cv.Any(
-            cv.one_of(CONF_AUTO, lower=True), cv.one_of(10, 20, 32, int=True)
+            cv.one_of(CONF_AUTO, lower=True), cv.one_of(10, 16, 20, 32, int=True)
         ),
     }
 )), _validate_intercom_audio_format)

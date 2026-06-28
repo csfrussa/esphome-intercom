@@ -11,7 +11,8 @@ the simplest deployment because SIP/RTP use inbound UDP/TCP sockets.
 
 ## ESP Devices
 
-Choose signaling transport per device:
+Choose SIP signaling transport per device. SIP is implicit; `protocol` selects
+only whether signaling uses UDP or TCP:
 
 ```yaml
 intercom_api:
@@ -35,6 +36,20 @@ VPN, LXC, or multiple subnets, set the integration advertise host so ESPs see a
 reachable SIP Contact/SDP address.
 
 Use `ha_bridge` for routed or logical calls that should pass through HA.
+
+## Optional SIP Trunk
+
+The trunk is disabled by default. Leave it disabled for local-only intercom
+installs; no registration, external route or DTMF collector is started.
+
+Enable it only when HA must register to a SIP provider or PBX. The trunk setup
+asks for provider transport, server, credentials, optional outbound proxy,
+default inbound target and optional DTMF route map.
+
+Inbound provider calls are answered by HA so it can collect DTMF digits. Normal
+mobile dialers can use post-dial pauses, for example a contact that dials the
+provider number, waits, and sends `100`. HA maps the final digit buffer to a
+local phonebook target or falls back to the configured default target.
 
 ## Media
 

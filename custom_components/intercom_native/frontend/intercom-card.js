@@ -192,7 +192,10 @@ class IntercomCard extends HTMLElement {
 
   _hasBrowserAudioPath() {
     const id = this._sessionDeviceId();
-    return intercomEngine.active && (!id || intercomEngine.deviceId === id);
+    const callId = this._sessionCallId();
+    return intercomEngine.active &&
+      (!id || intercomEngine.deviceId === id) &&
+      (!callId || intercomEngine.callId === callId);
   }
 
   _ownsSoftphoneMedia(snapshot = this._softphoneSnapshot || {}) {
@@ -1767,6 +1770,11 @@ class IntercomCard extends HTMLElement {
       this._showError(err.message || String(err));
     }
 
+    if (wasSoftphone) {
+      await intercomEngine.close("hangup");
+      this._markSoftphoneMediaOwner("");
+    }
+
     this._stopping = false;
     this._render();
   }
@@ -1875,24 +1883,6 @@ class IntercomCard extends HTMLElement {
         type: "intercom_native/ha_softphone_state",
       });
       this._applySoftphoneSnapshot(result || { state: "idle" });
-      if (result?.state && result.state !== "idle") {
-        const sessionDeviceId = result.session_device_id || null;
-        const target = result.target_device_id
-          ? this._availableDevices.find(d => d.device_id === result.target_device_id)
-          : this._getSoftphoneTargetDevice();
-        await intercomEngine.resumeSession(
-          {
-            ...(target || {}),
-            device_id: sessionDeviceId || HA_SOFTPHONE_DEVICE_ID,
-            audio_mode: result.audio_mode || target?.audio_mode || "full_duplex",
-            tx_formats: result.rx_format ? [result.rx_format] : target?.tx_formats,
-            rx_formats: result.tx_format ? [result.tx_format] : target?.rx_formats,
-            softphone: true,
-          },
-          sessionDeviceId || HA_SOFTPHONE_DEVICE_ID,
-          result,
-        );
-      }
       this._softphoneStateLoaded = true;
     } catch (err) {
       if (!this._isUnknownCommandError(err)) console.warn("intercom: failed loading HA softphone state", err);

@@ -1,6 +1,7 @@
 # SIP Phonebook Contract
 
 The phonebook is the SIP dial plan shared by ESP devices and Home Assistant.
+SIP is implicit; transport fields only choose SIP/TCP or SIP/UDP.
 
 ## ESP Local Phonebook
 
@@ -39,7 +40,8 @@ Rules:
 ## HA Roster
 
 HA owns the central `sensor.intercom_phonebook` roster. It contains ESP peers,
-HA itself, manual SIP endpoints, phone numbers, and groups.
+HA itself, manual SIP endpoints, phone numbers, trunk-routed external targets
+when configured, and groups.
 
 Roster entries use JSON fields:
 
@@ -59,5 +61,9 @@ Roster entries use JSON fields:
 - `name` resolves through the phonebook.
 - Phone/number targets require HA routing.
 - `ha_bridge: true` forces HA to act as a SIP bridge.
+- If HA has a registered trunk, external numbers and unresolved number-like
+  targets can route through the trunk.
+- Inbound trunk DTMF routes map digit strings to the same local target namespace
+  as the phonebook.
 - Missing or incompatible media routes must fail explicitly with SIP terminal
   reasons such as `media_incompatible` or `transport_unreachable`.

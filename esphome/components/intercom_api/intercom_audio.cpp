@@ -15,7 +15,6 @@ namespace esphome {
 namespace intercom_api {
 
 static const char *const TAG = "intercom_api.audio";
-static constexpr uint8_t MAX_TX_BURST = 4;
 
 void IntercomApi::debug_log_pcm_level_(const char *label, const uint8_t *pcm, size_t bytes,
                                        const AudioFormat &format,
@@ -93,28 +92,27 @@ void IntercomApi::tx_task_() {
   ESP_LOGD(TAG, "TX task started");
 
   uint8_t *const audio_chunk = this->tx_audio_chunk_;
+  TickType_t last_wake = xTaskGetTickCount();
 
   while (true) {
     const size_t frame_bytes = this->tx_audio_chunk_bytes_();
     if (!this->is_tx_stream_ready_() || this->mic_buffer_->available() < frame_bytes) {
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      last_wake = xTaskGetTickCount();
       continue;
     }
 
-    uint8_t burst = 0;
-    while (this->is_tx_stream_ready_() && this->mic_buffer_->available() >= frame_bytes &&
-           burst < MAX_TX_BURST) {
-      if (!this->read_tx_chunk_(audio_chunk)) {
-        break;
-      }
-      this->process_tx_chunk_(audio_chunk);
-      burst++;
+    if (!this->read_tx_chunk_(audio_chunk)) {
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
+      last_wake = xTaskGetTickCount();
+      continue;
     }
 
-    if (burst < MAX_TX_BURST) {
-      // Producer notifies after every write; a give after this task's last take stays pending.
-      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    }
+    this->process_tx_chunk_(audio_chunk);
+
+    const uint32_t frame_ms = std::max<uint32_t>(1, this->current_tx_audio_format_.frame_ms);
+    const TickType_t frame_ticks = std::max<TickType_t>(1, pdMS_TO_TICKS(frame_ms));
+    vTaskDelayUntil(&last_wake, frame_ticks);
   }
 }
 

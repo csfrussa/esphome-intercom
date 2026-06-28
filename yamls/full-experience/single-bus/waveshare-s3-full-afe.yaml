@@ -311,24 +311,28 @@ intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   audio:
-    # Primary/preferred TX/RX formats for SIP/RTP. This board records at 16 kHz
-    # but can receive 48 kHz through the speaker resampler, so HA/browser calls
-    # negotiate asymmetric PCM instead of lowering both directions to 16 kHz.
+    # Primary/preferred TX/RX formats for SIP/RTP. The AFE mic publishes 16 kHz
+    # PCM at the processor frame cadence, so TX advertises 16 ms packets. RX uses
+    # the highest non-fragmented LAN RTP profile accepted by the speaker resampler.
     tx:
       sample_rate: 16000
       pcm_format: s16le
       channels: 1
-      frame_ms: 10
+      frame_ms: 16
     rx:
-      sample_rate: 48000
+      sample_rate: 32000
       pcm_format: s16le
       channels: 1
-      frame_ms: 10
+      frame_ms: 16
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
     # only because speaker: intercom_speaker_input points at the resampler; do
     # not advertise additional formats when wiring intercom_api directly to a
     # fixed-rate mixer input.
     rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1

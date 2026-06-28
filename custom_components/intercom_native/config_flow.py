@@ -14,6 +14,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_ASSIST_INTENTS,
+    CONF_DEBUG_MODE,
     CONF_SIP_TCP_ENABLED,
     CONF_SIP_UDP_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -77,6 +78,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
             "rtp_port": existing.get("rtp_port", INTERCOM_RTP_PORT),
             "advertise_host": existing.get("advertise_host", ""),
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
+            CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
         }
         schema = vol.Schema(
@@ -96,6 +98,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_ASSIST_INTENTS,
                     default=defaults[CONF_ASSIST_INTENTS],
                 ): BooleanSelector(),
+                vol.Required(CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]): BooleanSelector(),
                 vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
             }
         )
@@ -223,6 +226,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                         "rtp_port": int(existing.get("rtp_port", INTERCOM_RTP_PORT)),
                         "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
+                        CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
                     }
                 )
                 data[CONF_TRUNK_ENABLED] = True

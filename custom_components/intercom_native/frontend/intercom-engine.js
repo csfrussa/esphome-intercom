@@ -20,6 +20,7 @@ class IntercomEngine extends EventTarget {
     this._ws = null;
     this._state = "IDLE";
     this._deviceId = "";
+    this._callId = "";
     this._audioMode = "full_duplex";
     this._txFormat = DEFAULT_FORMAT;
     this._rxFormat = DEFAULT_FORMAT;
@@ -30,7 +31,7 @@ class IntercomEngine extends EventTarget {
     this._captureSink = null;
     this._source = null;
     this._playbackNode = null;
-    this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0 };
+    this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
     this._busConnection = null;
     this._busUnsub = null;
     this._callSubscribers = new Set();
@@ -71,13 +72,17 @@ class IntercomEngine extends EventTarget {
     return this._deviceId;
   }
 
+  get callId() {
+    return this._callId;
+  }
+
   get stats() {
     return { ...this._stats };
   }
 
   statsText() {
     if (!this.active) return "";
-    return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | Buf: ${this._stats.buffered_frames}`;
+    return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | Buf: ${this._stats.buffered_frames} | Und: ${this._stats.underruns || 0}`;
   }
 
   _emit() {
@@ -179,11 +184,18 @@ class IntercomEngine extends EventTarget {
     return `${proto}//${window.location.host}${signed.path || path}`;
   }
 
-  async _connect(deviceId) {
-    if (this._ws && this._deviceId === deviceId && this._ws.readyState === WebSocket.OPEN) return;
+  async _connect(deviceId, callId = "") {
+    const wantedCallId = String(callId || "");
+    if (
+      this._ws &&
+      this._deviceId === deviceId &&
+      this._callId === wantedCallId &&
+      this._ws.readyState === WebSocket.OPEN
+    ) return;
     if (
       this._connectPromise &&
       this._deviceId === deviceId &&
+      this._callId === wantedCallId &&
       this._ws &&
       this._ws.readyState === WebSocket.CONNECTING
     ) {
@@ -191,6 +203,7 @@ class IntercomEngine extends EventTarget {
     }
     await this.close("switch");
     this._deviceId = deviceId;
+    this._callId = wantedCallId;
     this._lastSessionPayload = null;
     this._ws = new WebSocket(await this._wsUrl(deviceId));
     this._ws.binaryType = "arraybuffer";
@@ -421,18 +434,24 @@ class IntercomEngine extends EventTarget {
   }
 
   async _resumeSessionLocked(deviceInfo, deviceId, statePayload) {
-    if (this._ws && this._deviceId === deviceId && this._ws.readyState === WebSocket.OPEN) {
+    const callId = String(statePayload?.call_id || "");
+    if (
+      this._ws &&
+      this._deviceId === deviceId &&
+      this._callId === callId &&
+      this._ws.readyState === WebSocket.OPEN
+    ) {
       this._setState("IN_CALL");
       return;
     }
-    await this._connect(deviceId);
+    await this._connect(deviceId, callId);
     this._resetStats();
     if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, statePayload)) return;
     this._setState("IN_CALL");
   }
 
   _resetStats() {
-    this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0 };
+    this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
   }
 
   async close(_reason = "") {
@@ -440,6 +459,7 @@ class IntercomEngine extends EventTarget {
       this._ws.close();
     }
     this._ws = null;
+    this._callId = "";
     await this._cleanupAudio("close");
   }
 

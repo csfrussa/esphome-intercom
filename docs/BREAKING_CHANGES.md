@@ -1,5 +1,23 @@
 # Breaking changes
 
+## SIP consolidation audit
+
+The active branch is intentionally SIP-first and breaking:
+
+- ESP `intercom_api` is a SIP phone. `protocol: udp|tcp` means SIP signaling
+  transport only.
+- HA `intercom_native` is a SIP softphone, dial-plan authority, SIP/RTP bridge
+  and optional SIP trunk endpoint.
+- The retired proprietary intercom protocol is not a compatibility layer.
+- ESP discovery/scanning between standalone peers is not a functional
+  primitive. Use explicit SIP URIs, local `phonebook` entries or the HA roster.
+- Cards mirror their owner. HA cards mirror HA softphone state. ESP cards mirror
+  ESPHome entities and controls.
+- Optional HA trunk support is disabled by default. If disabled, no provider
+  registration, external route or DTMF routing path starts.
+- Inbound trunk routing uses standard SIP plus RFC2833/telephone-event DTMF to
+  select local phonebook targets.
+
 ## 2026.7.0-dev: source-based full media path and native 48 kHz intercom presets
 
 `2026.7.0-dev` is a prerelease. It is intended for users who want to test the
@@ -78,14 +96,14 @@ perspective. `ha_softphone` represents Home Assistant itself. If you previously
 depended on one card mixing both models, split it into one hybrid ESP card and
 one optional HA softphone card.
 
-Browser audio setup now waits for the server START/ANSWER response and uses the
-negotiated TX/RX formats from that response before creating the AudioWorklets.
+Browser audio setup now waits for the HA SIP softphone control response and
+uses the negotiated TX/RX formats from that response before creating the AudioWorklets.
 Custom frontend code that starts microphone/playback worklets before the
 control reply should be updated; otherwise ESP -> HA answered calls can use the
 wrong frame size when one direction negotiates 48 kHz.
 
 ESP caller playback now applies the negotiated RX speaker format before the
-call is activated and re-applies it when the ANSWER confirms the effective
+call is activated and re-applies it when the SIP answer confirms the effective
 direction formats. Custom ESP integrations that bypass the maintained
 `intercom_api` speaker setup must do the same before feeding high-rate PCM to
 the local speaker path.

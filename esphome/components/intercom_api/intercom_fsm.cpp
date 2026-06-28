@@ -380,6 +380,8 @@ void IntercomApi::clear_terminal_call_snapshot_() {
   this->last_terminal_direction_.clear();
   this->last_terminal_caller_name_.clear();
   this->last_terminal_dest_name_.clear();
+  this->last_terminal_tx_audio_format_ = DEFAULT_AUDIO_FORMAT;
+  this->last_terminal_rx_audio_format_ = DEFAULT_AUDIO_FORMAT;
 }
 
 void IntercomApi::publish_last_reason_(const std::string &reason) {
@@ -547,6 +549,8 @@ void IntercomApi::end_call_(CallEndReason reason, const std::string &detail) {
   this->last_terminal_call_id_ = call.call_id;
   this->last_terminal_caller_name_ = call.caller_name;
   this->last_terminal_dest_name_ = call.dest_name;
+  this->last_terminal_tx_audio_format_ = this->current_tx_audio_format_;
+  this->last_terminal_rx_audio_format_ = this->current_rx_audio_format_;
   if (!call.caller_name.empty() && call.caller_name == this->device_name_) {
     this->last_terminal_direction_ = "outgoing";
   } else if (!call.dest_name.empty() && call.dest_name == this->device_name_) {

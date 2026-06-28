@@ -1,7 +1,7 @@
 const DEFAULT_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
-const RING_FRAMES = 8;
-const START_FRAMES = 2;
-const DROP_FRAMES = 6;
+const RING_FRAMES = 12;
+const START_FRAMES = 4;
+const DROP_FRAMES = 9;
 
 function normaliseFormat(value) {
   const fmt = value || DEFAULT_FORMAT;
@@ -35,6 +35,7 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
     this._framesIn = 0;
     this._framesOut = 0;
     this._framesDrop = 0;
+    this._underruns = 0;
     this._lastStats = 0;
 
     this.port.onmessage = (event) => {
@@ -89,6 +90,7 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
 
     for (let i = 0; i < channels[0].length; i++) {
       if (!this._started || this._available < this._format.channels) {
+        if (this._started && this._available < this._format.channels) this._underruns++;
         for (const out of channels) out[i] = 0;
         this._started = false;
         continue;
@@ -109,6 +111,7 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
         frames_in: this._framesIn,
         frames_out: this._framesOut,
         frames_drop: this._framesDrop,
+        underruns: this._underruns,
       });
     }
     return true;

@@ -435,6 +435,8 @@ class IntercomApi : public Component {
   std::string last_terminal_direction_;
   std::string last_terminal_caller_name_;
   std::string last_terminal_dest_name_;
+  AudioFormat last_terminal_tx_audio_format_{DEFAULT_AUDIO_FORMAT};
+  AudioFormat last_terminal_rx_audio_format_{DEFAULT_AUDIO_FORMAT};
   // Registered entities (for state sync after boot)
   switch_::Switch *auto_answer_switch_{nullptr};
   switch_::Switch *dnd_switch_{nullptr};

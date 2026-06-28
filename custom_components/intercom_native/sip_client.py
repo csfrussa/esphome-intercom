@@ -604,6 +604,66 @@ class SipCallClient:
         else:
             self.cancel()
 
+    async def terminate(self, timeout: float = 1.5) -> str:
+        """Terminate the SIP dialog/transaction and wait for the SIP response.
+
+        A confirmed dialog ends with BYE + 200 OK. An early INVITE transaction
+        ends with CANCEL + 200 OK to CANCEL and a final 487 for the INVITE.
+        Keeping the socket alive for that exchange avoids leaving ESP phones in
+        ringing state while HA already moved back to idle.
+        """
+        if self.dialog is not None:
+            self.bye()
+            deadline = asyncio.get_running_loop().time() + timeout
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    received = await self._read_response(max(0.05, deadline - asyncio.get_running_loop().time()))
+                except asyncio.TimeoutError:
+                    break
+                except Exception:
+                    continue
+                if received is None:
+                    break
+                msg, addr = received
+                if not msg.is_response or msg.status_code is None:
+                    continue
+                self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+                _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
+                if 200 <= msg.status_code < 300:
+                    return "remote_hangup"
+            return "timeout"
+
+        self.cancel()
+        saw_cancel_ok = False
+        saw_invite_terminated = False
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                received = await self._read_response(max(0.05, deadline - asyncio.get_running_loop().time()))
+            except asyncio.TimeoutError:
+                break
+            except Exception:
+                continue
+            if received is None:
+                break
+            msg, addr = received
+            if not msg.is_response or msg.status_code is None:
+                continue
+            self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+            _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
+            cseq = msg.header("CSeq").upper()
+            if "CANCEL" in cseq and 200 <= msg.status_code < 300:
+                saw_cancel_ok = True
+            elif "INVITE" in cseq and msg.status_code == 487:
+                saw_invite_terminated = True
+            elif msg.status_code >= 300:
+                saw_invite_terminated = True
+            if saw_cancel_ok and saw_invite_terminated:
+                return "cancelled"
+        if saw_cancel_ok or saw_invite_terminated:
+            return "cancelled"
+        return "timeout"
+
     def snapshot(self) -> dict[str, Any]:
         dialog = self.dialog
         return {

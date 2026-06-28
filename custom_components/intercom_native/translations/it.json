@@ -10,7 +10,9 @@
           "sip_port": "Porta SIP",
           "rtp_port": "Porta RTP",
           "advertise_host": "Host/IP HA annunciato",
-          "assist_intents": "Abilita intent Assist"
+          "assist_intents": "Abilita intent Assist",
+          "debug_mode": "Abilita debug SIP/RTP",
+          "trunk_enabled": "Abilita trunk SIP opzionale"
         },
         "data_description": {
           "sip_tcp_enabled": "Ascolta il signaling SIP su TCP. Attivo di default per softphone HA e bridge SIP.",
@@ -18,12 +20,54 @@
           "sip_port": "Porta di ascolto dell'endpoint SIP HA.",
           "rtp_port": "Porta UDP RTP base per media e relay HA.",
           "advertise_host": "Override opzionale pubblicato nelle rubriche ESP. Usalo quando HA è dietro routing, NAT, LXC, VPN o più subnet e l'indirizzo annunciato automaticamente non è raggiungibile dagli ESP.",
-          "assist_intents": "Permette di chiamare e gestire vocalmente le chiamate con l'assistente (per esempio: \"Hey Jarvis, chiama Cucina\"). Abilita comandi Assist opzionali per chiamare, riagganciare, rispondere e rifiutare; i nomi pronunciati vengono risolti dinamicamente dalla rubrica intercom live."
+          "assist_intents": "Permette di chiamare e gestire vocalmente le chiamate con l'assistente (per esempio: \"Hey Jarvis, chiama Cucina\"). Abilita comandi Assist opzionali per chiamare, riagganciare, rispondere e rifiutare; i nomi pronunciati vengono risolti dinamicamente dalla rubrica intercom live.",
+          "debug_mode": "Espone diagnostica dettagliata SIP/RTP/media negli snapshot del softphone HA e nell'event bus, e abilita log aggiuntivi mirati per analizzare le chiamate.",
+          "trunk_enabled": "Mostra le impostazioni provider/PBX. Se disattivo, non parte nessuna registrazione trunk, rotta esterna o raccolta DTMF."
+        }
+      },
+      "trunk": {
+        "title": "Trunk SIP opzionale",
+        "description": "Registra Home Assistant a un trunk provider/PBX per chiamate esterne e routing DTMF in ingresso.",
+        "data": {
+          "trunk_transport": "Transport SIP trunk",
+          "trunk_server": "Server trunk",
+          "trunk_port": "Porta SIP trunk",
+          "trunk_domain": "Dominio trunk",
+          "trunk_username": "Username trunk",
+          "trunk_auth_username": "Username auth",
+          "trunk_password": "Password",
+          "trunk_register_expires": "Scadenza REGISTER",
+          "trunk_outbound_proxy": "Proxy outbound",
+          "trunk_inbound_default_target": "Destinazione default ingresso",
+          "trunk_dtmf_enabled": "Abilita routing DTMF ingresso",
+          "trunk_dtmf_timeout_ms": "Timeout DTMF",
+          "trunk_dtmf_terminator": "Terminatore DTMF",
+          "trunk_dtmf_routes": "Rotte DTMF"
+        },
+        "data_description": {
+          "trunk_transport": "Transport SIP usato da HA verso il provider.",
+          "trunk_server": "Host registrar/proxy del provider.",
+          "trunk_port": "Porta SIP provider, normalmente 5060.",
+          "trunk_domain": "Realm/dominio SIP opzionale. Se vuoto usa il server trunk.",
+          "trunk_username": "Utente account SIP e utente Request-URI atteso in ingresso.",
+          "trunk_auth_username": "Username digest auth se diverso dallo username SIP.",
+          "trunk_password": "Password digest auth.",
+          "trunk_register_expires": "Scadenza REGISTER in secondi.",
+          "trunk_outbound_proxy": "Proxy opzionale o sip:host:port usato come next hop di signaling.",
+          "trunk_inbound_default_target": "Target rubrica locale usato quando nessuna rotta DTMF risolve. Usa HA per il softphone HA.",
+          "trunk_dtmf_enabled": "Raccoglie cifre RFC2833/telephone-event dopo aver risposto alle chiamate trunk in ingresso.",
+          "trunk_dtmf_timeout_ms": "Finestra di raccolta cifre. Tienila corta; default 1000 ms, massimo 2000 ms.",
+          "trunk_dtmf_terminator": "Terminatore opzionale, per esempio #. Vuoto significa che decide timeout o match esatto.",
+          "trunk_dtmf_routes": "Una rotta per riga nel formato cifre=target, per esempio 100=Cucina."
         }
       }
     },
     "error": {
-      "sip_transport_required": "Deve essere abilitato almeno un transport di signaling SIP."
+      "sip_transport_required": "Deve essere abilitato almeno un transport di signaling SIP.",
+      "trunk_server_required": "Il server trunk è obbligatorio.",
+      "trunk_username_required": "Lo username trunk è obbligatorio.",
+      "trunk_password_required": "La password trunk è obbligatoria.",
+      "trunk_dtmf_routes_invalid": "Le rotte DTMF devono usare una voce cifre=target per riga."
     },
     "abort": {
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",

@@ -501,6 +501,11 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
   const char *last_event = "";
   std::string selected_tx = IntercomApi::audio_format_token_(this->current_tx_audio_format_);
   std::string selected_rx = IntercomApi::audio_format_token_(this->current_rx_audio_format_);
+  if (!this->last_terminal_call_id_.empty() && !this->last_reason_.empty() &&
+      this->call_state_.load(std::memory_order_acquire) == CallState::IDLE) {
+    selected_tx = IntercomApi::audio_format_token_(this->last_terminal_tx_audio_format_);
+    selected_rx = IntercomApi::audio_format_token_(this->last_terminal_rx_audio_format_);
+  }
   if (this->transport_ != nullptr) {
     const SipTransportSnapshot snap = this->transport_->snapshot();
     rtp_tx_packets = snap.rtp_tx_packets;
@@ -509,8 +514,10 @@ std::string IntercomApi::build_sip_snapshot_string_() const {
     rtp_rx_bytes = snap.rtp_rx_bytes;
     sip_status = snap.last_sip_status_code;
     last_event = snap.last_sip_event;
-    selected_tx = IntercomApi::audio_format_token_(snap.selected_tx_format);
-    selected_rx = IntercomApi::audio_format_token_(snap.selected_rx_format);
+    if (this->call_state_.load(std::memory_order_acquire) != CallState::IDLE || this->last_reason_.empty()) {
+      selected_tx = IntercomApi::audio_format_token_(snap.selected_tx_format);
+      selected_rx = IntercomApi::audio_format_token_(snap.selected_rx_format);
+    }
   }
   char out[256];
   snprintf(out, sizeof(out),

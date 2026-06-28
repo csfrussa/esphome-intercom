@@ -43,18 +43,22 @@ regressions would be a problem.
   callee phonebook. The phonebook is the outbound dial plan; inbound
   caller/destination identity comes from SIP headers. This keeps VPN/routed
   callers and HA bridges working without pre-seeding every callee phonebook.
+- ☎️ Intercom Native can optionally register one SIP trunk account. When
+  disabled, trunk code is inactive. When enabled, unresolved outbound numbers
+  can route through the trunk and inbound provider calls can select HA or a
+  local phonebook target with RFC2833/telephone-event DTMF.
 - 🛡️ Browser audio WebSocket sessions remain server-authoritative: if the socket
   is truly gone, the server ends the call.
 - 🔄 Browser/card reload during an active HA softphone call can explicitly rebind
   to the existing server session within a short grace window, avoiding the old
   "dashboard refresh killed or desynced the softphone call" behavior.
 - 📞 ESP -> HA browser-answer calls now initialize the browser audio pipeline
-  only after the server `ANSWER` reply carries the negotiated TX/RX formats.
+  only after the HA SIP answer/control reply carries the negotiated TX/RX formats.
   This keeps the ESP-caller / HA-responder path aligned with HA-originated
   calls and avoids deep/slow audio caused by a browser worklet using stale
   16 kHz framing against a negotiated 48 kHz leg.
 - 🧭 ESP caller devices now also apply the selected RX speaker format before
-  activation and again when the `ANSWER` arrives. ESP-originated calls answered
+  activation and again when the SIP answer arrives. ESP-originated calls answered
   by HA therefore use the negotiated speaker rate instead of a stale/default
   playback format.
 - 🚫 Duplicate terminal/bridge events were tightened so cards should see one
@@ -99,7 +103,7 @@ regressions would be a problem.
   `16000:s16le:1:32` and `48000:s16le:1:20`.
 - 🔀 TX and RX capabilities are advertised separately, so a device can expose
   16 kHz microphone audio while accepting 48 kHz speaker audio.
-- ✅ ANSWER confirms the effective caller-to-destination and
+- ✅ The SIP answer confirms the effective caller-to-destination and
   destination-to-caller formats. The caller no longer has to guess how the
   remote side will send audio.
 - 🧯 Unsupported high-rate or oversized media profiles are rejected with a SIP

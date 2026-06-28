@@ -4,8 +4,8 @@
 
 It is a SIP/SDP/RTP profile, not a proprietary intercom protocol. ESP devices
 act as SIP user agents and exchange RTP PCM media. Home Assistant may provide
-roster distribution, routing, bridging and future transcoding, but direct
-ESP-to-ESP calls must work when a SIP URI is known.
+roster distribution, routing, bridging and optional provider trunk registration,
+but direct ESP-to-ESP calls must work when a SIP URI is known.
 
 ## Security And Registration
 
@@ -21,6 +21,9 @@ ESP devices.
 ESP trust is provided by the existing ESPHome/Home Assistant management channel
 for roster delivery. SIP signaling remains unauthenticated on the local network.
 
+Home Assistant may register one optional provider/PBX trunk. That registration
+belongs to HA only and does not create SIP accounts for ESP devices.
+
 ## SIP Core
 
 Required SIP methods:
@@ -30,6 +33,9 @@ Required SIP methods:
 - `CANCEL`
 - `BYE`
 - `OPTIONS`
+- `REGISTER` on the HA trunk client only
+- `INFO` is accepted by HA as a SIP method; DTMF routing is based on
+  `telephone-event` RTP
 
 Required responses:
 
@@ -86,7 +92,13 @@ Direct calls use SIP URIs such as:
 - `sip:Salotto@192.168.1.52:5060;transport=udp`
 
 Phone numbers and unresolved names route through the Home Assistant SIP bridge when
-configured. Missing endpoint metadata must not invent a direct SIP route.
+configured. If an optional HA trunk is configured and registered, unresolved
+external targets can route through that trunk. Missing endpoint metadata must
+not invent a direct SIP route.
+
+Inbound trunk calls can use RFC2833/telephone-event DTMF digits as a local route
+selector. Digits are mapped by HA to local SIP phonebook targets; ESP devices do
+not need provider-side extensions or registrations.
 
 ## State
 
@@ -106,3 +118,6 @@ Cards render the state of their owner only:
 
 - HA softphone card mirrors the HA softphone.
 - ESP mirror card mirrors one ESP.
+
+HA trunk registration status is observability data on the HA softphone snapshot;
+it is not an ESP phone state.

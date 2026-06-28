@@ -8,6 +8,7 @@ the central phonebook and routed through HA as SIP dialogs when needed.
 import asyncio
 from dataclasses import replace
 import logging
+import socket
 import time
 
 import voluptuous as vol
@@ -23,6 +24,7 @@ from homeassistant.components import network
 
 from .const import (
     CONF_ASSIST_INTENTS,
+    CONF_DEBUG_MODE,
     CONF_SIP_TCP_ENABLED,
     CONF_SIP_UDP_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -283,6 +285,10 @@ def _get_trunk_config(hass: HomeAssistant) -> dict:
     return hass.data.get(DOMAIN, {}).get("trunk_config", _entry_trunk_config(None))
 
 
+def _debug_mode(hass: HomeAssistant) -> bool:
+    return bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
+
+
 def _trunk_enabled(cfg: dict) -> bool:
     return bool(
         cfg.get(CONF_TRUNK_ENABLED)
@@ -413,6 +419,36 @@ def _sip_send_bye(hass: HomeAssistant, call_id: str = "") -> bool:
         if callable(send_bye) and send_bye(call_id):
             return True
     return False
+
+
+def _rtp_port_available(port: int) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("0.0.0.0", int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def _allocate_sip_rtp_port(hass: HomeAssistant, *, step: int = 2) -> int:
+    cfg = _get_transport_config(hass)
+    bucket = hass.data.setdefault(DOMAIN, {})
+    base_port = int(cfg["rtp_port"])
+    if _rtp_port_available(base_port):
+        bucket["sip_rtp_next_port"] = base_port + int(step)
+        return base_port
+    candidate = int(bucket.get("sip_rtp_next_port", base_port + int(step)))
+    for _ in range(64):
+        if candidate == base_port:
+            candidate += int(step)
+            continue
+        if _rtp_port_available(candidate):
+            bucket["sip_rtp_next_port"] = candidate + int(step)
+            return candidate
+        candidate += int(step)
+    return base_port
 
 
 async def _async_emit_esp_state_event(
@@ -728,6 +764,7 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
     """Keep an outbound SIP client alive and complete early-dialog INVITEs."""
     bucket = hass.data.setdefault(DOMAIN, {})
     active = bucket.setdefault("sip_clients", {})
+    watchers = bucket.setdefault("sip_client_watchers", {})
     if result not in {"ringing", "in_call"}:
         hass.async_create_task(client.close())
         return
@@ -798,9 +835,11 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
         _fire_call_event(hass, payload, "sip")
         if final not in {"ringing", "in_call"}:
             active.pop(client.dialog_ids.call_id, None)
+            watchers.pop(client.dialog_ids.call_id, None)
             await client.close()
 
-    hass.async_create_task(_watch_sip_final())
+    task = hass.async_create_task(_watch_sip_final())
+    watchers[client.dialog_ids.call_id] = task
 
 
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
@@ -866,10 +905,11 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     cfg = _get_transport_config(hass)
     local_ip = await _ha_advertise_host(hass)
     from .sdp import build_answer_directional
+    local_rtp_port = _allocate_sip_rtp_port(hass)
     answer = build_answer_directional(
         local_ip,
         local_ip,
-        int(cfg["rtp_port"]),
+        local_rtp_port,
         invite.send_format,
         invite.recv_format,
     )
@@ -879,7 +919,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
 
     hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone_media", {})[call_id] = {
         "invite": invite,
-        "local_rtp_port": int(cfg["rtp_port"]),
+        "local_rtp_port": local_rtp_port,
     }
     _LOGGER.info("SIP answered call_id=%s", call_id)
     _set_ha_softphone_call_state(
@@ -1008,6 +1048,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     peer_name = str(softphone_store.get("peer_name") or softphone_store.get("last_terminal_peer_name") or "")
     direction = str(softphone_store.get("direction") or softphone_store.get("last_terminal_direction") or "")
     client = clients.pop(call_id, None) if call_id else None
+    watcher = bucket.setdefault("sip_client_watchers", {}).pop(call_id, None) if call_id else None
     relay = relays.pop(call_id, None) if call_id else None
     if call_id:
         media_sessions.pop(call_id, None)
@@ -1015,7 +1056,13 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     server_bye = False
     pending_closed = 0
     if client is not None:
-        client.bye_or_cancel()
+        if watcher is not None:
+            watcher.cancel()
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
+        await client.terminate()
         await client.close()
     if relay is not None:
         await relay.stop()
@@ -1327,11 +1374,12 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         remote_rx_formats=remote_rx_formats,
         target=target,
     )
+    local_rtp_port = _allocate_sip_rtp_port(hass)
     client = SipCallClient(
         local_ip=local_ip,
         local_name=_ha_peer_name(hass),
         local_sip_port=int(cfg["sip_port"]),
-        local_rtp_port=int(cfg["rtp_port"]),
+        local_rtp_port=local_rtp_port,
         supported_send_formats=sip_send_formats,
         supported_recv_formats=sip_recv_formats,
         signaling_transport=_sip_uri_transport(uri),
@@ -1770,6 +1818,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "sip_port": INTERCOM_SIP_PORT,
         "rtp_port": INTERCOM_RTP_PORT,
     }
+    hass.data[DOMAIN][CONF_DEBUG_MODE] = False
     hass.data[DOMAIN]["trunk_config"] = _entry_trunk_config(None)
     hass.data[DOMAIN]["sip_port"] = INTERCOM_SIP_PORT
     await _async_setup_shared(hass, config)
@@ -1783,6 +1832,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})["transport_config"] = cfg
     hass.data[DOMAIN]["trunk_config"] = trunk_cfg
     hass.data[DOMAIN]["sip_port"] = cfg["sip_port"]
+    hass.data[DOMAIN][CONF_DEBUG_MODE] = bool(entry.data.get(CONF_DEBUG_MODE, False))
     await _async_setup_shared(hass)
     await _async_apply_assist_intents(
         hass,
@@ -2634,16 +2684,17 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 last_sip_event="INVITE",
             )
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        local_rtp_port = _allocate_sip_rtp_port(hass)
         answer = build_answer_directional(
             local_ip,
             local_ip,
-            int(cfg["rtp_port"]),
+            local_rtp_port,
             invite.send_format,
             invite.recv_format,
         )
         bucket.setdefault("ha_softphone_media", {})[invite.call_id] = {
             "invite": invite,
-            "local_rtp_port": int(cfg["rtp_port"]),
+            "local_rtp_port": local_rtp_port,
         }
         _set_ha_softphone_call_state(
             hass,

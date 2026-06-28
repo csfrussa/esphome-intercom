@@ -3,8 +3,8 @@
 This document is retained only as a tombstone for old links.
 
 The proprietary intercom wire protocol is no longer the project contract. It is
-not a fallback and should not be used for new code, tests, YAML packages, cards,
-or tools.
+not a compatibility layer and should not be used for new code, tests, YAML
+packages, cards, or tools.
 
 The current contract is:
 

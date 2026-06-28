@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
+from .const import CONF_DEBUG_MODE, DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
 from .fsm import CallState, TerminalReason, sip_phone_state
 
 CALL_EVENT = "intercom_native.call_event"
@@ -208,6 +208,7 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_relays": {},
         "sip_client_dialogs": {},
         "sip_trunk": {},
+        "media_debug": {},
     }
     if endpoint is None:
         endpoint = None
@@ -275,6 +276,7 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
     runtime = _sip_runtime_snapshot(hass)
+    debug_mode = bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
     last_status = store.get("sip_status_code", "") or runtime["last_sip_status_code"] or ""
     last_event = store.get("last_sip_event", "") or runtime["last_sip_event"]
     caller = store.get("caller", "") or store.get("last_terminal_caller", "")
@@ -340,6 +342,8 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_relays": runtime["rtp_relays"],
         "sip_client_dialogs": runtime["sip_client_dialogs"],
         "sip_trunk": runtime["sip_trunk"],
+        "debug_mode": debug_mode,
+        "media_debug": dict(store.get("media_debug") or {}) if debug_mode else {},
     }
 
 

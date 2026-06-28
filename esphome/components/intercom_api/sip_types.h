@@ -54,7 +54,8 @@ struct AudioFormat {
                             this->sample_rate == 32000 || this->sample_rate == 44100 ||
                             this->sample_rate == 48000;
     const bool valid_channels = this->channels == 1 || this->channels == 2;
-    const bool valid_frame = this->frame_ms == 10 || this->frame_ms == 20 || this->frame_ms == 32;
+    const bool valid_frame = this->frame_ms == 10 || this->frame_ms == 16 ||
+                             this->frame_ms == 20 || this->frame_ms == 32;
     const bool whole_frames = (static_cast<uint64_t>(this->sample_rate) * this->frame_ms) % 1000u == 0;
     return valid_rate && valid_channels && valid_frame && whole_frames && this->container_bytes_per_sample() != 0;
   }

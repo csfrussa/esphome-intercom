@@ -20,6 +20,7 @@ as `16000:s16le:1:32`, `16000:s16le:1:20`, or `48000:s16le:1:10`.
 - For local ESP-only routing, declare the contact in `intercom_api.phonebook`.
 - Use a direct SIP URI (`sip:name@host:5060`) when bypassing HA.
 - Use `ha_bridge: true` when HA must bridge a logical target.
+- For external numbers, confirm the optional trunk is configured and registered.
 
 ## Busy Or DND
 
@@ -33,3 +34,19 @@ final response.
 - Check selected TX/RX formats in the SIP snapshot.
 - Check RTP packet/byte counters on both HA and ESP.
 - For HA bridge calls, inspect relay logs for conversion/drop messages.
+
+## Trunk Does Not Register
+
+- Confirm `trunk_enabled` is on; when off, no trunk runtime is created.
+- Check `sip_trunk.trunk_status_code`, `trunk_status_reason` and
+  `trunk_last_sip_event` in the HA softphone snapshot.
+- Confirm provider transport, server, port, username/auth username and password.
+- If the provider requires an outbound proxy, set `trunk_outbound_proxy`.
+
+## Inbound Trunk Call Routes To The Wrong Target
+
+- Confirm the provider offers RFC2833/telephone-event DTMF in SDP.
+- Check `trunk_dtmf_routes` entries use `digits=target`, one route per line.
+- Keep `trunk_dtmf_timeout_ms` short, normally 1000 ms and never above 2000 ms.
+- If no route matches, HA logs the received digits and uses
+  `trunk_inbound_default_target`.

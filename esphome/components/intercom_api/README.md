@@ -154,6 +154,9 @@ back to `intercom_api`.
 
 ## Transport
 
+SIP is the only call-control protocol. `protocol` selects the SIP signaling
+transport exposed by this phone.
+
 SIP/UDP signaling:
 
 ```yaml
@@ -220,6 +223,10 @@ as the address other peers should dial.
 multihomed/LXC/NAT installs where Home Assistant would otherwise publish an
 address ESP devices cannot reach. It is not required just because ESPs and HA
 are on different routed subnets.
+
+ESP devices never register to the optional HA/provider trunk. If HA has a trunk,
+HA maps external numbers or inbound DTMF route digits to local phonebook
+targets and then calls ESP devices as normal SIP phones.
 
 ## SIP Automation Hooks
 

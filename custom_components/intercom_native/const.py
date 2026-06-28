@@ -5,6 +5,7 @@ from pathlib import Path
 
 DOMAIN = "intercom_native"
 CONF_ASSIST_INTENTS = "assist_intents"
+CONF_DEBUG_MODE = "debug_mode"
 CONF_SIP_TCP_ENABLED = "sip_tcp_enabled"
 CONF_SIP_UDP_ENABLED = "sip_udp_enabled"
 CONF_TRUNK_ENABLED = "trunk_enabled"
