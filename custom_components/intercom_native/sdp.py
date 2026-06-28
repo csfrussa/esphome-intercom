@@ -128,16 +128,48 @@ def _dedupe_formats(formats: list[AudioFormat]) -> list[AudioFormat]:
     return out
 
 
-def _rtp_matches_audio(offered: RtpPcmFormat, local: AudioFormat) -> bool:
+def _rtp_compatible_audio(offered: RtpPcmFormat, local: AudioFormat) -> RtpPcmFormat | None:
     if not is_rtp_pcm_mappable(local):
-        return False
+        return None
+    if offered.frame_ms not in (0, local.frame_ms):
+        return None
     wanted = audio_format_to_rtp(local, offered.payload_type)
-    return (
+    if (
         offered.encoding == wanted.encoding
         and offered.sample_rate == wanted.sample_rate
         and offered.channels == wanted.channels
-        and offered.frame_ms == local.frame_ms
-    )
+    ):
+        return wanted
+    return None
+
+
+def _rtp_matches_audio(offered: RtpPcmFormat, local: AudioFormat) -> bool:
+    return _rtp_compatible_audio(offered, local) is not None
+
+
+def _best_offered_match(offered: list[RtpPcmFormat], local_preferred: list[AudioFormat]) -> RtpPcmFormat | None:
+    for local in local_preferred:
+        for offered_fmt in offered:
+            selected = _rtp_compatible_audio(offered_fmt, local)
+            if selected is not None:
+                return selected
+    return None
+
+
+def _first_offered_match(
+    offered: list[RtpPcmFormat],
+    local_preferred: list[AudioFormat],
+    *,
+    skip_payload_type: int | None = None,
+) -> RtpPcmFormat | None:
+    for offered_fmt in offered:
+        if skip_payload_type is not None and offered_fmt.payload_type == skip_payload_type:
+            continue
+        for local in local_preferred:
+            selected = _rtp_compatible_audio(offered_fmt, local)
+            if selected is not None:
+                return selected
+    return None
 
 
 def build_offer(origin_ip: str, media_ip: str, media_port: int, formats: list[AudioFormat]) -> str:
@@ -179,7 +211,7 @@ def parse_sdp(sdp: str | bytes) -> dict:
     media_port = 0
     payload_order: list[int] = []
     rtpmap: dict[int, tuple[str, int, int]] = {}
-    ptime = 20
+    ptime = 0
     in_audio = False
     for raw in sdp.replace("\r\n", "\n").split("\n"):
         line = raw.strip()
@@ -235,11 +267,7 @@ def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
 
 
 def negotiate(remote_sdp: str | bytes, local_preferred: list[AudioFormat]) -> RtpPcmFormat | None:
-    for local in local_preferred:
-        for offered in offered_pcm_formats(remote_sdp):
-            if _rtp_matches_audio(offered, local):
-                return offered
-    return None
+    return _best_offered_match(offered_pcm_formats(remote_sdp), local_preferred)
 
 
 def negotiate_directional(
@@ -267,32 +295,17 @@ def negotiate_answer_directional(
     RTP stream by expecting the first payload in both directions.
     """
     offered = offered_pcm_formats(remote_sdp)
-    send = None
-    for offered_fmt in offered:
-        for local in local_send_preferred:
-            if _rtp_matches_audio(offered_fmt, local):
-                send = offered_fmt
-                break
-        if send is not None:
-            break
+    send = _first_offered_match(offered, local_send_preferred)
     if send is None:
         return None
 
-    recv = None
-    for offered_fmt in offered:
-        if offered_fmt.payload_type == send.payload_type and len(offered) > 1:
-            continue
-        for local in local_recv_preferred:
-            if _rtp_matches_audio(offered_fmt, local):
-                recv = offered_fmt
-                break
-        if recv is not None:
-            break
+    recv = _first_offered_match(
+        offered,
+        local_recv_preferred,
+        skip_payload_type=send.payload_type if len(offered) > 1 else None,
+    )
     if recv is None:
-        for local in local_recv_preferred:
-            if _rtp_matches_audio(send, local):
-                recv = send
-                break
+        recv = _best_offered_match([send], local_recv_preferred)
     if recv is None:
         return None
     return RtpPcmDirection(send=send, recv=recv)

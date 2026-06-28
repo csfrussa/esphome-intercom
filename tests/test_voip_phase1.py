@@ -541,6 +541,36 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertEqual(selected.sample_rate, 48000)
         self.assertEqual(selected.payload_type, 96)
 
+    def test_negotiate_missing_ptime_prefers_best_local_pcm(self) -> None:
+        offer = (
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 192.168.1.48\r\n"
+            "s=pjmedia\r\n"
+            "c=IN IP4 192.168.1.48\r\n"
+            "t=0 0\r\n"
+            "m=audio 40760 RTP/AVP 96 97 98\r\n"
+            "a=rtpmap:96 L16/16000\r\n"
+            "a=rtpmap:97 L16/48000\r\n"
+            "a=rtpmap:98 opus/48000/2\r\n"
+            "a=sendrecv\r\n"
+        )
+        selected = sdp.negotiate(
+            offer,
+            [
+                audio_format.AudioFormat(48000, "s16le", 1, 10),
+                audio_format.AudioFormat(16000, "s16le", 1, 20),
+            ],
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.payload_type, 97)
+        self.assertEqual(selected.audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
+
+        answer = sdp.build_answer("192.168.1.10", "192.168.1.10", 40000, selected)
+        self.assertIn("m=audio 40000 RTP/AVP 97", answer)
+        self.assertIn("a=rtpmap:97 L16/48000/1", answer)
+        self.assertIn("a=ptime:10", answer)
+
     def test_negotiate_l24_from_s24(self) -> None:
         offer = sdp.build_offer(
             "192.168.1.20",
