@@ -70,6 +70,7 @@ InviteHandler = Callable[[SipInvite], Awaitable[SipInviteResult]]
 TerminateHandler = Callable[[str, str], Awaitable[None]]
 RegisterHandler = Callable[[sip.SipMessage, tuple[str, int], str], Awaitable[Any]]
 SendHandler = Callable[[bytes, tuple[str, int]], None]
+TcpDialogSender = Callable[[bytes], None]
 
 
 def _extract_tag(header: str) -> str:
@@ -628,6 +629,8 @@ class SipTcpServer:
         self.on_register = on_register
         self.server: asyncio.AbstractServer | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
+        self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
+        self._response_queues: dict[tuple[tuple[str, int], str], asyncio.Queue[bytes]] = {}
 
     async def start(self) -> bool:
         if self.server is not None:
@@ -643,6 +646,7 @@ class SipTcpServer:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername") or ("0.0.0.0", 0)
         addr = (str(peer[0]), int(peer[1]))
+        self._writers[addr] = writer
 
         def _send(data: bytes, _addr) -> None:
             writer.write(data)
@@ -667,12 +671,55 @@ class SipTcpServer:
                 raw = await _read_sip_stream_message(reader)
                 if raw is None:
                     break
+                try:
+                    msg = sip.parse_message(raw)
+                except Exception:
+                    msg = None
+                if msg is not None and msg.is_response:
+                    queue = self._response_queues.get((addr, msg.header("Call-ID")))
+                    if queue is not None:
+                        await queue.put(raw)
+                        continue
                 await endpoint._handle_datagram(raw, addr)
         finally:
             self.endpoints.discard(endpoint)
+            self._writers.pop(addr, None)
+            for key in [key for key in self._response_queues if key[0] == addr]:
+                self._response_queues.pop(key, None)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+    def open_reused_dialog(
+        self,
+        addr: tuple[str, int],
+        call_id: str,
+    ) -> tuple[TcpDialogSender, asyncio.Queue[bytes]] | None:
+        writer = self._writers.get(addr)
+        if writer is None or writer.is_closing():
+            return None
+        queue: asyncio.Queue[bytes] = asyncio.Queue()
+        key = (addr, call_id)
+        self._response_queues[key] = queue
+
+        def _send(data: bytes) -> None:
+            writer.write(data)
+
+            async def _drain() -> None:
+                try:
+                    await writer.drain()
+                except (ConnectionError, RuntimeError, OSError):
+                    _LOGGER.debug("SIP TCP reused dialog write drain failed", exc_info=True)
+
+            try:
+                asyncio.get_running_loop().create_task(_drain())
+            except RuntimeError:
+                pass
+
+        return _send, queue
+
+    def close_reused_dialog(self, addr: tuple[str, int], call_id: str) -> None:
+        self._response_queues.pop((addr, call_id), None)
 
     def send_final_response(
         self,
@@ -705,4 +752,8 @@ class SipTcpServer:
             self.server.close()
             await self.server.wait_closed()
             self.server = None
+        for writer in tuple(self._writers.values()):
+            writer.close()
         self.endpoints.clear()
+        self._writers.clear()
+        self._response_queues.clear()

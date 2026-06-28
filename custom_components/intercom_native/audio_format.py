@@ -127,13 +127,13 @@ HA_BROWSER_RX_FORMATS = _browser_formats(channels=(1, 2))
 HA_SIP_PCM_FORMATS = (
     AudioFormat(48000, PcmFormat.S16LE, 2, 20),
     AudioFormat(48000, PcmFormat.S16LE, 1, 20),
-    AudioFormat(32000, PcmFormat.S16LE, 1, 16),
-    AudioFormat(16000, PcmFormat.S16LE, 1, 16),
     AudioFormat(48000, PcmFormat.S16LE, 1, 10),
+    AudioFormat(32000, PcmFormat.S16LE, 1, 16),
     AudioFormat(32000, PcmFormat.S16LE, 1, 10),
+    AudioFormat(16000, PcmFormat.S16LE, 1, 16),
     AudioFormat(16000, PcmFormat.S16LE, 1, 10),
-    AudioFormat(16000, PcmFormat.S16LE, 1, 32),
     AudioFormat(16000, PcmFormat.S16LE, 1, 20),
+    AudioFormat(16000, PcmFormat.S16LE, 1, 32),
     AudioFormat(8000, PcmFormat.S16LE, 1, 20),
 )
 HA_SIP_PCM_TX_FORMATS = HA_SIP_PCM_FORMATS

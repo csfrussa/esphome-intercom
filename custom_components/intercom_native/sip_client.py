@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import logging
 import socket
-from typing import Any
+from typing import Any, Callable
 
 from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS, PcmFormat
 from . import g711
@@ -234,6 +234,9 @@ class SipCallClient:
         self.protocol: _SipClientProtocol | None = None
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
+        self._tcp_reuse_send: Callable[[bytes], None] | None = None
+        self._tcp_reuse_responses: asyncio.Queue[bytes] | None = None
+        self._tcp_reuse_close: Callable[[], None] | None = None
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
         self.dialog_ids = sip.SipDialogIds(call_id=sip.make_call_id("ha"), local_tag=sip.make_tag())
         self.dialog: SipDialog | None = None
@@ -283,8 +286,26 @@ class SipCallClient:
                 pass
             self.writer = None
             self.reader = None
+        if self._tcp_reuse_close is not None:
+            self._tcp_reuse_close()
+            self._tcp_reuse_close = None
+        self._tcp_reuse_send = None
+        self._tcp_reuse_responses = None
+
+    def use_reused_tcp_connection(
+        self,
+        *,
+        send: Callable[[bytes], None],
+        responses: asyncio.Queue[bytes],
+        close: Callable[[], None],
+    ) -> None:
+        self._tcp_reuse_send = send
+        self._tcp_reuse_responses = responses
+        self._tcp_reuse_close = close
 
     async def _connect_tcp(self, remote_host: str, remote_sip_port: int) -> None:
+        if self._tcp_reuse_send is not None:
+            return
         if self.writer is not None:
             return
         host, port = self._signaling_target(remote_host, int(remote_sip_port))
@@ -314,6 +335,9 @@ class SipCallClient:
 
     async def _send_raw(self, raw: bytes, remote_host: str, remote_sip_port: int) -> None:
         if self.signaling_transport == "TCP":
+            if self._tcp_reuse_send is not None:
+                self._tcp_reuse_send(raw)
+                return
             await self._connect_tcp(remote_host, remote_sip_port)
             assert self.writer is not None
             self.writer.write(raw)
@@ -325,11 +349,14 @@ class SipCallClient:
 
     def _has_signaling_path(self) -> bool:
         if self.signaling_transport == "TCP":
-            return self.writer is not None
+            return self.writer is not None or self._tcp_reuse_send is not None
         return self.transport is not None
 
     def _send_dialog_request(self, raw: bytes, host: str, port: int) -> None:
         if self.signaling_transport == "TCP":
+            if self._tcp_reuse_send is not None:
+                self._tcp_reuse_send(raw)
+                return
             if self.writer is None:
                 return
             self.writer.write(raw)
@@ -351,6 +378,12 @@ class SipCallClient:
 
     async def _read_response(self, timeout: float) -> tuple[sip.SipMessage, tuple[str, int]] | None:
         if self.signaling_transport == "TCP":
+            if self._tcp_reuse_responses is not None:
+                try:
+                    raw = await asyncio.wait_for(self._tcp_reuse_responses.get(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    return None
+                return sip.parse_message(raw), (self._pending_remote_host, self._pending_remote_sip_port)
             if self.reader is None:
                 return None
             try:
@@ -371,7 +404,7 @@ class SipCallClient:
         remote_sip_port: int,
         timeout: float = 8.0,
     ) -> str:
-        if self.signaling_transport == "TCP":
+        if self.signaling_transport == "TCP" and self._tcp_reuse_send is None:
             await self._connect_tcp(remote_host, int(remote_sip_port))
         else:
             await self.start()

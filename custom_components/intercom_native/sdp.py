@@ -13,14 +13,14 @@ class SdpError(ValueError):
 
 MAX_RTP_OFFER_FORMATS = 12
 _PREFERRED_RTP_AUDIO_KEYS = {
-    (32000, PcmFormat.S16LE, 1, 16): 0,
-    (16000, PcmFormat.S16LE, 1, 16): 1,
-    (48000, PcmFormat.S16LE, 1, 10): 2,
-    (32000, PcmFormat.S16LE, 1, 10): 3,
-    (24000, PcmFormat.S16LE, 1, 20): 4,
-    (16000, PcmFormat.S16LE, 1, 32): 5,
+    (48000, PcmFormat.S16LE, 1, 10): 0,
+    (32000, PcmFormat.S16LE, 1, 16): 1,
+    (32000, PcmFormat.S16LE, 1, 10): 2,
+    (24000, PcmFormat.S16LE, 1, 20): 3,
+    (16000, PcmFormat.S16LE, 1, 16): 4,
+    (16000, PcmFormat.S16LE, 1, 10): 5,
     (16000, PcmFormat.S16LE, 1, 20): 6,
-    (16000, PcmFormat.S16LE, 1, 10): 7,
+    (16000, PcmFormat.S16LE, 1, 32): 7,
     (8000, PcmFormat.S16LE, 1, 20): 8,
 }
 _STATIC_RTPMAP = {
@@ -36,6 +36,8 @@ class RtpPcmFormat:
     sample_rate: int
     channels: int
     frame_ms: int = 20
+    min_frame_ms: int = 0
+    max_frame_ms: int = 0
 
     @property
     def bits(self) -> int:
@@ -160,6 +162,21 @@ def _dedupe_formats(formats: list[AudioFormat]) -> list[AudioFormat]:
 
 def _rtp_compatible_audio(offered: RtpPcmFormat, local: AudioFormat) -> RtpPcmFormat | None:
     if offered.frame_ms not in (0, local.frame_ms):
+        min_frame_ms = offered.min_frame_ms or 0
+        max_frame_ms = offered.max_frame_ms or 0
+        if min_frame_ms and local.frame_ms < min_frame_ms:
+            return None
+        if max_frame_ms and local.frame_ms > max_frame_ms:
+            return None
+        if not min_frame_ms and not max_frame_ms:
+            return None
+        if min_frame_ms and not max_frame_ms and local.frame_ms > offered.frame_ms:
+            return None
+        if max_frame_ms and not min_frame_ms and local.frame_ms < offered.frame_ms:
+            return None
+    if offered.frame_ms == 0 and offered.min_frame_ms and local.frame_ms < offered.min_frame_ms:
+        return None
+    if offered.frame_ms == 0 and offered.max_frame_ms and local.frame_ms > offered.max_frame_ms:
         return None
     if offered.encoding == "OPUS":
         if (
@@ -256,6 +273,8 @@ def parse_sdp(sdp: str | bytes) -> dict:
     rtpmap: dict[int, tuple[str, int, int]] = {}
     fmtp: dict[int, str] = {}
     ptime = 0
+    minptime = 0
+    maxptime = 0
     in_audio = False
     for raw in sdp.replace("\r\n", "\n").split("\n"):
         line = raw.strip()
@@ -288,6 +307,10 @@ def parse_sdp(sdp: str | bytes) -> dict:
             fmtp[int(left)] = spec.strip()
         elif in_audio and line.startswith("a=ptime:"):
             ptime = int(line.removeprefix("a=ptime:").strip())
+        elif in_audio and line.startswith("a=minptime:"):
+            minptime = int(line.removeprefix("a=minptime:").strip())
+        elif in_audio and line.startswith("a=maxptime:"):
+            maxptime = int(line.removeprefix("a=maxptime:").strip())
     if not session_conn or not media_port or not payload_order:
         raise SdpError("SDP missing c=, m=audio port, or payload list")
     return {
@@ -297,6 +320,8 @@ def parse_sdp(sdp: str | bytes) -> dict:
         "rtpmap": rtpmap,
         "fmtp": fmtp,
         "ptime": ptime,
+        "minptime": minptime,
+        "maxptime": maxptime,
     }
 
 
@@ -310,7 +335,7 @@ def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
         encoding, rate, channels = spec
         if encoding not in {"L16", "L24", "PCMA", "PCMU", "OPUS"}:
             continue
-        out.append(RtpPcmFormat(pt, encoding, rate, channels, parsed["ptime"]))
+        out.append(RtpPcmFormat(pt, encoding, rate, channels, parsed["ptime"], parsed["minptime"], parsed["maxptime"]))
     return out
 
 
@@ -376,10 +401,13 @@ def negotiate_answer_directional(
     if send is None:
         return None
 
+    asymmetric_profile = [_format_key(fmt) for fmt in local_send_preferred] != [
+        _format_key(fmt) for fmt in local_recv_preferred
+    ]
     recv = _first_offered_match(
         offered,
         local_recv_preferred,
-        skip_payload_type=send.payload_type if len(offered) > 1 else None,
+        skip_payload_type=send.payload_type if asymmetric_profile and len(offered) > 1 else None,
     )
     if recv is None:
         recv = _best_offered_match([send], local_recv_preferred)

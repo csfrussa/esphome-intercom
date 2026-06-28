@@ -95,6 +95,24 @@ def _extract_uri(header: str) -> str:
     return value.strip()
 
 
+def _extract_register_username(request: sip.SipMessage) -> str:
+    candidates: list[str] = []
+    for raw_uri in (request.uri, _extract_uri(request.header("To")), _extract_uri(request.header("From"))):
+        if not raw_uri:
+            continue
+        try:
+            parsed = sip.parse_sip_uri(raw_uri)
+        except Exception:
+            continue
+        if parsed.user:
+            candidates.append(parsed.user)
+    if not candidates:
+        auth_username = parse_digest_challenge(request.header("Authorization")).get("username", "")
+        if auth_username:
+            candidates.append(auth_username)
+    return normalize_username(candidates[0])
+
+
 def _header_param(header: str, name: str) -> str:
     wanted = name.lower()
     for part in (header or "").split(";")[1:]:
@@ -170,8 +188,8 @@ class SipRegistrar:
         if not self.enabled:
             return self._result(405, "Method Not Allowed")
         try:
-            uri = sip.parse_sip_uri(request.uri)
-            username = normalize_username(uri.user or "")
+            sip.parse_sip_uri(request.uri)
+            username = _extract_register_username(request)
         except Exception:
             return self._result(400, "Bad Request")
         account = self.accounts.get(username.lower())

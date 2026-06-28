@@ -1508,6 +1508,19 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if use_trunk else "",
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
     )
+    if _sip_uri_transport(uri).upper() == "TCP" and not use_trunk:
+        endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
+        tcp_server = getattr(endpoint, "tcp_server", None)
+        remote_addr = (uri.host, int(uri.port or cfg["sip_port"]))
+        reuse = tcp_server.open_reused_dialog(remote_addr, client.dialog_ids.call_id) if tcp_server is not None else None
+        if reuse is not None:
+            send, responses = reuse
+            client.use_reused_tcp_connection(
+                send=send,
+                responses=responses,
+                close=lambda addr=remote_addr, call_id=client.dialog_ids.call_id: tcp_server.close_reused_dialog(addr, call_id),
+            )
+            _LOGGER.info("SIP TCP connection reuse enabled for %s via %s:%s", target, remote_addr[0], remote_addr[1])
     _set_ha_softphone_call_state(
         hass,
         CallState.CALLING.value,

@@ -51,9 +51,9 @@ class SipUri:
     def __str__(self) -> str:
         user = self.user.strip()
         host = self.host.strip()
-        if not user or not host:
-            raise SipError("SIP URI requires non-empty user and host")
-        uri = f"sip:{user}@{host}"
+        if not host:
+            raise SipError("SIP URI requires non-empty host")
+        uri = f"sip:{user}@{host}" if user else f"sip:{host}"
         if self.port is not None:
             if not 1 <= int(self.port) <= 65535:
                 raise SipError(f"SIP URI port out of range: {self.port}")
@@ -136,9 +136,10 @@ def parse_sip_uri(value: str) -> SipUri:
     if not raw.lower().startswith("sip:"):
         raise SipError(f"not a sip URI: {value!r}")
     rest = raw[4:]
-    if "@" not in rest:
-        raise SipError("SIP URI missing @host")
-    user, host_params = rest.split("@", 1)
+    if "@" in rest:
+        user, host_params = rest.split("@", 1)
+    else:
+        user, host_params = "", rest
     params_raw: list[str] = []
     if ";" in host_params:
         host_part, params_part = host_params.split(";", 1)

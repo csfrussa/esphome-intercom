@@ -52,6 +52,15 @@ sip_rtp_bridge = _load_intercom_module("sip_rtp_bridge")
 dtmf = _load_intercom_module("dtmf")
 
 
+class SipUriTest(unittest.TestCase):
+    def test_parse_host_only_uri_used_by_standard_register_routes(self) -> None:
+        uri = sip.parse_sip_uri("sip:192.168.1.10;transport=tcp")
+        self.assertEqual(uri.user, "")
+        self.assertEqual(uri.host, "192.168.1.10")
+        self.assertEqual(uri.params, (("transport", "tcp"),))
+        self.assertEqual(str(uri), "sip:192.168.1.10;transport=tcp")
+
+
 def _load_sip_transport_with_homeassistant_stubs():
     if "homeassistant" not in sys.modules:
         ha_pkg = types.ModuleType("homeassistant")
@@ -656,8 +665,8 @@ class SdpPcmProfileTest(unittest.TestCase):
         )
         selected = sdp.negotiate_answer_directional(
             answer,
-            [ha_to_esp, esp_to_ha],
-            [ha_to_esp, esp_to_ha],
+            [ha_to_esp],
+            [esp_to_ha],
         )
         self.assertIsNotNone(selected)
         assert selected is not None
@@ -665,6 +674,32 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertEqual(selected.send.audio_format, ha_to_esp)
         self.assertEqual(selected.recv.payload_type, 97)
         self.assertEqual(selected.recv.audio_format, esp_to_ha)
+
+    def test_standard_softphone_answer_uses_one_common_payload_when_profiles_are_symmetric(self) -> None:
+        answer = (
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 192.168.1.48\r\n"
+            "s=baresip\r\n"
+            "c=IN IP4 192.168.1.48\r\n"
+            "t=0 0\r\n"
+            "m=audio 45686 RTP/AVP 96 98\r\n"
+            "a=rtpmap:96 L16/48000\r\n"
+            "a=rtpmap:98 L16/16000\r\n"
+            "a=minptime:10\r\n"
+            "a=ptime:10\r\n"
+            "a=sendrecv\r\n"
+        )
+        selected = sdp.negotiate_answer_directional(
+            answer,
+            list(audio_format.HA_SIP_PCM_FORMATS),
+            list(audio_format.HA_SIP_PCM_FORMATS),
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.send.payload_type, 96)
+        self.assertEqual(selected.recv.payload_type, 96)
+        self.assertEqual(selected.send.audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
+        self.assertEqual(selected.recv.audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
 
     def test_rejects_oversized_pcm_rtp_frame(self) -> None:
         with self.assertRaises(sdp.SdpError):
@@ -717,6 +752,37 @@ class SdpPcmProfileTest(unittest.TestCase):
         assert selected is not None
         self.assertEqual(selected.encoding, "L16")
         self.assertEqual(selected.sample_rate, 48000)
+
+    def test_negotiate_48k_10ms_when_softphone_offers_20ms_with_minptime_10(self) -> None:
+        offer = (
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 192.168.1.48\r\n"
+            "s=baresip\r\n"
+            "c=IN IP4 192.168.1.48\r\n"
+            "t=0 0\r\n"
+            "m=audio 12456 RTP/AVP 96 97 8 0 101\r\n"
+            "a=rtpmap:96 L16/48000\r\n"
+            "a=rtpmap:97 L16/16000\r\n"
+            "a=rtpmap:8 PCMA/8000\r\n"
+            "a=rtpmap:0 PCMU/8000\r\n"
+            "a=rtpmap:101 telephone-event/8000\r\n"
+            "a=fmtp:101 0-15\r\n"
+            "a=sendrecv\r\n"
+            "a=minptime:10\r\n"
+            "a=ptime:20\r\n"
+        )
+        selected = sdp.negotiate_directional(
+            offer,
+            list(audio_format.HA_SIP_PCM_FORMATS),
+            list(audio_format.HA_SIP_PCM_FORMATS),
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.send.audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
+        self.assertEqual(selected.recv.audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
+        answer = sdp.build_answer_directional("192.168.1.10", "192.168.1.10", 40000, selected.send, selected.recv)
+        self.assertIn("a=rtpmap:96 L16/48000/1", answer)
+        self.assertIn("a=ptime:10", answer)
 
     def test_g711_rtp_payload_converts_to_internal_s16le(self) -> None:
         pcm = b"\x00\x00\x00\x10\x00\xf0"
@@ -1093,6 +1159,43 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entries[0].id, "SmartphoneDany")
         self.assertEqual(entries[0].kind, "sip")
         self.assertEqual(entries[0].sip_uri, "sip:SmartphoneDany@192.168.1.50:5062;transport=udp")
+
+    async def test_register_accepts_host_only_request_uri_from_baresip(self) -> None:
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("SmartphoneDany", "Smartphone Dany", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+        )
+        request_uri = "sip:192.168.1.10;transport=tcp"
+        base_headers = [
+            ("Via", "SIP/2.0/TCP 192.168.1.50:49258;branch=z9hG4bKreg;rport"),
+            ("From", '"Smartphone Dany" <sip:SmartphoneDany@192.168.1.10>;tag=a'),
+            ("To", "<sip:SmartphoneDany@192.168.1.10>"),
+            ("Call-ID", "reg-host-only"),
+            ("CSeq", "1 REGISTER"),
+            ("Contact", "<sip:SmartphoneDany@192.168.1.50:49258;transport=tcp>"),
+            ("Expires", "120"),
+        ]
+        challenge_req = sip.parse_message(sip.build_request("REGISTER", request_uri, base_headers, b""))
+        challenge = await registrar.handle_register(challenge_req, ("192.168.1.50", 49258), "TCP")
+        self.assertEqual(challenge.status, 401)
+        authorization = sip_auth.build_digest_authorization(
+            challenge_header=dict(challenge.headers)["WWW-Authenticate"],
+            username="SmartphoneDany",
+            password="secret",
+            method="REGISTER",
+            uri=request_uri,
+        )
+        ok_req = sip.parse_message(
+            sip.build_request("REGISTER", request_uri, base_headers + [("Authorization", authorization)], b"")
+        )
+        ok = await registrar.handle_register(ok_req, ("192.168.1.50", 49258), "TCP")
+        self.assertEqual(ok.status, 200)
+        self.assertEqual(
+            registrar.roster_entries()[0].sip_uri,
+            "sip:SmartphoneDany@192.168.1.50:49258;transport=tcp",
+        )
 
 
 class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
