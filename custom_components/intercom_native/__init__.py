@@ -6,6 +6,7 @@ the central phonebook and routed through HA as SIP dialogs when needed.
 """
 
 import asyncio
+import contextlib
 from dataclasses import replace
 import logging
 import socket
@@ -858,6 +859,29 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
     watchers[client.dialog_ids.call_id] = task
 
 
+async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
+    """Close stale HA softphone SIP clients before creating a new dialog."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    bucket = hass.data.setdefault(DOMAIN, {})
+    store = _ha_softphone_store(hass)
+    if str(store.get("state") or "").strip().lower() in HA_SOFTPHONE_ACTIVE_STATES:
+        raise ServiceValidationError("HA softphone already has an active SIP call")
+
+    for call_id, client in list(bucket.setdefault("sip_clients", {}).items()):
+        bucket["sip_clients"].pop(call_id, None)
+        watcher = bucket.setdefault("sip_client_watchers", {}).pop(call_id, None)
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+        try:
+            await client.terminate()
+            await client.close()
+        except Exception:
+            _LOGGER.debug("Ignoring stale HA SIP client cleanup error", exc_info=True)
+
+
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
     """Remove stale intercom devices."""
     from datetime import datetime, timedelta, timezone
@@ -1400,6 +1424,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         )
     if not use_trunk and (route.kind not in {"direct", "bridge"} or not route_uri):
         raise ServiceValidationError(f"cannot resolve SIP target: {target}")
+    await _async_prepare_ha_outbound_call(hass)
     uri = parse_sip_uri(route_uri)
     remote_tx_formats = (
         _device_formats(dest_device, "tx_formats")

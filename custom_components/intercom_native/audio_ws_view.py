@@ -87,6 +87,9 @@ def async_register_audio_ws_view(hass: HomeAssistant) -> None:
 def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSession | None:
     store = _ha_softphone_store(hass)
     call_id = str(store.get("call_id") or "").strip()
+    state = str(store.get("state") or "").strip().lower()
+    if state not in {"connecting", "in_call"}:
+        return None
     inbound = hass.data.get(DOMAIN, {}).get("ha_softphone_media", {})
     if call_id and call_id in inbound:
         item = inbound[call_id]
@@ -105,18 +108,6 @@ def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSessi
     clients: dict[str, SipCallClient] = hass.data.get(DOMAIN, {}).get("sip_clients", {})
     if call_id and call_id in clients:
         client = clients[call_id]
-        if client.dialog is not None:
-            dialog = client.dialog
-            return _SoftphoneMediaSession(
-                call_id=dialog.call_id,
-                local_rtp_port=int(dialog.local_rtp_port),
-                remote_rtp_host=dialog.remote_rtp_host,
-                remote_rtp_port=int(dialog.remote_rtp_port),
-                send_format=dialog.send_format,
-                recv_format=dialog.recv_format,
-            )
-    if len(clients) == 1:
-        client = next(iter(clients.values()))
         if client.dialog is not None:
             dialog = client.dialog
             return _SoftphoneMediaSession(
