@@ -762,7 +762,7 @@ class IntercomCard extends HTMLElement {
     const name = entry.name || entry.id;
     if (!name || this._isHaName(name)) return false;
     if (entry.kind === "ha") return false;
-    return ["esp", "sip", "phone", "group"].includes(entry.kind);
+    return ["esp", "softphone", "phone", "group"].includes(entry.kind);
   }
 
   _formatListFromMetadata(value) {
