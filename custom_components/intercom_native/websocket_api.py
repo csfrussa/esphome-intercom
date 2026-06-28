@@ -169,6 +169,10 @@ def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone", {"dnd": False})
 
 
+def _sip_bridge_store(hass: HomeAssistant) -> dict[str, Any]:
+    return hass.data.setdefault(DOMAIN, {}).setdefault("sip_bridge_state", {})
+
+
 async def _async_shutdown_all(hass: HomeAssistant) -> None:
     """Clear HA softphone volatile state before SIP transports are stopped."""
     bucket = hass.data.setdefault(DOMAIN, {})
@@ -177,6 +181,7 @@ async def _async_shutdown_all(hass: HomeAssistant) -> None:
         if future is not None and not future.done():
             future.cancel()
     bucket.pop("ha_softphone_media", None)
+    bucket.pop("sip_bridge_state", None)
     bucket.pop("audio_ws_owners", None)
     store = _ha_softphone_store(hass)
     store.update(
@@ -338,6 +343,14 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
     runtime = _sip_runtime_snapshot(hass)
     debug_mode = bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
+    active_softphone = store.get("state") in {
+        CallState.CALLING.value,
+        CallState.REMOTE_RINGING.value,
+        CallState.RINGING.value,
+        CallState.CONNECTING.value,
+        CallState.IN_CALL.value,
+        CallState.TERMINATING.value,
+    }
     last_status = store.get("sip_status_code", "") or runtime["last_sip_status_code"] or ""
     last_event = store.get("last_sip_event", "") or runtime["last_sip_event"]
     caller = store.get("caller", "") or store.get("last_terminal_caller", "")
@@ -370,7 +383,7 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "device_id": HA_SOFTPHONE_DEVICE_ID,
         "session_device_id": store.get("session_device_id", ""),
         "dnd": _ha_softphone_dnd(hass),
-        "busy": bool(store.get("session_device_id") or runtime["pending_transactions"] or runtime["active_dialogs"]),
+        "busy": bool(store.get("session_device_id") and active_softphone),
         "state": store.get("state", CallState.IDLE.value),
         "sip_state": store.get("sip_state", store.get("state", CallState.IDLE.value)),
         "caller": caller,
@@ -519,6 +532,61 @@ def _set_ha_softphone_call_state(
         extra.get("last_sip_event", store.get("last_sip_event", "")),
     )
     _fire_call_event(hass, payload, "session")
+
+
+def _set_sip_bridge_call_state(
+    hass: HomeAssistant,
+    state: str,
+    *,
+    call_id: str = "",
+    dest_call_id: str = "",
+    caller: str = "",
+    callee: str = "",
+    peer_name: str = "",
+    target: str = "",
+    **extra: Any,
+) -> None:
+    """Publish PBX/B2BUA state without mutating the HA softphone session."""
+    store = _sip_bridge_store(hass)
+    state = _sip_public_state(state)
+    terminal = state in {
+        CallState.IDLE.value,
+        CallState.BUSY.value,
+        CallState.DECLINED.value,
+        CallState.CANCELLED.value,
+        CallState.MEDIA_INCOMPATIBLE.value,
+        CallState.TRANSPORT_UNREACHABLE.value,
+        CallState.AUTH_REQUIRED_UNSUPPORTED.value,
+        "error",
+    }
+    payload = {
+        "state": state,
+        "sip_state": state,
+        "call_id": call_id,
+        "dest_call_id": dest_call_id,
+        "caller": caller,
+        "callee": callee,
+        "peer_name": peer_name or target or callee,
+        "target": target or callee,
+        "terminal_reason": extra.get("terminal_reason") or extra.get("reason") or "",
+    }
+    payload.update({k: v for k, v in extra.items() if v not in (None, "")})
+    store.update(payload)
+    if terminal:
+        store["last_terminal_call_id"] = call_id
+        store["last_terminal_dest_call_id"] = dest_call_id
+    _LOGGER.info(
+        "SIP bridge state=%s call_id=%s dest_call_id=%s caller=%s callee=%s target=%s reason=%s event=%s",
+        state,
+        call_id,
+        dest_call_id,
+        caller,
+        callee,
+        target,
+        payload.get("terminal_reason", ""),
+        payload.get("last_sip_event", ""),
+    )
+    _fire_call_event(hass, payload, "sip_bridge")
 
 
 def _ha_softphone_device(hass: HomeAssistant) -> dict[str, Any]:

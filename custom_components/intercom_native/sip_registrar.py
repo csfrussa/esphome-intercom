@@ -236,6 +236,36 @@ class SipRegistrar:
     def roster_entries(self) -> list[RosterEntry]:
         self.expire()
         entries: list[RosterEntry] = []
+        for username, account in sorted(self.accounts.items()):
+            if not account.enabled:
+                continue
+            registration = self.registrations.get(account.username)
+            metadata = {
+                "registered": bool(registration),
+            }
+            sip_uri = ""
+            if registration is not None:
+                sip_uri = registration.contact_uri
+                metadata.update(
+                    {
+                        "sip_transport": registration.transport.lower(),
+                        "user_agent": registration.user_agent,
+                    }
+                )
+            entries.append(
+                RosterEntry(
+                    id=account.username,
+                    name=account.roster_name,
+                    kind="softphone",
+                    sip_uri=sip_uri,
+                    metadata=metadata,
+                )
+            )
+        return entries
+
+    def registered_roster_entries(self) -> list[RosterEntry]:
+        self.expire()
+        entries: list[RosterEntry] = []
         for username, registration in sorted(self.registrations.items()):
             account = self.accounts.get(username.lower())
             if account is None or not account.enabled:

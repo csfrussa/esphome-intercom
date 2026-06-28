@@ -630,7 +630,7 @@ class SipTcpServer:
         self.server: asyncio.AbstractServer | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
         self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
-        self._response_queues: dict[tuple[tuple[str, int], str], asyncio.Queue[bytes]] = {}
+        self._dialog_queues: dict[tuple[tuple[str, int], str], asyncio.Queue[bytes]] = {}
 
     async def start(self) -> bool:
         if self.server is not None:
@@ -675,8 +675,8 @@ class SipTcpServer:
                     msg = sip.parse_message(raw)
                 except Exception:
                     msg = None
-                if msg is not None and msg.is_response:
-                    queue = self._response_queues.get((addr, msg.header("Call-ID")))
+                if msg is not None:
+                    queue = self._dialog_queues.get((addr, msg.header("Call-ID")))
                     if queue is not None:
                         await queue.put(raw)
                         continue
@@ -684,8 +684,8 @@ class SipTcpServer:
         finally:
             self.endpoints.discard(endpoint)
             self._writers.pop(addr, None)
-            for key in [key for key in self._response_queues if key[0] == addr]:
-                self._response_queues.pop(key, None)
+            for key in [key for key in self._dialog_queues if key[0] == addr]:
+                self._dialog_queues.pop(key, None)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -700,7 +700,7 @@ class SipTcpServer:
             return None
         queue: asyncio.Queue[bytes] = asyncio.Queue()
         key = (addr, call_id)
-        self._response_queues[key] = queue
+        self._dialog_queues[key] = queue
 
         def _send(data: bytes) -> None:
             writer.write(data)
@@ -719,7 +719,7 @@ class SipTcpServer:
         return _send, queue
 
     def close_reused_dialog(self, addr: tuple[str, int], call_id: str) -> None:
-        self._response_queues.pop((addr, call_id), None)
+        self._dialog_queues.pop((addr, call_id), None)
 
     def send_final_response(
         self,
@@ -756,4 +756,4 @@ class SipTcpServer:
             writer.close()
         self.endpoints.clear()
         self._writers.clear()
-        self._response_queues.clear()
+        self._dialog_queues.clear()

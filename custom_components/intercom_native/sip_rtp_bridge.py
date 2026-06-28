@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import logging
+from pathlib import Path
 import secrets
 from typing import Any
+import wave
 
 from . import rtp
 from .audio_format import AudioFormat
@@ -15,6 +17,8 @@ from .sdp import RtpPcmFormat, audio_format_to_rtp
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 
 _LOGGER = logging.getLogger(__name__)
+_DEBUG_CAPTURE_DIR = Path("/tmp/intercom_native_debug")
+_DEBUG_CAPTURE_SECONDS = 8
 
 
 @dataclass(slots=True)
@@ -71,7 +75,16 @@ class SipRtpRelay:
     changes that are exact for the supported PCM profile.
     """
 
-    def __init__(self, *, left: RtpPeer, right: RtpPeer, left_port: int, right_port: int) -> None:
+    def __init__(
+        self,
+        *,
+        left: RtpPeer,
+        right: RtpPeer,
+        left_port: int,
+        right_port: int,
+        debug_capture: bool = False,
+        capture_name: str = "",
+    ) -> None:
         self.left = left
         self.right = right
         self.left_port = int(left_port)
@@ -94,6 +107,60 @@ class SipRtpRelay:
         self.right_decoder = RtpPayloadDecoder(right.inbound_rtp_format)
         self.left_encoder = RtpPayloadEncoder(left.outbound_rtp_format)
         self.right_encoder = RtpPayloadEncoder(right.outbound_rtp_format)
+        self._capture_buffers: dict[str, bytearray] = {}
+        self._capture_paths: dict[str, Path] = {}
+        self._capture_formats: dict[str, AudioFormat] = {}
+        self._capture_frames: dict[str, int] = {"left": 0, "right": 0}
+        if debug_capture:
+            self._prepare_debug_capture(capture_name)
+
+    def _prepare_debug_capture(self, capture_name: str) -> None:
+        safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in capture_name)[:80]
+        if not safe_name:
+            safe_name = f"relay_{self.left_port}_{self.right_port}"
+        for side, fmt in (("left", self.left.audio_format), ("right", self.right.audio_format)):
+            path = _DEBUG_CAPTURE_DIR / f"{safe_name}_{side}_rx.wav"
+            self._capture_buffers[side] = bytearray()
+            self._capture_paths[side] = path
+            self._capture_formats[side] = fmt
+            _LOGGER.info("SIP RTP debug capture prepared side=%s path=%s format=%s", side, path, fmt.wire_token())
+
+    def _capture_pcm(self, side: str, pcm: bytes) -> None:
+        buffer = self._capture_buffers.get(side)
+        if buffer is None:
+            return
+        fmt = self.left.audio_format if side == "left" else self.right.audio_format
+        max_frames = int(fmt.sample_rate * _DEBUG_CAPTURE_SECONDS)
+        current = self._capture_frames.get(side, 0)
+        if current >= max_frames:
+            return
+        samples = len(pcm) // max(1, fmt.container_bytes_per_sample * fmt.channels)
+        if current + samples > max_frames:
+            keep = (max_frames - current) * fmt.container_bytes_per_sample * fmt.channels
+            pcm = pcm[:keep]
+            samples = max_frames - current
+        buffer.extend(pcm)
+        self._capture_frames[side] = current + samples
+
+    def _write_debug_capture_files(self) -> None:
+        if not self._capture_buffers:
+            return
+        _DEBUG_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+        for side, pcm in self._capture_buffers.items():
+            fmt = self._capture_formats[side]
+            path = self._capture_paths[side]
+            with wave.open(str(path), "wb") as wav:
+                wav.setnchannels(fmt.channels)
+                wav.setsampwidth(2)
+                wav.setframerate(fmt.sample_rate)
+                wav.writeframes(bytes(pcm))
+            _LOGGER.info(
+                "SIP RTP debug capture wrote side=%s path=%s bytes=%d format=%s",
+                side,
+                path,
+                len(pcm),
+                fmt.wire_token(),
+            )
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -133,6 +200,8 @@ class SipRtpRelay:
         if self.right_transport is not None:
             self.right_transport.close()
             self.right_transport = None
+        await asyncio.to_thread(self._write_debug_capture_files)
+        self._capture_buffers.clear()
 
     def handle_packet(self, side: str, data: bytes, addr) -> None:
         source = self.left if side == "left" else self.right
@@ -153,6 +222,7 @@ class SipRtpRelay:
             pcm = decoder.decode(packet.payload)
             if not pcm:
                 return
+            self._capture_pcm(side, pcm)
             converter = self.left_to_right if side == "left" else self.right_to_left
             converted_frames = converter.convert(pcm)
             out_format = dest.outbound_audio_format

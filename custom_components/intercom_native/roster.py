@@ -244,17 +244,11 @@ def resolve_target(
             if ha is None:
                 return RouteDecision("requires_bridge", number, "", entry=entry, reason="ha_required")
             return RouteDecision("requires_bridge", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
-        if entry.kind == "softphone" and entry.sip_uri:
+        if entry.kind == "softphone":
+            if not entry.sip_uri:
+                return RouteDecision("reject", entry.id, "", entry=entry, reason="transport_unreachable")
             if not _sip_uri_transport(entry.sip_uri) and not _sip_transport(entry):
-                if ha is not None:
-                    return RouteDecision(
-                        "bridge",
-                        entry.id,
-                        _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
-                        entry=entry,
-                        reason="missing_direct_transport",
-                    )
-                return RouteDecision("bridge", entry.id, "", entry=entry, reason="missing_direct_transport")
+                return RouteDecision("reject", entry.id, "", entry=entry, reason="missing_direct_transport")
             return RouteDecision("direct", entry.id, entry.sip_uri, entry=entry)
         if entry.kind == "group":
             return RouteDecision("group", entry.id, "", entry=entry)

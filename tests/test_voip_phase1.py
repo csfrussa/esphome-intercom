@@ -1293,6 +1293,53 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entries[0].id, "SmartphoneDany")
         self.assertEqual(entries[0].kind, "softphone")
         self.assertEqual(entries[0].sip_uri, "sip:SmartphoneDany@192.168.1.50:5062;transport=udp")
+        self.assertTrue(entries[0].metadata["registered"])
+
+    def test_sip_account_remains_in_roster_when_not_registered(self) -> None:
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("Zoiper", "Zoiper", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+        )
+
+        entries = registrar.roster_entries()
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].id, "Zoiper")
+        self.assertEqual(entries[0].kind, "softphone")
+        self.assertEqual(entries[0].sip_uri, "")
+        self.assertFalse(entries[0].metadata["registered"])
+
+    def test_unregistered_softphone_rejects_instead_of_falling_back_to_ha(self) -> None:
+        entries = [
+            roster.RosterEntry(
+                id="HA",
+                name="Casa",
+                kind="ha",
+                address="192.168.1.10",
+                metadata={"sip_port": 5060, "sip_transport": "tcp"},
+            ),
+            roster.RosterEntry(
+                id="Zoiper",
+                name="Zoiper",
+                kind="softphone",
+                metadata={"registered": False},
+            ),
+        ]
+
+        decision = roster.resolve_target("Zoiper", entries, ha_bridge=True)
+
+        self.assertEqual(decision.kind, "reject")
+        self.assertEqual(decision.reason, "transport_unreachable")
+
+    def test_sip_uri_parser_accepts_name_addr_with_header_params(self) -> None:
+        parsed = sip.parse_sip_uri("<sip:Zoiper@192.168.1.10:41171;transport=udp>;tag=7bc04a5b")
+
+        self.assertEqual(parsed.user, "Zoiper")
+        self.assertEqual(parsed.host, "192.168.1.10")
+        self.assertEqual(parsed.port, 41171)
+        self.assertEqual(dict(parsed.params)["transport"], "udp")
 
     async def test_register_accepts_host_only_request_uri_from_baresip(self) -> None:
         registrar = sip_registrar.SipRegistrar(

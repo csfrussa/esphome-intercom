@@ -131,8 +131,8 @@ def make_branch() -> str:
 
 def parse_sip_uri(value: str) -> SipUri:
     raw = value.strip()
-    if raw.startswith("<") and raw.endswith(">"):
-        raw = raw[1:-1].strip()
+    if raw.startswith("<") and ">" in raw:
+        raw = raw[1:raw.index(">")].strip()
     if not raw.lower().startswith("sip:"):
         raise SipError(f"not a sip URI: {value!r}")
     rest = raw[4:]

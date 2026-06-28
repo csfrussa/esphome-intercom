@@ -41,6 +41,27 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("card", body.lower())
         self.assertNotIn("frontend", body.lower())
 
+    def test_bridge_hangup_does_not_publish_ha_softphone_session(self) -> None:
+        body = _function_body(self.source, "_handle_sip_hangup_service")
+        bridge_branch = body.split("if bridge_handled:", 1)[1].split("return", 1)[0]
+        self.assertIn("_set_sip_bridge_call_state(", bridge_branch)
+        self.assertNotIn("_set_ha_softphone_call_state(", bridge_branch)
+
+    def test_inbound_bridge_completion_does_not_mutate_ha_softphone(self) -> None:
+        body = _function_body(self.source, "_async_start_sip_endpoint")
+        bridge_path = body.split('if not force_ha_softphone and decision.kind in {"direct", "bridge", "group"}', 1)[1]
+        bridge_path = bridge_path.split("ha_softphone_active = _ha_softphone_has_active_call", 1)[0]
+        self.assertIn("_set_sip_bridge_call_state(", bridge_path)
+        self.assertNotIn("_set_ha_softphone_call_state(", bridge_path)
+
+    def test_ha_softphone_busy_excludes_bridge_runtime_maps(self) -> None:
+        ws = (ROOT / "custom_components" / "intercom_native" / "websocket_api.py").read_text()
+        state_body = _function_body(ws, "_ha_softphone_state")
+        busy_expr = state_body.split('"busy":', 1)[1].split(",", 1)[0]
+        self.assertIn("session_device_id", busy_expr)
+        self.assertNotIn("pending_transactions", busy_expr)
+        self.assertNotIn("active_dialogs", busy_expr)
+
     def test_missing_roster_formats_do_not_force_legacy_16k_default(self) -> None:
         body = _function_body(self.source, "_roster_entry_formats")
         self.assertIn("if entry is None:", body)

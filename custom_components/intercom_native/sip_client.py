@@ -378,6 +378,19 @@ class SipCallClient:
             host, port = self._signaling_target(host, int(port))
             self.transport.sendto(raw, (host, port))
 
+    def _send_response_to_request(self, request: sip.SipMessage, host: str, port: int, status: int, reason: str) -> None:
+        headers = [
+            ("Via", request.header("Via")),
+            ("From", request.header("From")),
+            ("To", request.header("To")),
+            ("Call-ID", request.header("Call-ID")),
+            ("CSeq", request.header("CSeq")),
+        ]
+        raw = sip.build_response(status, reason, headers, b"")
+        self._send_dialog_request(raw, host, int(port))
+        self._mark_sip_event("SIP_RESPONSE", int(status), reason)
+        _LOGGER.info("SIP TX %s %s to %s:%s", status, reason, host, port)
+
     async def _read_response(self, timeout: float) -> tuple[sip.SipMessage, tuple[str, int]] | None:
         if self.signaling_transport == "TCP":
             if self._tcp_reuse_responses is not None:
@@ -553,6 +566,8 @@ class SipCallClient:
                 continue
             self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
+            if "CANCEL" in msg.header("CSeq").upper():
+                continue
             if msg.status_code == 180:
                 continue
             if 200 <= msg.status_code < 300:
@@ -570,6 +585,52 @@ class SipCallClient:
             if msg.status_code >= 300:
                 self._send_invite_error_ack(msg, addr[0], addr[1])
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
+
+    async def wait_for_dialog_termination(self, timeout: float | None = None) -> str:
+        """Wait for a remote BYE on a confirmed outbound dialog.
+
+        Outbound HA-originated calls keep their SIP client alive after 200 OK so
+        the same signaling path can receive the peer's BYE. When that happens we
+        must acknowledge it and let the owner remove this client from its active
+        dialog registry; otherwise the HA endpoint remains falsely busy.
+        """
+        if self.dialog is None:
+            return "not_in_call"
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + float(timeout)
+        while True:
+            wait_timeout = 3600.0
+            if deadline is not None:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return "timeout"
+                wait_timeout = max(0.05, remaining)
+            try:
+                received = await self._read_response(wait_timeout)
+            except asyncio.TimeoutError:
+                return "timeout" if deadline is not None else "remote_hangup"
+            except Exception as err:
+                _LOGGER.debug("SIP dialog termination wait ignored malformed message: %s", err)
+                continue
+            if received is None:
+                return "remote_hangup"
+            msg, addr = received
+            if msg.is_response:
+                if msg.status_code is not None:
+                    self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+                    _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
+                continue
+            if msg.method == "BYE":
+                _LOGGER.info("SIP RX BYE from %s:%s", addr[0], addr[1])
+                self._send_response_to_request(msg, addr[0], addr[1], 200, "OK")
+                self.dialog = None
+                return "remote_hangup"
+            if msg.method == "CANCEL":
+                _LOGGER.info("SIP RX CANCEL from %s:%s", addr[0], addr[1])
+                self._send_response_to_request(msg, addr[0], addr[1], 200, "OK")
+                return "cancelled"
+            if msg.method == "ACK":
+                continue
+            self._send_response_to_request(msg, addr[0], addr[1], 405, "Method Not Allowed")
 
     def _commit_200_ok(
         self,
@@ -702,7 +763,7 @@ class SipCallClient:
         self._mark_sip_event("BYE")
         _LOGGER.info("SIP TX BYE %s:%s", self.dialog.remote_host, self.dialog.remote_sip_port)
 
-    def cancel(self) -> None:
+    def cancel(self) -> bool:
         """Cancel an INVITE transaction before a final 2xx response.
 
         SIP uses CANCEL, not BYE, while the INVITE is still in early dialog.
@@ -710,7 +771,13 @@ class SipCallClient:
         peer can match it to the pending transaction.
         """
         if not self._has_signaling_path() or not self._pending_request_uri:
-            return
+            _LOGGER.info(
+                "SIP CANCEL skipped: no signaling path call_id=%s transport=%s pending_uri=%s",
+                self.dialog_ids.call_id,
+                self.signaling_transport,
+                bool(self._pending_request_uri),
+            )
+            return False
         cancel_ids = sip.SipDialogIds(
             call_id=self.dialog_ids.call_id,
             local_tag=self.dialog_ids.local_tag,
@@ -731,6 +798,7 @@ class SipCallClient:
         self._send_dialog_request(raw, self._pending_remote_host, self._pending_remote_sip_port)
         self._mark_sip_event("CANCEL")
         _LOGGER.info("SIP TX CANCEL %s:%s", self._pending_remote_host, self._pending_remote_sip_port)
+        return True
 
     def bye_or_cancel(self) -> None:
         if self.dialog is not None:
@@ -767,7 +835,9 @@ class SipCallClient:
                     return "remote_hangup"
             return "timeout"
 
-        self.cancel()
+        sent_cancel = self.cancel()
+        if not sent_cancel:
+            return "transport_unreachable"
         saw_cancel_ok = False
         saw_invite_terminated = False
         deadline = asyncio.get_running_loop().time() + timeout
