@@ -1259,13 +1259,48 @@ bool SipTransport::send_final_response(const std::string &call_id,
   return sent;
 }
 
+bool SipTransport::replay_stateless_invite_final_(const std::string &request, const sockaddr_in &src,
+                                                  const std::string &call_id) {
+  if (call_id.empty() || call_id != this->last_stateless_invite_final_call_id_) {
+    return false;
+  }
+  const uint32_t age_ms = millis() - this->last_stateless_invite_final_ms_;
+  if (this->last_stateless_invite_final_ms_ == 0 || age_ms > 5000) {
+    return false;
+  }
+  ESP_LOGI(TAG, "SIP INVITE retransmission replaying %u %s for call_id=%s",
+           this->last_stateless_invite_final_status_,
+           this->last_stateless_invite_final_reason_.c_str(),
+           call_id.c_str());
+  return this->send_stateless_response_(
+      request, src,
+      this->last_stateless_invite_final_status_,
+      this->last_stateless_invite_final_reason_.empty()
+          ? "Busy Here"
+          : this->last_stateless_invite_final_reason_.c_str(),
+      this->last_stateless_invite_final_app_reason_);
+}
+
+void SipTransport::remember_stateless_invite_final_(const std::string &call_id, uint16_t status,
+                                                    const char *reason, const std::string &app_reason) {
+  this->last_stateless_invite_final_call_id_ = call_id;
+  this->last_stateless_invite_final_status_ = status;
+  this->last_stateless_invite_final_reason_ = reason == nullptr ? "" : reason;
+  this->last_stateless_invite_final_app_reason_ = app_reason;
+  this->last_stateless_invite_final_ms_ = millis();
+}
+
 bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in &src) {
   const std::string body = message_body(message);
   const uint32_t src_ip = ntohl(src.sin_addr.s_addr);
   const std::string incoming_call_id = header_value(message, "Call-ID");
+  if (this->replay_stateless_invite_final_(message, src, incoming_call_id)) {
+    return true;
+  }
   if (!incoming_call_id.empty() && !this->call_id_.empty() && incoming_call_id != this->call_id_) {
     ESP_LOGW(TAG, "SIP INVITE rejected busy: active_call_id=%s incoming_call_id=%s",
              this->call_id_.c_str(), incoming_call_id.c_str());
+    this->remember_stateless_invite_final_(incoming_call_id, 486, "Busy Here", "busy");
     return this->send_stateless_response_(message, src, 486, "Busy Here", "busy");
   }
   this->remote_ip_v4_.store(src_ip, std::memory_order_release);

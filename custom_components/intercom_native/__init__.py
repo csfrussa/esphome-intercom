@@ -490,6 +490,45 @@ def _sip_send_bye(hass: HomeAssistant, call_id: str = "") -> bool:
     return False
 
 
+async def _terminate_sip_bridge(hass: HomeAssistant, call_id: str) -> tuple[bool, str, str, bool, bool]:
+    """Terminate a B2BUA bridge by either source or destination leg call-id."""
+    if not call_id:
+        return False, "", "", False, False
+    bucket = hass.data.setdefault(DOMAIN, {})
+    bridges = bucket.setdefault("sip_bridge_clients", {})
+    source_call_id = call_id if call_id in bridges else ""
+    dest_call_id = bridges.get(source_call_id, "") if source_call_id else ""
+    if not source_call_id:
+        for source, dest in list(bridges.items()):
+            if dest == call_id:
+                source_call_id = source
+                dest_call_id = dest
+                break
+    if not source_call_id:
+        return False, "", "", False, False
+
+    bridges.pop(source_call_id, None)
+    relay = bucket.setdefault("sip_relays", {}).pop(source_call_id, None)
+    if relay is not None:
+        await relay.stop()
+
+    client_closed = False
+    if dest_call_id:
+        client = bucket.setdefault("sip_clients", {}).pop(dest_call_id, None)
+        watcher = bucket.setdefault("sip_client_watchers", {}).pop(dest_call_id, None)
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+        if client is not None:
+            await client.terminate()
+            await client.close()
+            client_closed = True
+
+    source_bye = _sip_send_bye(hass, source_call_id)
+    return True, source_call_id, dest_call_id, client_closed, source_bye
+
+
 def _rtp_port_available(port: int) -> bool:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -1173,6 +1212,41 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     callee = str(softphone_store.get("callee") or softphone_store.get("last_terminal_callee") or "")
     peer_name = str(softphone_store.get("peer_name") or softphone_store.get("last_terminal_peer_name") or "")
     direction = str(softphone_store.get("direction") or softphone_store.get("last_terminal_direction") or "")
+    bridge_handled, bridge_source_call_id, bridge_dest_call_id, bridge_client, bridge_server_bye = await _terminate_sip_bridge(hass, call_id)
+    if bridge_handled:
+        call_id = bridge_source_call_id
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.IDLE.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=caller,
+            callee=callee,
+            peer_name=peer_name,
+            direction=direction,
+            call_id=call_id,
+            reason=TerminalReason.LOCAL_HANGUP.value,
+            origin="self",
+            last_sip_event="SIP_BYE",
+        )
+        _fire_call_event(
+            hass,
+            {
+                "state": CallState.IDLE.value,
+                "scope": "sip_bridge",
+                "call_id": bridge_source_call_id,
+                "dest_call_id": bridge_dest_call_id,
+                "terminal_reason": TerminalReason.LOCAL_HANGUP.value,
+            },
+            "sip",
+        )
+        _LOGGER.info(
+            "SIP bridge hangup call_id=%s dest_call_id=%s client=%s server_bye=%s",
+            bridge_source_call_id,
+            bridge_dest_call_id,
+            bridge_client,
+            bridge_server_bye,
+        )
+        return
     client = clients.pop(call_id, None) if call_id else None
     watcher = bucket.setdefault("sip_client_watchers", {}).pop(call_id, None) if call_id else None
     relay = relays.pop(call_id, None) if call_id else None
@@ -2473,13 +2547,21 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return
 
+        peer_target = _peer_for_target(destination, peers)
+        remote_tx_formats = _peer_audio_formats(peer_target, "tx_formats") or _roster_entry_formats(decision.entry, "tx_formats")
+        remote_rx_formats = _peer_audio_formats(peer_target, "rx_formats") or _roster_entry_formats(decision.entry, "rx_formats")
+        sip_send_formats, sip_recv_formats = _sip_target_audio_profile(
+            remote_tx_formats=remote_tx_formats,
+            remote_rx_formats=remote_rx_formats,
+            target=destination,
+        )
         client = SipCallClient(
             local_ip=local_ip,
             local_name=invite.caller or _ha_peer_name(hass),
             local_sip_port=int(cfg["sip_port"]),
             local_rtp_port=dest_relay_port,
-            supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
-            supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
+            supported_send_formats=sip_send_formats,
+            supported_recv_formats=sip_recv_formats,
             signaling_transport=_sip_uri_transport(bridge_uri),
         )
         result = await client.invite(
@@ -2570,6 +2652,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
         bucket.setdefault("sip_clients", {})[client.dialog_ids.call_id] = client
         bucket.setdefault("sip_bridge_clients", {})[invite.call_id] = client.dialog_ids.call_id
+        _LOGGER.info(
+            "SIP bridge registered call_id=%s dest_call_id=%s target=%s",
+            invite.call_id,
+            client.dialog_ids.call_id,
+            bridge_uri.user,
+        )
         bucket.setdefault("sip_relays", {})[invite.call_id] = relay
         _set_ha_softphone_call_state(
             hass,
@@ -2875,13 +2963,21 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 source_relay_port = next_port
                 dest_relay_port = next_port + 2
                 bucket["sip_rtp_next_port"] = next_port + 4
+                peer_target = _peer_for_target(decision.target or invite.target, peers)
+                remote_tx_formats = _peer_audio_formats(peer_target, "tx_formats") or _roster_entry_formats(decision.entry, "tx_formats")
+                remote_rx_formats = _peer_audio_formats(peer_target, "rx_formats") or _roster_entry_formats(decision.entry, "rx_formats")
+                sip_send_formats, sip_recv_formats = _sip_target_audio_profile(
+                    remote_tx_formats=remote_tx_formats,
+                    remote_rx_formats=remote_rx_formats,
+                    target=decision.target or invite.target,
+                )
                 client = SipCallClient(
                     local_ip=local_ip,
                     local_name=invite.caller or _ha_peer_name(hass),
                     local_sip_port=int(cfg["sip_port"]),
                     local_rtp_port=dest_relay_port,
-                    supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
-                    supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
+                    supported_send_formats=sip_send_formats,
+                    supported_recv_formats=sip_recv_formats,
                     signaling_transport=_sip_uri_transport(decision_uri),
                 )
                 result = await client.invite(
@@ -2901,6 +2997,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 active = bucket.setdefault("sip_clients", {})
                 active[client.dialog_ids.call_id] = client
                 bucket.setdefault("sip_bridge_clients", {})[invite.call_id] = client.dialog_ids.call_id
+                _LOGGER.info(
+                    "SIP bridge registered call_id=%s dest_call_id=%s target=%s",
+                    invite.call_id,
+                    client.dialog_ids.call_id,
+                    decision_uri.user,
+                )
 
                 async def _finish_bridge(initial_result: str) -> None:
                     final = initial_result

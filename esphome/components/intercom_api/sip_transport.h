@@ -93,6 +93,10 @@ class SipTransport : public SipPhoneTransport {
   void request_tcp_client_close_();
   void close_tcp_client_from_sip_task_();
   void reset_dialog_();
+  bool replay_stateless_invite_final_(const std::string &request, const sockaddr_in &src,
+                                      const std::string &call_id);
+  void remember_stateless_invite_final_(const std::string &call_id, uint16_t status,
+                                        const char *reason, const std::string &app_reason);
   void mark_sip_event_(SipEvent event, uint16_t status = 0);
   static const char *sip_event_name_(SipEvent event);
   void set_media_config_(const AudioFormat &tx, const AudioFormat &rx,
@@ -124,6 +128,11 @@ class SipTransport : public SipPhoneTransport {
   std::string caller_name_;
   std::string dest_route_;
   std::string dest_name_;
+  std::string last_stateless_invite_final_call_id_;
+  std::string last_stateless_invite_final_reason_;
+  std::string last_stateless_invite_final_app_reason_;
+  uint16_t last_stateless_invite_final_status_{0};
+  uint32_t last_stateless_invite_final_ms_{0};
   std::string sip_tcp_rx_buffer_;
   AudioFormatList offer_tx_formats_{};
   AudioFormatList offer_rx_formats_{};

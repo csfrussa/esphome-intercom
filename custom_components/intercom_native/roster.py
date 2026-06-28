@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import re
+from urllib.parse import unquote
 from typing import Any, Literal
 
 
@@ -108,7 +109,7 @@ def dump_roster_json(entries: list[RosterEntry]) -> str:
 
 def find_entry(entries: list[RosterEntry], target: str) -> RosterEntry | None:
     def norm(value: str) -> str:
-        return "".join(ch for ch in value.strip().lower() if ch.isalnum())
+        return "".join(ch for ch in unquote(value).strip().lower() if ch.isalnum())
 
     wanted = norm(target)
     for entry in entries:

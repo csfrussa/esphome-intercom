@@ -1058,6 +1058,22 @@ class RouterContractTest(unittest.TestCase):
         self.assertEqual(decision.target, "200")
         self.assertEqual(decision.sip_uri, "sip:200@192.168.1.47;transport=udp")
 
+    def test_ha_router_decodes_sip_uri_user_for_phonebook_lookup(self) -> None:
+        entries = roster.parse_roster_json(
+            [
+                {
+                    "id": "Waveshare S3 Audio",
+                    "kind": "esp",
+                    "address": "192.168.1.47",
+                    "metadata": {"sip_transport": "udp"},
+                }
+            ]
+        )
+        decision = router.resolve_ha_router("Waveshare%20S3%20Audio", entries, trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.FORWARD)
+        self.assertEqual(decision.target, "Waveshare S3 Audio")
+        self.assertEqual(decision.sip_uri, "sip:Waveshare S3 Audio@192.168.1.47;transport=udp")
+
     def test_ha_router_public_number_requires_ready_trunk(self) -> None:
         unavailable = router.resolve_ha_router("0551234567", [], trunk_ready=False)
         self.assertEqual(unavailable.action, router.RouteAction.REJECT)
