@@ -25,12 +25,28 @@ from .const import (
     CONF_ASSIST_INTENTS,
     CONF_SIP_TCP_ENABLED,
     CONF_SIP_UDP_ENABLED,
+    CONF_TRUNK_AUTH_USERNAME,
+    CONF_TRUNK_DOMAIN,
+    CONF_TRUNK_DTMF_ENABLED,
+    CONF_TRUNK_DTMF_ROUTES,
+    CONF_TRUNK_DTMF_TERMINATOR,
+    CONF_TRUNK_DTMF_TIMEOUT_MS,
+    CONF_TRUNK_ENABLED,
+    CONF_TRUNK_EXPIRES,
+    CONF_TRUNK_INBOUND_DEFAULT_TARGET,
+    CONF_TRUNK_OUTBOUND_PROXY,
+    CONF_TRUNK_PASSWORD,
+    CONF_TRUNK_PORT,
+    CONF_TRUNK_SERVER,
+    CONF_TRUNK_TRANSPORT,
+    CONF_TRUNK_USERNAME,
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
     INTERCOM_RTP_PORT,
     INTERCOM_SIP_PORT,
 )
+from .dtmf import parse_dtmf_route_map
 from .device_resolver import get_resolver
 from .fsm import CallState, TerminalReason, sip_phone_state
 from .audio_format import (
@@ -228,6 +244,27 @@ def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
     }
 
 
+def _entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
+    data = entry.data if entry is not None else {}
+    return {
+        CONF_TRUNK_ENABLED: bool(data.get(CONF_TRUNK_ENABLED, False)),
+        CONF_TRUNK_TRANSPORT: str(data.get(CONF_TRUNK_TRANSPORT) or "udp").strip().lower(),
+        CONF_TRUNK_SERVER: str(data.get(CONF_TRUNK_SERVER) or "").strip(),
+        CONF_TRUNK_PORT: int(data.get(CONF_TRUNK_PORT) or INTERCOM_SIP_PORT),
+        CONF_TRUNK_DOMAIN: str(data.get(CONF_TRUNK_DOMAIN) or "").strip(),
+        CONF_TRUNK_USERNAME: str(data.get(CONF_TRUNK_USERNAME) or "").strip(),
+        CONF_TRUNK_AUTH_USERNAME: str(data.get(CONF_TRUNK_AUTH_USERNAME) or "").strip(),
+        CONF_TRUNK_PASSWORD: str(data.get(CONF_TRUNK_PASSWORD) or ""),
+        CONF_TRUNK_EXPIRES: int(data.get(CONF_TRUNK_EXPIRES) or 300),
+        CONF_TRUNK_OUTBOUND_PROXY: str(data.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip(),
+        CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA",
+        CONF_TRUNK_DTMF_ENABLED: bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)),
+        CONF_TRUNK_DTMF_TIMEOUT_MS: max(100, min(2000, int(data.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 1000))),
+        CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
+        CONF_TRUNK_DTMF_ROUTES: str(data.get(CONF_TRUNK_DTMF_ROUTES) or "").strip(),
+    }
+
+
 def _get_transport_config(hass: HomeAssistant) -> dict:
     """Return current HA-side network config (transport flags + ports)."""
     return hass.data.get(DOMAIN, {}).get(
@@ -239,6 +276,19 @@ def _get_transport_config(hass: HomeAssistant) -> dict:
             "rtp_port": INTERCOM_RTP_PORT,
             "advertise_host": "",
         },
+    )
+
+
+def _get_trunk_config(hass: HomeAssistant) -> dict:
+    return hass.data.get(DOMAIN, {}).get("trunk_config", _entry_trunk_config(None))
+
+
+def _trunk_enabled(cfg: dict) -> bool:
+    return bool(
+        cfg.get(CONF_TRUNK_ENABLED)
+        and cfg.get(CONF_TRUNK_SERVER)
+        and cfg.get(CONF_TRUNK_USERNAME)
+        and cfg.get(CONF_TRUNK_PASSWORD)
     )
 
 
@@ -353,6 +403,14 @@ def _sip_send_final_response(
             answer_sdp=answer_sdp,
             decline_reason=decline_reason,
         ):
+            return True
+    return False
+
+
+def _sip_send_bye(hass: HomeAssistant, call_id: str = "") -> bool:
+    for server in _sip_servers(hass):
+        send_bye = getattr(server, "send_bye", None)
+        if callable(send_bye) and send_bye(call_id):
             return True
     return False
 
@@ -1239,11 +1297,21 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         ha_sip_port=int(cfg["sip_port"]),
         force_ha=force_ha_bridge or bool(call.data.get("ha_bridge", False)),
     )
-    if route.kind == "requires_bridge":
+    trunk = hass.data.get(DOMAIN, {}).get("sip_trunk")
+    trunk_cfg = _get_trunk_config(hass)
+    trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
+    use_trunk = route.kind == "requires_bridge" and trunk_ready
+    if route.kind == "requires_bridge" and not use_trunk:
         raise ServiceValidationError(f"{target} requires an HA SIP bridge route")
-    if route.kind not in {"direct", "bridge"} or not route.sip_uri:
+    route_uri = route.sip_uri
+    if use_trunk:
+        route_uri = (
+            f"sip:{target}@{trunk_cfg[CONF_TRUNK_SERVER]}:{int(trunk_cfg[CONF_TRUNK_PORT])};"
+            f"transport={str(trunk_cfg[CONF_TRUNK_TRANSPORT]).lower()}"
+        )
+    if not use_trunk and (route.kind not in {"direct", "bridge"} or not route_uri):
         raise ServiceValidationError(f"cannot resolve SIP target: {target}")
-    uri = parse_sip_uri(route.sip_uri)
+    uri = parse_sip_uri(route_uri)
     remote_tx_formats = (
         _device_formats(dest_device, "tx_formats")
         if dest_device is not None
@@ -1267,6 +1335,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         supported_send_formats=sip_send_formats,
         supported_recv_formats=sip_recv_formats,
         signaling_transport=_sip_uri_transport(uri),
+        auth_username=str(trunk_cfg.get(CONF_TRUNK_AUTH_USERNAME) or ""),
+        username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or ""),
+        password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if use_trunk else "",
+        outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
     )
     _set_ha_softphone_call_state(
         hass,
@@ -1279,7 +1351,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         call_id=client.dialog_ids.call_id,
         sip_transport=_sip_uri_transport(uri).lower(),
         last_sip_event="INVITE",
-        sip_uri=route.sip_uri,
+        sip_uri=route_uri,
     )
     result = await client.invite(
         target=uri.user,
@@ -1292,7 +1364,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         client=client,
         result=result,
         target=target,
-        sip_uri=route.sip_uri,
+        sip_uri=route_uri,
     )
     if public_result == CallState.REMOTE_RINGING.value or result == "ringing":
         _set_ha_softphone_call_state(
@@ -1306,7 +1378,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             call_id=client.dialog_ids.call_id,
             sip_status_code=180,
             last_sip_event="SIP_RESPONSE",
-            sip_uri=route.sip_uri,
+            sip_uri=route_uri,
         )
     elif public_result == CallState.IN_CALL.value and client.dialog is not None:
         _set_ha_softphone_call_state(
@@ -1322,7 +1394,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
             sip_status_code=200,
             last_sip_event="SIP_RESPONSE",
-            sip_uri=route.sip_uri,
+            sip_uri=route_uri,
         )
     elif public_result not in {CallState.REMOTE_RINGING.value, CallState.IN_CALL.value}:
         terminal_reason = _sip_terminal_reason(result, public_result)
@@ -1339,7 +1411,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             terminal_reason=terminal_reason,
             sip_status_code=client.last_sip_status_code,
             last_sip_event=client.last_sip_event or "SIP_RESPONSE",
-            sip_uri=route.sip_uri,
+            sip_uri=route_uri,
         )
     terminal_reason = "" if public_result in {CallState.RINGING.value, CallState.IN_CALL.value} else _sip_terminal_reason(result, public_result)
     _fire_call_event(
@@ -1349,12 +1421,12 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             "scope": "sip",
             "call_id": client.dialog_ids.call_id,
             "target": target,
-            "sip_uri": route.sip_uri,
+            "sip_uri": route_uri,
             "terminal_reason": terminal_reason,
         },
         "sip",
     )
-    _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route.sip_uri, result)
+    _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route_uri, result)
 
 
 def _set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
@@ -1698,6 +1770,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "sip_port": INTERCOM_SIP_PORT,
         "rtp_port": INTERCOM_RTP_PORT,
     }
+    hass.data[DOMAIN]["trunk_config"] = _entry_trunk_config(None)
     hass.data[DOMAIN]["sip_port"] = INTERCOM_SIP_PORT
     await _async_setup_shared(hass, config)
     return True
@@ -1706,7 +1779,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Intercom Native from a config entry (UI setup)."""
     cfg = _entry_transport_config(entry)
+    trunk_cfg = _entry_trunk_config(entry)
     hass.data.setdefault(DOMAIN, {})["transport_config"] = cfg
+    hass.data[DOMAIN]["trunk_config"] = trunk_cfg
     hass.data[DOMAIN]["sip_port"] = cfg["sip_port"]
     await _async_setup_shared(hass)
     await _async_apply_assist_intents(
@@ -1718,6 +1793,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Failed to bind SIP port {cfg['sip_port']}. Another SIP "
             "endpoint may already be listening on that port."
         )
+    await _async_start_sip_trunk(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -1732,6 +1808,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .websocket_api import _async_shutdown_all
     await _async_shutdown_all()
 
+    await _async_stop_sip_trunk(hass)
     await _async_stop_sip_endpoint(hass)
     unsub = hass.data.get(DOMAIN, {}).pop("esp_state_event_bridge_unsub", None)
     if unsub is not None:
@@ -1740,10 +1817,57 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def _async_start_sip_trunk(hass: HomeAssistant) -> bool:
+    cfg = _get_trunk_config(hass)
+    if not _trunk_enabled(cfg):
+        hass.data.setdefault(DOMAIN, {}).pop("sip_trunk", None)
+        return True
+    from .sip_trunk import SipTrunkClient, SipTrunkConfig
+
+    local_ip = await _ha_advertise_host(hass)
+    if not local_ip:
+        _LOGGER.warning("SIP trunk disabled: HA advertise IP is unknown")
+        return False
+    trunk = SipTrunkClient(
+        config=SipTrunkConfig(
+            enabled=True,
+            transport=str(cfg[CONF_TRUNK_TRANSPORT]),
+            server=str(cfg[CONF_TRUNK_SERVER]),
+            port=int(cfg[CONF_TRUNK_PORT]),
+            domain=str(cfg[CONF_TRUNK_DOMAIN]),
+            username=str(cfg[CONF_TRUNK_USERNAME]),
+            auth_username=str(cfg[CONF_TRUNK_AUTH_USERNAME]),
+            password=str(cfg[CONF_TRUNK_PASSWORD]),
+            expires=int(cfg[CONF_TRUNK_EXPIRES]),
+            outbound_proxy=str(cfg[CONF_TRUNK_OUTBOUND_PROXY]),
+        ),
+        local_ip=local_ip,
+        local_sip_port=int(_get_transport_config(hass)["sip_port"]),
+    )
+    hass.data.setdefault(DOMAIN, {})["sip_trunk"] = trunk
+    try:
+        await trunk.start()
+    except Exception as err:
+        _LOGGER.warning("SIP trunk registration failed: %s", err)
+    return True
+
+
+async def _async_stop_sip_trunk(hass: HomeAssistant) -> None:
+    trunk = hass.data.get(DOMAIN, {}).pop("sip_trunk", None)
+    if trunk is None:
+        return
+    try:
+        await trunk.stop()
+    except Exception:
+        _LOGGER.debug("Ignoring SIP trunk stop error", exc_info=True)
+
+
 async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     """Bind the enabled SIP signaling listeners for HA softphone and bridge calls."""
     from .roster import RosterEntry, resolve_target
+    from .dtmf import DtmfCollector
     from .sdp import build_answer_directional
+    from . import sdp as sip_sdp
     from .sip import parse_sip_uri
     from .sip_client import SipCallClient
     from .sip_endpoint import SipEndpointManager
@@ -1808,6 +1932,264 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             _LOGGER.warning("Ignoring invalid peer %s on %s: %s", key, peer.name, err)
             return []
 
+    def _is_trunk_invite(invite: SipInvite) -> bool:
+        trunk_cfg = _get_trunk_config(hass)
+        if not _trunk_enabled(trunk_cfg):
+            return False
+        target_user = str(invite.request_uri.user or "").strip().lower()
+        trunk_users = {
+            str(trunk_cfg.get(CONF_TRUNK_USERNAME) or "").strip().lower(),
+            str(trunk_cfg.get(CONF_TRUNK_AUTH_USERNAME) or "").strip().lower(),
+        }
+        trunk_users.discard("")
+        trunk_hosts = {
+            str(trunk_cfg.get(CONF_TRUNK_SERVER) or "").strip().lower(),
+            str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip().lower(),
+        }
+        trunk_hosts.discard("")
+        return bool(
+            (target_user and target_user in trunk_users)
+            or str(invite.source_host or "").strip().lower() in trunk_hosts
+        )
+
+    def _is_ha_target(value: str) -> bool:
+        return _same_route_name(value, _ha_peer_name(hass)) or _same_route_name(value, "ha")
+
+    async def _run_trunk_inbound_route(
+        invite: SipInvite,
+        *,
+        source_relay_port: int,
+        dest_relay_port: int,
+    ) -> None:
+        bucket = hass.data.setdefault(DOMAIN, {})
+        trunk_cfg = _get_trunk_config(hass)
+        routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
+        dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
+        dtmf_format = dtmf_formats[0] if dtmf_formats else None
+        destination = ""
+        digits = ""
+        if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_format is not None:
+            try:
+                collector = DtmfCollector(
+                    host="0.0.0.0",
+                    port=source_relay_port,
+                    payload_type=dtmf_format.payload_type,
+                    routes=routes,
+                    timeout=float(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 1000) / 1000.0,
+                    terminator=str(trunk_cfg.get(CONF_TRUNK_DTMF_TERMINATOR) or ""),
+                )
+                digits, destination = await collector.collect()
+            except Exception as err:
+                _LOGGER.info("SIP trunk DTMF collection unavailable: %s", err)
+        elif trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes:
+            _LOGGER.info("SIP trunk inbound call has no telephone-event SDP offer; using default destination")
+
+        default_target = str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA"
+        if digits and not destination:
+            _LOGGER.info("SIP trunk DTMF route not found for digits=%s; using default=%s", digits, default_target)
+        destination = destination or default_target
+        _LOGGER.info(
+            "SIP trunk inbound route call_id=%s caller=%s digits=%s destination=%s",
+            invite.call_id,
+            invite.caller or invite.source_host,
+            digits or "-",
+            destination,
+        )
+
+        if _is_ha_target(destination):
+            bucket.setdefault("ha_softphone_media", {})[invite.call_id] = {
+                "invite": invite,
+                "local_rtp_port": source_relay_port,
+            }
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.IN_CALL.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=_ha_peer_name(hass),
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                selected_tx_format=invite.send_format.audio_format.wire_token(),
+                selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                audio_mode="full_duplex",
+                route_kind="trunk",
+                sip_status_code=200,
+                last_sip_event="SIP_RESPONSE",
+            )
+            _fire_call_event(
+                hass,
+                {
+                    "state": CallState.IN_CALL.value,
+                    "scope": "sip_trunk",
+                    "call_id": invite.call_id,
+                    "caller": invite.caller,
+                    "callee": _ha_peer_name(hass),
+                    "dtmf_digits": digits,
+                    "target": destination,
+                },
+                "sip",
+            )
+            return
+
+        peers = await _async_build_peer_snapshot(hass)
+        decision = resolve_target(destination, _roster_from_peers(peers), ha_bridge=False)
+        peer_target = _peer_for_target(decision.target or destination, peers)
+        bridge_uri = None
+        try:
+            if peer_target is not None and peer_target.host:
+                sip_transport = str((peer_target.device or {}).get("sip_transport") or "tcp").lower()
+                if sip_transport not in {"tcp", "udp"}:
+                    sip_transport = "tcp"
+                bridge_uri = parse_sip_uri(
+                    f"sip:{decision.target or destination}@{peer_target.host}:{peer_target.sip_port or cfg['sip_port']};transport={sip_transport}"
+                )
+            elif decision.entry is not None and decision.entry.sip_uri:
+                bridge_uri = parse_sip_uri(decision.entry.sip_uri)
+            elif decision.entry is not None and decision.entry.kind != "ha" and decision.entry.address:
+                bridge_port = int((decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
+                bridge_uri = parse_sip_uri(f"sip:{decision.entry.id}@{decision.entry.address}:{bridge_port}")
+            elif decision.sip_uri:
+                bridge_uri = parse_sip_uri(decision.sip_uri)
+        except Exception as err:
+            _LOGGER.info("SIP trunk route parse failed destination=%s: %s", destination, err)
+
+        if bridge_uri is None or bridge_uri.host == local_ip:
+            _LOGGER.info("SIP trunk destination unresolved destination=%s route=%s", destination, decision.kind)
+            _sip_send_bye(hass, invite.call_id)
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.TRANSPORT_UNREACHABLE.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=destination,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                terminal_reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                origin="self",
+                sip_status_code=404,
+                last_sip_event="BYE",
+            )
+            return
+
+        client = SipCallClient(
+            local_ip=local_ip,
+            local_name=invite.caller or _ha_peer_name(hass),
+            local_sip_port=int(cfg["sip_port"]),
+            local_rtp_port=dest_relay_port,
+            supported_send_formats=[invite.recv_format.audio_format],
+            supported_recv_formats=[invite.send_format.audio_format],
+            signaling_transport=_sip_uri_transport(bridge_uri),
+        )
+        result = await client.invite(
+            target=bridge_uri.user,
+            remote_host=bridge_uri.host,
+            remote_sip_port=bridge_uri.port or int(cfg["sip_port"]),
+        )
+        if result == "ringing":
+            result = await client.wait_for_final()
+        if result != "in_call" or client.dialog is None:
+            _LOGGER.info("SIP trunk destination failed destination=%s result=%s", destination, result)
+            await client.close()
+            _sip_send_bye(hass, invite.call_id)
+            public_result = _sip_public_state(result)
+            terminal_reason = _sip_terminal_reason(result, public_result)
+            _set_ha_softphone_call_state(
+                hass,
+                public_result,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=destination,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason=terminal_reason,
+                terminal_reason=terminal_reason,
+                origin="remote",
+                sip_status_code=client.last_sip_status_code,
+                last_sip_event=client.last_sip_event or "BYE",
+            )
+            return
+
+        try:
+            relay = SipRtpRelay(
+                left=RtpPeer(
+                    host=invite.remote_rtp_host,
+                    port=invite.remote_rtp_port,
+                    payload_type=invite.recv_format.payload_type,
+                    audio_format=invite.recv_format.audio_format,
+                    send_payload_type=invite.send_format.payload_type,
+                    send_audio_format=invite.send_format.audio_format,
+                ),
+                right=RtpPeer(
+                    host=client.dialog.remote_rtp_host,
+                    port=client.dialog.remote_rtp_port,
+                    payload_type=client.dialog.recv_format.payload_type,
+                    audio_format=client.dialog.recv_format.audio_format,
+                    send_payload_type=client.dialog.send_format.payload_type,
+                    send_audio_format=client.dialog.send_format.audio_format,
+                ),
+                left_port=source_relay_port,
+                right_port=dest_relay_port,
+            )
+            await relay.start()
+        except Exception as err:
+            _LOGGER.warning("SIP trunk RTP bridge unavailable: %s", err)
+            client.bye()
+            await client.close()
+            _sip_send_bye(hass, invite.call_id)
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.MEDIA_INCOMPATIBLE.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=destination,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                terminal_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                origin="self",
+                sip_status_code=488,
+                last_sip_event="BYE",
+            )
+            return
+
+        bucket.setdefault("sip_clients", {})[client.dialog_ids.call_id] = client
+        bucket.setdefault("sip_bridge_clients", {})[invite.call_id] = client.dialog_ids.call_id
+        bucket.setdefault("sip_relays", {})[invite.call_id] = relay
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.IN_CALL.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=destination,
+            peer_name=destination,
+            direction="incoming",
+            call_id=invite.call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            audio_mode="full_duplex",
+            route_kind="trunk",
+            sip_status_code=200,
+            last_sip_event="SIP_RESPONSE",
+            sip_uri=str(bridge_uri),
+        )
+        _fire_call_event(
+            hass,
+            {
+                "state": CallState.IN_CALL.value,
+                "scope": "sip_trunk",
+                "call_id": invite.call_id,
+                "target": destination,
+                "dtmf_digits": digits,
+                "dest_call_id": client.dialog_ids.call_id,
+            },
+            "sip",
+        )
+
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
         caller_peer = _peer_for_target(invite.caller, peers)
@@ -1869,6 +2251,48 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 "sip",
             )
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
+        if _is_trunk_invite(invite):
+            next_port = int(bucket.get("sip_rtp_next_port", int(cfg["rtp_port"]) + 2))
+            source_relay_port = next_port
+            dest_relay_port = next_port + 2
+            bucket["sip_rtp_next_port"] = next_port + 4
+            trunk_cfg = _get_trunk_config(hass)
+            dtmf_format = None
+            if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED):
+                dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
+                dtmf_format = dtmf_formats[0] if dtmf_formats else None
+            answer = build_answer_directional(
+                local_ip,
+                local_ip,
+                source_relay_port,
+                invite.send_format,
+                invite.recv_format,
+                dtmf=dtmf_format,
+            )
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.CONNECTING.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"),
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                selected_tx_format=invite.send_format.audio_format.wire_token(),
+                selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                audio_mode="full_duplex",
+                route_kind="trunk",
+                sip_status_code=200,
+                last_sip_event="INVITE",
+            )
+            hass.async_create_task(
+                _run_trunk_inbound_route(
+                    invite,
+                    source_relay_port=source_relay_port,
+                    dest_relay_port=dest_relay_port,
+                )
+            )
+            return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT

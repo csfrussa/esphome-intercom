@@ -17,11 +17,9 @@ CRLF = "\r\n"
 SIP_VERSION = "SIP/2.0"
 MAX_SIP_MESSAGE_BYTES = 8192
 MAX_SIP_BODY_BYTES = 4096
-SUPPORTED_METHODS = frozenset({"INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"})
+SUPPORTED_METHODS = frozenset({"INVITE", "ACK", "BYE", "CANCEL", "INFO", "OPTIONS", "REGISTER"})
 KNOWN_UNSUPPORTED_METHODS = frozenset(
     {
-        "REGISTER",
-        "INFO",
         "MESSAGE",
         "NOTIFY",
         "PRACK",

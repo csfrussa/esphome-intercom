@@ -10,6 +10,7 @@ from typing import Any
 
 from .audio_format import AudioFormat, DEFAULT_AUDIO_FORMAT, PcmFormat
 from . import rtp, sdp, sip
+from .sip_auth import build_digest_authorization
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -164,6 +165,10 @@ class SipCallClient:
         supported_send_formats: list[AudioFormat] | None = None,
         supported_recv_formats: list[AudioFormat] | None = None,
         signaling_transport: str = "UDP",
+        auth_username: str = "",
+        username: str = "",
+        password: str = "",
+        outbound_proxy: str = "",
     ) -> None:
         self.local_ip = local_ip
         self.local_name = local_name
@@ -173,6 +178,10 @@ class SipCallClient:
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.signaling_transport = (signaling_transport or "UDP").upper()
+        self.auth_username = auth_username
+        self.username = username or local_name
+        self.password = password
+        self.outbound_proxy = outbound_proxy
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: _SipClientProtocol | None = None
         self.reader: asyncio.StreamReader | None = None
@@ -230,12 +239,30 @@ class SipCallClient:
     async def _connect_tcp(self, remote_host: str, remote_sip_port: int) -> None:
         if self.writer is not None:
             return
-        self.reader, self.writer = await asyncio.open_connection(remote_host, int(remote_sip_port))
+        host, port = self._signaling_target(remote_host, int(remote_sip_port))
+        self.reader, self.writer = await asyncio.open_connection(host, port)
         sock = self.writer.get_extra_info("socket")
         if sock is not None:
             sockname = sock.getsockname()
             if sockname and len(sockname) >= 2 and int(sockname[1]) > 0:
                 self.local_sip_port = int(sockname[1])
+
+    def _signaling_target(self, remote_host: str, remote_sip_port: int) -> tuple[str, int]:
+        proxy = str(self.outbound_proxy or "").strip()
+        if not proxy:
+            return remote_host, int(remote_sip_port)
+        if proxy.startswith("sip:"):
+            proxy = proxy[4:]
+        proxy = proxy.split(";", 1)[0].strip()
+        if "@" in proxy:
+            proxy = proxy.rsplit("@", 1)[1]
+        if ":" in proxy and proxy.count(":") == 1:
+            host, port = proxy.rsplit(":", 1)
+            try:
+                return host.strip(), int(port)
+            except ValueError:
+                return host.strip(), int(remote_sip_port)
+        return proxy, int(remote_sip_port)
 
     async def _send_raw(self, raw: bytes, remote_host: str, remote_sip_port: int) -> None:
         if self.signaling_transport == "TCP":
@@ -245,7 +272,8 @@ class SipCallClient:
             await self.writer.drain()
             return
         assert self.transport is not None
-        self.transport.sendto(raw, (remote_host, int(remote_sip_port)))
+        host, port = self._signaling_target(remote_host, int(remote_sip_port))
+        self.transport.sendto(raw, (host, port))
 
     def _has_signaling_path(self) -> bool:
         if self.signaling_transport == "TCP":
@@ -270,7 +298,8 @@ class SipCallClient:
                 pass
             return
         if self.transport is not None:
-            self.transport.sendto(raw, (host, int(port)))
+            host, port = self._signaling_target(host, int(port))
+            self.transport.sendto(raw, (host, port))
 
     async def _read_response(self, timeout: float) -> tuple[sip.SipMessage, tuple[str, int]] | None:
         if self.signaling_transport == "TCP":
@@ -343,6 +372,7 @@ class SipCallClient:
         retransmit_interval = SIP_T1
         next_retransmit = loop.time() + retransmit_interval
         udp_invite_retransmits = 0
+        auth_retried = False
         while True:
             now = loop.time()
             remaining = deadline - now
@@ -382,6 +412,32 @@ class SipCallClient:
                 if not self._commit_200_ok(msg, target, remote_host, int(remote_sip_port), request_uri, local_uri, remote_uri):
                     return "media_incompatible"
                 return "in_call"
+            if msg.status_code in {401, 407} and self.password and not auth_retried:
+                auth_retried = True
+                auth_header = "Proxy-Authorization" if msg.status_code == 407 else "Authorization"
+                challenge = msg.header("Proxy-Authenticate" if msg.status_code == 407 else "WWW-Authenticate")
+                try:
+                    auth_value = build_digest_authorization(
+                        challenge_header=challenge,
+                        username=self.username,
+                        auth_username=self.auth_username,
+                        password=self.password,
+                        method="INVITE",
+                        uri=request_uri,
+                    )
+                except Exception as err:
+                    _LOGGER.info("SIP digest auth failed to build INVITE response: %s", err)
+                    return sip.sip_failure_reason(msg.status_code)
+                self.dialog_ids.cseq += 1
+                self._invite_cseq = self.dialog_ids.cseq
+                retry_headers = list(headers)
+                retry_headers = [(k, v) for k, v in retry_headers if k not in {"CSeq", auth_header}]
+                retry_headers.append(("CSeq", f"{self._invite_cseq} INVITE"))
+                retry_headers.append((auth_header, auth_value))
+                raw = sip.build_request("INVITE", request_uri, retry_headers, body)
+                self._mark_sip_event("INVITE")
+                await self._send_raw(raw, remote_host, int(remote_sip_port))
+                continue
             if msg.status_code and msg.status_code >= 300:
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 

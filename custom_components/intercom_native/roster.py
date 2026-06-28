@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 
 RosterKind = Literal["ha", "esp", "phone", "sip", "group"]
-RouteKind = Literal["direct", "bridge", "requires_bridge", "group"]
+RouteKind = Literal["direct", "bridge", "requires_bridge", "group", "trunk"]
 _PHONE_RE = re.compile(r"^[+0-9][0-9 .()/-]{2,}$")
 
 

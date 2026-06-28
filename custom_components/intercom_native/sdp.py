@@ -46,6 +46,12 @@ class RtpPcmFormat:
 
 
 @dataclass(frozen=True, slots=True)
+class RtpDtmfFormat:
+    payload_type: int
+    sample_rate: int
+
+
+@dataclass(frozen=True, slots=True)
 class RtpPcmDirection:
     send: RtpPcmFormat
     recv: RtpPcmFormat
@@ -211,6 +217,7 @@ def parse_sdp(sdp: str | bytes) -> dict:
     media_port = 0
     payload_order: list[int] = []
     rtpmap: dict[int, tuple[str, int, int]] = {}
+    fmtp: dict[int, str] = {}
     ptime = 0
     in_audio = False
     for raw in sdp.replace("\r\n", "\n").split("\n"):
@@ -239,6 +246,9 @@ def parse_sdp(sdp: str | bytes) -> dict:
             else:
                 raise SdpError(f"bad rtpmap: {line}")
             rtpmap[pt] = (encoding.upper(), int(rate), channels)
+        elif in_audio and line.startswith("a=fmtp:"):
+            left, spec = line.removeprefix("a=fmtp:").split(None, 1)
+            fmtp[int(left)] = spec.strip()
         elif in_audio and line.startswith("a=ptime:"):
             ptime = int(line.removeprefix("a=ptime:").strip())
     if not session_conn or not media_port or not payload_order:
@@ -248,6 +258,7 @@ def parse_sdp(sdp: str | bytes) -> dict:
         "media_port": media_port,
         "payload_order": payload_order,
         "rtpmap": rtpmap,
+        "fmtp": fmtp,
         "ptime": ptime,
     }
 
@@ -263,6 +274,19 @@ def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
         if encoding not in {"L16", "L24"}:
             continue
         out.append(RtpPcmFormat(pt, encoding, rate, channels, parsed["ptime"]))
+    return out
+
+
+def offered_dtmf_formats(sdp: str | bytes) -> list[RtpDtmfFormat]:
+    parsed = parse_sdp(sdp)
+    out: list[RtpDtmfFormat] = []
+    for pt in parsed["payload_order"]:
+        spec = parsed["rtpmap"].get(pt)
+        if spec is None:
+            continue
+        encoding, rate, _channels = spec
+        if encoding == "TELEPHONE-EVENT":
+            out.append(RtpDtmfFormat(pt, rate))
     return out
 
 
@@ -311,8 +335,15 @@ def negotiate_answer_directional(
     return RtpPcmDirection(send=send, recv=recv)
 
 
-def build_answer(origin_ip: str, media_ip: str, media_port: int, selected: RtpPcmFormat) -> str:
-    return build_answer_directional(origin_ip, media_ip, media_port, selected, selected)
+def build_answer(
+    origin_ip: str,
+    media_ip: str,
+    media_port: int,
+    selected: RtpPcmFormat,
+    *,
+    dtmf: RtpDtmfFormat | None = None,
+) -> str:
+    return build_answer_directional(origin_ip, media_ip, media_port, selected, selected, dtmf=dtmf)
 
 
 def build_answer_directional(
@@ -321,6 +352,8 @@ def build_answer_directional(
     media_port: int,
     send: RtpPcmFormat,
     recv: RtpPcmFormat,
+    *,
+    dtmf: RtpDtmfFormat | None = None,
 ) -> str:
     selected = []
     seen: set[int] = set()
@@ -329,7 +362,10 @@ def build_answer_directional(
             continue
         seen.add(fmt.payload_type)
         selected.append(fmt)
-    payloads = " ".join(str(fmt.payload_type) for fmt in selected)
+    payload_values = [str(fmt.payload_type) for fmt in selected]
+    if dtmf is not None and str(dtmf.payload_type) not in payload_values:
+        payload_values.append(str(dtmf.payload_type))
+    payloads = " ".join(payload_values)
     lines = [
         "v=0",
         f"o=- 0 0 IN IP4 {origin_ip}",
@@ -340,6 +376,9 @@ def build_answer_directional(
     ]
     for fmt in selected:
         lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
+    if dtmf is not None:
+        lines.append(f"a=rtpmap:{dtmf.payload_type} telephone-event/{dtmf.sample_rate}")
+        lines.append(f"a=fmtp:{dtmf.payload_type} 0-16")
     lines.extend([
         f"a=ptime:{selected[0].frame_ms}",
         f"a=maxptime:{selected[0].frame_ms}",

@@ -207,6 +207,7 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_dropped_packets": 0,
         "rtp_relays": {},
         "sip_client_dialogs": {},
+        "sip_trunk": {},
     }
     if endpoint is None:
         endpoint = None
@@ -257,6 +258,15 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
             data["last_sip_event"] = str(client_data.get("last_sip_event") or data["last_sip_event"])
             data["last_sip_status_code"] = int(client_data.get("last_sip_status_code") or data["last_sip_status_code"] or 0)
             data["last_sip_reason"] = str(client_data.get("last_sip_reason") or data["last_sip_reason"])
+    trunk = bucket.get("sip_trunk")
+    trunk_snapshot = getattr(trunk, "snapshot", None)
+    if callable(trunk_snapshot):
+        data["sip_trunk"] = dict(trunk_snapshot())
+        if data["sip_trunk"].get("trunk_last_sip_event"):
+            data["last_sip_event"] = str(data["sip_trunk"].get("trunk_last_sip_event") or data["last_sip_event"])
+        if data["sip_trunk"].get("trunk_status_code"):
+            data["last_sip_status_code"] = int(data["sip_trunk"].get("trunk_status_code") or 0)
+            data["last_sip_reason"] = str(data["sip_trunk"].get("trunk_status_reason") or "")
     data["pending_call_ids"] = sorted(set(data["pending_call_ids"]))
     data["active_call_ids"] = sorted(set(data["active_call_ids"]))
     return data
@@ -329,6 +339,7 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_dropped_packets": runtime["rtp_dropped_packets"],
         "rtp_relays": runtime["rtp_relays"],
         "sip_client_dialogs": runtime["sip_client_dialogs"],
+        "sip_trunk": runtime["sip_trunk"],
     }
 
 

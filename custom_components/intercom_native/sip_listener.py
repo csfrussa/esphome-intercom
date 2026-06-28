@@ -278,6 +278,12 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         if request.method == "OPTIONS":
             self._send_response(request, addr, 200, "OK")
             return
+        if request.method == "REGISTER":
+            self._send_response(request, addr, 405, "Method Not Allowed")
+            return
+        if request.method == "INFO":
+            self._send_response(request, addr, 200, "OK")
+            return
         if request.method in {"CANCEL", "BYE"}:
             call_id = request.header("Call-ID")
             terminal_reason = "cancelled" if request.method == "CANCEL" else "remote_hangup"
