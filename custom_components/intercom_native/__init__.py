@@ -427,6 +427,9 @@ def _sip_active_dialog_count(server: object | None) -> int:
             return int(count())
         except Exception:
             return 0
+    dialogs = getattr(server, "active_dialogs", None)
+    if isinstance(dialogs, dict):
+        return len(dialogs)
     endpoint = getattr(server, "endpoint", None)
     dialogs = getattr(endpoint, "active_dialogs", None)
     if isinstance(dialogs, dict):
@@ -444,10 +447,16 @@ def _sip_active_dialog_count(server: object | None) -> int:
 
 def _sip_servers(hass: HomeAssistant) -> list[object]:
     bucket = hass.data.get(DOMAIN, {})
+    servers: list[object] = []
     endpoint = bucket.get("sip_endpoint")
     if endpoint is not None:
-        return [endpoint]
-    return [server for server in (bucket.get("sip_server"), bucket.get("sip_tcp_server")) if server is not None]
+        servers.append(endpoint)
+    else:
+        servers.extend(server for server in (bucket.get("sip_server"), bucket.get("sip_tcp_server")) if server is not None)
+    trunk_endpoint = getattr(bucket.get("sip_trunk"), "inbound_endpoint", None)
+    if trunk_endpoint is not None:
+        servers.append(trunk_endpoint)
+    return servers
 
 
 def _sip_send_final_response(
