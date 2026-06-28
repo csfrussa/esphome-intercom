@@ -242,10 +242,14 @@ intercom_api:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   audio:
-    # Primary/preferred RX format for UDP: 48 kHz improves HA/browser audio,
-    # and 10 ms keeps each mono s16 frame below the default 1200-byte UDP
-    # payload ceiling. TX remains the microphone/AFE format unless audio.tx is
-    # overridden.
+    # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
+    # matching 10 ms TX reframe of the 16 kHz AFE mic for peers that negotiate
+    # ptime 10. 32 kHz/16 ms remains a fallback.
+    tx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -256,6 +260,10 @@ intercom_api:
     # not advertise additional formats when wiring intercom_api directly to a
     # fixed-rate mixer input.
     rx_formats:
+      - sample_rate: 32000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1

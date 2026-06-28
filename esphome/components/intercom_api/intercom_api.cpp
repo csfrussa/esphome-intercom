@@ -118,7 +118,7 @@ bool IntercomApi::allocate_setup_buffers_() {
       ? RAMAllocator<uint8_t>()
       : RAMAllocator<uint8_t>(RAMAllocator<uint8_t>::ALLOC_INTERNAL);
   if (this->has_microphone_()) {
-    this->tx_audio_chunk_ = psram_u8.allocate(this->tx_audio_chunk_bytes_());
+    this->tx_audio_chunk_ = psram_u8.allocate(this->tx_audio_max_chunk_bytes_());
     if (!this->tx_audio_chunk_) {
       ESP_LOGE(TAG, "Failed to allocate tx audio chunk buffer");
       return false;

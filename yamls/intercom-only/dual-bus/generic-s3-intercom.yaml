@@ -207,9 +207,14 @@ intercom_api:
   # SIP TCP; RTP media remains UDP after SDP negotiation.
   protocol: udp
   audio:
-    # Primary/preferred RX format: 48 kHz improves HA/browser audio and 10 ms
-    # keeps each mono s16 RTP packet compact. TX remains the microphone/AEC
-    # format unless audio.tx is overridden.
+    # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
+    # matching 10 ms TX reframe of the 16 kHz mic for peers that negotiate
+    # ptime 10. 32 kHz/16 ms remains a fallback.
+    tx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -220,6 +225,10 @@ intercom_api:
     # not advertise additional formats when wiring intercom_api directly to a
     # fixed-rate mixer input.
     rx_formats:
+      - sample_rate: 32000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1

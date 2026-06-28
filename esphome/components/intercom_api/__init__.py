@@ -124,11 +124,6 @@ def _validate_intercom_audio_format(value):
 
 
 def _validate_intercom_audio_config(value):
-    if value[CONF_TX_FORMATS]:
-        raise cv.Invalid(
-            "intercom_api.audio.tx_formats is reserved for a future TX resampler; "
-            "ESP TX must match the configured microphone/source format"
-        )
     for primary, extra_key in (
         (CONF_TX, CONF_TX_FORMATS),
         (CONF_RX, CONF_RX_FORMATS),
@@ -139,6 +134,25 @@ def _validate_intercom_audio_config(value):
                 f"because audio.{primary} is always included first"
             )
     return value
+
+
+def _has_auto_audio_field(fmt: dict) -> bool:
+    return any(_is_auto(fmt[key]) for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS, CONF_FRAME_MS))
+
+
+def _validate_tx_reframe_formats(tx_fmt: dict, tx_formats: list[dict]) -> None:
+    for fmt in tx_formats:
+        if _has_auto_audio_field(fmt):
+            raise cv.Invalid(
+                "intercom_api.audio.tx_formats entries must be explicit. "
+                "Only audio.tx can derive fields automatically from the microphone."
+            )
+        for key in (CONF_SAMPLE_RATE, CONF_PCM_FORMAT, CONF_CHANNELS):
+            if fmt[key] != tx_fmt[key]:
+                raise cv.Invalid(
+                    "intercom_api.audio.tx_formats can only declare packet-time reframes "
+                    "of audio.tx. sample_rate, pcm_format and channels must match audio.tx."
+                )
 
 
 INTERCOM_AUDIO_FORMAT_SCHEMA = cv.All(cv.Any(cv.one_of(CONF_AUTO, lower=True), cv.Schema(
@@ -572,6 +586,7 @@ def _final_validate(config):
     audio_cfg[CONF_RX] = _resolve_audio_format(config, CONF_RX, audio_cfg[CONF_RX])
     tx_fmt = audio_cfg[CONF_TX]
     rx_fmt = audio_cfg[CONF_RX]
+    _validate_tx_reframe_formats(tx_fmt, audio_cfg[CONF_TX_FORMATS])
 
     if protocol in (PROTOCOL_UDP, PROTOCOL_TCP):
         audio_cfg = config[CONF_AUDIO]

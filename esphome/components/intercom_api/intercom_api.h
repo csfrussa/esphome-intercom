@@ -34,6 +34,7 @@
 #include <esp_event.h>
 
 #include <atomic>
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -475,8 +476,15 @@ class IntercomApi : public Component {
 
   // Per-iteration drain buffers, heap-allocated at setup() so the audio
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.
-  size_t tx_audio_chunk_bytes_() const { return this->tx_audio_format_.nominal_frame_bytes(); }
-  size_t mic_processing_samples_() const { return this->tx_audio_chunk_bytes_() / sizeof(int16_t); }
+  size_t tx_audio_chunk_bytes_() const { return this->current_tx_audio_format_.nominal_frame_bytes(); }
+  size_t tx_audio_max_chunk_bytes_() const {
+    size_t bytes = this->tx_audio_format_.nominal_frame_bytes();
+    for (uint8_t i = 0; i < this->tx_audio_formats_.count; i++) {
+      bytes = std::max(bytes, this->tx_audio_formats_.formats[i].nominal_frame_bytes());
+    }
+    return bytes;
+  }
+  size_t mic_processing_samples_() const { return this->tx_audio_max_chunk_bytes_() / sizeof(int16_t); }
 #endif
 #ifdef USE_INTERCOM_API_MIC
   uint8_t *tx_audio_chunk_{nullptr};
