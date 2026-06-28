@@ -168,12 +168,14 @@ class SipTrunkClient:
 
         endpoint = SipUdpEndpoint(
             local_ip=manager.local_ip,
+            local_sip_port=manager.port,
             local_rtp_port=manager.local_rtp_port,
             supported_formats=manager.supported_formats,
             supported_send_formats=manager.supported_send_formats,
             supported_recv_formats=manager.supported_recv_formats,
             on_invite=manager.on_invite,
             on_terminated=manager.on_terminated,
+            on_register=getattr(manager, "on_register", None),
             send_override=self.send_response,
             signaling_transport=self.transport_name,
         )

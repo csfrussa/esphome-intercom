@@ -26,6 +26,8 @@ from homeassistant.components import network
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_REGISTRAR_ENABLED,
+    CONF_SIP_ACCOUNTS,
     CONF_SIP_TCP_ENABLED,
     CONF_SIP_UDP_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -61,6 +63,12 @@ from .audio_format import (
     parse_audio_format_list,
 )
 from .peer import Peer
+from .router import (
+    CallContext,
+    RouteAction,
+    RouteHintSource,
+    route_inbound_trunk,
+)
 from .websocket_api import (
     async_register_websocket_api,
     _async_load_ha_softphone_store,
@@ -90,6 +98,41 @@ HA_SOFTPHONE_ACTIVE_STATES = {
 
 def _pending_routes(hass: HomeAssistant) -> dict:
     return hass.data.setdefault(DOMAIN, {}).setdefault("sip_pending_routes", {})
+
+
+def _config_entry(hass: HomeAssistant) -> ConfigEntry | None:
+    return next(iter(hass.config_entries.async_entries(DOMAIN)), None)
+
+
+def _sip_account_dicts(hass: HomeAssistant) -> list[dict]:
+    entry = _config_entry(hass)
+    if entry is None:
+        return []
+    return [dict(item) for item in entry.data.get(CONF_SIP_ACCOUNTS, []) if isinstance(item, dict)]
+
+
+def _sip_accounts(hass: HomeAssistant):
+    from .sip_registrar import account_from_mapping
+
+    accounts = []
+    for raw in _sip_account_dicts(hass):
+        try:
+            accounts.append(account_from_mapping(raw))
+        except ValueError as err:
+            _LOGGER.warning("Ignoring invalid SIP account in config entry: %s", err)
+    return accounts
+
+
+def _update_sip_accounts(hass: HomeAssistant, accounts: list[dict]) -> None:
+    entry = _config_entry(hass)
+    if entry is None:
+        raise ConfigEntryError("Intercom Native config entry is required for SIP accounts")
+    data = dict(entry.data)
+    data[CONF_SIP_ACCOUNTS] = accounts
+    hass.config_entries.async_update_entry(entry, data=data)
+    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
+    if registrar is not None:
+        registrar.update_accounts(_sip_accounts(hass))
 
 
 def _ha_softphone_has_active_call(hass: HomeAssistant, *, ignore_call_id: str = "") -> bool:
@@ -255,6 +298,7 @@ def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
     return {
         CONF_SIP_TCP_ENABLED: bool(data.get(CONF_SIP_TCP_ENABLED, True)),
         CONF_SIP_UDP_ENABLED: bool(data.get(CONF_SIP_UDP_ENABLED, False)),
+        CONF_REGISTRAR_ENABLED: bool(data.get(CONF_REGISTRAR_ENABLED, False)),
         "sip_port": int(data.get("sip_port", INTERCOM_SIP_PORT)),
         "rtp_port": int(data.get("rtp_port", INTERCOM_RTP_PORT)),
         "advertise_host": (data.get("advertise_host") or "").strip(),
@@ -329,8 +373,8 @@ async def _ha_advertise_host(hass: HomeAssistant) -> str:
 
 
 def _select_transport_type(hass: HomeAssistant, host: str | None = None) -> str:
-    """SIP signaling transport inferred from a host."""
-    return "udp"
+    """Legacy inference is intentionally disabled for SIP routing."""
+    return ""
 
 
 def _resolve_esphome_route_id(hass: HomeAssistant, host: str) -> str:
@@ -625,7 +669,7 @@ async def _resolve_command_phone(hass: HomeAssistant, call: ServiceCall) -> dict
 def _device_transport(hass: HomeAssistant, d: dict, udp_manager=None) -> str:
     """Read the endpoint-declared SIP signaling transport."""
     value = str(d.get("sip_transport") or "").lower()
-    return value if value in ("udp", "tcp") else _select_transport_type(hass, d.get("host"))
+    return value if value in ("udp", "tcp") else ""
 
 
 async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
@@ -646,6 +690,9 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             _LOGGER.debug("Skipping offline intercom peer from phonebook: %s", name or host)
             continue
         sip_transport = _device_transport(hass, d)
+        if not sip_transport:
+            _LOGGER.warning("Skipping SIP peer %s from phonebook: endpoint did not publish sip_transport", name or host)
+            continue
         out.append(Peer(
             kind="esp",
             device=d,
@@ -685,14 +732,20 @@ def _format_entry_unified(peer: Peer) -> str:
         return name
     tx = ";".join(peer.tx_formats or [])
     rx = ";".join(peer.rx_formats or [])
-    sip_transport = str((peer.device or {}).get("sip_transport") or "tcp").lower()
+    sip_transport = str((peer.device or {}).get("sip_transport") or ("tcp" if peer.is_ha else "")).lower()
     if sip_transport not in {"tcp", "udp"}:
-        sip_transport = "tcp"
+        return name
     sip_transport_token = "sip_tcp" if sip_transport == "tcp" else "sip_udp"
     return (
         f"{name}|{peer_ip}|{peer.sip_port or 5060}|"
         f"{peer.rtp_port or 40000}|{peer.audio_mode}|{tx}|{rx}|{sip_transport_token}"
     )
+
+
+def _registered_roster_entries(hass: HomeAssistant):
+    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
+    entries = getattr(registrar, "roster_entries", None)
+    return list(entries()) if callable(entries) else []
 
 
 def _sip_uri_transport(uri) -> str:
@@ -1664,6 +1717,106 @@ async def _handle_sip_forward_service(call: ServiceCall) -> None:
     await _handle_sip_call_target_service(call, force_ha_bridge=True)
 
 
+async def _handle_sip_account_create_service(call: ServiceCall) -> None:
+    from homeassistant.exceptions import ServiceValidationError
+    from .sip_registrar import SipAccount, dump_account, generate_password, normalize_username
+
+    hass = call.hass
+    username = normalize_username(str(call.data["username"]))
+    display_name = str(call.data.get("display_name") or username).strip()
+    replace_existing = bool(call.data.get("replace", False))
+    accounts = _sip_account_dicts(hass)
+    if any(str(item.get("username") or "").lower() == username.lower() for item in accounts) and not replace_existing:
+        raise ServiceValidationError(f"SIP account {username} already exists")
+    password = str(call.data.get("password") or "").strip() or generate_password()
+    account = SipAccount(username=username, display_name=display_name, password=password, enabled=bool(call.data.get("enabled", True)))
+    accounts = [item for item in accounts if str(item.get("username") or "").lower() != username.lower()]
+    accounts.append(dump_account(account))
+    _update_sip_accounts(hass, accounts)
+    await _refresh_and_push_phonebook(hass)
+    _fire_call_event(
+        hass,
+        {"state": "sip_account_created", "username": username, "display_name": display_name, "password": password},
+        "sip",
+    )
+    _LOGGER.info("SIP local account created username=%s enabled=%s", username, account.enabled)
+
+
+async def _handle_sip_account_remove_service(call: ServiceCall) -> None:
+    from .sip_registrar import normalize_username
+
+    hass = call.hass
+    username = normalize_username(str(call.data["username"]))
+    accounts = [item for item in _sip_account_dicts(hass) if str(item.get("username") or "").lower() != username.lower()]
+    _update_sip_accounts(hass, accounts)
+    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
+    if registrar is not None:
+        registrar.registrations.pop(username, None)
+    await _refresh_and_push_phonebook(hass)
+    _LOGGER.info("SIP local account removed username=%s", username)
+
+
+async def _handle_sip_account_rotate_password_service(call: ServiceCall) -> None:
+    from homeassistant.exceptions import ServiceValidationError
+    from .sip_registrar import generate_password, normalize_username
+
+    hass = call.hass
+    username = normalize_username(str(call.data["username"]))
+    password = generate_password()
+    found = False
+    accounts = []
+    for item in _sip_account_dicts(hass):
+        if str(item.get("username") or "").lower() == username.lower():
+            item["password"] = password
+            found = True
+        accounts.append(item)
+    if not found:
+        raise ServiceValidationError(f"SIP account {username} does not exist")
+    _update_sip_accounts(hass, accounts)
+    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
+    if registrar is not None:
+        registrar.registrations.pop(username, None)
+    await _refresh_and_push_phonebook(hass)
+    _fire_call_event(hass, {"state": "sip_account_password_rotated", "username": username, "password": password}, "sip")
+    _LOGGER.info("SIP local account password rotated username=%s", username)
+
+
+async def _handle_sip_account_enabled_service(call: ServiceCall, *, enabled: bool) -> None:
+    from homeassistant.exceptions import ServiceValidationError
+    from .sip_registrar import normalize_username
+
+    hass = call.hass
+    username = normalize_username(str(call.data["username"]))
+    found = False
+    accounts = []
+    for item in _sip_account_dicts(hass):
+        if str(item.get("username") or "").lower() == username.lower():
+            item["enabled"] = enabled
+            found = True
+        accounts.append(item)
+    if not found:
+        raise ServiceValidationError(f"SIP account {username} does not exist")
+    _update_sip_accounts(hass, accounts)
+    if not enabled:
+        registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
+        if registrar is not None:
+            registrar.registrations.pop(username, None)
+    await _refresh_and_push_phonebook(hass)
+    _LOGGER.info("SIP local account %s username=%s", "enabled" if enabled else "disabled", username)
+
+
+async def _handle_sip_account_export_service(call: ServiceCall) -> None:
+    accounts = [
+        {
+            "username": item.get("username", ""),
+            "display_name": item.get("display_name", ""),
+            "enabled": bool(item.get("enabled", True)),
+        }
+        for item in _sip_account_dicts(call.hass)
+    ]
+    _fire_call_event(call.hass, {"state": "sip_account_export", "accounts": accounts}, "sip")
+
+
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register HA services for SIP phone control."""
 
@@ -1708,6 +1861,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_sip_route(call: ServiceCall) -> None:
         await _handle_sip_route_service(call)
+
+    async def handle_sip_account_create(call: ServiceCall) -> None:
+        await _handle_sip_account_create_service(call)
+
+    async def handle_sip_account_remove(call: ServiceCall) -> None:
+        await _handle_sip_account_remove_service(call)
+
+    async def handle_sip_account_rotate_password(call: ServiceCall) -> None:
+        await _handle_sip_account_rotate_password_service(call)
+
+    async def handle_sip_account_enable(call: ServiceCall) -> None:
+        await _handle_sip_account_enabled_service(call, enabled=True)
+
+    async def handle_sip_account_disable(call: ServiceCall) -> None:
+        await _handle_sip_account_enabled_service(call, enabled=False)
+
+    async def handle_sip_account_export(call: ServiceCall) -> None:
+        await _handle_sip_account_export_service(call)
 
     target_fields = {
         vol.Optional("device_id"): vol.Any(cv.string, [cv.string]),
@@ -1816,6 +1987,17 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         {vol.Required("dnd"): cv.boolean},
         extra=vol.PREVENT_EXTRA,
     )
+    sip_account_create_schema = vol.Schema(
+        {
+            vol.Required("username"): cv.string,
+            vol.Optional("display_name", default=""): cv.string,
+            vol.Optional("password", default=""): cv.string,
+            vol.Optional("enabled", default=True): cv.boolean,
+            vol.Optional("replace", default=False): cv.boolean,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    sip_account_name_schema = vol.Schema({vol.Required("username"): cv.string}, extra=vol.PREVENT_EXTRA)
     hass.services.async_register(DOMAIN, "purge_devices", handle_purge_devices, schema=purge_schema)
     hass.services.async_register(DOMAIN, "sip_answer", handle_sip_answer, schema=sip_answer_schema)
     hass.services.async_register(DOMAIN, "sip_decline", handle_sip_decline, schema=sip_decline_schema)
@@ -1836,6 +2018,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "phonebook_export", handle_phonebook_export)
     hass.services.async_register(DOMAIN, "phonebook_push", handle_phonebook_push)
     hass.services.async_register(DOMAIN, "sip_set_dnd", handle_sip_set_dnd, schema=set_dnd_schema)
+    hass.services.async_register(DOMAIN, "sip_account_create", handle_sip_account_create, schema=sip_account_create_schema)
+    hass.services.async_register(DOMAIN, "sip_account_remove", handle_sip_account_remove, schema=sip_account_name_schema)
+    hass.services.async_register(
+        DOMAIN, "sip_account_rotate_password", handle_sip_account_rotate_password, schema=sip_account_name_schema
+    )
+    hass.services.async_register(DOMAIN, "sip_account_enable", handle_sip_account_enable, schema=sip_account_name_schema)
+    hass.services.async_register(DOMAIN, "sip_account_disable", handle_sip_account_disable, schema=sip_account_name_schema)
+    hass.services.async_register(DOMAIN, "sip_account_export", handle_sip_account_export)
 
 
 async def _async_apply_assist_intents(hass: HomeAssistant, enabled: bool) -> None:
@@ -1932,6 +2122,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_shutdown_all(hass)
 
     await _async_stop_sip_trunk(hass)
+    hass.data.get(DOMAIN, {}).pop("sip_registrar", None)
     await _async_stop_sip_endpoint(hass)
     unsub = hass.data.get(DOMAIN, {}).pop("esp_state_event_bridge_unsub", None)
     if unsub is not None:
@@ -1998,6 +2189,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sip_client import SipCallClient
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
+    from .sip_registrar import SipRegistrar
     from .sip_rtp_bridge import RtpPeer, SipRtpRelay
 
     if hass.data.get(DOMAIN, {}).get("sip_endpoint") is not None:
@@ -2008,6 +2200,19 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     if not local_ip:
         _LOGGER.error("Cannot start SIP endpoint: HA announce IP is unknown")
         return False
+    registrar = SipRegistrar(
+        enabled=bool(cfg.get(CONF_REGISTRAR_ENABLED, False)),
+        accounts=_sip_accounts(hass),
+        local_ip=local_ip,
+        local_sip_port=int(cfg["sip_port"]),
+    )
+    hass.data.setdefault(DOMAIN, {})["sip_registrar"] = registrar
+
+    async def _on_register(request, addr, transport):
+        result = await registrar.handle_register(request, addr, transport)
+        if 200 <= int(result.status) < 300:
+            await _refresh_and_push_phonebook(hass)
+        return result
 
     def _roster_from_peers(peers: list[Peer]) -> list[RosterEntry]:
         entries: list[RosterEntry] = []
@@ -2030,6 +2235,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     },
                 )
             )
+        entries.extend(_registered_roster_entries(hass))
         return entries
 
     def _same_route_name(left: str, right: str) -> bool:
@@ -2111,9 +2317,46 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             _LOGGER.info("SIP trunk inbound call has no telephone-event SDP offer; using default destination")
 
         default_target = str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA"
-        if digits and not destination:
-            _LOGGER.info("SIP trunk DTMF route not found for digits=%s; using default=%s", digits, default_target)
-        destination = destination or default_target
+        route_hint = destination or digits
+        peers = await _async_build_peer_snapshot(hass)
+        decision = route_inbound_trunk(
+            CallContext(
+                call_id=invite.call_id,
+                direction="inbound",
+                origin="trunk",
+                caller=invite.caller,
+                called_did=str(invite.request_uri.user or ""),
+                requested_target=default_target,
+                route_hint=route_hint,
+                route_hint_source=RouteHintSource.DTMF if route_hint else RouteHintSource.NONE,
+                source_host=invite.source_host,
+            ),
+            _roster_from_peers(peers),
+            trunk_ready=False,
+        )
+        if decision.action is RouteAction.ANSWER_HA:
+            destination = default_target
+        elif decision.action is RouteAction.REJECT:
+            _LOGGER.info("SIP trunk route not found call_id=%s digits=%s hint=%s", invite.call_id, digits or "-", route_hint or "-")
+            _sip_send_bye(hass, invite.call_id)
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.TRANSPORT_UNREACHABLE.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=route_hint or default_target,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason="route_not_found",
+                terminal_reason="route_not_found",
+                origin="self",
+                sip_status_code=404,
+                last_sip_event="BYE",
+            )
+            return
+        else:
+            destination = decision.target or route_hint or default_target
         _LOGGER.info(
             "SIP trunk inbound route call_id=%s caller=%s digits=%s destination=%s tx=%s rx=%s",
             invite.call_id,
@@ -2162,7 +2405,6 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return
 
-        peers = await _async_build_peer_snapshot(hass)
         decision = resolve_target(destination, _roster_from_peers(peers), ha_bridge=False)
         peer_target = _peer_for_target(decision.target or destination, peers)
         bridge_uri = None
@@ -2563,6 +2805,23 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
 
         force_ha_softphone = route_action == "answer_ha"
+        if not force_ha_softphone and decision.kind == "reject":
+            status = 403 if decision.reason == "target_disabled" else 404
+            _set_ha_softphone_call_state(
+                hass,
+                "declined",
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=invite.target,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason=decision.reason or TerminalReason.DECLINED.value,
+                origin="self",
+                sip_status_code=status,
+                last_sip_event="SIP_RESPONSE",
+            )
+            return SipInviteResult(status, "Forbidden" if status == 403 else "Not Found", to_tag="", decline_reason=decision.reason or TerminalReason.DECLINED.value)
         if not force_ha_softphone and decision.kind == "requires_bridge":
             return SipInviteResult(503, "Service Unavailable", to_tag="")
         if not force_ha_softphone and decision.reason == "ha_required":
@@ -2904,6 +3163,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
         on_invite=_on_invite,
         on_terminated=_on_terminated,
+        on_register=_on_register,
         udp_enabled=bool(cfg.get(CONF_SIP_UDP_ENABLED, False)),
         tcp_enabled=bool(cfg.get(CONF_SIP_TCP_ENABLED, True)),
     )

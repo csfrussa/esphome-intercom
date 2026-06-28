@@ -12,6 +12,7 @@
           "advertise_host": "Advertised HA host/IP",
           "assist_intents": "Enable Assist intents",
           "debug_mode": "Enable SIP/RTP debug mode",
+          "sip_registrar_enabled": "Enable local SIP softphone accounts",
           "trunk_enabled": "Enable optional SIP trunk"
         },
         "data_description": {
@@ -22,6 +23,7 @@
           "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices.",
           "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live intercom phonebook.",
           "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
+          "sip_registrar_enabled": "Accept REGISTER from local softphones such as Zoiper, Linphone or baresip using accounts managed by Intercom Native services.",
           "trunk_enabled": "Show provider/PBX trunk settings. When disabled, no trunk registration, external route or DTMF collector starts."
         }
       },

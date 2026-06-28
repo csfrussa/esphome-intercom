@@ -91,10 +91,11 @@ class _DtmfProtocol(asyncio.DatagramProtocol):
         if not digit:
             return
         key = (timestamp, event)
-        if ended or key not in self._seen_events:
-            self._seen_events.add(key)
-            _LOGGER.debug("SIP trunk DTMF RX digit=%s seq=%s end=%s from=%s:%s", digit, sequence, ended, addr[0], addr[1])
-            self.on_digit(digit)
+        if key in self._seen_events:
+            return
+        self._seen_events.add(key)
+        _LOGGER.debug("SIP trunk DTMF RX digit=%s seq=%s end=%s from=%s:%s", digit, sequence, ended, addr[0], addr[1])
+        self.on_digit(digit)
 
 
 class DtmfCollector:

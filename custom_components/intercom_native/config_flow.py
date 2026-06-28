@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_REGISTRAR_ENABLED,
     CONF_SIP_TCP_ENABLED,
     CONF_SIP_UDP_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -79,6 +80,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
             "advertise_host": existing.get("advertise_host", ""),
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
+            CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
         }
         schema = vol.Schema(
@@ -99,6 +101,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                     default=defaults[CONF_ASSIST_INTENTS],
                 ): BooleanSelector(),
                 vol.Required(CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]): BooleanSelector(),
+                vol.Required(CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]): BooleanSelector(),
                 vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
             }
         )
@@ -134,6 +137,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_TRUNK_DTMF_TIMEOUT_MS: 1000,
                         CONF_TRUNK_DTMF_TERMINATOR: "",
                         CONF_TRUNK_DTMF_ROUTES: "",
+                        "sip_accounts": existing.get("sip_accounts", []),
                     }
                 )
                 current_entry, _existing = self._current_entry_data()
@@ -227,9 +231,11 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                         "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
+                        CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
                     }
                 )
                 data[CONF_TRUNK_ENABLED] = True
+                data.setdefault("sip_accounts", existing.get("sip_accounts", []))
                 data.update(user_input)
                 current_entry, _existing = self._current_entry_data()
                 if current_entry is None:

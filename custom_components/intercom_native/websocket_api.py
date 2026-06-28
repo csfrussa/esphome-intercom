@@ -259,6 +259,7 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_relays": {},
         "sip_client_dialogs": {},
         "sip_trunk": {},
+        "sip_registrar": {},
         "media_debug": {},
     }
     if endpoint is None:
@@ -319,6 +320,15 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
         if data["sip_trunk"].get("trunk_status_code"):
             data["last_sip_status_code"] = int(data["sip_trunk"].get("trunk_status_code") or 0)
             data["last_sip_reason"] = str(data["sip_trunk"].get("trunk_status_reason") or "")
+    registrar = bucket.get("sip_registrar")
+    registrar_snapshot = getattr(registrar, "snapshot", None)
+    if callable(registrar_snapshot):
+        data["sip_registrar"] = dict(registrar_snapshot())
+        if data["sip_registrar"].get("registrar_last_sip_event"):
+            data["last_sip_event"] = str(data["sip_registrar"].get("registrar_last_sip_event") or data["last_sip_event"])
+        if data["sip_registrar"].get("registrar_last_sip_status_code"):
+            data["last_sip_status_code"] = int(data["sip_registrar"].get("registrar_last_sip_status_code") or 0)
+            data["last_sip_reason"] = str(data["sip_registrar"].get("registrar_last_sip_reason") or "")
     data["pending_call_ids"] = sorted(set(data["pending_call_ids"]))
     data["active_call_ids"] = sorted(set(data["active_call_ids"]))
     return data

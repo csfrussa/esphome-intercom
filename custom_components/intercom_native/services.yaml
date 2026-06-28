@@ -370,3 +370,82 @@ sip_set_dnd:
       required: true
       selector:
         boolean:
+
+sip_account_create:
+  name: Create SIP Softphone Account
+  description: Create or replace a local SIP account for a standard softphone registering to Home Assistant.
+  fields:
+    username:
+      name: Username
+      description: SIP username and central phonebook ID, for example SmartphoneDany.
+      required: true
+      selector:
+        text:
+    display_name:
+      name: Display Name
+      description: Optional friendly name shown in the central phonebook.
+      required: false
+      selector:
+        text:
+    password:
+      name: Password
+      description: Optional password. If omitted, Home Assistant generates one and emits it once in the call event stream.
+      required: false
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      required: false
+      default: true
+      selector:
+        boolean:
+    replace:
+      name: Replace Existing
+      required: false
+      default: false
+      selector:
+        boolean:
+
+sip_account_remove:
+  name: Remove SIP Softphone Account
+  description: Remove one local SIP account and its active registration.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+sip_account_rotate_password:
+  name: Rotate SIP Softphone Password
+  description: Generate a new password for a local SIP account and clear its active registration.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+sip_account_enable:
+  name: Enable SIP Softphone Account
+  description: Enable a local SIP account.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+sip_account_disable:
+  name: Disable SIP Softphone Account
+  description: Disable a local SIP account and clear its active registration.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+sip_account_export:
+  name: Export SIP Softphone Accounts
+  description: Emit configured local SIP accounts without passwords in the intercom_native call event stream.

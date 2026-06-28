@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 
 RosterKind = Literal["ha", "esp", "phone", "sip", "group"]
-RouteKind = Literal["direct", "bridge", "requires_bridge", "group", "trunk"]
+RouteKind = Literal["direct", "bridge", "requires_bridge", "group", "trunk", "reject"]
 _PHONE_RE = re.compile(r"^[+0-9][0-9 .()/-]{2,}$")
 
 
@@ -198,7 +198,7 @@ def resolve_target(
     if ha is None and ha_host:
         ha = RosterEntry(id="HA", name="HA", kind="ha", address=ha_host, metadata={"sip_port": ha_sip_port})
     if entry is not None and not entry.enabled:
-        return RouteDecision("bridge", target, "", entry=entry, reason="disabled")
+        return RouteDecision("reject", target, "", entry=entry, reason="target_disabled")
 
     if entry is not None:
         if entry.kind == "phone":

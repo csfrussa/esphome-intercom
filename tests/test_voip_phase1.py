@@ -43,9 +43,13 @@ sip = _load_intercom_module("sip")
 sdp = _load_intercom_module("sdp")
 rtp = _load_intercom_module("rtp")
 roster = _load_intercom_module("roster")
+router = _load_intercom_module("router")
 sip_client = _load_intercom_module("sip_client")
 sip_listener = _load_intercom_module("sip_listener")
+sip_registrar = _load_intercom_module("sip_registrar")
+sip_auth = _load_intercom_module("sip_auth")
 sip_rtp_bridge = _load_intercom_module("sip_rtp_bridge")
+dtmf = _load_intercom_module("dtmf")
 
 
 def _load_sip_transport_with_homeassistant_stubs():
@@ -909,6 +913,186 @@ class RosterResolverTest(unittest.TestCase):
             roster.resolve_target("Salotto", entries, ha_bridge=True).sip_uri,
             "sip:Salotto@192.168.1.10;transport=tcp",
         )
+
+
+class RouterContractTest(unittest.TestCase):
+    def test_esp_numeric_target_always_bridges_to_ha(self) -> None:
+        entries = roster.parse_roster_json(
+            [
+                {"id": "HA", "kind": "ha", "address": "192.168.1.10"},
+                {"id": "200", "kind": "esp", "address": "192.168.1.20", "metadata": {"sip_transport": "udp"}},
+            ]
+        )
+        decision = router.resolve_esp_origin("200", entries, "sip:200@192.168.1.10;transport=tcp")
+        self.assertEqual(decision.action, router.RouteAction.BRIDGE)
+        self.assertEqual(decision.reason, router.RouteReason.NUMBER_VIA_HA)
+        self.assertEqual(decision.sip_uri, "sip:200@192.168.1.10;transport=tcp")
+
+    def test_ha_router_extension_forwards_to_esp(self) -> None:
+        entries = roster.parse_roster_json(
+            [{"id": "200", "name": "WS3", "kind": "esp", "address": "192.168.1.47", "metadata": {"sip_transport": "udp"}}]
+        )
+        decision = router.resolve_ha_router("200", entries, trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.FORWARD)
+        self.assertEqual(decision.target, "200")
+        self.assertEqual(decision.sip_uri, "sip:200@192.168.1.47;transport=udp")
+
+    def test_ha_router_public_number_requires_ready_trunk(self) -> None:
+        unavailable = router.resolve_ha_router("0551234567", [], trunk_ready=False)
+        self.assertEqual(unavailable.action, router.RouteAction.REJECT)
+        self.assertEqual(unavailable.status, 503)
+        self.assertEqual(unavailable.reason, router.RouteReason.TRUNK_UNAVAILABLE)
+        ready = router.resolve_ha_router("0551234567", [], trunk_ready=True)
+        self.assertEqual(ready.action, router.RouteAction.TRUNK)
+
+    def test_trunk_inbound_no_hint_answers_ha(self) -> None:
+        ctx = router.CallContext(call_id="trunk-1", direction="inbound", origin="trunk")
+        decision = router.route_inbound_trunk(ctx, [], trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.ANSWER_HA)
+
+    def test_trunk_inbound_unknown_hint_rejects_route_not_found(self) -> None:
+        ctx = router.CallContext(
+            call_id="trunk-2",
+            direction="inbound",
+            origin="trunk",
+            route_hint="999",
+            route_hint_source=router.RouteHintSource.DTMF,
+        )
+        decision = router.route_inbound_trunk(ctx, [], trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.REJECT)
+        self.assertEqual(decision.reason, router.RouteReason.ROUTE_NOT_FOUND)
+        self.assertEqual(decision.status, 404)
+
+    def test_disabled_entry_rejects(self) -> None:
+        entries = roster.parse_roster_json(
+            [{"id": "WS3", "kind": "esp", "address": "192.168.1.47", "enabled": False}]
+        )
+        decision = router.resolve_ha_router("WS3", entries, trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.REJECT)
+        self.assertEqual(decision.reason, router.RouteReason.TARGET_DISABLED)
+
+
+class SipProtocolBugFixTest(unittest.TestCase):
+    def test_dtmf_collector_emits_one_digit_per_event(self) -> None:
+        digits: list[str] = []
+        proto = dtmf._DtmfProtocol(101, digits.append)
+
+        def packet(*, sequence: int, timestamp: int, ended: bool) -> bytes:
+            header = bytearray(12)
+            header[0] = 0x80
+            header[1] = 101
+            header[2:4] = int(sequence).to_bytes(2, "big")
+            header[4:8] = int(timestamp).to_bytes(4, "big")
+            header[8:12] = b"ssrc"
+            payload = bytes([5, 0x80 if ended else 0x00, 0x00, 0xA0])
+            return bytes(header) + payload
+
+        proto.datagram_received(packet(sequence=1, timestamp=1234, ended=False), ("127.0.0.1", 5000))
+        proto.datagram_received(packet(sequence=2, timestamp=1234, ended=True), ("127.0.0.1", 5000))
+        proto.datagram_received(packet(sequence=3, timestamp=1234, ended=True), ("127.0.0.1", 5000))
+        self.assertEqual(digits, ["5"])
+
+    def test_response_contact_uses_configured_local_sip_port(self) -> None:
+        request = sip.parse_message(
+            sip.build_request(
+                "INVITE",
+                "sip:HA@192.168.1.10:9999",
+                [
+                    ("Via", "SIP/2.0/UDP 192.168.1.30:5060;branch=z9hG4bKx;rport"),
+                    ("From", "<sip:ESP@192.168.1.30>;tag=a"),
+                    ("To", "<sip:HA@192.168.1.10>"),
+                    ("Call-ID", "contact-port"),
+                    ("CSeq", "1 INVITE"),
+                    ("Content-Length", "0"),
+                ],
+                b"",
+            )
+        )
+        uri = sip_listener._response_contact_uri(
+            request,
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+            transport="UDP",
+        )
+        self.assertEqual(uri, "sip:HA@192.168.1.10:5060;transport=udp")
+
+    def test_invite_error_ack_uses_invite_transaction(self) -> None:
+        class FakeTransport:
+            def __init__(self) -> None:
+                self.sent: list[tuple[bytes, tuple[str, int]]] = []
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                self.sent.append((data, addr))
+
+        client = sip_client.SipCallClient(local_ip="192.168.1.10", local_name="HA", local_sip_port=5060, local_rtp_port=41000)
+        client.transport = FakeTransport()  # type: ignore[assignment]
+        client.dialog_ids = sip.SipDialogIds(call_id="call-error", local_tag="ltag", cseq=3, branch="z9hG4bKorig")
+        client._invite_cseq = 3
+        client._pending_request_uri = "sip:ESP@192.168.1.30:5060"
+        client._pending_local_uri = "sip:HA@192.168.1.10:5060"
+        client._pending_remote_uri = "sip:ESP@192.168.1.30:5060"
+        msg = sip.parse_message(
+            sip.build_response(
+                486,
+                "Busy Here",
+                [
+                    ("Via", "SIP/2.0/UDP 192.168.1.10:5060;branch=z9hG4bKorig"),
+                    ("From", "<sip:HA@192.168.1.10>;tag=ltag"),
+                    ("To", "<sip:ESP@192.168.1.30>;tag=rtag"),
+                    ("Call-ID", "call-error"),
+                    ("CSeq", "3 INVITE"),
+                ],
+                b"",
+            )
+        )
+        client._send_invite_error_ack(msg, "192.168.1.30", 5060)
+        raw, addr = client.transport.sent[0]  # type: ignore[union-attr]
+        parsed = sip.parse_message(raw)
+        self.assertEqual(addr, ("192.168.1.30", 5060))
+        self.assertEqual(parsed.method, "ACK")
+        self.assertEqual(parsed.header("CSeq"), "3 ACK")
+        self.assertIn("z9hG4bKorig", parsed.header("Via"))
+
+
+class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
+    async def test_register_challenge_then_binding_roster_entry(self) -> None:
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("SmartphoneDany", "Smartphone Dany", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+        )
+        base_headers = [
+            ("Via", "SIP/2.0/UDP 192.168.1.50:5062;branch=z9hG4bKreg;rport"),
+            ("From", "<sip:SmartphoneDany@192.168.1.10>;tag=a"),
+            ("To", "<sip:SmartphoneDany@192.168.1.10>"),
+            ("Call-ID", "reg-1"),
+            ("CSeq", "1 REGISTER"),
+            ("Contact", "<sip:SmartphoneDany@192.168.1.50:5062;transport=udp>"),
+            ("Expires", "120"),
+        ]
+        request_uri = "sip:SmartphoneDany@192.168.1.10"
+        challenge_req = sip.parse_message(sip.build_request("REGISTER", request_uri, base_headers, b""))
+        challenge = await registrar.handle_register(challenge_req, ("192.168.1.50", 5062), "UDP")
+        self.assertEqual(challenge.status, 401)
+        authenticate = dict(challenge.headers)["WWW-Authenticate"]
+        authorization = sip_auth.build_digest_authorization(
+            challenge_header=authenticate,
+            username="SmartphoneDany",
+            password="secret",
+            method="REGISTER",
+            uri=request_uri,
+        )
+        ok_req = sip.parse_message(
+            sip.build_request("REGISTER", request_uri, base_headers + [("Authorization", authorization)], b"")
+        )
+        ok = await registrar.handle_register(ok_req, ("192.168.1.50", 5062), "UDP")
+        self.assertEqual(ok.status, 200)
+        entries = registrar.roster_entries()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].id, "SmartphoneDany")
+        self.assertEqual(entries[0].kind, "sip")
+        self.assertEqual(entries[0].sip_uri, "sip:SmartphoneDany@192.168.1.50:5062;transport=udp")
 
 
 class SipBridgeTest(unittest.IsolatedAsyncioTestCase):

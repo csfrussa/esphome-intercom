@@ -467,6 +467,7 @@ class SipCallClient:
                     return "media_incompatible"
                 return "in_call"
             if msg.status_code in {401, 407} and self.password and not auth_retried:
+                self._send_invite_error_ack(msg, addr[0], addr[1])
                 auth_retried = True
                 auth_header = "Proxy-Authorization" if msg.status_code == 407 else "Authorization"
                 challenge = msg.header("Proxy-Authenticate" if msg.status_code == 407 else "WWW-Authenticate")
@@ -493,6 +494,7 @@ class SipCallClient:
                 await self._send_raw(raw, remote_host, int(remote_sip_port))
                 continue
             if msg.status_code and msg.status_code >= 300:
+                self._send_invite_error_ack(msg, addr[0], addr[1])
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
     async def wait_for_final(self, timeout: float = 60.0) -> str:
@@ -530,6 +532,7 @@ class SipCallClient:
                     return "media_incompatible"
                 return "in_call"
             if msg.status_code >= 300:
+                self._send_invite_error_ack(msg, addr[0], addr[1])
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
     def _commit_200_ok(
@@ -609,6 +612,35 @@ class SipCallClient:
         self._send_dialog_request(raw, host, port)
         self._mark_sip_event("ACK")
         _LOGGER.info("SIP TX ACK %s:%s", host, port)
+
+    def _send_invite_error_ack(self, msg: sip.SipMessage, host: str, port: int) -> None:
+        if not self._has_signaling_path():
+            return
+        request_uri = self._pending_request_uri
+        local_uri = self._pending_local_uri
+        remote_uri = self._pending_remote_uri
+        if not request_uri or not local_uri or not remote_uri:
+            return
+        ack_ids = sip.SipDialogIds(
+            call_id=self.dialog_ids.call_id,
+            local_tag=self.dialog_ids.local_tag,
+            remote_tag=_extract_tag(msg.header("To")),
+            cseq=self._invite_cseq,
+            branch=self.dialog_ids.branch,
+        )
+        headers = sip.dialog_headers(
+            request_uri=request_uri,
+            local_uri=local_uri,
+            remote_uri=remote_uri,
+            dialog=ack_ids,
+            method="ACK",
+            contact_uri=local_uri,
+            transport=self.signaling_transport,
+        )
+        raw = sip.build_request("ACK", request_uri, headers, b"")
+        self._send_dialog_request(raw, host, int(port))
+        self._mark_sip_event("ACK")
+        _LOGGER.info("SIP TX ACK final INVITE error %s:%s", host, port)
 
     def bye(self) -> None:
         if not self._has_signaling_path() or self.dialog is None:

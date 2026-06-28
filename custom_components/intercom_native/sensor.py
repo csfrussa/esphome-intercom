@@ -129,6 +129,7 @@ class IntercomPhonebookSensor(SensorEntity):
             _async_build_peer_snapshot,
             _format_entry_unified,
             _push_roster_json_to_esps,
+            _registered_roster_entries,
         )
         from .roster import RosterEntry, dump_roster_json
 
@@ -158,6 +159,7 @@ class IntercomPhonebookSensor(SensorEntity):
         for raw in self.hass.data.get(DOMAIN, {}).get("manual_roster_entries", []):
             if isinstance(raw, RosterEntry):
                 roster_entries.append(raw)
+        roster_entries.extend(_registered_roster_entries(self.hass))
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
         visible_count = len(roster_entries)

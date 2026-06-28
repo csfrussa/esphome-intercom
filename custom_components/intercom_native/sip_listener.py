@@ -68,6 +68,7 @@ class _ActiveDialog:
 
 InviteHandler = Callable[[SipInvite], Awaitable[SipInviteResult]]
 TerminateHandler = Callable[[str, str], Awaitable[None]]
+RegisterHandler = Callable[[sip.SipMessage, tuple[str, int], str], Awaitable[Any]]
 SendHandler = Callable[[bytes, tuple[str, int]], None]
 
 
@@ -143,14 +144,13 @@ def _response_headers(request: sip.SipMessage, *, addr=None, to_tag: str = "") -
     return headers
 
 
-def _response_contact_uri(request: sip.SipMessage, *, local_ip: str, transport: str) -> str:
+def _response_contact_uri(request: sip.SipMessage, *, local_ip: str, local_sip_port: int, transport: str) -> str:
     try:
         request_uri = sip.parse_sip_uri(request.uri)
         user = request_uri.user or "intercom"
-        port = request_uri.port or 5060
     except Exception:
         user = "intercom"
-        port = 5060
+    port = int(local_sip_port or 5060)
     return str(sip.SipUri(user, local_ip, port, params=(("transport", transport.lower()),)))
 
 
@@ -173,21 +173,25 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         *,
         local_ip: str,
         local_rtp_port: int,
+        local_sip_port: int = 5060,
         supported_formats: list[AudioFormat],
         supported_send_formats: list[AudioFormat] | None = None,
         supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
+        on_register: RegisterHandler | None = None,
         send_override: SendHandler | None = None,
         signaling_transport: str = "UDP",
     ) -> None:
         self.local_ip = local_ip
+        self.local_sip_port = int(local_sip_port or 5060)
         self.local_rtp_port = local_rtp_port or INTERCOM_RTP_PORT
         base_formats = supported_formats or list(HA_SIP_PCM_FORMATS)
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.on_invite = on_invite
         self.on_terminated = on_terminated
+        self.on_register = on_register
         self.send_override = send_override
         self.signaling_transport = (signaling_transport or "UDP").upper()
         self.transport: asyncio.DatagramTransport | None = None
@@ -243,7 +247,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         if request.method == "INVITE" and 200 <= int(status) < 300:
             headers.append((
                 "Contact",
-                f"<{_response_contact_uri(request, local_ip=self.local_ip, transport=self.signaling_transport)}>",
+                f"<{_response_contact_uri(request, local_ip=self.local_ip, local_sip_port=self.local_sip_port, transport=self.signaling_transport)}>",
             ))
         if body:
             headers.append(("Content-Type", "application/sdp"))
@@ -280,6 +284,15 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             self._send_response(request, addr, 200, "OK")
             return
         if request.method == "REGISTER":
+            if self.on_register is not None:
+                result = await self.on_register(request, addr, self.signaling_transport)
+                headers = _response_headers(request, addr=addr, to_tag="")
+                headers.extend(tuple(getattr(result, "headers", ()) or ()))
+                raw = sip.build_response(int(result.status), str(result.reason), headers, b"")
+                _LOGGER.info("SIP TX %s %s to %s:%s", result.status, result.reason, addr[0], addr[1])
+                self._mark_sip_event("SIP_RESPONSE", int(result.status), str(result.reason))
+                self._send(raw, addr)
+                return
             self._send_response(request, addr, 405, "Method Not Allowed")
             return
         if request.method == "INFO":
@@ -491,6 +504,7 @@ class SipUdpServer:
         supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
+        on_register: RegisterHandler | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -501,6 +515,7 @@ class SipUdpServer:
         self.supported_recv_formats = supported_recv_formats
         self.on_invite = on_invite
         self.on_terminated = on_terminated
+        self.on_register = on_register
         self.transport: asyncio.DatagramTransport | None = None
         self.endpoint: SipUdpEndpoint | None = None
 
@@ -512,12 +527,14 @@ class SipUdpServer:
             def _factory() -> SipUdpEndpoint:
                 self.endpoint = SipUdpEndpoint(
                     local_ip=self.local_ip,
+                    local_sip_port=self.port,
                     local_rtp_port=self.local_rtp_port,
                     supported_formats=self.supported_formats,
                     supported_send_formats=self.supported_send_formats,
                     supported_recv_formats=self.supported_recv_formats,
                     on_invite=self.on_invite,
                     on_terminated=self.on_terminated,
+                    on_register=self.on_register,
                     signaling_transport="UDP",
                 )
                 return self.endpoint
@@ -597,6 +614,7 @@ class SipTcpServer:
         supported_recv_formats: list[AudioFormat] | None = None,
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
+        on_register: RegisterHandler | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -607,6 +625,7 @@ class SipTcpServer:
         self.supported_recv_formats = supported_recv_formats
         self.on_invite = on_invite
         self.on_terminated = on_terminated
+        self.on_register = on_register
         self.server: asyncio.AbstractServer | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
 
@@ -631,12 +650,14 @@ class SipTcpServer:
 
         endpoint = SipUdpEndpoint(
             local_ip=self.local_ip,
+            local_sip_port=self.port,
             local_rtp_port=self.local_rtp_port,
             supported_formats=self.supported_formats,
             supported_send_formats=self.supported_send_formats,
             supported_recv_formats=self.supported_recv_formats,
             on_invite=self.on_invite,
             on_terminated=self.on_terminated,
+            on_register=self.on_register,
             send_override=_send,
             signaling_transport="TCP",
         )
