@@ -418,6 +418,46 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         await endpoint._handle_datagram(custom, ("192.168.1.20", 5060))
         self.assertEqual(sip.parse_message(sent[-1]).status_code, 501)
 
+    async def test_listener_200_ok_invite_includes_contact(self) -> None:
+        sent: list[bytes] = []
+        fmt = audio_format.AudioFormat(48000, "s16le", 1, 10)
+        rtp_fmt = sdp.audio_format_to_rtp(fmt, 96)
+        offer = sdp.build_offer("192.168.1.48", "192.168.1.48", 40900, [fmt]).encode()
+        answer = sdp.build_answer_directional("192.168.1.10", "192.168.1.10", 40000, rtp_fmt, rtp_fmt)
+
+        async def on_invite(_invite):
+            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer)
+
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40000,
+            supported_formats=[fmt],
+            on_invite=on_invite,
+            send_override=lambda data, _addr: sent.append(data),
+            signaling_transport="TCP",
+        )
+        invite = sip.build_request(
+            "INVITE",
+            "sip:Casa@192.168.1.10;transport=tcp",
+            [
+                ("Via", "SIP/2.0/TCP 192.168.1.48:38946;branch=z9hG4bKcontact;rport"),
+                ("From", '"Codex Baresip" <sip:codex@192.168.1.48>;tag=src'),
+                ("To", "<sip:Casa@192.168.1.10;transport=tcp>"),
+                ("Call-ID", "contact-200-ok"),
+                ("CSeq", "1 INVITE"),
+                ("Contact", "<sip:codex@192.168.1.48:38946;transport=tcp>"),
+                ("Content-Type", "application/sdp"),
+            ],
+            offer,
+        )
+
+        await endpoint._handle_datagram(invite, ("192.168.1.48", 38946))
+
+        response = sip.parse_message(sent[-1])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.header("Contact"), "<sip:Casa@192.168.1.10:5060;transport=tcp>")
+        self.assertIn("L16/48000/1", response.body.decode())
+
     def test_decline_reason_header_overrides_generic_status(self) -> None:
         msg = sip.SipMessage(
             status_code=486,

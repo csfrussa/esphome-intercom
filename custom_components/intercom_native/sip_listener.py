@@ -143,6 +143,17 @@ def _response_headers(request: sip.SipMessage, *, addr=None, to_tag: str = "") -
     return headers
 
 
+def _response_contact_uri(request: sip.SipMessage, *, local_ip: str, transport: str) -> str:
+    try:
+        request_uri = sip.parse_sip_uri(request.uri)
+        user = request_uri.user or "intercom"
+        port = request_uri.port or 5060
+    except Exception:
+        user = "intercom"
+        port = 5060
+    return str(sip.SipUri(user, local_ip, port, params=(("transport", transport.lower()),)))
+
+
 def _unsupported_method_response(method: str) -> tuple[int, str]:
     if method in sip.KNOWN_UNSUPPORTED_METHODS:
         return 405, "Method Not Allowed"
@@ -228,6 +239,11 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         decline_reason: str = "",
     ) -> None:
         headers = _response_headers(request, addr=addr, to_tag=to_tag)
+        if request.method == "INVITE" and 200 <= int(status) < 300:
+            headers.append((
+                "Contact",
+                f"<{_response_contact_uri(request, local_ip=self.local_ip, transport=self.signaling_transport)}>",
+            ))
         if body:
             headers.append(("Content-Type", "application/sdp"))
         if int(status) == 405:
