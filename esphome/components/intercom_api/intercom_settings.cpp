@@ -23,6 +23,7 @@ struct ParsedPhonebookSlot {
 
 struct JsonRosterSlot {
   std::string name;
+  std::string number;
   std::string kind;
   std::string address;
   std::string endpoint_kind;
@@ -119,10 +120,15 @@ bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {
     return false;
   }
   std::transform(slot->kind.begin(), slot->kind.end(), slot->kind.begin(), ::tolower);
+  if (slot->kind == "softphone" && !id.empty()) {
+    name = id;
+    slot->name = id;
+  }
+  slot->number = Phonebook::trim(json_string(obj, "number"));
   slot->address = Phonebook::trim(json_string(obj, "address"));
   if (slot->address.empty()) slot->address = Phonebook::trim(json_string(obj, "host"));
   slot->ha_bridge = json_bool(obj, "ha_bridge");
-  if (slot->kind == "ha" || slot->kind == "esp" || slot->kind == "sip") {
+  if (slot->kind == "ha" || slot->kind == "esp" || slot->kind == "softphone") {
     slot->endpoint_kind = "sip";
   }
   std::transform(slot->endpoint_kind.begin(), slot->endpoint_kind.end(), slot->endpoint_kind.begin(), ::tolower);
@@ -447,6 +453,11 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
     } else {
       append_csv(&out, slot.name);
     }
+    if (has_ha && !slot.number.empty() && slot.number != slot.name && slot.kind != "ha") {
+      append_csv(&out, serialize_endpoint(slot.number, local_endpoint_kind, ha_slot.address,
+                                          ha_local_port, ha_local_rtp_port,
+                                          ha_slot.sip_transport == "tcp"));
+    }
   }
 
   return out;
@@ -502,7 +513,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
   const uint16_t ha_local_rtp_port = ha_slot.rtp_port;
 
   std::vector<ContactEntry> entries;
-  entries.reserve(slots.size());
+  entries.reserve(slots.size() * 2);
   for (const auto &slot : slots) {
     ContactEndpointKind endpoint_kind = ContactEndpointKind::UNKNOWN;
     Phonebook::parse_endpoint_kind(slot.endpoint_kind, &endpoint_kind);
@@ -545,6 +556,18 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
 
     if (this->cycle_active_) this->seen_in_cycle_.insert(entry.name);
     entries.push_back(std::move(entry));
+
+    if (has_ha && !slot.number.empty() && slot.number != slot.name && slot.kind != "ha") {
+      ContactEntry alias;
+      alias.name = slot.number;
+      alias.endpoint_kind = local_endpoint_kind;
+      alias.ip = ha_slot.address;
+      alias.port = ha_local_port;
+      alias.rtp_port = ha_local_rtp_port;
+      alias.sip_transport_tcp = ha_slot.sip_transport == "tcp";
+      if (this->cycle_active_) this->seen_in_cycle_.insert(alias.name);
+      entries.push_back(std::move(alias));
+    }
   }
   return this->phonebook_.replace_all(std::move(entries));
 }

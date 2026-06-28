@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
     CONF_SIP_TCP_ENABLED,
     CONF_SIP_UDP_ENABLED,
@@ -138,6 +139,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_TRUNK_DTMF_TERMINATOR: "",
                         CONF_TRUNK_DTMF_ROUTES: "",
                         "sip_accounts": existing.get("sip_accounts", []),
+                        CONF_PHONEBOOK_CONTACTS: existing.get(CONF_PHONEBOOK_CONTACTS, []),
                     }
                 )
                 current_entry, _existing = self._current_entry_data()
@@ -236,6 +238,7 @@ class IntercomNativeConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
                 data[CONF_TRUNK_ENABLED] = True
                 data.setdefault("sip_accounts", existing.get("sip_accounts", []))
+                data.setdefault(CONF_PHONEBOOK_CONTACTS, existing.get(CONF_PHONEBOOK_CONTACTS, []))
                 data.update(user_input)
                 current_entry, _existing = self._current_entry_data()
                 if current_entry is None:

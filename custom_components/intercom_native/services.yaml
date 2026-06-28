@@ -242,7 +242,7 @@ phonebook_add_contact:
             - ha
             - esp
             - phone
-            - sip
+            - softphone
             - group
     address:
       name: Address

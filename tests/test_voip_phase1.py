@@ -1058,6 +1058,45 @@ class RouterContractTest(unittest.TestCase):
         self.assertEqual(decision.target, "200")
         self.assertEqual(decision.sip_uri, "sip:200@192.168.1.47;transport=udp")
 
+    def test_ha_router_extension_number_alias_forwards_to_esp(self) -> None:
+        entries = roster.parse_roster_json(
+            [
+                {
+                    "id": "Spotpear",
+                    "name": "Spotpear Ball v2",
+                    "kind": "esp",
+                    "address": "192.168.1.31",
+                    "number": "200",
+                    "metadata": {"sip_transport": "udp"},
+                }
+            ]
+        )
+        decision = router.resolve_ha_router("200", entries, trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.FORWARD)
+        self.assertEqual(decision.target, "Spotpear")
+        self.assertEqual(decision.sip_uri, "sip:Spotpear@192.168.1.31;transport=udp")
+
+    def test_manual_phonebook_number_overrides_discovered_endpoint_without_duplicate(self) -> None:
+        discovered = roster.parse_roster_json(
+            [
+                {
+                    "id": "Spotpear",
+                    "name": "Spotpear Ball v2",
+                    "kind": "esp",
+                    "address": "192.168.1.31",
+                    "metadata": {"sip_transport": "udp", "sip_port": 5060},
+                }
+            ]
+        )
+        manual = roster.parse_roster_json(
+            [{"id": "Spotpear", "name": "Spotpear Ball v2", "kind": "esp", "number": "200"}]
+        )
+        merged = roster.merge_roster_overrides(discovered, manual)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].address, "192.168.1.31")
+        self.assertEqual(merged[0].number, "200")
+        self.assertEqual(merged[0].metadata["sip_transport"], "udp")
+
     def test_ha_router_decodes_sip_uri_user_for_phonebook_lookup(self) -> None:
         entries = roster.parse_roster_json(
             [
@@ -1099,6 +1138,30 @@ class RouterContractTest(unittest.TestCase):
         self.assertEqual(decision.action, router.RouteAction.REJECT)
         self.assertEqual(decision.reason, router.RouteReason.ROUTE_NOT_FOUND)
         self.assertEqual(decision.status, 404)
+
+    def test_trunk_inbound_hint_resolves_phonebook_number_alias(self) -> None:
+        entries = roster.parse_roster_json(
+            [
+                {
+                    "id": "Spotpear",
+                    "name": "Spotpear Ball v2",
+                    "kind": "esp",
+                    "address": "192.168.1.31",
+                    "number": "200",
+                    "metadata": {"sip_transport": "udp"},
+                }
+            ]
+        )
+        ctx = router.CallContext(
+            call_id="trunk-3",
+            direction="inbound",
+            origin="trunk",
+            route_hint="200",
+            route_hint_source=router.RouteHintSource.DTMF,
+        )
+        decision = router.route_inbound_trunk(ctx, entries, trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.FORWARD)
+        self.assertEqual(decision.target, "Spotpear")
 
     def test_disabled_entry_rejects(self) -> None:
         entries = roster.parse_roster_json(
@@ -1228,7 +1291,7 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
         entries = registrar.roster_entries()
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].id, "SmartphoneDany")
-        self.assertEqual(entries[0].kind, "sip")
+        self.assertEqual(entries[0].kind, "softphone")
         self.assertEqual(entries[0].sip_uri, "sip:SmartphoneDany@192.168.1.50:5062;transport=udp")
 
     async def test_register_accepts_host_only_request_uri_from_baresip(self) -> None:

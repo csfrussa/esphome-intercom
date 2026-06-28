@@ -244,7 +244,7 @@ class SipRegistrar:
                 RosterEntry(
                     id=account.username,
                     name=account.roster_name,
-                    kind="sip",
+                    kind="softphone",
                     sip_uri=registration.contact_uri,
                     metadata={
                         "sip_transport": registration.transport.lower(),

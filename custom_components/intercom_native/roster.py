@@ -9,7 +9,7 @@ from urllib.parse import unquote
 from typing import Any, Literal
 
 
-RosterKind = Literal["ha", "esp", "phone", "sip", "group"]
+RosterKind = Literal["ha", "esp", "phone", "softphone", "group"]
 RouteKind = Literal["direct", "bridge", "requires_bridge", "group", "trunk", "reject"]
 _PHONE_RE = re.compile(r"^[+0-9][0-9 .()/-]{2,}$")
 
@@ -51,7 +51,7 @@ def _entry_from_mapping(raw: dict[str, Any]) -> RosterEntry:
     if not raw.get("kind"):
         raise RosterError(f"roster entry {entry_id!r} missing kind")
     kind = str(raw.get("kind") or "").strip().lower()
-    if kind not in {"ha", "esp", "phone", "sip", "group"}:
+    if kind not in {"ha", "esp", "phone", "softphone", "group"}:
         raise RosterError(f"unsupported roster kind {kind!r}")
     return RosterEntry(
         id=entry_id,
@@ -113,9 +113,46 @@ def find_entry(entries: list[RosterEntry], target: str) -> RosterEntry | None:
 
     wanted = norm(target)
     for entry in entries:
-        if norm(entry.id) == wanted or norm(entry.name) == wanted:
+        if norm(entry.id) == wanted or norm(entry.name) == wanted or norm(entry.number) == wanted:
             return entry
     return None
+
+
+def merge_roster_overrides(entries: list[RosterEntry], overrides: list[RosterEntry]) -> list[RosterEntry]:
+    """Apply manual phonebook overlays without duplicating discovered endpoints."""
+
+    def norm(value: str) -> str:
+        return "".join(ch for ch in unquote(value).strip().lower() if ch.isalnum())
+
+    merged = list(entries)
+    for override in overrides:
+        override_keys = {norm(override.id), norm(override.name)}
+        override_keys.discard("")
+        index = -1
+        for pos, entry in enumerate(merged):
+            entry_keys = {norm(entry.id), norm(entry.name)}
+            entry_keys.discard("")
+            if override_keys & entry_keys:
+                index = pos
+                break
+        if index < 0:
+            merged.append(override)
+            continue
+        current = merged[index]
+        metadata = dict(current.metadata)
+        metadata.update({key: value for key, value in override.metadata.items() if value not in (None, "")})
+        merged[index] = RosterEntry(
+            id=override.id or current.id,
+            name=override.name or current.name,
+            kind=override.kind or current.kind,
+            address=override.address or current.address,
+            sip_uri=override.sip_uri or current.sip_uri,
+            number=override.number or current.number,
+            ha_bridge=bool(override.ha_bridge or current.ha_bridge),
+            enabled=bool(override.enabled and current.enabled),
+            metadata=metadata,
+        )
+    return merged
 
 
 def _ha_entry(entries: list[RosterEntry]) -> RosterEntry | None:
@@ -207,7 +244,7 @@ def resolve_target(
             if ha is None:
                 return RouteDecision("requires_bridge", number, "", entry=entry, reason="ha_required")
             return RouteDecision("requires_bridge", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
-        if entry.kind == "sip" and entry.sip_uri:
+        if entry.kind == "softphone" and entry.sip_uri:
             if not _sip_uri_transport(entry.sip_uri) and not _sip_transport(entry):
                 if ha is not None:
                     return RouteDecision(

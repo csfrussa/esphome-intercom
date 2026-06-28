@@ -26,6 +26,7 @@ from homeassistant.components import network
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
     CONF_SIP_ACCOUNTS,
     CONF_SIP_TCP_ENABLED,
@@ -122,6 +123,51 @@ def _sip_accounts(hass: HomeAssistant):
         except ValueError as err:
             _LOGGER.warning("Ignoring invalid SIP account in config entry: %s", err)
     return accounts
+
+
+def _phonebook_contact_dicts(hass: HomeAssistant) -> list[dict]:
+    entry = _config_entry(hass)
+    if entry is None:
+        return []
+    return [dict(item) for item in entry.data.get(CONF_PHONEBOOK_CONTACTS, []) if isinstance(item, dict)]
+
+
+def _manual_roster_entries(hass: HomeAssistant):
+    from .roster import RosterError, parse_roster_json
+
+    try:
+        return parse_roster_json(_phonebook_contact_dicts(hass))
+    except (RosterError, ValueError, TypeError) as err:
+        _LOGGER.warning("Ignoring invalid manual phonebook contacts in config entry: %s", err)
+        return []
+
+
+def _store_manual_roster_entries(hass: HomeAssistant, entries) -> None:
+    from .roster import dump_roster_json, parse_roster_json
+
+    entry = _config_entry(hass)
+    if entry is None:
+        raise ConfigEntryError("Intercom Native config entry is required for phonebook contacts")
+    # Round-trip through JSON so storage is plain dict/list data.
+    contacts = parse_roster_json(dump_roster_json(list(entries)))
+    payload = [
+        {
+            "id": item.id,
+            "name": item.name,
+            "kind": item.kind,
+            "address": item.address,
+            "sip_uri": item.sip_uri,
+            "number": item.number,
+            "ha_bridge": item.ha_bridge,
+            "enabled": item.enabled,
+            "metadata": item.metadata,
+        }
+        for item in contacts
+    ]
+    data = dict(entry.data)
+    data[CONF_PHONEBOOK_CONTACTS] = payload
+    hass.config_entries.async_update_entry(entry, data=data)
+    hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = contacts
 
 
 def _update_sip_accounts(hass: HomeAssistant, accounts: list[dict]) -> None:
@@ -804,6 +850,35 @@ def _sip_uri_transport(uri) -> str:
     return "UDP"
 
 
+def _enable_reused_sip_tcp_connection(
+    hass: HomeAssistant,
+    client,
+    uri,
+    *,
+    target: str,
+    default_sip_port: int,
+) -> bool:
+    """Use the REGISTER TCP connection when a registered client contact points at it."""
+    if _sip_uri_transport(uri).upper() != "TCP":
+        return False
+    endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
+    tcp_server = getattr(endpoint, "tcp_server", None)
+    if tcp_server is None:
+        return False
+    remote_addr = (uri.host, int(uri.port or default_sip_port))
+    reuse = tcp_server.open_reused_dialog(remote_addr, client.dialog_ids.call_id)
+    if reuse is None:
+        return False
+    send, responses = reuse
+    client.use_reused_tcp_connection(
+        send=send,
+        responses=responses,
+        close=lambda addr=remote_addr, call_id=client.dialog_ids.call_id: tcp_server.close_reused_dialog(addr, call_id),
+    )
+    _LOGGER.info("SIP TCP connection reuse enabled for %s via %s:%s", target, remote_addr[0], remote_addr[1])
+    return True
+
+
 async def _resolve_target_device(hass: HomeAssistant, call: ServiceCall) -> dict | None:
     """Thin wrapper over IntercomDeviceResolver.resolve_target."""
     return await get_resolver(hass).resolve_target(call)
@@ -1427,9 +1502,13 @@ async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
         ha_bridge=bool(call.data.get("ha_bridge", False)),
         metadata=metadata,
     )
-    bucket = hass.data.setdefault(DOMAIN, {}).setdefault("manual_roster_entries", [])
-    bucket[:] = [item for item in bucket if getattr(item, "id", "").lower() != entry.id.lower()]
-    bucket.append(entry)
+    entries = [
+        item for item in _manual_roster_entries(hass)
+        if getattr(item, "id", "").lower() != entry.id.lower()
+        and getattr(item, "name", "").lower() != entry.name.lower()
+    ]
+    entries.append(entry)
+    _store_manual_roster_entries(hass, entries)
     await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook contact added: %s (%s)", entry.id, entry.kind)
 
@@ -1438,16 +1517,18 @@ async def _handle_phonebook_remove_contact_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     name = str(call.data["name"]).strip()
     wanted = name.lower()
-    bucket = hass.data.setdefault(DOMAIN, {}).setdefault("manual_roster_entries", [])
-    before = len(bucket)
-    bucket[:] = [
+    entries = _manual_roster_entries(hass)
+    before = len(entries)
+    entries = [
         item
-        for item in bucket
+        for item in entries
         if getattr(item, "id", "").lower() != wanted
         and getattr(item, "name", "").lower() != wanted
+        and getattr(item, "number", "").lower() != wanted
     ]
+    _store_manual_roster_entries(hass, entries)
     await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("Phonebook contact removed: %s (%d removed)", name, before - len(bucket))
+    _LOGGER.info("Phonebook contact removed: %s (%d removed)", name, before - len(entries))
 
 
 async def _handle_phonebook_set_contacts_service(call: ServiceCall) -> None:
@@ -1455,14 +1536,14 @@ async def _handle_phonebook_set_contacts_service(call: ServiceCall) -> None:
 
     hass: HomeAssistant = call.hass
     entries = parse_roster_json(str(call.data.get("roster_json") or "[]"))
-    hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = entries
+    _store_manual_roster_entries(hass, entries)
     await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook manual contacts replaced: %d entries", len(entries))
 
 
 async def _handle_phonebook_clear_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
-    hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = []
+    _store_manual_roster_entries(hass, [])
     await _refresh_and_push_phonebook(hass)
     _LOGGER.info("Phonebook manual contacts cleared")
 
@@ -1596,19 +1677,14 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
         include_common_codecs=use_trunk,
     )
-    if _sip_uri_transport(uri).upper() == "TCP" and not use_trunk:
-        endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
-        tcp_server = getattr(endpoint, "tcp_server", None)
-        remote_addr = (uri.host, int(uri.port or cfg["sip_port"]))
-        reuse = tcp_server.open_reused_dialog(remote_addr, client.dialog_ids.call_id) if tcp_server is not None else None
-        if reuse is not None:
-            send, responses = reuse
-            client.use_reused_tcp_connection(
-                send=send,
-                responses=responses,
-                close=lambda addr=remote_addr, call_id=client.dialog_ids.call_id: tcp_server.close_reused_dialog(addr, call_id),
-            )
-            _LOGGER.info("SIP TCP connection reuse enabled for %s via %s:%s", target, remote_addr[0], remote_addr[1])
+    if not use_trunk:
+        _enable_reused_sip_tcp_connection(
+            hass,
+            client,
+            uri,
+            target=target,
+            default_sip_port=int(cfg["sip_port"]),
+        )
     _set_ha_softphone_call_state(
         hass,
         CallState.CALLING.value,
@@ -2058,7 +2134,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         {
             vol.Required("name"): cv.string,
             vol.Optional("id", default=""): cv.string,
-            vol.Optional("kind", default="esp"): vol.In(["ha", "esp", "phone", "sip", "group"]),
+            vol.Optional("kind", default="esp"): vol.In(["ha", "esp", "phone", "softphone", "group"]),
             vol.Optional("address", default=""): cv.string,
             vol.Optional("sip_uri", default=""): cv.string,
             vol.Optional("number", default=""): cv.string,
@@ -2197,6 +2273,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["trunk_config"] = trunk_cfg
     hass.data[DOMAIN]["sip_port"] = cfg["sip_port"]
     hass.data[DOMAIN][CONF_DEBUG_MODE] = bool(entry.data.get(CONF_DEBUG_MODE, False))
+    hass.data[DOMAIN]["manual_roster_entries"] = _manual_roster_entries(hass)
     await _async_setup_shared(hass)
     await _async_apply_assist_intents(
         hass,
@@ -2316,6 +2393,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         return result
 
     def _roster_from_peers(peers: list[Peer]) -> list[RosterEntry]:
+        from .roster import merge_roster_overrides
+
         entries: list[RosterEntry] = []
         for peer in peers:
             entries.append(
@@ -2336,6 +2415,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     },
                 )
             )
+        entries = merge_roster_overrides(entries, _manual_roster_entries(hass))
         entries.extend(_registered_roster_entries(hass))
         return entries
 
@@ -2563,6 +2643,13 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             supported_send_formats=sip_send_formats,
             supported_recv_formats=sip_recv_formats,
             signaling_transport=_sip_uri_transport(bridge_uri),
+        )
+        _enable_reused_sip_tcp_connection(
+            hass,
+            client,
+            bridge_uri,
+            target=destination,
+            default_sip_port=int(cfg["sip_port"]),
         )
         result = await client.invite(
             target=bridge_uri.user,
@@ -2979,6 +3066,13 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     supported_send_formats=sip_send_formats,
                     supported_recv_formats=sip_recv_formats,
                     signaling_transport=_sip_uri_transport(decision_uri),
+                )
+                _enable_reused_sip_tcp_connection(
+                    hass,
+                    client,
+                    decision_uri,
+                    target=decision.target or invite.target,
+                    default_sip_port=int(cfg["sip_port"]),
                 )
                 result = await client.invite(
                     target=decision_uri.user,

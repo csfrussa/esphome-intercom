@@ -131,7 +131,7 @@ class IntercomPhonebookSensor(SensorEntity):
             _push_roster_json_to_esps,
             _registered_roster_entries,
         )
-        from .roster import RosterEntry, dump_roster_json
+        from .roster import RosterEntry, dump_roster_json, merge_roster_overrides
 
         peers = await _async_build_peer_snapshot(self.hass)
         entries = [_format_entry_unified(p) for p in peers]
@@ -156,9 +156,11 @@ class IntercomPhonebookSensor(SensorEntity):
             )
             for p in peers
         ]
+        manual_entries: list[RosterEntry] = []
         for raw in self.hass.data.get(DOMAIN, {}).get("manual_roster_entries", []):
             if isinstance(raw, RosterEntry):
-                roster_entries.append(raw)
+                manual_entries.append(raw)
+        roster_entries = merge_roster_overrides(roster_entries, manual_entries)
         roster_entries.extend(_registered_roster_entries(self.hass))
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
