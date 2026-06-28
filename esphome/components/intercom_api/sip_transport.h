@@ -8,6 +8,7 @@
 
 #include <lwip/sockets.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 #include <freertos/task.h>
 
 #include <atomic>
@@ -94,6 +95,10 @@ class SipTransport : public SipPhoneTransport {
   void reset_dialog_();
   void mark_sip_event_(SipEvent event, uint16_t status = 0);
   static const char *sip_event_name_(SipEvent event);
+  void set_media_config_(const AudioFormat &tx, const AudioFormat &rx,
+                         uint8_t tx_payload_type, uint8_t rx_payload_type);
+  void get_media_config_(AudioFormat *tx, AudioFormat *rx,
+                         uint8_t *tx_payload_type, uint8_t *rx_payload_type) const;
 
   uint16_t sip_port_{5060};
   uint16_t rtp_port_{40000};
@@ -126,6 +131,7 @@ class SipTransport : public SipPhoneTransport {
   AudioFormat selected_rx_format_{DEFAULT_AUDIO_FORMAT};
   uint8_t rtp_tx_payload_type_{96};
   uint8_t rtp_rx_payload_type_{96};
+  mutable portMUX_TYPE media_config_lock_ = portMUX_INITIALIZER_UNLOCKED;
   uint32_t cseq_{1};
   uint32_t invite_cseq_{1};
 

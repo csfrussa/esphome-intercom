@@ -1,16 +1,22 @@
-const DEFAULT_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
+const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
+const FRAME_MS = Object.freeze([10, 16, 20, 32]);
 const RING_FRAMES = 12;
 const START_FRAMES = 4;
 const DROP_FRAMES = 9;
 
 function normaliseFormat(value) {
-  const fmt = value || DEFAULT_FORMAT;
-  const sampleRate = Number(fmt.sampleRate) || DEFAULT_FORMAT.sampleRate;
-  const frameMs = Number(fmt.frameMs) || DEFAULT_FORMAT.frameMs;
-  const channels = Number(fmt.channels) || DEFAULT_FORMAT.channels;
-  const pcmFormat = ["s16le", "s24le", "s24le_in_s32", "s32le"].includes(fmt.pcmFormat)
-    ? fmt.pcmFormat
-    : DEFAULT_FORMAT.pcmFormat;
+  if (!value) throw new Error("playback worklet requires negotiated PCM format");
+  const sampleRate = Number(value.sampleRate);
+  const frameMs = Number(value.frameMs);
+  const channels = Number(value.channels);
+  const pcmFormat = value.pcmFormat;
+  if (!Number.isFinite(sampleRate) || !Number.isFinite(frameMs) || !Number.isFinite(channels)) {
+    throw new Error("playback worklet PCM format has invalid numeric fields");
+  }
+  if (!PCM_FORMATS.includes(pcmFormat)) throw new Error(`playback worklet unsupported PCM format ${pcmFormat}`);
+  if (![1, 2].includes(channels)) throw new Error(`playback worklet unsupported channel count ${channels}`);
+  if (!FRAME_MS.includes(frameMs)) throw new Error(`playback worklet unsupported frame_ms ${frameMs}`);
+  if ((sampleRate * frameMs) % 1000 !== 0) throw new Error("playback worklet PCM format does not form whole frames");
   const bytesPerSample = pcmFormat === "s16le" ? 2 : pcmFormat === "s24le" ? 3 : 4;
   return {
     sampleRate,

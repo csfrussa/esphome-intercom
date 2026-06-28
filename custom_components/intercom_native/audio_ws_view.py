@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant
 from . import rtp
 from .audio_ws import decode_audio_frame, encode_audio_frame
 from .const import CONF_DEBUG_MODE, DOMAIN, HA_SOFTPHONE_DEVICE_ID
-from .sip_client import SipCallClient, pcm_to_rtp_payload, rtp_payload_to_pcm
+from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
 from .websocket_api import _fire_call_event, _ha_softphone_store
 
 _LOGGER = logging.getLogger(__name__)
@@ -195,6 +195,8 @@ async def _run_audio_session(
                 "remote_rtp_port": session.remote_rtp_port,
                 "tx_format": session.send_format.audio_format.wire_token(),
                 "rx_format": session.recv_format.audio_format.wire_token(),
+                "tx_rtp_format": session.send_format.wire_token(),
+                "rx_rtp_format": session.recv_format.wire_token(),
                 "expected_browser_tx_frame_bytes": session.send_format.audio_format.nominal_frame_bytes,
                 "expected_browser_rx_frame_bytes": session.recv_format.audio_format.nominal_frame_bytes,
                 **counters,
@@ -210,17 +212,23 @@ async def _run_audio_session(
             "rx_format": session.recv_format.audio_format.wire_token(),
             "selected_tx_format": session.send_format.audio_format.wire_token(),
             "selected_rx_format": session.recv_format.audio_format.wire_token(),
+            "selected_tx_rtp_format": session.send_format.wire_token(),
+            "selected_rx_rtp_format": session.recv_format.wire_token(),
         }
     )
     _LOGGER.info(
-        "HA softphone audio websocket attached call_id=%s local_rtp=%s remote=%s:%s tx=%s rx=%s",
+        "HA softphone audio websocket attached call_id=%s local_rtp=%s remote=%s:%s tx=%s (%s) rx=%s (%s)",
         session.call_id,
         session.local_rtp_port,
         session.remote_rtp_host,
         session.remote_rtp_port,
         session.send_format.audio_format.wire_token(),
+        session.send_format.wire_token(),
         session.recv_format.audio_format.wire_token(),
+        session.recv_format.wire_token(),
     )
+    rtp_decoder = RtpPayloadDecoder(session.recv_format)
+    rtp_encoder = RtpPayloadEncoder(session.send_format)
 
     async def rtp_to_ws() -> None:
         nonlocal logged_first_rtp
@@ -247,7 +255,9 @@ async def _run_audio_session(
                     continue
                 counters["rtp_rx"] += 1
                 counters["rtp_rx_bytes"] += len(data)
-                pcm = rtp_payload_to_pcm(packet.payload, session.recv_format.audio_format)
+                pcm = rtp_decoder.decode(packet.payload)
+                if not pcm:
+                    continue
                 await ws.send_bytes(encode_audio_frame(pcm))
                 counters["ws_tx"] += 1
                 publish_counters()
@@ -296,7 +306,9 @@ async def _run_audio_session(
                 try:
                     counters["ws_rx"] += 1
                     pcm = decode_audio_frame(bytes(msg.data))
-                    payload = pcm_to_rtp_payload(pcm, session.send_format.audio_format)
+                    payload = rtp_encoder.encode(pcm)
+                    if not payload:
+                        continue
                     if tx_queue.full():
                         tx_queue.get_nowait()
                         counters["drop_tx_queue"] += 1

@@ -15,10 +15,12 @@ It can run in two supported shapes:
   routing, TDM reference, dual-bus sync, media player, Voice Assistant or Micro
   Wake Word share the same audio backend.
 
-The component negotiates PCM per direction. The default wire format is
-`16000:s16le:1:32`, but native ESPHome microphone/speaker paths may advertise
-their actual format up to 48 kHz and 32-bit containers. AFE/AEC-backed branches
-remain 16 kHz/s16/mono because Espressif esp-sr exposes that surface.
+The component negotiates explicit PCM per direction. SIP/SDP selects one
+dialog `ptime` shared by both directions, while TX and RX sample rate/PCM
+format can still differ. Maintained YAMLs publish their real capabilities; the
+internal no-audio placeholder is `16000:s16le:1:16` and is not used to repair
+missing endpoint formats. AFE/AEC-backed branches remain
+16 kHz/s16/mono because Espressif esp-sr exposes that surface.
 
 ## Audio Capabilities
 
@@ -42,8 +44,8 @@ Name|192.168.1.41|5060|40000|sip_udp
 It may also append per-direction audio capabilities:
 
 ```text
-Name|192.168.1.40|5060|40000|full_duplex|16000:s16le:1:32|48000:s32le:1:20|sip_tcp
-Name|192.168.1.41|5060|40000|speaker_only|16000:s16le:1:32|16000:s16le:1:32|sip_udp
+Name|192.168.1.40|5060|40000|full_duplex|16000:s16le:1:16|48000:s16le:1:10;16000:s16le:1:16|sip_tcp
+Name|192.168.1.41|5060|40000|speaker_only|16000:s16le:1:16|16000:s16le:1:16|sip_udp
 ```
 
 Home Assistant consumes these fields for routing/card display, format
@@ -109,9 +111,9 @@ intercom_api:
 
 Use `microphone:` directly instead of `microphone_source:` only when the
 referenced microphone already publishes the configured `audio.tx` format.
-AFE/AEC-backed branches should keep their intercom-facing TX format at
-`16000:s16le:1:32`; native ESPHome microphone/speaker branches can advertise
-their real format.
+AFE/AEC-backed branches should publish the processor output actually delivered
+to `intercom_api`; maintained profiles use `16000:s16le:1:16`. Native ESPHome
+microphone/speaker branches can advertise their real format.
 
 ## Mic-Only And Speaker-Only
 

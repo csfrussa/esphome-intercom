@@ -8,7 +8,9 @@ import logging
 import socket
 from typing import Any
 
-from .audio_format import AudioFormat, DEFAULT_AUDIO_FORMAT, PcmFormat
+from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS, PcmFormat
+from . import g711
+from .opus_codec import OpusDecoder, OpusEncoder
 from . import rtp, sdp, sip
 from .sip_auth import build_digest_authorization
 
@@ -18,7 +20,23 @@ SIP_T1 = 0.5
 SIP_T2 = 4.0
 
 
-def pcm_to_rtp_payload(data: bytes, fmt: AudioFormat) -> bytes:
+def _rtp_encoding(fmt: AudioFormat | sdp.RtpPcmFormat) -> str:
+    return getattr(fmt, "encoding", "")
+
+
+def _audio_format(fmt: AudioFormat | sdp.RtpPcmFormat) -> AudioFormat:
+    return fmt.audio_format if isinstance(fmt, sdp.RtpPcmFormat) else fmt
+
+
+def pcm_to_rtp_payload(data: bytes, fmt: AudioFormat | sdp.RtpPcmFormat) -> bytes:
+    encoding = _rtp_encoding(fmt)
+    if encoding == "PCMA":
+        return g711.s16le_to_alaw(data)
+    if encoding == "PCMU":
+        return g711.s16le_to_ulaw(data)
+    if encoding == "OPUS":
+        return OpusEncoder(fmt.sample_rate, fmt.channels).encode(data)
+    fmt = _audio_format(fmt)
     if fmt.pcm_format == PcmFormat.S16LE:
         if len(data) % 2:
             raise ValueError("s16le frame length is not sample-aligned")
@@ -34,7 +52,15 @@ def pcm_to_rtp_payload(data: bytes, fmt: AudioFormat) -> bytes:
     raise ValueError(f"{fmt.pcm_format.value} has no phase-1 RTP mapping")
 
 
-def rtp_payload_to_pcm(payload: bytes, fmt: AudioFormat) -> bytes:
+def rtp_payload_to_pcm(payload: bytes, fmt: AudioFormat | sdp.RtpPcmFormat) -> bytes:
+    encoding = _rtp_encoding(fmt)
+    if encoding == "PCMA":
+        return g711.alaw_to_s16le(payload)
+    if encoding == "PCMU":
+        return g711.ulaw_to_s16le(payload)
+    if encoding == "OPUS":
+        return OpusDecoder(fmt.sample_rate, fmt.channels).decode(payload)
+    fmt = _audio_format(fmt)
     if fmt.pcm_format == PcmFormat.S16LE:
         if len(payload) % 2:
             raise ValueError("L16 payload length is not sample-aligned")
@@ -51,6 +77,28 @@ def rtp_payload_to_pcm(payload: bytes, fmt: AudioFormat) -> bytes:
             out.extend((payload[i + 2], payload[i + 1], payload[i], 0xFF if payload[i] & 0x80 else 0x00))
         return bytes(out)
     raise ValueError(f"{fmt.pcm_format.value} has no phase-1 RTP mapping")
+
+
+class RtpPayloadDecoder:
+    def __init__(self, fmt: sdp.RtpPcmFormat) -> None:
+        self.fmt = fmt
+        self._opus = OpusDecoder(fmt.sample_rate, fmt.channels) if fmt.encoding == "OPUS" else None
+
+    def decode(self, payload: bytes) -> bytes:
+        if self._opus is not None:
+            return self._opus.decode(payload)
+        return rtp_payload_to_pcm(payload, self.fmt)
+
+
+class RtpPayloadEncoder:
+    def __init__(self, fmt: sdp.RtpPcmFormat) -> None:
+        self.fmt = fmt
+        self._opus = OpusEncoder(fmt.sample_rate, fmt.channels) if fmt.encoding == "OPUS" else None
+
+    def encode(self, pcm: bytes) -> bytes:
+        if self._opus is not None:
+            return self._opus.encode(pcm)
+        return pcm_to_rtp_payload(pcm, self.fmt)
 
 
 def _sip_decline_reason(msg: sip.SipMessage) -> str:
@@ -174,7 +222,7 @@ class SipCallClient:
         self.local_name = local_name
         self.local_sip_port = int(local_sip_port)
         self.local_rtp_port = int(local_rtp_port)
-        base_formats = supported_formats or [DEFAULT_AUDIO_FORMAT]
+        base_formats = supported_formats or list(HA_SIP_PCM_FORMATS)
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.signaling_transport = (signaling_transport or "UDP").upper()
@@ -366,7 +414,13 @@ class SipCallClient:
         raw = sip.build_request("INVITE", request_uri, headers, body)
         self._mark_sip_event("INVITE")
         await self._send_raw(raw, remote_host, int(remote_sip_port))
-        _LOGGER.info("SIP TX INVITE %s@%s:%s", target, remote_host, remote_sip_port)
+        _LOGGER.info(
+            "SIP TX INVITE %s@%s:%s offered=[%s]",
+            target,
+            remote_host,
+            remote_sip_port,
+            ", ".join(sdp.offered_media_descriptions(body)),
+        )
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         retransmit_interval = SIP_T1
@@ -494,6 +548,11 @@ class SipCallClient:
             self.supported_recv_formats,
         )
         if selected is None:
+            try:
+                offered = ", ".join(sdp.offered_media_descriptions(msg.body))
+            except Exception as err:
+                offered = f"unparseable SDP media: {err}"
+            _LOGGER.info("SIP 200 OK rejected: no compatible answer media offered=[%s]", offered)
             return False
         parsed = sdp.parse_sdp(msg.body)
         self.dialog_ids.remote_tag = _extract_tag(msg.header("To"))
@@ -516,6 +575,13 @@ class SipCallClient:
             remote_uri=remote_uri,
             send_format=selected.send,
             recv_format=selected.recv,
+        )
+        _LOGGER.info(
+            "SIP 200 OK media selected call_id=%s tx=%s rx=%s answer=[%s]",
+            self.dialog_ids.call_id,
+            selected.send.wire_token(),
+            selected.recv.wire_token(),
+            ", ".join(sdp.offered_media_descriptions(msg.body)),
         )
         self._send_ack(remote_host, int(remote_sip_port), request_uri, local_uri, remote_uri)
         return True
@@ -677,6 +743,8 @@ class SipCallClient:
             "local_rtp_port": dialog.local_rtp_port if dialog is not None else self.local_rtp_port,
             "selected_tx_format": dialog.send_format.audio_format.wire_token() if dialog is not None else "",
             "selected_rx_format": dialog.recv_format.audio_format.wire_token() if dialog is not None else "",
+            "selected_tx_rtp_format": dialog.send_format.wire_token() if dialog is not None else "",
+            "selected_rx_rtp_format": dialog.recv_format.wire_token() if dialog is not None else "",
             "dialog_active": dialog is not None,
             "pending_invite": bool(self._pending_request_uri and dialog is None),
             "sip_transport": self.signaling_transport.lower(),

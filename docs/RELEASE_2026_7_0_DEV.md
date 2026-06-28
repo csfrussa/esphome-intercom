@@ -100,7 +100,10 @@ regressions would be a problem.
 ## 📞 SIP Phone Profile
 
 - 🧾 SIP/SDP audio capability is described with explicit PCM tokens such as
-  `16000:s16le:1:32` and `48000:s16le:1:20`.
+  `16000:s16le:1:16`, `16000:s16le:1:32` and `48000:s16le:1:10`.
+- ⏱️ SIP/SDP negotiates one common packet time per dialog. TX and RX sample
+  rates can differ, but both selected directions must share a compatible
+  `frame_ms`/`ptime`.
 - 🔀 TX and RX capabilities are advertised separately, so a device can expose
   16 kHz microphone audio while accepting 48 kHz speaker audio.
 - ✅ The SIP answer confirms the effective caller-to-destination and

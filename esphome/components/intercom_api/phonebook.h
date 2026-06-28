@@ -28,10 +28,11 @@ inline const char *contact_endpoint_kind_to_str(ContactEndpointKind endpoint_kin
 }
 
 /// One phonebook slot. Empty ip/port = no endpoint yet (name-only placeholder).
-/// SIP phonebook entries:
+/// SIP dial-plan entries:
 ///   Name
-///   Name|host|sip_port|rtp_port|sip_udp
+///   Name|host|sip_port|rtp_port|sip_udp                 (manual SIP route)
 ///   Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
+///   (HA roster row with published media capabilities)
 /// missing_count tracks consecutive update cycles where this slot was not seen
 /// by any source; commit_cycle() advances/resets it and prunes once the
 /// configured threshold is hit. Default 0 keeps pruning disabled.

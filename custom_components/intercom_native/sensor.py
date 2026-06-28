@@ -4,7 +4,6 @@ HA publishes one SIP dial-plan roster.
 
 Entity names:
   - sensor.intercom_phonebook       format per row:
-      name|ip|sip_port|rtp_port|sip_udp
       name|ip|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
 
 ESP YAMLs subscribe to the unified sensor and normalize it locally into their

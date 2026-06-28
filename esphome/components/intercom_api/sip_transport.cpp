@@ -297,6 +297,22 @@ const char *rtp_encoding(const AudioFormat &fmt) {
   return nullptr;
 }
 
+bool list_supports_ptime(const AudioFormatList &list, uint8_t ptime) {
+  for (uint8_t i = 0; i < list.count; i++) {
+    const AudioFormat &candidate = list.formats[i];
+    if (candidate.frame_ms == ptime && rtp_encoding(candidate) != nullptr) return true;
+  }
+  return false;
+}
+
+uint8_t choose_common_ptime(const AudioFormatList &tx, const AudioFormatList &rx) {
+  static constexpr uint8_t kPreference[] = {10, 16, 20, 32};
+  for (uint8_t ptime : kPreference) {
+    if (list_supports_ptime(tx, ptime) && list_supports_ptime(rx, ptime)) return ptime;
+  }
+  return 0;
+}
+
 bool parse_rtpmap_format(const std::string &line, AudioFormat *fmt, uint8_t *payload_type) {
   // a=rtpmap:96 L16/16000/1
   const size_t colon = line.find(':');
@@ -370,8 +386,7 @@ SipTransportSnapshot SipTransport::snapshot() const {
   out.sip_tcp = this->remote_sip_tcp_.load(std::memory_order_acquire);
   out.remote_sip_port = this->remote_sip_port_.load(std::memory_order_acquire);
   out.remote_rtp_port = this->remote_rtp_port_.load(std::memory_order_acquire);
-  out.selected_tx_format = this->selected_tx_format_;
-  out.selected_rx_format = this->selected_rx_format_;
+  this->get_media_config_(&out.selected_tx_format, &out.selected_rx_format, nullptr, nullptr);
   out.rtp_tx_packets = this->rtp_tx_packets_.load(std::memory_order_acquire);
   out.rtp_rx_packets = this->rtp_rx_packets_.load(std::memory_order_acquire);
   out.rtp_tx_bytes = this->rtp_tx_bytes_.load(std::memory_order_acquire);
@@ -380,6 +395,26 @@ SipTransportSnapshot SipTransport::snapshot() const {
   out.last_sip_event = SipTransport::sip_event_name_(
       static_cast<SipEvent>(this->last_sip_event_.load(std::memory_order_acquire)));
   return out;
+}
+
+void SipTransport::set_media_config_(const AudioFormat &tx, const AudioFormat &rx,
+                                     uint8_t tx_payload_type, uint8_t rx_payload_type) {
+  portENTER_CRITICAL(&this->media_config_lock_);
+  this->selected_tx_format_ = tx;
+  this->selected_rx_format_ = rx;
+  this->rtp_tx_payload_type_ = tx_payload_type;
+  this->rtp_rx_payload_type_ = rx_payload_type;
+  portEXIT_CRITICAL(&this->media_config_lock_);
+}
+
+void SipTransport::get_media_config_(AudioFormat *tx, AudioFormat *rx,
+                                     uint8_t *tx_payload_type, uint8_t *rx_payload_type) const {
+  portENTER_CRITICAL(&this->media_config_lock_);
+  if (tx != nullptr) *tx = this->selected_tx_format_;
+  if (rx != nullptr) *rx = this->selected_rx_format_;
+  if (tx_payload_type != nullptr) *tx_payload_type = this->rtp_tx_payload_type_;
+  if (rx_payload_type != nullptr) *rx_payload_type = this->rtp_rx_payload_type_;
+  portEXIT_CRITICAL(&this->media_config_lock_);
 }
 
 void SipTransport::set_audio_formats(const AudioFormatList &tx, const AudioFormatList &rx) {
@@ -654,10 +689,6 @@ void SipTransport::reset_dialog_() {
   this->caller_name_.clear();
   this->dest_route_.clear();
   this->dest_name_.clear();
-  this->selected_tx_format_ = DEFAULT_AUDIO_FORMAT;
-  this->selected_rx_format_ = DEFAULT_AUDIO_FORMAT;
-  this->rtp_tx_payload_type_ = 96;
-  this->rtp_rx_payload_type_ = 96;
   this->call_active_.store(false, std::memory_order_release);
   this->outgoing_invite_pending_.store(false, std::memory_order_release);
 }
@@ -745,16 +776,17 @@ std::string SipTransport::build_sdp_offer_() const {
   std::string payloads;
   std::string maps;
   uint8_t pt = 96;
-  uint8_t first_ptime = 20;
+  const uint8_t selected_ptime = choose_common_ptime(this->offer_tx_formats_, this->offer_rx_formats_);
+  if (selected_ptime == 0) {
+    ESP_LOGW(TAG, "SIP SDP offer has no shared TX/RX RTP packet time");
+    return "";
+  }
   auto append_format = [&](const AudioFormat &fmt) {
     if (pt >= 120) return;
+    if (fmt.frame_ms != selected_ptime) return;
+    if (fmt.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return;
     const char *enc = rtp_encoding(fmt);
     if (enc == nullptr) return;
-    if (payloads.empty()) {
-      first_ptime = fmt.frame_ms;
-    } else if (fmt.frame_ms != first_ptime) {
-      return;
-    }
     if (!payloads.empty()) payloads.push_back(' ');
     payloads += std::to_string(pt);
     maps += "a=rtpmap:" + std::to_string(pt) + " " + enc + "/" +
@@ -792,8 +824,8 @@ std::string SipTransport::build_sdp_offer_() const {
          "t=0 0\r\n"
          "m=audio " + std::to_string(this->rtp_port_) + " RTP/AVP " + payloads + "\r\n" +
          maps +
-         "a=ptime:" + std::to_string(first_ptime) + "\r\n"
-         "a=maxptime:" + std::to_string(first_ptime) + "\r\n"
+         "a=ptime:" + std::to_string(selected_ptime) + "\r\n"
+         "a=maxptime:" + std::to_string(selected_ptime) + "\r\n"
          "a=sendrecv\r\n";
 }
 
@@ -801,22 +833,27 @@ std::string SipTransport::build_sdp_answer_() const {
   const uint32_t remote_ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   std::string local_ip = "0.0.0.0";
   this->local_ip_for_peer_(remote_ip, &local_ip);
-  const char *tx_enc = rtp_encoding(this->selected_tx_format_);
-  const char *rx_enc = rtp_encoding(this->selected_rx_format_);
+  AudioFormat selected_tx;
+  AudioFormat selected_rx;
+  uint8_t tx_payload_type = 96;
+  uint8_t rx_payload_type = 96;
+  this->get_media_config_(&selected_tx, &selected_rx, &tx_payload_type, &rx_payload_type);
+  const char *tx_enc = rtp_encoding(selected_tx);
+  const char *rx_enc = rtp_encoding(selected_rx);
   if (tx_enc == nullptr || rx_enc == nullptr) {
     ESP_LOGE(TAG, "SIP SDP answer refused: selected wire PCM format is not RTP-mappable");
     return "";
   }
-  std::string payloads = std::to_string(this->rtp_rx_payload_type_);
+  std::string payloads = std::to_string(rx_payload_type);
   std::string maps;
-  maps += "a=rtpmap:" + std::to_string(this->rtp_rx_payload_type_) + " " + rx_enc + "/" +
-          std::to_string(this->selected_rx_format_.sample_rate) + "/" +
-          std::to_string(this->selected_rx_format_.channels) + "\r\n";
-  if (this->rtp_tx_payload_type_ != this->rtp_rx_payload_type_) {
-    payloads += " " + std::to_string(this->rtp_tx_payload_type_);
-    maps += "a=rtpmap:" + std::to_string(this->rtp_tx_payload_type_) + " " + tx_enc + "/" +
-          std::to_string(this->selected_tx_format_.sample_rate) + "/" +
-          std::to_string(this->selected_tx_format_.channels) + "\r\n";
+  maps += "a=rtpmap:" + std::to_string(rx_payload_type) + " " + rx_enc + "/" +
+          std::to_string(selected_rx.sample_rate) + "/" +
+          std::to_string(selected_rx.channels) + "\r\n";
+  if (tx_payload_type != rx_payload_type) {
+    payloads += " " + std::to_string(tx_payload_type);
+    maps += "a=rtpmap:" + std::to_string(tx_payload_type) + " " + tx_enc + "/" +
+          std::to_string(selected_tx.sample_rate) + "/" +
+          std::to_string(selected_tx.channels) + "\r\n";
   }
   return "v=0\r\n"
          "o=- 0 0 IN IP4 " + local_ip + "\r\n"
@@ -825,8 +862,8 @@ std::string SipTransport::build_sdp_answer_() const {
          "t=0 0\r\n"
          "m=audio " + std::to_string(this->rtp_port_) + " RTP/AVP " + payloads + "\r\n" +
          maps +
-         "a=ptime:" + std::to_string(this->selected_rx_format_.frame_ms) + "\r\n"
-         "a=maxptime:" + std::to_string(this->selected_rx_format_.frame_ms) + "\r\n"
+         "a=ptime:" + std::to_string(selected_rx.frame_ms) + "\r\n"
+         "a=maxptime:" + std::to_string(selected_rx.frame_ms) + "\r\n"
          "a=sendrecv\r\n";
 }
 
@@ -925,10 +962,14 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
              selected_tx ? "yes" : "no", selected_rx ? "yes" : "no");
     return false;
   }
-  this->selected_tx_format_ = selected_tx_format;
-  this->selected_rx_format_ = selected_rx_format;
-  this->rtp_tx_payload_type_ = selected_tx_payload_type;
-  this->rtp_rx_payload_type_ = selected_rx_payload_type;
+  if (selected_tx_format.frame_ms != selected_rx_format.frame_ms) {
+    ESP_LOGW(TAG, "SIP SDP rejected: TX/RX ptime mismatch tx=%ums rx=%ums",
+             (unsigned) selected_tx_format.frame_ms,
+             (unsigned) selected_rx_format.frame_ms);
+    return false;
+  }
+  this->set_media_config_(selected_tx_format, selected_rx_format,
+                          selected_tx_payload_type, selected_rx_payload_type);
   this->remote_ip_v4_.store(media_ip, std::memory_order_release);
   this->remote_rtp_port_.store(media_port, std::memory_order_release);
   return true;
@@ -1097,9 +1138,12 @@ void SipTransport::send_audio_frame(const uint8_t *pcm, size_t bytes) {
   const uint32_t ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   const uint16_t port = this->remote_rtp_port_.load(std::memory_order_acquire);
   if (ip == 0 || port == 0 || bytes > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return;
+  AudioFormat tx_format;
+  uint8_t tx_payload_type = 96;
+  this->get_media_config_(&tx_format, nullptr, &tx_payload_type, nullptr);
   uint8_t packet[1500];
   packet[0] = 0x80;
-  packet[1] = this->rtp_tx_payload_type_ & 0x7F;
+  packet[1] = tx_payload_type & 0x7F;
   const uint16_t seq = this->rtp_sequence_.fetch_add(1, std::memory_order_acq_rel);
   packet[2] = static_cast<uint8_t>(seq >> 8);
   packet[3] = static_cast<uint8_t>(seq & 0xFF);
@@ -1112,23 +1156,23 @@ void SipTransport::send_audio_frame(const uint8_t *pcm, size_t bytes) {
   packet[9] = static_cast<uint8_t>((this->rtp_ssrc_ >> 16) & 0xFF);
   packet[10] = static_cast<uint8_t>((this->rtp_ssrc_ >> 8) & 0xFF);
   packet[11] = static_cast<uint8_t>(this->rtp_ssrc_ & 0xFF);
-  const uint8_t bps = this->selected_tx_format_.container_bytes_per_sample();
+  const uint8_t bps = tx_format.container_bytes_per_sample();
   const size_t input_bytes = bytes;
   uint8_t *dst = packet + 12;
-  if (this->selected_tx_format_.pcm_format == PcmFormat::S16LE) {
+  if (tx_format.pcm_format == PcmFormat::S16LE) {
     if ((bytes % 2) != 0) return;
     for (size_t i = 0; i < bytes; i += 2) {
       dst[i] = pcm[i + 1];
       dst[i + 1] = pcm[i];
     }
-  } else if (this->selected_tx_format_.pcm_format == PcmFormat::S24LE) {
+  } else if (tx_format.pcm_format == PcmFormat::S24LE) {
     if ((bytes % 3) != 0) return;
     for (size_t i = 0; i < bytes; i += 3) {
       dst[i] = pcm[i + 2];
       dst[i + 1] = pcm[i + 1];
       dst[i + 2] = pcm[i];
     }
-  } else if (this->selected_tx_format_.pcm_format == PcmFormat::S24LE_IN_S32) {
+  } else if (tx_format.pcm_format == PcmFormat::S24LE_IN_S32) {
     if ((bytes % 4) != 0 || bytes / 4 * 3 > sizeof(packet) - 12) return;
     size_t out = 0;
     for (size_t i = 0; i < bytes; i += 4) {
@@ -1140,9 +1184,9 @@ void SipTransport::send_audio_frame(const uint8_t *pcm, size_t bytes) {
   } else {
     return;
   }
-  const uint32_t samples = bps == 0 || this->selected_tx_format_.channels == 0
+  const uint32_t samples = bps == 0 || tx_format.channels == 0
       ? 0
-      : static_cast<uint32_t>(input_bytes / bps / this->selected_tx_format_.channels);
+      : static_cast<uint32_t>(input_bytes / bps / tx_format.channels);
   this->rtp_timestamp_.store(ts + samples, std::memory_order_release);
   struct sockaddr_in dest{};
   dest.sin_family = AF_INET;
@@ -1165,8 +1209,11 @@ bool SipTransport::send_answer(const std::string &call_id,
                                const AudioFormat &caller_to_dest_format,
                                const AudioFormat &dest_to_caller_format) {
   if (!call_id.empty()) this->call_id_ = call_id;
-  this->selected_rx_format_ = caller_to_dest_format;
-  this->selected_tx_format_ = dest_to_caller_format;
+  uint8_t tx_payload_type = 96;
+  uint8_t rx_payload_type = 96;
+  this->get_media_config_(nullptr, nullptr, &tx_payload_type, &rx_payload_type);
+  this->set_media_config_(dest_to_caller_format, caller_to_dest_format,
+                          tx_payload_type, rx_payload_type);
   this->outgoing_invite_pending_.store(false, std::memory_order_release);
   this->call_active_.store(true, std::memory_order_release);
   const std::string answer = this->build_sdp_answer_();
@@ -1268,6 +1315,9 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
   if (this->dest_route_.empty()) this->dest_route_ = this->dest_name_;
 
   ESP_LOGI(TAG, "SIP INVITE accepted into FSM call_id=%s", this->call_id_.c_str());
+  AudioFormat selected_tx;
+  AudioFormat selected_rx;
+  this->get_media_config_(&selected_tx, &selected_rx, nullptr, nullptr);
   SipSignal signal;
   signal.type = SipSignalType::INVITE;
   signal.call_id = this->call_id_;
@@ -1275,12 +1325,12 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
   signal.caller_name = this->caller_name_;
   signal.dest_route = this->dest_route_;
   signal.dest_name = this->dest_name_;
-  signal.caller_tx_formats.formats[0] = this->selected_rx_format_;
+  signal.caller_tx_formats.formats[0] = selected_rx;
   signal.caller_tx_formats.count = 1;
-  signal.caller_rx_formats.formats[0] = this->selected_tx_format_;
+  signal.caller_rx_formats.formats[0] = selected_tx;
   signal.caller_rx_formats.count = 1;
-  signal.selected_rx_format = this->selected_rx_format_;
-  signal.selected_tx_format = this->selected_tx_format_;
+  signal.selected_rx_format = selected_rx;
+  signal.selected_tx_format = selected_tx;
   this->emit_sip_signal_(signal);
   return true;
 }
@@ -1332,8 +1382,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
     signal.type = SipSignalType::STATUS_200_OK;
     signal.status_code = static_cast<uint16_t>(status);
     signal.call_id = this->call_id_;
-    signal.selected_tx_format = this->selected_tx_format_;
-    signal.selected_rx_format = this->selected_rx_format_;
+    this->get_media_config_(&signal.selected_tx_format, &signal.selected_rx_format, nullptr, nullptr);
     this->emit_sip_signal_(signal);
     return true;
   }
@@ -1581,23 +1630,26 @@ void SipTransport::rtp_task_() {
         if (pad == 0 || pad > payload_len) continue;
         payload_len -= pad;
       }
-      if ((buf[1] & 0x7F) != this->rtp_rx_payload_type_) continue;
+      AudioFormat rx_format;
+      uint8_t rx_payload_type = 96;
+      this->get_media_config_(nullptr, &rx_format, nullptr, &rx_payload_type);
+      if ((buf[1] & 0x7F) != rx_payload_type) continue;
       const uint8_t *payload = buf + header;
       size_t out_len = payload_len;
-      if (this->selected_rx_format_.pcm_format == PcmFormat::S16LE) {
+      if (rx_format.pcm_format == PcmFormat::S16LE) {
         if ((payload_len % 2) != 0 || payload_len > sizeof(pcm)) continue;
         for (size_t i = 0; i < payload_len; i += 2) {
           pcm[i] = payload[i + 1];
           pcm[i + 1] = payload[i];
         }
-      } else if (this->selected_rx_format_.pcm_format == PcmFormat::S24LE) {
+      } else if (rx_format.pcm_format == PcmFormat::S24LE) {
         if ((payload_len % 3) != 0 || payload_len > sizeof(pcm)) continue;
         for (size_t i = 0; i < payload_len; i += 3) {
           pcm[i] = payload[i + 2];
           pcm[i + 1] = payload[i + 1];
           pcm[i + 2] = payload[i];
         }
-      } else if (this->selected_rx_format_.pcm_format == PcmFormat::S24LE_IN_S32) {
+      } else if (rx_format.pcm_format == PcmFormat::S24LE_IN_S32) {
         if ((payload_len % 3) != 0 || payload_len / 3 * 4 > sizeof(pcm)) continue;
         out_len = 0;
         for (size_t i = 0; i < payload_len; i += 3) {

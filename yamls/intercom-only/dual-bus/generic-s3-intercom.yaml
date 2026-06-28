@@ -223,6 +223,10 @@ intercom_api:
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
         frame_ms: 32
   microphone: mic_main
   speaker: intercom_speaker_input

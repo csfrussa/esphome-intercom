@@ -69,7 +69,6 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_intercom_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP intercom_api.
 
-    Name|host|sip_port|rtp_port|sip_udp
     Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
     """
     if not value:
@@ -93,17 +92,19 @@ def parse_intercom_endpoint(value: str | None) -> dict | None:
         except ValueError as err:
             _LOGGER.warning("Invalid intercom endpoint audio formats in %r: %s", text, err)
             return None
+        if not tx_formats or not rx_formats:
+            _LOGGER.warning("Ignoring intercom endpoint without explicit SIP PCM formats: %r", text)
+            return None
         return mode, tx_formats, rx_formats
 
     primary_port = _valid_port(parts[2])
     secondary_port = _valid_port(parts[3])
     if primary_port is None or secondary_port is None:
         return None
-    parsed_tail = parse_formats(4) if len(parts) == 8 else (
-        "full_duplex",
-        parse_audio_format_list(None),
-        parse_audio_format_list(None),
-    )
+    if len(parts) != 8:
+        _LOGGER.warning("Ignoring intercom endpoint using obsolete no-format shape: %r", text)
+        return None
+    parsed_tail = parse_formats(4)
     if parsed_tail is None:
         return None
     mode, tx_formats, rx_formats = parsed_tail

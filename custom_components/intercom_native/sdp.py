@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .audio_format import AudioFormat, PcmFormat, UDP_SAFE_PAYLOAD_BYTES
+from .audio_format import AudioFormat, PcmFormat, UDP_SAFE_PAYLOAD_BYTES, choose_common_frame_ms
 
 
 class SdpError(ValueError):
@@ -23,6 +23,10 @@ _PREFERRED_RTP_AUDIO_KEYS = {
     (16000, PcmFormat.S16LE, 1, 10): 7,
     (8000, PcmFormat.S16LE, 1, 20): 8,
 }
+_STATIC_RTPMAP = {
+    0: ("PCMU", 8000, 1),
+    8: ("PCMA", 8000, 1),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,12 +43,23 @@ class RtpPcmFormat:
             return 16
         if self.encoding == "L24":
             return 24
+        if self.encoding in {"PCMA", "PCMU"}:
+            return 8
+        if self.encoding == "OPUS":
+            return 0
         raise SdpError(f"unsupported RTP PCM encoding {self.encoding}")
 
     @property
     def audio_format(self) -> AudioFormat:
+        if self.encoding in {"PCMA", "PCMU"}:
+            return AudioFormat(self.sample_rate, PcmFormat.S16LE, self.channels, self.frame_ms or 20)
+        if self.encoding == "OPUS":
+            return AudioFormat(48000, PcmFormat.S16LE, self.channels, self.frame_ms or 20)
         pcm = PcmFormat.S16LE if self.encoding == "L16" else PcmFormat.S24LE
         return AudioFormat(self.sample_rate, pcm, self.channels, self.frame_ms)
+
+    def wire_token(self) -> str:
+        return f"pt={self.payload_type}:{self.encoding}/{self.sample_rate}/{self.channels}/{self.frame_ms}ms"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +134,13 @@ def rtp_offer_formats(formats: list[AudioFormat]) -> list[AudioFormat]:
     return [fmt for fmt in ranked if fmt.frame_ms == frame_ms][:MAX_RTP_OFFER_FORMATS]
 
 
+def _common_ptime_formats(*format_lists: list[AudioFormat]) -> list[AudioFormat]:
+    frame_ms = choose_common_frame_ms(*format_lists)
+    if frame_ms is None:
+        return []
+    return [fmt for formats in format_lists for fmt in formats if fmt.frame_ms == frame_ms]
+
+
 def _format_key(fmt: AudioFormat) -> tuple[int, PcmFormat, int, int]:
     wire_pcm = PcmFormat.S24LE if fmt.pcm_format == PcmFormat.S24LE_IN_S32 else fmt.pcm_format
     return (fmt.sample_rate, wire_pcm, fmt.channels, fmt.frame_ms)
@@ -137,9 +159,22 @@ def _dedupe_formats(formats: list[AudioFormat]) -> list[AudioFormat]:
 
 
 def _rtp_compatible_audio(offered: RtpPcmFormat, local: AudioFormat) -> RtpPcmFormat | None:
+    if offered.frame_ms not in (0, local.frame_ms):
+        return None
+    if offered.encoding == "OPUS":
+        if (
+            local.pcm_format == PcmFormat.S16LE
+            and local.sample_rate == 48000
+            and local.channels == offered.channels
+            and local.frame_ms == 20
+        ):
+            return RtpPcmFormat(offered.payload_type, "OPUS", 48000, offered.channels, local.frame_ms)
+        return None
     if not is_rtp_pcm_mappable(local):
         return None
-    if offered.frame_ms not in (0, local.frame_ms):
+    if offered.encoding in {"PCMA", "PCMU"}:
+        if local.pcm_format == PcmFormat.S16LE and local.sample_rate == offered.sample_rate and local.channels == offered.channels:
+            return RtpPcmFormat(offered.payload_type, offered.encoding, offered.sample_rate, offered.channels, local.frame_ms)
         return None
     wanted = audio_format_to_rtp(local, offered.payload_type)
     if (
@@ -191,7 +226,7 @@ def build_offer_directional(
     send_formats: list[AudioFormat],
     recv_formats: list[AudioFormat],
 ) -> str:
-    formats = rtp_offer_formats([*(send_formats or []), *(recv_formats or [])])
+    formats = rtp_offer_formats(_common_ptime_formats(send_formats or [], recv_formats or []))
     if not formats:
         raise SdpError("SDP offer requires at least one RTP-mappable PCM format")
     rtp_formats = [audio_format_to_rtp(fmt, 96 + i) for i, fmt in enumerate(formats)]
@@ -269,11 +304,11 @@ def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
     parsed = parse_sdp(sdp)
     out: list[RtpPcmFormat] = []
     for pt in parsed["payload_order"]:
-        spec = parsed["rtpmap"].get(pt)
+        spec = parsed["rtpmap"].get(pt) or _STATIC_RTPMAP.get(pt)
         if spec is None:
             continue
         encoding, rate, channels = spec
-        if encoding not in {"L16", "L24"}:
+        if encoding not in {"L16", "L24", "PCMA", "PCMU", "OPUS"}:
             continue
         out.append(RtpPcmFormat(pt, encoding, rate, channels, parsed["ptime"]))
     return out
@@ -283,12 +318,28 @@ def offered_dtmf_formats(sdp: str | bytes) -> list[RtpDtmfFormat]:
     parsed = parse_sdp(sdp)
     out: list[RtpDtmfFormat] = []
     for pt in parsed["payload_order"]:
-        spec = parsed["rtpmap"].get(pt)
+        spec = parsed["rtpmap"].get(pt) or _STATIC_RTPMAP.get(pt)
         if spec is None:
             continue
         encoding, rate, _channels = spec
         if encoding == "TELEPHONE-EVENT":
             out.append(RtpDtmfFormat(pt, rate))
+    return out
+
+
+def offered_media_descriptions(sdp: str | bytes) -> list[str]:
+    parsed = parse_sdp(sdp)
+    out: list[str] = []
+    for pt in parsed["payload_order"]:
+        spec = parsed["rtpmap"].get(pt) or _STATIC_RTPMAP.get(pt)
+        if spec is None:
+            out.append(f"pt={pt}")
+            continue
+        encoding, rate, channels = spec
+        suffix = f"/{channels}" if channels != 1 else ""
+        out.append(f"pt={pt}:{encoding}/{rate}{suffix}")
+    if parsed["ptime"]:
+        out.append(f"ptime={parsed['ptime']}")
     return out
 
 
@@ -303,7 +354,7 @@ def negotiate_directional(
 ) -> RtpPcmDirection | None:
     send = negotiate(remote_sdp, local_send_preferred)
     recv = negotiate(remote_sdp, local_recv_preferred)
-    if send is None or recv is None:
+    if send is None or recv is None or send.frame_ms != recv.frame_ms:
         return None
     return RtpPcmDirection(send=send, recv=recv)
 
@@ -332,7 +383,7 @@ def negotiate_answer_directional(
     )
     if recv is None:
         recv = _best_offered_match([send], local_recv_preferred)
-    if recv is None:
+    if recv is None or send.frame_ms != recv.frame_ms:
         return None
     return RtpPcmDirection(send=send, recv=recv)
 
@@ -357,6 +408,8 @@ def build_answer_directional(
     *,
     dtmf: RtpDtmfFormat | None = None,
 ) -> str:
+    if send.frame_ms != recv.frame_ms:
+        raise SdpError("SDP answer requires a common TX/RX RTP packet time")
     selected = []
     seen: set[int] = set()
     for fmt in (send, recv):

@@ -11,7 +11,8 @@ from typing import Any
 from . import rtp
 from .audio_format import AudioFormat
 from .audio_pcm import PcmFrameConverter
-from .sip_client import pcm_to_rtp_payload, rtp_payload_to_pcm
+from .sdp import RtpPcmFormat, audio_format_to_rtp
+from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,8 +23,10 @@ class RtpPeer:
     port: int
     payload_type: int
     audio_format: AudioFormat
+    rtp_format: RtpPcmFormat | None = None
     send_payload_type: int | None = None
     send_audio_format: AudioFormat | None = None
+    send_rtp_format: RtpPcmFormat | None = None
     sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
     timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
     ssrc: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
@@ -35,6 +38,16 @@ class RtpPeer:
     @property
     def outbound_audio_format(self) -> AudioFormat:
         return self.send_audio_format if self.send_audio_format is not None else self.audio_format
+
+    @property
+    def inbound_rtp_format(self) -> RtpPcmFormat:
+        return self.rtp_format if self.rtp_format is not None else audio_format_to_rtp(self.audio_format, self.payload_type)
+
+    @property
+    def outbound_rtp_format(self) -> RtpPcmFormat:
+        if self.send_rtp_format is not None:
+            return self.send_rtp_format
+        return audio_format_to_rtp(self.outbound_audio_format, self.outbound_payload_type)
 
 
 class _RelayProtocol(asyncio.DatagramProtocol):
@@ -77,6 +90,10 @@ class SipRtpRelay:
         self.right_tx_bytes = 0
         self.left_to_right = PcmFrameConverter(left.audio_format, right.outbound_audio_format)
         self.right_to_left = PcmFrameConverter(right.audio_format, left.outbound_audio_format)
+        self.left_decoder = RtpPayloadDecoder(left.inbound_rtp_format)
+        self.right_decoder = RtpPayloadDecoder(right.inbound_rtp_format)
+        self.left_encoder = RtpPayloadEncoder(left.outbound_rtp_format)
+        self.right_encoder = RtpPayloadEncoder(right.outbound_rtp_format)
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -132,10 +149,14 @@ class SipRtpRelay:
             packet = rtp.parse_packet(data)
             if packet.payload_type != source.payload_type:
                 raise ValueError(f"payload type {packet.payload_type} != expected {source.payload_type}")
-            pcm = rtp_payload_to_pcm(packet.payload, source.audio_format)
+            decoder = self.left_decoder if side == "left" else self.right_decoder
+            pcm = decoder.decode(packet.payload)
+            if not pcm:
+                return
             converter = self.left_to_right if side == "left" else self.right_to_left
             converted_frames = converter.convert(pcm)
             out_format = dest.outbound_audio_format
+            encoder = self.right_encoder if side == "left" else self.left_encoder
             outgoing: list[bytes] = []
             sequence = dest.sequence
             timestamp = dest.timestamp
@@ -147,7 +168,7 @@ class SipRtpRelay:
                             sequence=sequence,
                             timestamp=timestamp,
                             ssrc=dest.ssrc,
-                            payload=pcm_to_rtp_payload(frame, out_format),
+                            payload=encoder.encode(frame),
                         )
                     )
                 )

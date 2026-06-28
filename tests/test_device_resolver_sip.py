@@ -61,7 +61,7 @@ class SipEndpointParseTest(unittest.TestCase):
     def test_parses_sip_endpoint_sensor_with_audio_formats(self) -> None:
         endpoint = (
             "Waveshare S3 Audio | 192.168.1.47 | 5060 | 40000 | "
-            "full_duplex | 16000:s16le:1:32 | 48000:s16le:1:10;16000:s16le:1:32 | sip_tcp"
+            "full_duplex | 16000:s16le:1:16 | 48000:s16le:1:10;16000:s16le:1:16;16000:s16le:1:32 | sip_tcp"
         )
         parsed = device_resolver.parse_intercom_endpoint(endpoint)
         self.assertIsNotNone(parsed)
@@ -70,18 +70,15 @@ class SipEndpointParseTest(unittest.TestCase):
         self.assertEqual(parsed["host"], "192.168.1.47")
         self.assertEqual(parsed["sip_port"], 5060)
         self.assertEqual(parsed["rtp_port"], 40000)
-        self.assertEqual([fmt.wire_token() for fmt in parsed["tx_formats"]], ["16000:s16le:1:32"])
+        self.assertEqual([fmt.wire_token() for fmt in parsed["tx_formats"]], ["16000:s16le:1:16"])
         self.assertEqual(
             [fmt.wire_token() for fmt in parsed["rx_formats"]],
-            ["48000:s16le:1:10", "16000:s16le:1:32"],
+            ["48000:s16le:1:10", "16000:s16le:1:16", "16000:s16le:1:32"],
         )
 
-    def test_parses_minimal_endpoint_sensor(self) -> None:
+    def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
         parsed = device_resolver.parse_intercom_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")
-        self.assertIsNotNone(parsed)
-        assert parsed is not None
-        self.assertEqual(parsed["name"], "Kitchen")
-        self.assertEqual(parsed["sip_transport"], "udp")
+        self.assertIsNone(parsed)
 
     def test_rejects_malformed_sip_endpoint(self) -> None:
         self.assertIsNone(device_resolver.parse_intercom_endpoint("Kitchen|sip|192.168.1.4|5060"))

@@ -35,7 +35,7 @@ speaker:
         num_channels: 1
       - id: intercom_mixer_input
         timeout: 10s
-        # 4 intercom wire frames: 1024 B @ 16 kHz mono = 32 ms/frame.
+        # Local mixer staging; RTP packet time is negotiated by SIP/SDP.
         buffer_duration: 128ms
         sample_rate: 48000
         bits_per_sample: 16

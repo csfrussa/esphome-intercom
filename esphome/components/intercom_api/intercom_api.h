@@ -424,7 +424,7 @@ class IntercomApi : public Component {
   text_sensor::TextSensor *caller_sensor_{nullptr};       // full: who is calling
   text_sensor::TextSensor *contacts_sensor_{nullptr};     // full: contact count (e.g. "3 contacts")
   text_sensor::TextSensor *transport_sensor_{nullptr};    // SIP signaling transport: "udp" or "tcp"
-  text_sensor::TextSensor *endpoint_sensor_{nullptr};     // route source: Name|host|sip_port|rtp_port|sip_udp
+  text_sensor::TextSensor *endpoint_sensor_{nullptr};     // HA roster row with SIP route and audio capabilities.
   text_sensor::TextSensor *last_reason_sensor_{nullptr};  // terminal reason for HA/card mirroring
   text_sensor::TextSensor *sip_snapshot_sensor_{nullptr};  // diagnostic SipPhoneState JSON
   std::string last_reason_;

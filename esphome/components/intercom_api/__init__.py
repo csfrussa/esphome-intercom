@@ -224,7 +224,7 @@ def _derive_stream_format_from_device(device_config: dict, *, direction: str) ->
                 CONF_SAMPLE_RATE: sample_rate,
                 CONF_PCM_FORMAT: _pcm_from_bits(bits),
                 CONF_CHANNELS: channels,
-                CONF_FRAME_MS: 32,
+                CONF_FRAME_MS: 16,
             }
 
     sample_rate = _single_stream_value(
@@ -254,7 +254,7 @@ def _derive_stream_format_from_device(device_config: dict, *, direction: str) ->
         CONF_SAMPLE_RATE: sample_rate,
         CONF_PCM_FORMAT: _pcm_from_bits(int(bits)),
         CONF_CHANNELS: channels,
-        CONF_FRAME_MS: 32,
+        CONF_FRAME_MS: 16,
     }
 
 
@@ -300,7 +300,7 @@ def _resolve_audio_format(config: dict, direction: str, value) -> dict:
                 CONF_SAMPLE_RATE: 16000,
                 CONF_PCM_FORMAT: "s16le",
                 CONF_CHANNELS: 1,
-                CONF_FRAME_MS: 32,
+                CONF_FRAME_MS: 16,
             }
         source = "microphone/source" if direction == CONF_TX else "speaker"
         raise cv.Invalid(
@@ -320,7 +320,7 @@ def _resolve_audio_format(config: dict, direction: str, value) -> dict:
                 CONF_SAMPLE_RATE: 16000,
                 CONF_PCM_FORMAT: "s16le",
                 CONF_CHANNELS: 1,
-                CONF_FRAME_MS: 32,
+                CONF_FRAME_MS: 16,
             }
         if derived is None:
             source = "microphone/source" if direction == CONF_TX else "speaker"

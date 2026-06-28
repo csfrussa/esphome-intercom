@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 import voluptuous as vol
@@ -11,6 +12,8 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import CONF_DEBUG_MODE, DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
 from .fsm import CallState, TerminalReason, sip_phone_state
+
+_LOGGER = logging.getLogger(__name__)
 
 CALL_EVENT = "intercom_native.call_event"
 SIP_CALL_STATE_EVENT = "intercom_native.sip_call_state"
@@ -166,6 +169,37 @@ def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone", {"dnd": False})
 
 
+async def _async_shutdown_all(hass: HomeAssistant) -> None:
+    """Clear HA softphone volatile state before SIP transports are stopped."""
+    bucket = hass.data.setdefault(DOMAIN, {})
+    for route in list((bucket.pop("sip_pending_routes", {}) or {}).values()):
+        future = route.get("future") if isinstance(route, dict) else None
+        if future is not None and not future.done():
+            future.cancel()
+    bucket.pop("ha_softphone_media", None)
+    bucket.pop("audio_ws_owners", None)
+    store = _ha_softphone_store(hass)
+    store.update(
+        {
+            "state": CallState.IDLE.value,
+            "sip_state": CallState.IDLE.value,
+            "terminal_reason": TerminalReason.LOCAL_HANGUP.value,
+            "last_sip_event": "shutdown",
+        }
+    )
+    for key in (
+        "session_device_id",
+        "target_device_id",
+        "selected_tx_format",
+        "selected_rx_format",
+        "audio_mode",
+        "route_kind",
+        "sip_uri",
+        "media_debug",
+    ):
+        store.pop(key, None)
+
+
 async def _async_load_ha_softphone_store(hass: HomeAssistant) -> None:
     from homeassistant.helpers.storage import Store
 
@@ -185,6 +219,23 @@ async def _async_save_ha_softphone_store(hass: HomeAssistant) -> None:
 
 def _ha_softphone_dnd(hass: HomeAssistant) -> bool:
     return bool(_ha_softphone_store(hass).get("dnd"))
+
+
+_MEDIA_COUNTER_KEYS = (
+    "rtp_tx_packets",
+    "rtp_rx_packets",
+    "rtp_tx_bytes",
+    "rtp_rx_bytes",
+)
+
+
+def _runtime_counter(store: dict[str, Any], runtime: dict[str, Any], key: str) -> int:
+    store_call_id = str(store.get("call_id") or "")
+    active_call_ids = {str(call_id) for call_id in runtime.get("active_call_ids", [])}
+    pending_call_ids = {str(call_id) for call_id in runtime.get("pending_call_ids", [])}
+    if store_call_id and store_call_id in active_call_ids | pending_call_ids:
+        return int(runtime.get(key, 0) or 0)
+    return int(store.get(key, runtime.get(key, 0)) or runtime.get(key, 0) or 0)
 
 
 def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
@@ -298,10 +349,10 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         terminal_reason=store.get("terminal_reason", ""),
         selected_tx_format=store.get("selected_tx_format", ""),
         selected_rx_format=store.get("selected_rx_format", ""),
-        rtp_tx_packets=int(store.get("rtp_tx_packets", runtime["rtp_tx_packets"]) or runtime["rtp_tx_packets"] or 0),
-        rtp_rx_packets=int(store.get("rtp_rx_packets", runtime["rtp_rx_packets"]) or runtime["rtp_rx_packets"] or 0),
-        rtp_tx_bytes=int(store.get("rtp_tx_bytes", runtime["rtp_tx_bytes"]) or runtime["rtp_tx_bytes"] or 0),
-        rtp_rx_bytes=int(store.get("rtp_rx_bytes", runtime["rtp_rx_bytes"]) or runtime["rtp_rx_bytes"] or 0),
+        rtp_tx_packets=_runtime_counter(store, runtime, "rtp_tx_packets"),
+        rtp_rx_packets=_runtime_counter(store, runtime, "rtp_rx_packets"),
+        rtp_tx_bytes=_runtime_counter(store, runtime, "rtp_tx_bytes"),
+        rtp_rx_bytes=_runtime_counter(store, runtime, "rtp_rx_bytes"),
         last_sip_event=last_event,
     )
     return {
@@ -322,6 +373,8 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "target_device_id": store.get("target_device_id", ""),
         "selected_tx_format": store.get("selected_tx_format", ""),
         "selected_rx_format": store.get("selected_rx_format", ""),
+        "selected_tx_rtp_format": store.get("selected_tx_rtp_format", ""),
+        "selected_rx_rtp_format": store.get("selected_rx_rtp_format", ""),
         "audio_mode": store.get("audio_mode", ""),
         "sip_transport": store.get("sip_transport", "udp+tcp"),
         "sip_status_code": last_status,
@@ -334,10 +387,10 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "active_dialogs": runtime["active_dialogs"],
         "pending_call_ids": runtime["pending_call_ids"],
         "active_call_ids": runtime["active_call_ids"],
-        "rtp_tx_packets": int(store.get("rtp_tx_packets", runtime["rtp_tx_packets"]) or runtime["rtp_tx_packets"] or 0),
-        "rtp_rx_packets": int(store.get("rtp_rx_packets", runtime["rtp_rx_packets"]) or runtime["rtp_rx_packets"] or 0),
-        "rtp_tx_bytes": int(store.get("rtp_tx_bytes", runtime["rtp_tx_bytes"]) or runtime["rtp_tx_bytes"] or 0),
-        "rtp_rx_bytes": int(store.get("rtp_rx_bytes", runtime["rtp_rx_bytes"]) or runtime["rtp_rx_bytes"] or 0),
+        "rtp_tx_packets": _runtime_counter(store, runtime, "rtp_tx_packets"),
+        "rtp_rx_packets": _runtime_counter(store, runtime, "rtp_rx_packets"),
+        "rtp_tx_bytes": _runtime_counter(store, runtime, "rtp_tx_bytes"),
+        "rtp_rx_bytes": _runtime_counter(store, runtime, "rtp_rx_bytes"),
         "rtp_dropped_packets": runtime["rtp_dropped_packets"],
         "rtp_relays": runtime["rtp_relays"],
         "sip_client_dialogs": runtime["sip_client_dialogs"],
@@ -381,6 +434,8 @@ def _set_ha_softphone_call_state(
         direction=direction or str(store.get("direction", "")),
         call_id=call_id or str(store.get("call_id", "")),
     )
+    previous_call_id = str(store.get("call_id") or "")
+    next_call_id = str(canonical.get("call_id") or "")
     if terminal:
         store["terminal_reason"] = extra.get("reason") or extra.get("terminal_reason") or state
         store["sip_status_code"] = extra.get("code") or extra.get("sip_status_code") or store.get("sip_status_code", "")
@@ -405,14 +460,21 @@ def _set_ha_softphone_call_state(
             "target_device_id",
             "selected_tx_format",
             "selected_rx_format",
+            "selected_tx_rtp_format",
+            "selected_rx_rtp_format",
             "audio_mode",
             "route_kind",
             "sip_uri",
+            "media_debug",
         ):
             store.pop(key, None)
         store["state"] = state
         store["sip_state"] = state
     else:
+        if next_call_id and next_call_id != previous_call_id:
+            for key in _MEDIA_COUNTER_KEYS:
+                store[key] = 0
+            store["media_debug"] = {}
         for key in (
             "last_terminal_call_id",
             "last_terminal_direction",
@@ -435,6 +497,17 @@ def _set_ha_softphone_call_state(
     payload.update({k: v for k, v in extra.items() if v not in (None, "")})
     if terminal and store.get("terminal_reason"):
         payload["terminal_reason"] = store["terminal_reason"]
+    _LOGGER.info(
+        "HA softphone state=%s call_id=%s direction=%s caller=%s callee=%s peer=%s reason=%s event=%s",
+        state,
+        canonical.get("call_id", ""),
+        canonical.get("direction", ""),
+        canonical.get("caller", ""),
+        canonical.get("callee", ""),
+        canonical.get("peer_name", ""),
+        store.get("terminal_reason", "") if terminal else "",
+        extra.get("last_sip_event", store.get("last_sip_event", "")),
+    )
     _fire_call_event(hass, payload, "session")
 
 

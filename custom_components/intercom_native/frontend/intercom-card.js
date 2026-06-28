@@ -891,14 +891,10 @@ class IntercomCard extends HTMLElement {
     const reason = this._getLastReason();
     if (!reason) return;
     const reasonKey = this._reasonKey(reason);
-    const isHangup =
-      reasonKey === "local_hangup" ||
-      reasonKey === "remote_hangup" ||
-      reasonKey === "remote_device_lost";
     // Mirror mode shows the ESP terminal reason as-is. If the card is a
     // HA/browser softphone, terminal direction comes from call_event instead.
     this._captureEndReason(
-      isHangup ? "idle" : "declined",
+      "terminal",
       reason,
       reasonKey === "local_hangup" ? "self" : "remote",
     );

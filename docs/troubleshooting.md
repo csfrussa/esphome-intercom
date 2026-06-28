@@ -11,8 +11,10 @@
 ## Call Fails With `media_incompatible`
 
 The SDP offer/answer did not produce a usable PCM RTP format, or HA could not
-build the required bridge conversion. Use one of the supported PCM profiles such
-as `16000:s16le:1:32`, `16000:s16le:1:20`, or `48000:s16le:1:10`.
+build the required bridge conversion. Use explicit supported PCM profiles such
+as `16000:s16le:1:16`, `16000:s16le:1:32`, `16000:s16le:1:20`, or
+`48000:s16le:1:10`. A call also needs one common packet time across the selected
+TX and RX directions; rates may differ, but `frame_ms`/`ptime` must match.
 
 ## HA Cannot Route A Name
 

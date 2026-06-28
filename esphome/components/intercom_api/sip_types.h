@@ -24,7 +24,7 @@ struct AudioFormat {
   uint32_t sample_rate{16000};
   PcmFormat pcm_format{PcmFormat::S16LE};
   uint8_t channels{1};
-  uint16_t frame_ms{32};
+  uint16_t frame_ms{16};
 
   uint8_t container_bytes_per_sample() const {
     switch (this->pcm_format) {

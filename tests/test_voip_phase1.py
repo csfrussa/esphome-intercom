@@ -624,6 +624,16 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertNotIn("a=fmtp:", answer)
         self.assertIn("a=maxptime:10", answer)
 
+    def test_directional_offer_requires_common_ptime(self) -> None:
+        with self.assertRaises(sdp.SdpError):
+            sdp.build_offer_directional(
+                "192.168.1.10",
+                "192.168.1.10",
+                40020,
+                [audio_format.AudioFormat(16000, "s16le", 1, 16)],
+                [audio_format.AudioFormat(48000, "s16le", 1, 10)],
+            )
+
     def test_answer_negotiation_preserves_asymmetric_payload_direction(self) -> None:
         ha_to_esp = audio_format.AudioFormat(48000, "s16le", 1, 10)
         esp_to_ha = audio_format.AudioFormat(16000, "s16le", 1, 10)
@@ -661,7 +671,7 @@ class SdpPcmProfileTest(unittest.TestCase):
                 [audio_format.AudioFormat(48000, "s16le", 1, 20)],
             )
 
-    def test_rejects_compressed_only_offer(self) -> None:
+    def test_accepts_g711_trunk_offer_as_pcm_edge_codec(self) -> None:
         offer = (
             "v=0\r\n"
             "o=- 0 0 IN IP4 192.168.1.20\r\n"
@@ -672,9 +682,46 @@ class SdpPcmProfileTest(unittest.TestCase):
             "a=rtpmap:0 PCMU/8000\r\n"
             "a=rtpmap:8 PCMA/8000\r\n"
             "a=rtpmap:96 opus/48000/2\r\n"
+            "a=ptime:20\r\n"
         )
-        selected = sdp.negotiate(offer, [audio_format.AudioFormat(16000, "s16le", 1, 20)])
-        self.assertIsNone(selected)
+        selected = sdp.negotiate(offer, [audio_format.AudioFormat(8000, "s16le", 1, 20)])
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.encoding, "PCMU")
+        self.assertEqual(selected.payload_type, 0)
+        self.assertEqual(selected.audio_format, audio_format.AudioFormat(8000, "s16le", 1, 20))
+
+    def test_prefers_l16_48k_over_g711_when_both_are_offered(self) -> None:
+        offer = (
+            "v=0\r\n"
+            "o=- 0 0 IN IP4 192.168.1.20\r\n"
+            "s=Phone\r\n"
+            "c=IN IP4 192.168.1.20\r\n"
+            "t=0 0\r\n"
+            "m=audio 40000 RTP/AVP 0 96 8\r\n"
+            "a=rtpmap:96 L16/48000/1\r\n"
+            "a=ptime:10\r\n"
+        )
+        selected = sdp.negotiate(
+            offer,
+            [
+                audio_format.AudioFormat(48000, "s16le", 1, 10),
+                audio_format.AudioFormat(8000, "s16le", 1, 20),
+            ],
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.encoding, "L16")
+        self.assertEqual(selected.sample_rate, 48000)
+
+    def test_g711_rtp_payload_converts_to_internal_s16le(self) -> None:
+        pcm = b"\x00\x00\x00\x10\x00\xf0"
+        alaw = sip_client.pcm_to_rtp_payload(pcm, sdp.RtpPcmFormat(8, "PCMA", 8000, 1, 20))
+        ulaw = sip_client.pcm_to_rtp_payload(pcm, sdp.RtpPcmFormat(0, "PCMU", 8000, 1, 20))
+        self.assertEqual(len(alaw), 3)
+        self.assertEqual(len(ulaw), 3)
+        self.assertEqual(len(sip_client.rtp_payload_to_pcm(alaw, sdp.RtpPcmFormat(8, "PCMA", 8000, 1, 20))), len(pcm))
+        self.assertEqual(len(sip_client.rtp_payload_to_pcm(ulaw, sdp.RtpPcmFormat(0, "PCMU", 8000, 1, 20))), len(pcm))
 
     def test_rejects_s32_wire_mapping(self) -> None:
         with self.assertRaises(sdp.SdpError):
@@ -734,8 +781,8 @@ class SdpPcmProfileTest(unittest.TestCase):
         )
         self.assertIsNone(selected)
 
-    def test_ha_sip_profile_keeps_esp_baseline_16k_32ms(self) -> None:
-        baseline = audio_format.AudioFormat(16000, "s16le", 1, 32)
+    def test_ha_sip_profile_keeps_esp_baseline_16k_16ms(self) -> None:
+        baseline = audio_format.AudioFormat(16000, "s16le", 1, 16)
         offer = sdp.build_offer_directional(
             "192.168.1.48",
             "192.168.1.48",

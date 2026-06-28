@@ -56,7 +56,7 @@ from .audio_format import (
     HA_SIP_PCM_FORMATS,
     HA_SIP_PCM_RX_FORMATS,
     HA_SIP_PCM_TX_FORMATS,
-    DEFAULT_AUDIO_FORMAT,
+    choose_common_frame_ms,
     parse_audio_format_list,
 )
 from .peer import Peer
@@ -125,7 +125,7 @@ def _device_formats(device: dict | None, key: str):
             (device or {}).get("name") or (device or {}).get("device_id"),
             err,
         )
-        return [DEFAULT_AUDIO_FORMAT]
+        return []
 
 
 def _roster_entry_formats(entry, key: str) -> list[AudioFormat]:
@@ -151,7 +151,7 @@ def _roster_entry_formats(entry, key: str) -> list[AudioFormat]:
             getattr(entry, "display_name", None) or getattr(entry, "id", ""),
             err,
         )
-        return [DEFAULT_AUDIO_FORMAT]
+        return []
 
 
 def _sip_public_state(state: str) -> str:
@@ -214,13 +214,27 @@ def _sip_target_audio_profile(
             [fmt.wire_token() for fmt in remote_tx],
             [fmt.wire_token() for fmt in remote_rx],
         )
-    else:
-        _LOGGER.debug(
-            "Directional SIP PCM profile for %s: send=%s recv=%s",
+        return [], []
+
+    common_frame_ms = choose_common_frame_ms(send_candidates, recv_candidates)
+    if common_frame_ms is None:
+        _LOGGER.warning(
+            "No common SIP ptime for %s (send=%s recv=%s)",
             target,
             [fmt.wire_token() for fmt in send_candidates],
             [fmt.wire_token() for fmt in recv_candidates],
         )
+        return [], []
+
+    send_candidates = [fmt for fmt in send_candidates if fmt.frame_ms == common_frame_ms]
+    recv_candidates = [fmt for fmt in recv_candidates if fmt.frame_ms == common_frame_ms]
+    _LOGGER.debug(
+        "Directional SIP PCM profile for %s: ptime=%sms send=%s recv=%s",
+        target,
+        common_frame_ms,
+        [fmt.wire_token() for fmt in send_candidates],
+        [fmt.wire_token() for fmt in recv_candidates],
+    )
     return send_candidates, recv_candidates
 
 
@@ -801,6 +815,8 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
                 call_id=client.dialog_ids.call_id,
                 selected_tx_format=client.dialog.send_format.audio_format.wire_token(),
                 selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=client.dialog.send_format.wire_token(),
+                selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
                 sip_status_code=200,
                 last_sip_event="SIP_RESPONSE",
                 sip_uri=sip_uri,
@@ -902,22 +918,27 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         _LOGGER.warning("sip_answer: no pending SIP call %s", call_id or "(current)")
         return
 
-    cfg = _get_transport_config(hass)
-    local_ip = await _ha_advertise_host(hass)
-    from .sdp import build_answer_directional
-    local_rtp_port = _allocate_sip_rtp_port(hass)
-    answer = build_answer_directional(
-        local_ip,
-        local_ip,
-        local_rtp_port,
-        invite.send_format,
-        invite.recv_format,
-    )
-    if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
-        _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
-        return
+    bucket = hass.data.setdefault(DOMAIN, {})
+    preanswered = bucket.setdefault("sip_preanswered", {}).pop(call_id, None)
+    local_rtp_port = int((preanswered or {}).get("local_rtp_port") or 0)
+    if local_rtp_port:
+        _LOGGER.info("SIP answered pre-answered trunk call_id=%s", call_id)
+    else:
+        local_ip = await _ha_advertise_host(hass)
+        from .sdp import build_answer_directional
+        local_rtp_port = _allocate_sip_rtp_port(hass)
+        answer = build_answer_directional(
+            local_ip,
+            local_ip,
+            local_rtp_port,
+            invite.send_format,
+            invite.recv_format,
+        )
+        if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
+            _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
+            return
 
-    hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone_media", {})[call_id] = {
+    bucket.setdefault("ha_softphone_media", {})[call_id] = {
         "invite": invite,
         "local_rtp_port": local_rtp_port,
     }
@@ -935,6 +956,8 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         last_sip_event="SIP_RESPONSE",
         selected_tx_format=invite.send_format.audio_format.wire_token(),
         selected_rx_format=invite.recv_format.audio_format.wire_token(),
+        selected_tx_rtp_format=invite.send_format.wire_token(),
+        selected_rx_rtp_format=invite.recv_format.wire_token(),
     )
 
 
@@ -981,6 +1004,21 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
     pending.pop(call_id, None)
+    preanswered = hass.data.get(DOMAIN, {}).setdefault("sip_preanswered", {})
+    was_preanswered = bool(call_id and preanswered.pop(call_id, None) is not None)
+    if was_preanswered:
+        _sip_send_bye(hass, call_id)
+        _LOGGER.info("SIP declined pre-answered trunk call_id=%s reason=%s", call_id, app_reason)
+        _set_ha_softphone_call_state(
+            hass,
+            "declined",
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            reason=app_reason,
+            call_id=call_id,
+            sip_status_code=status,
+            last_sip_event="BYE",
+        )
+        return
     if not call_id or not _sip_send_final_response(
         hass,
         call_id,
@@ -1034,6 +1072,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     relays = bucket.setdefault("sip_relays", {})
     pending = bucket.setdefault("sip_pending", {})
     media_sessions = bucket.setdefault("ha_softphone_media", {})
+    preanswered = bucket.setdefault("sip_preanswered", {})
     softphone_store = _ha_softphone_store(hass)
     if not call_id and len(clients) == 1:
         call_id = next(iter(clients))
@@ -1070,7 +1109,10 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         invite = pending.pop(pending_call_id, None)
         if invite is None:
             continue
-        if _sip_send_final_response(
+        if preanswered.pop(pending_call_id, None) is not None:
+            if _sip_send_bye(hass, pending_call_id):
+                pending_closed += 1
+        elif _sip_send_final_response(
             hass,
             pending_call_id,
             487,
@@ -1440,6 +1482,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             call_id=client.dialog_ids.call_id,
             selected_tx_format=client.dialog.send_format.audio_format.wire_token(),
             selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=client.dialog.send_format.wire_token(),
+            selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
             sip_status_code=200,
             last_sip_event="SIP_RESPONSE",
             sip_uri=route_uri,
@@ -1548,6 +1592,8 @@ def _set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             call_id=call_id,
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_mode="full_duplex",
             sip_status_code=180,
             last_sip_event="SIP_RESPONSE",
@@ -1564,6 +1610,8 @@ def _set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             call_id=call_id,
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_mode="full_duplex",
             sip_status_code=180,
             last_sip_event="SIP_RESPONSE",
@@ -1856,7 +1904,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Stop sessions / bridges before tearing down listeners; otherwise
     # orphaned transports leak sockets across config-entry reload.
     from .websocket_api import _async_shutdown_all
-    await _async_shutdown_all()
+    await _async_shutdown_all(hass)
 
     await _async_stop_sip_trunk(hass)
     await _async_stop_sip_endpoint(hass)
@@ -1894,6 +1942,9 @@ async def _async_start_sip_trunk(hass: HomeAssistant) -> bool:
         local_ip=local_ip,
         local_sip_port=int(_get_transport_config(hass)["sip_port"]),
     )
+    endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
+    if endpoint is not None:
+        trunk.attach_endpoint_manager(endpoint)
     hass.data.setdefault(DOMAIN, {})["sip_trunk"] = trunk
     try:
         await trunk.start()
@@ -2039,21 +2090,23 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             _LOGGER.info("SIP trunk DTMF route not found for digits=%s; using default=%s", digits, default_target)
         destination = destination or default_target
         _LOGGER.info(
-            "SIP trunk inbound route call_id=%s caller=%s digits=%s destination=%s",
+            "SIP trunk inbound route call_id=%s caller=%s digits=%s destination=%s tx=%s rx=%s",
             invite.call_id,
             invite.caller or invite.source_host,
             digits or "-",
             destination,
+            invite.send_format.wire_token(),
+            invite.recv_format.wire_token(),
         )
 
         if _is_ha_target(destination):
-            bucket.setdefault("ha_softphone_media", {})[invite.call_id] = {
-                "invite": invite,
+            bucket.setdefault("sip_pending", {})[invite.call_id] = invite
+            bucket.setdefault("sip_preanswered", {})[invite.call_id] = {
                 "local_rtp_port": source_relay_port,
             }
             _set_ha_softphone_call_state(
                 hass,
-                CallState.IN_CALL.value,
+                CallState.RINGING.value,
                 session_device_id=HA_SOFTPHONE_DEVICE_ID,
                 caller=invite.caller,
                 callee=_ha_peer_name(hass),
@@ -2062,15 +2115,17 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 call_id=invite.call_id,
                 selected_tx_format=invite.send_format.audio_format.wire_token(),
                 selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
                 audio_mode="full_duplex",
                 route_kind="trunk",
                 sip_status_code=200,
-                last_sip_event="SIP_RESPONSE",
+                last_sip_event="INVITE",
             )
             _fire_call_event(
                 hass,
                 {
-                    "state": CallState.IN_CALL.value,
+                    "state": CallState.RINGING.value,
                     "scope": "sip_trunk",
                     "call_id": invite.call_id,
                     "caller": invite.caller,
@@ -2129,8 +2184,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             local_name=invite.caller or _ha_peer_name(hass),
             local_sip_port=int(cfg["sip_port"]),
             local_rtp_port=dest_relay_port,
-            supported_send_formats=[invite.recv_format.audio_format],
-            supported_recv_formats=[invite.send_format.audio_format],
+            supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
+            supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
             signaling_transport=_sip_uri_transport(bridge_uri),
         )
         result = await client.invite(
@@ -2162,6 +2217,14 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 last_sip_event=client.last_sip_event or "BYE",
             )
             return
+        _LOGGER.info(
+            "SIP trunk bridge media call_id=%s trunk_tx=%s trunk_rx=%s destination_tx=%s destination_rx=%s",
+            invite.call_id,
+            invite.send_format.wire_token(),
+            invite.recv_format.wire_token(),
+            client.dialog.send_format.wire_token(),
+            client.dialog.recv_format.wire_token(),
+        )
 
         try:
             relay = SipRtpRelay(
@@ -2170,16 +2233,20 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     port=invite.remote_rtp_port,
                     payload_type=invite.recv_format.payload_type,
                     audio_format=invite.recv_format.audio_format,
+                    rtp_format=invite.recv_format,
                     send_payload_type=invite.send_format.payload_type,
                     send_audio_format=invite.send_format.audio_format,
+                    send_rtp_format=invite.send_format,
                 ),
                 right=RtpPeer(
                     host=client.dialog.remote_rtp_host,
                     port=client.dialog.remote_rtp_port,
                     payload_type=client.dialog.recv_format.payload_type,
                     audio_format=client.dialog.recv_format.audio_format,
+                    rtp_format=client.dialog.recv_format,
                     send_payload_type=client.dialog.send_format.payload_type,
                     send_audio_format=client.dialog.send_format.audio_format,
+                    send_rtp_format=client.dialog.send_format,
                 ),
                 left_port=source_relay_port,
                 right_port=dest_relay_port,
@@ -2221,6 +2288,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             call_id=invite.call_id,
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_mode="full_duplex",
             route_kind="trunk",
             sip_status_code=200,
@@ -2244,8 +2313,6 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         peers = await _async_build_peer_snapshot(hass)
         caller_peer = _peer_for_target(invite.caller, peers)
         if caller_peer is not None:
-            from . import sdp as sip_sdp
-
             send_candidates, recv_candidates = _sip_target_audio_profile(
                 remote_tx_formats=_peer_audio_formats(caller_peer, "tx_formats"),
                 remote_rx_formats=_peer_audio_formats(caller_peer, "rx_formats"),
@@ -2330,6 +2397,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 call_id=invite.call_id,
                 selected_tx_format=invite.send_format.audio_format.wire_token(),
                 selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
                 audio_mode="full_duplex",
                 route_kind="trunk",
                 sip_status_code=200,
@@ -2364,6 +2433,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             call_id=invite.call_id,
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_mode="full_duplex",
             route_kind=decision.kind,
             sip_uri=decision.sip_uri,
@@ -2498,8 +2569,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     local_name=invite.caller or _ha_peer_name(hass),
                     local_sip_port=int(cfg["sip_port"]),
                     local_rtp_port=dest_relay_port,
-                    supported_send_formats=[invite.recv_format.audio_format],
-                    supported_recv_formats=[invite.send_format.audio_format],
+                    supported_send_formats=list(HA_SIP_PCM_TX_FORMATS),
+                    supported_recv_formats=list(HA_SIP_PCM_RX_FORMATS),
                     signaling_transport=_sip_uri_transport(decision_uri),
                 )
                 result = await client.invite(
@@ -2550,16 +2621,20 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                                 port=invite.remote_rtp_port,
                                 payload_type=invite.recv_format.payload_type,
                                 audio_format=invite.recv_format.audio_format,
+                                rtp_format=invite.recv_format,
                                 send_payload_type=invite.send_format.payload_type,
                                 send_audio_format=invite.send_format.audio_format,
+                                send_rtp_format=invite.send_format,
                             ),
                             right=RtpPeer(
                                 host=client.dialog.remote_rtp_host,
                                 port=client.dialog.remote_rtp_port,
                                 payload_type=client.dialog.recv_format.payload_type,
                                 audio_format=client.dialog.recv_format.audio_format,
+                                rtp_format=client.dialog.recv_format,
                                 send_payload_type=client.dialog.send_format.payload_type,
                                 send_audio_format=client.dialog.send_format.audio_format,
+                                send_rtp_format=client.dialog.send_format,
                             ),
                             left_port=source_relay_port,
                             right_port=dest_relay_port,
@@ -2598,6 +2673,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         call_id=invite.call_id,
                         selected_tx_format=invite.send_format.audio_format.wire_token(),
                         selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                        selected_tx_rtp_format=invite.send_format.wire_token(),
+                        selected_rx_rtp_format=invite.recv_format.wire_token(),
                         sip_status_code=200,
                         last_sip_event="SIP_RESPONSE",
                         route_kind=decision.kind,
@@ -2677,6 +2754,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 call_id=invite.call_id,
                 selected_tx_format=invite.send_format.audio_format.wire_token(),
                 selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
                 audio_mode="full_duplex",
                 route_kind=decision.kind,
                 sip_uri=decision.sip_uri,
@@ -2707,6 +2786,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             call_id=invite.call_id,
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_mode="full_duplex",
             route_kind=decision.kind,
             sip_uri=decision.sip_uri,
@@ -2730,6 +2811,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
         pending = bucket.setdefault("sip_pending", {})
         invite = pending.pop(call_id, None)
+        bucket.setdefault("sip_preanswered", {}).pop(call_id, None)
         active_media_invite = bucket.setdefault("ha_softphone_media", {}).pop(call_id, {}).get("invite")
         if invite is None:
             invite = active_media_invite

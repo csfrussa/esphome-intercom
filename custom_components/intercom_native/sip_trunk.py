@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import logging
 import socket
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from . import sip
 from .sip_auth import build_digest_authorization
@@ -15,6 +15,8 @@ from .sip_client import _SipClientProtocol, _read_sip_stream_message
 
 
 _LOGGER = logging.getLogger(__name__)
+
+TrunkRequestHandler = Callable[[bytes, tuple[str, int]], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,7 @@ class SipTrunkClient:
         self.local_sip_port = int(local_sip_port)
         self.transport_name = (config.transport or "udp").upper()
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
+        self.responses: asyncio.Queue[sip.SipMessage] = asyncio.Queue()
         self.protocol: _SipClientProtocol | None = None
         self.transport: asyncio.DatagramTransport | None = None
         self.reader: asyncio.StreamReader | None = None
@@ -51,6 +54,13 @@ class SipTrunkClient:
         self.last_sip_event = ""
         self.expires_at = 0.0
         self._refresh_task: asyncio.Task | None = None
+        self._receive_task: asyncio.Task | None = None
+        self.request_handler: TrunkRequestHandler | None = None
+        self.inbound_endpoint: Any | None = None
+
+    def _ensure_receive_task(self) -> None:
+        if self._receive_task is None or self._receive_task.done():
+            self._receive_task = asyncio.create_task(self._receive_loop())
 
     @property
     def registrar_host(self) -> str:
@@ -80,8 +90,8 @@ class SipTrunkClient:
                 family=socket.AF_INET,
             )
             self.transport = transport  # type: ignore[assignment]
-        result = await self.register(timeout=2.0)
-        _LOGGER.info("SIP trunk register result=%s status=%s %s", result, self.status_code, self.status_reason)
+        self._ensure_receive_task()
+        await self.register(timeout=2.0)
         if self.registered:
             self._refresh_task = asyncio.create_task(self._refresh_loop())
 
@@ -98,6 +108,15 @@ class SipTrunkClient:
                 await self.register(expires=0, timeout=1.5)
             except Exception:
                 _LOGGER.debug("Ignoring SIP trunk unregister failure", exc_info=True)
+        if self._receive_task is not None:
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+            self._receive_task = None
+        self.request_handler = None
+        self.inbound_endpoint = None
         if self.transport is not None:
             self.transport.close()
             self.transport = None
@@ -114,12 +133,18 @@ class SipTrunkClient:
         while True:
             delay = max(30.0, min(float(self.config.expires) * 0.8, max(1.0, self.expires_at - time.time() - 10.0)))
             await asyncio.sleep(delay)
+            if self.transport_name == "TCP" and (self.writer is None or self.writer.is_closing()):
+                await self._connect_tcp()
+            self._ensure_receive_task()
             await self.register(timeout=2.0)
 
     async def _connect_tcp(self) -> None:
-        if self.writer is not None:
+        if self.writer is not None and not self.writer.is_closing():
             return
-        self.reader, self.writer = await asyncio.open_connection(self.registrar_host, int(self.config.port))
+        self.reader, self.writer = await asyncio.wait_for(
+            asyncio.open_connection(self.registrar_host, int(self.config.port)),
+            timeout=2.0,
+        )
 
     async def _send_raw(self, raw: bytes) -> None:
         if self.transport_name == "TCP":
@@ -132,13 +157,96 @@ class SipTrunkClient:
         self.transport.sendto(raw, (self.registrar_host, int(self.config.port)))
 
     async def _read_response(self, timeout: float) -> sip.SipMessage | None:
+        return await asyncio.wait_for(self.responses.get(), timeout=timeout)
+
+    def set_request_handler(self, handler: TrunkRequestHandler | None) -> None:
+        self.request_handler = handler
+
+    def attach_endpoint_manager(self, manager: Any) -> None:
+        """Route inbound trunk SIP requests through the HA SIP endpoint policy."""
+        from .sip_listener import SipUdpEndpoint
+
+        endpoint = SipUdpEndpoint(
+            local_ip=manager.local_ip,
+            local_rtp_port=manager.local_rtp_port,
+            supported_formats=manager.supported_formats,
+            supported_send_formats=manager.supported_send_formats,
+            supported_recv_formats=manager.supported_recv_formats,
+            on_invite=manager.on_invite,
+            on_terminated=manager.on_terminated,
+            send_override=self.send_response,
+            signaling_transport=self.transport_name,
+        )
+        self.inbound_endpoint = endpoint
+        self.set_request_handler(endpoint._handle_datagram)
+
+    def send_response(self, raw: bytes, addr: tuple[str, int]) -> None:
         if self.transport_name == "TCP":
-            if self.reader is None:
-                return None
-            raw = await asyncio.wait_for(_read_sip_stream_message(self.reader), timeout=timeout)
-            return sip.parse_message(raw) if raw else None
-        data, _addr = await asyncio.wait_for(self.queue.get(), timeout=timeout)
-        return sip.parse_message(data)
+            if self.writer is not None and not self.writer.is_closing():
+                self.writer.write(raw)
+                asyncio.create_task(self.writer.drain())
+            return
+        if self.transport is not None:
+            self.transport.sendto(raw, addr)
+
+    def _remote_addr(self) -> tuple[str, int]:
+        if self.writer is not None:
+            peer = self.writer.get_extra_info("peername")
+            if peer:
+                return (str(peer[0]), int(peer[1]))
+        return (self.registrar_host, int(self.config.port))
+
+    async def _receive_loop(self) -> None:
+        try:
+            while True:
+                if self.transport_name == "TCP":
+                    if self.reader is None:
+                        await asyncio.sleep(0)
+                        continue
+                    raw = await _read_sip_stream_message(self.reader)
+                    if raw is None:
+                        raise ConnectionError("SIP trunk TCP connection closed")
+                    addr = self._remote_addr()
+                else:
+                    raw, addr = await self.queue.get()
+                try:
+                    msg = sip.parse_message(raw)
+                except Exception as err:
+                    _LOGGER.info("SIP trunk RX malformed from %s:%s: %s", addr[0], addr[1], err)
+                    continue
+                if msg.is_response:
+                    await self.responses.put(msg)
+                    continue
+                _LOGGER.info("SIP trunk RX %s %s from %s:%s", msg.method, msg.uri, addr[0], addr[1])
+                self.last_sip_event = msg.method or "SIP_REQUEST"
+                if self.request_handler is None:
+                    _LOGGER.warning("SIP trunk inbound request ignored: no SIP endpoint is attached")
+                    continue
+                try:
+                    await self.request_handler(raw, addr)
+                except Exception as err:
+                    _LOGGER.exception(
+                        "SIP trunk inbound request failed method=%s uri=%s from=%s:%s error=%s",
+                        msg.method,
+                        msg.uri,
+                        addr[0],
+                        addr[1],
+                        err,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            self.registered = False
+            self.status_code = 0
+            self.status_reason = str(err)
+            _LOGGER.warning("SIP trunk receive loop stopped server=%s transport=%s error=%s", self.config.server, self.transport_name, err)
+        finally:
+            if self.transport_name == "TCP":
+                writer = self.writer
+                self.reader = None
+                self.writer = None
+                if writer is not None and not writer.is_closing():
+                    writer.close()
 
     async def register(self, *, expires: int | None = None, timeout: float = 2.0) -> str:
         expires_value = int(self.config.expires if expires is None else expires)
@@ -158,11 +266,23 @@ class SipTrunkClient:
                 self.registered = False
                 self.status_code = 0
                 self.status_reason = "timeout"
+                _LOGGER.warning(
+                    "SIP trunk registration timed out server=%s transport=%s expires=%s",
+                    self.config.server,
+                    self.transport_name,
+                    expires_value,
+                )
                 return "timeout"
             except Exception as err:
                 self.registered = False
                 self.status_code = 0
                 self.status_reason = str(err)
+                _LOGGER.warning(
+                    "SIP trunk registration transport error server=%s transport=%s error=%s",
+                    self.config.server,
+                    self.transport_name,
+                    err,
+                )
                 return "transport_unreachable"
             if msg is None or not msg.is_response or msg.status_code is None:
                 continue
@@ -189,9 +309,35 @@ class SipTrunkClient:
             if 200 <= msg.status_code < 300:
                 self.registered = expires_value > 0
                 self.expires_at = time.time() + expires_value if self.registered else 0.0
+                if self.registered:
+                    _LOGGER.info(
+                        "SIP trunk registered server=%s transport=%s expires=%ss status=%s %s",
+                        self.config.server,
+                        self.transport_name,
+                        expires_value,
+                        msg.status_code,
+                        msg.reason,
+                    )
+                else:
+                    _LOGGER.info(
+                        "SIP trunk registration ended server=%s transport=%s status=%s %s",
+                        self.config.server,
+                        self.transport_name,
+                        msg.status_code,
+                        msg.reason,
+                    )
                 return "registered" if self.registered else "unregistered"
             self.registered = False
-            return sip.sip_failure_reason(msg.status_code)
+            result = sip.sip_failure_reason(msg.status_code)
+            _LOGGER.warning(
+                "SIP trunk registration rejected server=%s transport=%s status=%s %s reason=%s",
+                self.config.server,
+                self.transport_name,
+                msg.status_code,
+                msg.reason,
+                result,
+            )
+            return result
 
     def _register_headers(self, expires: int, *, auth_value: str = "") -> list[tuple[str, str]]:
         local_uri = self.address_uri

@@ -357,7 +357,7 @@ speaker:
         buffer_duration: 100ms
       - id: intercom_mixer_input    # Intercom audio
         timeout: 10s
-        buffer_duration: 128ms       # 4 intercom wire frames (32 ms each)
+        buffer_duration: 128ms       # Intercom jitter/mixer staging; RTP ptime is negotiated separately.
 
   # ResamplerSpeakers: convert any input rate to 48kHz before the mixer
   - platform: resampler
@@ -523,6 +523,10 @@ intercom_api:
     # not advertise additional formats when wiring intercom_api directly to a
     # fixed-rate mixer input.
     rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1

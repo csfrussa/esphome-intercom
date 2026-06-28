@@ -43,7 +43,6 @@ _SIGNIFICANT_BITS = {
 SUPPORTED_SAMPLE_RATES = frozenset({8000, 12000, 16000, 24000, 32000, 44100, 48000})
 SUPPORTED_CHANNELS = frozenset({1, 2})
 SUPPORTED_FRAME_MS = frozenset({10, 16, 20, 32})
-COMMON_FRAME_MS = 20
 UDP_SAFE_PAYLOAD_BYTES = 1200
 
 
@@ -52,7 +51,7 @@ class AudioFormat:
     sample_rate: int = 16000
     pcm_format: PcmFormat = PcmFormat.S16LE
     channels: int = 1
-    frame_ms: int = 32
+    frame_ms: int = 16
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pcm_format", PcmFormat(self.pcm_format))
@@ -105,11 +104,12 @@ class AudioFormat:
         return f"{self.sample_rate}:{self.pcm_format.value}:{self.channels}:{self.frame_ms}"
 
 
-DEFAULT_AUDIO_FORMAT = AudioFormat()
+DEFAULT_AUDIO_FORMAT = AudioFormat(16000, PcmFormat.S16LE, 1, 16)
+PREFERRED_FRAME_MS = (10, 16, 20, 32)
 
 
 def _browser_formats(*, channels: tuple[int, ...]) -> tuple[AudioFormat, ...]:
-    formats: list[AudioFormat] = [DEFAULT_AUDIO_FORMAT]
+    formats: list[AudioFormat] = []
     for rate in sorted(SUPPORTED_SAMPLE_RATES):
         for frame_ms in sorted(SUPPORTED_FRAME_MS):
             if (rate * frame_ms) % 1000 != 0:
@@ -125,6 +125,8 @@ def _browser_formats(*, channels: tuple[int, ...]) -> tuple[AudioFormat, ...]:
 HA_BROWSER_TX_FORMATS = _browser_formats(channels=(1,))
 HA_BROWSER_RX_FORMATS = _browser_formats(channels=(1, 2))
 HA_SIP_PCM_FORMATS = (
+    AudioFormat(48000, PcmFormat.S16LE, 2, 20),
+    AudioFormat(48000, PcmFormat.S16LE, 1, 20),
     AudioFormat(32000, PcmFormat.S16LE, 1, 16),
     AudioFormat(16000, PcmFormat.S16LE, 1, 16),
     AudioFormat(48000, PcmFormat.S16LE, 1, 10),
@@ -132,6 +134,7 @@ HA_SIP_PCM_FORMATS = (
     AudioFormat(16000, PcmFormat.S16LE, 1, 10),
     AudioFormat(16000, PcmFormat.S16LE, 1, 32),
     AudioFormat(16000, PcmFormat.S16LE, 1, 20),
+    AudioFormat(8000, PcmFormat.S16LE, 1, 20),
 )
 HA_SIP_PCM_TX_FORMATS = HA_SIP_PCM_FORMATS
 HA_SIP_PCM_RX_FORMATS = HA_SIP_PCM_FORMATS
@@ -160,7 +163,7 @@ def audio_format_from_wire(
 
 def parse_audio_format_token(token: str | None) -> AudioFormat:
     if not token:
-        return DEFAULT_AUDIO_FORMAT
+        raise ValueError("audio format token is required")
     parts = [part.strip() for part in token.split(":")]
     if len(parts) != 4:
         raise ValueError(f"invalid audio format token '{token}'")
@@ -175,10 +178,10 @@ def parse_audio_format_token(token: str | None) -> AudioFormat:
 
 def parse_audio_format_list(value: str | None) -> list[AudioFormat]:
     if not value:
-        return [DEFAULT_AUDIO_FORMAT]
+        return []
     formats = [parse_audio_format_token(part.strip()) for part in value.split(";") if part.strip()]
     if not formats:
-        return [DEFAULT_AUDIO_FORMAT]
+        return []
     if len(formats) > 8:
         raise ValueError("too many audio formats (max 8)")
     return formats
@@ -206,3 +209,18 @@ def choose_common_format(preferred: list[AudioFormat], supported: list[AudioForm
         if fmt in supported_set:
             return fmt
     return None
+
+
+def choose_common_frame_ms(*format_lists: list[AudioFormat]) -> int | None:
+    available: set[int] | None = None
+    for formats in format_lists:
+        frames = {fmt.frame_ms for fmt in formats}
+        if not frames:
+            return None
+        available = frames if available is None else available & frames
+    if not available:
+        return None
+    for frame_ms in PREFERRED_FRAME_MS:
+        if frame_ms in available:
+            return frame_ms
+    return min(available)

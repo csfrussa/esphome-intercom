@@ -21,6 +21,7 @@ ROUTES = ("direct", "ha_bridge", "ha_softphone", "explicit_uri", "name_via_ha")
 DIRECTIONS = ("esp_to_esp", "esp_to_ha", "ha_to_esp", "pc_to_esp", "esp_to_pc")
 AUDIO_ROLES = ("full_duplex", "mic_only", "speaker_only", "muted_mic", "muted_speaker")
 FORMATS = (
+    "16000:s16le:1:16",
     "16000:s16le:1:32",
     "16000:s16le:1:20",
     "48000:s16le:1:10",

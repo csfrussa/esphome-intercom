@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Any, Awaitable, Callable
 
-from .audio_format import AudioFormat, DEFAULT_AUDIO_FORMAT
+from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS
 from .const import INTERCOM_RTP_PORT
 from . import sdp, sip
 
@@ -183,7 +183,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
     ) -> None:
         self.local_ip = local_ip
         self.local_rtp_port = local_rtp_port or INTERCOM_RTP_PORT
-        base_formats = supported_formats or [DEFAULT_AUDIO_FORMAT]
+        base_formats = supported_formats or list(HA_SIP_PCM_FORMATS)
         self.supported_send_formats = supported_send_formats or base_formats
         self.supported_recv_formats = supported_recv_formats or base_formats
         self.on_invite = on_invite
@@ -193,6 +193,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.transport: asyncio.DatagramTransport | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
         self.active_dialogs: dict[str, _ActiveDialog] = {}
+        self._logged_incompatible_invites: set[str] = set()
         self.last_sip_event = ""
         self.last_sip_status_code = 0
         self.last_sip_reason = ""
@@ -428,8 +429,28 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 self.supported_recv_formats,
             )
             if selected is None:
-                _LOGGER.info("SIP INVITE rejected: no compatible PCM media in SDP")
+                call_id = request.header("Call-ID")
+                if call_id not in self._logged_incompatible_invites:
+                    self._logged_incompatible_invites.add(call_id)
+                    try:
+                        offered = ", ".join(sdp.offered_media_descriptions(request.body))
+                    except Exception as err:
+                        offered = f"unparseable SDP media: {err}"
+                    _LOGGER.info(
+                        "SIP INVITE rejected: no compatible PCM media in SDP call_id=%s offered=[%s] local_send=[%s] local_recv=[%s]",
+                        call_id,
+                        offered,
+                        ", ".join(fmt.wire_token() for fmt in self.supported_send_formats),
+                        ", ".join(fmt.wire_token() for fmt in self.supported_recv_formats),
+                    )
                 return None
+            _LOGGER.info(
+                "SIP INVITE media selected call_id=%s tx=%s rx=%s offered=[%s]",
+                request.header("Call-ID"),
+                selected.send.wire_token(),
+                selected.recv.wire_token(),
+                ", ".join(sdp.offered_media_descriptions(request.body)),
+            )
             remote = sdp.parse_sdp(request.body)
             caller = _identity_header(request.header("X-Intercom-Caller-Name"))
             target = _identity_header(request.header("X-Intercom-Dest-Name"))

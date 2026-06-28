@@ -11,7 +11,8 @@ const MODULE_VERSION = (() => {
 const { RINGTONE_REPEAT_MS, playIntercomRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
-const DEFAULT_FORMAT = Object.freeze({ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 32 });
+const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
+const FRAME_MS = Object.freeze([10, 16, 20, 32]);
 
 class IntercomEngine extends EventTarget {
   constructor() {
@@ -22,8 +23,8 @@ class IntercomEngine extends EventTarget {
     this._deviceId = "";
     this._callId = "";
     this._audioMode = "full_duplex";
-    this._txFormat = DEFAULT_FORMAT;
-    this._rxFormat = DEFAULT_FORMAT;
+    this._txFormat = null;
+    this._rxFormat = null;
     this._lastSessionPayload = null;
     this._mediaStream = null;
     this._audioContext = null;
@@ -292,35 +293,38 @@ class IntercomEngine extends EventTarget {
     return new Ctor();
   }
 
-  _parseFormat(token, defaultFormat = DEFAULT_FORMAT) {
+  _parseFormat(token, label = "audio format") {
     const parts = String(token || "").split(":");
-    if (parts.length !== 4) return defaultFormat;
+    if (parts.length !== 4) throw new Error(`${label} missing negotiated PCM token`);
     const sampleRate = Number(parts[0]);
     const pcmFormat = parts[1];
     const channels = Number(parts[2]);
     const frameMs = Number(parts[3]);
-    if (!Number.isFinite(sampleRate) || !Number.isFinite(channels) || !Number.isFinite(frameMs)) return defaultFormat;
-    if (!["s16le", "s24le", "s24le_in_s32", "s32le"].includes(pcmFormat)) return defaultFormat;
+    if (!Number.isFinite(sampleRate) || !Number.isFinite(channels) || !Number.isFinite(frameMs)) {
+      throw new Error(`${label} has invalid numeric fields`);
+    }
+    if (!PCM_FORMATS.includes(pcmFormat)) throw new Error(`${label} has unsupported PCM format ${pcmFormat}`);
+    if (![1, 2].includes(channels)) throw new Error(`${label} has unsupported channel count ${channels}`);
+    if (!FRAME_MS.includes(frameMs)) throw new Error(`${label} has unsupported frame_ms ${frameMs}`);
+    if ((sampleRate * frameMs) % 1000 !== 0) throw new Error(`${label} does not form whole PCM frames`);
     return { sampleRate, pcmFormat, channels, frameMs };
   }
 
-  _chooseDeviceFormat(deviceInfo, key, defaultFormat = DEFAULT_FORMAT) {
-    const formats = Array.isArray(deviceInfo?.[key]) ? deviceInfo[key] : [];
-    return this._parseFormat(formats[0], defaultFormat);
-  }
-
-  _resolveSessionFormats(deviceInfo, negotiated = null) {
+  _resolveSessionFormats(negotiated = null) {
     const txFormat = negotiated?.selected_tx_format || negotiated?.tx_format;
     const rxFormat = negotiated?.selected_rx_format || negotiated?.rx_format;
+    if (!txFormat || !rxFormat) {
+      throw new Error("SIP session missing selected_tx_format/selected_rx_format");
+    }
     return {
-      tx: this._parseFormat(txFormat, this._chooseDeviceFormat(deviceInfo, "rx_formats")),
-      rx: this._parseFormat(rxFormat, this._chooseDeviceFormat(deviceInfo, "tx_formats")),
+      tx: this._parseFormat(txFormat, "selected_tx_format"),
+      rx: this._parseFormat(rxFormat, "selected_rx_format"),
     };
   }
 
   async _setupAudio(deviceInfo, negotiated = null) {
     this._audioMode = this._normaliseAudioMode(deviceInfo?.audio_mode);
-    const formats = this._resolveSessionFormats(deviceInfo, negotiated);
+    const formats = this._resolveSessionFormats(negotiated);
     this._txFormat = formats.tx;
     this._rxFormat = formats.rx;
     const sendToEsp = this._audioMode === "full_duplex" || this._audioMode === "speaker_only";
