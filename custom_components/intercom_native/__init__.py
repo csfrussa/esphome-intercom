@@ -21,7 +21,7 @@ from homeassistant.exceptions import ConfigEntryError
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 from homeassistant.helpers import config_validation as cv
-from homeassistant.components import network
+from homeassistant.components import network, persistent_notification
 
 from .const import (
     CONF_ASSIST_INTENTS,
@@ -1905,7 +1905,8 @@ async def _handle_sip_account_create_service(call: ServiceCall) -> None:
     accounts = _sip_account_dicts(hass)
     if any(str(item.get("username") or "").lower() == username.lower() for item in accounts) and not replace_existing:
         raise ServiceValidationError(f"SIP account {username} already exists")
-    password = str(call.data.get("password") or "").strip() or generate_password()
+    provided_password = str(call.data.get("password") or "").strip()
+    password = provided_password or generate_password()
     account = SipAccount(username=username, display_name=display_name, password=password, enabled=bool(call.data.get("enabled", True)))
     accounts = [item for item in accounts if str(item.get("username") or "").lower() != username.lower()]
     accounts.append(dump_account(account))
@@ -1916,6 +1917,18 @@ async def _handle_sip_account_create_service(call: ServiceCall) -> None:
         {"state": "sip_account_created", "username": username, "display_name": display_name, "password": password},
         "sip",
     )
+    if not provided_password:
+        persistent_notification.async_create(
+            hass,
+            (
+                f"SIP account `{username}` created for `{display_name}`.\n\n"
+                f"Password: `{password}`\n\n"
+                "This generated password is shown only now. Save it in the softphone "
+                "configuration or rotate the account password later."
+            ),
+            title="Intercom Native SIP Account",
+            notification_id=f"{DOMAIN}_sip_account_{username.lower()}",
+        )
     _LOGGER.info("SIP local account created username=%s enabled=%s", username, account.enabled)
 
 

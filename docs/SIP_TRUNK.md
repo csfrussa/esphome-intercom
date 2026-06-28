@@ -62,19 +62,27 @@ Example user flow:
 2. HA answers the trunk leg.
 3. The caller sends post-dial digits such as `100`.
 4. HA routes the call to the matching local phonebook target.
-5. If no route matches before timeout, HA uses `trunk_inbound_default_target`.
+5. If no digits/route hint arrive before timeout, HA rings the HA softphone or
+   the configured default target.
+6. If explicit digits arrive but do not resolve, HA terminates the answered leg
+   as `route_not_found`.
 
 No final `#` is required. `trunk_dtmf_terminator` can be set if a deployment
 wants one, but the normal path is a short timeout. Ambiguous prefixes are not
 rejected during setup: HA collects within the timeout, tries the final digit
-buffer, logs unresolved buffers and then uses the default target.
+buffer, and fails loudly if that explicit buffer cannot be resolved.
+
+If a provider/PBX does not advertise `telephone-event` in the SDP offer and
+does not forward SIP INFO DTMF, HA has no standard digit channel to inspect. In
+that case the call follows the "no route hint" path and rings HA/default.
 
 ## Media
 
 The provider leg and local leg are separate SIP dialogs. HA bridges RTP between
-them with the same relay/resampler used for local HA bridge calls. PCM remains
-the project media contract; ESP devices still reject unsupported media with
-standard SIP errors.
+them with the same relay/resampler used for local HA bridge calls. ESP devices
+remain PCM-only and reject unsupported media with standard SIP errors. HA trunk
+and softphone legs may accept common SIP codecs such as OPUS, PCMA or PCMU,
+then convert toward ESP PCM when the route requires it.
 
 ## Observability
 

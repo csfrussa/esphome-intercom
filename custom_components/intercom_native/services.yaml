@@ -377,7 +377,7 @@ sip_account_create:
   fields:
     username:
       name: Username
-      description: SIP username and central phonebook ID, for example SmartphoneDany.
+      description: SIP username and central phonebook ID, for example MobileOffice.
       required: true
       selector:
         text:
@@ -389,7 +389,7 @@ sip_account_create:
         text:
     password:
       name: Password
-      description: Optional password. If omitted, Home Assistant generates one and emits it once in the call event stream.
+      description: Optional password. If omitted, Home Assistant generates one and shows it once in the call event stream and in a persistent notification.
       required: false
       selector:
         text:

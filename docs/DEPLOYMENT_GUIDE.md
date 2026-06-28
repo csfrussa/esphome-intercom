@@ -1,13 +1,33 @@
 # Deployment Guide
 
+This guide maps the maintained YAMLs and the Home Assistant integration to the
+current VoIP model. The old TCP/UDP intercom split is gone: every device is a
+SIP phone, and `protocol: udp` or `protocol: tcp` only selects SIP signaling
+transport.
+
+## YAML Tree
+
+```text
+yamls/
+├── intercom-only/       SIP phone + audio stack, no wake word or VA
+├── full-experience/     SIP phone + audio stack + MWW/Voice Assistant/media
+├── experimental/        bring-up/reference profiles
+└── host/                local-only ESPHome host test YAMLs, gitignored
+```
+
+Choose the maintained YAML closest to the hardware and edit identity, pins and
+network settings. Do not start from historical `*-tcp`, `*-udp` or
+`*-sip` filenames; transport is now inside the `intercom_api` declaration.
+
 ## Network
 
 SIP signaling listens on `sip_port` and may use UDP or TCP. RTP media always
 uses UDP on `rtp_port`.
 
 Use routable IP addresses in `phonebook` or let HA publish the central
-`sensor.intercom_phonebook`. For HA Container/Docker, host networking remains
-the simplest deployment because SIP/RTP use inbound UDP/TCP sockets.
+`sensor.intercom_phonebook`. For HA Container/Docker/LXC, host networking or an
+explicit advertised host remains the simplest deployment because SIP/RTP use
+inbound UDP/TCP sockets.
 
 ## ESP Devices
 
@@ -29,13 +49,29 @@ intercom_api:
 Use `phonebook` for manual peers. Use the HA phonebook subscription package when
 HA should be the authority.
 
+Supported audio shapes:
+
+- full duplex: microphone plus speaker;
+- mic only: sends audio but ignores remote playback;
+- speaker only: plays remote audio but sends no mic RTP;
+- control only: call signaling/phonebook without audio.
+
+These are first-class SIP endpoint shapes. They are not compatibility modes.
+
 ## Home Assistant
 
-Configure `intercom_native` with reachable SIP/RTP ports. If HA is behind NAT,
-VPN, LXC, or multiple subnets, set the integration advertise host so ESPs see a
-reachable SIP Contact/SDP address.
+Configure `intercom_native` with reachable SIP/RTP ports. HA is always the
+local softphone and router/B2BUA. The setup toggles only choose whether HA
+listens for SIP/TCP and/or SIP/UDP; there is no separate "HA PBX" mode.
+
+If HA is behind NAT, VPN, LXC, Docker, or multiple subnets, set the integration
+advertise host so ESPs and softphones see a reachable SIP Contact/SDP address.
 
 Use `ha_bridge` for routed or logical calls that should pass through HA.
+
+Enable the local registrar if standard softphones should register to HA. Create
+accounts with `intercom_native.sip_account_create`; registered clients appear
+in the central phonebook as `kind: softphone`.
 
 ## Optional SIP Trunk
 
@@ -46,15 +82,19 @@ Enable it only when HA must register to a SIP provider or PBX. The trunk setup
 asks for provider transport, server, credentials, optional outbound proxy,
 default inbound target and optional DTMF route map.
 
-Inbound provider calls are answered by HA so it can collect DTMF digits. Normal
-mobile dialers can use post-dial pauses, for example a contact that dials the
-provider number, waits, and sends `100`. HA maps the final digit buffer to a
-local phonebook target or falls back to the configured default target.
+Inbound provider calls are answered by HA so it can collect DTMF digits when
+the provider exposes a standard digit channel. Normal mobile dialers can use
+post-dial pauses, for example a contact that dials the provider number, waits,
+and sends `100`. If no digits arrive, HA rings the configured default target
+(`HA` by default). If digits arrive and do not resolve, HA terminates the
+answered leg with `route_not_found`.
 
 ## Media
 
 ESP accepts compatible PCM SDP only. Unsupported codecs or oversized/unsupported
 formats must receive a SIP failure such as `488 Not Acceptable Here`.
 
-HA can bridge and resample between supported PCM formats. If a conversion cannot
+HA can bridge and resample between supported formats. Trunk/softphone legs may
+negotiate OPUS, PCMA or PCMU; ESP legs remain PCM-only. HA keeps the best
+negotiated quality per leg when conversion is available. If a conversion cannot
 be built, HA terminates the setup with `media_incompatible`.
