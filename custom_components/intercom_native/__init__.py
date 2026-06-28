@@ -1632,6 +1632,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     trunk_cfg = _get_trunk_config(hass)
     trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
     use_trunk = route.kind == "requires_bridge" and trunk_ready
+    use_softphone_codecs = bool(route.entry is not None and route.entry.kind == "softphone")
     if route.kind == "requires_bridge" and not use_trunk:
         raise ServiceValidationError(f"{target} requires an HA SIP bridge route")
     route_uri = route.sip_uri
@@ -1659,7 +1660,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         remote_rx_formats=remote_rx_formats,
         target=target,
     )
-    if use_trunk:
+    if use_trunk or use_softphone_codecs:
         sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
         sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
     local_rtp_port = _allocate_sip_rtp_port(hass)
@@ -1675,7 +1676,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or ""),
         password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if use_trunk else "",
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
-        include_common_codecs=use_trunk,
+        include_common_codecs=use_trunk or use_softphone_codecs,
     )
     if not use_trunk:
         _enable_reused_sip_tcp_connection(
