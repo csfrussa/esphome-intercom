@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 import numpy as np
@@ -16,6 +16,8 @@ _LOGGER = logging.getLogger(__name__)
 class OpusDecoder:
     sample_rate: int
     channels: int
+    _av: object = field(init=False, repr=False)
+    _ctx: object = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         try:
@@ -51,6 +53,8 @@ class OpusEncoder:
     sample_rate: int
     channels: int
     bit_rate: int = 64000
+    _av: object = field(init=False, repr=False)
+    _ctx: object = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         try:
