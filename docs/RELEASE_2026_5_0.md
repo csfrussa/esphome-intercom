@@ -11,9 +11,8 @@ The active architecture is intentionally breaking:
 - Home Assistant is a SIP softphone and SIP router/bridge.
 - SDP offer/answer selects PCM media formats.
 - RTP/UDP carries media.
-- Endpoint rows use `Name|host|sip_port|rtp_port|sip_udp` or the extended
-  `Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp`
-  shape.
+- Endpoint rows are SIP phonebook entries with a required display name and
+  optional address, ports, transport, extension and audio capabilities.
 - `intercom_api.protocol` selects SIP signaling transport only: `udp` means
   SIP/UDP and `tcp` means SIP/TCP.
 

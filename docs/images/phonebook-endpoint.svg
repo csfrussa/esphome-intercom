@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760"><defs>
+  <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#536173"/></marker>
+  <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#316bd6"/></marker>
+  <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#3a9b5f"/></marker>
+  <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#d78b1f"/></marker>
+  <style>
+  .bg { fill: #f7f8fb; }
+  .title { font: 700 34px sans-serif; fill: #172033; }
+  .subtitle { font: 400 17px sans-serif; fill: #516070; }
+  .box { fill: white; stroke: #c8d0dd; stroke-width: 2; rx: 18; }
+  .box-esp { fill: #eef8f2; stroke: #3a9b5f; }
+  .box-ha { fill: #eef4ff; stroke: #316bd6; }
+  .box-ext { fill: #fff6e8; stroke: #d78b1f; }
+  .box-soft { fill: #f6efff; stroke: #8157d9; }
+  .box-warn { fill: #fff0f0; stroke: #d94f4f; }
+  .label { font: 700 20px sans-serif; fill: #172033; }
+  .small { font: 400 14px sans-serif; fill: #415064; }
+  .tiny { font: 400 12px sans-serif; fill: #526173; }
+  .pill { fill: #172033; opacity: .08; rx: 10; }
+  .line { stroke: #536173; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+  .line2 { stroke: #316bd6; stroke-width: 4; fill: none; marker-end: url(#arrow-blue); }
+  .line-green { stroke: #3a9b5f; stroke-width: 4; fill: none; marker-end: url(#arrow-green); }
+  .line-orange { stroke: #d78b1f; stroke-width: 4; fill: none; marker-end: url(#arrow-orange); }
+  .dash { stroke-dasharray: 10 8; }
+  .legend { font: 600 13px sans-serif; fill: #172033; }
+</style></defs><rect class="bg" x="0" y="0" width="1400" height="760"/>
+<text class="title" x="54" y="62">SIP phonebook and dial plan</text><text class="subtitle" x="56" y="92">One roster feeds ESPs, HA card and routing decisions; SIP is implicit</text>
+<rect class="box box-esp" x="60" y="145" width="280" height="135"/>
+<text class="label" x="82" y="181">ESP endpoints</text>
+<text class="small" x="82" y="209">publish intercom_endpoint</text>
+<text class="small" x="82" y="231">name, host, ports</text>
+<text class="small" x="82" y="253">TX/RX audio formats</text>
+<rect class="box box" x="60" y="335" width="280" height="135"/>
+<text class="label" x="82" y="371">Manual/static contacts</text>
+<text class="small" x="82" y="399">name is required</text>
+<text class="small" x="82" y="421">address/ports optional</text>
+<text class="small" x="82" y="443">numbers and aliases</text>
+<rect class="box box-soft" x="60" y="525" width="280" height="135"/>
+<text class="label" x="82" y="561">Local SIP accounts</text>
+<text class="small" x="82" y="589">softphone REGISTER</text>
+<text class="small" x="82" y="611">Contact from registrar</text>
+<text class="small" x="82" y="633">kind: softphone</text>
+<rect class="box box-ha" x="520" y="245" width="360" height="240"/>
+<text class="label" x="542" y="281">HA central roster</text>
+<text class="small" x="542" y="309">sensor.intercom_phonebook</text>
+<text class="small" x="542" y="331">canonical endpoint rows</text>
+<text class="small" x="542" y="353">enabled, kind, number</text>
+<text class="small" x="542" y="375">sip_uri / transport</text>
+<text class="small" x="542" y="397">tx_formats / rx_formats</text>
+<rect class="box box-esp" x="1040" y="110" width="300" height="120"/>
+<text class="label" x="1062" y="146">Direct SIP</text>
+<text class="small" x="1062" y="174">complete URI/IP/transport</text>
+<text class="small" x="1062" y="196">compatible media</text>
+<text class="small" x="1062" y="218">ESP calls endpoint</text>
+<rect class="box box-ha" x="1040" y="285" width="300" height="120"/>
+<text class="label" x="1062" y="321">HA bridge</text>
+<text class="small" x="1062" y="349">unknown name or number</text>
+<text class="small" x="1062" y="371">cross transport/media</text>
+<text class="small" x="1062" y="393">two SIP dialogs</text>
+<rect class="box box-ext" x="1040" y="460" width="300" height="120"/>
+<text class="label" x="1062" y="496">Trunk route</text>
+<text class="small" x="1062" y="524">external number</text>
+<text class="small" x="1062" y="546">provider registered</text>
+<text class="small" x="1062" y="568">propagate SIP result</text>
+<rect class="box box-warn" x="1040" y="610" width="300" height="120"/>
+<text class="label" x="1062" y="646">Reject clearly</text>
+<text class="small" x="1062" y="674">disabled / not found</text>
+<text class="small" x="1062" y="696">media incompatible</text>
+<text class="small" x="1062" y="718">trunk unavailable</text>
+<path class="line" d="M340 210 C425 210 455 345 520 345"/>
+<path class="line" d="M340 400 C425 400 455 345 520 345"/>
+<path class="line" d="M340 590 C425 590 455 345 520 345"/>
+<path class="line2" d="M880 315 C945 250 980 180 1040 170"/>
+<path class="line2" d="M880 350 C950 350 980 345 1040 345"/>
+<path class="line-orange" d="M880 390 C950 430 985 505 1040 520"/>
+<path class="line" d="M880 430 C950 520 985 650 1040 670"/>
+<rect class="pill" x="552" y="520" width="140" height="24"/><text class="tiny" x="564" y="537">ESP roster sync</text>
+<rect class="pill" x="704" y="520" width="150" height="24"/><text class="tiny" x="716" y="537">HA card contacts</text>
+<rect class="pill" x="610" y="558" width="150" height="24"/><text class="tiny" x="622" y="575">automation services</text>
+</svg>

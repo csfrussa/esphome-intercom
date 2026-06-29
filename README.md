@@ -335,7 +335,7 @@ Routing is deterministic:
 
 ### Topology At A Glance
 
-![SIP router/B2BUA topology](docs/images/pbx-lite-topology.png)
+![SIP router/B2BUA topology](docs/images/sip-topology.png)
 
 How to read it:
 
@@ -604,9 +604,9 @@ SIP/RTP cleanly.
 
 ### Endpoint and phonebook model
 
-![Endpoint-first phonebook](docs/images/phonebook-endpoint.png)
+![SIP phonebook and dial plan](docs/images/phonebook-endpoint.png)
 
-_Every callable peer becomes a canonical endpoint row. HA merges rows into the roster consumed by ESPs and the card._
+_ESP endpoint publication, manual contacts and local SIP registrations become one HA-managed roster. Route decisions are direct SIP, HA bridge, trunk or explicit reject._
 
 Standard HA-managed firmware uses the native ESPHome API endpoint sensor plus
 `sensor.intercom_phonebook`. HA is the phonebook authority whenever it is part
@@ -1087,7 +1087,7 @@ ESP peers call each other directly only when the phonebook entry contains a
 complete direct SIP endpoint and compatible media. Numeric targets, unresolved
 names, trunk calls and bridge-required routes go to HA.
 
-![Cross-protocol ESP call](docs/images/cross-protocol-bridge.gif)
+![Cross-transport SIP bridge](docs/images/cross-transport-bridge.gif)
 
 _ESP-to-ESP routing depends on the selected destination and transport compatibility. In this demo a UDP device calls a TCP device through HA SIP router/B2BUA._
 
