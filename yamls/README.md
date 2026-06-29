@@ -62,9 +62,17 @@ published. Reusable debug building blocks are public packages under
 
 ## Product mode
 
-Each ESP flashed with these YAMLs is an independent extension on a peer-to-peer fabric. Same-transport devices can call each other directly from their local phonebook; in the current standard YAMLs HA is the stable phonebook authority. When HA is on the network it joins the fabric as one more extension and can also act as a SIP bridge via `ha_bridge: true`.
+Each ESP flashed with these YAMLs is an independent SIP phone on the local
+fabric. Same-transport devices can call each other directly when the HA-managed
+roster provides complete direct SIP endpoint data. Names, numbers and
+cross-transport routes go to HA, which is the stable roster authority and SIP
+bridge/B2BUA.
 
-There is one product mode: SIP-only phone mode. Phonebook / contacts / destination / caller entities are always exposed. `protocol: udp` selects SIP/UDP signaling and `protocol: tcp` selects SIP/TCP signaling; RTP media remains UDP. Direct contacts dial from the ESP phonebook, and logical contacts can route through HA with `ha_bridge: true`.
+There is one product mode: SIP-only phone mode. Phonebook, contacts,
+destination and caller entities are always exposed. `protocol: udp` selects
+SIP/UDP signaling and `protocol: tcp` selects SIP/TCP signaling; audio remains
+RTP/UDP in the current profile. Static contacts are optional local fallbacks;
+normal shared routing comes from `sensor.intercom_phonebook`.
 
 ## Optional packages
 

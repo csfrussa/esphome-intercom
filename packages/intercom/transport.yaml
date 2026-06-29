@@ -4,8 +4,8 @@
 #
 # Configures intercom_api as a standard SIP phone. `protocol` selects only the
 # SIP signaling transport: UDP is the default LAN mode; TCP is useful when the
-# network/proxy handles stream signaling better. RTP media remains UDP in both
-# modes and negotiates PCM through SDP.
+# network/proxy handles stream signaling better. Audio remains RTP/UDP in the
+# current profile and negotiates PCM through SDP.
 # =============================================================================
 
 substitutions:
