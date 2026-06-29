@@ -1,5 +1,6 @@
 const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
 const FRAME_MS = Object.freeze([10, 16, 20, 32]);
+const TX_BUFFER_POOL = 4;
 
 function normaliseFormat(value) {
   if (!value) throw new Error("recorder worklet requires negotiated PCM format");
@@ -30,8 +31,11 @@ class RecorderProcessor extends AudioWorkletProcessor {
     super();
     this._format = normaliseFormat(options?.processorOptions?.format);
     this._frameBytes = this._format.frameSamples * this._format.channels * this._format.bytesPerSample;
-    this._buffer = new ArrayBuffer(this._frameBytes);
-    this._view = new DataView(this._buffer);
+    this._buffers = Array.from({ length: TX_BUFFER_POOL }, () => new ArrayBuffer(this._frameBytes));
+    this._views = this._buffers.map((buffer) => new DataView(buffer));
+    this._bufferIndex = 0;
+    this._buffer = this._buffers[this._bufferIndex];
+    this._view = this._views[this._bufferIndex];
     this._writeSample = 0;
     this._position = 0;
     this._lastSample = 0;
@@ -62,9 +66,10 @@ class RecorderProcessor extends AudioWorkletProcessor {
     if (this._writeSample !== this._format.frameSamples) return;
 
     const frame = this._buffer;
-    this.port.postMessage({ type: "audio", buffer: frame }, [frame]);
-    this._buffer = new ArrayBuffer(this._frameBytes);
-    this._view = new DataView(this._buffer);
+    this.port.postMessage({ type: "audio", buffer: frame });
+    this._bufferIndex = (this._bufferIndex + 1) % this._buffers.length;
+    this._buffer = this._buffers[this._bufferIndex];
+    this._view = this._views[this._bufferIndex];
     this._writeSample = 0;
   }
 

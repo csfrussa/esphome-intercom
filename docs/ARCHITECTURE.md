@@ -147,6 +147,15 @@ Terminal reasons are backend-owned and may contain exact SIP/application
 reasons. The frontend must display the supplied reason rather than mapping it
 through a private parallel FSM.
 
+HA runtime call ownership is centralized in `CallRegistry`. Pending routes,
+pending INVITEs, pre-answered trunk legs, HA softphone media, SIP clients,
+bridge clients, relays and client watcher tasks live behind that registry
+instead of separate mutable maps. Service handlers, inbound SIP callbacks,
+WebSocket audio and debug snapshots all derive active call information from the
+same session/leg registry. This avoids HA softphone state being polluted by
+router-only bridges and makes bridge teardown propagate BYE/cleanup through the
+same call session.
+
 ## Routing
 
 Direct SIP targets are dialed as SIP URIs. Logical names are resolved through
@@ -199,6 +208,22 @@ field. Optional fields include:
 `kind: softphone` is reserved for standard SIP clients registered to HA's local
 registrar. SIP is implicit; there is no `kind: sip`.
 
+ESP phonebook storage is bounded. The runtime accepts up to 64 normalized
+contacts per ESP phonebook and replaces existing names in place. Larger rosters
+must be filtered by HA before push rather than relying on dynamic ESP heap
+growth during call handling.
+
+## SIP/TCP Backpressure
+
+Every SIP/TCP connection has one governed writer task. Producers enqueue SIP
+messages through `SipTcpWriter`; the writer owns `StreamWriter.write()` and
+`drain()`. Queue pressure is explicit and logged instead of spawning ad-hoc
+drain tasks or writing from multiple call paths. Closing or reconnecting a TCP
+leg first closes the governed writer and only then replaces the stream.
+
+This applies to outbound SIP clients, the TCP SIP listener and trunk
+registration/call legs. UDP signaling still sends datagrams directly.
+
 ## Frontend Contract
 
 Cards do not own call control state.
@@ -215,6 +240,13 @@ left/right presses go to the ESP and the selected contact shown by the card is
 the ESP selected contact. HA softphone cards are synchronized through
 `intercom_native` snapshots and events. Browser audio belongs to the HA
 softphone leg and is attached through `/api/intercom_native/ws`.
+
+Browser capture runs inside an AudioWorklet. The worklet uses a small reusable
+frame pool and posts fixed negotiated frames to the engine. The engine reuses a
+single WebSocket send buffer for the negotiated frame size. Playback is paced by
+the adaptive jitter buffer in the playback worklet, not by fixed UI-thread
+timers. This keeps browser audio resilient across local LAN, HA app, SSL proxy
+and remote WebSocket paths without tuning one set of magic delay constants.
 
 ## Observability
 

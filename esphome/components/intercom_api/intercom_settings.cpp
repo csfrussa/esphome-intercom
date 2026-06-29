@@ -387,11 +387,13 @@ std::string IntercomApi::normalize_roster_json_for_transport_(const std::string 
   }
 
   std::vector<JsonRosterSlot> slots;
+  slots.reserve(std::min(static_cast<size_t>(cJSON_GetArraySize(contacts)), Phonebook::MAX_CONTACTS));
   JsonRosterSlot ha_slot;
   bool has_ha = false;
 
   const cJSON *item = nullptr;
   cJSON_ArrayForEach(item, contacts) {
+    if (slots.size() >= Phonebook::MAX_CONTACTS) break;
     JsonRosterSlot slot;
     if (!parse_json_roster_slot(item, &slot)) continue;
     if (slot.name == this->device_name_ || slot.name == this->device_route_id_) continue;
@@ -486,11 +488,13 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
   }
 
   std::vector<JsonRosterSlot> slots;
+  slots.reserve(std::min(static_cast<size_t>(cJSON_GetArraySize(contacts)), Phonebook::MAX_CONTACTS));
   JsonRosterSlot ha_slot;
   bool has_ha = false;
 
   const cJSON *item = nullptr;
   cJSON_ArrayForEach(item, contacts) {
+    if (slots.size() >= Phonebook::MAX_CONTACTS) break;
     JsonRosterSlot slot;
     if (!parse_json_roster_slot(item, &slot)) continue;
     if (slot.name == this->device_name_ || slot.name == this->device_route_id_) continue;
@@ -513,8 +517,9 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
   const uint16_t ha_local_rtp_port = ha_slot.rtp_port;
 
   std::vector<ContactEntry> entries;
-  entries.reserve(slots.size() * 2);
+  entries.reserve(std::min(Phonebook::MAX_CONTACTS, slots.size() * 2));
   for (const auto &slot : slots) {
+    if (entries.size() >= Phonebook::MAX_CONTACTS) break;
     ContactEndpointKind endpoint_kind = ContactEndpointKind::UNKNOWN;
     Phonebook::parse_endpoint_kind(slot.endpoint_kind, &endpoint_kind);
     const bool missing_sip_transport = endpoint_kind == ContactEndpointKind::SIP && slot.sip_transport.empty();
@@ -558,6 +563,7 @@ bool IntercomApi::apply_roster_json_contacts_(const std::string &roster_json) {
     entries.push_back(std::move(entry));
 
     if (has_ha && !slot.number.empty() && slot.number != slot.name && slot.kind != "ha") {
+      if (entries.size() >= Phonebook::MAX_CONTACTS) break;
       ContactEntry alias;
       alias.name = slot.number;
       alias.endpoint_kind = local_endpoint_kind;

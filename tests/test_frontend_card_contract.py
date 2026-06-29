@@ -119,7 +119,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._applySoftphoneSnapshot(data)", body)
         self.assertIn("this._ensureHaSoftphoneAudioPath(data)", body)
 
-    def test_frontend_has_no_legacy_esp_call_control_ws_commands(self) -> None:
+    def test_frontend_has_no_esp_call_control_ws_commands(self) -> None:
         engine = (ROOT / "custom_components" / "intercom_native" / "frontend" / "intercom-engine.js").read_text()
         for token in (
             "ENGINE_TRANSITIONS",

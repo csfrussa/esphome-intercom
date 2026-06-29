@@ -6,11 +6,13 @@ from dataclasses import dataclass, field
 import json
 import re
 from urllib.parse import unquote
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .router import RouteDecision
 
 
 RosterKind = Literal["ha", "esp", "phone", "softphone", "group"]
-RouteKind = Literal["direct", "bridge", "requires_bridge", "group", "trunk", "reject"]
 _PHONE_RE = re.compile(r"^[+0-9][0-9 .()/-]{2,}$")
 
 
@@ -33,15 +35,6 @@ class RosterEntry:
     @property
     def display_name(self) -> str:
         return self.name or self.id
-
-
-@dataclass(frozen=True, slots=True)
-class RouteDecision:
-    kind: RouteKind
-    target: str
-    sip_uri: str
-    entry: RosterEntry | None = None
-    reason: str = ""
 
 
 def _entry_from_mapping(raw: dict[str, Any]) -> RosterEntry:
@@ -212,14 +205,16 @@ def resolve_target(
     ha_host: str = "",
     ha_sip_port: int = 5060,
     force_ha: bool | None = None,
-) -> RouteDecision:
+) -> "RouteDecision":
+    from .router import RouteAction, RouteDecision, RouteReason
+
     target = target.strip()
     if not target:
         raise RosterError("empty call target")
     if force_ha is not None:
         ha_bridge = bool(force_ha)
     if target.lower().startswith("sip:") and "@" in target:
-        return RouteDecision("direct", target, target)
+        return RouteDecision(RouteAction.DIRECT, target=target, sip_uri=target)
 
     explicit_name = target
     explicit_host = ""
@@ -229,50 +224,46 @@ def resolve_target(
         explicit_host = explicit_host.strip()
         if explicit_name and explicit_host:
             uri = f"sip:{explicit_name}@{explicit_host}"
-            return RouteDecision("direct", explicit_name, uri)
+            return RouteDecision(RouteAction.DIRECT, target=explicit_name, sip_uri=uri)
 
     entry = find_entry(entries, target)
     ha = _ha_entry(entries)
     if ha is None and ha_host:
         ha = RosterEntry(id="HA", name="HA", kind="ha", address=ha_host, metadata={"sip_port": ha_sip_port})
     if entry is not None and not entry.enabled:
-        return RouteDecision("reject", target, "", entry=entry, reason="target_disabled")
+        return RouteDecision(RouteAction.REJECT, target=target, status=403, reason=RouteReason.TARGET_DISABLED, entry=entry)
 
     if entry is not None:
         if entry.kind == "phone":
             number = entry.number or entry.id
-            if ha is None:
-                return RouteDecision("requires_bridge", number, "", entry=entry, reason="ha_required")
-            return RouteDecision("requires_bridge", number, _sip_uri(number, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
+            return RouteDecision(RouteAction.TRUNK, target=number, entry=entry)
         if entry.kind == "softphone":
             if not entry.sip_uri:
-                return RouteDecision("reject", entry.id, "", entry=entry, reason="transport_unreachable")
+                return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
             if not _sip_uri_transport(entry.sip_uri) and not _sip_transport(entry):
-                return RouteDecision("reject", entry.id, "", entry=entry, reason="missing_direct_transport")
-            return RouteDecision("direct", entry.id, entry.sip_uri, entry=entry)
+                return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.NO_DIRECT_TRANSPORT, entry=entry)
+            return RouteDecision(RouteAction.DIRECT, target=entry.id, sip_uri=entry.sip_uri, entry=entry)
         if entry.kind == "group":
-            return RouteDecision("group", entry.id, "", entry=entry)
+            return RouteDecision(RouteAction.GROUP, target=entry.id, entry=entry)
         if (ha_bridge or entry.ha_bridge or not entry.address) and ha is not None and entry.kind != "ha":
-            return RouteDecision("bridge", entry.id, _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
+            return RouteDecision(RouteAction.BRIDGE, target=entry.id, sip_uri=_sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)), entry=entry)
         if entry.address:
             transport = _sip_transport(entry)
             if entry.kind == "esp" and not transport:
                 if ha is not None:
                     return RouteDecision(
-                        "bridge",
-                        entry.id,
-                        _sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
+                        RouteAction.BRIDGE,
+                        target=entry.id,
+                        sip_uri=_sip_uri(entry.id, ha.address, _entry_sip_port(ha), _sip_transport(ha)),
                         entry=entry,
-                        reason="missing_direct_transport",
+                        reason=RouteReason.NO_DIRECT_TRANSPORT,
                     )
-                return RouteDecision("bridge", entry.id, "", entry=entry, reason="missing_direct_transport")
-            return RouteDecision("direct", entry.id, _sip_uri(entry.id, entry.address, _entry_sip_port(entry), transport), entry=entry)
+                return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.NO_DIRECT_TRANSPORT, entry=entry)
+            return RouteDecision(RouteAction.DIRECT, target=entry.id, sip_uri=_sip_uri(entry.id, entry.address, _entry_sip_port(entry), transport), entry=entry)
 
     if _looks_phone(target):
-        if ha is None:
-            return RouteDecision("requires_bridge", target, "", reason="ha_required")
-        return RouteDecision("requires_bridge", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))
+        return RouteDecision(RouteAction.TRUNK, target=target)
 
     if ha is None:
-        return RouteDecision("bridge", target, "", reason="ha_required")
-    return RouteDecision("bridge", target, _sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))
+        return RouteDecision(RouteAction.REJECT, target=target, status=404, reason=RouteReason.ROUTE_NOT_FOUND)
+    return RouteDecision(RouteAction.BRIDGE, target=target, sip_uri=_sip_uri(target, ha.address, _entry_sip_port(ha), _sip_transport(ha)))

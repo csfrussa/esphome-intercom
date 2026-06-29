@@ -251,7 +251,7 @@ class IntercomApi : public Component {
   void prev_contact();
   const std::string &get_current_destination() const;
   // Endpoint of the selected SIP contact. Empty/zero makes start() fail with
-  // transport_unreachable; there is no legacy default peer.
+  // transport_unreachable; there is no implicit default peer.
   const std::string &get_current_contact_ip() const;
   uint16_t get_current_contact_port() const;
   uint16_t get_current_contact_rtp_port() const;

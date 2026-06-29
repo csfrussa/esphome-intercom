@@ -58,6 +58,8 @@ enum class AddResult : uint8_t {
 /// stable across re-adds so next/prev never jump on republish.
 class Phonebook {
  public:
+  static constexpr size_t MAX_CONTACTS = 64;
+
   /// Skip add_one() for this name (the device's own name).
   void set_self_name(const std::string &n) { this->self_name_ = n; }
 
@@ -93,7 +95,7 @@ class Phonebook {
   bool add_batch(const std::string &csv) {
     bool changed = false;
     size_t start = 0;
-    while (start <= csv.size()) {
+    while (start <= csv.size() && this->entries_.size() < MAX_CONTACTS) {
       const size_t comma = csv.find(',', start);
       const size_t end = (comma == std::string::npos) ? csv.size() : comma;
       const AddResult r = this->add_one(csv.substr(start, end - start));
@@ -109,6 +111,7 @@ class Phonebook {
 
   AddResult add_entry(const ContactEntry &entry) {
     if (entry.name.empty()) return AddResult::Rejected;
+    if (this->entries_.size() >= MAX_CONTACTS && !this->contains_(entry.name)) return AddResult::Rejected;
     if (!this->self_name_.empty() && entry.name == this->self_name_) {
       return AddResult::Rejected;
     }
@@ -122,6 +125,7 @@ class Phonebook {
     std::vector<ContactEntry> normalized;
     normalized.reserve(entries.size());
     for (auto &entry : entries) {
+      if (normalized.size() >= MAX_CONTACTS) break;
       if (entry.name.empty()) continue;
       if (!this->self_name_.empty() && entry.name == this->self_name_) continue;
       entry.missing_count = 0;
@@ -364,6 +368,7 @@ class Phonebook {
 
   static std::vector<std::string> split_(const std::string &s, char sep) {
     std::vector<std::string> out;
+    out.reserve(8);
     size_t start = 0;
     while (start <= s.size()) {
       const size_t pos = s.find(sep, start);
@@ -392,6 +397,13 @@ class Phonebook {
   std::vector<ContactEntry> entries_;
   size_t index_{0};
   std::string self_name_;
+
+  bool contains_(const std::string &name) const {
+    for (const auto &entry : this->entries_) {
+      if (entry.name == name) return true;
+    }
+    return false;
+  }
 };
 
 }  // namespace intercom_api

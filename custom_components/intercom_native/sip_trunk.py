@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import logging
 import socket
@@ -12,6 +13,7 @@ from typing import Any, Awaitable, Callable
 from . import sip
 from .sip_auth import build_digest_authorization
 from .sip_client import _SipClientProtocol, _read_sip_stream_message
+from .sip_tcp_io import SipTcpWriter
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ class SipTrunkClient:
         self.transport: asyncio.DatagramTransport | None = None
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
+        self._tcp_writer: SipTcpWriter | None = None
         self.call_id = sip.make_call_id("trunk-register")
         self.local_tag = sip.make_tag()
         self.cseq = 1
@@ -121,6 +124,9 @@ class SipTrunkClient:
             self.transport.close()
             self.transport = None
         if self.writer is not None:
+            if self._tcp_writer is not None:
+                await self._tcp_writer.close()
+                self._tcp_writer = None
             self.writer.close()
             try:
                 await self.writer.wait_closed()
@@ -141,17 +147,26 @@ class SipTrunkClient:
     async def _connect_tcp(self) -> None:
         if self.writer is not None and not self.writer.is_closing():
             return
+        if self._tcp_writer is not None:
+            await self._tcp_writer.close()
+            self._tcp_writer = None
+        if self.writer is not None:
+            self.writer.close()
+            with contextlib.suppress(Exception):
+                await self.writer.wait_closed()
+            self.writer = None
+            self.reader = None
         self.reader, self.writer = await asyncio.wait_for(
             asyncio.open_connection(self.registrar_host, int(self.config.port)),
             timeout=2.0,
         )
+        self._tcp_writer = SipTcpWriter(self.writer, label=f"trunk {self.registrar_host}:{self.config.port}")
 
     async def _send_raw(self, raw: bytes) -> None:
         if self.transport_name == "TCP":
             await self._connect_tcp()
-            assert self.writer is not None
-            self.writer.write(raw)
-            await self.writer.drain()
+            assert self._tcp_writer is not None
+            await self._tcp_writer.send(raw)
             return
         assert self.transport is not None
         self.transport.sendto(raw, (self.registrar_host, int(self.config.port)))
@@ -184,9 +199,8 @@ class SipTrunkClient:
 
     def send_response(self, raw: bytes, addr: tuple[str, int]) -> None:
         if self.transport_name == "TCP":
-            if self.writer is not None and not self.writer.is_closing():
-                self.writer.write(raw)
-                asyncio.create_task(self.writer.drain())
+            if self._tcp_writer is not None:
+                self._tcp_writer.send_nowait(raw)
             return
         if self.transport is not None:
             self.transport.sendto(raw, addr)

@@ -40,7 +40,7 @@ Local targets still resolve through the phonebook first.
 - A number or unresolved target can route through the registered trunk.
 
 If the trunk is configured but not registered, outbound unresolved targets fail
-as routing errors. There is no legacy intercom compatibility route.
+as routing errors. There is no proprietary intercom compatibility route.
 
 ## Inbound Routing
 

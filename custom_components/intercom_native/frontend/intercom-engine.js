@@ -44,6 +44,7 @@ class IntercomEngine extends EventTarget {
     this._ringtoneRequests = new Map();
     this._ringtoneContext = null;
     this._ringtoneTimer = null;
+    this._audioFrameBuffer = null;
 
     window.addEventListener("pagehide", () => this.close("pagehide"));
   }
@@ -261,7 +262,10 @@ class IntercomEngine extends EventTarget {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
     const bytes = new Uint8Array(buffer);
     if (!bytes.byteLength) return;
-    const frame = new Uint8Array(bytes.byteLength + 1);
+    if (!this._audioFrameBuffer || this._audioFrameBuffer.byteLength !== bytes.byteLength + 1) {
+      this._audioFrameBuffer = new Uint8Array(bytes.byteLength + 1);
+    }
+    const frame = this._audioFrameBuffer;
     frame[0] = WS_AUDIO;
     frame.set(bytes, 1);
     this._ws.send(frame);
@@ -484,6 +488,7 @@ class IntercomEngine extends EventTarget {
     if (this._mediaStream) { this._mediaStream.getTracks().forEach((t) => t.stop()); this._mediaStream = null; }
     if (this._playbackNode) { this._playbackNode.disconnect(); this._playbackNode = null; }
     if (this._audioContext) { await this._audioContext.close().catch(() => {}); this._audioContext = null; }
+    this._audioFrameBuffer = null;
     this._forceIdle();
   }
 }

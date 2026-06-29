@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import logging
 import socket
@@ -13,6 +14,7 @@ from . import g711
 from .opus_codec import OpusDecoder, OpusEncoder
 from . import rtp, sdp, sip
 from .sip_auth import build_digest_authorization
+from .sip_tcp_io import SipTcpWriter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -240,6 +242,7 @@ class SipCallClient:
         self.protocol: _SipClientProtocol | None = None
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
+        self._tcp_writer: SipTcpWriter | None = None
         self._tcp_reuse_send: Callable[[bytes], None] | None = None
         self._tcp_reuse_responses: asyncio.Queue[bytes] | None = None
         self._tcp_reuse_close: Callable[[], None] | None = None
@@ -285,6 +288,9 @@ class SipCallClient:
             self.transport.close()
             self.transport = None
         if self.writer is not None:
+            if self._tcp_writer is not None:
+                await self._tcp_writer.close()
+                self._tcp_writer = None
             self.writer.close()
             try:
                 await self.writer.wait_closed()
@@ -312,10 +318,20 @@ class SipCallClient:
     async def _connect_tcp(self, remote_host: str, remote_sip_port: int) -> None:
         if self._tcp_reuse_send is not None:
             return
-        if self.writer is not None:
+        if self.writer is not None and not self.writer.is_closing():
             return
+        if self._tcp_writer is not None:
+            await self._tcp_writer.close()
+            self._tcp_writer = None
+        if self.writer is not None:
+            self.writer.close()
+            with contextlib.suppress(Exception):
+                await self.writer.wait_closed()
+            self.writer = None
+            self.reader = None
         host, port = self._signaling_target(remote_host, int(remote_sip_port))
         self.reader, self.writer = await asyncio.open_connection(host, port)
+        self._tcp_writer = SipTcpWriter(self.writer, label=f"client {host}:{port}")
         sock = self.writer.get_extra_info("socket")
         if sock is not None:
             sockname = sock.getsockname()
@@ -345,9 +361,8 @@ class SipCallClient:
                 self._tcp_reuse_send(raw)
                 return
             await self._connect_tcp(remote_host, remote_sip_port)
-            assert self.writer is not None
-            self.writer.write(raw)
-            await self.writer.drain()
+            assert self._tcp_writer is not None
+            await self._tcp_writer.send(raw)
             return
         assert self.transport is not None
         host, port = self._signaling_target(remote_host, int(remote_sip_port))
@@ -365,18 +380,8 @@ class SipCallClient:
                 return
             if self.writer is None:
                 return
-            self.writer.write(raw)
-            async def _drain() -> None:
-                try:
-                    assert self.writer is not None
-                    await self.writer.drain()
-                except (ConnectionError, RuntimeError, OSError) as err:
-                    _LOGGER.debug("SIP TCP dialog write drain failed after peer close: %s", err)
-
-            try:
-                asyncio.get_running_loop().create_task(_drain())
-            except RuntimeError:
-                pass
+            if self._tcp_writer is not None:
+                self._tcp_writer.send_nowait(raw)
             return
         if self.transport is not None:
             host, port = self._signaling_target(host, int(port))

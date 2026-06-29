@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 
 from . import rtp
 from .audio_ws import decode_audio_frame, encode_audio_frame
+from .call_registry import CallRegistry
 from .const import CONF_DEBUG_MODE, DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
 from .websocket_api import _fire_call_event, _ha_softphone_store
@@ -170,7 +171,10 @@ def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSessi
     state = str(store.get("state") or "").strip().lower()
     if state not in {"connecting", "in_call"}:
         return None
-    inbound = hass.data.get(DOMAIN, {}).get("ha_softphone_media", {})
+    registry = hass.data.get(DOMAIN, {}).get("call_registry")
+    if not isinstance(registry, CallRegistry):
+        return None
+    inbound = registry.softphone_media
     if call_id and call_id in inbound:
         item = inbound[call_id]
         invite = item.get("invite")
@@ -185,7 +189,7 @@ def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSessi
                 recv_format=invite.recv_format,
             )
 
-    clients: dict[str, SipCallClient] = hass.data.get(DOMAIN, {}).get("sip_clients", {})
+    clients: dict[str, SipCallClient] = registry.sip_clients
     if call_id and call_id in clients:
         client = clients[call_id]
         if client.dialog is not None:

@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
+from .call_registry import CallRegistry
 from .const import CONF_DEBUG_MODE, DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
 from .fsm import CallState, TerminalReason, sip_phone_state
 
@@ -176,11 +177,15 @@ def _sip_bridge_store(hass: HomeAssistant) -> dict[str, Any]:
 async def _async_shutdown_all(hass: HomeAssistant) -> None:
     """Clear HA softphone volatile state before SIP transports are stopped."""
     bucket = hass.data.setdefault(DOMAIN, {})
-    for route in list((bucket.pop("sip_pending_routes", {}) or {}).values()):
+    registry = bucket.get("call_registry")
+    if not isinstance(registry, CallRegistry):
+        registry = CallRegistry()
+        bucket["call_registry"] = registry
+    for route in list(registry.pending_routes.values()):
         future = route.get("future") if isinstance(route, dict) else None
         if future is not None and not future.done():
             future.cancel()
-    bucket.pop("ha_softphone_media", None)
+    registry.clear_runtime()
     bucket.pop("sip_bridge_state", None)
     bucket.pop("audio_ws_owners", None)
     store = _ha_softphone_store(hass)
@@ -245,6 +250,9 @@ def _runtime_counter(store: dict[str, Any], runtime: dict[str, Any], key: str) -
 
 def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
     bucket = hass.data.get(DOMAIN, {})
+    registry = bucket.get("call_registry")
+    if not isinstance(registry, CallRegistry):
+        registry = None
     endpoint = bucket.get("sip_endpoint")
     data: dict[str, Any] = {
         "sip_udp_ready": False,
@@ -285,7 +293,7 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
                 "last_sip_reason": str(getattr(snap, "last_sip_reason", "") or ""),
             }
         )
-    for call_id, relay in dict(bucket.get("sip_relays", {}) or {}).items():
+    for call_id, relay in dict((registry.relays if registry is not None else {}) or {}).items():
         snap = getattr(relay, "snapshot", None)
         if not callable(snap):
             continue
@@ -296,7 +304,7 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
         data["rtp_tx_packets"] += int(relay_data.get("left_tx_packets", 0)) + int(relay_data.get("right_tx_packets", 0))
         data["rtp_tx_bytes"] += int(relay_data.get("left_tx_bytes", 0)) + int(relay_data.get("right_tx_bytes", 0))
         data["rtp_dropped_packets"] += int(relay_data.get("dropped_packets", 0))
-    for key, client in dict(bucket.get("sip_clients", {}) or {}).items():
+    for key, client in dict((registry.sip_clients if registry is not None else {}) or {}).items():
         snap = getattr(client, "snapshot", None)
         if not callable(snap):
             continue

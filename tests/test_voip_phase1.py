@@ -275,17 +275,7 @@ class SipProfileTest(unittest.TestCase):
         self.assertIn("z9hG4bKinvite", parsed.header("Via"))
 
     def test_tcp_ack_and_bye_use_stream_writer(self) -> None:
-        class FakeWriter:
-            def __init__(self) -> None:
-                self.sent = bytearray()
-
-            def write(self, data: bytes) -> None:
-                self.sent.extend(data)
-
-            async def drain(self) -> None:
-                return None
-
-        writer = FakeWriter()
+        sent = bytearray()
         client = sip_client.SipCallClient(
             local_ip="192.168.1.10",
             local_name="Casa",
@@ -293,7 +283,7 @@ class SipProfileTest(unittest.TestCase):
             local_rtp_port=41000,
             signaling_transport="TCP",
         )
-        client.writer = writer  # type: ignore[assignment]
+        client.use_reused_tcp_connection(send=sent.extend, responses=asyncio.Queue(), close=lambda: None)
         client.dialog_ids = sip.SipDialogIds(
             call_id="call-tcp-dialog",
             local_tag="local",
@@ -323,13 +313,13 @@ class SipProfileTest(unittest.TestCase):
             "sip:Casa@192.168.1.10:43123",
             "sip:ESP@192.168.1.30:5060",
         )
-        ack = sip.parse_message(bytes(writer.sent))
+        ack = sip.parse_message(bytes(sent))
         self.assertEqual(ack.method, "ACK")
         self.assertIn("SIP/2.0/TCP 192.168.1.10:43123", ack.header("Via"))
 
-        writer.sent.clear()
+        sent.clear()
         client.bye()
-        bye = sip.parse_message(bytes(writer.sent))
+        bye = sip.parse_message(bytes(sent))
         self.assertEqual(bye.method, "BYE")
         self.assertIn("SIP/2.0/TCP 192.168.1.10:43123", bye.header("Via"))
 
@@ -579,7 +569,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             ),
         ]
         decision = roster.resolve_target("Spotpear_Ball_v2", entries, ha_bridge=True)
-        self.assertEqual(decision.kind, "bridge")
+        self.assertEqual(decision.action, router.RouteAction.BRIDGE)
         self.assertIsNotNone(decision.entry)
         assert decision.entry is not None
         self.assertEqual(decision.entry.address, "192.168.1.31")
@@ -602,8 +592,8 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             ),
         ]
         decision = roster.resolve_target("Cucina", entries, ha_bridge=False)
-        self.assertEqual(decision.kind, "bridge")
-        self.assertEqual(decision.reason, "missing_direct_transport")
+        self.assertEqual(decision.action, router.RouteAction.BRIDGE)
+        self.assertEqual(decision.reason, router.RouteReason.NO_DIRECT_TRANSPORT)
         self.assertIn("transport=tcp", decision.sip_uri)
 
 
@@ -993,7 +983,7 @@ class RosterResolverTest(unittest.TestCase):
             roster.resolve_target("Cucina", entries).sip_uri,
             "sip:Cucina@192.168.1.10",
         )
-        self.assertEqual(roster.resolve_target("Cucina", entries).reason, "missing_direct_transport")
+        self.assertEqual(roster.resolve_target("Cucina", entries).reason, router.RouteReason.NO_DIRECT_TRANSPORT)
         self.assertEqual(
             roster.resolve_target("Studio", entries).sip_uri,
             "sip:Studio@192.168.1.31;transport=tcp",
@@ -1007,8 +997,8 @@ class RosterResolverTest(unittest.TestCase):
             "sip:Corridoio@192.168.1.10",
         )
         phone = roster.resolve_target("Nonna", entries)
-        self.assertEqual(phone.kind, "requires_bridge")
-        self.assertEqual(phone.sip_uri, "sip:0574863562@192.168.1.10")
+        self.assertEqual(phone.action, router.RouteAction.TRUNK)
+        self.assertEqual(phone.target, "0574863562")
 
     def test_explicit_sip_uri_and_name_at_ip(self) -> None:
         entries = roster.parse_roster_json([{"id": "HA", "kind": "ha", "address": "192.168.1.10"}])
@@ -1395,8 +1385,8 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
 
         decision = roster.resolve_target("Zoiper", entries, ha_bridge=True)
 
-        self.assertEqual(decision.kind, "reject")
-        self.assertEqual(decision.reason, "transport_unreachable")
+        self.assertEqual(decision.action, router.RouteAction.REJECT)
+        self.assertEqual(decision.reason, router.RouteReason.TRUNK_UNAVAILABLE)
 
     def test_sip_uri_parser_accepts_name_addr_with_header_params(self) -> None:
         parsed = sip.parse_sip_uri("<sip:Zoiper@192.168.1.10:41171;transport=udp>;tag=7bc04a5b")

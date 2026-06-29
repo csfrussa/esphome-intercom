@@ -1,6 +1,6 @@
 """Strict SIP/2.0 helpers for the intercom VoIP profile.
 
-This module intentionally implements a small standards-compatible subset of
+This module intentionally implements a small standards-aligned subset of
 SIP rather than a proprietary replacement. Unsupported methods/features are
 handled by policy at the call layer, but the messages built and parsed here are
 ordinary SIP/2.0 messages.

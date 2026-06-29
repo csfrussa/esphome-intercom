@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS
 from .const import INTERCOM_RTP_PORT
 from . import sdp, sip
+from .sip_tcp_io import SipTcpWriter
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -630,6 +631,7 @@ class SipTcpServer:
         self.server: asyncio.AbstractServer | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
         self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
+        self._tcp_writers: dict[tuple[str, int], SipTcpWriter] = {}
         self._dialog_queues: dict[tuple[tuple[str, int], str], asyncio.Queue[bytes]] = {}
 
     async def start(self) -> bool:
@@ -647,10 +649,11 @@ class SipTcpServer:
         peer = writer.get_extra_info("peername") or ("0.0.0.0", 0)
         addr = (str(peer[0]), int(peer[1]))
         self._writers[addr] = writer
+        tx = SipTcpWriter(writer, label=f"listener {addr[0]}:{addr[1]}")
+        self._tcp_writers[addr] = tx
 
         def _send(data: bytes, _addr) -> None:
-            writer.write(data)
-            asyncio.create_task(writer.drain())
+            tx.send_nowait(data)
 
         endpoint = SipUdpEndpoint(
             local_ip=self.local_ip,
@@ -684,8 +687,10 @@ class SipTcpServer:
         finally:
             self.endpoints.discard(endpoint)
             self._writers.pop(addr, None)
+            self._tcp_writers.pop(addr, None)
             for key in [key for key in self._dialog_queues if key[0] == addr]:
                 self._dialog_queues.pop(key, None)
+            await tx.close()
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -696,25 +701,15 @@ class SipTcpServer:
         call_id: str,
     ) -> tuple[TcpDialogSender, asyncio.Queue[bytes]] | None:
         writer = self._writers.get(addr)
-        if writer is None or writer.is_closing():
+        tx = self._tcp_writers.get(addr)
+        if writer is None or writer.is_closing() or tx is None:
             return None
         queue: asyncio.Queue[bytes] = asyncio.Queue()
         key = (addr, call_id)
         self._dialog_queues[key] = queue
 
         def _send(data: bytes) -> None:
-            writer.write(data)
-
-            async def _drain() -> None:
-                try:
-                    await writer.drain()
-                except (ConnectionError, RuntimeError, OSError):
-                    _LOGGER.debug("SIP TCP reused dialog write drain failed", exc_info=True)
-
-            try:
-                asyncio.get_running_loop().create_task(_drain())
-            except RuntimeError:
-                pass
+            tx.send_nowait(data)
 
         return _send, queue
 
@@ -752,8 +747,11 @@ class SipTcpServer:
             self.server.close()
             await self.server.wait_closed()
             self.server = None
+        for tx in tuple(self._tcp_writers.values()):
+            await tx.close()
         for writer in tuple(self._writers.values()):
             writer.close()
         self.endpoints.clear()
         self._writers.clear()
+        self._tcp_writers.clear()
         self._dialog_queues.clear()
