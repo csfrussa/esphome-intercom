@@ -87,7 +87,7 @@ speaker:
     bits_per_sample: 16bit
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   microphone_source:
     microphone: native_mic
     bits_per_sample: 16
@@ -118,7 +118,7 @@ Mic-only:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   microphone: processed_mic
 ```
 
@@ -126,7 +126,7 @@ Speaker-only:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   speaker: local_speaker
 ```
 
@@ -160,7 +160,7 @@ SIP/UDP signaling:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   transport: udp
   sip_port: 5060
   rtp_port: 40000
@@ -170,7 +170,7 @@ SIP/TCP signaling:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   transport: tcp
   sip_port: 5060
   rtp_port: 40000
@@ -190,7 +190,7 @@ must exist before HA connects, or tiny fixed systems:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
     - name: Casa di nonna
@@ -244,7 +244,7 @@ SIP-aware hooks expose the call identity directly:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   on_incoming_call:
     then:
       - logger.log:

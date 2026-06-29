@@ -102,7 +102,7 @@ PCM_FORMAT_IDS = {
     "s32le": 4,
 }
 
-SUPPORTED_INTERCOM_SAMPLE_RATES = (8000, 12000, 16000, 24000, 32000, 44100, 48000)
+SUPPORTED_PHONE_SAMPLE_RATES = (8000, 12000, 16000, 24000, 32000, 44100, 48000)
 UDP_SAFE_PAYLOAD_BYTES = 1200
 
 
@@ -155,10 +155,10 @@ def _validate_tx_reframe_formats(tx_fmt: dict, tx_formats: list[dict]) -> None:
                 )
 
 
-INTERCOM_AUDIO_FORMAT_SCHEMA = cv.All(cv.Any(cv.one_of(CONF_AUTO, lower=True), cv.Schema(
+PHONE_AUDIO_FORMAT_SCHEMA = cv.All(cv.Any(cv.one_of(CONF_AUTO, lower=True), cv.Schema(
     {
         cv.Optional(CONF_SAMPLE_RATE, default=CONF_AUTO): cv.Any(
-            cv.one_of(CONF_AUTO, lower=True), cv.one_of(*SUPPORTED_INTERCOM_SAMPLE_RATES, int=True)
+            cv.one_of(CONF_AUTO, lower=True), cv.one_of(*SUPPORTED_PHONE_SAMPLE_RATES, int=True)
         ),
         cv.Optional(CONF_PCM_FORMAT, default=CONF_AUTO): cv.Any(
             cv.one_of(CONF_AUTO, lower=True), cv.one_of(*PCM_FORMAT_IDS.keys(), lower=True)
@@ -458,13 +458,13 @@ CONFIG_SCHEMA = cv.Schema(
         # an AFE mic can publish 16 kHz while the speaker sink accepts 48 kHz.
         cv.Optional(CONF_AUDIO, default={}): cv.All(cv.Schema(
             {
-                cv.Optional(CONF_TX, default={}): INTERCOM_AUDIO_FORMAT_SCHEMA,
-                cv.Optional(CONF_RX, default={}): INTERCOM_AUDIO_FORMAT_SCHEMA,
+                cv.Optional(CONF_TX, default={}): PHONE_AUDIO_FORMAT_SCHEMA,
+                cv.Optional(CONF_RX, default={}): PHONE_AUDIO_FORMAT_SCHEMA,
                 cv.Optional(CONF_TX_FORMATS, default=[]): cv.ensure_list(
-                    INTERCOM_AUDIO_FORMAT_SCHEMA
+                    PHONE_AUDIO_FORMAT_SCHEMA
                 ),
                 cv.Optional(CONF_RX_FORMATS, default=[]): cv.ensure_list(
-                    INTERCOM_AUDIO_FORMAT_SCHEMA
+                    PHONE_AUDIO_FORMAT_SCHEMA
                 ),
             }
         ), _validate_voip_audio_config),
@@ -989,7 +989,7 @@ async def to_code(config):
 
 # === Action registrations ===
 # Simple action schema that just references the esphome_voip_stack component
-INTERCOM_ACTION_SCHEMA = automation.maybe_simple_id(
+PHONE_ACTION_SCHEMA = automation.maybe_simple_id(
     {
         cv.GenerateID(): cv.use_id(ESPHomeVoipStack),
     }
@@ -1011,7 +1011,7 @@ def _register_simple_action(name, action_class):
     Bundle it in one helper so adding a new simple action is one line below
     instead of an eight-line decorator + coroutine block.
     """
-    @automation.register_action(name, action_class, INTERCOM_ACTION_SCHEMA, synchronous=True)
+    @automation.register_action(name, action_class, PHONE_ACTION_SCHEMA, synchronous=True)
     async def _to_code(config, action_id, template_arg, args):
         return await _new_parented_action(config, action_id, template_arg)
     return _to_code
@@ -1227,7 +1227,7 @@ _register_simple_action("esphome_voip_stack.update_contacts", UpdateContactsActi
 
 # === Condition registrations ===
 # Simple condition schema that just references the esphome_voip_stack component
-VOIP_CONDITION_SCHEMA = automation.maybe_simple_id(
+PHONE_CONDITION_SCHEMA = automation.maybe_simple_id(
     {
         cv.GenerateID(): cv.use_id(ESPHomeVoipStack),
     }
@@ -1236,7 +1236,7 @@ VOIP_CONDITION_SCHEMA = automation.maybe_simple_id(
 
 def _register_simple_condition(name, condition_class):
     """Register a parameter-less Parented<ESPHomeVoipStack> condition."""
-    @automation.register_condition(name, condition_class, VOIP_CONDITION_SCHEMA)
+    @automation.register_condition(name, condition_class, PHONE_CONDITION_SCHEMA)
     async def _to_code(config, condition_id, template_arg, args):
         var = cg.new_Pvariable(condition_id, template_arg)
         parent = await cg.get_variable(config[CONF_ID])

@@ -5,12 +5,12 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 ## Pick your path
 
 - 🚀 **Start here**: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) is the decision
-  tree that maps hardware and features (intercom only, VA + MWW, touch display,
+  tree that maps hardware and features (VoIP only, VA + MWW, touch display,
   2-mic Speech Enhancement) to the right ready-to-flash config under
   [`yamls/`](../yamls/).
 
 - 🧭 **Quick examples**: the top-level [README](../README.md#quick-start-examples)
-  includes practical doorbell, room-to-room intercom, ESP static contacts and
+  includes practical doorbell, room-to-room VoIP, ESP static contacts and
   HA-managed central roster examples.
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
@@ -60,10 +60,10 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   rate/layout conversion, AEC reference capture, PSRAM placement and
   post-processor mic output. On AEC/AFE profiles, its standard ESPHome
   microphone facade is the cleaned stream consumed by MWW, Voice Assistant and
-  intercom while media/TTS keeps playing through the speaker.
+  VoIP while media/TTS keeps playing through the speaker.
 - Full-experience media now uses ESPHome's source-based `speaker_source` path:
   HA media, announcements, local files and optional Sendspin streams feed one
-  media player before the mixer arbitrates with intercom and Voice Assistant.
+  media player before the mixer arbitrates with VoIP and Voice Assistant.
   The local [`speaker`](../esphome/components/speaker/README.md) fork remains
   documented for custom YAMLs that still use `platform: speaker`.
 - [`runtime_fsm`](../esphome/components/runtime_fsm/README.md), a generic

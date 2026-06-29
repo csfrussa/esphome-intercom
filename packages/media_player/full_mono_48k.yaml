@@ -6,7 +6,7 @@
 #   - tts_speaker_input
 #
 # One media player owns normal HA media, announcements, local audio files and
-# Sendspin. The mixer remains responsible for arbitration with intercom.
+# Sendspin. The mixer remains responsible for arbitration with VoIP.
 # =============================================================================
 
 sendspin:

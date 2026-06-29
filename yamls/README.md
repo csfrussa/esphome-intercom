@@ -19,12 +19,12 @@ Wi-Fi firmware.
 
 ```
 yamls/
-  voip-only/         Intercom without Voice Assistant or Wake Word
+  voip-only/         VoIP without Voice Assistant or Wake Word
     single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)
     dual-bus/            Devices using esp_audio_stack rx_bus + tx_bus
     esphome-native/      Native ESPHome mic/speaker examples
 
-  full-experience/       VA + MWW + Intercom (complete voice assistant hub)
+  full-experience/       VA + MWW + VoIP (complete voice assistant hub)
     single-bus/          esp_audio_stack full profiles
     dual-bus/            esp_audio_stack full profiles with separate RX/TX buses
     esphome-native/      Native ESPHome audio profiles for processed/separate paths
@@ -71,13 +71,13 @@ bridge/B2BUA.
 There is one product mode: SIP-only phone mode. Phonebook, contacts,
 destination and caller entities are always exposed. `transport: udp` selects
 SIP/UDP signaling and `transport: tcp` selects SIP/TCP signaling; audio remains
-RTP/UDP in the current profile. Static contacts are optional local fallbacks;
-normal shared routing comes from `sensor.voip_phonebook`.
+RTP/UDP in the current profile. Static contacts are optional local entries for
+offline/custom installs; normal shared routing comes from `sensor.voip_phonebook`.
 
 ## Optional packages
 
 `packages/voice_assistant/timers.yaml` adds headless Home Assistant timer alarm
-support on top of the full VA/intercom package. It is intentionally not part of
+support on top of the full VA/VoIP package. It is intentionally not part of
 `va_voip.yaml`; include it only on devices that should expose timer behavior.
 
 ## Production logging

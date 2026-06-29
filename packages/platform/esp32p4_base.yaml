@@ -8,7 +8,7 @@
 # Usage:
 #   packages:
 #     p4_base:
-#       url: https://github.com/n-IA-hane/esphome-intercom
+#       url: https://github.com/n-IA-hane/esphome-VoIP
 #       file: packages/platform/esp32p4_base.yaml
 #       ref: main
 # =============================================================================
@@ -29,5 +29,5 @@ esp32:
     sdkconfig_options:
       # Keep P4 instruction/rodata fetches in PSRAM as in the last stable
       # display/audio baseline. Disabling this globally fixed one AFE FFT crash
-      # signature but reintroduced display flicker and choppy intercom TX audio.
+      # signature but reintroduced display flicker and choppy VoIP TX audio.
       CONFIG_SPIRAM_XIP_FROM_PSRAM: "y"

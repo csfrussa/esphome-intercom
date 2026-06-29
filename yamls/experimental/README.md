@@ -7,7 +7,7 @@ regression comparison.
 
 ## Contents
 
-- [`home-assistant-voice-pe/`](home-assistant-voice-pe/) - Voice PE intercom
+- [`home-assistant-voice-pe/`](home-assistant-voice-pe/) - Voice PE VoIP
   integration proof.
 
 Dual-bus MEMS+amp profiles are no longer experimental; the maintained SIP phone
@@ -18,7 +18,7 @@ use `esp_audio_stack` `rx_bus` / `tx_bus`.
 
 | YAML | Hardware | What's missing |
 |------|----------|----------------|
-| `home-assistant-voice-pe/home-assistant-voice-pe-voip.yaml` | Home Assistant Voice PE | runtime intercom validation |
+| `home-assistant-voice-pe/home-assistant-voice-pe-voip.yaml` | Home Assistant Voice PE | runtime VoIP validation |
 
 ## Contributing
 

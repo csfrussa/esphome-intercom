@@ -5,18 +5,18 @@
 # action buttons.
 #
 # Event data available:
-#   trigger.event.data.caller      - Device name (e.g., "Intercom Spotpear Ball v2")
+#   trigger.event.data.caller      - Device name (e.g., "Spotpear VoIP")
 #   trigger.event.data.destination - Your HA location name
 #   trigger.event.data.type        - "doorbell"
 #
 # Replace notify.mobile_app_your_phone with your mobile app service.
-# Replace every /lovelace/intercom value with the dashboard view that contains
+# Replace every /lovelace/voip value with the dashboard view that contains
 # your voip-stack-card, for example /your-dashboard/your-view. If Home Assistant
 # generated a URL ending in /0, that simply means the first Lovelace view has no
 # custom path.
 
 alias: Doorbell Notification
-description: Send push notification when doorbell rings - tap to open intercom
+description: Send push notification when doorbell rings - tap to open VoIP card
 triggers:
   - trigger: event
     event_type: esphome.voip_call
@@ -28,8 +28,8 @@ actions:
       message: "{{ trigger.event.data.caller }} is calling..."
       data:
         tag: voip_call
-        url: /lovelace/intercom
-        clickAction: /lovelace/intercom
+        url: /lovelace/voip
+        clickAction: /lovelace/voip
         channel: doorbell
         importance: high
         ttl: 0
@@ -37,8 +37,8 @@ actions:
         actions:
           - action: URI
             title: "Answer"
-            uri: /lovelace/intercom?voip_answer=1
-          - action: DECLINE_INTERCOM
+            uri: /lovelace/voip?voip_answer=1
+          - action: VOIP_DECLINE
             title: "Decline"
   - action: persistent_notification.create
     data:
@@ -49,13 +49,13 @@ actions:
       - trigger: event
         event_type: mobile_app_notification_action
         event_data:
-          action: DECLINE_INTERCOM
+          action: VOIP_DECLINE
     timeout: "00:00:30"
   - if:
       - condition: template
         value_template: "{{ wait.trigger is not none }}"
     then:
-      - action: homeassistant_voip_stack.decline
+      - action: homeassistant_voip_stack.sip_decline
         target:
           device_id: "{{ trigger.event.data.device_id }}"
         data:

@@ -1,16 +1,16 @@
 # =============================================================================
 # ESPHome VoIP Stack callbacks for VA-enabled devices.
-# Like intercom/callbacks.yaml but also drives voip_ringing_loop (full
+# Like voip/callbacks.yaml but also drives voip_ringing_loop (full
 # ringtone playback on incoming call), since VA devices have a media player
 # stack capable of running it. Use this on full-experience devices that
 # include voice_assistant/core.yaml.
 #
 # Prerequisites in the device YAML:
 #   - esphome_voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
-#   - script id `update_status` (provided by intercom/state_machine_full.yaml)
-#   - script id `voip_ringing_loop` (provided by intercom/state_machine_full.yaml)
-#   - script ids `ui_ic_call`, `ui_ic_dest_ringing`, `ui_ic_ended`
-#     (provided as placeholders by intercom/state_machine_full.yaml; device
+#   - script id `update_status` (provided by voip/state_machine_full.yaml)
+#   - script id `voip_ringing_loop` (provided by voip/state_machine_full.yaml)
+#   - script ids `ui_call_started`, `ui_call_dest_ringing`, `ui_call_ended`
+#     (provided as placeholders by voip/state_machine_full.yaml; device
 #      !extends them to drive LVGL)
 #
 # Required substitutions:
@@ -18,42 +18,42 @@
 # =============================================================================
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   on_calling:
     - script.execute: update_status
     - script.execute:
-        id: ui_ic_call
-        peer: !lambda 'return id(voip_phone).get_current_destination();'
+        id: ui_call_started
+        peer: !lambda 'return id(phone).get_current_destination();'
     - if:
         condition:
-          esphome_voip_stack.is_ha_destination: voip_phone
+          esphome_voip_stack.is_ha_destination:
         then:
           - homeassistant.event:
               event: esphome.voip_call
               data:
                 caller: "${friendly_name}"
-                destination: !lambda 'return id(voip_phone).get_current_destination();'
+                destination: !lambda 'return id(phone).get_current_destination();'
                 type: "doorbell"
   on_ringing:
     - script.execute: update_status
     - script.execute:
-        id: ui_ic_call
-        peer: !lambda 'return id(voip_phone).get_caller();'
+        id: ui_call_started
+        peer: !lambda 'return id(phone).get_caller();'
     - script.execute: voip_ringing_loop
   on_dest_ringing:
     # Caller path: dest acked with RING. Same calling screen, the
-    # device YAML flips its label inside ui_ic_dest_ringing.
+    # device YAML flips its label inside ui_call_dest_ringing.
     - script.execute:
-        id: ui_ic_dest_ringing
-        peer: !lambda 'return id(voip_phone).get_current_destination();'
+        id: ui_call_dest_ringing
+        peer: !lambda 'return id(phone).get_current_destination();'
   on_in_call:
     - script.stop: voip_ringing_loop
     - script.execute: update_status
     - script.execute:
-        id: ui_ic_call
+        id: ui_call_started
         peer: !lambda |-
-          auto c = id(voip_phone).get_caller();
-          return c.empty() ? id(voip_phone).get_current_destination() : c;
+          auto c = id(phone).get_caller();
+          return c.empty() ? id(phone).get_current_destination() : c;
   on_idle:
     - script.stop: voip_ringing_loop
     - script.execute: update_status
@@ -61,15 +61,15 @@ esphome_voip_stack:
     - script.stop: voip_ringing_loop
     - script.execute: update_status
     - script.execute:
-        id: ui_ic_ended
+        id: ui_call_ended
         peer: !lambda |-
-          auto c = id(voip_phone).get_caller();
-          return c.empty() ? id(voip_phone).get_current_destination() : c;
+          auto c = id(phone).get_caller();
+          return c.empty() ? id(phone).get_current_destination() : c;
         reason: !lambda 'return reason;'
   on_call_failed:
     - script.stop: voip_ringing_loop
     - script.execute: update_status
     - script.execute:
-        id: ui_ic_ended
-        peer: !lambda 'return id(voip_phone).get_current_destination();'
+        id: ui_call_ended
+        peer: !lambda 'return id(phone).get_current_destination();'
         reason: !lambda 'return reason;'

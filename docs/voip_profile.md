@@ -1,6 +1,6 @@
 # voip-pcm/1
 
-`voip-pcm/1` is the ESPHome Intercom VoIP profile.
+`voip-pcm/1` is the ESPHome VoIP Stack profile.
 
 It is a SIP/SDP/RTP profile, not a proprietary intercom protocol. ESP devices
 act as SIP user agents and exchange RTP PCM media. Home Assistant may provide
@@ -102,7 +102,7 @@ not need provider-side extensions or registrations.
 
 ## State
 
-SIP events are the source of truth for intercom state.
+SIP events are the source of truth for VoIP phone state.
 
 - outgoing `INVITE` -> calling
 - incoming `INVITE` accepted -> ringing

@@ -54,7 +54,7 @@ The active branch is intentionally SIP-first and breaking:
 - Inbound trunk routing uses standard SIP plus RFC2833/telephone-event DTMF to
   select local phonebook targets.
 
-## 2026.7.0-dev: source-based full media path and native 48 kHz intercom presets
+## 2026.7.0-dev: source-based full media path and native 48 kHz VoIP presets
 
 `2026.7.0-dev` is a prerelease. It is intended for users who want to test the
 new full-experience audio/media path and Sendspin/Music Assistant integration
@@ -63,7 +63,7 @@ before the next stable release.
 Maintained full-experience YAMLs now use ESPHome's `speaker_source` media
 player path. Media, announcements, timer sounds, local audio files and optional
 Sendspin streams enter one media player and then flow through the existing
-mixer. Intercom still has its own mixer source and keeps priority through the
+mixer. VoIP call audio still has its own mixer source and keeps priority through the
 existing call-state logic. Custom YAMLs copied from older full-experience files
 should migrate away from `platform: speaker` media-player blocks and local
 `files:` entries toward `media_source` plus `media_player.play_media` with

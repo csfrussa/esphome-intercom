@@ -1,5 +1,5 @@
 # =============================================================================
-# Intercom HA-callable actions.
+# VoIP HA-callable actions.
 # Drop-in for devices that integrate with the Home Assistant `homeassistant_voip_stack`
 # integration. Exposes only the call-control actions.
 #
@@ -8,7 +8,7 @@
 # sensors.
 #
 # Prerequisites in the device YAML:
-#   - id `intercom` : esphome_voip_stack component (intercom/callbacks.yaml provides this)
+#   - id `phone` : esphome_voip_stack component (voip/callbacks.yaml provides this)
 # =============================================================================
 
 wifi:
@@ -17,7 +17,7 @@ wifi:
         id: runtime_controller
         event: wifi_connected
     - delay: 1s
-    - esphome_voip_stack.publish_entity_states: voip_phone
+    - esphome_voip_stack.publish_entity_states:
   on_disconnect:
     - runtime_fsm.event:
         id: runtime_controller
@@ -39,7 +39,7 @@ api:
               id: runtime_controller
               event: ha_connected
     - delay: 1s
-    - esphome_voip_stack.publish_entity_states: voip_phone
+    - esphome_voip_stack.publish_entity_states:
   on_client_disconnected:
     - if:
         condition:
@@ -129,7 +129,7 @@ api:
             entry: !lambda 'return entry;'
     - action: flush_contacts
       then:
-        - esphome_voip_stack.flush_contacts: voip_phone
+        - esphome_voip_stack.flush_contacts:
     - action: update_contacts
       then:
-        - esphome_voip_stack.update_contacts: voip_phone
+        - esphome_voip_stack.update_contacts:

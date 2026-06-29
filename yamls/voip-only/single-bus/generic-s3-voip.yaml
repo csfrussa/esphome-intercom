@@ -1,5 +1,5 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM (SIP) - Single I2S bus, no hardware codec
+# GENERIC ESP32-S3 VOIP - Single I2S bus, no hardware codec
 # =============================================================================
 # Generic SIP phone profile. It keeps the AEC-only audio pipeline small and
 # exposes standard SIP signaling plus RTP media through esphome_voip_stack.
@@ -7,8 +7,8 @@
 # ESP-to-ESP calls use the unified phonebook from HA.
 #
 # Audio pipeline:
-#   MEMS mic -> esp_audio_stack (48kHz) -> esp_ae_rate_cvt x3 -> esp_aec -> intercom TX
-#   Intercom RX (16kHz) -> resampler -> hw_speaker (48kHz) -> class-D amp
+#   MEMS mic -> esp_audio_stack (48kHz) -> esp_ae_rate_cvt x3 -> esp_aec -> VoIP TX
+#   VoIP RX (16kHz) -> resampler -> hw_speaker (48kHz) -> class-D amp
 #
 # HARDWARE (adapt GPIOs to YOUR board):
 #   - Board: Any ESP32-S3 with PSRAM
@@ -29,24 +29,24 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
 # =============================================================================
-# Package: shared intercom state machine
+# Package: shared VoIP state machine
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/voip_only.yaml@dev
-  buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/buttons_switches.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
+  core: !include ../../../packages/voip_only.yaml
+  buttons_switches: !include ../../../packages/voip/buttons_switches.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  speaker_mute: !include ../../../packages/voip/speaker_mute.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
 
 esphome:
   name: ${name}
@@ -180,7 +180,7 @@ speaker:
 # roster. esphome_voip_stack.start auto-binds signaling and RTP to the selected
 # endpoint.
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   buffers_in_psram: true
   # SIP signaling transport only. Use `tcp` when this endpoint must signal over
   # SIP TCP; audio remains RTP/UDP after SDP negotiation.
@@ -236,7 +236,7 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # Intercom-only standard: stay inside the dios_ssp_aec engine. The two
+    # VoIP-only standard: stay inside the dios_ssp_aec engine. The two
     # VOIP modes share the same engine, so a runtime switch never triggers
     # an esp_aec3 FFT alloc and avoids the silent calloc-fail bug observed
     # at filter_length>4 on cross-engine transitions. SR modes are not
@@ -251,11 +251,11 @@ select:
       - if:
           condition:
             not:
-              esphome_voip_stack.is_idle: voip_phone
+              esphome_voip_stack.is_idle:
           then:
             - logger.log:
                 level: WARN
-                format: "Cannot switch AEC mode during active intercom call"
+                format: "Cannot switch AEC mode during active VoIP call"
           else:
             - logger.log:
                 format: "Switching AEC mode to %s"

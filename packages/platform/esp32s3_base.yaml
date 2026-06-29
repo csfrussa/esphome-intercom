@@ -10,7 +10,7 @@
 # Usage:
 #   packages:
 #     s3_base:
-#       url: https://github.com/n-IA-hane/esphome-intercom
+#       url: https://github.com/n-IA-hane/esphome-VoIP
 #       file: packages/platform/esp32s3_base.yaml
 #       ref: main
 # =============================================================================
@@ -39,7 +39,7 @@ esp32:
       CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "65536"
       CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: "y"
       # Official espressif/mdns knobs: keep responder allocations and its task
-      # stack out of internal RAM. Intercom phonebooks no longer depend on mDNS
+      # stack out of internal RAM. VoIP phonebooks no longer depend on mDNS
       # discovery, but ESPHome still enables the responder for normal API UX.
       CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM: "y"
       CONFIG_MDNS_MEMORY_ALLOC_SPIRAM: "y"

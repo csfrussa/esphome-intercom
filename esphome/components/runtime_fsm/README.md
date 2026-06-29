@@ -947,7 +947,7 @@ native component.
 runtime_fsm:
   id: runtime
   voip:
-    id: voip_phone
+    id: phone
     activity_prefix: "voip:"
     states:
       ringing:

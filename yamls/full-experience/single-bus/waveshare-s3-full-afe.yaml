@@ -1,5 +1,5 @@
 # =============================================================================
-# Waveshare ESP32-S3-AUDIO-Board: VA + Intercom + MWW (no display)
+# Waveshare ESP32-S3-AUDIO-Board: VA + VoIP + MWW (no display)
 # =============================================================================
 #
 # Hardware:
@@ -30,11 +30,11 @@
 #
 # Dual-mic target:
 #   ES7210 TDM slots [0, 2]          → esp_ae_rate_cvt x3 ──┐
-#   ES7210 TDM slot 1 (DAC ref)      → esp_ae_rate_cvt x3 ──┴── esp_afe (AEC + Speech Enhancement + VAD) → mono mic_main → VA / Intercom TX / MWW
+#   ES7210 TDM slot 1 (DAC ref)      → esp_ae_rate_cvt x3 ──┴── esp_afe (AEC + Speech Enhancement + VAD) → mono mic_main → VA / VoIP TX / MWW
 #
 #   Music/radio → media_speaker_input (resampler) ───────────┐
 #   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311 DAC
-#   Intercom RX → voip_speaker_input (resampler) ────────┘
+#   VoIP RX → voip_speaker_input (resampler) ────────┘
 #
 # =============================================================================
 
@@ -44,37 +44,37 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
   afe_aec_restore_mode: RESTORE_DEFAULT_ON
 
 # =============================================================================
-# Package: shared VA + Intercom state machine, callbacks, switches, buttons
+# Package: shared VA + VoIP state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
-  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
-  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  core: !include ../../../packages/va_voip_cpp.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
+  led_state_full: !include ../../../packages/led/state_full_ring.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
+  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
 # =============================================================================
 # ESPHome Base
@@ -208,7 +208,7 @@ esp_afe:
   # under playback, but on this target it causes TTS/media stutter and any
   # runtime toggle requires a full AFE rebuild.
   agc_enabled: false
-  # Worst-case HTTPS media/TTS + intercom needs contiguous internal heap for
+  # Worst-case HTTPS media/TTS + VoIP needs contiguous internal heap for
   # ESPHome API frame reads, TLS and I2S. Keep AFE bridge buffers in PSRAM on
   # this full profile; the small PSRAM latency cost is preferable to API
   # bad_alloc crashes during Assist/TTS responses.
@@ -309,7 +309,7 @@ voice_assistant:
 # =============================================================================
 esphome_voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
-  buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   audio:
     # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
     # with a 10 ms reframe available for peers that can drive the speaker at
@@ -369,7 +369,7 @@ binary_sensor:
         input: true
         pullup: true
     on_multi_click:
-      # Single click: call toggle if intercom active, otherwise VA start/stop
+      # Single click: call toggle if VoIP call active, otherwise VA start/stop
       - timing:
           - ON for at most 500ms
           - OFF for at least 400ms
@@ -387,9 +387,9 @@ binary_sensor:
                 - if:
                     condition:
                       not:
-                        - esphome_voip_stack.is_idle: voip_phone
+                        - esphome_voip_stack.is_idle:
                     then:
-                      - esphome_voip_stack.call_toggle: voip_phone
+                      - esphome_voip_stack.call_toggle:
                     else:
                       - runtime_fsm.event:
                           id: runtime_controller
@@ -401,7 +401,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - esphome_voip_stack.next_contact: voip_phone
+          - esphome_voip_stack.next_contact:
       # Long press (1-3s): toggle mute
       - timing:
           - ON for 1s to 3s
@@ -421,7 +421,7 @@ binary_sensor:
       mode:
         input: true
     on_press:
-      - esphome_voip_stack.call_toggle: voip_phone
+      - esphome_voip_stack.call_toggle:
 
   # KEY2 (TCA9555 EXIO10): Next contact
   - platform: gpio
@@ -435,7 +435,7 @@ binary_sensor:
       mode:
         input: true
     on_press:
-      - esphome_voip_stack.next_contact: voip_phone
+      - esphome_voip_stack.next_contact:
 
   # KEY3 (TCA9555 EXIO11): Decline / Previous contact
   - platform: gpio
@@ -451,11 +451,11 @@ binary_sensor:
     on_press:
       - if:
           condition:
-            esphome_voip_stack.is_ringing: voip_phone
+            esphome_voip_stack.is_ringing:
           then:
-            - esphome_voip_stack.decline_call: voip_phone
+            - esphome_voip_stack.decline_call:
           else:
-            - esphome_voip_stack.prev_contact: voip_phone
+            - esphome_voip_stack.prev_contact:
 
 # =============================================================================
 # Switches (device-specific)
@@ -506,7 +506,7 @@ switch:
           id: runtime_controller
           event: speaker_unmuted
 
-  # Intercom switches
+  # VoIP switches
 
 # =============================================================================
 # Select Entities
@@ -541,11 +541,11 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle: voip_phone
+                        esphome_voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN
-                      format: "Cannot switch AEC mode during active VA/intercom"
+                      format: "Cannot switch AEC mode during active VA/VoIP"
                 else:
                   - logger.log:
                       format: "Switching AEC mode to %s"

@@ -31,7 +31,7 @@ class MediaOwner(str, Enum):
     NONE = "none"
     USER = "user"
     VA_TTS = "va_tts"
-    INTERCOM_RINGTONE = "voip_ringtone"
+    VOIP_RINGTONE = "voip_ringtone"
     TIMER = "timer"
 
 
@@ -104,8 +104,8 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
             False,
         )
 
-    intercom_media_residue = (
-        facts.media_owner == MediaOwner.INTERCOM_RINGTONE
+    voip_media_residue = (
+        facts.media_owner == MediaOwner.VOIP_RINGTONE
         or (
             facts.ringtone_stopping_generation
             and facts.ringtone_stopping_generation == facts.media_generation
@@ -117,7 +117,7 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
         return RuntimeSnapshot("va_thinking", LedSnapshot("va_thinking", (255, 180, 0), "Spin", "va"), "duck", "stop", False)
     if facts.va_state == VaState.LISTENING:
         return RuntimeSnapshot("va_listening", LedSnapshot("va_listening", (0, 0, 255), "Slow Pulse", "va"), "duck", "stop", False)
-    if facts.media_playing and not intercom_media_residue:
+    if facts.media_playing and not voip_media_residue:
         return RuntimeSnapshot("media", LedSnapshot("media", (0, 255, 0), "Spin", "media"), "normal", "stop", False)
     if facts.mic_muted and facts.speaker_muted:
         return RuntimeSnapshot("muted", LedSnapshot("muted", (255, 80, 0), "Slow Pulse", "audio_policy"), "normal", "stop", False)
@@ -135,7 +135,7 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
             snapshot,
         )
 
-    def test_intercom_ringing_masks_media_and_va(self) -> None:
+    def test_voip_ringing_masks_media_and_va(self) -> None:
         snap = reduce_runtime(
             RuntimeFacts(
                 call_state=CallState.RINGING,
@@ -150,13 +150,13 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
         self.assertEqual(snap.ringtone, "play")
         self.assertNoMediaSpin(snap)
 
-    def test_intercom_in_call_is_fixed_green_even_if_ringtone_media_is_still_draining(self) -> None:
+    def test_voip_in_call_is_fixed_green_even_if_ringtone_media_is_still_draining(self) -> None:
         snap = reduce_runtime(
             RuntimeFacts(
                 call_state=CallState.IN_CALL,
                 call_generation=7,
                 media_playing=True,
-                media_owner=MediaOwner.INTERCOM_RINGTONE,
+                media_owner=MediaOwner.VOIP_RINGTONE,
                 media_generation=7,
                 ringtone_stopping_generation=7,
             )
@@ -171,7 +171,7 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
             RuntimeFacts(
                 call_state=CallState.IDLE,
                 media_playing=True,
-                media_owner=MediaOwner.INTERCOM_RINGTONE,
+                media_owner=MediaOwner.VOIP_RINGTONE,
                 media_generation=11,
                 ringtone_stopping_generation=11,
             )

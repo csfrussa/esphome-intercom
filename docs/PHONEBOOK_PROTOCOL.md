@@ -12,7 +12,7 @@ have contacts before HA sync, work offline, or keep a tiny fixed local roster:
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
     - name: Kitchen
@@ -42,7 +42,8 @@ Rules:
 - A numeric name/number from an ESP is routed to HA. HA decides whether it is a
   local extension or an external trunk number.
 - HA-managed sync through `sensor.voip_phonebook` is the recommended path.
-  Static contacts are local additions/fallbacks, not a second central roster.
+  Static contacts are local additions for offline/custom installs, not a second
+  central roster.
 
 ## HA Roster
 

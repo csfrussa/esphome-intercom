@@ -2,7 +2,7 @@
 # Single WS2812/SK6812 status LED.
 #
 # Hardware/effects package for generic devices with one addressable status LED.
-# State mapping stays in a separate package or the active intercom state machine.
+# State mapping stays in a separate package or the active VoIP state machine.
 # =============================================================================
 
 substitutions:

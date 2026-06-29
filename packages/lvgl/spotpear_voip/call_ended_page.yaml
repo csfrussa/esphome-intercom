@@ -1,8 +1,8 @@
-id: ic_ended_page
+id: call_ended_page
 bg_color: 0x202020
 # Tap anywhere on the page = skip the 4 s auto-return countdown.
 on_click:
-  - lambda: 'id(ic_ended_active) = false;'
+  - lambda: 'id(call_ended_active) = false;'
   - script.execute: draw_display
 widgets:
   - label:
@@ -12,7 +12,7 @@ widgets:
       text_color: 0xFFFFFF
       text_font: font_title
       text_align: CENTER
-      width: ${ic_title_width}
+      width: ${call_title_width}
       long_mode: SCROLL
   - label:
       align: CENTER
@@ -21,9 +21,9 @@ widgets:
       text_color: 0xFFFFFF
       text_font: font_title
       text_align: CENTER
-      width: ${ic_ended_text_width}
+      width: ${call_ended_text_width}
   - label:
-      id: ic_ended_peer_label
+      id: call_ended_peer_label
       align: CENTER
       text: ""
       text_color: 0xFFFFFF
@@ -32,7 +32,7 @@ widgets:
       text_font: font_title
       text_align: CENTER
       long_mode: SCROLL
-      width: ${ic_peer_width}
+      width: ${call_peer_width}
   - label:
       align: CENTER
       y: 13%
@@ -40,9 +40,9 @@ widgets:
       text_color: 0xFFFFFF
       text_font: font_info
       text_align: CENTER
-      width: ${ic_ended_text_width}
+      width: ${call_ended_text_width}
   - label:
-      id: ic_ended_reason_label
+      id: call_ended_reason_label
       align: CENTER
       y: 25%
       text: "-"
@@ -50,4 +50,4 @@ widgets:
       text_font: font_info
       text_align: CENTER
       long_mode: SCROLL
-      width: ${ic_ended_reason_text_width}
+      width: ${call_ended_reason_text_width}

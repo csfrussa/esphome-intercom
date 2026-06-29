@@ -3,7 +3,7 @@
 #
 # Requires:
 #   - light id `status_led` from packages/led/status_ws2812_ring.yaml
-#   - global id `g_applied_led` from intercom/state_machine_full.yaml
+#   - global id `g_applied_led` from voip/state_machine_full.yaml
 #   - placeholder script id `update_led` from the active state machine package
 # =============================================================================
 
@@ -36,13 +36,13 @@ script:
             case 7:  // VA Speaking: blue solid
               led->turn_on().set_rgb(0.3f, 0.3f, 0.7f).set_brightness(0.6f).set_effect("None").perform();
               break;
-            case 8:  // IC Ringing: red strobe
+            case 8:  // Call ringing: red strobe
               led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
               break;
-            case 9:  // IC Outgoing: orange strobe
+            case 9:  // Call outgoing: orange strobe
               led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
               break;
-            case 10: // IC Streaming: green solid
+            case 10: // Call in progress: green solid
               led->turn_on().set_rgb(0.3f, 0.69f, 0.31f).set_brightness(1.0f).set_effect("None").perform();
               break;
             case 11: // VA Error: red solid

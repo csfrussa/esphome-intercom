@@ -1,4 +1,4 @@
-id: ic_ringing_in_page
+id: call_ringing_in_page
 bg_color: 0xFF0000
 widgets:
   - label:
@@ -8,7 +8,7 @@ widgets:
       text_color: 0xFFFFFF
       text_font: font_title
       text_align: CENTER
-      width: ${ic_title_width}
+      width: ${call_title_width}
       long_mode: SCROLL
   - label:
       align: TOP_MID
@@ -18,21 +18,21 @@ widgets:
       text_font: font_state
       text_align: CENTER
   - label:
-      id: ic_ringing_in_peer_label
+      id: call_ringing_in_peer_label
       align: CENTER
       text: ""
       text_color: 0xFFFFFF
       text_font: font_title
       text_align: CENTER
       long_mode: SCROLL
-      width: ${ic_ringing_in_peer_width}
+      width: ${call_ringing_in_peer_width}
   # Answer (green left) / Decline (red right)
   - button:
       floating: true
       align: LEFT_MID
-      x: ${ic_btn_offset}
-      width: ${ic_btn_size}
-      height: ${ic_btn_size}
+      x: ${call_btn_offset}
+      width: ${call_btn_size}
+      height: ${call_btn_size}
       bg_opa: TRANSP
       shadow_opa: TRANSP
       widgets:
@@ -40,15 +40,15 @@ widgets:
             text: "\U000F03F2"
             align: CENTER
             text_color: 0x00FF00
-            text_font: ic_icons
+            text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.call_toggle: voip_phone
+        - esphome_voip_stack.call_toggle:
   - button:
       floating: true
       align: RIGHT_MID
       x: -5
-      width: ${ic_btn_size}
-      height: ${ic_btn_size}
+      width: ${call_btn_size}
+      height: ${call_btn_size}
       bg_opa: TRANSP
       shadow_opa: TRANSP
       widgets:
@@ -56,10 +56,10 @@ widgets:
             text: "\U000F03F5"
             align: CENTER
             text_color: 0xFFFFFF
-            text_font: ic_icons
+            text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.decline_call: voip_phone
+        - esphome_voip_stack.decline_call:
 
 # ========================================================================
-# INTERCOM: RINGING OUT PAGE
+# VOIP: RINGING OUT PAGE
 # ========================================================================

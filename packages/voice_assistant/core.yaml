@@ -1,20 +1,20 @@
 # =============================================================================
 # Voice Assistant + Micro Wake Word (core configuration + handlers).
 # Drop-in for full-experience devices that run VA on top of the shared
-# intercom/state_machine_full.yaml.
+# voip/state_machine_full.yaml.
 #
 # Prerequisites in the device YAML:
 #   - VA hardware config (microphone, speaker, media_player, ringtone, ...)
 #     declared via the standard ESPHome blocks; this package only adds
 #     `voice_assistant: id: va` + `micro_wake_word: id: mww` config sections
 #     and their on_* handlers, not the hardware bindings.
-#   - script id `update_status` (provided by intercom/state_machine_full.yaml)
-#   - script id `va_end_handler` (provided by intercom/state_machine_full.yaml)
-#   - script id `mww_failsafe`   (provided by intercom/state_machine_full.yaml)
-#   - script id `barge_failsafe` (provided by intercom/state_machine_full.yaml)
-#   - script id `va_error_flash` (provided by intercom/state_machine_full.yaml)
+#   - script id `update_status` (provided by voip/state_machine_full.yaml)
+#   - script id `va_end_handler` (provided by voip/state_machine_full.yaml)
+#   - script id `mww_failsafe`   (provided by voip/state_machine_full.yaml)
+#   - script id `barge_failsafe` (provided by voip/state_machine_full.yaml)
+#   - script id `va_error_flash` (provided by voip/state_machine_full.yaml)
 #   - script id `ui_tts_started`, `ui_stt_ended` (placeholders or device override)
-#   - id `intercom`              : esphome_voip_stack component (for publish_entity_states)
+#   - id `phone`              : esphome_voip_stack component (for publish_entity_states)
 #   - id `mute`                  : mic mute switch
 # =============================================================================
 

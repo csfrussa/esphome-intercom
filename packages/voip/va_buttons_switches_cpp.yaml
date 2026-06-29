@@ -1,6 +1,6 @@
 # =============================================================================
-# Intercom buttons + mute/wake-word switches.
-# VA-aware variant of intercom/buttons_switches.yaml: the mic mute switch also
+# VoIP buttons + mute/wake-word switches.
+# VA-aware variant of voip/buttons_switches.yaml: the mic mute switch also
 # stops/starts the wake word + voice assistant pipeline, and adds an extra
 # Wake Word toggle.
 #

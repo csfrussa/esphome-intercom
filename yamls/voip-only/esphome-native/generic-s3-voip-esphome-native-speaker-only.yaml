@@ -1,7 +1,7 @@
 # =============================================================================
-# GENERIC ESP32-S3 INTERCOM SPEAKER-ONLY UDP - native ESPHome audio
+# GENERIC ESP32-S3 VOIP SPEAKER-ONLY - native ESPHome audio
 # =============================================================================
-# Standalone speaker-only intercom profile for native ESPHome audio.
+# Standalone speaker-only VoIP profile for native ESPHome audio.
 #
 # Purpose:
 #   - No esp_audio_stack.
@@ -34,9 +34,9 @@
 
 substitutions:
   name: generic-native-int-spk
-  friendly_name: Generic S3 Native Intercom Speaker Only
+  friendly_name: Generic S3 Native VoIP Speaker Only
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
   speaker_enable_pin: GPIO18
   status_led_pin: GPIO48
@@ -44,13 +44,13 @@ substitutions:
   status_led_rgb_order: GRB
 
 packages:
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
-  voip_auto_entities: github://n-IA-hane/esphome-intercom/packages/voip/auto_entities.yaml@dev
-  voip_buttons: github://n-IA-hane/esphome-intercom/packages/voip/buttons_base.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  ha_api: !include ../../../packages/voip/ha_api.yaml
+  voip_auto_entities: !include ../../../packages/voip/auto_entities.yaml
+  voip_buttons: !include ../../../packages/voip/buttons_base.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
 
 esphome:
   name: ${name}
@@ -127,7 +127,7 @@ i2s_audio:
     i2s_bclk_pin: GPIO12
     i2s_lrclk_pin: GPIO13
 
-# Native ESPHome speaker. Keep it at intercom's wire format to avoid a
+# Native ESPHome speaker. Keep it at VoIP wire format to avoid a
 # resampler in this regression profile.
 speaker:
   - platform: i2s_audio
@@ -142,7 +142,7 @@ speaker:
     timeout: 500ms
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   task_stacks_in_psram: true
   buffers_in_psram: true
   audio:

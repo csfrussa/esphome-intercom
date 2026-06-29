@@ -54,14 +54,14 @@ VoIP call-control path is not a compatibility layer.
 
 ## 🏠 Home Assistant VoIP Stack / Home Assistant
 
-- 🗣️ **Home Assistant VoIP Stack now is able to call other intercoms via Voice
+- 🗣️ **Home Assistant VoIP Stack now is able to call other VoIP contacts via Voice
   Assistant.** An optional Assist intent adapter can be enabled from the
   Home Assistant VoIP Stack setup/reconfigure dialog. With the provided custom sentences,
   voice satellites can call a phonebook contact, hang up, answer or decline
   using the satellite that heard the sentence. Spoken contact names are resolved
   dynamically against the live phonebook, so `call kitchen speaker` can resolve
   to the canonical `Kitchen Speaker` contact without changing low-level
-  intercom matching. If no phonebook contact matches, the adapter can also call
+  VoIP contact matching. If no phonebook contact matches, the adapter can also call
   the single VoIP device assigned to a matching Home Assistant area name.
   Multiple VoIP devices per area are intentionally not voice-dialed in this
   prerelease; group/area calls are left for a later release.
@@ -166,19 +166,19 @@ VoIP call-control path is not a compatibility layer.
 - 🧱 Runtime audio now works in explicit **audio frames/chunks** derived from the
   negotiated stream format instead of treating every path as fixed
   milliseconds around 16 kHz/s16/mono.
-- 📐 Intercom TX/RX chunk sizes, ring sizes and frame validation are derived from
+- 📐 VoIP TX/RX chunk sizes, ring sizes and frame validation are derived from
   `AudioFormat`.
 - 🧯 ESP microphone RTP packetization now preserves residual samples when the
   hardware/audio-stack callback size is not an exact multiple of negotiated
   SIP `ptime`. This fixes the 64 ms AFE callback -> 10 ms RTP case that caused
   periodic ESP-to-HA audio gaps.
 - 🎚️ ESP speaker stream info is updated from the selected RX format before
-  intercom playback, so native speaker paths can receive higher-rate PCM.
+  VoIP playback, so native speaker paths can receive higher-rate PCM.
 - 🎙️ AFE/AEC microphone branches remain 16 kHz/s16/mono because that is the
   Espressif AFE/AEC output contract.
 - 🔄 Native ESPHome microphone/speaker paths can advertise higher-rate PCM when
   they bypass AFE/AEC.
-- 🧼 TCP accept/error logs and several numeric intercom errors were made clearer
+- 🧼 TCP accept/error logs and several numeric VoIP errors were made clearer
   for users reading logs.
 - 🧰 Shared socket helpers and smaller transport cleanups reduced duplicated TCP
   and UDP code.
@@ -194,11 +194,11 @@ VoIP call-control path is not a compatibility layer.
 - 🧠 Maintained full-experience presets now use the generic `runtime_fsm`
   reducer for LED/display/ducking/ringtone/timer arbitration. YAML callbacks
   report events; one reducer snapshot decides the visible state and audio
-  policy, so media, TTS, timers, mute, connectivity and intercom no longer
+  policy, so media, TTS, timers, mute, connectivity and VoIP no longer
   race each other through separate scripts.
 - 🧩 Normal HA media, announcements, timer sounds, local files and Sendspin all
   enter one media player/source path, then the mixer arbitrates against
-  intercom and Voice Assistant.
+  VoIP calls and Voice Assistant.
 - 🗣️ Voice Assistant reply state is now tied to real TTS/media-player
   announcement lifecycle callbacks. Slow local TTS engines keep the blue
   response state while the URL is pending, switch cleanly when playback starts,
@@ -213,7 +213,7 @@ VoIP call-control path is not a compatibility layer.
 - 🗣️ Maintained full YAMLs now expose an optional package for local Assist
   silence commands. It lets `shut up` style commands stop only the active
   VA/TTS announcement on the satellite that heard the sentence, without
-  stopping background media. Intercom call/hangup/answer/decline commands are
+  stopping background media. VoIP call/hangup/answer/decline commands are
   handled by the optional Home Assistant VoIP Stack Assist intent adapter instead of
   YAML automations.
 - 🖼️ Sendspin artwork is promoted for display profiles that opt in to the
@@ -224,7 +224,7 @@ VoIP call-control path is not a compatibility layer.
   it lands in an ESPHome release. Thanks to
   [issue #58](https://github.com/n-IA-hane/esphome-intercom/issues/58) for the
   FYI that surfaced this capability.
-- 🥇 Intercom keeps priority through its dedicated mixer source.
+- 🥇 VoIP keeps priority through its dedicated mixer source.
 - ⏲️ Timer/ringtone/media playback now follow the same source arbitration model
   instead of drifting through separate speaker paths.
 - 🧯 Runtime reducer state dumps are disabled by default in production package
@@ -270,8 +270,8 @@ VoIP call-control path is not a compatibility layer.
   path.
 - 🧪 Native ESPHome voip-only presets now advertise 48 kHz PCM where the
   native I2S path can support it.
-- 🚦 TCP native intercom presets use larger 20 ms PCM frames.
-- 🚦 UDP native intercom presets use 10 ms frames by default to stay under the
+- 🚦 TCP native VoIP presets use larger 20 ms PCM frames.
+- 🚦 UDP native VoIP presets use 10 ms frames by default to stay under the
   conservative UDP payload ceiling.
 - 🎙️ AFE/AEC full profiles keep 16 kHz TX from the AFE branch and can use
   higher-rate RX toward the speaker branch.

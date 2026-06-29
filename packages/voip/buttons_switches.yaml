@@ -1,6 +1,6 @@
 # =============================================================================
-# Intercom buttons + mute switches.
-# Drop-in for intercom devices that need button/switch entities.
+# VoIP buttons + mute switches.
+# Drop-in for VoIP devices that need button/switch entities.
 #
 # Provides:
 #   buttons: call_button, next_contact_button, prev_contact_button,
@@ -9,7 +9,7 @@
 #
 # Prerequisites in the device YAML:
 #   - id `mic_main`   : microphone (for microphone.mute action)
-#   - script id `update_status` (provided by intercom/state_machine.yaml)
+#   - script id `update_status` (provided by voip/state_machine.yaml)
 # =============================================================================
 
 packages:

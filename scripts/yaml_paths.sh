@@ -92,10 +92,11 @@ find_yamls() {
 # (yaml doesn't actually use the toggle pattern, e.g. a fragment).
 detect_mode() {
   local f="$1" has_local=0 has_remote=0
-  # Remote markers: ext_components_source pointing at github://, OR any
-  # packages: entry with github:// shorthand.
-  if grep -qE '^[[:space:]]*ext_components_source:[[:space:]]*"github://' "$f" \
-     || grep -qE '^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*github://' "$f"; then
+  # Remote markers: ext_components_source/packages pointing at this repo.
+  # Third-party github:// packages are allowed in local mode and must not make
+  # the YAML look mixed.
+  if grep -qF "ext_components_source: \"${DEFAULT_URL}" "$f" \
+     || grep -qF ": ${DEFAULT_URL}/" "$f"; then
     has_remote=1
   fi
   # Local markers: ext_components_source with relative path (`"../`), OR any

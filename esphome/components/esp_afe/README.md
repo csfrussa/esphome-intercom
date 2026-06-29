@@ -36,7 +36,7 @@ Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 > feature, so AGC changes require AFE reinit. The public dual-mic packages keep
 > AGC disabled and do not expose an AGC switch.
 
-Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full signal processing pipeline. Both components implement the `AudioProcessor` interface, but they are **only** drop-in replacements behind `esp_audio_stack`. With standalone `esphome_voip_stack` (no audio stack driver), use `esp_aec`: the AFE feed/fetch task model needs the steady producer that `esp_audio_stack` provides and that the standalone intercom path does not.
+Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full signal processing pipeline. Both components implement the `AudioProcessor` interface, but they are **only** drop-in replacements behind `esp_audio_stack`. With standalone `esphome_voip_stack` (no audio stack driver), use `esp_aec`: the AFE feed/fetch task model needs the steady producer that `esp_audio_stack` provides and that the standalone VoIP path does not.
 
 ### When to use esp_afe vs esp_aec
 
@@ -170,7 +170,7 @@ esp_afe:
 > 19 KB. Current maintained dual-mic full-experience profiles keep
 > `feed_buf_in_psram`, `feed_ring_in_psram` and `fetch_ring_in_psram` false
 > when the board has enough contiguous internal/DMA heap. This avoids PSRAM
-> traffic on the hot AFE bridge path and improved P4 intercom/TTS latency during
+> traffic on the hot AFE bridge path and improved P4 VoIP/TTS latency during
 > validation. Each flag remains independent for board-specific tuning: enabling
 > them can recover up to about 19 KB internal RAM, at the cost of Core 0 PSRAM
 > reads/writes. Cumulative Core 0 cost when all are `true` is about
@@ -211,7 +211,7 @@ The combination of `type` and `mode` determines the AEC engine and DSP pipeline:
 
 | type + mode | AEC Engine | CPU (Core 0) | MWW Compatible | Use Case |
 |-------------|-----------|-------------|----------------|----------|
-| `sr` + `low_cost` | `esp_aec3` (linear, SIMD) | **~23%** | **Yes** (10/10) | VA + MWW + Intercom |
+| `sr` + `low_cost` | `esp_aec3` (linear, SIMD) | **~23%** | **Yes** (10/10) | VA + MWW + VoIP |
 | `sr` + `high_perf` | `esp_aec3` (FFT) | ~25% | Yes | Not recommended (DMA memory on S3) |
 | `vc` + `low_cost` | `dios_ssp_aec` (Speex) | ~60% | No (2/10) | VoIP without wake word |
 | `vc` + `high_perf` | `dios_ssp_aec` | ~64% | No | VoIP without wake word |
@@ -251,7 +251,7 @@ switch:
 | `vad` | `mdi:account-voice` | Voice activity detection toggle. VAD is structurally initialized and enabled/disabled live through the GMF AFE manager |
 | `agc` | `mdi:tune-vertical` | Auto gain control toggle (requires AFE reinit). Use only on single-mic or custom diagnostic builds whose checked runtime config keeps `agc_init: true`; public dual-mic packages omit it |
 
-Use `RESTORE_DEFAULT_OFF` for VAD restore on full-experience intercom targets:
+Use `RESTORE_DEFAULT_OFF` for VAD restore on full-experience VoIP targets:
 VAD is off on first boot, but the user's HA switch state is preserved after
 that. If `Voice Detected` should keep working in standby, set
 `continuous_vad: true` so the background mic path is intentional.
@@ -280,7 +280,7 @@ TDM / codec input
                                             ESP-SR target mono output
                                                          |
                                                          v
-                                             MWW / Voice Assistant / intercom
+                                             MWW / Voice Assistant / VoIP
 ```
 
 ### Binary Sensor Platform
@@ -553,7 +553,7 @@ esp32:
 
 Do not disable Wi-Fi/PHY IRAM paths as a default memory shortcut on full
 audio devices. The saved RAM is small compared to the latency and throughput
-risk on the same network path that carries TTS/media, API and intercom traffic.
+risk on the same network path that carries TTS/media, API and VoIP traffic.
 
 > **Tip**: Use ESPHome's native `debug` sensors (`free`, `block`, `min_free`,
 > `fragmentation`, `psram`, `cpu_frequency`) for firmware-level diagnostics.

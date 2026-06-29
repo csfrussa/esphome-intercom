@@ -1,5 +1,5 @@
 # =============================================================================
-# Intercom phone SIP/RTP transport
+# VoIP phone SIP/RTP transport
 # =============================================================================
 #
 # Configures esphome_voip_stack as a standard SIP phone. `transport` selects only the
@@ -14,7 +14,7 @@ substitutions:
   voip_rtp_port: "40000"
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   # SIP signaling transport: `udp` by default; set `voip_transport: tcp`
   # in the device YAML when this phone must use SIP over TCP.
   transport: ${voip_transport}

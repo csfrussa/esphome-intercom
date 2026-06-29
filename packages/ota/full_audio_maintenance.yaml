@@ -6,7 +6,7 @@
 #
 # Required IDs:
 #   - audio_stack
-#   - intercom
+#   - VoIP
 #   - mww
 #   - speaker_media_player
 #   - script: start_mww_when_ready
@@ -28,7 +28,7 @@ ota:
           announcement: true
       - voice_assistant.stop:
       - micro_wake_word.stop:
-      - esphome_voip_stack.stop: voip_phone
+      - esphome_voip_stack.stop:
       - esp_audio_stack.stop_and_wait: audio_stack
     on_abort:
       - script.execute: ota_full_audio_restore
@@ -49,6 +49,6 @@ script:
           id: g_ota_in_progress
           value: "false"
       - esp_audio_stack.start: audio_stack
-      - esphome_voip_stack.start: voip_phone
+      - esphome_voip_stack.start:
       - script.execute: start_mww_when_ready
       - esp_audio_stack.restore_ota_watchdog: audio_stack

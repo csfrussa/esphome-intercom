@@ -9,8 +9,8 @@
 # Tested modules: INMP441 digital MEMS microphone, MAX98357A I2S amplifier.
 #
 # Audio pipeline:
-#   INMP441 -> RX I2S bus -> esp_audio_stack (48 kHz) -> esp_ae_rate_cvt -> esp_aec -> VA / Intercom / MWW
-#   Media/VA/Intercom -> mixer (48 kHz) -> esp_audio_stack -> TX I2S bus -> MAX98357A
+#   INMP441 -> RX I2S bus -> esp_audio_stack (48 kHz) -> esp_ae_rate_cvt -> esp_aec -> VA / VoIP / MWW
+#   Media/VA/VoIP -> mixer (48 kHz) -> esp_audio_stack -> TX I2S bus -> MAX98357A
 #
 # Pin choice rationale:
 #   - Camera GPIOs are reused because the camera module is removed.
@@ -49,8 +49,8 @@ substitutions:
   name: generic-s3-dual-aec
   friendly_name: Generic S3 Dual AEC
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
   mic_id: mic_main
 
   speaker_enable_pin: GPIO18
@@ -59,26 +59,26 @@ substitutions:
   status_led_rgb_order: GRB
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute_cpp.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_single.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
-  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
-  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  core: !include ../../../packages/va_voip_cpp.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  speaker_mute: !include ../../../packages/voip/speaker_mute_cpp.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
+  led_state_full: !include ../../../packages/led/state_full_single.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
+  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
 esphome:
   name: ${name}
@@ -282,11 +282,11 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle: voip_phone
+                        esphome_voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN
-                      format: "Cannot switch AEC mode during active VA/intercom"
+                      format: "Cannot switch AEC mode during active VA/VoIP"
                 else:
                   - logger.log:
                       format: "Switching AEC mode to %s"
@@ -318,7 +318,7 @@ binary_sensor:
         input: true
         pullup: true
     on_multi_click:
-      # Single click: call toggle if intercom active, otherwise VA start/stop
+      # Single click: call toggle if VoIP call active, otherwise VA start/stop
       - timing:
           - ON for at most 500ms
           - OFF for at least 400ms
@@ -326,9 +326,9 @@ binary_sensor:
           - if:
               condition:
                 not:
-                  - esphome_voip_stack.is_idle: voip_phone
+                  - esphome_voip_stack.is_idle:
               then:
-                - esphome_voip_stack.call_toggle: voip_phone
+                - esphome_voip_stack.call_toggle:
               else:
                 - runtime_fsm.event:
                     id: runtime_controller
@@ -340,7 +340,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - esphome_voip_stack.next_contact: voip_phone
+          - esphome_voip_stack.next_contact:
       # Long press (1-3s): toggle mute
       - timing:
           - ON for 1s to 3s

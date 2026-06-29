@@ -6,7 +6,7 @@
 #
 # Required IDs:
 #   - audio_stack
-#   - intercom
+#   - VoIP
 #   - mww
 #   - speaker_media_player
 #   - scripts: ai_animation_loop, timer_alarm_loop, start_mww_when_ready, draw_display
@@ -33,7 +33,7 @@ ota:
           announcement: true
       - voice_assistant.stop:
       - micro_wake_word.stop:
-      - esphome_voip_stack.stop: voip_phone
+      - esphome_voip_stack.stop:
       - esp_audio_stack.stop_and_wait: audio_stack
       - lvgl.pause:
           show_snow: false
@@ -57,7 +57,7 @@ script:
           value: "false"
       - lvgl.resume:
       - esp_audio_stack.start: audio_stack
-      - esphome_voip_stack.start: voip_phone
+      - esphome_voip_stack.start:
       - script.execute: start_mww_when_ready
       - script.execute: draw_display
       - esp_audio_stack.restore_ota_watchdog: audio_stack

@@ -1,29 +1,29 @@
 # =============================================================================
-# SPOTPEAR BALL V2 - VOICE ASSISTANT + INTERCOM + WAKE WORD (esp_afe pipeline)
+# SPOTPEAR BALL V2 - VOICE ASSISTANT + VOIP + WAKE WORD (esp_afe pipeline)
 # =============================================================================
 # Target board: Spotpear Ball v2 (ESP32-S3 with GC9A01A 240x240 round display,
 # ES8311 mono codec, CST816 touch, GPIO0 button).
 #
 # Audio pipeline (esp_audio_stack @ 48 kHz, stereo AEC reference):
 #
-#   I2S RX 48kHz stereo -> L=mic R=ref -> esp_ae_rate_cvt x3 -> esp_afe (AEC+NS+AGC) -> mic_afe -> VA / Intercom TX / MWW
+#   I2S RX 48kHz stereo -> L=mic R=ref -> esp_ae_rate_cvt x3 -> esp_afe (AEC+NS+AGC) -> mic_afe -> VA / VoIP TX / MWW
 #
 #   Music/radio → media_speaker_input (resampler) ───────────┐
 #   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
-#   Intercom RX → voip_speaker_input (resampler) ────────┘
+#   VoIP RX → voip_speaker_input (resampler) ────────┘
 #
 # Single GPIO0 button, page-aware:
-#   VA idle           : click=start VA      | long (1-3s)=switch to intercom
+#   VA idle           : click=start VA      | long (1-3s)=switch to VoIP
 #   VA active         : click=stop VA
-#   Intercom idle     : click=call          | double=next contact | long=switch to VA
-#   Intercom ring in  : click=answer        | double=decline      | long=switch to VA
-#   Intercom ring out : click=hangup        | long=switch to VA
-#   Intercom in call  : click=hangup        | long=switch to VA
+#   VoIP idle     : click=call          | double=next contact | long=switch to VA
+#   VoIP ring in  : click=answer        | double=decline      | long=switch to VA
+#   VoIP ring out : click=hangup        | long=switch to VA
+#   VoIP in call  : click=hangup        | long=switch to VA
 #   Timer ringing     : click=stop timer (any page)
 # =============================================================================
 
 substitutions:
-  # Hardware-shared identity: all Spotpear Ball v2 firmware variants (intercom / full-afe
+  # Hardware-shared identity: all Spotpear Ball v2 firmware variants (voip / full-afe
   # / full-afe) share `spotpear-ball-v2` so a flash swap reuses the same HA device entity
   # and the same .esphome/build cache.
   name: spotpear-ball-v2
@@ -31,35 +31,35 @@ substitutions:
   mic_id: mic_afe
   afe_vad_restore_mode: ALWAYS_ON
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
 
-  # IC layout proportions (relative to display_height)
-  ic_btn_size: "25%"
-  ic_btn_offset: "2%"
-  ic_btn_below_center: "19%"   # cornetta center between peer (50%) and battery overlay (82%)
-  ic_contacts_y: "31%"         # idle phonebook icon: visual midway between IDLE label (~y=58) and peer (~y=120)
+  # Call layout proportions (relative to display_height)
+  call_btn_size: "25%"
+  call_btn_offset: "2%"
+  call_btn_below_center: "19%"   # cornetta center between peer (50%) and battery overlay (82%)
+  call_contacts_y: "31%"         # idle phonebook icon: visual midway between IDLE label (~y=58) and peer (~y=120)
   # Round 240x240 GC9A01: peer label widths derived from circle chord at the label's y.
-  ic_peer_width: "224"               # chord at y=120 (centre) minus 12 px side margin: idle/ringing_out/in_call
-  ic_ringing_in_peer_width: "139"    # ic_ringing_in only: answer/decline buttons sit at LEFT_MID/RIGHT_MID at y=120
-  ic_title_width: "116"              # device-name title at y≈19 (8%): chord minus 12 px margin
-  ic_ended_text_width: "187"         # ic_ended_page "Call ended" (y≈53) and "Reason:" (y≈139) labels: chord minus 12 px margin
-  ic_ended_reason_text_width: "177"  # ic_ended_page reason text (dynamic) at y≈168: chord minus 12 px margin (above top_battery_label at y=197)
+  call_peer_width: "224"               # chord at y=120 (centre) minus 12 px side margin: idle/ringing_out/in_call
+  call_ringing_in_peer_width: "139"    # call_ringing_in only: answer/decline buttons sit at LEFT_MID/RIGHT_MID at y=120
+  call_title_width: "116"              # device-name title at y≈19 (8%): chord minus 12 px margin
+  call_ended_text_width: "187"         # call_ended_page "Call ended" (y≈53) and "Reason:" (y≈139) labels: chord minus 12 px margin
+  call_ended_reason_text_width: "177"  # call_ended_page reason text (dynamic) at y≈168: chord minus 12 px margin (above top_battery_label at y=197)
   # Settings page widths for the round 240x240 panel.
-  ic_settings_row_width: "170"
-  ic_settings_wide_width: "190"
-  ic_settings_mid_width: "170"
-  ic_settings_narrow_width: "150"
-  ic_settings_dropdown_width: "170"
-  ic_settings_slider_height: "12"
-  ic_settings_switch_width: "50"
-  ic_settings_switch_height: "26"
-  ic_settings_label_font: font_info
-  ic_settings_pad_row: "6"
+  settings_row_width: "170"
+  settings_wide_width: "190"
+  settings_mid_width: "170"
+  settings_narrow_width: "150"
+  settings_dropdown_width: "170"
+  settings_slider_height: "12"
+  settings_switch_width: "50"
+  settings_switch_height: "26"
+  settings_label_font: font_info
+  settings_pad_row: "6"
 
   voice_assist_idle_phase_id: "1"
   voice_assist_listening_phase_id: "2"
@@ -78,29 +78,29 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
-  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
-  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
-  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
-  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
-  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@dev
-  spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_full.yaml@dev
+  core: !include ../../../packages/va_voip_cpp.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
+  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  sendspin_artwork: !include ../../../packages/media_player/sendspin_artwork.yaml
+  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
+  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
+  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
+  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
+  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
+  spotpear_voip_nav: !include ../../../packages/lvgl/spotpear_voip/nav_full.yaml
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION
@@ -117,15 +117,15 @@ esphome:
           brightness: 100%
       - script.execute: compute_layout_metrics
       - script.execute: reposition_widgets
-      # Settings is a single vertical scroll page. Intercom swipe-up opens it;
-      # swipe-down at scroll top returns to Intercom.
+      # Settings is a single vertical scroll page. VoIP swipe-up opens it;
+      # swipe-down at scroll top returns to VoIP.
       - lambda: |-
           id(g_settings_pages).clear();
           id(g_settings_pages).push_back(id(settings_continuous_page)->obj);
       - script.execute: backlight_timer
       - micro_wake_word.stop:
       - delay: 1s
-      - lambda: id(peer_name) = id(voip_phone).get_current_destination();
+      - lambda: id(peer_name) = id(phone).get_current_destination();
       - delay: 30s
       - if:
           condition:
@@ -272,7 +272,7 @@ esp_afe:
 # Audio task defaults come from the component; this preset keeps the
 # single-bus ES8311 path simple and relies on stereo loopback reference.
 # Bus runs at 48kHz (ES8311 native rate, better DAC quality).
-# Espressif rate conversion x3 produces 16kHz for mic/AFE/MWW/VA/intercom.
+# Espressif rate conversion x3 produces 16kHz for mic/AFE/MWW/VA/VoIP.
 # =============================================================================
 esp_audio_stack:
   id: audio_stack
@@ -311,7 +311,7 @@ esp_audio_stack:
 
 # =============================================================================
 # MICROPHONE
-# Single mic_afe: processed AEC output for all consumers (VA STT, intercom TX, MWW).
+# Single mic_afe: processed AEC output for all consumers (VA STT, VoIP TX, MWW).
 # No separate unprocessed microphone path is exposed.
 # =============================================================================
 microphone:
@@ -412,7 +412,7 @@ media_player:
 #
 # MWW always-on (stop_after_detection: false) on mic_afe.
 # SR linear AEC preserves spectral features for neural detection (10/10).
-# Ducking is derived by runtime_fsm from the active VA/media/intercom policies.
+# Ducking is derived by runtime_fsm from the active VA/media/VoIP policies.
 # =============================================================================
 micro_wake_word:
   id: mww
@@ -444,12 +444,12 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# INTERCOM API
+# VOIP STACK
 # =============================================================================
 esphome_voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
-  buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
-  id: voip_phone
+  buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  id: phone
   audio:
     # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
     # with a 10 ms reframe available for peers that can drive the speaker at
@@ -494,11 +494,11 @@ esphome_voip_stack:
   # Idle screen refresh hook: each merge cycle ends with publish_destination_,
   # so re-render so peer name + contact count reflect the new roster.
   on_update_contacts:
-    - lambda: id(peer_name) = id(voip_phone).get_current_destination();
-    - script.execute: update_ic_idle_labels
+    - lambda: id(peer_name) = id(phone).get_current_destination();
+    - script.execute: update_call_idle_labels
   on_destination_changed:
-    - lambda: id(peer_name) = id(voip_phone).get_current_destination();
-    - script.execute: update_ic_idle_labels
+    - lambda: id(peer_name) = id(phone).get_current_destination();
+    - script.execute: update_call_idle_labels
     - script.execute: draw_display
 
 # =============================================================================
@@ -510,7 +510,7 @@ globals:
     restore_value: false
     initial_value: ${voice_assist_not_ready_phase_id}
 
-  # Mode: 0=VA, 1=Intercom
+  # Mode: 0=VA, 1=VoIP
   - id: current_mode
     type: int
     restore_value: no
@@ -520,7 +520,7 @@ globals:
   # (instant lv_disp_load_scr). Non-zero = LVGL anim type (e.g. MOVE_TOP),
   # consumed and reset back to 0 on use. Set by swipe_to_voip/swipe_to_va
   # so a swipe-driven page change is animated, while every other caller
-  # (long-press toggle, intercom state callbacks, etc.) stays instant.
+  # (long-press toggle, VoIP state callbacks, etc.) stays instant.
   - id: nav_anim
     type: int
     restore_value: no
@@ -536,7 +536,7 @@ globals:
     restore_value: no
     initial_value: "0"
 
-  # Intercom peer name for display
+  # VoIP peer name for display
   - id: peer_name
     type: std::string
     restore_value: no
@@ -555,10 +555,10 @@ globals:
     type: std::vector<std::string>
     restore_value: false
 
-  # ic_ended_page is shown briefly after a call terminates (hangup,
-  # decline, error, timeout). Set by ui_ic_ended, cleared by the
+  # call_ended_page is shown briefly after a call terminates (hangup,
+  # decline, error, timeout). Set by ui_call_ended, cleared by the
   # auto-return delay or by the next state change.
-  - id: ic_ended_active
+  - id: call_ended_active
     type: bool
     restore_value: false
     initial_value: "false"
@@ -652,13 +652,13 @@ script:
             case 7:  // VA Speaking: blue solid
               led->turn_on().set_rgb(0.0f, 0.0f, 1.0f).set_brightness(1.0f).set_effect("None").perform();
               break;
-            case 8:  // IC Ringing: red strobe
+            case 8:  // Call ringing: red strobe
               led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
               break;
-            case 9:  // IC Outgoing: orange strobe
+            case 9:  // Call outgoing: orange strobe
               led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
               break;
-            case 10: // IC In Call: green solid
+            case 10: // Call in progress: green solid
               led->turn_on().set_rgb(0.0f, 1.0f, 0.0f).set_brightness(1.0f).set_effect("None").perform();
               break;
             case 11: // VA Error: red solid
@@ -683,9 +683,9 @@ script:
     then:
       - lambda: |-
           int state = id(ui_state);
-          // Intercom idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle") {
-            id(peer_name) = id(voip_phone).get_current_destination();
+          // VoIP idle: restore previous mode after call ends.
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+            id(peer_name) = id(phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
             }
@@ -746,14 +746,14 @@ script:
                 id: text_response
                 state: "..."
             - script.stop: reply_pagination_timer
-      # Intercom idle: update labels if staying in IC mode.
+      # VoIP idle: update labels if staying in call mode.
       - if:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(voip_phone).get_state_str() == "idle";
+                     && id(phone).get_state_str() == "idle";
           then:
-            - script.execute: update_ic_idle_labels
+            - script.execute: update_call_idle_labels
       - script.execute: draw_display
 
   # TTS text display (extends package placeholder)
@@ -812,8 +812,8 @@ script:
           state: !lambda 'return text;'
       - script.execute: draw_display
 
-  # Intercom call display (extends package placeholder)
-  - id: !extend ui_ic_call
+  # VoIP call display (extends package placeholder)
+  - id: !extend ui_call_started
     then:
       - script.stop: reply_pagination_timer
       - lambda: |-
@@ -821,31 +821,31 @@ script:
           id(previous_mode) = id(current_mode);
           id(current_mode) = 1;
       - script.execute: backlight_timer
-      # Update the relevant peer label for whichever IC page will show
+      # Update the relevant peer label for whichever call page will show
       - lvgl.label.update:
-          id: ic_ringing_out_peer_label
+          id: call_ringing_out_peer_label
           text: !lambda 'return id(peer_name);'
       - lvgl.label.update:
-          id: ic_ringing_in_peer_label
+          id: call_ringing_in_peer_label
           text: !lambda 'return id(peer_name);'
       - lvgl.label.update:
-          id: ic_in_call_peer_label
+          id: call_in_call_peer_label
           text: !lambda 'return id(peer_name);'
       - script.execute: draw_display
 
-  # Call terminated screen: render peer + reason on ic_ended_page,
-  # gate draw_display via ic_ended_active for the auto-return window.
-  - id: !extend ui_ic_ended
+  # Call terminated screen: render peer + reason on call_ended_page,
+  # gate draw_display via call_ended_active for the auto-return window.
+  - id: !extend ui_call_ended
     mode: restart
     then:
       - globals.set:
-          id: ic_ended_active
+          id: call_ended_active
           value: "true"
       - lvgl.label.update:
-          id: ic_ended_peer_label
+          id: call_ended_peer_label
           text: !lambda 'return peer.empty() ? std::string("-") : peer;'
       - lvgl.label.update:
-          id: ic_ended_reason_label
+          id: call_ended_reason_label
           text: !lambda |-
             std::string r = reason;
             if      (r == "local_hangup")    return std::string("Local hangup");
@@ -861,10 +861,10 @@ script:
       - delay: 4s
       - if:
           condition:
-            lambda: 'return id(ic_ended_active);'
+            lambda: 'return id(call_ended_active);'
           then:
             - globals.set:
-                id: ic_ended_active
+                id: call_ended_active
                 value: "false"
             - script.execute: draw_display
 
@@ -953,7 +953,7 @@ script:
             lv_obj_set_y(obj, y_center - fh / 2);
           };
 
-          // --- IC pages: percentages + align handle positioning, no reposition needed ---
+          // --- call pages: percentages + align handle positioning, no reposition needed ---
 
           // --- Thinking page: chord-width labels (10 children after image) ---
           lv_obj_t* think[] = {
@@ -992,21 +992,21 @@ script:
       - lambda: |-
           // Determine target page
           lv_obj_t* target = nullptr;
-          auto s = id(voip_phone).get_state_str();
+          auto s = id(phone).get_state_str();
           bool in_call = (s == "ringing" || s == "calling" ||
                           s == "remote_ringing" || s == "connecting" ||
                           s == "in_call");
           if (in_call) {
-            id(ic_settings_active) = false;  // call interrupts settings view
+            id(settings_active) = false;  // call interrupts settings view
           }
           // Timer ringing owns the UI while the alarm is active. This must use
           // the runtime_fsm timer activity, not voice_assistant_phase, because media_player
           // callbacks can legitimately update the phase while playing the alarm.
           if (id(runtime_controller).is_activity_active("timer_ringing")) {
             target = id(timer_finished_page)->obj;
-          } else if (id(ic_ended_active)) {
-            target = id(ic_ended_page)->obj;
-          } else if (id(ic_settings_active) && !id(g_settings_pages).empty()) {
+          } else if (id(call_ended_active)) {
+            target = id(call_ended_page)->obj;
+          } else if (id(settings_active) && !id(g_settings_pages).empty()) {
             int idx = id(g_settings_index);
             int n = (int) id(g_settings_pages).size();
             if (idx < 0 || idx >= n) idx = 0;
@@ -1018,16 +1018,16 @@ script:
           } else if (!api::global_api_server->is_connected()) {
             target = id(no_ha_page)->obj;
           } else if (id(current_mode) == 1) {
-            // Intercom mode
-            auto s = id(voip_phone).get_state_str();
+            // VoIP mode
+            auto s = id(phone).get_state_str();
             if (s == "ringing") {
-              target = id(ic_ringing_in_page)->obj;
+              target = id(call_ringing_in_page)->obj;
             } else if (s == "calling" || s == "remote_ringing") {
-              target = id(ic_ringing_out_page)->obj;
+              target = id(call_ringing_out_page)->obj;
             } else if (s == "in_call" || s == "connecting") {
-              target = id(ic_in_call_page)->obj;
+              target = id(call_in_call_page)->obj;
             } else {
-              target = id(ic_idle_page)->obj;
+              target = id(call_idle_page)->obj;
             }
           } else {
             // VA mode
@@ -1058,11 +1058,11 @@ script:
           else if (target == id(replying_page)->obj) page_name = "replying";
           else if (target == id(error_page)->obj) page_name = "error";
           else if (target == id(muted_page)->obj) page_name = "muted";
-          else if (target == id(ic_idle_page)->obj) page_name = "ic_idle";
-          else if (target == id(ic_ringing_in_page)->obj) page_name = "ic_ringing_in";
-          else if (target == id(ic_ringing_out_page)->obj) page_name = "ic_ringing_out";
-          else if (target == id(ic_in_call_page)->obj) page_name = "ic_in_call";
-          else if (target == id(ic_ended_page)->obj) page_name = "ic_ended";
+          else if (target == id(call_idle_page)->obj) page_name = "call_idle";
+          else if (target == id(call_ringing_in_page)->obj) page_name = "call_ringing_in";
+          else if (target == id(call_ringing_out_page)->obj) page_name = "call_ringing_out";
+          else if (target == id(call_in_call_page)->obj) page_name = "call_in_call";
+          else if (target == id(call_ended_page)->obj) page_name = "call_ended";
           else if (target == id(timer_finished_page)->obj) page_name = "timer_finished";
 
           // Skip page load if already showing (avoids redundant SPI transfer)
@@ -1132,10 +1132,10 @@ script:
       - if:
           condition:
             lambda: |-
-              return id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle"
+              return id(current_mode) == 1 && id(phone).get_state_str() == "idle"
                      && !id(init_in_progress);
           then:
-            - script.execute: update_ic_idle_labels
+            - script.execute: update_call_idle_labels
       # Always sync timer overlay on redraw (on_timer_tick stops when timers expire)
       - script.execute: update_timer_state
 
@@ -1274,20 +1274,20 @@ script:
       - globals.set:
           id: current_mode
           value: '1'
-      - script.execute: update_ic_idle_labels
+      - script.execute: update_call_idle_labels
       - script.execute: draw_display
 
-  # Update all dynamic labels on the intercom idle page
-  - id: update_ic_idle_labels
+  # Update all dynamic labels on the VoIP idle page
+  - id: update_call_idle_labels
     then:
-      - lambda: id(peer_name) = id(voip_phone).get_current_destination();
+      - lambda: id(peer_name) = id(phone).get_current_destination();
       - lvgl.label.update:
-          id: ic_idle_peer_label
+          id: call_idle_peer_label
           text: !lambda 'return id(peer_name);'
       - lvgl.label.update:
-          id: ic_idle_contacts_label
+          id: call_idle_contacts_label
           text: !lambda |-
-            auto csv = id(voip_phone).get_contacts_csv();
+            auto csv = id(phone).get_contacts_csv();
             int count = csv.empty() ? 0 : std::count(csv.begin(), csv.end(), ',') + 1;
             char buf[16];
             snprintf(buf, sizeof(buf), "\U000F06CB %d", count);
@@ -1529,18 +1529,18 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle";
+                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
                     then:
-                      - esphome_voip_stack.call_toggle: voip_phone
+                      - esphome_voip_stack.call_toggle:
                     else:
                       - if:
                           condition:
                             lambda: |-
                               if (id(current_mode) != 1) return false;
-                              auto s = id(voip_phone).get_state_str();
+                              auto s = id(phone).get_state_str();
                               return s != "idle";
                           then:
-                            - esphome_voip_stack.call_toggle: voip_phone
+                            - esphome_voip_stack.call_toggle:
                           else:
                             - runtime_fsm.event:
                                 id: runtime_controller
@@ -1556,23 +1556,23 @@ binary_sensor:
               condition:
                 lambda: |-
                   if (id(current_mode) != 1) return false;
-                  auto s = id(voip_phone).get_state_str();
+                  auto s = id(phone).get_state_str();
                   return s == "ringing";
               then:
-                - esphome_voip_stack.decline_call: voip_phone
+                - esphome_voip_stack.decline_call:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle";
+                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
                     then:
-                      - esphome_voip_stack.next_contact: voip_phone
-      # Long press (3s): switch VA <-> Intercom
+                      - esphome_voip_stack.next_contact:
+      # Long press (3s): switch VA <-> VoIP
       - timing:
           - ON for 1s to 3s
         then:
           - if:
               condition:
-                lambda: return id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle";
+                lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
               then:
                 - script.execute: switch_to_va
               else:
@@ -1687,7 +1687,7 @@ switch:
       - runtime_fsm.event:
           id: runtime_controller
           event: speaker_unmuted
-  # Intercom switches
+  # VoIP switches
 
   # AEC runtime toggles
 # =============================================================================
@@ -1719,11 +1719,11 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle: voip_phone
+                        esphome_voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN
-                      format: "Cannot switch AEC mode during active VA/intercom"
+                      format: "Cannot switch AEC mode during active VA/VoIP"
                 else:
                   - logger.log:
                       format: "Switching AEC mode to %s"
@@ -2103,14 +2103,14 @@ font:
           - "\U000F07D0" # home-assistant (HA connected)
           - "\U000F15D0" # home-alert (HA disconnected)
   - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
-    id: ic_icons
+    id: call_icons
     size: 42
     glyphs:
       - "\U000F03F2" # phone
       - "\U000F03F5" # phone-hangup
       - "\U000F0731" # arrow left bold
       - "\U000F0734" # arrow right bold
-  # Intercom fonts
+  # VoIP fonts
   - file:
       type: gfonts
       family: ${font_family}
@@ -2129,7 +2129,7 @@ font:
       weight: 500
     id: font_state
     size: 28
-    # Static IC labels only: IDLE, RINGING, CALLING, IN CALL.
+    # Static call labels only: IDLE, RINGING, CALLING, IN CALL.
     # Explicit glyphs save ~150 KB flash vs GF_Latin_Core (319 glyphs).
     glyphs: " ACDEGILNR"
   - file:
@@ -2201,7 +2201,7 @@ display:
 # =============================================================================
 # LVGL DISPLAY ENGINE
 #
-# Declarative widgets for VA + intercom pages. Static idle image,
+# Declarative widgets for VA + VoIP pages. Static idle image,
 # mood-based replying backgrounds, timer overlay on top_layer.
 # =============================================================================
 lvgl:
@@ -2641,23 +2641,23 @@ lvgl:
             src: error_no_wifi
 
     # ========================================================================
-    # INTERCOM: IDLE PAGE
+    # VOIP: IDLE PAGE
     # ========================================================================
-    - id: ic_idle_page
+    - id: call_idle_page
       bg_color: 0x0000FF
       # Horizontal swipe = prev/next contact. Vertical navigation is supplied by
-      # the including firmware variant: full-experience goes VA <-> intercom <->
-      # settings, voip-only keeps the intercom/settings stack.
+      # the including firmware variant: full-experience goes VA <-> VoIP <->
+      # settings, voip-only keeps the voip/settings stack.
       on_swipe_left:
-        - esphome_voip_stack.next_contact: voip_phone
-        - script.execute: update_ic_idle_labels
+        - esphome_voip_stack.next_contact:
+        - script.execute: update_call_idle_labels
       on_swipe_right:
-        - esphome_voip_stack.prev_contact: voip_phone
-        - script.execute: update_ic_idle_labels
+        - esphome_voip_stack.prev_contact:
+        - script.execute: update_call_idle_labels
       on_swipe_up:
-        - script.execute: ic_voip_to_settings
+        - script.execute: call_to_settings
       on_swipe_down:
-        - script.execute: ic_voip_to_va
+        - script.execute: call_to_va
       widgets:
         - label:
             align: TOP_MID
@@ -2666,11 +2666,11 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
-            width: ${ic_title_width}
+            width: ${call_title_width}
             long_mode: SCROLL
         # State (static) + contacts row (dynamic) on two lines, centered.
         - label:
-            id: ic_idle_status_label
+            id: call_idle_status_label
             align: TOP_MID
             y: 17%
             text: "IDLE"
@@ -2678,27 +2678,27 @@ lvgl:
             text_font: font_state
             text_align: CENTER
         - label:
-            id: ic_idle_contacts_label
+            id: call_idle_contacts_label
             align: TOP_MID
-            y: ${ic_contacts_y}
+            y: ${call_contacts_y}
             text: "\U000F06CB 0"
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
         # Peer name: single line; long names ping-pong scroll horizontally.
         - label:
-            id: ic_idle_peer_label
+            id: call_idle_peer_label
             align: CENTER
             text: "-"
             text_color: 0xFFFFFF
             text_font: font_title
-            width: ${ic_peer_width}
+            width: ${call_peer_width}
             text_align: CENTER
             long_mode: SCROLL
         # Prev/next contact buttons: explicit chevron taps next to the peer
         # name. Page on_swipe_left/right keeps the gesture path alive too.
         - button:
-            id: ic_idle_prev_contact_btn
+            id: call_idle_prev_contact_btn
             align: CENTER
             x: -60
             y: -34
@@ -2711,12 +2711,12 @@ lvgl:
                   text: "\U000F0731"
                   align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.prev_contact: voip_phone
-              - script.execute: update_ic_idle_labels
+              - esphome_voip_stack.prev_contact:
+              - script.execute: update_call_idle_labels
         - button:
-            id: ic_idle_next_contact_btn
+            id: call_idle_next_contact_btn
             align: CENTER
             x: 60
             y: -34
@@ -2729,17 +2729,17 @@ lvgl:
                   text: "\U000F0734"
                   align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.next_contact: voip_phone
-              - script.execute: update_ic_idle_labels
+              - esphome_voip_stack.next_contact:
+              - script.execute: update_call_idle_labels
         # Green call button below the peer name (idle screen only calls).
         - button:
             floating: true
             align: CENTER
-            y: ${ic_btn_below_center}
-            width: ${ic_btn_size}
-            height: ${ic_btn_size}
+            y: ${call_btn_below_center}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
             bg_opa: TRANSP
             shadow_opa: TRANSP
             widgets:
@@ -2747,14 +2747,14 @@ lvgl:
                   text: "\U000F03F2"
                   align: CENTER
                   text_color: 0x00FF00
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.call_toggle: voip_phone
+              - esphome_voip_stack.call_toggle:
 
       # ========================================================================
-      # INTERCOM: RINGING IN PAGE
+      # VOIP: RINGING IN PAGE
       # ========================================================================
-    - id: ic_ringing_in_page
+    - id: call_ringing_in_page
       bg_color: 0xFF0000
       widgets:
         - label:
@@ -2764,7 +2764,7 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
-            width: ${ic_title_width}
+            width: ${call_title_width}
             long_mode: SCROLL
         - label:
             align: TOP_MID
@@ -2774,21 +2774,21 @@ lvgl:
             text_font: font_state
             text_align: CENTER
         - label:
-            id: ic_ringing_in_peer_label
+            id: call_ringing_in_peer_label
             align: CENTER
             text: ""
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
             long_mode: SCROLL
-            width: ${ic_ringing_in_peer_width}
+            width: ${call_ringing_in_peer_width}
         # Answer (green left) / Decline (red right)
         - button:
             floating: true
             align: LEFT_MID
-            x: ${ic_btn_offset}
-            width: ${ic_btn_size}
-            height: ${ic_btn_size}
+            x: ${call_btn_offset}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
             bg_opa: TRANSP
             shadow_opa: TRANSP
             widgets:
@@ -2796,15 +2796,15 @@ lvgl:
                   text: "\U000F03F2"
                   align: CENTER
                   text_color: 0x00FF00
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.call_toggle: voip_phone
+              - esphome_voip_stack.call_toggle:
         - button:
             floating: true
             align: RIGHT_MID
             x: -5
-            width: ${ic_btn_size}
-            height: ${ic_btn_size}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
             bg_opa: TRANSP
             shadow_opa: TRANSP
             widgets:
@@ -2812,14 +2812,14 @@ lvgl:
                   text: "\U000F03F5"
                   align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.decline_call: voip_phone
+              - esphome_voip_stack.decline_call:
 
       # ========================================================================
-      # INTERCOM: RINGING OUT PAGE
+      # VOIP: RINGING OUT PAGE
       # ========================================================================
-    - id: ic_ringing_out_page
+    - id: call_ringing_out_page
       bg_color: 0xFF9900
       widgets:
         - label:
@@ -2829,7 +2829,7 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
-            width: ${ic_title_width}
+            width: ${call_title_width}
             long_mode: SCROLL
         - label:
             align: TOP_MID
@@ -2839,21 +2839,21 @@ lvgl:
             text_font: font_state
             text_align: CENTER
         - label:
-            id: ic_ringing_out_peer_label
+            id: call_ringing_out_peer_label
             align: CENTER
             text: ""
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
             long_mode: SCROLL
-            width: ${ic_peer_width}
+            width: ${call_peer_width}
         # Hangup below center
         - button:
             floating: true
             align: CENTER
-            y: ${ic_btn_below_center}
-            width: ${ic_btn_size}
-            height: ${ic_btn_size}
+            y: ${call_btn_below_center}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
             bg_opa: TRANSP
             shadow_opa: TRANSP
             widgets:
@@ -2861,14 +2861,14 @@ lvgl:
                   text: "\U000F03F5"
                   align: CENTER
                   text_color: 0xFF0000
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.decline_call: voip_phone
+              - esphome_voip_stack.decline_call:
 
       # ========================================================================
-      # INTERCOM: IN CALL PAGE
+      # VOIP: IN CALL PAGE
       # ========================================================================
-    - id: ic_in_call_page
+    - id: call_in_call_page
       bg_color: 0x008800
       widgets:
         - label:
@@ -2878,7 +2878,7 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
-            width: ${ic_title_width}
+            width: ${call_title_width}
             long_mode: SCROLL
         - label:
             align: TOP_MID
@@ -2888,21 +2888,21 @@ lvgl:
             text_font: font_state
             text_align: CENTER
         - label:
-            id: ic_in_call_peer_label
+            id: call_in_call_peer_label
             align: CENTER
             text: ""
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
             long_mode: SCROLL
-            width: ${ic_peer_width}
+            width: ${call_peer_width}
         # Hangup below center
         - button:
             floating: true
             align: CENTER
-            y: ${ic_btn_below_center}
-            width: ${ic_btn_size}
-            height: ${ic_btn_size}
+            y: ${call_btn_below_center}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
             bg_opa: TRANSP
             shadow_opa: TRANSP
             widgets:
@@ -2910,21 +2910,21 @@ lvgl:
                   text: "\U000F03F5"
                   align: CENTER
                   text_color: 0xFF0000
-                  text_font: ic_icons
+                  text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.call_toggle: voip_phone
+              - esphome_voip_stack.call_toggle:
 
       # ========================================================================
-      # INTERCOM: CALL ENDED PAGE
+      # VOIP: CALL ENDED PAGE
       # ========================================================================
-      # Shown for ~4 s after a call terminates. ui_ic_ended writes the peer
-      # + reason labels and toggles ic_ended_active so draw_display keeps
+      # Shown for ~4 s after a call terminates. ui_call_ended writes the peer
+      # + reason labels and toggles call_ended_active so draw_display keeps
       # this page on screen until the auto-return delay elapses.
-    - id: ic_ended_page
+    - id: call_ended_page
       bg_color: 0x202020
       # Tap anywhere on the page = skip the 4 s auto-return countdown.
       on_click:
-        - lambda: 'id(ic_ended_active) = false;'
+        - lambda: 'id(call_ended_active) = false;'
         - script.execute: draw_display
       widgets:
         - label:
@@ -2934,7 +2934,7 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
-            width: ${ic_title_width}
+            width: ${call_title_width}
             long_mode: SCROLL
         - label:
             align: CENTER
@@ -2943,9 +2943,9 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_title
             text_align: CENTER
-            width: ${ic_ended_text_width}
+            width: ${call_ended_text_width}
         - label:
-            id: ic_ended_peer_label
+            id: call_ended_peer_label
             align: CENTER
             text: ""
             text_color: 0xFFFFFF
@@ -2954,7 +2954,7 @@ lvgl:
             text_font: font_title
             text_align: CENTER
             long_mode: SCROLL
-            width: ${ic_peer_width}
+            width: ${call_peer_width}
         - label:
             align: CENTER
             y: 13%
@@ -2962,9 +2962,9 @@ lvgl:
             text_color: 0xFFFFFF
             text_font: font_info
             text_align: CENTER
-            width: ${ic_ended_text_width}
+            width: ${call_ended_text_width}
         - label:
-            id: ic_ended_reason_label
+            id: call_ended_reason_label
             align: CENTER
             y: 25%
             text: "-"
@@ -2972,12 +2972,12 @@ lvgl:
             text_font: font_info
             text_align: CENTER
             long_mode: SCROLL
-            width: ${ic_ended_reason_text_width}
+            width: ${call_ended_reason_text_width}
     # ========================================================================
     # SETTINGS PAGE (one vertical scroll surface for round displays)
     # ========================================================================
     # Spotpear round-display settings surface for full AEC builds.
-    # The page is one vertical scroll view: swipe down exits to Intercom only when
+    # The page is one vertical scroll view: swipe down exits to VoIP only when
     # the scroll position is already at the top. Widget IDs intentionally match the
     # generic settings sync packages.
     - id: settings_continuous_page
@@ -2988,16 +2988,16 @@ lvgl:
       scrollbar_mode: AUTO
       on_scroll:
         - lambda: |-
-            if (!id(ic_settings_active)) return;
+            if (!id(settings_active)) return;
             if (lv_obj_get_scroll_y(id(settings_continuous_page)->obj) < -28) {
-              id(ic_settings_close).execute();
+              id(settings_close).execute();
             }
       widgets:
         - label:
             text: "Audio"
             align: TOP_MID
             y: 18
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             text_align: CENTER
             text_font: montserrat_16
             text_color: 0xFFFFFF
@@ -3005,7 +3005,7 @@ lvgl:
             text: "Master volume"
             align: TOP_MID
             y: 48
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             text_align: CENTER
             text_font: montserrat_14
             text_color: 0xB0B0B0
@@ -3013,7 +3013,7 @@ lvgl:
             id: ui_speaker_vol_slider
             align: TOP_MID
             y: 74
-            width: ${ic_settings_row_width}
+            width: ${settings_row_width}
             height: 14
             min_value: 0
             max_value: 100
@@ -3028,7 +3028,7 @@ lvgl:
             text: "Microphone gain"
             align: TOP_MID
             y: 106
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             text_align: CENTER
             text_font: montserrat_14
             text_color: 0xB0B0B0
@@ -3036,7 +3036,7 @@ lvgl:
             id: ui_mic_vol_slider
             align: TOP_MID
             y: 132
-            width: ${ic_settings_row_width}
+            width: ${settings_row_width}
             height: 14
             min_value: -20
             max_value: 30
@@ -3051,14 +3051,14 @@ lvgl:
             text: "Call"
             align: TOP_MID
             y: 178
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             text_align: CENTER
             text_font: montserrat_16
             text_color: 0xFFFFFF
         - obj:
             align: TOP_MID
             y: 210
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             height: 38
             bg_opa: TRANSP
             border_width: 0
@@ -3086,7 +3086,7 @@ lvgl:
         - obj:
             align: TOP_MID
             y: 256
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             height: 38
             bg_opa: TRANSP
             border_width: 0
@@ -3114,7 +3114,7 @@ lvgl:
         - obj:
             align: TOP_MID
             y: 302
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             height: 38
             bg_opa: TRANSP
             border_width: 0
@@ -3142,7 +3142,7 @@ lvgl:
         - obj:
             align: TOP_MID
             y: 348
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             height: 38
             bg_opa: TRANSP
             border_width: 0
@@ -3171,14 +3171,14 @@ lvgl:
             text: "AEC"
             align: TOP_MID
             y: 400
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             text_align: CENTER
             text_font: montserrat_16
             text_color: 0xFFFFFF
         - obj:
             align: TOP_MID
             y: 432
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             height: 38
             bg_opa: TRANSP
             border_width: 0
@@ -3207,7 +3207,7 @@ lvgl:
             id: ui_aec_mode_dd
             align: TOP_MID
             y: 480
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             options:
               - SR low cost
               - SR high perf
@@ -3219,14 +3219,14 @@ lvgl:
             text: "Voice assistant"
             align: TOP_MID
             y: 538
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             text_align: CENTER
             text_font: montserrat_16
             text_color: 0xFFFFFF
         - obj:
             align: TOP_MID
             y: 570
-            width: ${ic_settings_mid_width}
+            width: ${settings_mid_width}
             height: 38
             bg_opa: TRANSP
             border_width: 0

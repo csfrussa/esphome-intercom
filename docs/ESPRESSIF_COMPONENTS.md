@@ -84,7 +84,7 @@ conformance, but are not currently a replacement for `esp_audio_stack`:
 | Component or BSP | Used for | License family | Notes |
 |---|---|---|---|
 | `espressif/esp_board_manager` / `periph_i2s` | Reference for Espressif board-level I2S ownership | Espressif Modified MIT, restricted to Espressif products | Audited but not used by the active backend. The adapter uses official `esp_driver_i2s` internally, but currently hides DMA channel config and enables channels during peripheral ref, which does not fit this ESPHome lifecycle. |
-| Waveshare `esp32_p4_wifi6_touch_lcd_x` BSP | Reference for Waveshare P4 pinout, ES8311/ES7210 setup and PA control | See upstream BSP package | The BSP uses `esp_codec_dev` and standard I2S examples. Our full-duplex TDM path still needs custom ESPHome integration for mic/ref staging, mixer, intercom and Home Assistant entities. |
+| Waveshare `esp32_p4_wifi6_touch_lcd_x` BSP | Reference for Waveshare P4 pinout, ES8311/ES7210 setup and PA control | See upstream BSP package | The BSP uses `esp_codec_dev` and standard I2S examples. Our full-duplex TDM path still needs custom ESPHome integration for mic/ref staging, mixer, VoIP calls and Home Assistant entities. |
 
 ## Generated-Code Coverage
 
@@ -106,7 +106,7 @@ The current generated-code snapshots confirm:
   profile for voip-only and full AEC presets.
 - Generic S3 AFE: remains no-codec but uses `esp_afe` over the same bus facade,
   with the TYPE2-style software reference path for larger flash layouts.
-- Generic S3 dual-bus intercom: remains no-codec and uses the same
+- Generic S3 dual-bus VoIP: remains no-codec and uses the same
   `esp_audio_stack` facade, but creates separate ESP-IDF I2S simplex channels
   for RX and TX. This path is only compiled when YAML uses `rx_bus` and `tx_bus`.
 
@@ -178,9 +178,9 @@ Do not treat all Espressif components the same:
 - The public dual-mic full-experience targets use a hybrid bridge-buffer
   placement: keep the per-frame AFE feed scratch and fetch output ring internal,
   move the larger AFE feed staging ring to PSRAM, and place ESPHome-owned audio
-  and intercom frame buffers in PSRAM. DMA descriptors and I2S driver buffers
+  and VoIP frame buffers in PSRAM. DMA descriptors and I2S driver buffers
   remain internal. This is the current WS3/P4 baseline for HTTPS media plus TTS
-  plus intercom stress.
+  plus VoIP stress.
 
 Runtime test interpretation: PSRAM use inside GMF/esp-sr is expected. If a test
 crashes or glitches, first capture the stack and memory snapshot; do not fork or
@@ -203,7 +203,7 @@ entities or device-specific data routing.
 | `gmf_io` / `io_codec_dev` | GMF IO wrapper around codec-device read/write | Not used in `esp_audio_stack` | Sendspin / `speaker_source` need playback timestamps tied to I2S DMA completion. `esp_audio_stack` therefore uses `esp_codec_dev_read/write` directly and registers the ESP-IDF I2S TX completion callback, mirroring ESPHome's native I2S speaker model. |
 | `esp_codec_dev` | Codec control plus I2S read/write abstraction | Integrated now | `esp_audio_stack` now creates one shared I2S data interface and separate IN/OUT codec devices, matching Espressif's test pattern. ES7210, ES8311, ES8388, ES8374 and ES8389 control/gain/volume/mute/data read/write go through the official component while ESPHome keeps mic/speaker callback routing. |
 | `esp_board_manager` / `periph_i2s` | Board/peripheral lifecycle manager for I2S TX/RX STD/TDM/PDM | Audited, not active | Official adapter, but it currently hides `i2s_chan_config_t` DMA/auto-clear policy and enables channels on ref. Active backend stays on official `esp_driver_i2s` direct ownership. |
-| `esp_capture` audio sources | High-level capture sources, including codec AEC capture | Do not integrate now | It owns a capture pipeline and source lifecycle intended for recording/streaming. It conflicts with ESPHome's microphone, speaker, mixer and intercom ownership. Useful as reference only. |
+| `esp_capture` audio sources | High-level capture sources, including codec AEC capture | Do not integrate now | It owns a capture pipeline and source lifecycle intended for recording/streaming. It conflicts with ESPHome's microphone, speaker, mixer and VoIP ownership. Useful as reference only. |
 | Waveshare BSP | Board pinout, codec, PA and display/touch setup | Copy patterns only | It validates hardware constants and codec setup style. Its audio examples are standard I2S/codec flows, not our 48 kHz full-duplex TDM with two mics plus reference. |
 
 ## Exposed Capability Checklist

@@ -1,16 +1,16 @@
 # =============================================================================
-# VA + Intercom meta-package.
+# VA + VoIP meta-package.
 # Bundles the core sub-packages that make up a full-experience device
-# (voice_assistant + micro_wake_word + intercom runtime):
-#   - intercom/state_machine_full.yaml shared reducer, failsafes, ringing loop
+# (voice_assistant + micro_wake_word + VoIP runtime):
+#   - voip/state_machine_full.yaml shared reducer, failsafes, ringing loop
 #   - voice_assistant/core.yaml        voice_assistant + micro_wake_word config
-#   - intercom/va_callbacks.yaml       esphome_voip_stack on_* (with ringing loop)
+#   - voip/va_callbacks.yaml           esphome_voip_stack on_* (with ringing loop)
 #
 # Maintained presets include optional feature packages explicitly next to this
 # core package, so users can comment out one line to remove a feature:
-#   - intercom/va_buttons_switches.yaml buttons + mic mute/wake-word switches
-#   - intercom/call_settings.yaml       auto-answer + DND switches
-#   - intercom/ha_api.yaml              HA-callable call-control services
+#   - voip/va_buttons_switches.yaml buttons + mic mute/wake-word switches
+#   - voip/call_settings.yaml       auto-answer + DND switches
+#   - voip/ha_api.yaml              HA-callable call-control services
 #
 # For LVGL devices that want a settings carousel, ALSO include:
 #   `lvgl/settings_navigation.yaml`   carousel state + navigation scripts
@@ -36,13 +36,13 @@
 # =============================================================================
 
 packages:
-  state_machine_full: !include intercom/state_machine_full.yaml
+  state_machine_full: !include voip/state_machine_full.yaml
   voice_assistant_core: !include voice_assistant/core.yaml
-  va_callbacks: !include intercom/va_callbacks.yaml
+  va_callbacks: !include voip/va_callbacks.yaml
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   # Full-experience devices can have HA API/logging, media HTTP, TTS HTTP and
-  # intercom sockets alive together. Reserve that headroom through ESPHome's
+  # VoIP sockets alive together. Reserve that headroom through ESPHome's
   # socket accounting instead of hardcoding CONFIG_LWIP_MAX_SOCKETS in YAMLs.
   network_socket_headroom: 8

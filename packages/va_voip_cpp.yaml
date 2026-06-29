@@ -1,21 +1,21 @@
 # =============================================================================
-# VA + Intercom meta-package using runtime_fsm.
-# Core runtime only: VA, MWW, intercom callbacks and runtime_fsm arbitration.
+# VA + VoIP meta-package using runtime_fsm.
+# Core runtime only: VA, MWW, VoIP callbacks and runtime_fsm arbitration.
 #
 # Maintained presets include optional feature packages explicitly next to this
 # core package, so users can comment out one line to remove a feature:
-#   - intercom/va_buttons_switches_cpp.yaml
-#   - intercom/call_settings.yaml
-#   - intercom/ha_api_cpp.yaml
+#   - voip/va_buttons_switches_cpp.yaml
+#   - voip/call_settings.yaml
+#   - voip/ha_api_cpp.yaml
 #   - voice_assistant/local_commands_cpp.yaml
 # =============================================================================
 
 packages:
-  state_machine_full: !include intercom/state_machine_full_cpp.yaml
+  state_machine_full: !include voip/state_machine_full_cpp.yaml
   runtime_fsm_full: !include runtime_fsm/full_controller.yaml
   voice_assistant_core: !include voice_assistant/core_cpp.yaml
-  va_callbacks: !include intercom/va_callbacks_cpp.yaml
+  va_callbacks: !include voip/va_callbacks_cpp.yaml
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   network_socket_headroom: 8

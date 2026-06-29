@@ -1,5 +1,5 @@
 # =============================================================================
-# Waveshare ESP32-P4 WiFi6 Touch LCD: VA + Intercom + MWW (LVGL)
+# Waveshare ESP32-P4 WiFi6 Touch LCD: VA + VoIP + MWW (LVGL)
 # =============================================================================
 #
 # Hardware:
@@ -29,15 +29,15 @@
 # Audio pipeline (esp_audio_stack at 48kHz, TDM + Espressif rate conversion to 16kHz):
 #
 #   ES7210 TDM [mic=slot0, ref=slot1, mic=slot2, nc=slot3] → esp_ae_rate_cvt x3 ──────┐
-#                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / Intercom TX / MWW
+#                                                                         └── esp_afe FD/MMNR (AEC + Speech Enhancement + VAD) → mic_afe → VA / VoIP TX / MWW
 #
 #   Music/radio → media_speaker_input (resampler) ───────────┐
 #   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
-#   Intercom RX → voip_speaker_input (resampler) ────────┘
+#   VoIP RX → voip_speaker_input (resampler) ────────┘
 #
 # Touch UI:
 #   VA pages:      Status display (idle, listening, thinking, replying, error)
-#   Intercom pages: Touch buttons for call/answer/decline/hangup/next/prev
+#   VoIP pages: Touch buttons for call/answer/decline/hangup/next/prev
 #   Mode switch:   Long press GPIO0 or touch "Mode" button
 #
 # =============================================================================
@@ -49,8 +49,8 @@ substitutions:
 
   # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # release mode.
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
 
   # Display dimensions (portrait)
   display_width: "800"
@@ -76,16 +76,16 @@ substitutions:
   voice_assist_muted_phase_id: "12"
 
   # Settings page widths for the 800x1280 portrait display (no rounding).
-  ic_settings_row_width: "760"
-  ic_settings_wide_width: "760"
-  ic_settings_mid_width: "760"
-  ic_settings_narrow_width: "760"
-  ic_settings_dropdown_width: "240"
-  ic_settings_pad_row: "20"
-  ic_settings_slider_height: "20"
-  ic_settings_switch_width: "70"
-  ic_settings_switch_height: "36"
-  ic_settings_label_font: font_body
+  settings_row_width: "760"
+  settings_wide_width: "760"
+  settings_mid_width: "760"
+  settings_narrow_width: "760"
+  settings_dropdown_width: "240"
+  settings_pad_row: "20"
+  settings_slider_height: "20"
+  settings_switch_width: "70"
+  settings_switch_height: "36"
+  settings_label_font: font_body
 
   # P4 AFE profile: dual mic keeps SE/BSS structural. AEC remains runtime
   # togglable, but defaults ON because this ES7210/ES8311 path degrades
@@ -93,27 +93,27 @@ substitutions:
   afe_aec_restore_mode: ALWAYS_ON
 
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
-  p4_va_cleanup: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_va_cleanup.yaml@dev
+  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
+  p4_diagnostics: !include ../../../packages/diagnostics/native_no_wifi_signal.yaml
+  core: !include ../../../packages/va_voip_cpp.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  sendspin_artwork: !include ../../../packages/media_player/sendspin_artwork.yaml
+  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
+  p4_va_cleanup: !include ../../../packages/lvgl/p4_va_cleanup.yaml
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@dev
+  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION
@@ -124,7 +124,7 @@ esphome:
   on_boot:
     - priority: 200
       then:
-        - lambda: id(peer_name) = id(voip_phone).get_current_destination();
+        - lambda: id(peer_name) = id(phone).get_current_destination();
     - priority: -100
       then:
         - logger.log: "Boot: late init start"
@@ -280,14 +280,14 @@ esp_afe:
   # every AFE frame, and P4 now has enough contiguous internal heap after the
   # SDK baseline cleanup. Setting these three flags to true moves about 45-50KB
   # back to PSRAM on the P4 dual-mic profile, but adds per-frame PSRAM traffic
-  # and was observed to make intercom TX less stable under full display/audio load.
+  # and was observed to make VoIP TX less stable under full display/audio load.
   feed_buf_in_psram: false
   feed_ring_in_psram: false
   fetch_ring_in_psram: false
 
 esp_audio_stack:
   id: audio_stack
-  # Concurrent TLS streams (music + TTS + intercom) are tight on internal RAM.
+  # Concurrent TLS streams (music + TTS + VoIP) are tight on internal RAM.
   # Move the audio task's own stack to PSRAM (matches waveshare-s3-full-afe).
   # The task is not CPU-bound (per-frame AFE work lives in Espressif GMF manager tasks), so
   # PSRAM stack latency is acceptable.
@@ -326,7 +326,7 @@ esp_audio_stack:
   # internal in the component; this moves only component-owned frame buffers.
   buffers_in_psram: true
 
-# mic_afe: post-AFE (Speech Enhancement + AEC + VAD) for VA STT, intercom TX, AND MWW.
+# mic_afe: post-AFE (Speech Enhancement + AEC + VAD) for VA STT, VoIP TX, AND MWW.
 # Same beamformed/cleaned stream feeds every consumer.
 microphone:
   - platform: esp_audio_stack
@@ -342,7 +342,7 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
 
-  # 3-source mixer: media (duckable) + TTS (never ducked) + intercom
+  # 3-source mixer: media (duckable) + TTS (never ducked) + VoIP
   - platform: mixer
     id: audio_mixer
     output_speaker: hw_speaker
@@ -355,9 +355,9 @@ speaker:
       - id: tts_mixer_input         # VA TTS announcements (never ducked)
         timeout: 10s
         buffer_duration: 100ms
-      - id: voip_mixer_input    # Intercom audio
+      - id: voip_mixer_input    # VoIP audio
         timeout: 10s
-        buffer_duration: 128ms       # Intercom jitter/mixer staging; RTP ptime is negotiated separately.
+        buffer_duration: 128ms       # VoIP jitter/mixer staging; RTP ptime is negotiated separately.
 
   # ResamplerSpeakers: convert any input rate to 48kHz before the mixer
   - platform: resampler
@@ -371,7 +371,7 @@ speaker:
     task_stack_in_psram: true
 
   - platform: resampler
-    id: voip_speaker_input           # Intercom RX (16kHz) to 48kHz
+    id: voip_speaker_input           # VoIP RX (16kHz) to 48kHz
     output_speaker: voip_mixer_input
     task_stack_in_psram: true
     buffer_duration: 128ms
@@ -441,7 +441,7 @@ media_player:
           event: announcement_started
       - if:
           condition:
-            esphome_voip_stack.is_idle: voip_phone
+            esphome_voip_stack.is_idle:
           then:
             - script.execute: backlight_timer
     on_play:
@@ -502,9 +502,9 @@ voice_assistant:
 # ESPHome VoIP Stack
 # =============================================================================
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   task_stacks_in_psram: true
-  # Set true to save roughly 5-8KB internal RAM from intercom-owned staging
+  # Set true to save roughly 5-8KB internal RAM from VoIP-owned staging
   # buffers. Keep false on P4 full AFE while there is enough heap, because these
   # buffers sit on the mic TX path during calls.
   buffers_in_psram: false
@@ -547,13 +547,13 @@ esphome_voip_stack:
   delete_contact_missing_from:
     updates_number: 1
   on_update_contacts:
-    - lambda: 'id(peer_name) = id(voip_phone).get_current_destination();'
+    - lambda: 'id(peer_name) = id(phone).get_current_destination();'
     - script.execute: draw_display
     - delay: 2s
-    - script.execute: update_ic_idle_labels
+    - script.execute: update_call_idle_labels
   on_destination_changed:
-    - lambda: 'id(peer_name) = id(voip_phone).get_current_destination();'
-    - script.execute: update_ic_idle_labels
+    - lambda: 'id(peer_name) = id(phone).get_current_destination();'
+    - script.execute: update_call_idle_labels
     - script.execute: draw_display
 
 # =============================================================================
@@ -1001,20 +1001,20 @@ lvgl:
                   text_font: font_button
 
     # ==================================================================
-    # MAIN PAGE: Split-screen (weather/intercom + VA)
+    # MAIN PAGE: Split-screen (weather/VoIP + VA)
     # ==================================================================
     - id: main_page
       bg_color: 0x000000
       # Vertical-up swipe opens the unified settings page by pushing the main
       # screen upward. The top tileview keeps horizontal gestures for
-      # weather/intercom navigation and must not duplicate this handler.
+      # weather/VoIP navigation and must not duplicate this handler.
       on_swipe_up:
         - lvgl.page.show:
             id: settings_p4_page
             animation: MOVE_TOP
             time: 250ms
       widgets:
-        # === TOP HALF: TILEVIEW (weather + intercom) ===
+        # === TOP HALF: TILEVIEW (weather + VoIP) ===
         - tileview:
             id: top_tileview
             width: 780
@@ -1293,15 +1293,15 @@ lvgl:
                                   text_color: 0x6BA3FF
                                   text_align: CENTER
 
-              # --- TILE 1: INTERCOM ---
+              # --- TILE 1: VOIP ---
               - row: 0
                 column: 1
                 dir: HOR
                 id: voip_tile
                 widgets:
-                  # IC IDLE group
+                  # CALL IDLE group
                   - obj:
-                      id: ic_idle_group
+                      id: call_idle_group
                       width: 780
                       height: 630
                       bg_opa: TRANSP
@@ -1314,7 +1314,7 @@ lvgl:
                             align: TOP_LEFT
                             x: 30
                             y: 20
-                            text: "INTERCOM"
+                            text: "VOIP"
                             text_color: 0x4361EE
                             text_font: font_title
                         - label:
@@ -1324,7 +1324,7 @@ lvgl:
                             text_color: 0x888888
                             text_font: font_small
                         - label:
-                            id: ic_idle_peer_label
+                            id: call_idle_peer_label
                             align: TOP_MID
                             y: 130
                             width: 700
@@ -1334,7 +1334,7 @@ lvgl:
                             text_align: CENTER
                             long_mode: DOT
                         - label:
-                            id: ic_idle_contacts_label
+                            id: call_idle_contacts_label
                             align: TOP_MID
                             y: 200
                             text: "Contacts: 0"
@@ -1343,11 +1343,11 @@ lvgl:
                         # Transparent overlay over the peer label area:
                         # captures horizontal swipes for prev/next contact and
                         # blocks them from bubbling up to the parent tileview
-                        # (which would otherwise cycle weather <-> intercom).
+                        # (which would otherwise cycle weather <-> VoIP).
                         # Vertical swipes still bubble: the tileview only handles
                         # horizontal anyway, so this is a no-op for it.
                         - obj:
-                            id: ic_idle_swipe_area
+                            id: call_idle_swipe_area
                             align: TOP_MID
                             y: 90
                             width: 720
@@ -1358,11 +1358,11 @@ lvgl:
                             clickable: true
                             gesture_bubble: false
                             on_swipe_left:
-                              - esphome_voip_stack.next_contact: voip_phone
-                              - script.execute: update_ic_idle_labels
+                              - esphome_voip_stack.next_contact:
+                              - script.execute: update_call_idle_labels
                             on_swipe_right:
-                              - esphome_voip_stack.prev_contact: voip_phone
-                              - script.execute: update_ic_idle_labels
+                              - esphome_voip_stack.prev_contact:
+                              - script.execute: update_call_idle_labels
                         # Prev
                         - button:
                             align: BOTTOM_LEFT
@@ -1373,7 +1373,7 @@ lvgl:
                             bg_color: 0x2D2D44
                             radius: 10
                             on_click:
-                              - esphome_voip_stack.prev_contact: voip_phone
+                              - esphome_voip_stack.prev_contact:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1389,7 +1389,7 @@ lvgl:
                             bg_color: 0x2ECC71
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.call_toggle: voip_phone
+                              - esphome_voip_stack.call_toggle:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1406,16 +1406,16 @@ lvgl:
                             bg_color: 0x2D2D44
                             radius: 10
                             on_click:
-                              - esphome_voip_stack.next_contact: voip_phone
+                              - esphome_voip_stack.next_contact:
                             widgets:
                               - label:
                                   align: CENTER
                                   text: "Next >"
                                   text_color: 0xEEEEEE
                                   text_font: font_button
-                  # IC RINGING IN group
+                  # CALL RINGING IN group
                   - obj:
-                      id: ic_ringing_in_group
+                      id: call_ringing_in_group
                       width: 780
                       height: 630
                       bg_color: 0x3D0000
@@ -1438,7 +1438,7 @@ lvgl:
                             text_color: 0xCCCCCC
                             text_font: font_body
                         - label:
-                            id: ic_ringing_in_peer_label
+                            id: call_ringing_in_peer_label
                             align: TOP_MID
                             y: 140
                             width: 700
@@ -1456,7 +1456,7 @@ lvgl:
                             bg_color: 0x2ECC71
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.answer_call: voip_phone
+                              - esphome_voip_stack.answer_call:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1472,16 +1472,16 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.decline_call: voip_phone
+                              - esphome_voip_stack.decline_call:
                             widgets:
                               - label:
                                   align: CENTER
                                   text: "DECLINE"
                                   text_color: 0xFFFFFF
                                   text_font: font_button
-                  # IC RINGING OUT group
+                  # CALL RINGING OUT group
                   - obj:
-                      id: ic_ringing_out_group
+                      id: call_ringing_out_group
                       width: 780
                       height: 630
                       bg_color: 0x1A1000
@@ -1492,7 +1492,7 @@ lvgl:
                       hidden: true
                       widgets:
                         - label:
-                            id: ic_ringing_out_status_label
+                            id: call_ringing_out_status_label
                             align: TOP_MID
                             y: 40
                             # CALLING by default, switches to RINGING when
@@ -1501,7 +1501,7 @@ lvgl:
                             text_color: 0xF39C12
                             text_font: font_title
                         - label:
-                            id: ic_ringing_out_peer_label
+                            id: call_ringing_out_peer_label
                             align: CENTER
                             y: -40
                             width: 700
@@ -1524,16 +1524,16 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.call_toggle: voip_phone
+                              - esphome_voip_stack.call_toggle:
                             widgets:
                               - label:
                                   align: CENTER
                                   text: "HANG UP"
                                   text_color: 0xFFFFFF
                                   text_font: font_button
-                  # IC IN CALL group
+                  # CALL IN CALL group
                   - obj:
-                      id: ic_in_call_group
+                      id: call_in_call_group
                       width: 780
                       height: 630
                       bg_color: 0x002200
@@ -1556,7 +1556,7 @@ lvgl:
                             text_color: 0xCCCCCC
                             text_font: font_body
                         - label:
-                            id: ic_in_call_peer_label
+                            id: call_in_call_peer_label
                             align: CENTER
                             y: -30
                             width: 700
@@ -1573,18 +1573,18 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.call_toggle: voip_phone
+                              - esphome_voip_stack.call_toggle:
                             widgets:
                               - label:
                                   align: CENTER
                                   text: "HANG UP"
                                   text_color: 0xFFFFFF
                                   text_font: font_button
-                  # IC ENDED group - shown for ~4 s after a call terminates
+                  # CALL ENDED group - shown for ~4 s after a call terminates
                   # (hangup, decline, error, timeout), then auto-hides via
-                  # the ic_ended_active flag inside draw_display.
+                  # the call_ended_active flag inside draw_display.
                   - obj:
-                      id: ic_ended_group
+                      id: call_ended_group
                       width: 780
                       height: 630
                       bg_color: 0x202020
@@ -1595,7 +1595,7 @@ lvgl:
                       hidden: true
                       widgets:
                         - label:
-                            id: ic_ended_peer_label
+                            id: call_ended_peer_label
                             align: CENTER
                             y: -60
                             width: 720
@@ -1605,7 +1605,7 @@ lvgl:
                             text_align: CENTER
                             long_mode: WRAP
                         - label:
-                            id: ic_ended_reason_label
+                            id: call_ended_reason_label
                             align: CENTER
                             y: 40
                             width: 720
@@ -1903,11 +1903,11 @@ lvgl:
     #   selects : aec_mode_select  (options published by esp_afe FD pipeline)
     #
     # Substitutions used (already defined in the device YAML):
-    #   ic_settings_row_width      e.g. "600"
-    #   ic_settings_slider_height  e.g. "20"
-    #   ic_settings_switch_width   e.g. "70"
-    #   ic_settings_switch_height  e.g. "36"
-    #   ic_settings_label_font     e.g. font_body
+    #   settings_row_width      e.g. "600"
+    #   settings_slider_height  e.g. "20"
+    #   settings_switch_width   e.g. "70"
+    #   settings_switch_height  e.g. "36"
+    #   settings_label_font     e.g. font_body
     #
     # Animation contract (driven by the device's main_page):
     #   - swipe-up on main_page -> lvgl.page.show: settings_p4_page, MOVE_TOP
@@ -1953,37 +1953,37 @@ lvgl:
               # Header
               # ------------------------------------------------------------------
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Settings"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
 
               # ==================================================================
               # SECTION: AUDIO  (2 sliders)
               # ==================================================================
               - obj:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   height: 2
                   bg_color: 0x444444
                   border_width: 0
                   pad_all: 0
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Audio"
                   text_align: CENTER
                   text_color: 0x88AAFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Master volume"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - slider:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   id: ui_speaker_vol_slider
-                  height: ${ic_settings_slider_height}
+                  height: ${settings_slider_height}
                   adv_hittest: true
                   gesture_bubble: true
                   min_value: 0
@@ -1994,15 +1994,15 @@ lvgl:
                         id: master_volume
                         value: !lambda 'return x;'
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Mic gain"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - slider:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   id: ui_mic_vol_slider
-                  height: ${ic_settings_slider_height}
+                  height: ${settings_slider_height}
                   adv_hittest: true
                   gesture_bubble: true
                   min_value: ${mic_gain_min}
@@ -2016,27 +2016,27 @@ lvgl:
               # SECTION: MUTE / AUTO ANSWER
               # ========================================================================
               - obj:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   height: 2
                   bg_color: 0x444444
                   border_width: 0
                   pad_all: 0
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Mute"
                   text_align: CENTER
                   text_color: 0x88AAFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Speaker mute"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_speaker_mute_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(speaker_mute).state;'
                   on_value:
@@ -2045,15 +2045,15 @@ lvgl:
                         if (x) id(speaker_mute).turn_on();
                         else id(speaker_mute).turn_off();
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Mic mute"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_mic_mute_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(mute).state;'
                   on_value:
@@ -2062,15 +2062,15 @@ lvgl:
                         if (x) id(mute).turn_on();
                         else id(mute).turn_off();
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Auto answer"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_auto_answer_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(auto_answer_switch).state;'
                   on_value:
@@ -2079,15 +2079,15 @@ lvgl:
                         if (x) id(auto_answer_switch).turn_on();
                         else id(auto_answer_switch).turn_off();
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Do Not Disturb"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_dnd_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(dnd_switch).state;'
                   on_value:
@@ -2100,27 +2100,27 @@ lvgl:
               # SECTION: ECHO CANCELLATION (AEC switch + Mode dropdown)
               # ========================================================================
               - obj:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   height: 2
                   bg_color: 0x444444
                   border_width: 0
                   pad_all: 0
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Echo Cancellation"
                   text_align: CENTER
                   text_color: 0x88AAFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "AEC"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_aec_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(aec_switch).state;'
                   on_value:
@@ -2129,11 +2129,11 @@ lvgl:
                         if (x) id(aec_switch).turn_on();
                         else id(aec_switch).turn_off();
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "AEC mode"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - dropdown:
                   id: ui_aec_mode_dd
                   width: 240
@@ -2150,27 +2150,27 @@ lvgl:
               # SECTION: AFE PIPELINE
               # ========================================================================
               - obj:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   height: 2
                   bg_color: 0x444444
                   border_width: 0
                   pad_all: 0
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "AFE Pipeline"
                   text_align: CENTER
                   text_color: 0x88AAFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Voice Activity Detector"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_vad_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(vad_switch).state;'
                   on_value:
@@ -2182,27 +2182,27 @@ lvgl:
               # SECTION: VOICE ASSISTANT
               # ========================================================================
               - obj:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   height: 2
                   bg_color: 0x444444
                   border_width: 0
                   pad_all: 0
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Voice Assistant"
                   text_align: CENTER
                   text_color: 0x88AAFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - label:
-                  width: ${ic_settings_row_width}
+                  width: ${settings_row_width}
                   text: "Wake word"
                   text_align: CENTER
                   text_color: 0xFFFFFF
-                  text_font: ${ic_settings_label_font}
+                  text_font: ${settings_label_font}
               - switch:
                   id: ui_wake_word_sw
-                  width: ${ic_settings_switch_width}
-                  height: ${ic_settings_switch_height}
+                  width: ${settings_switch_width}
+                  height: ${settings_switch_height}
                   state:
                     checked: !lambda 'return id(wake_word_switch).state;'
                   on_value:
@@ -2235,12 +2235,12 @@ globals:
     restore_value: no
     initial_value: '""'
 
-  # ic_ended_group is shown briefly after a call terminates (hangup,
-  # decline, error, timeout). The flag is set by ui_ic_ended and
+  # call_ended_group is shown briefly after a call terminates (hangup,
+  # decline, error, timeout). The flag is set by ui_call_ended and
   # cleared either by the auto-return delay or by an early state
   # change. draw_display checks it so the page is not overwritten
   # while the user reads the reason.
-  - id: ic_ended_active
+  - id: call_ended_active
     type: bool
     restore_value: false
     initial_value: "false"
@@ -2293,9 +2293,9 @@ script:
     then:
       - lambda: |-
           int state = id(ui_state);
-          // Intercom idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle") {
-            id(peer_name) = id(voip_phone).get_current_destination();
+          // VoIP idle: restore previous mode after call ends.
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+            id(peer_name) = id(phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
             }
@@ -2355,14 +2355,14 @@ script:
             - text_sensor.template.publish:
                 id: text_response
                 state: "..."
-      # Intercom idle: update labels if staying in IC mode.
+      # VoIP idle: update labels if staying in call mode.
       - if:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(voip_phone).get_state_str() == "idle";
+                     && id(phone).get_state_str() == "idle";
           then:
-            - script.execute: update_ic_idle_labels
+            - script.execute: update_call_idle_labels
       - script.execute: draw_display
 
   # TTS text display (extends package placeholder)
@@ -2406,49 +2406,49 @@ script:
           state: !lambda 'return text;'
       - script.execute: draw_display
 
-  # Intercom call display (extends package placeholder). Resets the
+  # VoIP call display (extends package placeholder). Resets the
   # calling-status label to "CALLING" so a fresh start() doesn't leak
   # the "RINGING" text from a previous call.
-  - id: !extend ui_ic_call
+  - id: !extend ui_call_started
     then:
       - lambda: |-
           id(peer_name) = peer;
           id(previous_mode) = id(current_mode);
           id(current_mode) = 1;
       - lvgl.label.update:
-          id: ic_ringing_out_status_label
+          id: call_ringing_out_status_label
           text: "CALLING"
       - script.execute: backlight_timer
       - script.execute: draw_display
 
   # Caller path: dest acked with RING. Same calling tile, label flips
   # from "CALLING" to "RINGING".
-  - id: !extend ui_ic_dest_ringing
+  - id: !extend ui_call_dest_ringing
     then:
       - lambda: 'id(peer_name) = peer;'
       - lvgl.label.update:
-          id: ic_ringing_out_peer_label
+          id: call_ringing_out_peer_label
           text: !lambda 'return id(peer_name);'
       - lvgl.label.update:
-          id: ic_ringing_out_status_label
+          id: call_ringing_out_status_label
           text: "RINGING"
       - script.execute: backlight_timer
 
-  # Call ended (hangup, decline, error, timeout). Show ic_ended_group
+  # Call ended (hangup, decline, error, timeout). Show call_ended_group
   # with peer + reason for ~4 s, then auto-route back to whatever the
   # FSM is in now (typically Idle).
-  - id: !extend ui_ic_ended
+  - id: !extend ui_call_ended
     mode: restart
     then:
       - globals.set:
-          id: ic_ended_active
+          id: call_ended_active
           value: "true"
       - lvgl.label.update:
-          id: ic_ended_peer_label
+          id: call_ended_peer_label
           text: !lambda |-
             return peer.empty() ? std::string("Call ended.") : ("Call with " + peer + " ended.");
       - lvgl.label.update:
-          id: ic_ended_reason_label
+          id: call_ended_reason_label
           text: !lambda |-
             std::string r = reason;
             std::string label;
@@ -2467,10 +2467,10 @@ script:
       - delay: 4s
       - if:
           condition:
-            lambda: 'return id(ic_ended_active);'
+            lambda: 'return id(call_ended_active);'
           then:
             - globals.set:
-                id: ic_ended_active
+                id: call_ended_active
                 value: "false"
             - script.execute: draw_display
 
@@ -2482,7 +2482,7 @@ script:
           lv_obj_t* active_scr = lv_disp_get_scr_act(nullptr);
 
           // Settings page is user-driven (modal): never let the periodic
-          // draw_display callers (intercom state, idle phase, animations,
+          // draw_display callers (VoIP state, idle phase, animations,
           // weather refresh, ...) snap the screen back to main_page while
           // the user is interacting with the settings carousel.
           if (active_scr == id(settings_p4_page)->obj) return;
@@ -2575,52 +2575,52 @@ script:
             set_hidden(id(va_muted_group), false);
           }
 
-          // === Update intercom tile (top right) ===
-          auto ic_state = id(voip_phone).get_state_str();
+          // === Update VoIP tile (top right) ===
+          auto call_state = id(phone).get_state_str();
 
-          set_hidden(id(ic_idle_group), true);
-          set_hidden(id(ic_ringing_in_group), true);
-          set_hidden(id(ic_ringing_out_group), true);
-          set_hidden(id(ic_in_call_group), true);
-          set_hidden(id(ic_ended_group), true);
+          set_hidden(id(call_idle_group), true);
+          set_hidden(id(call_ringing_in_group), true);
+          set_hidden(id(call_ringing_out_group), true);
+          set_hidden(id(call_in_call_group), true);
+          set_hidden(id(call_ended_group), true);
 
-          if (id(ic_ended_active)) {
-            // ui_ic_ended owns the tile for ~4 s after a terminated
+          if (id(call_ended_active)) {
+            // ui_call_ended owns the tile for ~4 s after a terminated
             // call so the user reads the reason regardless of the FSM
             // state already returning to IDLE.
-            set_hidden(id(ic_ended_group), false);
+            set_hidden(id(call_ended_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "ringing") {
-            set_label(id(ic_ringing_in_peer_label), id(peer_name).c_str());
-            set_hidden(id(ic_ringing_in_group), false);
+          } else if (call_state == "ringing") {
+            set_label(id(call_ringing_in_peer_label), id(peer_name).c_str());
+            set_hidden(id(call_ringing_in_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "calling" || ic_state == "remote_ringing") {
-            set_label(id(ic_ringing_out_peer_label), id(peer_name).c_str());
-            set_hidden(id(ic_ringing_out_group), false);
+          } else if (call_state == "calling" || call_state == "remote_ringing") {
+            set_label(id(call_ringing_out_peer_label), id(peer_name).c_str());
+            set_hidden(id(call_ringing_out_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
-          } else if (ic_state == "in_call" || ic_state == "connecting") {
-            set_label(id(ic_in_call_peer_label), id(peer_name).c_str());
-            set_hidden(id(ic_in_call_group), false);
+          } else if (call_state == "in_call" || call_state == "connecting") {
+            set_label(id(call_in_call_peer_label), id(peer_name).c_str());
+            set_hidden(id(call_in_call_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
           } else {
-            set_label(id(ic_idle_peer_label), id(peer_name).c_str());
-            auto csv = id(voip_phone).get_contacts_csv();
+            set_label(id(call_idle_peer_label), id(peer_name).c_str());
+            auto csv = id(phone).get_contacts_csv();
             int count = csv.empty() ? 0 : (int)std::count(csv.begin(), csv.end(), ',') + 1;
             char buf[32];
             snprintf(buf, sizeof(buf), "Contacts: %d", count);
-            set_label(id(ic_idle_contacts_label), buf);
-            set_hidden(id(ic_idle_group), false);
+            set_label(id(call_idle_contacts_label), buf);
+            set_hidden(id(call_idle_group), false);
           }
 
       # Animation lifecycle
       - if:
           condition:
             lambda: |-
-              std::string ic_state = id(voip_phone).get_state_str();
+              std::string call_state = id(phone).get_state_str();
               return id(current_mode) == 0 &&
                      id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
                      !id(init_in_progress) &&
-                     (ic_state == "idle" || ic_state.empty());
+                     (call_state == "idle" || call_state.empty());
           then:
             - if:
                 condition:
@@ -2641,8 +2641,8 @@ script:
                   return id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
                          !id(init_in_progress);
               - lambda: |-
-                  std::string ic_state = id(voip_phone).get_state_str();
-                  return ic_state == "idle" || ic_state.empty();
+                  std::string call_state = id(phone).get_state_str();
+                  return call_state == "idle" || call_state.empty();
               - switch.is_off: mute
               - not:
                   micro_wake_word.is_running:
@@ -2673,11 +2673,11 @@ script:
     mode: restart
     then:
       - lambda: |-
-          std::string ic_state = id(voip_phone).get_state_str();
-          if (id(ic_ended_active) ||
-              ic_state == "ringing" ||
-              ic_state == "calling" || ic_state == "remote_ringing" ||
-              ic_state == "in_call" || ic_state == "connecting") {
+          std::string call_state = id(phone).get_state_str();
+          if (id(call_ended_active) ||
+              call_state == "ringing" ||
+              call_state == "calling" || call_state == "remote_ringing" ||
+              call_state == "in_call" || call_state == "connecting") {
             return;
           }
 
@@ -2855,18 +2855,18 @@ script:
           lv_label_set_text(id(timer_label), buf);
           lv_obj_clear_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
 
-  # Update peer name + contacts count on the intercom idle group.
+  # Update peer name + contacts count on the VoIP idle group.
   # Used by next/prev_contact_button and by render_ui_state when staying idle.
-  - id: update_ic_idle_labels
+  - id: update_call_idle_labels
     then:
-      - lambda: id(peer_name) = id(voip_phone).get_current_destination();
+      - lambda: id(peer_name) = id(phone).get_current_destination();
       - lvgl.label.update:
-          id: ic_idle_peer_label
+          id: call_idle_peer_label
           text: !lambda 'return id(peer_name);'
       - lvgl.label.update:
-          id: ic_idle_contacts_label
+          id: call_idle_contacts_label
           text: !lambda |-
-            auto csv = id(voip_phone).get_contacts_csv();
+            auto csv = id(phone).get_contacts_csv();
             int count = csv.empty() ? 0 : (int)std::count(csv.begin(), csv.end(), ',') + 1;
             char buf[32];
             snprintf(buf, sizeof(buf), "Contacts: %d", count);
@@ -3085,11 +3085,11 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle: voip_phone
+                        esphome_voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN
-                      format: "Cannot switch AEC mode during active VA/intercom"
+                      format: "Cannot switch AEC mode during active VA/VoIP"
                 else:
                   - logger.log:
                       format: "Switching AEC mode to %s"
@@ -3195,9 +3195,9 @@ interval:
             and:
               - api.connected:
               - lambda: |-
-                  std::string ic_state = id(voip_phone).get_state_str();
+                  std::string call_state = id(phone).get_state_str();
                   return !id(init_in_progress) &&
-                         !id(ic_ended_active) &&
-                         (ic_state == "idle" || ic_state.empty());
+                         !id(call_ended_active) &&
+                         (call_state == "idle" || call_state.empty());
           then:
             - script.execute: fetch_forecast

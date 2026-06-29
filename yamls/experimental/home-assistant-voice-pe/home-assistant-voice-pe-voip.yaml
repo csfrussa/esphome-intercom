@@ -2,27 +2,27 @@
 # Home Assistant Voice PE + esphome_voip_stack experiment.
 #
 # This YAML keeps the official Voice PE audio stack intact and only adds the
-# native intercom layer. The Voice PE is not a Generic S3: its microphones are
+# native VoIP layer. The Voice PE is not a Generic S3: its microphones are
 # processed by the onboard XMOS voice front-end before ESPHome receives them.
 #
 # Expected audio graph:
 #   XMOS processed mic -> i2s_mics channel 0 -> esphome_voip_stack TX
-#   esphome_voip_stack RX -> intercom resampler -> Voice PE mixer -> AIC3204 speaker
+#   esphome_voip_stack RX -> VoIP resampler -> Voice PE mixer -> AIC3204 speaker
 #
 # This is an experimental bring-up target, not a validated release preset.
 # =============================================================================
 
 substitutions:
-  name: ha-voice-pe-intercom
-  friendly_name: Home Assistant Voice PE Intercom
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  name: ha-voice-pe-voip
+  friendly_name: Home Assistant Voice PE VoIP
+  ext_components_source: "../../../esphome/components"
 
 packages:
-  voice_pe_base: github://n-IA-hane/esphome-intercom/home-assistant-voice.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  voip_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  voip_ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
+  voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  voip_settings: !include ../../../packages/voip/call_settings.yaml
+  voip_ha_api: !include ../../../packages/voip/ha_api.yaml
 
 esphome:
   name: ${name}
@@ -39,7 +39,7 @@ wifi:
 
 speaker:
   # The official Voice PE mixer already combines media and announcements.
-  # Add one more input for intercom audio instead of replacing the hardware
+  # Add one more input for VoIP audio instead of replacing the hardware
   # speaker, DAC, sendspin, jack compensation or media player.
   - id: !extend mixing_speaker
     source_speakers:
@@ -53,7 +53,7 @@ speaker:
     bits_per_sample: 16
 
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   microphone_source:
     microphone: i2s_mics
     channels: 0
@@ -89,7 +89,7 @@ esphome_voip_stack:
 
 button:
   - platform: esphome_voip_stack
-    esphome_voip_stack_id: voip_phone
+    esphome_voip_stack_id: phone
     call:
       name: Call
       id: call_button

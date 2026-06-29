@@ -3,7 +3,7 @@
 This phase is mandatory before the next deep refactor. The project needs a host
 simulation target that runs the product runtime without physical ESP hardware.
 Unit tests and isolated mocks are not enough: the simulator must exercise the
-same intercom runtime, SIP/TCP/UDP protocol, Home Assistant API surface, audio
+same VoIP runtime and SIP/RTP protocol, Home Assistant API surface, audio
 policy, presentation state, and UI decisions used by firmware.
 
 ## Source Basis
@@ -113,7 +113,7 @@ be explicitly marked hardware-only. Scenarios should assert:
 - speaker state;
 - media state;
 - voice assistant state;
-- intercom session;
+- VoIP session;
 - Home Assistant entities;
 - queue/counter health;
 - stale callback rejection.

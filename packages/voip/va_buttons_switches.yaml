@@ -1,6 +1,6 @@
 # =============================================================================
-# Intercom buttons + mute/wake-word switches.
-# VA-aware variant of intercom/buttons_switches.yaml: the mic mute switch also
+# VoIP buttons + mute/wake-word switches.
+# VA-aware variant of voip/buttons_switches.yaml: the mic mute switch also
 # stops/starts the wake word + voice assistant pipeline, and adds an extra
 # Wake Word toggle.
 #
@@ -11,7 +11,7 @@
 #
 # Prerequisites in the device YAML:
 #   - id `mww`        : micro_wake_word component (voice_assistant/core.yaml)
-#   - script id `update_status` (provided by intercom/state_machine_full.yaml)
+#   - script id `update_status` (provided by voip/state_machine_full.yaml)
 #
 # Required substitutions:
 #   ${mic_id} - ID of the microphone bound to the mute action (default: mic_main)

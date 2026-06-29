@@ -33,7 +33,7 @@ views:
               - entity: switch.<your_device>_wake_word
               - entity: switch.<your_device>_mic_mute
               - entity: switch.<your_device>_speaker_mute
-      # --- Intercom-only device (no VA, no wake word) ---
+      # --- VoIP-only device (no VA, no wake word) ---
       - type: grid
         cards:
           - type: custom:voip-stack-card

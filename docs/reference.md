@@ -4,7 +4,7 @@
 
 ```yaml
 esphome_voip_stack:
-  id: voip_phone
+  id: phone
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   sip_port: 5060
   rtp_port: 40000

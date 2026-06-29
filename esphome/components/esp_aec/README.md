@@ -26,10 +26,10 @@ Ready-to-flash full-experience YAMLs include both paths: `generic-s3-full-aec-*`
 
 | Scenario | Pick |
 |----------|------|
-| Intercom only, single mic, no VA | `esp_aec` (lighter on RAM and CPU) |
+| VoIP only, single mic, no VA | `esp_aec` (lighter on RAM and CPU) |
 | Generic full build for 4 MB-oriented devices where you accept standalone AEC instead of NS/AGC/VAD | `esp_aec` |
 | Full AFE presets, codec/TDM boards, or larger flash generic builds | `esp_afe` |
-| Intercom + VA + dual-mic with Speech Enhancement | `esp_afe` |
+| VoIP + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
 | Standalone native `esphome_voip_stack` without `esp_audio_stack` | No software processor; bind directly to ESPHome microphone/speaker. Use `esp_audio_stack` + `esp_aec` when software echo cancellation is required. |
 
@@ -76,7 +76,7 @@ esp-sr 2.4.4 ships SR, VOIP and FD AEC modes:
 |------|--------|--------------------------------------|-----|-----------------|-------------|
 | `sr_low_cost` | `esp_aec3` linear | **~22 %** | No | **10/10** | VA + MWW when speaker leakage is already mild |
 | `sr_high_perf` | `esp_aec3` FFT | ~25 % | No | 10/10 | Only when contiguous DMA-capable internal RAM is available |
-| `voip_low_cost` | `dios_ssp_aec` Speex | ~58 % | Yes | 2/10 | Intercom-only, mild echo, low CPU budget |
+| `voip_low_cost` | `dios_ssp_aec` Speex | ~58 % | Yes | 2/10 | VoIP-only, mild echo, low CPU budget |
 | `voip_high_perf` | `dios_ssp_aec` | ~64 % | Yes | 2/10 | **Default for voip-only** (with `filter_length: 8` for 128 ms tail) |
 | `fd_low_cost` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Codec-backed full-duplex devices with audible speaker echo, such as Spotpear ES8311 loopback |
 | `fd_high_perf` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Same use case when contiguous DMA-capable internal RAM is available |
@@ -106,7 +106,7 @@ The `AEC Mode` select wires runtime modes to a Home Assistant select entity, wit
 
 **Engine standard**: stay inside one engine per device tier to avoid esp-sr's silent FFT calloc-fail bug on cross-engine transitions at `filter_length > 4`. Public YAMLs restrict the options accordingly.
 
-Intercom-only (no MWW) - VOIP engine only:
+VoIP-only (no MWW) - VOIP engine only:
 
 ```yaml
 select:

@@ -1,5 +1,5 @@
 # =============================================================================
-# Shared state machine for VA + Intercom devices.
+# Shared state machine for VA + VoIP devices.
 # Drop-in for any device that combines voice_assistant, micro_wake_word, and
 # esphome_voip_stack. Provides the central reducer (update_status), failsafes, and
 # all the cross-cutting hook placeholders that device YAMLs !extend.
@@ -8,19 +8,19 @@
 #   0=idle, 1=init, 2=no_wifi, 3=no_ha,
 #   4=both_muted, 5=mic_muted, 6=spk_muted,
 #   7=mww_recent_or_barge, 8=va_listening, 9=va_thinking,
-#   10=va_responding, 11=ic_ringing, 12=ic_calling,
-#   13=ic_in_call, 14=va_error, 15=media
+#   10=va_responding, 11=call_ringing, 12=calling,
+#   13=call_in_call, 14=va_error, 15=media
 #
 # g_applied_led values, derived from ui_state for LED rendering:
 #   0=off, 1=both_muted, 2=mic_muted, 3=spk_muted, 4=mww_recent_or_barge,
 #   5=va_listening, 6=va_thinking, 7=va_responding,
-#   8=ic_ringing, 9=ic_calling, 10=ic_in_call, 11=va_error, 12=media
+#   8=call_ringing, 9=calling, 10=call_in_call, 11=va_error, 12=media
 #
 # Prerequisites in the device YAML:
-#   - id `intercom`              : esphome_voip_stack component
+#   - id `phone`              : esphome_voip_stack component
 #   - id `va`                    : voice_assistant component (voice_assistant/core.yaml)
 #   - id `mww`                   : micro_wake_word component (voice_assistant/core.yaml)
-#   - id `mute`, `speaker_mute`  : mute switches (intercom/va_buttons_switches.yaml)
+#   - id `mute`, `speaker_mute`  : mute switches (voip/va_buttons_switches.yaml)
 #   - id `tts_speaker_input`     : TTS speaker source for TTS audio
 #   - id `speaker_media_player`  : media_player component
 #   - id `media_mixer_input`     : mixer source for ducking
@@ -39,9 +39,9 @@ substitutions:
   ui_state_va_listening: "8"
   ui_state_va_thinking: "9"
   ui_state_va_replying: "10"
-  ui_state_ic_ringing: "11"
-  ui_state_ic_calling: "12"
-  ui_state_ic_in_call: "13"
+  ui_state_call_ringing: "11"
+  ui_state_calling: "12"
+  ui_state_call_in_call: "13"
   ui_state_va_error: "14"
   ui_state_media: "15"
 
@@ -113,7 +113,7 @@ script:
           id(g_fsm_seq)++;
           using S = media_player::MediaPlayerState;
           constexpr uint32_t ACT_MEDIA = 1u << 0;
-          constexpr uint32_t ACT_INTERCOM = 1u << 1;
+          constexpr uint32_t ACT_VOIP = 1u << 1;
           constexpr uint32_t ACT_TTS_QUEUED = 1u << 2;
           constexpr uint32_t ACT_TTS_PLAYING = 1u << 3;
           constexpr uint32_t ACT_VA_LISTENING = 1u << 4;
@@ -127,8 +127,8 @@ script:
           uint32_t mask = 0;
           if (media_active)
             mask |= ACT_MEDIA;
-          if (!id(voip_phone).is_idle())
-            mask |= ACT_INTERCOM;
+          if (!id(phone).is_idle())
+            mask |= ACT_VOIP;
           if (id(g_va_phase) == 1)
             mask |= ACT_VA_LISTENING;
           if (id(g_va_phase) == 2)
@@ -173,14 +173,14 @@ script:
           } else if (id(g_va_phase) == 2) {
             state = ${ui_state_va_thinking};
             led = 6;
-          } else if (id(voip_phone).is_ringing()) {
-            state = ${ui_state_ic_ringing};
+          } else if (id(phone).is_ringing()) {
+            state = ${ui_state_call_ringing};
             led = 8;
-          } else if (id(voip_phone).is_calling()) {
-            state = ${ui_state_ic_calling};
+          } else if (id(phone).is_calling()) {
+            state = ${ui_state_calling};
             led = 9;
-          } else if (id(voip_phone).is_in_call()) {
-            state = ${ui_state_ic_in_call};
+          } else if (id(phone).is_in_call()) {
+            state = ${ui_state_call_in_call};
             led = 10;
           } else if (id(g_va_phase) == 6) {
             state = ${ui_state_va_error};
@@ -198,14 +198,14 @@ script:
       - if:
           condition:
             lambda: |-
-              constexpr uint32_t ACT_INTERCOM = 1u << 1;
+              constexpr uint32_t ACT_VOIP = 1u << 1;
               constexpr uint32_t ACT_TTS_QUEUED = 1u << 2;
               constexpr uint32_t ACT_TTS_PLAYING = 1u << 3;
               constexpr uint32_t ACT_VA_LISTENING = 1u << 4;
               constexpr uint32_t ACT_VA_THINKING = 1u << 5;
               constexpr uint32_t ACT_BARGE_PENDING = 1u << 6;
               constexpr uint32_t ACT_MWW_RECENT = 1u << 8;
-              uint32_t duck_mask = ACT_INTERCOM | ACT_TTS_QUEUED | ACT_TTS_PLAYING |
+              uint32_t duck_mask = ACT_VOIP | ACT_TTS_QUEUED | ACT_TTS_PLAYING |
                                    ACT_VA_LISTENING | ACT_VA_THINKING |
                                    ACT_BARGE_PENDING | ACT_MWW_RECENT;
               return (id(g_activity_mask) & duck_mask) != 0 ||
@@ -250,13 +250,13 @@ script:
     parameters:
       text: string
     then: []
-  - id: ui_ic_call
+  - id: ui_call_started
     parameters:
       peer: string
     then: []
   # Caller path: dest acked with RING. Same calling screen, label
   # flips. Devices with display !extend this to update LVGL widgets.
-  - id: ui_ic_dest_ringing
+  - id: ui_call_dest_ringing
     parameters:
       peer: string
     then: []
@@ -265,7 +265,7 @@ script:
   # (`local_hangup` / `remote_hangup` / `declined` / `timeout` /
   # `busy` / `unreachable` / `protocol_error` / `bridge_error`) or
   # a free-form SIP terminal reason.
-  - id: ui_ic_ended
+  - id: ui_call_ended
     parameters:
       peer: string
       reason: string
@@ -298,7 +298,7 @@ script:
               - not:
                   media_player.is_announcing:
                     id: speaker_media_player
-              - esphome_voip_stack.is_idle: voip_phone
+              - esphome_voip_stack.is_idle:
           then:
             - logger.log:
                 tag: mww
@@ -314,7 +314,7 @@ script:
             - logger.log:
                 level: INFO
                 tag: mww
-                format: "MWW: safe start skipped init=%d ota=%d enabled=%d mute=%d va=%d mww=%d announcing=%d intercom_idle=%d"
+                format: "MWW: safe start skipped init=%d ota=%d enabled=%d mute=%d va=%d mww=%d announcing=%d voip_idle=%d"
                 args:
                   - id(init_in_progress)
                   - id(g_ota_in_progress)
@@ -323,7 +323,7 @@ script:
                   - id(va).is_running()
                   - id(mww).is_running()
                   - id(speaker_media_player).state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING
-                  - id(voip_phone).is_idle()
+                  - id(phone).is_idle()
 
   # Core scripts
   - id: va_hold_response_until_announcement
@@ -480,7 +480,7 @@ script:
     then:
       - while:
           condition:
-            esphome_voip_stack.is_ringing: voip_phone
+            esphome_voip_stack.is_ringing:
           then:
             - media_player.play_media:
                 id: speaker_media_player

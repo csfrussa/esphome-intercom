@@ -64,5 +64,5 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
     num_channels: 1
-    # Keep the intercom RX resampler buffer frame-aligned with the wire chunk.
+    # Keep the VoIP RX resampler buffer frame-aligned with the wire chunk.
     buffer_duration: 128ms

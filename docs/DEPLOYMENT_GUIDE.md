@@ -75,7 +75,7 @@ in the central phonebook as `kind: softphone`.
 
 ## Optional SIP Trunk
 
-The trunk is disabled by default. Leave it disabled for local-only intercom
+The trunk is disabled by default. Leave it disabled for local-only VoIP
 installs; no registration, external route or DTMF collector is started.
 
 Enable it only when HA must register to a SIP provider or PBX. The trunk setup

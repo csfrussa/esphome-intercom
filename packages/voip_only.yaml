@@ -1,14 +1,14 @@
 # =============================================================================
-# Intercom-Only meta-package.
-# Bundles the core sub-packages that make up an voip-only device:
-#   - intercom/state_machine.yaml      LED reducer + g_applied_led
-#   - intercom/callbacks.yaml          esphome_voip_stack on_* + ui_ic_* hooks
+# VoIP-only meta-package.
+# Bundles the core sub-packages that make up a VoIP-only device:
+#   - voip/state_machine.yaml      LED reducer + g_applied_led
+#   - voip/callbacks.yaml          esphome_voip_stack on_* + ui_call_* hooks
 #
 # Maintained presets include optional feature packages explicitly next to this
 # core package, so users can comment out one line to remove a feature:
-#   - intercom/buttons_switches.yaml   call/next/prev/decline buttons + mute
-#   - intercom/call_settings.yaml      auto-answer + DND switches
-#   - intercom/ha_api.yaml             HA-callable call-control services
+#   - voip/buttons_switches.yaml   call/next/prev/decline buttons + mute
+#   - voip/call_settings.yaml      auto-answer + DND switches
+#   - voip/ha_api.yaml             HA-callable call-control services
 #
 # For LVGL devices that want a settings carousel, ALSO include:
 #   `lvgl/settings_navigation.yaml`   carousel state + navigation scripts
@@ -27,8 +27,8 @@
 # =============================================================================
 
 packages:
-  state_machine: !include intercom/state_machine.yaml
-  callbacks: !include intercom/callbacks.yaml
+  state_machine: !include voip/state_machine.yaml
+  callbacks: !include voip/callbacks.yaml
 
 # No CONFIG_LWIP_MAX_SOCKETS override: esphome_voip_stack reserves its socket
 # quota through socket.consume_sockets() in its Python validation path,
