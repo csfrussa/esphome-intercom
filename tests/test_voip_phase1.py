@@ -356,6 +356,30 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(parsed.header("X-Intercom-Caller-Route"), "Casa")
         self.assertEqual(parsed.header("X-Intercom-Dest-Name"), "Cucina")
 
+    def test_tcp_invite_connection_refused_returns_transport_unreachable(self) -> None:
+        async def run() -> str:
+            server = await asyncio.start_server(lambda _r, _w: None, "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            server.close()
+            await server.wait_closed()
+            client = sip_client.SipCallClient(
+                local_ip="127.0.0.1",
+                local_name="Casa",
+                local_sip_port=5060,
+                local_rtp_port=41000,
+                signaling_transport="TCP",
+            )
+            return await client.invite(
+                target="CodexBaresip",
+                remote_host="127.0.0.1",
+                remote_sip_port=port,
+                timeout=0.1,
+            )
+
+        result = asyncio.run(run())
+
+        self.assertEqual(result, "transport_unreachable")
+
     def test_dialog_headers_preserve_transport_port_and_rport(self) -> None:
         headers = sip.dialog_headers(
             request_uri="sip:Cucina@192.168.1.30:5070",

@@ -183,6 +183,26 @@ def _update_sip_accounts(hass: HomeAssistant, accounts: list[dict]) -> None:
         registrar.update_accounts(_sip_accounts(hass))
 
 
+async def _mark_sip_account_unreachable(hass: HomeAssistant, username: str) -> None:
+    """Drop a stale registrar Contact while keeping the account in the roster."""
+
+    wanted = (username or "").strip().lower()
+    if not wanted:
+        return
+    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
+    if registrar is None:
+        return
+    removed = False
+    for key, registration in list(getattr(registrar, "registrations", {}).items()):
+        reg_user = str(getattr(registration, "username", key) or key).strip().lower()
+        if reg_user == wanted or str(key).strip().lower() == wanted:
+            registrar.registrations.pop(key, None)
+            removed = True
+    if removed:
+        _LOGGER.info("SIP registrar contact marked unreachable user=%s", username)
+        await _refresh_and_push_phonebook(hass)
+
+
 def _ha_softphone_has_active_call(hass: HomeAssistant, *, ignore_call_id: str = "") -> bool:
     store = _ha_softphone_store(hass)
     if ignore_call_id and str(store.get("call_id") or "") == ignore_call_id:
@@ -1741,6 +1761,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         remote_host=uri.host,
         remote_sip_port=uri.port or int(cfg["sip_port"]),
     )
+    if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.kind == "softphone":
+        await _mark_sip_account_unreachable(hass, route.entry.id)
     public_result = _sip_public_state(result)
     _track_outbound_sip_client(
         hass,
@@ -3039,6 +3061,14 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
 
         force_ha_softphone = route_action == "answer_ha"
+        trunk_cfg = _get_trunk_config(hass)
+        trunk = hass.data.get(DOMAIN, {}).get("sip_trunk")
+        trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
+        bridge_to_trunk = bool(
+            not force_ha_softphone
+            and decision.kind == "requires_bridge"
+            and trunk_ready
+        )
         if not force_ha_softphone and decision.kind == "reject":
             if decision.reason == "target_disabled":
                 status = 403
@@ -3062,14 +3092,22 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 last_sip_event="SIP_RESPONSE",
             )
             return SipInviteResult(status, sip_reason, to_tag="", decline_reason=decision.reason or TerminalReason.DECLINED.value)
-        if not force_ha_softphone and decision.kind == "requires_bridge":
+        if not force_ha_softphone and decision.kind == "requires_bridge" and not bridge_to_trunk:
             return SipInviteResult(503, "Service Unavailable", to_tag="")
         if not force_ha_softphone and decision.reason == "ha_required":
             return SipInviteResult(404, "Not Found", to_tag="")
-        if not force_ha_softphone and decision.kind in {"direct", "bridge", "group"} and decision.entry is not None:
+        if not force_ha_softphone and (
+            bridge_to_trunk or (decision.kind in {"direct", "bridge", "group"} and decision.entry is not None)
+        ):
             peer_target = _peer_for_target(decision.target or invite.target, peers)
             bridge_uri = None
-            if peer_target is not None and peer_target.host:
+            if bridge_to_trunk:
+                bridge_uri = parse_sip_uri(
+                    f"sip:{decision.target or invite.target}@{trunk_cfg[CONF_TRUNK_SERVER]}:"
+                    f"{int(trunk_cfg[CONF_TRUNK_PORT])};"
+                    f"transport={str(trunk_cfg[CONF_TRUNK_TRANSPORT]).lower()}"
+                )
+            elif peer_target is not None and peer_target.host:
                 sip_transport = str((peer_target.device or {}).get("sip_transport") or "tcp").lower()
                 if sip_transport not in {"tcp", "udp"}:
                     sip_transport = "tcp"
@@ -3097,26 +3135,35 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     target=decision.target or invite.target,
                 )
                 bridge_to_softphone = bool(decision.entry is not None and decision.entry.kind == "softphone")
-                if bridge_to_softphone:
+                if bridge_to_trunk or bridge_to_softphone:
                     sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
                 client = SipCallClient(
                     local_ip=local_ip,
-                    local_name=invite.caller or _ha_peer_name(hass),
+                    local_name=(
+                        str(trunk_cfg.get(CONF_TRUNK_USERNAME) or _ha_peer_name(hass))
+                        if bridge_to_trunk
+                        else invite.caller or _ha_peer_name(hass)
+                    ),
                     local_sip_port=int(cfg["sip_port"]),
                     local_rtp_port=dest_relay_port,
                     supported_send_formats=sip_send_formats,
                     supported_recv_formats=sip_recv_formats,
                     signaling_transport=_sip_uri_transport(decision_uri),
-                    include_common_codecs=bridge_to_softphone,
+                    auth_username=str(trunk_cfg.get(CONF_TRUNK_AUTH_USERNAME) or "") if bridge_to_trunk else "",
+                    username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or "") if bridge_to_trunk else "",
+                    password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if bridge_to_trunk else "",
+                    outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if bridge_to_trunk else "",
+                    include_common_codecs=bridge_to_trunk or bridge_to_softphone,
                 )
-                _enable_reused_sip_tcp_connection(
-                    hass,
-                    client,
-                    decision_uri,
-                    target=decision.target or invite.target,
-                    default_sip_port=int(cfg["sip_port"]),
-                )
+                if not bridge_to_trunk:
+                    _enable_reused_sip_tcp_connection(
+                        hass,
+                        client,
+                        decision_uri,
+                        target=decision.target or invite.target,
+                        default_sip_port=int(cfg["sip_port"]),
+                    )
                 result = await client.invite(
                     target=decision_uri.user,
                     remote_host=decision_uri.host,

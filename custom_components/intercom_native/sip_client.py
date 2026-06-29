@@ -366,8 +366,8 @@ class SipCallClient:
                 try:
                     assert self.writer is not None
                     await self.writer.drain()
-                except (ConnectionError, RuntimeError, OSError):
-                    _LOGGER.debug("SIP TCP dialog write drain failed after peer close", exc_info=True)
+                except (ConnectionError, RuntimeError, OSError) as err:
+                    _LOGGER.debug("SIP TCP dialog write drain failed after peer close: %s", err)
 
             try:
                 asyncio.get_running_loop().create_task(_drain())
@@ -419,10 +419,22 @@ class SipCallClient:
         remote_sip_port: int,
         timeout: float = 8.0,
     ) -> str:
-        if self.signaling_transport == "TCP" and self._tcp_reuse_send is None:
-            await self._connect_tcp(remote_host, int(remote_sip_port))
-        else:
-            await self.start()
+        try:
+            if self.signaling_transport == "TCP" and self._tcp_reuse_send is None:
+                await self._connect_tcp(remote_host, int(remote_sip_port))
+            else:
+                await self.start()
+        except OSError as err:
+            self._mark_sip_event("TRANSPORT_ERROR", 0, str(err))
+            _LOGGER.info(
+                "SIP transport unreachable target=%s host=%s:%s transport=%s error=%s",
+                target,
+                remote_host,
+                remote_sip_port,
+                self.signaling_transport,
+                err,
+            )
+            return "transport_unreachable"
         transport_param = (("transport", self.signaling_transport.lower()),)
         request_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port), params=transport_param))
         local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port, params=transport_param))
