@@ -27,11 +27,11 @@
 </style>
 </defs>
 <rect class="bg" x="0" y="0" width="1400" height="760"/>
-<text class="title" x="54" y="62">SIP transport choice</text>
-<text class="subtitle" x="56" y="92">TCP and UDP are signaling choices; RTP media is always UDP</text>
+<text class="title" x="54" y="62">ESP SIP signaling transport</text>
+<text class="subtitle" x="56" y="92">ESPs choose SIP/TCP or SIP/UDP signaling; RTP media is always UDP</text>
 <rect class="box box-ha" x="80" y="155" width="350" height="210"/>
 <text class="label" x="102" y="191">SIP/TCP signaling</text>
-<text class="small" x="102" y="219">recommended default</text>
+<text class="small" x="102" y="219">ESP signaling option</text>
 <text class="small" x="102" y="241">stable through containers/VLANs</text>
 <text class="small" x="102" y="263">connection state is visible</text>
 <text class="small" x="102" y="285">good for routed networks</text>
@@ -53,7 +53,7 @@
 <text class="small" x="992" y="263">requires clean routing/firewall</text>
 <text class="small" x="992" y="285">retransmits are SIP-level</text>
 <rect class="box box-ha" x="970" y="465" width="350" height="145"/>
-<text class="label" x="992" y="501">HA can bridge</text>
+<text class="label" x="992" y="501">HA bridge path</text>
 <text class="small" x="992" y="529">SIP/TCP ↔ SIP/UDP</text>
 <text class="small" x="992" y="551">format conversion</text>
 <text class="small" x="992" y="573">RTP relay/resampler</text>

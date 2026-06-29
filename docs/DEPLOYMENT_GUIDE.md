@@ -60,9 +60,8 @@ These are first-class SIP endpoint shapes. They are not compatibility modes.
 
 ## Home Assistant
 
-Configure `homeassistant_voip_stack` with reachable SIP/RTP ports. HA is always the
-local softphone and router/B2BUA. The setup toggles only choose whether HA
-listens for SIP/TCP and/or SIP/UDP; there is no separate "HA PBX" mode.
+Configure `homeassistant_voip_stack` with reachable SIP/RTP ports. HA is always
+the local softphone and router/B2BUA. There is no separate "HA PBX" mode.
 
 If HA is behind NAT, VPN, LXC, Docker, or multiple subnets, set the integration
 advertise host so ESPs and softphones see a reachable SIP Contact/SDP address.

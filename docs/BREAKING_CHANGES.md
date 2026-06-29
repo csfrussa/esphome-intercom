@@ -11,6 +11,8 @@ The practical change:
 - ESP `esphome_voip_stack` devices are now SIP phones.
 - Home Assistant `homeassistant_voip_stack` is now a SIP softphone, dial-plan authority,
   SIP router/B2BUA, RTP bridge/resampler and optional SIP trunk client.
+- Home Assistant no longer exposes local SIP transport toggles. Configure ports
+  and optional features, not listener modes.
 - Standard softphones can register to Home Assistant as local SIP accounts and
   become phonebook contacts.
 - Home Assistant can register one provider/PBX trunk, so ESPs and the HA
@@ -41,8 +43,9 @@ The active branch is intentionally SIP-first and breaking:
 
 - ESP `esphome_voip_stack` is a SIP phone. `transport: udp|tcp` means SIP signaling
   transport only.
-- HA `homeassistant_voip_stack` is a SIP softphone, dial-plan authority, SIP/RTP bridge
-  and optional SIP trunk endpoint.
+- HA `homeassistant_voip_stack` is a SIP softphone, dial-plan authority, SIP/RTP
+  bridge and optional SIP trunk endpoint. Only trunk/provider transport remains
+  configurable.
 - The retired proprietary intercom protocol is not a compatibility layer.
 - ESP discovery/scanning between standalone peers is not a functional
   primitive. Use explicit SIP URIs, ESP `static_contacts` entries or the HA

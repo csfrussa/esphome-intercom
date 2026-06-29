@@ -90,6 +90,9 @@ VoIP call-control path is not a compatibility layer.
   disabled, trunk code is inactive. When enabled, unresolved outbound numbers
   can route through the trunk and inbound provider calls can select HA or a
   local phonebook target with RFC2833/telephone-event DTMF.
+- 🔌 HA local SIP transport toggles were removed from setup. The user configures
+  ports and optional features; only provider/PBX trunk transport remains
+  configurable.
 - 🛡️ Browser audio WebSocket sessions remain server-authoritative: if the socket
   is truly gone, the server ends the call.
 - 🔄 Browser/card reload during an active HA softphone call can explicitly rebind
@@ -303,7 +306,8 @@ VoIP call-control path is not a compatibility layer.
 - 📖 README was reworked around the 2026.7.0-dev SIP/VoIP migration first, then
   the new audio/media direction.
 - 📘 `docs/reference.md`, architecture docs, protocol docs and troubleshooting
-  docs were audited for stale 16 kHz-only assumptions.
+  docs were audited for stale 16 kHz-only assumptions and stale HA TCP/UDP setup
+  toggles.
 - 🧭 YAML selection docs now call out native high-rate paths, AFE/AEC 16 kHz
   branches, TCP vs UDP tradeoffs and Sendspin validation status.
 - 🧾 Breaking/compatibility notes were updated for the SIP/VoIP migration,

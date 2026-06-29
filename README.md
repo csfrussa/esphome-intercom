@@ -40,6 +40,8 @@ Action required:
 - `esphome_voip_stack` remains the ESPHome component name, but `transport: udp|tcp`
   now means SIP/UDP or SIP/TCP signaling. RTP audio remains UDP in the current
   phone profile.
+- `homeassistant_voip_stack` no longer exposes local SIP transport toggles:
+  configure ports and optional features, not listener modes.
 - `homeassistant_voip_stack` can optionally register a provider/PBX trunk and can also
   host local SIP accounts for standard softphones. Trunk support is off unless
   configured.
@@ -83,7 +85,11 @@ From a single ESPHome full-duplex doorbell to a multi-device VoIP setup over Hom
 
 If your goal is simply **"I want a full-duplex intercom with Home Assistant"**, start from the ready YAMLs under [`yamls/voip-only/`](yamls/voip-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `homeassistant_voip_stack` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
 
-You will see SIP router/B2BUA language below. Do not let that scare you: it is the internal model that lets ESPs, Home Assistant and the browser card call each other consistently. You can still use it as a normal one-button intercom. The SIP router/B2BUA model matters when you add more rooms, route through HA, bridge SIP TCP and SIP UDP, or want clear ringing, decline, busy and error reasons.
+You will see SIP router/B2BUA language below. Do not let that scare you: it is
+the internal model that lets ESPs, Home Assistant and the browser card call each
+other consistently. You can still use it as a normal one-button intercom. The
+model matters when you add more rooms, route through HA, mix SIP signaling
+transports, or want clear ringing, decline, busy and error reasons.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
@@ -338,23 +344,19 @@ ESP-to-ESP calling**. Today HA is the stable phonebook authority in the standard
 YAMLs. If HA is on the network, it also joins as one more extension and can act
 as a SIP router/B2BUA bridge when routing asks for it.
 
-There is one product mode on top of two SIP signaling transports. HA
-`homeassistant_voip_stack` is a SIP softphone, SIP TCP/UDP listener, RTP bridge/resampler,
-phonebook publisher, optional registrar for local softphones and optional trunk
-client.
+There is one product mode on top of SIP. HA `homeassistant_voip_stack` is a SIP
+softphone, router/B2BUA, RTP bridge/resampler, phonebook publisher, optional
+registrar for local softphones and optional trunk client. ESP `transport:
+tcp|udp` controls only that ESP phone's SIP signaling; RTP audio remains UDP.
 
-Use TCP as the default transport when the network path must be predictable:
-routed LANs, VLANs, Docker/HA container setups, Wi-Fi segments with filtering,
-or any install where retransmission is more important than the lowest possible
-latency. Use UDP when the devices live on a simple, well-behaved LAN and you
-want the lowest protocol overhead for audio. UDP control is still SIP router/B2BUA, but
-audio datagrams are not retransmitted, so packet loss or routing/firewall
-misconfiguration shows up as audible glitches instead of delayed recovery.
-Both transports are first-class and HA can bridge between them.
+Choose ESP `transport: tcp` when routed LANs, VLANs, containers or filtered
+Wi-Fi make reliable SIP signaling easier to operate. Choose ESP
+`transport: udp` on a simple LAN where lower signaling overhead is preferred.
 
-![SIP TCP and SIP UDP transport choice](docs/images/tcp-udp-choice.png)
+![ESP SIP signaling transport](docs/images/tcp-udp-choice.png)
 
-_SIP TCP and SIP UDP expose the same SIP router/B2BUA behavior; the network decides which one is easier to operate._
+_SIP TCP and SIP UDP expose the same phone behavior. ESPs choose one signaling
+transport; routing still follows the phonebook._
 
 Routing is deterministic:
 
@@ -527,7 +529,11 @@ the ESPHome API; ESP static contacts remain local offline/custom additions.
   user speech while music, TTS or ringtone audio is playing from the speaker.
 - **Ready-to-flash YAML configs** - Optimized configurations for real, tested hardware combining Voice Assistant, Micro Wake Word and VoIP calls on the same device.
 - **Auto Answer** - Configurable automatic call acceptance (ESP-side switch + browser card checkbox).
-- **HA Services** - `homeassistant_voip_stack.sip_answer`, `decline` (with optional `reason`), `hangup`, `call`, `forward`, `purge_devices`. All registered with explicit `voluptuous` schemas (`extra=PREVENT_EXTRA`); empty target-bearing calls fail schema validation before handlers run.
+- **HA Services** - `homeassistant_voip_stack.sip_call`, `sip_answer`,
+  `sip_decline`, `sip_hangup`, `sip_forward`, `sip_route`, `sip_set_dnd`,
+  phonebook services, local SIP account services and `purge_devices`. All are
+  registered with explicit `voluptuous` schemas (`extra=PREVENT_EXTRA`);
+  empty target-bearing calls fail schema validation before handlers run.
 - **Call Forwarding** - Forward active or ringing calls to another device via automation.
 - **Ringtone on incoming calls** - Devices play a looping ringtone while ringing.
 - **Volume Control** - Adjustable Master Volume and microphone gain.
@@ -579,7 +585,8 @@ flowchart TD
     FSM <--> Audio
 ```
 
-This is the whole product in one picture: HA is a transport hub and optional bridge; the ESP owns call state, audio, and the local phonebook.
+This is the whole product in one picture: HA is the SIP routing and phonebook
+hub; each ESP owns its SIP phone state, audio path and local dial plan mirror.
 
 ### Audio format
 
@@ -735,14 +742,15 @@ Then configure Zoiper, Linphone, baresip or pjsua with:
 server: <Home Assistant advertised IP or host>
 username: MobileOffice
 password: <password generated by HA>
-transport: SIP TCP or SIP UDP, matching the enabled HA listener
+transport: SIP TCP or SIP UDP
 ```
 
-The username is also the central phonebook ID. When `MobileOffice` registers,
-HA adds a dynamic SIP contact with that name to the roster and pushes it to ESP
-devices. Deregistering, disabling the account or letting the REGISTER expire
-removes the dynamic contact. Passwords are not logged; generated passwords are
-only shown at creation/rotation time.
+Pick whichever SIP transport is easiest to operate from the softphone/network
+path. The username is also the central phonebook ID. When `MobileOffice`
+registers, HA adds a dynamic SIP contact with that name to the roster and
+pushes it to ESP devices. Deregistering, disabling the account or letting the
+REGISTER expire removes the dynamic contact. Passwords are not logged;
+generated passwords are only shown at creation/rotation time.
 
 ---
 
@@ -757,9 +765,8 @@ only shown at creation/rotation time.
 3. Find "Home Assistant VoIP Stack" and click **Download**.
 4. Restart Home Assistant.
 5. Go to **Settings → Integrations → Add Integration** → search "Home Assistant VoIP Stack" → click **Submit**.
-6. In the config flow, tick the SIP signaling transports you want. SIP TCP is on
-   by default, SIP UDP is opt-in. Default ports are SIP `5060` and RTP base
-   `40000`.
+6. In the config flow, set the SIP and RTP ports only if the defaults do not fit
+   your network. Default ports are SIP `5060` and RTP base `40000`.
 
 ![HACS custom repository](docs/images/hacs-custom-repository.png)
 
@@ -771,7 +778,7 @@ _After the repository is added, open Home Assistant VoIP Stack in HACS and downl
 
 ![Home Assistant VoIP Stack config flow](docs/images/homeassistant-voip-stack-config-flow.png)
 
-_The config flow enables the SIP TCP and SIP UDP listeners used by ESP peers and the HA SIP router/B2BUA bridge._
+_The config flow sets the HA SIP/RTP ports and optional features._
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
@@ -832,7 +839,7 @@ cp -r custom_components/homeassistant_voip_stack /config/custom_components/
 Then add via UI: **Settings → Integrations → Add Integration → Home Assistant VoIP Stack**, restart Home Assistant.
 
 The integration will:
-- Bind SIP TCP and SIP UDP listener sockets on the configured ports.
+- Start the HA SIP endpoint on the configured SIP port.
 - Register the WebSocket API commands for the card.
 - Publish the SIP phonebook (`sensor.voip_phonebook`) for ESP subscribers.
 - Optionally register a provider/PBX trunk.
@@ -1114,10 +1121,9 @@ name: Kitchen Phone
 show_extended_info: true
 ```
 
-The default card mode is `hybrid`: the card mirrors one ESP endpoint. If that
-ESP selects another ESP, the card mirrors the ESP controls; if that ESP selects
-Home Assistant, the browser acts as the HA softphone leg for that ESP. To use
-Home Assistant as one independent softphone endpoint, add a separate card:
+The default card mode is `esp_mirror`: the card mirrors one ESP endpoint and
+presses that ESP's own contact, call, answer, decline and hangup controls. To
+use Home Assistant as one independent softphone endpoint, add a separate card:
 
 ```yaml
 type: custom:voip-stack-card
@@ -1131,7 +1137,7 @@ Do Not Disturb controls. It rings only for calls addressed to Home Assistant and
 does not mirror an ESP card state. Only `hybrid` cards must be bound to an ESP
 with `device_id`.
 
-The two modes intentionally display calls differently. A `hybrid` card shows
+The two modes intentionally display calls differently. An `esp_mirror` card shows
 Answer/Decline when its mirrored ESP is ringing, including the case where that
 ESP is being called by Home Assistant. A `ha_softphone` card shows Hangup while
 HA is the caller and Answer/Decline only when HA is the callee. In both
@@ -1166,7 +1172,11 @@ _The card uses the ESPHome device registry, so the device must be added to HA be
 
 ## Call Routing
 
-There is no simple/full product split. Every ESP runs the same SIP router/B2BUA state machine with a local phonebook. If the phonebook contains one HA peer, you have a one-button doorbell/room phone. If it contains multiple ESPs, the same firmware can call them directly or through HA depending on the selected routing policy.
+There is no simple/full product split. Every ESP runs the same SIP phone state
+machine with a local phonebook mirror. If the phonebook contains one HA peer,
+you have a one-button doorbell/room phone. If it contains multiple ESPs, the
+same firmware can call them directly or through HA depending on the selected
+routing policy.
 
 ![Browser calling ESP](docs/images/call-from-home-assistant-to-esp.gif)
 
@@ -1286,7 +1296,7 @@ sequenceDiagram
     participant A as 📟 ESP A
     participant B as 📟 ESP B
 
-    Note left of A: user selects B<br/>same protocol + device_independent
+    Note left of A: user selects B<br/>direct SIP route + compatible media
     A->>B: INVITE caller=A dest=B
     Note right of B: 180 Ringing
     B-->>A: 200 OK

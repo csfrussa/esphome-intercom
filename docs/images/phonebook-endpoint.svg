@@ -45,17 +45,17 @@
 <text class="small" x="542" y="309">sensor.voip_phonebook</text>
 <text class="small" x="542" y="331">canonical endpoint rows</text>
 <text class="small" x="542" y="353">enabled, kind, number</text>
-<text class="small" x="542" y="375">sip_uri / transport</text>
+<text class="small" x="542" y="375">sip_uri / signaling transport</text>
 <text class="small" x="542" y="397">tx_formats / rx_formats</text>
 <rect class="box box-esp" x="1040" y="110" width="300" height="120"/>
 <text class="label" x="1062" y="146">Direct SIP</text>
-<text class="small" x="1062" y="174">complete URI/IP/transport</text>
+<text class="small" x="1062" y="174">complete URI/IP/signaling</text>
 <text class="small" x="1062" y="196">compatible media</text>
 <text class="small" x="1062" y="218">ESP calls endpoint</text>
 <rect class="box box-ha" x="1040" y="285" width="300" height="120"/>
 <text class="label" x="1062" y="321">HA bridge</text>
 <text class="small" x="1062" y="349">unknown name or number</text>
-<text class="small" x="1062" y="371">cross transport/media</text>
+<text class="small" x="1062" y="371">mixed signaling/media</text>
 <text class="small" x="1062" y="393">two SIP dialogs</text>
 <rect class="box box-ext" x="1040" y="460" width="300" height="120"/>
 <text class="label" x="1062" y="496">Trunk route</text>

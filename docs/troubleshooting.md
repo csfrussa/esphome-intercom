@@ -25,7 +25,9 @@ collect:
 
 ## HA Softphone Does Not Ring
 
-- Confirm HA SIP TCP/UDP listener readiness in logs.
+- Confirm HA reports both implicit SIP listeners ready in logs:
+  `SIP UDP listener ready`, `SIP TCP listener ready` and
+  `SIP endpoint enabled on UDP+TCP/<port>`.
 - Confirm the INVITE Request-URI reaches HA's advertised host and SIP port.
 - Check HA softphone DND and active-call state. A second inbound call while HA
   is ringing or in-call should receive busy.

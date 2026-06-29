@@ -2,8 +2,8 @@
 
 The phonebook is the SIP dial plan shared by ESP devices, Home Assistant,
 registered local softphones and the optional trunk. SIP is implicit everywhere:
-fields named `transport`, `sip_transport` or `transport` only choose SIP/TCP or
-SIP/UDP signaling, never a second call-control protocol.
+fields named `transport` or `sip_transport` only choose SIP/TCP or SIP/UDP
+signaling, never a second call-control protocol.
 
 ## ESP Static Contacts
 

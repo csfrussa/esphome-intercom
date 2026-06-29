@@ -1,7 +1,7 @@
 # Media shot list
 
 This is the working list for refreshing README and documentation media for the
-`2026.5.0` release.
+`2026.7.0-dev` SIP/VoIP release.
 
 ## Primary README media
 
@@ -27,14 +27,19 @@ This is the working list for refreshing README and documentation media for the
 
 ## Installation and configuration media
 
+These screenshots must be recaptured before the stable release whenever the HA
+setup flow, card editor, card labels or entity names change. During prerelease
+work, diagram/mock assets are acceptable only when they do not document removed
+options or old component names.
+
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
 | `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
 | `docs/images/hacs-download-homeassistant-voip-stack.png` | Screenshot | HACS download step | Captured: Home Assistant VoIP Stack HACS entry and download menu |
-| `docs/images/homeassistant-voip-stack-config-flow.png` | Screenshot | HA integration setup | Captured: TCP and UDP options visible |
-| `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Replace old screenshot if entity names or UI changed |
-| `docs/images/card-selection.png` | Screenshot | Card picker | Updated custom card name and icon |
-| `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Captured: visual card editor and live preview |
+| `docs/images/homeassistant-voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
+| `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Recapture if entity names, device names or ESPHome onboarding UI changed. |
+| `docs/images/card-selection.png` | Screenshot | Card picker | Must show `VoIP Stack Card`, not old Intercom card names. |
+| `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Must show current `voip-stack-card` modes and options. |
 
 ## Full voice device media
 
@@ -59,7 +64,7 @@ replace individual photos or GIFs if the UI changes before release.
 |---|---|---|---|
 | `docs/images/sip-topology.png` / `.svg` | Diagram | SIP/VoIP topology | Created: ESP SIP phones, HA softphone/router/B2BUA, local registrar, registered softphones and optional provider trunk |
 | `docs/images/phonebook-endpoint.png` / `.svg` | Diagram | SIP phonebook and dial plan | Created: endpoint publication, manual/static contacts, SIP account registration, direct/bridge/trunk/reject routing |
-| `docs/images/tcp-udp-choice.png` / `.svg` | Diagram | SIP transport guidance | Created: SIP/TCP vs SIP/UDP signaling, RTP always UDP, same phone semantics and HA bridge behavior |
+| `docs/images/tcp-udp-choice.png` / `.svg` | Diagram | ESP SIP transport guidance | Created: ESP SIP/TCP vs SIP/UDP signaling choice, RTP always UDP, HA bridge path when routing needs it |
 | `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |
 
 ## Capture order for live demo
