@@ -229,11 +229,9 @@ class IntercomApi : public Component {
   void register_dnd_switch(switch_::Switch *sw) { this->dnd_switch_ = sw; }
   void register_volume_number(number::Number *num) { this->volume_number_ = num; }
   void register_mic_gain_number(number::Number *num) { this->mic_gain_number_ = num; }
-  // SIP dial-plan contact management.
-  // Entry grammar:
-  //   "Name"                                      bare name placeholder
-  //   "Name|ip|sip_port|rtp_port|sip_udp"     SIP endpoint
-  //   "Name|ip|sip_port|rtp_port|audio_mode|tx|rx|sip_tcp"
+  // SIP dial-plan contact management. Public YAML should prefer the
+  // structured add_contact action. add_contact(std::string) remains the compact
+  // internal transport-row path used by HA roster sync and generated helpers.
   // add_contact and set_contacts run the same idempotent merge: same shape
   // = no-op, missing endpoint upgraded in place, mismatched endpoint
   // replaced. Slot order is stable; only flush_contacts() trims.

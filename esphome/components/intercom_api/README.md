@@ -33,23 +33,20 @@ The endpoint capability is inferred from the YAML wiring:
 | `speaker` only | `speaker_only` | Plays incoming audio; no mic TX task is created. |
 | neither mic nor speaker | `control_only` | Signaling/phonebook only. |
 
-The endpoint sensor publishes a SIP phone row. SIP is implicit; the final token
-selects signaling transport:
+The endpoint sensor publishes this device as a SIP phonebook endpoint. SIP is
+implicit. The public concepts are:
 
-```text
-Name|192.168.1.40|5060|40000|sip_tcp
-Name|192.168.1.41|5060|40000|sip_udp
-```
+- name: display and dial name;
+- address: optional host/IP for direct SIP endpoints;
+- SIP port and RTP port;
+- transport: SIP/TCP or SIP/UDP signaling;
+- audio mode: full duplex, microphone only, speaker only or control only;
+- advertised TX/RX PCM capabilities.
 
-It may also append per-direction audio capabilities:
-
-```text
-Name|192.168.1.40|5060|40000|full_duplex|16000:s16le:1:16|48000:s16le:1:10;16000:s16le:1:16|sip_tcp
-Name|192.168.1.41|5060|40000|speaker_only|16000:s16le:1:16|16000:s16le:1:16|sip_udp
-```
-
-Home Assistant consumes these fields for routing/card display, format
-negotiation and avoiding audio directions that cannot exist.
+Home Assistant consumes those fields for routing/card display, format
+negotiation and avoiding audio directions that cannot exist. User YAML should
+use the structured `add_contact` action or HA-managed roster sync instead of
+hand-building serialized endpoint rows.
 
 ## Compile-Time Shape
 

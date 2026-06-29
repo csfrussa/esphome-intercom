@@ -458,12 +458,10 @@ esphome:
 
 Contact fields:
 
-```text
-name|required display/dial name
-address|optional host/IP for direct SIP endpoints
-sip_port|optional SIP signaling port, default 5060
-sip_transport|tcp or udp when direct SIP is allowed
-```
+- `name`: required display and dial name.
+- `address`: optional host/IP for direct SIP endpoints.
+- `port`: optional SIP signaling port, default `5060`.
+- `sip_transport`: `tcp` or `udp` when direct SIP is allowed.
 
 If you include the maintained HA phonebook subscription package, HA pushes the
 canonical roster JSON after boot. For a fully static local phonebook, omit that
