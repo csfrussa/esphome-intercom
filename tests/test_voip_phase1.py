@@ -1278,6 +1278,47 @@ class SipProtocolBugFixTest(unittest.TestCase):
         self.assertIn("z9hG4bKorig", parsed.header("Via"))
 
 
+class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_invite_treats_183_session_progress_as_ringing(self) -> None:
+        sent: list[bytes] = []
+        responses: asyncio.Queue[bytes] = asyncio.Queue()
+        responses.put_nowait(
+            sip.build_response(
+                183,
+                "Session Progress",
+                [
+                    ("Via", "SIP/2.0/TCP 192.168.1.10:5060;branch=z9hG4bKorig"),
+                    ("From", "<sip:420@192.168.1.10>;tag=ltag"),
+                    ("To", "<sip:3519968203@provider.example>;tag=rtag"),
+                    ("Call-ID", "progress-call"),
+                    ("CSeq", "1 INVITE"),
+                ],
+                b"",
+            )
+        )
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="420",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+            signaling_transport="TCP",
+        )
+        client.use_reused_tcp_connection(
+            send=sent.append,
+            responses=responses,
+            close=lambda: None,
+        )
+        result = await client.invite(
+            target="3519968203",
+            remote_host="provider.example",
+            remote_sip_port=5060,
+            timeout=0.2,
+        )
+        self.assertEqual(result, "ringing")
+        self.assertEqual(client.last_sip_status_code, 183)
+        self.assertTrue(sent)
+
+
 class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
     async def test_register_challenge_then_binding_roster_entry(self) -> None:
         registrar = sip_registrar.SipRegistrar(

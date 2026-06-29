@@ -131,6 +131,10 @@ def _sip_decline_reason(msg: sip.SipMessage) -> str:
     return "".join(out).strip()
 
 
+def _is_invite_progress_response(status_code: int | None) -> bool:
+    return status_code is not None and 100 < int(status_code) < 200
+
+
 def _sip_header_token(value: str) -> str:
     return "".join(
         ch
@@ -521,7 +525,7 @@ class SipCallClient:
                 continue
             self._mark_sip_event("SIP_RESPONSE", int(msg.status_code or 0), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
-            if msg.status_code == 180:
+            if _is_invite_progress_response(msg.status_code):
                 return "ringing"
             if msg.status_code and 200 <= msg.status_code < 300:
                 if not self._commit_200_ok(msg, target, remote_host, int(remote_sip_port), request_uri, local_uri, remote_uri):
@@ -559,7 +563,7 @@ class SipCallClient:
                 return _sip_decline_reason(msg) or sip.sip_failure_reason(msg.status_code)
 
     async def wait_for_final(self, timeout: float = 60.0) -> str:
-        """Continue an INVITE transaction after the first 180 Ringing."""
+        """Continue an INVITE transaction after the first provisional progress response."""
         if self.dialog is not None:
             return "in_call"
         deadline = asyncio.get_running_loop().time() + timeout
@@ -580,7 +584,7 @@ class SipCallClient:
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
             if "CANCEL" in msg.header("CSeq").upper():
                 continue
-            if msg.status_code == 180:
+            if _is_invite_progress_response(msg.status_code):
                 continue
             if 200 <= msg.status_code < 300:
                 if not self._commit_200_ok(
