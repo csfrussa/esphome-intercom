@@ -1,5 +1,40 @@
 # Breaking changes
 
+## 2026.7.0-dev: from PBX-lite to real PBX
+
+This release is the SIP/VoIP migration. It is not a small protocol tweak and it
+is intentionally not backward compatible with the retired project-specific
+call-control path.
+
+The practical change:
+
+- ESP `intercom_api` devices are now SIP phones.
+- Home Assistant `intercom_native` is now a SIP softphone, dial-plan authority,
+  SIP router/B2BUA, RTP bridge/resampler and optional SIP trunk client.
+- Standard softphones can register to Home Assistant as local SIP accounts and
+  become phonebook contacts.
+- Home Assistant can register one provider/PBX trunk, so ESPs and the HA
+  softphone can make and receive external calls without requiring Asterisk next
+  to the integration.
+- The shared phonebook is now a SIP dial plan: explicit `sip:name@host` /
+  `name@host` routes go direct, known local endpoints can be bridged by HA, and
+  external numbers can use the trunk when configured.
+- SIP call reasons are surfaced to ESP displays, HA state and cards: busy, DND,
+  declined, cancelled, timeout, media-incompatible, transport-unreachable and
+  route errors are no longer hidden behind the old intercom FSM.
+
+Migration impact:
+
+- Rebuild ESP firmware from the maintained 2026.7.0-dev YAMLs or update custom
+  YAMLs to the SIP `intercom_api` contract.
+- `protocol: udp|tcp` still exists in ESP YAML, but it means SIP signaling
+  transport only. RTP media is UDP.
+- ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
+  Provider/PBX registration belongs to Home Assistant's optional trunk client.
+- The old ESP-only network scanning/discovery path is gone. Use explicit SIP
+  URIs, local `phonebook` entries or the HA-managed roster.
+- The old project-specific intercom call-control protocol is not a fallback.
+
 ## SIP consolidation audit
 
 The active branch is intentionally SIP-first and breaking:

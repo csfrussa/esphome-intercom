@@ -1,13 +1,46 @@
-# 2026.7.0-dev — negotiated audio formats, speaker-source media path and Sendspin
+# 2026.7.0-dev — from PBX-lite to real PBX, SIP/VoIP phones and high-rate media
 
-This is a **development prerelease** for field testing the next intercom and
-media generation before it becomes a stable release. It contains large changes
-in Home Assistant, the Lovelace card, the ESP SIP phone and the full-experience
-audio path.
+This is a **development prerelease** for field testing the next VoIP generation
+before it becomes a stable release. It contains the largest call-control change
+in the project so far: ESP devices and Home Assistant have been migrated from
+the old project call model to SIP/SDP/RTP VoIP.
 
 Use it if you want to help test. Stay on the latest stable release if the
 device is installed somewhere where temporary audio glitches or call-routing
 regressions would be a problem.
+
+## ☎️ From PBX-lite to real PBX
+
+Yes, you read that correctly. ESP devices are now SIP phones and Home Assistant
+is now a SIP softphone, router/B2BUA, RTP bridge/resampler and optional trunk
+client. Intercom Native has been migrated with them, so Home Assistant is not a
+sidecar around an intercom protocol anymore: it participates in real VoIP call
+flows.
+
+That means this release can do things that previously required an external PBX
+such as Asterisk:
+
+- ESP devices can call each other with SIP identities from the shared
+  phonebook.
+- ESP devices can call Home Assistant as an independent softphone.
+- Home Assistant can call ESP devices from the Lovelace softphone card,
+  automations, Assist intents or services.
+- Home Assistant can bridge calls between ESPs, registered softphones and trunk
+  legs while preserving SIP call state and terminal reasons.
+- A standard softphone such as Zoiper, Linphone, baresip or pjsua can register
+  to Home Assistant as a local SIP account and become a phonebook contact.
+- Home Assistant can register one optional provider/PBX trunk. External numbers
+  and provider inbound calls can be routed through Intercom Native.
+- With a trunk configured, ESPs and Home Assistant can place and receive
+  external calls without carrying Asterisk beside the integration.
+- SIP status, DND, busy, decline, cancel, BYE, incompatible media and routing
+  failures are propagated as call reasons instead of being hidden behind a
+  project-specific state machine.
+
+This is intentionally a breaking migration. ESP firmware does not REGISTER to a
+provider/PBX and does not require SIP auth. ESPs are local SIP user agents; HA
+is the central router/B2BUA and optional trunk endpoint. The old proprietary
+intercom call-control path is not a compatibility layer.
 
 ## 🏠 Intercom Native / Home Assistant
 
@@ -249,13 +282,14 @@ regressions would be a problem.
 
 - 📘 Added a dedicated `runtime_fsm` component README with the reducer model,
   YAML syntax, policy/action examples, debug mode and host-test command.
-- 📖 README was reworked for the 2026.7.0-dev audio/media direction.
+- 📖 README was reworked around the 2026.7.0-dev SIP/VoIP migration first, then
+  the new audio/media direction.
 - 📘 `docs/reference.md`, architecture docs, protocol docs and troubleshooting
   docs were audited for stale 16 kHz-only assumptions.
 - 🧭 YAML selection docs now call out native high-rate paths, AFE/AEC 16 kHz
   branches, TCP vs UDP tradeoffs and Sendspin validation status.
-- 🧾 Breaking/compatibility notes were updated for negotiated formats and the
-  new media path.
+- 🧾 Breaking/compatibility notes were updated for the SIP/VoIP migration,
+  negotiated formats and the new media path.
 - 🛒 HACS guidance was refreshed now that the project is accepted in the HACS
   default repository flow. Custom repository instructions remain useful for
   development/prerelease testing.

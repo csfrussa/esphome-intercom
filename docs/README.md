@@ -14,7 +14,8 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   examples.
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
-  keeps historical upgrade notes separate from the current SIP contract.
+  starts from the current SIP/VoIP breaking migration. The full incoming release
+  note is [RELEASE_2026_7_0_DEV.md](RELEASE_2026_7_0_DEV.md).
 
 - 📚 **Configuration reference**: [reference.md](reference.md) covers every
   `intercom_api`, `esp_aec` and `esp_afe` option, every action and condition,

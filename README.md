@@ -5,12 +5,24 @@
 
 ## BREAKING CHANGES for 2026.7.0-dev
 
-`2026.7.0-dev` is a prerelease for the new full-experience media path and the
-first high-rate native intercom presets. These notes cover only changes from
-`2026.6.3`.
+`2026.7.0-dev` is a prerelease for the SIP/VoIP migration, the new
+full-experience media path and the first high-rate native intercom presets.
+These notes cover only changes from `2026.6.3`.
 
 Action required:
 
+- **This is the VoIP breaking release.** ESP devices are SIP phones. Home
+  Assistant is a SIP softphone, SIP router/B2BUA, RTP bridge/resampler and
+  optional trunk client. The retired project-specific intercom call-control path
+  is not a fallback.
+- `intercom_api` remains the ESPHome component name, but `protocol: udp|tcp`
+  now means SIP/UDP or SIP/TCP signaling. RTP media remains UDP.
+- `intercom_native` can optionally register a provider/PBX trunk and can also
+  host local SIP accounts for standard softphones. Trunk support is off unless
+  configured.
+- ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
+  Direct ESP calls use explicit SIP URI/IP/transport phonebook rows; unresolved
+  names and numbers route through HA when HA is present.
 - Maintained full-experience YAMLs now use the `speaker_source` media path:
   media, announcements, timers, local files and optional Sendspin enter one
   media player, then the mixer arbitrates them against intercom and Voice
@@ -109,11 +121,36 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-### 2026.7.0-dev - Full media-source path and high-rate native intercom
+### 2026.7.0-dev - From PBX-lite to real PBX
 
 `2026.7.0-dev` is a prerelease intended for field testing before the next
-stable release. It keeps the `2026.6.3` SIP softphone engine and negotiated
-PCM transport, then updates the maintained YAMLs around that foundation.
+stable release. The headline is not just a media-path update: it is the real
+VoIP migration.
+
+Yes, you read that correctly: ESP devices and Home Assistant have been migrated
+to SIP/SDP/RTP. ESPs are SIP phones. Home Assistant is a SIP softphone, SIP
+router/B2BUA, RTP bridge/resampler and optional trunk client. Intercom Native
+has been migrated too, so the HA integration can route and bridge real SIP call
+legs instead of wrapping a project-specific intercom protocol.
+
+What this makes possible:
+
+- ESP devices can call each other from the shared SIP phonebook.
+- ESP devices can call Home Assistant, now treated as an independent softphone.
+- Home Assistant can call ESP devices from the Lovelace softphone card,
+  automations, Assist intents or services.
+- Standard softphones such as Zoiper, Linphone, baresip or pjsua can register
+  to Home Assistant with local SIP accounts and appear as phonebook contacts.
+- Home Assistant can register one optional provider/PBX trunk for inbound and
+  outbound external calls.
+- With a trunk configured, ESPs and Home Assistant can make and receive external
+  calls without deploying Asterisk beside the integration.
+- HA can bridge ESP, HA softphone, registered softphone and trunk legs while
+  preserving SIP state, RTP counters, negotiated media formats and terminal
+  reasons.
+- Busy, DND, decline, cancel, BYE, timeout, media-incompatible and route errors
+  are exposed as call reasons from SIP behavior, not as a duplicated frontend
+  state machine.
 
 Changes since `2026.6.3`:
 
