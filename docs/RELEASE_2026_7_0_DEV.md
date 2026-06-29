@@ -17,6 +17,12 @@ client. Intercom Native has been migrated with them, so Home Assistant is not a
 sidecar around an intercom protocol anymore: it participates in real VoIP call
 flows.
 
+This does not remove the simple door intercom use case. An ESP can still be a
+one-button door intercom or room intercom with the same user workflow: call, answer,
+talk, hang up. It is now a real SIP/VoIP phone underneath, so the same device
+can also join direct SIP calls, HA-routed calls, registered softphone calls and
+trunk calls when those paths are configured.
+
 That means this release can do things that previously required an external PBX
 such as Asterisk:
 
@@ -33,6 +39,10 @@ such as Asterisk:
   and provider inbound calls can be routed through Intercom Native.
 - With a trunk configured, ESPs and Home Assistant can place and receive
   external calls without carrying Asterisk beside the integration.
+- Audio quality is negotiated per direction. A device can receive the best
+  compatible speaker format available on that leg while transmitting whatever
+  its microphone path can actually produce, for example 48 kHz receive audio
+  with a 16 kHz AFE/AEC microphone return.
 - SIP status, DND, busy, decline, cancel, BYE, incompatible media and routing
   failures are propagated as call reasons instead of being hidden behind a
   project-specific state machine.

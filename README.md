@@ -59,7 +59,7 @@ Minimum versions for this release:
 
 From a single ESPHome full-duplex doorbell to a multi-device intercom over Home Assistant, all the way to a complete Voice Assistant setup with wake word detection, echo cancellation and an LVGL touchscreen UI.
 
-If your goal is simply **"I want a full-duplex intercom/citofono with Home Assistant"**, start from the ready YAMLs under [`yamls/intercom-only/`](yamls/intercom-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `intercom_native` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
+If your goal is simply **"I want a full-duplex intercom with Home Assistant"**, start from the ready YAMLs under [`yamls/intercom-only/`](yamls/intercom-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `intercom_native` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
 
 You will see SIP router/B2BUA language below. Do not let that scare you: it is the internal model that lets ESPs, Home Assistant and the browser card call each other consistently. You can still use it as a normal one-button intercom. The SIP router/B2BUA model matters when you add more rooms, route through HA, bridge SIP TCP and SIP UDP, or want clear ringing, decline, busy and error reasons.
 
@@ -134,6 +134,12 @@ router/B2BUA, RTP bridge/resampler and optional trunk client. Intercom Native
 has been migrated too, so the HA integration can route and bridge real SIP call
 legs instead of wrapping a project-specific intercom protocol.
 
+You can still use an ESP exactly like a simple door intercom or room intercom: one
+button, one destination, answer, talk, hang up. The difference is that the
+device is now a real SIP/VoIP phone underneath, so the same firmware can also
+participate in direct SIP calls, HA-routed calls, local softphone calls and
+trunk calls when those features are enabled.
+
 What this makes possible:
 
 - ESP devices can call each other from the shared SIP phonebook.
@@ -149,6 +155,9 @@ What this makes possible:
 - HA can bridge ESP, HA softphone, registered softphone and trunk legs while
   preserving SIP state, RTP counters, negotiated media formats and terminal
   reasons.
+- Audio quality is negotiated per direction. If one side can receive 48 kHz
+  speaker audio while its microphone path is 16 kHz, the bridge keeps the best
+  compatible quality on each leg instead of forcing a single global format.
 - Busy, DND, decline, cancel, BYE, timeout, media-incompatible and route errors
   are exposed as call reasons from SIP behavior, not as a duplicated frontend
   state machine.
@@ -271,7 +280,7 @@ and display-driven voice devices.
 
 | Goal | Start here | Result |
 |---|---|---|
-| One ESP as a full-duplex citofono/intercom with Home Assistant | [`yamls/intercom-only/`](yamls/intercom-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
+| One ESP as a full-duplex intercom with Home Assistant | [`yamls/intercom-only/`](yamls/intercom-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
 | Room-to-room ESP intercom | One intercom-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP. |
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
