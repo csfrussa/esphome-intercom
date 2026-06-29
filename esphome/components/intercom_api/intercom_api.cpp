@@ -80,8 +80,9 @@ void IntercomApi::cleanup_partial_setup_() {
 
   RAMAllocator<uint8_t> u8_alloc;
   if (this->tx_audio_chunk_ != nullptr) {
-    u8_alloc.deallocate(this->tx_audio_chunk_, this->tx_audio_chunk_bytes_());
+    u8_alloc.deallocate(this->tx_audio_chunk_, this->tx_audio_chunk_alloc_bytes_);
     this->tx_audio_chunk_ = nullptr;
+    this->tx_audio_chunk_alloc_bytes_ = 0;
   }
 
   this->mic_buffer_.reset();
@@ -118,9 +119,11 @@ bool IntercomApi::allocate_setup_buffers_() {
       ? RAMAllocator<uint8_t>()
       : RAMAllocator<uint8_t>(RAMAllocator<uint8_t>::ALLOC_INTERNAL);
   if (this->has_microphone_()) {
-    this->tx_audio_chunk_ = psram_u8.allocate(this->tx_audio_max_chunk_bytes_());
+    this->tx_audio_chunk_alloc_bytes_ = this->tx_audio_max_chunk_bytes_();
+    this->tx_audio_chunk_ = psram_u8.allocate(this->tx_audio_chunk_alloc_bytes_);
     if (!this->tx_audio_chunk_) {
       ESP_LOGE(TAG, "Failed to allocate tx audio chunk buffer");
+      this->tx_audio_chunk_alloc_bytes_ = 0;
       return false;
     }
   }
@@ -148,7 +151,7 @@ bool IntercomApi::setup_audio_processor_() {
 bool IntercomApi::setup_transport_() {
 #ifdef USE_INTERCOM_SIP_TRANSPORT
   this->transport_ = std::make_unique<SipTransport>(
-      this->sip_port_, this->rtp_port_, "",
+      this->sip_port_, this->rtp_port_, this->udp_max_payload_, "",
       this->task_stacks_in_psram_);
   this->transport_->set_sip_signaling_transport(this->protocol_ == TransportType::TCP);
 #else

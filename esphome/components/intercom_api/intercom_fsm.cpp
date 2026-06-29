@@ -47,7 +47,7 @@ void IntercomApi::clear_call_identity_() {
   this->current_dest_name_.clear();
   this->current_caller_to_dest_format_ = DEFAULT_AUDIO_FORMAT;
   this->current_dest_to_caller_format_ = DEFAULT_AUDIO_FORMAT;
-  this->current_tx_audio_format_ = DEFAULT_AUDIO_FORMAT;
+  this->set_current_tx_audio_format_(DEFAULT_AUDIO_FORMAT);
   this->current_rx_audio_format_ = DEFAULT_AUDIO_FORMAT;
 }
 
@@ -207,7 +207,7 @@ void IntercomApi::start() {
            this->device_name_.c_str(), dest_name.c_str(), call_id.c_str());
   this->current_caller_to_dest_format_ = this->tx_audio_format_;
   this->current_dest_to_caller_format_ = this->rx_audio_format_;
-  this->current_tx_audio_format_ = this->tx_audio_format_;
+  this->set_current_tx_audio_format_(this->tx_audio_format_);
   this->current_rx_audio_format_ = this->rx_audio_format_;
   this->set_active_(true);
   this->set_call_state_(CallState::CALLING);
@@ -736,7 +736,7 @@ handle_incoming_invite_in_idle:
       this->current_caller_to_dest_format_ = caller_to_dest;
       this->current_dest_to_caller_format_ = dest_to_caller;
       this->current_rx_audio_format_ = caller_to_dest;
-      this->current_tx_audio_format_ = dest_to_caller;
+      this->set_current_tx_audio_format_(dest_to_caller);
 
       this->clear_terminal_call_snapshot_();
       const std::string dest_route = in_dest_route.empty()
@@ -818,7 +818,7 @@ handle_incoming_invite_in_idle:
         }
         this->current_caller_to_dest_format_ = msg.selected_tx_format;
         this->current_dest_to_caller_format_ = msg.selected_rx_format;
-        this->current_tx_audio_format_ = msg.selected_tx_format;
+        this->set_current_tx_audio_format_(msg.selected_tx_format);
         this->current_rx_audio_format_ = msg.selected_rx_format;
 #ifdef USE_INTERCOM_API_SPEAKER
         if (this->speaker_) {

@@ -12,6 +12,7 @@
 #include <freertos/task.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -24,7 +25,7 @@ class SipTransport : public SipPhoneTransport {
   static constexpr uint32_t kSipTaskStackBytes = 8192;
   static constexpr uint32_t kRtpTaskStackBytes = 8192;
 
-  SipTransport(uint16_t sip_port, uint16_t rtp_port, std::string remote_host,
+  SipTransport(uint16_t sip_port, uint16_t rtp_port, size_t udp_max_payload, std::string remote_host,
                bool task_stacks_in_psram);
   ~SipTransport() override;
 
@@ -106,6 +107,7 @@ class SipTransport : public SipPhoneTransport {
 
   uint16_t sip_port_{5060};
   uint16_t rtp_port_{40000};
+  size_t udp_max_payload_{UDP_SAFE_AUDIO_PAYLOAD_BYTES};
   bool task_stacks_in_psram_{false};
   std::atomic<uint32_t> remote_ip_v4_{0};
   std::atomic<uint16_t> remote_sip_port_{5060};

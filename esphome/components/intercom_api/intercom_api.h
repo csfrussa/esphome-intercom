@@ -129,6 +129,7 @@ class IntercomApi : public Component {
     this->tx_audio_format_ = AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms};
     this->tx_audio_formats_.formats[0] = this->tx_audio_format_;
     this->tx_audio_formats_.count = 1;
+    this->set_current_tx_audio_format_(this->tx_audio_format_);
   }
   void set_rx_audio_format(uint32_t sample_rate, uint8_t pcm_format, uint8_t channels, uint16_t frame_ms) {
     this->rx_audio_format_ = AudioFormat{sample_rate, static_cast<PcmFormat>(pcm_format), channels, frame_ms};
@@ -474,7 +475,9 @@ class IntercomApi : public Component {
 
   // Per-iteration drain buffers, heap-allocated at setup() so the audio
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.
-  size_t tx_audio_chunk_bytes_() const { return this->current_tx_audio_format_.nominal_frame_bytes(); }
+  size_t tx_audio_chunk_bytes_() const {
+    return this->current_tx_audio_frame_bytes_.load(std::memory_order_acquire);
+  }
   size_t tx_audio_max_chunk_bytes_() const {
     size_t bytes = this->tx_audio_format_.nominal_frame_bytes();
     for (uint8_t i = 0; i < this->tx_audio_formats_.count; i++) {
@@ -486,6 +489,7 @@ class IntercomApi : public Component {
 #endif
 #ifdef USE_INTERCOM_API_MIC
   uint8_t *tx_audio_chunk_{nullptr};
+  size_t tx_audio_chunk_alloc_bytes_{0};
   bool read_tx_chunk_(uint8_t *audio_chunk);
 
   // task_stacks_in_psram_: true puts task stacks in PSRAM (saves internal
@@ -508,6 +512,13 @@ class IntercomApi : public Component {
   AudioFormat current_dest_to_caller_format_{DEFAULT_AUDIO_FORMAT};
   AudioFormat current_tx_audio_format_{DEFAULT_AUDIO_FORMAT};
   AudioFormat current_rx_audio_format_{DEFAULT_AUDIO_FORMAT};
+  void set_current_tx_audio_format_(const AudioFormat &format) {
+    this->current_tx_audio_format_ = format;
+    this->current_tx_audio_frame_bytes_.store(format.nominal_frame_bytes(), std::memory_order_release);
+    this->current_tx_audio_frame_ms_.store(format.frame_ms == 0 ? 1 : format.frame_ms, std::memory_order_release);
+  }
+  std::atomic<size_t> current_tx_audio_frame_bytes_{DEFAULT_AUDIO_FORMAT.nominal_frame_bytes()};
+  std::atomic<uint16_t> current_tx_audio_frame_ms_{DEFAULT_AUDIO_FORMAT.frame_ms};
   uint32_t audio_debug_last_tx_log_ms_{0};
   uint32_t audio_debug_last_rx_log_ms_{0};
   uint32_t audio_debug_last_mic_log_ms_{0};

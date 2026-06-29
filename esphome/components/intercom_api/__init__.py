@@ -182,9 +182,10 @@ def _format_container_bits(fmt: dict) -> int:
     return 32
 
 
-def _format_frame_bytes(fmt: dict) -> int:
+def _format_rtp_payload_bytes(fmt: dict) -> int:
     samples = (fmt[CONF_SAMPLE_RATE] * fmt[CONF_FRAME_MS]) // 1000
-    return samples * fmt[CONF_CHANNELS] * (_format_container_bits(fmt) // 8)
+    sample_bytes = 3 if fmt[CONF_PCM_FORMAT] == "s24le_in_s32" else (_format_container_bits(fmt) // 8)
+    return samples * fmt[CONF_CHANNELS] * sample_bytes
 
 
 def _pcm_from_bits(bits: int) -> str:
@@ -598,10 +599,10 @@ def _final_validate(config):
         checks.extend((CONF_TX_FORMATS, fmt) for fmt in audio_cfg[CONF_TX_FORMATS])
         checks.extend((CONF_RX_FORMATS, fmt) for fmt in audio_cfg[CONF_RX_FORMATS])
         for direction, fmt in checks:
-            frame_bytes = _format_frame_bytes(fmt)
-            if frame_bytes > max_payload:
+            payload_bytes = _format_rtp_payload_bytes(fmt)
+            if payload_bytes > max_payload:
                 raise cv.Invalid(
-                    f"intercom_api RTP audio.{direction} frame is {frame_bytes} bytes, "
+                    f"intercom_api RTP audio.{direction} payload is {payload_bytes} bytes, "
                     f"above the configured RTP payload limit of {max_payload}. "
                     "ESPHome editor action required: lower audio sample_rate, channels, pcm_format, "
                     "or frame_ms for this SIP/RTP profile. Only raise udp_max_payload when this LAN is "

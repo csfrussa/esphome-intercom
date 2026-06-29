@@ -389,9 +389,10 @@ size_t rtp_payload_to_pcm(const uint8_t *payload, size_t payload_len, const Audi
 
 }  // namespace
 
-SipTransport::SipTransport(uint16_t sip_port, uint16_t rtp_port, std::string remote_host,
+SipTransport::SipTransport(uint16_t sip_port, uint16_t rtp_port, size_t udp_max_payload, std::string remote_host,
                            bool task_stacks_in_psram)
-    : sip_port_(sip_port), rtp_port_(rtp_port), task_stacks_in_psram_(task_stacks_in_psram) {
+    : sip_port_(sip_port), rtp_port_(rtp_port), udp_max_payload_(udp_max_payload),
+      task_stacks_in_psram_(task_stacks_in_psram) {
   audio_format_list_default(&this->offer_tx_formats_);
   audio_format_list_default(&this->offer_rx_formats_);
   this->rtp_ssrc_ = esp_random();
@@ -819,7 +820,8 @@ std::string SipTransport::build_sdp_offer_() const {
   std::string payloads;
   std::string maps;
   uint8_t pt = 96;
-  const uint8_t selected_ptime = choose_common_audio_ptime(this->offer_tx_formats_, this->offer_rx_formats_);
+  const uint8_t selected_ptime =
+      choose_common_audio_ptime(this->offer_tx_formats_, this->offer_rx_formats_, this->udp_max_payload_);
   if (selected_ptime == 0) {
     ESP_LOGW(TAG, "SIP SDP offer has no shared TX/RX RTP packet time");
     return "";
@@ -827,8 +829,7 @@ std::string SipTransport::build_sdp_offer_() const {
   auto append_format = [&](const AudioFormat &fmt) {
     if (pt >= 120) return;
     if (fmt.frame_ms != selected_ptime) return;
-    if (fmt.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return;
-    const char *enc = audio_format_rtp_encoding(fmt);
+    const char *enc = audio_format_rtp_encoding(fmt, this->udp_max_payload_);
     if (enc == nullptr) return;
     if (!payloads.empty()) payloads.push_back(' ');
     payloads += std::to_string(pt);
@@ -868,8 +869,8 @@ std::string SipTransport::build_sdp_answer_() const {
   uint8_t tx_payload_type = 96;
   uint8_t rx_payload_type = 96;
   this->get_media_config_(&selected_tx, &selected_rx, &tx_payload_type, &rx_payload_type);
-  const char *tx_enc = audio_format_rtp_encoding(selected_tx);
-  const char *rx_enc = audio_format_rtp_encoding(selected_rx);
+  const char *tx_enc = audio_format_rtp_encoding(selected_tx, this->udp_max_payload_);
+  const char *rx_enc = audio_format_rtp_encoding(selected_rx, this->udp_max_payload_);
   if (tx_enc == nullptr || rx_enc == nullptr) {
     ESP_LOGE(TAG, "SIP SDP answer refused: selected wire PCM format is not RTP-mappable");
     return "";
@@ -936,8 +937,10 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
         fmt.frame_ms = media_ptime;
         AudioFormat local_rx;
         AudioFormat local_tx;
-        const bool tx_ok = audio_format_list_match_udp_safe(this->offer_tx_formats_, fmt, &local_tx);
-        const bool rx_ok = audio_format_list_match_udp_safe(this->offer_rx_formats_, fmt, &local_rx);
+        const bool tx_ok = audio_format_list_match_udp_safe(this->offer_tx_formats_, fmt, &local_tx,
+                                                            this->udp_max_payload_);
+        const bool rx_ok = audio_format_list_match_udp_safe(this->offer_rx_formats_, fmt, &local_rx,
+                                                            this->udp_max_payload_);
         if (!selected_rx && rx_ok) {
           selected_rx_format = local_rx;
           selected_rx_payload_type = pt;
@@ -1152,7 +1155,7 @@ void SipTransport::send_audio_frame(const uint8_t *pcm, size_t bytes) {
   if (!this->rtp_running_.load(std::memory_order_acquire) || this->rtp_socket_ < 0 || pcm == nullptr || bytes == 0) return;
   const uint32_t ip = this->remote_ip_v4_.load(std::memory_order_acquire);
   const uint16_t port = this->remote_rtp_port_.load(std::memory_order_acquire);
-  if (ip == 0 || port == 0 || bytes > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return;
+  if (ip == 0 || port == 0) return;
   AudioFormat tx_format;
   uint8_t tx_payload_type = 96;
   this->get_media_config_(&tx_format, nullptr, &tx_payload_type, nullptr);
@@ -1174,7 +1177,7 @@ void SipTransport::send_audio_frame(const uint8_t *pcm, size_t bytes) {
   const uint8_t bps = tx_format.container_bytes_per_sample();
   const size_t input_bytes = bytes;
   bytes = pcm_to_rtp_payload(pcm, bytes, tx_format, packet + 12, sizeof(packet) - 12);
-  if (bytes == 0) return;
+  if (bytes == 0 || bytes > this->udp_max_payload_) return;
   const uint32_t samples = bps == 0 || tx_format.channels == 0
       ? 0
       : static_cast<uint32_t>(input_bytes / bps / tx_format.channels);

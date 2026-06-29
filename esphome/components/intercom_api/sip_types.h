@@ -48,6 +48,15 @@ struct AudioFormat {
     return this->nominal_frame_samples() * this->channels * this->container_bytes_per_sample();
   }
 
+  uint8_t rtp_bytes_per_sample() const {
+    if (this->pcm_format == PcmFormat::S24LE_IN_S32) return 3;
+    return this->container_bytes_per_sample();
+  }
+
+  size_t nominal_rtp_payload_bytes() const {
+    return this->nominal_frame_samples() * this->channels * this->rtp_bytes_per_sample();
+  }
+
   bool is_valid() const {
     const bool valid_rate = this->sample_rate == 8000 || this->sample_rate == 12000 ||
                             this->sample_rate == 16000 || this->sample_rate == 24000 ||
@@ -185,9 +194,10 @@ inline uint8_t audio_format_bits_per_sample(const AudioFormat &format) {
   }
 }
 
-inline const char *audio_format_rtp_encoding(const AudioFormat &format) {
+inline const char *audio_format_rtp_encoding(const AudioFormat &format,
+                                             size_t max_payload = UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
   if (format.channels != 1) return nullptr;
-  if (format.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return nullptr;
+  if (format.nominal_rtp_payload_bytes() > max_payload) return nullptr;
   if (format.pcm_format == PcmFormat::S16LE) return "L16";
   if (format.pcm_format == PcmFormat::S24LE || format.pcm_format == PcmFormat::S24LE_IN_S32) return "L24";
   return nullptr;
@@ -211,19 +221,21 @@ inline bool choose_common_audio_format(const AudioFormatList &preferred, const A
   return false;
 }
 
-inline bool audio_format_list_supports_rtp_ptime(const AudioFormatList &list, uint8_t ptime) {
+inline bool audio_format_list_supports_rtp_ptime(const AudioFormatList &list, uint8_t ptime,
+                                                 size_t max_payload = UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
   for (uint8_t i = 0; i < list.count; i++) {
     const AudioFormat &candidate = list.formats[i];
-    if (candidate.frame_ms == ptime && audio_format_rtp_encoding(candidate) != nullptr) return true;
+    if (candidate.frame_ms == ptime && audio_format_rtp_encoding(candidate, max_payload) != nullptr) return true;
   }
   return false;
 }
 
-inline uint8_t choose_common_audio_ptime(const AudioFormatList &tx, const AudioFormatList &rx) {
+inline uint8_t choose_common_audio_ptime(const AudioFormatList &tx, const AudioFormatList &rx,
+                                         size_t max_payload = UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
   static constexpr uint8_t kPreference[] = {10, 16, 20, 32};
   for (uint8_t ptime : kPreference) {
-    if (audio_format_list_supports_rtp_ptime(tx, ptime) &&
-        audio_format_list_supports_rtp_ptime(rx, ptime)) {
+    if (audio_format_list_supports_rtp_ptime(tx, ptime, max_payload) &&
+        audio_format_list_supports_rtp_ptime(rx, ptime, max_payload)) {
       return ptime;
     }
   }
@@ -231,11 +243,12 @@ inline uint8_t choose_common_audio_ptime(const AudioFormatList &tx, const AudioF
 }
 
 inline bool audio_format_list_match_udp_safe(const AudioFormatList &list, const AudioFormat &remote,
-                                             AudioFormat *local) {
-  if (remote.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return false;
+                                             AudioFormat *local,
+                                             size_t max_payload = UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
+  if (remote.nominal_rtp_payload_bytes() > max_payload) return false;
   for (uint8_t i = 0; i < list.count; i++) {
     const AudioFormat &candidate = list.formats[i];
-    if (candidate == remote && candidate.nominal_frame_bytes() <= UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
+    if (candidate == remote && candidate.nominal_rtp_payload_bytes() <= max_payload) {
       if (local != nullptr) *local = candidate;
       return true;
     }

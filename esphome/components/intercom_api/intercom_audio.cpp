@@ -116,7 +116,7 @@ void IntercomApi::tx_task_() {
 
     this->process_tx_chunk_(audio_chunk);
 
-    const uint32_t frame_ms = std::max<uint32_t>(1, this->current_tx_audio_format_.frame_ms);
+    const uint32_t frame_ms = this->current_tx_audio_frame_ms_.load(std::memory_order_acquire);
     const TickType_t frame_ticks = std::max<TickType_t>(1, pdMS_TO_TICKS(frame_ms));
     vTaskDelayUntil(&last_wake, frame_ticks);
   }
