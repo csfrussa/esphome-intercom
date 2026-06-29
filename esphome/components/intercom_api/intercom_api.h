@@ -510,8 +510,11 @@ class IntercomApi : public Component {
   AudioFormat current_rx_audio_format_{DEFAULT_AUDIO_FORMAT};
   uint32_t audio_debug_last_tx_log_ms_{0};
   uint32_t audio_debug_last_rx_log_ms_{0};
+  uint32_t audio_debug_last_mic_log_ms_{0};
+  uint32_t audio_debug_last_mic_callback_ms_{0};
   uint32_t audio_debug_tx_frames_{0};
   uint32_t audio_debug_rx_frames_{0};
+  uint32_t audio_debug_mic_callbacks_{0};
 
   // First peer audio frame closes the 200 OK echo loop.
   std::atomic<bool> first_audio_received_{false};

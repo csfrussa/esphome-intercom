@@ -96,8 +96,14 @@ void IntercomApi::tx_task_() {
 
   while (true) {
     const size_t frame_bytes = this->tx_audio_chunk_bytes_();
-    if (!this->is_tx_stream_ready_() || this->mic_buffer_->available() < frame_bytes) {
+    if (!this->is_tx_stream_ready_()) {
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      last_wake = xTaskGetTickCount();
+      continue;
+    }
+
+    if (this->mic_buffer_->available() < frame_bytes) {
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
       last_wake = xTaskGetTickCount();
       continue;
     }
@@ -124,6 +130,28 @@ void IntercomApi::on_microphone_data_(const uint8_t *data, size_t len) {
   }
   if (this->mic_buffer_ == nullptr || data == nullptr || len == 0) {
     return;
+  }
+  if (this->audio_debug_) {
+    const uint32_t now = millis();
+    const uint32_t delta = this->audio_debug_last_mic_callback_ms_ == 0
+                               ? 0
+                               : now - this->audio_debug_last_mic_callback_ms_;
+    this->audio_debug_last_mic_callback_ms_ = now;
+    this->audio_debug_mic_callbacks_++;
+    if (now - this->audio_debug_last_mic_log_ms_ >= 1000) {
+      this->audio_debug_last_mic_log_ms_ = now;
+      ESP_LOGI(TAG,
+               "AudioDebug[mic_callback]: callbacks=%u len=%u delta_ms=%u tx_frame_bytes=%u "
+               "buffer_available=%u tx_format=%u:%u:%u:%u state=%s",
+               (unsigned) this->audio_debug_mic_callbacks_, (unsigned) len, (unsigned) delta,
+               (unsigned) this->tx_audio_chunk_bytes_(),
+               (unsigned) this->mic_buffer_->available(),
+               (unsigned) this->current_tx_audio_format_.sample_rate,
+               (unsigned) this->current_tx_audio_format_.pcm_format,
+               (unsigned) this->current_tx_audio_format_.channels,
+               (unsigned) this->current_tx_audio_format_.frame_ms,
+               this->get_call_state_str());
+    }
   }
 
   // Skip our gain when esp_audio_stack owns the mic_gain entity (already applied upstream).

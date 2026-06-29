@@ -1,8 +1,12 @@
 const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
 const FRAME_MS = Object.freeze([10, 16, 20, 32]);
-const RING_FRAMES = 12;
-const START_FRAMES = 4;
-const DROP_FRAMES = 9;
+const BUFFER_CAPACITY_SECONDS = 1.28;
+const MIN_START_LATENCY_MS = 80;
+const MAX_START_LATENCY_MS = 320;
+const OVERFLOW_KEEP_LATENCY_MS = 960;
+const JITTER_SAFETY_MULTIPLIER = 4;
+const STABLE_DECAY_SECONDS = 12;
+const PLC_DECAY_PER_SAMPLE = 0.9997;
 
 function normaliseFormat(value) {
   if (!value) throw new Error("playback worklet requires negotiated PCM format");
@@ -33,7 +37,11 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
     super();
     this._format = normaliseFormat(options?.processorOptions?.format);
     this._contextFrameSamples = Math.max(1, Math.round(this._format.frameSamples * sampleRate / this._format.sampleRate));
-    this._ring = new Float32Array(this._contextFrameSamples * this._format.channels * RING_FRAMES);
+    this._capacityFrames = Math.max(8, Math.ceil((BUFFER_CAPACITY_SECONDS * 1000) / this._format.frameMs));
+    this._minStartFrames = Math.max(2, Math.ceil(MIN_START_LATENCY_MS / this._format.frameMs));
+    this._maxStartFrames = Math.max(this._minStartFrames, Math.ceil(MAX_START_LATENCY_MS / this._format.frameMs));
+    this._dropFrames = Math.max(this._maxStartFrames + 1, Math.ceil(OVERFLOW_KEEP_LATENCY_MS / this._format.frameMs));
+    this._ring = new Float32Array(this._contextFrameSamples * this._format.channels * this._capacityFrames);
     this._read = 0;
     this._write = 0;
     this._available = 0;
@@ -43,6 +51,12 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
     this._framesDrop = 0;
     this._underruns = 0;
     this._lastStats = 0;
+    this._targetStartFrames = this._minStartFrames;
+    this._lastUnderrun = 0;
+    this._lastOutput = new Float32Array(this._format.channels);
+    this._concealmentGain = 0;
+    this._lastArrivalTime = 0;
+    this._arrivalJitterSeconds = 0;
 
     this.port.onmessage = (event) => {
       const data = event.data;
@@ -65,7 +79,9 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
   _push(buffer) {
     const frameBytes = this._format.frameSamples * this._format.channels * this._format.bytesPerSample;
     if (buffer.byteLength !== frameBytes) return;
-    if (this._available >= this._contextFrameSamples * this._format.channels * DROP_FRAMES) {
+    const frameSamples = this._contextFrameSamples * this._format.channels;
+    this._updateArrivalJitter();
+    if (this._available >= frameSamples * this._dropFrames) {
       this._read = (this._read + this._contextFrameSamples * this._format.channels) % this._ring.length;
       this._available -= this._contextFrameSamples * this._format.channels;
       this._framesDrop++;
@@ -85,25 +101,59 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
     }
     this._available += this._contextFrameSamples * this._format.channels;
     this._framesIn++;
-    if (!this._started && this._available >= this._contextFrameSamples * this._format.channels * START_FRAMES) {
+    if (!this._started && this._available >= frameSamples * this._targetStartFrames) {
       this._started = true;
     }
+  }
+
+  _updateArrivalJitter() {
+    const now = currentTime;
+    if (!Number.isFinite(now) || now <= 0) return;
+    if (this._lastArrivalTime > 0) {
+      const expected = this._format.frameMs / 1000;
+      const deviation = Math.abs((now - this._lastArrivalTime) - expected);
+      this._arrivalJitterSeconds += (deviation - this._arrivalJitterSeconds) / 16;
+      const adaptiveFrames = Math.ceil(
+        (MIN_START_LATENCY_MS + this._arrivalJitterSeconds * 1000 * JITTER_SAFETY_MULTIPLIER) /
+          this._format.frameMs,
+      );
+      this._targetStartFrames = Math.max(
+        this._targetStartFrames,
+        Math.min(this._maxStartFrames, Math.max(this._minStartFrames, adaptiveFrames)),
+      );
+    }
+    this._lastArrivalTime = now;
   }
 
   process(_inputs, outputs) {
     const channels = outputs?.[0] || [];
     if (!channels.length) return true;
 
+    let underrunThisQuantum = false;
     for (let i = 0; i < channels[0].length; i++) {
-      if (!this._started || this._available < this._format.channels) {
-        if (this._started && this._available < this._format.channels) this._underruns++;
+      if (!this._started) {
         for (const out of channels) out[i] = 0;
-        this._started = false;
+        continue;
+      }
+      if (this._available < this._format.channels) {
+        if (!underrunThisQuantum) {
+          underrunThisQuantum = true;
+          this._underruns++;
+          this._lastUnderrun = currentTime;
+          this._targetStartFrames = Math.min(this._maxStartFrames, this._targetStartFrames + 2);
+        }
+        for (let ch = 0; ch < channels.length; ch++) {
+          channels[ch][i] = this._lastOutput[Math.min(ch, this._format.channels - 1)] * this._concealmentGain;
+        }
+        this._concealmentGain *= PLC_DECAY_PER_SAMPLE;
         continue;
       }
       for (let ch = 0; ch < channels.length; ch++) {
-        channels[ch][i] = this._ring[(this._read + Math.min(ch, this._format.channels - 1)) % this._ring.length];
+        const sample = this._ring[(this._read + Math.min(ch, this._format.channels - 1)) % this._ring.length];
+        channels[ch][i] = sample;
+        this._lastOutput[Math.min(ch, this._format.channels - 1)] = sample;
       }
+      this._concealmentGain = 1;
       this._read = (this._read + this._format.channels) % this._ring.length;
       this._available -= this._format.channels;
     }
@@ -111,6 +161,12 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
     this._framesOut++;
     if (currentTime - this._lastStats >= 1) {
       this._lastStats = currentTime;
+      if (
+        this._targetStartFrames > this._minStartFrames &&
+        currentTime - this._lastUnderrun >= STABLE_DECAY_SECONDS
+      ) {
+        this._targetStartFrames--;
+      }
       this.port.postMessage({
         type: "stats",
         buffered_frames: Math.floor(this._available / (this._contextFrameSamples * this._format.channels)),
@@ -118,6 +174,9 @@ class IntercomPlaybackProcessor extends AudioWorkletProcessor {
         frames_out: this._framesOut,
         frames_drop: this._framesDrop,
         underruns: this._underruns,
+        jitter_target_frames: this._targetStartFrames,
+        jitter_target_ms: this._targetStartFrames * this._format.frameMs,
+        arrival_jitter_ms: Math.round(this._arrivalJitterSeconds * 10000) / 10,
       });
     }
     return true;

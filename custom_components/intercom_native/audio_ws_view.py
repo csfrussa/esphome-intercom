@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 import logging
+from pathlib import Path
 import secrets
 from typing import Any
+import wave
 
 from aiohttp import WSMsgType, web
 
@@ -20,6 +23,7 @@ from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
 from .websocket_api import _fire_call_event, _ha_softphone_store
 
 _LOGGER = logging.getLogger(__name__)
+_DEBUG_DIR = Path("/tmp/intercom_native_debug")
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +42,82 @@ class _RtpAudioProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr) -> None:
         self.queue.put_nowait((data, addr))
+
+
+class _DebugAudioCapture:
+    def __init__(self, call_id: str, *, rx_format: Any, tx_format: Any) -> None:
+        self.call_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in call_id)[:96]
+        self.rx_format = rx_format.audio_format
+        self.tx_format = tx_format.audio_format
+        self.rtp_to_ws = bytearray()
+        self.ws_to_rtp = bytearray()
+        self.rtp_to_ws_deltas_ms: list[float] = []
+        self.ws_rx_deltas_ms: list[float] = []
+        self.ws_send_deltas_ms: list[float] = []
+        self.rtp_tx_deltas_ms: list[float] = []
+        self._last_rtp_rx: float | None = None
+        self._last_ws_rx: float | None = None
+        self._last_ws_send: float | None = None
+        self._last_rtp_tx: float | None = None
+
+    def note_rtp_rx(self, now: float, pcm: bytes) -> None:
+        self._append_delta(self.rtp_to_ws_deltas_ms, "_last_rtp_rx", now)
+        self.rtp_to_ws.extend(pcm)
+
+    def note_ws_rx(self, now: float, pcm: bytes) -> None:
+        self._append_delta(self.ws_rx_deltas_ms, "_last_ws_rx", now)
+        self.ws_to_rtp.extend(pcm)
+
+    def note_ws_send(self, now: float) -> None:
+        self._append_delta(self.ws_send_deltas_ms, "_last_ws_send", now)
+
+    def note_rtp_tx(self, now: float) -> None:
+        self._append_delta(self.rtp_tx_deltas_ms, "_last_rtp_tx", now)
+
+    def _append_delta(self, target: list[float], attr: str, now: float) -> None:
+        previous = getattr(self, attr)
+        if previous is not None:
+            target.append((now - previous) * 1000.0)
+        setattr(self, attr, now)
+
+    def write(self, counters: dict[str, int]) -> None:
+        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        rx_path = _DEBUG_DIR / f"{self.call_id}_ha_ws_rtp_to_browser.wav"
+        tx_path = _DEBUG_DIR / f"{self.call_id}_ha_ws_browser_to_rtp.wav"
+        meta_path = _DEBUG_DIR / f"{self.call_id}_ha_ws_timing.json"
+        self._write_wav(rx_path, self.rx_format, self.rtp_to_ws)
+        self._write_wav(tx_path, self.tx_format, self.ws_to_rtp)
+        meta = {
+            "call_id": self.call_id,
+            "rx_format": self.rx_format.wire_token(),
+            "tx_format": self.tx_format.wire_token(),
+            "rtp_to_browser_wav": str(rx_path),
+            "browser_to_rtp_wav": str(tx_path),
+            "counters": dict(counters),
+            "rtp_to_ws_deltas_ms": self.rtp_to_ws_deltas_ms,
+            "ws_rx_deltas_ms": self.ws_rx_deltas_ms,
+            "ws_send_deltas_ms": self.ws_send_deltas_ms,
+            "rtp_tx_deltas_ms": self.rtp_tx_deltas_ms,
+        }
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        _LOGGER.info(
+            "HA softphone audio debug capture wrote call_id=%s rtp_to_browser=%s bytes=%d "
+            "browser_to_rtp=%s bytes=%d timing=%s",
+            self.call_id,
+            rx_path,
+            len(self.rtp_to_ws),
+            tx_path,
+            len(self.ws_to_rtp),
+            meta_path,
+        )
+
+    def _write_wav(self, path: Path, fmt: Any, payload: bytearray) -> None:
+        sample_width = fmt.container_bytes_per_sample
+        with wave.open(str(path), "wb") as wav_file:
+            wav_file.setnchannels(int(fmt.channels))
+            wav_file.setsampwidth(int(sample_width))
+            wav_file.setframerate(int(fmt.sample_rate))
+            wav_file.writeframes(bytes(payload))
 
 
 class IntercomAudioWebSocketView(HomeAssistantView):
@@ -161,6 +241,11 @@ async def _run_audio_session(
     }
     logged_first_rtp = False
     last_counter_event = 0.0
+    debug_capture = (
+        _DebugAudioCapture(session.call_id, rx_format=session.recv_format, tx_format=session.send_format)
+        if bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
+        else None
+    )
 
     def publish_counters(*, force: bool = False) -> None:
         nonlocal last_counter_event
@@ -249,7 +334,11 @@ async def _run_audio_session(
                 pcm = rtp_decoder.decode(packet.payload)
                 if not pcm:
                     continue
+                if debug_capture is not None:
+                    debug_capture.note_rtp_rx(loop.time(), pcm)
                 await ws.send_bytes(encode_audio_frame(pcm))
+                if debug_capture is not None:
+                    debug_capture.note_ws_send(loop.time())
                 counters["ws_tx"] += 1
                 publish_counters()
             except Exception as err:  # noqa: BLE001 - media path must stay alive on bad packets.
@@ -274,6 +363,8 @@ async def _run_audio_session(
                 )
             )
             transport.sendto(packet, (session.remote_rtp_host, int(session.remote_rtp_port)))
+            if debug_capture is not None:
+                debug_capture.note_rtp_tx(loop.time())
             counters["rtp_tx"] += 1
             counters["rtp_tx_bytes"] += len(packet)
             sequence = rtp.next_sequence(sequence)
@@ -297,6 +388,8 @@ async def _run_audio_session(
                 try:
                     counters["ws_rx"] += 1
                     pcm = decode_audio_frame(bytes(msg.data))
+                    if debug_capture is not None:
+                        debug_capture.note_ws_rx(loop.time(), pcm)
                     payload = rtp_encoder.encode(pcm)
                     if not payload:
                         continue
@@ -337,3 +430,5 @@ async def _run_audio_session(
             counters["drop_tx_queue"],
             counters["tx_error"],
         )
+        if debug_capture is not None:
+            await hass.async_add_executor_job(debug_capture.write, counters)

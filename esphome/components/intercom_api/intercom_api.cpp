@@ -93,7 +93,7 @@ bool IntercomApi::allocate_setup_buffers_() {
 #ifdef USE_INTERCOM_API_MIC
   if (this->has_microphone_()) {
     const size_t tx_frame_bytes = this->tx_audio_chunk_bytes_();
-    const size_t tx_buffer_bytes = std::max<size_t>(tx_frame_bytes * 4, tx_frame_bytes + 1024);
+    const size_t tx_buffer_bytes = std::max<size_t>(tx_frame_bytes * 16, tx_frame_bytes + 4096);
     this->mic_buffer_ = this->buffers_in_psram_
         ? audio_processor::create_prefer_psram(tx_buffer_bytes, "intercom.mic")
         : audio_processor::create_internal(tx_buffer_bytes, "intercom.mic");
