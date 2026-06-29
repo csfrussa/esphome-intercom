@@ -29,48 +29,12 @@ rebuilt from the maintained `dev` YAMLs before the release lands on `main`.
 
 `2026.7.0-dev` is a prerelease for the SIP/VoIP migration, the new
 full-experience media path and the first high-rate native VoIP presets.
-These notes cover only changes from `2026.6.3`.
+This is the VoIP breaking release: ESP devices are SIP phones, Home Assistant
+is a SIP softphone/router/bridge/trunk endpoint, and the old project-specific
+call-control path is not a fallback.
 
-Action required:
-
-- **This is the VoIP breaking release.** ESP devices are SIP phones. Home
-  Assistant is a SIP softphone, SIP router/B2BUA, RTP bridge/resampler and
-  optional trunk client. The retired project-specific VoIP call-control path
-  is not a fallback.
-- `esphome_voip_stack` remains the ESPHome component name, but `transport: udp|tcp`
-  now means SIP/UDP or SIP/TCP signaling. RTP audio remains UDP in the current
-  phone profile.
-- `homeassistant_voip_stack` no longer exposes local SIP transport toggles:
-  configure ports and optional features, not listener modes.
-- `homeassistant_voip_stack` can optionally register a provider/PBX trunk and can also
-  host local SIP accounts for standard softphones. Trunk support is off unless
-  configured.
-- ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
-  Direct ESP calls use explicit SIP URI/IP/transport phonebook rows; unresolved
-  names and numbers route through HA when HA is present.
-- Maintained full-experience YAMLs now use the `speaker_source` media path:
-  media, announcements, timers, local files and optional Sendspin enter one
-  media player, then the mixer arbitrates them against VoIP and Voice
-  Assistant.
-- Maintained full-experience YAMLs now use `runtime_fsm`, a generic
-  YAML-programmed reducer that owns LED/display/ducking/ringtone/timer
-  arbitration from one state snapshot instead of scattered callback scripts.
-- Custom full-experience YAMLs copied from older `platform: speaker` media
-  player blocks should be refreshed against the maintained 2026.7.0-dev
-  packages.
-- Sendspin / Music Assistant is included in maintained full profiles through
-  the shared `speaker_source` media path. WS3, Spotpear and P4 field tests
-  validated grouped 48 kHz mono PCM playback with the hardware-clocked timing
-  path.
-- Native ESPHome voip-only presets advertise 48 kHz PCM where the real
-  native I2S path supports it. AFE/AEC microphone branches remain
-  16 kHz/s16/mono because that is the Espressif AFE/AEC output format.
-- UDP audio is validated against `udp_max_payload` and still defaults to a
-  conservative 1200-byte PCM-frame ceiling. Use TCP or opt in explicitly for
-  larger LAN datagrams.
-- Incoming SIP calls no longer require the caller to exist in the callee's
-  local phonebook. The phonebook is for outbound dialing; inbound SIP INVITE carries
-  the caller/destination identity.
+Read the full migration list before upgrading custom YAMLs or automations:
+[`docs/BREAKING_CHANGES.md`](docs/BREAKING_CHANGES.md).
 
 Minimum versions for this release:
 
