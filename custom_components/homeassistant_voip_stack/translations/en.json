@@ -3,10 +3,8 @@
     "step": {
       "user": {
         "title": "Home Assistant VoIP Stack",
-        "description": "SIP softphone and SIP bridge/router for ESPHome VoIP phones.",
+        "description": "SIP softphone and SIP bridge/router for ESPHome VoIP phones. HA listens on SIP UDP and TCP automatically.",
         "data": {
-          "sip_tcp_enabled": "Enable SIP TCP",
-          "sip_udp_enabled": "Enable SIP UDP",
           "sip_port": "SIP port",
           "rtp_port": "RTP port",
           "advertise_host": "Advertised HA host/IP",
@@ -15,9 +13,7 @@
           "trunk_enabled": "Enable optional SIP trunk"
         },
         "data_description": {
-          "sip_tcp_enabled": "Listen for SIP signaling over TCP. Enabled by default for HA softphone and SIP bridge routing.",
-          "sip_udp_enabled": "Listen for SIP signaling over UDP. Enable this when ESP devices or external softphones call HA over SIP UDP.",
-          "sip_port": "Listen port for the HA SIP endpoint.",
+          "sip_port": "Listen port for the HA SIP endpoint. HA accepts SIP signaling over both UDP and TCP on this port.",
           "rtp_port": "Base RTP UDP port for HA media and relays.",
           "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices.",
           "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live VoIP phonebook.",
@@ -63,7 +59,6 @@
       }
     },
     "error": {
-      "sip_transport_required": "At least one SIP signaling transport must be enabled.",
       "trunk_server_required": "Trunk server is required.",
       "trunk_username_required": "Trunk username is required.",
       "trunk_password_required": "Trunk password is required.",

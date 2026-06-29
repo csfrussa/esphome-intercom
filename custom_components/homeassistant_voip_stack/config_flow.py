@@ -17,8 +17,6 @@ from .const import (
     CONF_DEBUG_MODE,
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
-    CONF_SIP_TCP_ENABLED,
-    CONF_SIP_UDP_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
     CONF_TRUNK_DTMF_ENABLED,
@@ -69,13 +67,11 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle install/reconfigure of the single Home Assistant VoIP Stack entry.
 
         SIP is the only HA call-control protocol. HA is always both a
-        softphone and SIP router/B2BUA; these toggles only choose which SIP
-        signaling transports HA listens on.
+        softphone and SIP router/B2BUA, and it listens on both SIP/UDP and
+        SIP/TCP like a normal SIP endpoint.
         """
         _current_entry, existing = self._current_entry_data()
         defaults = {
-            CONF_SIP_TCP_ENABLED: existing.get(CONF_SIP_TCP_ENABLED, True),
-            CONF_SIP_UDP_ENABLED: existing.get(CONF_SIP_UDP_ENABLED, False),
             "sip_port": existing.get("sip_port", VOIP_STACK_SIP_PORT),
             "rtp_port": existing.get("rtp_port", VOIP_STACK_RTP_PORT),
             "advertise_host": existing.get("advertise_host", ""),
@@ -86,14 +82,6 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_SIP_TCP_ENABLED,
-                    default=defaults[CONF_SIP_TCP_ENABLED],
-                ): BooleanSelector(),
-                vol.Required(
-                    CONF_SIP_UDP_ENABLED,
-                    default=defaults[CONF_SIP_UDP_ENABLED],
-                ): BooleanSelector(),
                 vol.Required("sip_port", default=defaults["sip_port"]): _port_selector(),
                 vol.Required("rtp_port", default=defaults["rtp_port"]): _port_selector(),
                 vol.Optional("advertise_host", default=defaults["advertise_host"]): str,
@@ -115,8 +103,6 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             for k in ("advertise_host",):
                 user_input[k] = (user_input.get(k) or "").strip()
 
-            if not (user_input[CONF_SIP_TCP_ENABLED] or user_input[CONF_SIP_UDP_ENABLED]):
-                errors["base"] = "sip_transport_required"
             if not errors:
                 self._base_input = dict(user_input)
                 if user_input[CONF_TRUNK_ENABLED]:
@@ -226,8 +212,6 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 data = dict(
                     self._base_input
                     or {
-                        CONF_SIP_TCP_ENABLED: existing.get(CONF_SIP_TCP_ENABLED, True),
-                        CONF_SIP_UDP_ENABLED: existing.get(CONF_SIP_UDP_ENABLED, False),
                         "sip_port": int(existing.get("sip_port", VOIP_STACK_SIP_PORT)),
                         "rtp_port": int(existing.get("rtp_port", VOIP_STACK_RTP_PORT)),
                         "advertise_host": str(existing.get("advertise_host", "") or "").strip(),

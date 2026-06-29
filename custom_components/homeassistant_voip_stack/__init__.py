@@ -30,8 +30,6 @@ from .const import (
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
     CONF_SIP_ACCOUNTS,
-    CONF_SIP_TCP_ENABLED,
-    CONF_SIP_UDP_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
     CONF_TRUNK_DTMF_ENABLED,
@@ -376,8 +374,6 @@ def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
     """Normalised SIP/RTP config."""
     data = entry.data if entry is not None else {}
     return {
-        CONF_SIP_TCP_ENABLED: bool(data.get(CONF_SIP_TCP_ENABLED, True)),
-        CONF_SIP_UDP_ENABLED: bool(data.get(CONF_SIP_UDP_ENABLED, False)),
         CONF_REGISTRAR_ENABLED: bool(data.get(CONF_REGISTRAR_ENABLED, False)),
         "sip_port": int(data.get("sip_port", VOIP_STACK_SIP_PORT)),
         "rtp_port": int(data.get("rtp_port", VOIP_STACK_RTP_PORT)),
@@ -407,12 +403,13 @@ def _entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
 
 
 def _get_transport_config(hass: HomeAssistant) -> dict:
-    """Return current HA-side network config (transport flags + ports)."""
+    """Return current HA-side network config.
+
+    HA always listens for SIP signaling on both UDP and TCP.
+    """
     return hass.data.get(DOMAIN, {}).get(
         "transport_config",
         {
-            CONF_SIP_TCP_ENABLED: True,
-            CONF_SIP_UDP_ENABLED: False,
             "sip_port": VOIP_STACK_SIP_PORT,
             "rtp_port": VOIP_STACK_RTP_PORT,
             "advertise_host": "",
@@ -2346,8 +2343,6 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Home Assistant VoIP Stack defaults from configuration.yaml."""
     hass.data.setdefault(DOMAIN, {})["transport_config"] = {
-        CONF_SIP_TCP_ENABLED: True,
-        CONF_SIP_UDP_ENABLED: False,
         "sip_port": VOIP_STACK_SIP_PORT,
         "rtp_port": VOIP_STACK_RTP_PORT,
     }
@@ -3606,23 +3601,15 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         on_invite=_on_invite,
         on_terminated=_on_terminated,
         on_register=_on_register,
-        udp_enabled=bool(cfg.get(CONF_SIP_UDP_ENABLED, False)),
-        tcp_enabled=bool(cfg.get(CONF_SIP_TCP_ENABLED, True)),
+        udp_enabled=True,
+        tcp_enabled=True,
     )
     if not await endpoint.start():
         return False
     hass.data[DOMAIN]["sip_endpoint"] = endpoint
     hass.data[DOMAIN]["sip_server"] = endpoint.udp_server
     hass.data[DOMAIN]["sip_tcp_server"] = endpoint.tcp_server
-    transports = "+".join(
-        name
-        for name, enabled in (
-            ("UDP", bool(cfg.get(CONF_SIP_UDP_ENABLED, False))),
-            ("TCP", bool(cfg.get(CONF_SIP_TCP_ENABLED, True))),
-        )
-        if enabled
-    )
-    _LOGGER.info("SIP endpoint enabled on %s/%s (RTP base %s)", transports, cfg["sip_port"], cfg["rtp_port"])
+    _LOGGER.info("SIP endpoint enabled on UDP+TCP/%s (RTP base %s)", cfg["sip_port"], cfg["rtp_port"])
     return True
 
 

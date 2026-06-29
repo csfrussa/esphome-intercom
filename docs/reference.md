@@ -112,9 +112,7 @@ The setup flow has two layers:
 
 | Option | Meaning |
 | --- | --- |
-| `sip_tcp_enabled` | Listen for SIP/TCP on the HA SIP port. Enabled by default. |
-| `sip_udp_enabled` | Listen for SIP/UDP on the HA SIP port. Disabled by default. |
-| `sip_port` | HA SIP listener port shared by enabled transports. |
+| `sip_port` | HA SIP listener port. HA accepts SIP signaling over both UDP and TCP on this port. |
 | `rtp_port` | Base HA RTP UDP port used by HA softphone media and relays. |
 | `advertise_host` | Optional Contact/SDP host override for routed, VPN, LXC, Docker or multihomed installs. |
 | `assist_intents` | Optional Assist intents for call, answer, decline and hangup. |
