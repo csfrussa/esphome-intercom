@@ -330,24 +330,3 @@ intercom call-control path is not a compatibility layer.
   the caller is absent from the local phonebook. Custom security/policy behavior
   should be implemented explicitly; missing phonebook rows are not an inbound
   access-control mechanism.
-
-## 🧪 Suggested Field Test Matrix
-
-- 🏠 HA softphone -> ESP and ESP -> HA on AFE/AEC devices at 16 kHz.
-- 🔄 Browser refresh/reload during an active HA softphone call; the card should
-  converge back to the server session.
-- 🎙️ Native intercom-only TCP at 48 kHz both directions.
-- 📡 Native intercom-only UDP at 48 kHz/10 ms, verifying HA accepts the endpoint
-  and the frame size stays below `udp_max_payload`.
-- 🔀 ESP-to-ESP direct calls with matching formats.
-- 🌉 ESP-to-ESP calls through HA SIP bridging with different TX/RX formats.
-- ✅ Auto Answer on/off from both sides: ESP ringing, HA ringing, Answer,
-  Decline and Hangup.
-- 📥 Inbound TCP and UDP calls from callers not present in the callee phonebook:
-  the callee should ring/answer and terminal UI should show the actual caller.
-- 🎛️ Hybrid card behavior: Call from HA, Answer/Decline mirrored to the attached
-  ESP where applicable.
-- 🔊 Full-experience media playback, timer sound, ringtone and intercom priority.
-- 🎵 Sendspin single speaker, duplicate cards open and grouped speakers.
-- 🧯 Long playback/call sessions with logs checked for underruns, stuck media
-  sources, stale sessions and warning spam.
