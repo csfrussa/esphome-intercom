@@ -863,7 +863,7 @@ def _format_entry_unified(peer: Peer) -> str:
 
 def _registered_roster_entries(hass: HomeAssistant):
     registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
-    entries = getattr(registrar, "roster_entries", None)
+    entries = getattr(registrar, "registered_roster_entries", None)
     return list(entries()) if callable(entries) else []
 
 
@@ -1534,6 +1534,12 @@ async def _refresh_and_push_phonebook(hass: HomeAssistant) -> None:
     await _refresh_phonebook_sensor(hass)
     roster_json = await _current_roster_json(hass)
     await _push_roster_json_to_esps(hass, roster_json)
+
+
+async def _deferred_phonebook_sync(hass: HomeAssistant) -> None:
+    """Push the canonical phonebook after entry setup/reload settles."""
+    await asyncio.sleep(0)
+    await _refresh_and_push_phonebook(hass)
 
 
 async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
@@ -2373,6 +2379,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     await _async_start_sip_trunk(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    hass.async_create_task(_deferred_phonebook_sync(hass))
     return True
 
 
