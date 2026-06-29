@@ -16,42 +16,10 @@ namespace intercom_api {
 static const char *const TAG = "intercom_api.fsm";
 
 #ifdef USE_INTERCOM_API_SPEAKER
-static uint8_t audio_stream_bits_per_sample(const AudioFormat &format) {
-  switch (format.pcm_format) {
-    case PcmFormat::S16LE:
-      return 16;
-    case PcmFormat::S24LE:
-      return 24;
-    case PcmFormat::S24LE_IN_S32:
-    case PcmFormat::S32LE:
-      return 32;
-    default:
-      return 16;
-  }
-}
-
 static audio::AudioStreamInfo audio_stream_info_from_format(const AudioFormat &format) {
-  return audio::AudioStreamInfo(audio_stream_bits_per_sample(format), format.channels, format.sample_rate);
+  return audio::AudioStreamInfo(audio_format_bits_per_sample(format), format.channels, format.sample_rate);
 }
 #endif
-
-static bool audio_format_list_contains(const AudioFormatList &list, const AudioFormat &format) {
-  for (uint8_t i = 0; i < list.count; i++) {
-    if (list.formats[i] == format) return true;
-  }
-  return false;
-}
-
-static bool choose_common_audio_format(const AudioFormatList &preferred, const AudioFormatList &supported,
-                                       AudioFormat *out) {
-  for (uint8_t i = 0; i < preferred.count; i++) {
-    if (audio_format_list_contains(supported, preferred.formats[i])) {
-      if (out != nullptr) *out = preferred.formats[i];
-      return true;
-    }
-  }
-  return false;
-}
 
 // === Call-identity helpers ===
 // Mutex-guarded so the recv task and the main loop never observe a

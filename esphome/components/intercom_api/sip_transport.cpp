@@ -289,30 +289,6 @@ std::string make_token(const char *prefix) {
   return buf;
 }
 
-const char *rtp_encoding(const AudioFormat &fmt) {
-  if (fmt.channels != 1) return nullptr;
-  if (fmt.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return nullptr;
-  if (fmt.pcm_format == PcmFormat::S16LE) return "L16";
-  if (fmt.pcm_format == PcmFormat::S24LE || fmt.pcm_format == PcmFormat::S24LE_IN_S32) return "L24";
-  return nullptr;
-}
-
-bool list_supports_ptime(const AudioFormatList &list, uint8_t ptime) {
-  for (uint8_t i = 0; i < list.count; i++) {
-    const AudioFormat &candidate = list.formats[i];
-    if (candidate.frame_ms == ptime && rtp_encoding(candidate) != nullptr) return true;
-  }
-  return false;
-}
-
-uint8_t choose_common_ptime(const AudioFormatList &tx, const AudioFormatList &rx) {
-  static constexpr uint8_t kPreference[] = {10, 16, 20, 32};
-  for (uint8_t ptime : kPreference) {
-    if (list_supports_ptime(tx, ptime) && list_supports_ptime(rx, ptime)) return ptime;
-  }
-  return 0;
-}
-
 bool parse_rtpmap_format(const std::string &line, AudioFormat *fmt, uint8_t *payload_type) {
   // a=rtpmap:96 L16/16000/1
   const size_t colon = line.find(':');
@@ -342,6 +318,73 @@ bool parse_rtpmap_format(const std::string &line, AudioFormat *fmt, uint8_t *pay
   *fmt = candidate;
   *payload_type = static_cast<uint8_t>(pt);
   return true;
+}
+
+size_t pcm_to_rtp_payload(const uint8_t *pcm, size_t bytes, const AudioFormat &format,
+                          uint8_t *dst, size_t dst_cap) {
+  if (pcm == nullptr || dst == nullptr || bytes == 0) return 0;
+  if (format.pcm_format == PcmFormat::S16LE) {
+    if ((bytes % 2) != 0 || bytes > dst_cap) return 0;
+    for (size_t i = 0; i < bytes; i += 2) {
+      dst[i] = pcm[i + 1];
+      dst[i + 1] = pcm[i];
+    }
+    return bytes;
+  }
+  if (format.pcm_format == PcmFormat::S24LE) {
+    if ((bytes % 3) != 0 || bytes > dst_cap) return 0;
+    for (size_t i = 0; i < bytes; i += 3) {
+      dst[i] = pcm[i + 2];
+      dst[i + 1] = pcm[i + 1];
+      dst[i + 2] = pcm[i];
+    }
+    return bytes;
+  }
+  if (format.pcm_format == PcmFormat::S24LE_IN_S32) {
+    if ((bytes % 4) != 0 || bytes / 4 * 3 > dst_cap) return 0;
+    size_t out = 0;
+    for (size_t i = 0; i < bytes; i += 4) {
+      dst[out++] = pcm[i + 2];
+      dst[out++] = pcm[i + 1];
+      dst[out++] = pcm[i];
+    }
+    return out;
+  }
+  return 0;
+}
+
+size_t rtp_payload_to_pcm(const uint8_t *payload, size_t payload_len, const AudioFormat &format,
+                          uint8_t *pcm, size_t pcm_cap) {
+  if (payload == nullptr || pcm == nullptr || payload_len == 0) return 0;
+  if (format.pcm_format == PcmFormat::S16LE) {
+    if ((payload_len % 2) != 0 || payload_len > pcm_cap) return 0;
+    for (size_t i = 0; i < payload_len; i += 2) {
+      pcm[i] = payload[i + 1];
+      pcm[i + 1] = payload[i];
+    }
+    return payload_len;
+  }
+  if (format.pcm_format == PcmFormat::S24LE) {
+    if ((payload_len % 3) != 0 || payload_len > pcm_cap) return 0;
+    for (size_t i = 0; i < payload_len; i += 3) {
+      pcm[i] = payload[i + 2];
+      pcm[i + 1] = payload[i + 1];
+      pcm[i + 2] = payload[i];
+    }
+    return payload_len;
+  }
+  if (format.pcm_format == PcmFormat::S24LE_IN_S32) {
+    if ((payload_len % 3) != 0 || payload_len / 3 * 4 > pcm_cap) return 0;
+    size_t out = 0;
+    for (size_t i = 0; i < payload_len; i += 3) {
+      pcm[out++] = payload[i + 2];
+      pcm[out++] = payload[i + 1];
+      pcm[out++] = payload[i];
+      pcm[out++] = payload[i] & 0x80 ? 0xFF : 0x00;
+    }
+    return out;
+  }
+  return 0;
 }
 
 }  // namespace
@@ -776,7 +819,7 @@ std::string SipTransport::build_sdp_offer_() const {
   std::string payloads;
   std::string maps;
   uint8_t pt = 96;
-  const uint8_t selected_ptime = choose_common_ptime(this->offer_tx_formats_, this->offer_rx_formats_);
+  const uint8_t selected_ptime = choose_common_audio_ptime(this->offer_tx_formats_, this->offer_rx_formats_);
   if (selected_ptime == 0) {
     ESP_LOGW(TAG, "SIP SDP offer has no shared TX/RX RTP packet time");
     return "";
@@ -785,7 +828,7 @@ std::string SipTransport::build_sdp_offer_() const {
     if (pt >= 120) return;
     if (fmt.frame_ms != selected_ptime) return;
     if (fmt.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return;
-    const char *enc = rtp_encoding(fmt);
+    const char *enc = audio_format_rtp_encoding(fmt);
     if (enc == nullptr) return;
     if (!payloads.empty()) payloads.push_back(' ');
     payloads += std::to_string(pt);
@@ -793,24 +836,11 @@ std::string SipTransport::build_sdp_offer_() const {
             std::to_string(fmt.sample_rate) + "/" + std::to_string(fmt.channels) + "\r\n";
     pt++;
   };
-  auto list_contains = [](const AudioFormatList &list, uint8_t limit, const AudioFormat &fmt) -> bool {
-    for (uint8_t i = 0; i < limit; i++) {
-      const AudioFormat &candidate = list.formats[i];
-      if (candidate.sample_rate == fmt.sample_rate &&
-          candidate.pcm_format == fmt.pcm_format &&
-          candidate.channels == fmt.channels &&
-          candidate.frame_ms == fmt.frame_ms) {
-        return true;
-      }
-    }
-    return false;
-  };
   for (uint8_t i = 0; i < this->offer_rx_formats_.count && pt < 120; i++) {
     append_format(this->offer_rx_formats_.formats[i]);
   }
   for (uint8_t i = 0; i < this->offer_tx_formats_.count && pt < 120; i++) {
-    if (list_contains(this->offer_rx_formats_, this->offer_rx_formats_.count,
-                      this->offer_tx_formats_.formats[i])) continue;
+    if (audio_format_list_contains(this->offer_rx_formats_, this->offer_tx_formats_.formats[i])) continue;
     append_format(this->offer_tx_formats_.formats[i]);
   }
   if (payloads.empty()) {
@@ -838,8 +868,8 @@ std::string SipTransport::build_sdp_answer_() const {
   uint8_t tx_payload_type = 96;
   uint8_t rx_payload_type = 96;
   this->get_media_config_(&selected_tx, &selected_rx, &tx_payload_type, &rx_payload_type);
-  const char *tx_enc = rtp_encoding(selected_tx);
-  const char *rx_enc = rtp_encoding(selected_rx);
+  const char *tx_enc = audio_format_rtp_encoding(selected_tx);
+  const char *rx_enc = audio_format_rtp_encoding(selected_rx);
   if (tx_enc == nullptr || rx_enc == nullptr) {
     ESP_LOGE(TAG, "SIP SDP answer refused: selected wire PCM format is not RTP-mappable");
     return "";
@@ -877,21 +907,6 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
   AudioFormat selected_rx_format;
   uint8_t selected_tx_payload_type = 0;
   uint8_t selected_rx_payload_type = 0;
-  auto supports_wire_format = [](const AudioFormatList &list, const AudioFormat &remote, AudioFormat *local) -> bool {
-    if (remote.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return false;
-    for (uint8_t i = 0; i < list.count; i++) {
-      const AudioFormat &candidate = list.formats[i];
-      if (candidate.sample_rate == remote.sample_rate &&
-          candidate.pcm_format == remote.pcm_format &&
-          candidate.channels == remote.channels &&
-          candidate.frame_ms == remote.frame_ms &&
-          candidate.nominal_frame_bytes() <= UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
-        if (local != nullptr) *local = candidate;
-        return true;
-      }
-    }
-    return false;
-  };
   size_t ptime_pos = 0;
   while (ptime_pos < sdp.size()) {
     size_t end = sdp.find("\r\n", ptime_pos);
@@ -921,8 +936,8 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
         fmt.frame_ms = media_ptime;
         AudioFormat local_rx;
         AudioFormat local_tx;
-        const bool tx_ok = supports_wire_format(this->offer_tx_formats_, fmt, &local_tx);
-        const bool rx_ok = supports_wire_format(this->offer_rx_formats_, fmt, &local_rx);
+        const bool tx_ok = audio_format_list_match_udp_safe(this->offer_tx_formats_, fmt, &local_tx);
+        const bool rx_ok = audio_format_list_match_udp_safe(this->offer_rx_formats_, fmt, &local_rx);
         if (!selected_rx && rx_ok) {
           selected_rx_format = local_rx;
           selected_rx_payload_type = pt;
@@ -1158,32 +1173,8 @@ void SipTransport::send_audio_frame(const uint8_t *pcm, size_t bytes) {
   packet[11] = static_cast<uint8_t>(this->rtp_ssrc_ & 0xFF);
   const uint8_t bps = tx_format.container_bytes_per_sample();
   const size_t input_bytes = bytes;
-  uint8_t *dst = packet + 12;
-  if (tx_format.pcm_format == PcmFormat::S16LE) {
-    if ((bytes % 2) != 0) return;
-    for (size_t i = 0; i < bytes; i += 2) {
-      dst[i] = pcm[i + 1];
-      dst[i + 1] = pcm[i];
-    }
-  } else if (tx_format.pcm_format == PcmFormat::S24LE) {
-    if ((bytes % 3) != 0) return;
-    for (size_t i = 0; i < bytes; i += 3) {
-      dst[i] = pcm[i + 2];
-      dst[i + 1] = pcm[i + 1];
-      dst[i + 2] = pcm[i];
-    }
-  } else if (tx_format.pcm_format == PcmFormat::S24LE_IN_S32) {
-    if ((bytes % 4) != 0 || bytes / 4 * 3 > sizeof(packet) - 12) return;
-    size_t out = 0;
-    for (size_t i = 0; i < bytes; i += 4) {
-      dst[out++] = pcm[i + 2];
-      dst[out++] = pcm[i + 1];
-      dst[out++] = pcm[i];
-    }
-    bytes = out;
-  } else {
-    return;
-  }
+  bytes = pcm_to_rtp_payload(pcm, bytes, tx_format, packet + 12, sizeof(packet) - 12);
+  if (bytes == 0) return;
   const uint32_t samples = bps == 0 || tx_format.channels == 0
       ? 0
       : static_cast<uint32_t>(input_bytes / bps / tx_format.channels);
@@ -1670,32 +1661,8 @@ void SipTransport::rtp_task_() {
       this->get_media_config_(nullptr, &rx_format, nullptr, &rx_payload_type);
       if ((buf[1] & 0x7F) != rx_payload_type) continue;
       const uint8_t *payload = buf + header;
-      size_t out_len = payload_len;
-      if (rx_format.pcm_format == PcmFormat::S16LE) {
-        if ((payload_len % 2) != 0 || payload_len > sizeof(pcm)) continue;
-        for (size_t i = 0; i < payload_len; i += 2) {
-          pcm[i] = payload[i + 1];
-          pcm[i + 1] = payload[i];
-        }
-      } else if (rx_format.pcm_format == PcmFormat::S24LE) {
-        if ((payload_len % 3) != 0 || payload_len > sizeof(pcm)) continue;
-        for (size_t i = 0; i < payload_len; i += 3) {
-          pcm[i] = payload[i + 2];
-          pcm[i + 1] = payload[i + 1];
-          pcm[i + 2] = payload[i];
-        }
-      } else if (rx_format.pcm_format == PcmFormat::S24LE_IN_S32) {
-        if ((payload_len % 3) != 0 || payload_len / 3 * 4 > sizeof(pcm)) continue;
-        out_len = 0;
-        for (size_t i = 0; i < payload_len; i += 3) {
-          pcm[out_len++] = payload[i + 2];
-          pcm[out_len++] = payload[i + 1];
-          pcm[out_len++] = payload[i];
-          pcm[out_len++] = payload[i] & 0x80 ? 0xFF : 0x00;
-        }
-      } else {
-        continue;
-      }
+      const size_t out_len = rtp_payload_to_pcm(payload, payload_len, rx_format, pcm, sizeof(pcm));
+      if (out_len == 0) continue;
       this->rtp_rx_packets_.fetch_add(1, std::memory_order_acq_rel);
       this->rtp_rx_bytes_.fetch_add(static_cast<uint32_t>(n), std::memory_order_acq_rel);
       this->emit_audio_frame_(pcm, out_len);

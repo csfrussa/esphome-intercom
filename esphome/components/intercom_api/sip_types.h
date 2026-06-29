@@ -171,5 +171,77 @@ static constexpr size_t AUDIO_CHUNK_BYTES = 1024;
 static constexpr size_t MAX_AUDIO_CHUNK = 16 * 1024;
 static constexpr size_t UDP_SAFE_AUDIO_PAYLOAD_BYTES = 1200;
 
+inline uint8_t audio_format_bits_per_sample(const AudioFormat &format) {
+  switch (format.pcm_format) {
+    case PcmFormat::S16LE:
+      return 16;
+    case PcmFormat::S24LE:
+      return 24;
+    case PcmFormat::S24LE_IN_S32:
+    case PcmFormat::S32LE:
+      return 32;
+    default:
+      return 16;
+  }
+}
+
+inline const char *audio_format_rtp_encoding(const AudioFormat &format) {
+  if (format.channels != 1) return nullptr;
+  if (format.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return nullptr;
+  if (format.pcm_format == PcmFormat::S16LE) return "L16";
+  if (format.pcm_format == PcmFormat::S24LE || format.pcm_format == PcmFormat::S24LE_IN_S32) return "L24";
+  return nullptr;
+}
+
+inline bool audio_format_list_contains(const AudioFormatList &list, const AudioFormat &format) {
+  for (uint8_t i = 0; i < list.count; i++) {
+    if (list.formats[i] == format) return true;
+  }
+  return false;
+}
+
+inline bool choose_common_audio_format(const AudioFormatList &preferred, const AudioFormatList &supported,
+                                       AudioFormat *out) {
+  for (uint8_t i = 0; i < preferred.count; i++) {
+    if (audio_format_list_contains(supported, preferred.formats[i])) {
+      if (out != nullptr) *out = preferred.formats[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool audio_format_list_supports_rtp_ptime(const AudioFormatList &list, uint8_t ptime) {
+  for (uint8_t i = 0; i < list.count; i++) {
+    const AudioFormat &candidate = list.formats[i];
+    if (candidate.frame_ms == ptime && audio_format_rtp_encoding(candidate) != nullptr) return true;
+  }
+  return false;
+}
+
+inline uint8_t choose_common_audio_ptime(const AudioFormatList &tx, const AudioFormatList &rx) {
+  static constexpr uint8_t kPreference[] = {10, 16, 20, 32};
+  for (uint8_t ptime : kPreference) {
+    if (audio_format_list_supports_rtp_ptime(tx, ptime) &&
+        audio_format_list_supports_rtp_ptime(rx, ptime)) {
+      return ptime;
+    }
+  }
+  return 0;
+}
+
+inline bool audio_format_list_match_udp_safe(const AudioFormatList &list, const AudioFormat &remote,
+                                             AudioFormat *local) {
+  if (remote.nominal_frame_bytes() > UDP_SAFE_AUDIO_PAYLOAD_BYTES) return false;
+  for (uint8_t i = 0; i < list.count; i++) {
+    const AudioFormat &candidate = list.formats[i];
+    if (candidate == remote && candidate.nominal_frame_bytes() <= UDP_SAFE_AUDIO_PAYLOAD_BYTES) {
+      if (local != nullptr) *local = candidate;
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace intercom_api
 }  // namespace esphome

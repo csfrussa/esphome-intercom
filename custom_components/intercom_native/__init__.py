@@ -73,6 +73,7 @@ from .router import (
     RouteReason,
     route_inbound_trunk,
 )
+from .sip_bridge import build_invite_client_relay
 from .websocket_api import (
     async_register_websocket_api,
     _async_load_ha_softphone_store,
@@ -573,21 +574,14 @@ async def _terminate_sip_bridge(hass: HomeAssistant, call_id: str) -> tuple[bool
     if not call_id:
         return False, "", "", False, False
     registry = _call_registry(hass)
-    source_call_id, dest_call_id = registry.bridge_for(call_id)
-    called_by_dest = False
+    source_call_id, dest_call_id, relay, client, watcher, called_by_dest = registry.detach_bridge(call_id)
     if not source_call_id:
         return False, "", "", False, False
-    called_by_dest = call_id == dest_call_id
-
-    registry.bridge_clients.pop(source_call_id, None)
-    relay = registry.relays.pop(source_call_id, None)
     if relay is not None:
         await relay.stop()
 
     client_closed = False
     if dest_call_id:
-        client = registry.sip_clients.pop(dest_call_id, None)
-        watcher = registry.client_watchers.pop(dest_call_id, None)
         if watcher is not None:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -601,8 +595,7 @@ async def _terminate_sip_bridge(hass: HomeAssistant, call_id: str) -> tuple[bool
             client_closed = True
 
     source_bye = _sip_send_bye(hass, source_call_id)
-    registry.finish(source_call_id, reason=TerminalReason.LOCAL_HANGUP.value)
-    registry.pop(source_call_id)
+    registry.finish_and_pop(source_call_id, reason=TerminalReason.LOCAL_HANGUP.value)
     return True, source_call_id, dest_call_id, client_closed, source_bye
 
 
@@ -1063,10 +1056,8 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
             payload["sip_uri"] = sip_uri
         _fire_call_event(hass, payload, "sip")
         if final not in {"ringing", "in_call"}:
-            registry.sip_clients.pop(client.dialog_ids.call_id, None)
-            registry.client_watchers.pop(client.dialog_ids.call_id, None)
-            registry.finish(client.dialog_ids.call_id, reason=terminal_reason, state=public_final)
-            registry.pop(client.dialog_ids.call_id)
+            registry.detach_client(client.dialog_ids.call_id)
+            registry.finish_and_pop(client.dialog_ids.call_id, reason=terminal_reason, state=public_final)
             await client.close()
             return
         if final == "in_call":
@@ -1082,8 +1073,7 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
                     err,
                 )
                 terminal = "error"
-            registry.sip_clients.pop(client.dialog_ids.call_id, None)
-            registry.client_watchers.pop(client.dialog_ids.call_id, None)
+            registry.detach_client(client.dialog_ids.call_id)
             await client.close()
             terminal_reason = TerminalReason.REMOTE_HANGUP.value if terminal == "remote_hangup" else _sip_terminal_reason(terminal, _sip_public_state(terminal))
             _set_ha_softphone_call_state(
@@ -1102,8 +1092,7 @@ def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, targ
                 last_sip_event=client.last_sip_event or "BYE",
                 sip_uri=sip_uri,
             )
-            registry.finish(client.dialog_ids.call_id, reason=terminal_reason)
-            registry.pop(client.dialog_ids.call_id)
+            registry.finish_and_pop(client.dialog_ids.call_id, reason=terminal_reason)
 
     task = hass.async_create_task(_watch_sip_lifecycle())
     registry.client_watchers[client.dialog_ids.call_id] = task
@@ -1119,8 +1108,7 @@ async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
         raise ServiceValidationError("HA softphone already has an active SIP call")
 
     for call_id, client in list(registry.sip_clients.items()):
-        registry.sip_clients.pop(call_id, None)
-        watcher = registry.client_watchers.pop(call_id, None)
+        _client, watcher = registry.detach_client(call_id)
         if watcher is not None:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1130,7 +1118,7 @@ async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
             await client.close()
         except Exception:
             _LOGGER.debug("Ignoring stale HA SIP client cleanup error", exc_info=True)
-        registry.pop(call_id)
+        registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
 
 
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
@@ -1301,8 +1289,7 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
             sip_status_code=status,
             last_sip_event="BYE",
         )
-        registry.finish(call_id, reason=app_reason, state="declined")
-        registry.pop(call_id)
+        registry.finish_and_pop(call_id, reason=app_reason, state="declined")
         return
     if not call_id or not _sip_send_final_response(
         hass,
@@ -1324,8 +1311,7 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
         sip_status_code=status,
         last_sip_event="SIP_RESPONSE",
     )
-    registry.finish(call_id, reason=app_reason, state="declined")
-    registry.pop(call_id)
+    registry.finish_and_pop(call_id, reason=app_reason, state="declined")
 
 
 async def _handle_sip_hangup_service(call: ServiceCall) -> None:
@@ -1407,8 +1393,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
             bridge_server_bye,
         )
         return
-    client = clients.pop(call_id, None) if call_id else None
-    watcher = registry.client_watchers.pop(call_id, None) if call_id else None
+    client, watcher = registry.detach_client(call_id) if call_id else (None, None)
     relay = relays.pop(call_id, None) if call_id else None
     if call_id:
         media_sessions.pop(call_id, None)
@@ -1455,8 +1440,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
             sip_status_code=487,
             last_sip_event="SIP_RESPONSE",
         )
-        registry.finish(pending_call_id, reason=TerminalReason.LOCAL_HANGUP.value)
-        registry.pop(pending_call_id)
+        registry.finish_and_pop(pending_call_id, reason=TerminalReason.LOCAL_HANGUP.value)
     if client is None and relay is None:
         for server in _sip_servers(hass):
             send_bye = getattr(server, "send_bye", None)
@@ -1479,8 +1463,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         last_sip_event="SIP_BYE" if (client is not None or relay is not None or server_bye) else "SIP_HANGUP",
     )
     if call_id:
-        registry.finish(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
-        registry.pop(call_id)
+        registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
     _fire_call_event(
         hass,
         {
@@ -2472,7 +2455,6 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
     from .sip_registrar import SipRegistrar
-    from .sip_rtp_bridge import RtpPeer, SipRtpRelay
 
     if hass.data.get(DOMAIN, {}).get("sip_endpoint") is not None:
         return True
@@ -2806,31 +2788,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         )
 
         try:
-            relay = SipRtpRelay(
-                left=RtpPeer(
-                    host=invite.remote_rtp_host,
-                    port=invite.remote_rtp_port,
-                    payload_type=invite.recv_format.payload_type,
-                    audio_format=invite.recv_format.audio_format,
-                    rtp_format=invite.recv_format,
-                    send_payload_type=invite.send_format.payload_type,
-                    send_audio_format=invite.send_format.audio_format,
-                    send_rtp_format=invite.send_format,
-                ),
-                right=RtpPeer(
-                    host=client.dialog.remote_rtp_host,
-                    port=client.dialog.remote_rtp_port,
-                    payload_type=client.dialog.recv_format.payload_type,
-                    audio_format=client.dialog.recv_format.audio_format,
-                    rtp_format=client.dialog.recv_format,
-                    send_payload_type=client.dialog.send_format.payload_type,
-                    send_audio_format=client.dialog.send_format.audio_format,
-                    send_rtp_format=client.dialog.send_format,
-                ),
-                left_port=source_relay_port,
-                right_port=dest_relay_port,
+            relay = build_invite_client_relay(
+                invite=invite,
+                client=client,
+                source_relay_port=source_relay_port,
+                dest_relay_port=dest_relay_port,
                 debug_capture=_debug_mode(hass),
-                capture_name=f"{invite.call_id}_{client.dialog_ids.call_id}",
             )
             await relay.start()
         except Exception as err:
@@ -2855,17 +2818,16 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             return
 
         registry = _call_registry(hass)
-        registry.sip_clients[client.dialog_ids.call_id] = client
-        registry.bridge_clients[invite.call_id] = client.dialog_ids.call_id
-        registry.upsert(
-            invite.call_id,
+        registry.register_bridge(
+            source_call_id=invite.call_id,
+            dest_call_id=client.dialog_ids.call_id,
+            client=client,
             state=CallState.IN_CALL.value,
             caller=invite.caller,
             callee=destination,
             route_kind="trunk",
+            source_role="trunk",
         )
-        registry.add_leg(invite.call_id, invite.call_id, role="trunk", state=CallState.IN_CALL.value)
-        registry.add_leg(invite.call_id, client.dialog_ids.call_id, role="callee", state=CallState.IN_CALL.value)
         _LOGGER.info(
             "SIP bridge registered call_id=%s dest_call_id=%s target=%s",
             invite.call_id,
@@ -3237,17 +3199,17 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         to_tag="",
                         decline_reason=decline_reason,
                     )
-                registry.sip_clients[client.dialog_ids.call_id] = client
-                registry.bridge_clients[invite.call_id] = client.dialog_ids.call_id
-                registry.upsert(
-                    invite.call_id,
+                registry.register_bridge(
+                    source_call_id=invite.call_id,
+                    dest_call_id=client.dialog_ids.call_id,
+                    client=client,
                     state=CallState.CONNECTING.value,
                     caller=invite.caller,
                     callee=invite.target,
                     route_kind=decision.action.value,
+                    source_state=CallState.CONNECTING.value,
+                    dest_state=result,
                 )
-                registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.CONNECTING.value)
-                registry.add_leg(invite.call_id, client.dialog_ids.call_id, role="callee", state=result)
                 _LOGGER.info(
                     "SIP bridge registered call_id=%s dest_call_id=%s target=%s",
                     invite.call_id,
@@ -3275,10 +3237,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             "Not Acceptable Here" if status_code == 488 else "Request Terminated" if status_code == 487 else "Busy Here",
                             decline_reason=decline_reason,
                         )
-                        registry.bridge_clients.pop(invite.call_id, None)
-                        registry.sip_clients.pop(client.dialog_ids.call_id, None)
-                        registry.finish(invite.call_id, reason=terminal_reason, state=public_state)
-                        registry.pop(invite.call_id)
+                        registry.discard_bridge_session(
+                            invite.call_id,
+                            client.dialog_ids.call_id,
+                            reason=terminal_reason,
+                            state=public_state,
+                        )
                         await client.close()
                         _set_sip_bridge_call_state(
                             hass,
@@ -3298,31 +3262,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                         return
                     try:
-                        relay = SipRtpRelay(
-                            left=RtpPeer(
-                                host=invite.remote_rtp_host,
-                                port=invite.remote_rtp_port,
-                                payload_type=invite.recv_format.payload_type,
-                                audio_format=invite.recv_format.audio_format,
-                                rtp_format=invite.recv_format,
-                                send_payload_type=invite.send_format.payload_type,
-                                send_audio_format=invite.send_format.audio_format,
-                                send_rtp_format=invite.send_format,
-                            ),
-                            right=RtpPeer(
-                                host=client.dialog.remote_rtp_host,
-                                port=client.dialog.remote_rtp_port,
-                                payload_type=client.dialog.recv_format.payload_type,
-                                audio_format=client.dialog.recv_format.audio_format,
-                                rtp_format=client.dialog.recv_format,
-                                send_payload_type=client.dialog.send_format.payload_type,
-                                send_audio_format=client.dialog.send_format.audio_format,
-                                send_rtp_format=client.dialog.send_format,
-                            ),
-                            left_port=source_relay_port,
-                            right_port=dest_relay_port,
+                        relay = build_invite_client_relay(
+                            invite=invite,
+                            client=client,
+                            source_relay_port=source_relay_port,
+                            dest_relay_port=dest_relay_port,
                             debug_capture=_debug_mode(hass),
-                            capture_name=f"{invite.call_id}_{client.dialog_ids.call_id}",
                         )
                         await relay.start()
                     except Exception as err:
@@ -3334,10 +3279,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             "Not Acceptable Here",
                             decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
                         )
-                        registry.bridge_clients.pop(invite.call_id, None)
-                        registry.sip_clients.pop(client.dialog_ids.call_id, None)
-                        registry.finish(invite.call_id, reason=TerminalReason.MEDIA_INCOMPATIBLE.value, state=CallState.MEDIA_INCOMPATIBLE.value)
-                        registry.pop(invite.call_id)
+                        registry.discard_bridge_session(
+                            invite.call_id,
+                            client.dialog_ids.call_id,
+                            reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                            state=CallState.MEDIA_INCOMPATIBLE.value,
+                        )
                         await client.close()
                         return
                     registry.relays[invite.call_id] = relay
@@ -3569,9 +3516,9 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         active_media_invite = registry.softphone_media.pop(call_id, {}).get("invite")
         if invite is None:
             invite = active_media_invite
-        relay = registry.relays.pop(call_id, None)
-        dest_call_id = registry.bridge_clients.pop(call_id, "")
-        client = registry.sip_clients.pop(dest_call_id, None) if dest_call_id else None
+        source_call_id, dest_call_id, relay, client, _watcher, _called_by_dest = registry.detach_bridge(call_id)
+        if source_call_id:
+            call_id = source_call_id
         softphone_store = bucket.get("ha_softphone", {})
         softphone_call_id = str(softphone_store.get("call_id") or "")
         terminal_reason = reason or "remote_hangup"
@@ -3599,8 +3546,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 reason=terminal_reason,
                 origin="remote",
             )
-            registry.finish(call_id, reason=terminal_reason, state=terminal_state)
-            registry.pop(call_id)
+            registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
         if relay is not None:
             await relay.stop()
         if client is not None:
@@ -3639,8 +3585,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 relay is not None,
                 bool(dest_call_id),
             )
-            registry.finish(call_id, reason=terminal_reason)
-            registry.pop(call_id)
+            registry.finish_and_pop(call_id, reason=terminal_reason)
 
     supported_formats = list(HA_SIP_PCM_FORMATS)
     endpoint = SipEndpointManager(
@@ -3677,14 +3622,12 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
     registry = _call_registry(hass)
     relays = dict(registry.relays)
-    registry.relays.clear()
     for relay in list(relays.values()):
         try:
             await relay.stop()
         except Exception:
             _LOGGER.debug("Ignoring SIP RTP relay stop error", exc_info=True)
     clients = dict(registry.sip_clients)
-    registry.sip_clients.clear()
     for client in list(clients.values()):
         try:
             client.bye()

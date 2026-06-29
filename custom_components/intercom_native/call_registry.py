@@ -134,6 +134,68 @@ class CallRegistry:
                 return source, dest
         return "", ""
 
+    def detach_bridge(self, call_id: str) -> tuple[str, str, Any | None, Any | None, Any | None, bool]:
+        source_call_id, dest_call_id = self.bridge_for(call_id)
+        if not source_call_id:
+            return "", "", None, None, None, False
+        called_by_dest = call_id == dest_call_id
+        self.bridge_clients.pop(source_call_id, None)
+        relay = self.relays.pop(source_call_id, None)
+        client = self.sip_clients.pop(dest_call_id, None) if dest_call_id else None
+        watcher = self.client_watchers.pop(dest_call_id, None) if dest_call_id else None
+        return source_call_id, dest_call_id, relay, client, watcher, called_by_dest
+
+    def finish_and_pop(self, call_id: str, *, reason: str = "", state: str = "idle") -> CallSession | None:
+        self.finish(call_id, reason=reason, state=state)
+        return self.pop(call_id)
+
+    def discard_bridge_session(
+        self,
+        source_call_id: str,
+        dest_call_id: str = "",
+        *,
+        reason: str = "",
+        state: str = "idle",
+    ) -> Any | None:
+        dest = dest_call_id or self.bridge_clients.get(source_call_id, "")
+        self.bridge_clients.pop(source_call_id, None)
+        client = self.sip_clients.pop(dest, None) if dest else None
+        self.finish_and_pop(source_call_id, reason=reason, state=state)
+        return client
+
+    def detach_client(self, call_id: str) -> tuple[Any | None, Any | None]:
+        client = self.sip_clients.pop(call_id, None)
+        watcher = self.client_watchers.pop(call_id, None)
+        return client, watcher
+
+    def register_bridge(
+        self,
+        *,
+        source_call_id: str,
+        dest_call_id: str,
+        client: Any,
+        state: str,
+        caller: str = "",
+        callee: str = "",
+        route_kind: str = "",
+        source_role: LegRole = "caller",
+        dest_role: LegRole = "callee",
+        source_state: str = "",
+        dest_state: str = "",
+    ) -> CallSession:
+        self.sip_clients[dest_call_id] = client
+        self.bridge_clients[source_call_id] = dest_call_id
+        session = self.upsert(
+            source_call_id,
+            state=state,
+            caller=caller,
+            callee=callee,
+            route_kind=route_kind,
+        )
+        self.add_leg(source_call_id, source_call_id, role=source_role, state=source_state or state)
+        self.add_leg(source_call_id, dest_call_id, role=dest_role, state=dest_state or state)
+        return session
+
     def clear_runtime(self) -> None:
         self.sessions.clear()
         self.leg_index.clear()
