@@ -56,11 +56,11 @@ playback were validated with the shared `speaker_source` path and the
 hardware-clocked ESP audio stack timing model.
 
 Native ESPHome intercom-only presets now use 48 kHz PCM where the actual
-native I2S microphone or speaker path supports it. TCP native profiles use
-20 ms frames. UDP native profiles use 10 ms frames so 48 kHz/s16/mono remains
-below the default 1200-byte UDP datagram limit. AFE/AEC-backed profiles keep
-16 kHz TX because that is the Espressif AFE/AEC output format; this is a local
-branch constraint, not a global intercom transport limit.
+native I2S microphone or speaker path supports it. SIP/TCP profiles may use
+larger packet times; SIP/UDP profiles use short packet times such as 10 ms so
+48 kHz/s16/mono remains below the default 1200-byte UDP datagram limit.
+AFE/AEC-backed profiles keep 16 kHz TX because that is the Espressif AFE/AEC
+output format; this is a local branch constraint, not a global SIP media limit.
 
 UDP custom formats are validated against `udp_max_payload` at build time and by
 Home Assistant when publishing the phonebook. The default is intentionally

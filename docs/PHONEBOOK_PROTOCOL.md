@@ -75,7 +75,8 @@ data:
 
 `name` is the only required field. `number` is an optional extension/alias.
 `address`, `sip_uri`, `sip_transport`, `sip_port`, and `rtp_port` are optional
-and are filled by discovery or registration when available.
+and are filled by ESP endpoint publication, manual entries or SIP account
+registration when available.
 
 ## Routing
 

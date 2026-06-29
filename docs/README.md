@@ -29,7 +29,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - 📒 **Phonebook protocol**: [PHONEBOOK_PROTOCOL.md](PHONEBOOK_PROTOCOL.md)
   documents canonical endpoint rows, `audio_mode`, `tx_formats`/`rx_formats`
-  and how HA shapes TCP/UDP/HA rows for each ESP.
+  and how HA shapes direct SIP or HA-bridged routes for each ESP.
 
 - 🧱 **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) describes component
   decomposition, threading/core affinity, per-frame data flow, the

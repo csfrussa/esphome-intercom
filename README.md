@@ -236,7 +236,7 @@ and display-driven voice devices.
 | One ESP as a full-duplex citofono/intercom with Home Assistant | [`yamls/intercom-only/`](yamls/intercom-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
 | Room-to-room ESP intercom | One intercom-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP. |
-| Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native-tcp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-tcp.yaml) or [`generic-s3-full-esphome-native-udp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-udp.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
+| Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
 | Standalone native ESPHome intercom | [`yamls/intercom-only/esphome-native/`](yamls/intercom-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. Do not use this path for shared single-bus software-AEC builds. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and intercom while media/TTS keeps playing. |
 | Media, announcements and optional Music Assistant / Sendspin for full voice profiles | [`speaker_source` media path](docs/reference.md#full-experience-media-path) | One media player feeds the mixer with HA media, announcements, local files and optional Sendspin streams; intercom keeps its own higher-priority mixer source. |
@@ -253,8 +253,8 @@ button, LVGL button, automation, service call or Lovelace card.
 If Home Assistant is part of the setup, use the standard HA-managed phonebook.
 Each ESP publishes `intercom_endpoint` through the native ESPHome API, HA builds
 `sensor.intercom_phonebook`, and standard ESP packages subscribe to that roster.
-The old ESP-only network scan/discovery path is not part of the SIP routing
-contract. If HA is present, it is the phonebook authority.
+ESP-side network scanning is not a SIP routing primitive. If HA is present, it
+is the phonebook authority.
 
 ### SIP router/B2BUA mental model
 
@@ -455,7 +455,7 @@ package and define contacts manually.
 - **Call Forwarding** - Forward active or ringing calls to another device via automation.
 - **Ringtone on incoming calls** - Devices play a looping ringtone while ringing.
 - **Volume Control** - Adjustable Master Volume and microphone gain.
-- **Phonebook** - Dedup by friendly name. HA publishes the protocol-aware `sensor.intercom_phonebook`; ESP packages subscribe to it and locally shape TCP/UDP/HA slots into their dial plan. YAML automations can still call the native `intercom_api` actions/services.
+- **Phonebook** - Dedup by friendly name. HA publishes the SIP-aware `sensor.intercom_phonebook`; ESP packages subscribe to it and locally shape endpoint rows into direct SIP or HA-bridged routes. YAML automations can still call the native `intercom_api` actions/services.
 - **Do Not Disturb** - Native `intercom_api` switch. When enabled, incoming calls are rejected with `SIP reject("DND")` so the caller receives a real reason.
 - **HA peer name = `hass.config.location_name`** everywhere (NEVER hardcoded).
 - **Status LED** - Visual feedback for call states.
@@ -541,7 +541,7 @@ PCM unless a future measured Opus mode proves worth the cost.
 The functional wire contract is standard SIP/2.0 signaling, SDP offer/answer
 and RTP media. ESP devices are SIP user agents; Home Assistant is a SIP
 softphone plus SIP router/B2BUA. There is no project-specific call-control
-fallback in the functional path.
+compatibility path.
 
 Supported SIP methods in the local profile are `INVITE`, `ACK`, `CANCEL`,
 `BYE`, `OPTIONS`, `INFO` for DTMF interop where used, and `REGISTER` only for
@@ -573,7 +573,7 @@ _Every callable peer becomes a canonical endpoint row. HA merges rows into the r
 
 Standard HA-managed firmware uses the native ESPHome API endpoint sensor plus
 `sensor.intercom_phonebook`. HA is the phonebook authority whenever it is part
-of the installation. ESP-side network discovery is not part of the SIP routing
+of the installation. ESP-side network scanning is not part of the SIP routing
 contract. The canonical roster JSON, SIP URI fields and audio capability fields
 are documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
 
@@ -1073,7 +1073,7 @@ flowchart TD
 5. Either side can hang up; the terminal reason is propagated to the other leg.
 
 **SIP router/B2BUA features:**
-- Contact list auto-discovery from HA
+- Contact roster publication from HA
 - Next/Previous contact navigation
 - Caller ID display
 - Ringing timeout with auto-decline
@@ -1189,26 +1189,20 @@ sequenceDiagram
 
 | Device | YAML | Microphone | Speaker | I2S Mode | Audio pipeline | Features |
 |--------|------|------------|---------|----------|----------------|----------|
-| **Spotpear Ball v2 (AFE)** | [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom + LVGL |
-| **Spotpear Ball v2 (AFE UDP)** | [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | Same full experience, UDP intercom transport |
-| **Spotpear Ball v2 (intercom)** | [`spotpear-ball-v2-intercom-tcp.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | Intercom only |
-| **Waveshare S3-Audio (AFE)** | [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LED + AFE switches/sensors |
-| **Waveshare S3-Audio (AFE UDP)** | [`waveshare-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-udp.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
-| **Waveshare P4-Touch portrait (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LVGL touch |
-| **Waveshare P4-Touch portrait (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Same full experience, UDP intercom transport |
-| **Waveshare P4-Touch landscape (AFE TCP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + Intercom |
-| **Waveshare P4-Touch landscape (AFE UDP)** _(experimental)_ | [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, UDP intercom transport |
-| **Generic S3 (full AEC light)** | [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + Intercom, lighter 4 MB-oriented preset |
-| **Generic S3 (full AEC light UDP)** | [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | Same full AEC light experience, UDP intercom transport |
-| **Generic S3 (full AFE, untested)** | [`generic-s3-full-afe-tcp.yaml`](yamls/untested/generic-s3-full-afe-tcp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
-| **Generic S3 (full AFE UDP, untested)** | [`generic-s3-full-afe-udp.yaml`](yamls/untested/generic-s3-full-afe-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | Same full AFE experience, UDP intercom transport, requires >4 MB app slot |
-| **Generic S3 (full native TCP)** | [`generic-s3-full-esphome-native-tcp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-tcp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends, separated I2S mic/speaker paths, or native audio testing |
-| **Generic S3 (full native UDP)** | [`generic-s3-full-esphome-native-udp.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native-udp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Same full native experience, UDP intercom transport |
-| **Generic S3 (native intercom full-duplex TCP/UDP)** | [`generic-s3-intercom-esphome-native-full-duplex-tcp.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex-tcp.yaml) / [`udp`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex-udp.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Separated native ESPHome audio paths | None in firmware; use hardware/DSP AEC if needed | Intercom-only native ESPHome audio for two independent I2S paths, not a shared single-bus AEC backend |
-| **Generic S3 (native intercom mic-only TCP/UDP)** | [`generic-s3-intercom-esphome-native-mic-only-tcp.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-mic-only-tcp.yaml) / [`udp`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-mic-only-udp.yaml) | Native ESPHome mic or processed front-end | None | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | One-way microphone endpoint |
-| **Generic S3 (native intercom speaker-only TCP/UDP)** | [`generic-s3-intercom-esphome-native-speaker-only-tcp.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-speaker-only-tcp.yaml) / [`udp`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-speaker-only-udp.yaml) | None | Native ESPHome speaker | Native ESPHome audio | Not applicable | One-way speaker endpoint |
-| **Generic S3 single bus (intercom TCP/UDP)** | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) / [`udp`](yamls/intercom-only/single-bus/generic-s3-intercom-udp.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | Intercom only |
-| **Generic S3 dual bus (intercom TCP/UDP)** | [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom-tcp.yaml) / [`udp`](yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | Intercom only |
+| **Spotpear Ball v2 (AFE)** | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom + LVGL |
+| **Spotpear Ball v2 (intercom)** | [`spotpear-ball-v2-intercom.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | Intercom only |
+| **Waveshare S3-Audio (AFE)** | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LED + AFE switches/sensors |
+| **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LVGL touch |
+| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + Intercom |
+| **Generic S3 (full AEC light)** | [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + Intercom, lighter 4 MB-oriented preset |
+| **Generic S3 (full AEC light, dual bus)** | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + Intercom on separated I2S buses |
+| **Generic S3 (full AFE, untested)** | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
+| **Generic S3 (full native)** | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends, separated I2S mic/speaker paths, or native audio testing |
+| **Generic S3 (native intercom full-duplex)** | [`generic-s3-intercom-esphome-native-full-duplex.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Separated native ESPHome audio paths | None in firmware; use hardware/DSP AEC if needed | Intercom-only native ESPHome audio for two independent I2S paths, not a shared single-bus AEC backend |
+| **Generic S3 (native intercom mic-only)** | [`generic-s3-intercom-esphome-native-mic-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-mic-only.yaml) | Native ESPHome mic or processed front-end | None | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | One-way microphone endpoint |
+| **Generic S3 (native intercom speaker-only)** | [`generic-s3-intercom-esphome-native-speaker-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-speaker-only.yaml) | None | Native ESPHome speaker | Native ESPHome audio | Not applicable | One-way speaker endpoint |
+| **Generic S3 single bus (intercom)** | [`generic-s3-intercom.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | Intercom only |
+| **Generic S3 dual bus (intercom)** | [`generic-s3-intercom.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | Intercom only |
 
 > **Want to help expand this list?** Send me a device to test or consider a [donation](https://github.com/sponsors/n-IA-hane), every bit helps!
 
@@ -1623,7 +1617,7 @@ This prevents the adaptive filter from drifting during silence, which would othe
 
 Running a display alongside Voice Assistant, Micro Wake Word, AEC/AFE, media
 playback and intercom on one ESP is challenging due to RAM and CPU constraints.
-`spotpear-ball-v2-full-afe-tcp.yaml` is the compact LVGL reference. The P4 LVGL
+`spotpear-ball-v2-full-afe.yaml` is the compact LVGL reference. The P4 LVGL
 YAMLs use the same state model on a larger MIPI panel and now have a cleaner
 runtime profile, but remain hardware-specific targets because hosted Wi-Fi,
 MIPI/LVGL/PPA and SDIO traffic make their tuning different from normal S3
@@ -1836,31 +1830,29 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`generic-s3-full-aec-tcp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic `esp_audio_stack` AEC, single-bus mono, previous-frame reference |
-| [`generic-s3-full-aec-udp.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Same full AEC light profile, UDP intercom transport |
+| [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic `esp_audio_stack` AEC, single-bus mono, previous-frame reference |
+| [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Generic ESP32-S3 (MEMS+amp, dual bus) | Same full AEC light profile on separated I2S buses |
 
 ### Full Experience with `esp_afe` (VA + MWW + Intercom + NS/AGC/VAD, heavier)
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`generic-s3-full-afe-tcp.yaml`](yamls/untested/generic-s3-full-afe-tcp.yaml) | Generic ESP32-S3 (MEMS+amp) | Untested single-mic AFE, single-bus mono, TYPE2-style software reference, requires >4 MB app slot |
-| [`generic-s3-full-afe-udp.yaml`](yamls/untested/generic-s3-full-afe-udp.yaml) | Generic ESP32-S3 (MEMS+amp) | Untested full AFE, UDP intercom transport, requires >4 MB app slot |
-| [`spotpear-ball-v2-full-afe-tcp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
-| [`spotpear-ball-v2-full-afe-udp.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe-udp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Same as TCP full AFE, UDP intercom transport |
-| [`waveshare-s3-full-afe-tcp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-tcp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
-| [`waveshare-s3-full-afe-udp.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe-udp.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | Same as TCP full AFE, UDP intercom transport |
-| [`waveshare-p4-touch-full-afe-tcp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement, TCP intercom |
-| [`waveshare-p4-touch-full-afe-udp-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, same full AFE, UDP intercom transport |
-| [`waveshare-p4-touch-full-afe-tcp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-tcp-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement, TCP intercom |
-| [`waveshare-p4-touch-full-afe-udp-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-udp-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, same full AFE, UDP intercom transport |
+| [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Generic ESP32-S3 (MEMS+amp) | Untested single-mic AFE, single-bus mono, TYPE2-style software reference, requires >4 MB app slot |
+| [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
+| [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
+| [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement |
+| [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
 
 ### Intercom Only (no VA, no MWW)
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`spotpear-ball-v2-intercom-tcp.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom-tcp.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, `esp_aec`, intercom display |
-| [`generic-s3-intercom-tcp.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom-tcp.yaml) | Generic ESP32-S3 (MEMS+amp, single bus) | Single-bus, `esp_aec` |
-| [`generic-s3-intercom-udp.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom-udp.yaml) | Generic ESP32-S3 (dual I2S, UDP) | Dual-bus, `esp_aec`, previous-frame reference |
+| [`spotpear-ball-v2-intercom.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, `esp_aec`, intercom display |
+| [`generic-s3-intercom.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom.yaml) | Generic ESP32-S3 (MEMS+amp, single bus) | Single-bus, `esp_aec` |
+| [`generic-s3-intercom.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom.yaml) | Generic ESP32-S3 (dual I2S) | Dual-bus, `esp_aec`, previous-frame reference |
+| [`generic-s3-intercom-esphome-native-full-duplex.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex.yaml) | Generic ESP32-S3 native full-duplex | Native ESPHome mic and speaker |
+| [`generic-s3-intercom-esphome-native-mic-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-mic-only.yaml) | Generic ESP32-S3 native mic-only | One-way microphone endpoint |
+| [`generic-s3-intercom-esphome-native-speaker-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-speaker-only.yaml) | Generic ESP32-S3 native speaker-only | One-way speaker endpoint |
 
 ---
 

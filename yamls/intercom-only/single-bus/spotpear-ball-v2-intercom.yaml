@@ -23,7 +23,7 @@
 
 substitutions:
   # Hardware identity is shared by the SIP transport setting. The selected
-  # SIP transport setting is exposed by the intercom transport sensor and the unified
+  # SIP transport setting is exposed by the SIP transport sensor and the unified
   # phonebook row.
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2
@@ -331,7 +331,7 @@ intercom_api:
   audio:
     # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
     # matching 10 ms TX reframe of the 16 kHz mic for peers that negotiate
-    # ptime 10. 32 kHz/16 ms remains a fallback.
+    # ptime 10. 32 kHz/16 ms remains an alternate advertised format.
     tx_formats:
       - sample_rate: 16000
         pcm_format: s16le

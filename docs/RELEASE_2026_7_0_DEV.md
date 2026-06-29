@@ -267,7 +267,7 @@ regressions would be a problem.
 - Custom ESP YAMLs using `intercom_api` should review the new `audio.tx` and
   `audio.rx` settings if they want anything other than the default 16 kHz/s16/mono.
 - AFE/AEC TX remains 16 kHz/s16/mono. This is expected and should not be treated
-  as an intercom transport limitation.
+  as a global SIP media limitation.
 - HA bridging is the supported way to connect devices with incompatible direct
   audio formats.
 - UDP high-rate audio is limited by datagram size. Use TCP unless the UDP frame
