@@ -7,6 +7,10 @@ their own firmware.
 The repository ships YAML, ESPHome components and source code. It does not ship
 prebuilt firmware binaries for these Espressif audio components.
 
+For repository-wide attribution, ESPHome-derived component notes and the
+Apache-2.0 license text used by local ESPHome compatibility forks, see
+[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
 ## Runtime Components
 
 The current audio stack uses these Espressif components:

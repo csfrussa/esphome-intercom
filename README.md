@@ -2017,10 +2017,15 @@ Your support helps me dedicate more time to open source development. Thank you! 
 
 MIT License - See [LICENSE](LICENSE) for details.
 
-Audio builds may resolve Espressif components such as `esp-sr`,
-`gmf_ai_audio`, `gmf_core` and `esp_codec_dev` through ESPHome's IDF Component
-Manager. See [Espressif Components And Licenses](docs/ESPRESSIF_COMPONENTS.md)
-for the component-level license notes and usage restrictions.
+Some local ESPHome compatibility components are derived from Apache-2.0 ESPHome
+components, and audio firmware builds may resolve Espressif components such as
+`esp-sr`, `gmf_ai_audio`, `gmf_core`, `esp_audio_effects` and `esp_codec_dev`
+through ESPHome's IDF Component Manager.
+
+See [Third-Party Notices](THIRD_PARTY_NOTICES.md) for attribution and
+redistribution notes, and
+[Espressif Components And Licenses](docs/ESPRESSIF_COMPONENTS.md) for the
+component-level audio license boundaries and usage restrictions.
 
 ---
 
