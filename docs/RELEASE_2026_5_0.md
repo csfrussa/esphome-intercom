@@ -3,7 +3,7 @@
 This release note is kept only as historical context for the pre-SIP
 architecture. Current development has superseded it with the SIP/SDP/RTP
 migration documented in `RELEASE_2026_7_0_DEV.md`, `PHONEBOOK_PROTOCOL.md`,
-`voip_profile.md` and `codex_voip_test_matrix.md`.
+`voip_profile.md` and `voip_test_matrix.md`.
 
 The active architecture is intentionally breaking:
 

@@ -12,8 +12,8 @@ SOCKET="${SIM_SOCKET:-test_runs/simulator/voip-sim.sock}"
 CONTRACT=0
 TRACE_DIR=""
 PROFILE="${SIM_PROFILE:-}"
-PYTHON_BIN="${PYTHON_BIN:-/home/codex/.venv/bin/python}"
-ESPHOME_BIN="${ESPHOME_BIN:-/home/codex/.venv/bin/esphome}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT/.venv/bin/python}"
+ESPHOME_BIN="${ESPHOME_BIN:-$ROOT/.venv/bin/esphome}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

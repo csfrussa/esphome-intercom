@@ -6,8 +6,8 @@ Upstream baseline: ESPHome `2026.5.3`, component path
 Checked with:
 
 ```bash
-/home/codex/.venv/bin/esphome version
-diff -ru /home/codex/.venv/lib/python3.14/site-packages/esphome/components/speaker esphome/components/speaker
+.venv/bin/esphome version
+diff -ru .venv/lib/python3.14/site-packages/esphome/components/speaker esphome/components/speaker
 ```
 
 ## Local Patches

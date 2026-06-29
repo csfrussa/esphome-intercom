@@ -42,9 +42,9 @@ These services simulate a hardware button starting/stopping Voice Assistant on t
 
 ## Automated Test
 
-Run a local HA Assist cycle with a private debug helper, or manually call the
-ESPHome service from Home Assistant. Private debug helpers are intentionally not
-part of the distributed source tree.
+Run a local HA Assist cycle with a local diagnostic helper, or manually call the
+ESPHome service from Home Assistant. Diagnostic helpers are local-only tools and
+are intentionally not part of the distributed source tree.
 
 The cycle should:
 

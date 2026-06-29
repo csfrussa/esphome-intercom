@@ -10,7 +10,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = Path("/home/codex/.venv/bin/python")
+PYTHON = ROOT / ".venv/bin/python"
 
 
 def run(cmd: list[str]) -> None:

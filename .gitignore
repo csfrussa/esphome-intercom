@@ -8,18 +8,13 @@
 # Secrets (contains WiFi passwords, etc.)
 secrets.yaml
 
-# Claude Code project file (internal notes)
+# Local project notes
 CLAUDE.md
 
-# Private development diaries and investigation notes
-docs/private-dev-notes/
-
-# Codex CLI marker (internal tool config)
-.codex
-
-# Local Codex helper scripts and scratch tools
-.codex-tools/
-.codex-local/
+# Private development notes and local helper tools
+docs/private/
+local-tools/
+local-scratch/
 
 # Python cache
 __pycache__/

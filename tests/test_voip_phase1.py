@@ -360,7 +360,7 @@ class SipProfileTest(unittest.TestCase):
                 signaling_transport="TCP",
             )
             return await client.invite(
-                target="CodexBaresip",
+                target="TestBaresip",
                 remote_host="127.0.0.1",
                 remote_sip_port=port,
                 timeout=0.1,
@@ -523,11 +523,11 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             "sip:Casa@192.168.1.10;transport=tcp",
             [
                 ("Via", "SIP/2.0/TCP 192.168.1.48:38946;branch=z9hG4bKcontact;rport"),
-                ("From", '"Codex Baresip" <sip:codex@192.168.1.48>;tag=src'),
+                ("From", '"Test Baresip" <sip:test@192.168.1.48>;tag=src'),
                 ("To", "<sip:Casa@192.168.1.10;transport=tcp>"),
                 ("Call-ID", "contact-200-ok"),
                 ("CSeq", "1 INVITE"),
-                ("Contact", "<sip:codex@192.168.1.48:38946;transport=tcp>"),
+                ("Contact", "<sip:test@192.168.1.48:38946;transport=tcp>"),
                 ("Content-Type", "application/sdp"),
             ],
             offer,

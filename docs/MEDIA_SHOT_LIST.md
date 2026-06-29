@@ -81,7 +81,7 @@ replace individual photos or GIFs if the UI changes before release.
 
 ## Director checklist
 
-Use this section during capture when Codex is driving the demo from HA services,
+Use this section during capture when driving the demo from HA services,
 ESPHome actions or the Lovelace card.
 
 | Scene | Trigger | Expected visible state |

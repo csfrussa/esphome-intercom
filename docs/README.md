@@ -41,9 +41,6 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   symptoms (no devices found, no audio, echo, latency, ringing without connect,
   phonebook/routing issues) with concrete checks.
 
-- ✅ **SIP migration audit**: [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) records
-  the current public contract and deferred verification matrix.
-
 - 🖼️ **Media refresh plan**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists
   screenshots, photos, GIFs and demo scenes that should replace obsolete README
   media.
