@@ -72,14 +72,15 @@ url_owner_repo() {
 
 # Find production YAMLs that should be toggle-managed.
 # Excludes: ESPHome build cache, secrets file (per-device WiFi credentials,
-# never published), `yamls/debug` (local diagnostics, not downloadable release
-# presets), and `*_NOT_READY.yaml` (work-in-progress yamls staged but not yet
-# wired up to the toggle pattern).
+# never published), `yamls/debug` / `yamls/host` (local diagnostics, not
+# downloadable release presets), and `*_NOT_READY.yaml` (work-in-progress
+# yamls staged but not yet wired up to the toggle pattern).
 find_yamls() {
   local root="$1"
   find "$root/yamls" -type f -name '*.yaml' \
     -not -path '*/.esphome/*' \
     -not -path "$root/yamls/debug/*" \
+    -not -path "$root/yamls/host/*" \
     -not -name 'secrets.yaml' \
     -not -name '*_NOT_READY.yaml' \
     | sort

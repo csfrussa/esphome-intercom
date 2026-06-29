@@ -37,20 +37,20 @@ substitutions:
   name: generic-native-int-mic
   friendly_name: Generic S3 Native Intercom Mic Only
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@voip-refactor"
 
   status_led_pin: GPIO48
   status_led_chipset: WS2812
   status_led_rgb_order: GRB
 
 packages:
-  intercom_transport: !include ../../../packages/intercom/transport.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  ha_api: !include ../../../packages/intercom/ha_api.yaml
-  intercom_auto_entities: !include ../../../packages/intercom/auto_entities.yaml
-  intercom_buttons: !include ../../../packages/intercom/buttons_base.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport.yaml@voip-refactor
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@voip-refactor
+  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api.yaml@voip-refactor
+  intercom_auto_entities: github://n-IA-hane/esphome-intercom/packages/intercom/auto_entities.yaml@voip-refactor
+  intercom_buttons: github://n-IA-hane/esphome-intercom/packages/intercom/buttons_base.yaml@voip-refactor
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@voip-refactor
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@voip-refactor
 
 esphome:
   name: ${name}

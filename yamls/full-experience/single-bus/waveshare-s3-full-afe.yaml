@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@voip-refactor"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/voip-refactor/"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -56,25 +56,25 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_intercom_cpp.yaml
-  va_buttons_switches: !include ../../../packages/intercom/va_buttons_switches_cpp.yaml
-  call_settings: !include ../../../packages/intercom/call_settings.yaml
-  ha_api: !include ../../../packages/intercom/ha_api_cpp.yaml
-  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
-  intercom_transport: !include ../../../packages/intercom/transport.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
-  led_state_full: !include ../../../packages/led/state_full_ring.yaml
-  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
-  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@voip-refactor
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/va_buttons_switches_cpp.yaml@voip-refactor
+  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@voip-refactor
+  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api_cpp.yaml@voip-refactor
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@voip-refactor
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@voip-refactor
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport.yaml@voip-refactor
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@voip-refactor
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@voip-refactor
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@voip-refactor
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@voip-refactor
+  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_ring.yaml@voip-refactor
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@voip-refactor
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@voip-refactor
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@voip-refactor
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@voip-refactor
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@voip-refactor
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@voip-refactor
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@voip-refactor
 
 # =============================================================================
 # ESPHome Base

@@ -28,9 +28,9 @@ substitutions:
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@voip-refactor"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/voip-refactor/"
 
   # IC layout proportions (relative to display_height)
   ic_btn_size: "25%"
@@ -63,26 +63,26 @@ substitutions:
 # Packages
 # =============================================================================
 packages:
-  core: !include ../../../packages/intercom_only.yaml
-  buttons_switches: !include ../../../packages/intercom/buttons_switches.yaml
-  call_settings: !include ../../../packages/intercom/call_settings.yaml
-  ha_api: !include ../../../packages/intercom/ha_api.yaml
-  phonebook_subscribe: !include ../../../packages/intercom/phonebook_subscribe.yaml
-  intercom_transport: !include ../../../packages/intercom/transport.yaml
-  speaker_mute: !include ../../../packages/intercom/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/intercom_only.yaml@voip-refactor
+  buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/buttons_switches.yaml@voip-refactor
+  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@voip-refactor
+  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api.yaml@voip-refactor
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@voip-refactor
+  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport.yaml@voip-refactor
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@voip-refactor
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@voip-refactor
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@voip-refactor
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@voip-refactor
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@voip-refactor
+  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@voip-refactor
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@voip-refactor
   # LVGL settings carousel: globals, navigation scripts, and the individual
   # settings pages this device exposes (swipe-left order is the include order).
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  spotpear_intercom_nav: !include ../../../packages/lvgl/spotpear_intercom/nav_intercom_only.yaml
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@voip-refactor
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@voip-refactor
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@voip-refactor
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@voip-refactor
+  spotpear_intercom_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_intercom/nav_intercom_only.yaml@voip-refactor
 
 # =============================================================================
 # Core
