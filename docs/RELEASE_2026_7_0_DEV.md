@@ -119,6 +119,10 @@ intercom call-control path is not a compatibility layer.
   and playback from that contract.
 - 🎧 Capture and playback worklets support dynamic PCM settings instead of
   assuming 16 kHz `Int16Array` everywhere.
+- 🧯 Browser playback now uses an adaptive jitter buffer with lightweight packet
+  loss concealment instead of fixed startup/drop thresholds. Remote HA app and
+  browser sessions tolerate normal websocket/RTP jitter without periodic
+  audio-gap artifacts.
 - 🔄 Softphone calls survive normal Lovelace reload/reconnect flows when the
   browser rebinds inside the server grace window.
 - 🧭 Device identity remains `device_id` based in the frontend. Legacy
@@ -164,6 +168,10 @@ intercom call-control path is not a compatibility layer.
   milliseconds around 16 kHz/s16/mono.
 - 📐 Intercom TX/RX chunk sizes, ring sizes and frame validation are derived from
   `AudioFormat`.
+- 🧯 ESP microphone RTP packetization now preserves residual samples when the
+  hardware/audio-stack callback size is not an exact multiple of negotiated
+  SIP `ptime`. This fixes the 64 ms AFE callback -> 10 ms RTP case that caused
+  periodic ESP-to-HA audio gaps.
 - 🎚️ ESP speaker stream info is updated from the selected RX format before
   intercom playback, so native speaker paths can receive higher-rate PCM.
 - 🎙️ AFE/AEC microphone branches remain 16 kHz/s16/mono because that is the
