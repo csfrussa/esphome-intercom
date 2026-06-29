@@ -10,8 +10,8 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   [`yamls/`](../yamls/).
 
 - 🧭 **Quick examples**: the top-level [README](../README.md#quick-start-examples)
-  includes practical doorbell, room-to-room intercom, and manual boot phonebook
-  examples.
+  includes practical doorbell, room-to-room intercom, ESP static contacts and
+  HA-managed central roster examples.
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
   starts from the current SIP/VoIP breaking migration. The full incoming release

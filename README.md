@@ -16,7 +16,8 @@ Action required:
   optional trunk client. The retired project-specific intercom call-control path
   is not a fallback.
 - `intercom_api` remains the ESPHome component name, but `protocol: udp|tcp`
-  now means SIP/UDP or SIP/TCP signaling. RTP media remains UDP.
+  now means SIP/UDP or SIP/TCP signaling. RTP audio remains UDP in the current
+  phone profile.
 - `intercom_native` can optionally register a provider/PBX trunk and can also
   host local SIP accounts for standard softphones. Trunk support is off unless
   configured.
@@ -429,43 +430,52 @@ binary_sensor:
 Contact names are exact and case-sensitive. Check `sensor.<device>_destination`
 or the HA phonebook sensor if a call reports `Contact not found`.
 
-### Load a manual phonebook at boot
+### Static Contacts And Manual Roster Changes
 
 The recommended path is HA-managed sync through `sensor.intercom_phonebook`.
-Use manual boot loading only for custom YAMLs, offline installs, diagnostics, or
-very small fixed systems.
+Use ESP static contacts only for offline installs, diagnostics, direct SIP
+peers that should exist before HA connects, or very small fixed systems.
 
 ```yaml
-esphome:
-  on_boot:
-    priority: -100
-    then:
-      - intercom_api.flush_contacts:
-          id: intercom
-      - intercom_api.add_contact:
-          id: intercom
-          name: "Home"
-          ip: "192.168.1.10"
-          port: 5060
-          sip_transport: tcp
-      - intercom_api.add_contact:
-          id: intercom
-          name: "Kitchen Intercom"
-          ip: "192.168.1.21"
-          port: 5060
-          sip_transport: udp
+intercom_api:
+  id: intercom
+  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
+  static_contacts:
+    - name: "Home"
+      ip: "192.168.1.10"
+      port: 5060
+      sip_transport: tcp
+    - name: "Kitchen Intercom"
+      ip: "192.168.1.21"
+      port: 5060
+      sip_transport: udp
+    - name: "Gate"
 ```
 
 Contact fields:
 
 - `name`: required display and dial name.
-- `address`: optional host/IP for direct SIP endpoints.
+- `ip`: optional host/IP for direct SIP endpoints.
 - `port`: optional SIP signaling port, default `5060`.
+- `rtp_port`: optional RTP media port, default `40000`.
 - `sip_transport`: `tcp` or `udp` when direct SIP is allowed.
 
-If you include the maintained HA phonebook subscription package, HA pushes the
-canonical roster JSON after boot. For a fully static local phonebook, omit that
-package and define contacts manually.
+Runtime ESP automations can still mutate the local dial plan when needed:
+
+```yaml
+on_press:
+  - intercom_api.add_contacts:
+      id: intercom
+      name: "Temporary Desk"
+      ip: "192.168.1.55"
+      sip_transport: udp
+```
+
+Home Assistant is the central roster authority when it is present. Add, remove
+or replace central contacts with `intercom_native.phonebook_add_contact`,
+`phonebook_remove_contact`, `phonebook_set_contacts`, `phonebook_clear` and
+`phonebook_push`. HA pushes the updated roster immediately to online ESPs via
+the ESPHome API; ESP static contacts remain local fallbacks/custom additions.
 
 ## Features
 
@@ -589,10 +599,16 @@ B2BUA boundary before sending PCM to ESPs. Generic direct SIP calls select one
 common RTP format per dialog. HA bridge/trunk calls may use different formats
 on each leg because HA owns both dialogs and the RTP relay/resampler.
 
-SIP signaling can listen on TCP, UDP or both. RTP remains UDP. UDP RTP payloads
-are kept under the safe payload budget for typical home LANs; high-rate ESP
+SIP signaling can listen on TCP, UDP or both. RTP audio remains UDP even when
+SIP signaling is TCP, matching normal SIP phone behavior. UDP RTP payloads are
+kept under the safe payload budget for typical home LANs; high-rate ESP
 profiles use short packet times such as 10 ms so 48 kHz mono L16 fits without
 IP fragmentation.
+
+RTP over TCP exists in SIP/SDP standards, but it is not part of the current ESP
+phone profile. Treat it as a future HA-side advanced media transport option
+that needs explicit SDP negotiation and interoperability testing with real
+softphones/providers before it is exposed.
 
 Transport choice is an installation choice, not a feature split. TCP is the
 recommended starting point for routed networks and HA/container deployments
@@ -612,11 +628,76 @@ of the installation. ESP-side network scanning is not part of the SIP routing
 contract. The canonical roster JSON, SIP URI fields and audio capability fields
 are documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
 
+### Central Phonebook And Dial Plan Services
+
+HA exposes `sensor.intercom_phonebook` as the central SIP roster. It merges:
+
+- ESP endpoint sensors published by online devices;
+- HA itself as a softphone target;
+- manual contacts created with HA services;
+- local SIP accounts registered to HA;
+- trunk-routed phone targets and group entries when configured.
+
+Useful services:
+
+- `intercom_native.phonebook_add_contact`: add or replace one central contact.
+- `intercom_native.phonebook_remove_contact`: remove a manual central contact by name.
+- `intercom_native.phonebook_set_contacts`: replace manual contacts from JSON.
+- `intercom_native.phonebook_clear`: clear manual central contacts.
+- `intercom_native.phonebook_push`: push the current roster to online ESPs.
+- `intercom_native.sip_call`: originate a call from HA.
+- `intercom_native.sip_forward`: forward/bridge a pending or new call.
+- `intercom_native.sip_route`: answer, decline, busy, forward or bridge a pending route request.
+
+Example central contact:
+
+```yaml
+service: intercom_native.phonebook_add_contact
+data:
+  name: "Office Phone"
+  kind: phone
+  number: "210"
+```
+
+Example dial-plan automation:
+
+```yaml
+alias: Route trunk calls to kitchen at night
+trigger:
+  - platform: event
+    event_type: intercom_native.sip_route_request
+condition:
+  - condition: time
+    after: "22:00:00"
+action:
+  - service: intercom_native.sip_route
+    data:
+      call_id: "{{ trigger.event.data.call_id }}"
+      action: forward
+      destination: "Kitchen Intercom"
+```
+
+Without an automation, inbound trunk calls with no route hint ring the HA
+softphone/default target. If an explicit DTMF/SIP route hint arrives and cannot
+resolve, HA terminates that leg with `route_not_found` instead of silently
+falling back.
+
 ### Local softphone accounts
 
 Intercom Native can optionally act as a local SIP registrar for standard
-softphones. Create an account with `intercom_native.sip_account_create`, then
-configure Zoiper, Linphone, baresip or pjsua with:
+softphones. Create an account from Developer Tools -> Services with
+`intercom_native.sip_account_create`:
+
+```yaml
+service: intercom_native.sip_account_create
+data:
+  username: "MobileOffice"
+  display_name: "Mobile Office"
+```
+
+If `password` is omitted, HA generates one and shows it once in an Intercom
+Native persistent notification and in the `intercom_native.call_event` stream.
+Then configure Zoiper, Linphone, baresip or pjsua with:
 
 ```text
 server: <Home Assistant advertised IP or host>
@@ -628,8 +709,8 @@ transport: SIP TCP or SIP UDP, matching the enabled HA listener
 The username is also the central phonebook ID. When `MobileOffice` registers,
 HA adds a dynamic SIP contact with that name to the roster and pushes it to ESP
 devices. Deregistering, disabling the account or letting the REGISTER expire
-removes the dynamic contact. Passwords are never logged; generated passwords
-are emitted once in the Intercom Native call event stream.
+removes the dynamic contact. Passwords are not logged; generated passwords are
+only shown at creation/rotation time.
 
 ---
 
@@ -850,7 +931,7 @@ intercom_api:
 ```yaml
 intercom_api:
   id: intercom
-  # protocol chooses SIP signaling transport: tcp or udp. RTP remains UDP.
+  # protocol chooses SIP signaling transport: tcp or udp. Audio is RTP/UDP.
   protocol: udp
   microphone: mic_component
   speaker: spk_component

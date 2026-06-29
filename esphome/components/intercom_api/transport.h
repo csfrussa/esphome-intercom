@@ -84,7 +84,7 @@ class SipPhoneTransport {
   /// carries RTP media port until the internal naming is fully collapsed.
   virtual void set_remote(const std::string &ip, uint16_t port, uint16_t rtp_port = 0) {}
 
-  /// SIP-only: select TCP or UDP for SIP signaling. RTP media remains UDP.
+  /// SIP-only: select TCP or UDP for SIP signaling. Audio remains RTP/UDP.
   /// Other transports ignore this because their protocol is fixed by type.
   virtual void set_sip_signaling_transport(bool tcp) { (void) tcp; }
 

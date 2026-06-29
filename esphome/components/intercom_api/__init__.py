@@ -80,7 +80,7 @@ CONF_FRAME_MS = "frame_ms"
 CONF_NETWORK_SOCKET_HEADROOM = "network_socket_headroom"
 CONF_UDP_MAX_PAYLOAD = "udp_max_payload"
 CONF_AUTO = "auto"
-CONF_PHONEBOOK = "phonebook"
+CONF_STATIC_CONTACTS = "static_contacts"
 CONF_ENTRY = "entry"
 CONF_CONTACT = "contact"
 CONF_IP = "ip"
@@ -409,16 +409,16 @@ PHONEBOOK_CONTACT_SCHEMA = cv.Schema(
 )
 
 
-def _validate_phonebook_contact(value):
+def _validate_static_contact(value):
     value = PHONEBOOK_CONTACT_SCHEMA(value)
     if CONF_ENTRY in value:
         return value
     if CONF_NAME not in value:
-        raise cv.Invalid("phonebook contact requires name")
+        raise cv.Invalid("static contact requires name")
     return value
 
 
-def _phonebook_contact_entry(contact, default_protocol: str) -> str:
+def _static_contact_entry(contact, default_protocol: str) -> str:
     if CONF_ENTRY in contact:
         return contact[CONF_ENTRY]
     name = contact[CONF_NAME]
@@ -433,7 +433,7 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(IntercomApi),
         # SIP signaling transport. Use protocol: tcp for SIP/TCP or
-        # protocol: udp for SIP/UDP. RTP media remains UDP.
+        # protocol: udp for SIP/UDP. Audio remains RTP/UDP.
         cv.Optional(CONF_PROTOCOL, default=PROTOCOL_UDP): cv.one_of(
             PROTOCOL_TCP, PROTOCOL_UDP, lower=True
         ),
@@ -442,8 +442,8 @@ CONFIG_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_SIP_PORT, default=5060): cv.port,
         cv.Optional(CONF_RTP_PORT, default=40000): cv.port,
-        cv.Optional(CONF_PHONEBOOK, default=[]): cv.ensure_list(
-            _validate_phonebook_contact
+        cv.Optional(CONF_STATIC_CONTACTS, default=[]): cv.ensure_list(
+            _validate_static_contact
         ),
         # On the first post-boot phonebook population, select the HA peer row
         # as the current destination so a freshly booted ESP is tuned to HA
@@ -563,7 +563,7 @@ def _consume_intercom_sockets(config):
     """
     from esphome.components import socket
 
-    # SIP signaling can be UDP or TCP; RTP media remains UDP.
+    # SIP signaling can be UDP or TCP; audio remains RTP/UDP.
     socket.consume_sockets(2, "intercom_api_sip", socket.SocketType.UDP)(config)
     socket.consume_sockets(2, "intercom_api_sip_tcp")(config)
     socket.consume_sockets(1, "intercom_api_sip", socket.SocketType.TCP_LISTEN)(config)
@@ -721,7 +721,7 @@ async def _add_core_settings(var, config):
 
 
 def _add_transport_settings(var, config):
-    # SIP signaling transport: UDP or TCP. RTP media remains UDP.
+    # SIP signaling transport: UDP or TCP. Audio remains RTP/UDP.
     if config[CONF_PROTOCOL] == PROTOCOL_UDP:
         cg.add(var.set_protocol(TransportType.UDP))
     else:
@@ -731,11 +731,11 @@ def _add_transport_settings(var, config):
     cg.add(var.set_rtp_port(config[CONF_RTP_PORT]))
 
 
-def _add_phonebook_contacts(var, config):
-    contacts = config.get(CONF_PHONEBOOK, [])
+def _add_static_contacts(var, config):
+    contacts = config.get(CONF_STATIC_CONTACTS, [])
     default_protocol = config.get(CONF_PROTOCOL, PROTOCOL_UDP)
     for contact in contacts:
-        cg.add(var.add_contact(_phonebook_contact_entry(contact, default_protocol)))
+        cg.add(var.add_contact(_static_contact_entry(contact, default_protocol)))
 
 
 async def _add_device_and_audio_processor_settings(var, config):
@@ -980,7 +980,7 @@ async def to_code(config):
     await _add_core_settings(var, config)
     _add_transport_settings(var, config)
     await _add_device_and_audio_processor_settings(var, config)
-    _add_phonebook_contacts(var, config)
+    _add_static_contacts(var, config)
     await _build_intercom_automations(var, config)
     await _build_intercom_text_sensors(var, config)
     await _build_intercom_auto_entities(var, config)

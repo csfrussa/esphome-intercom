@@ -58,7 +58,7 @@ SIP signaling transports:
 - UDP on the configured SIP listen port
 - TCP on the same configured SIP listen port
 
-RTP media remains UDP.
+RTP audio remains UDP in the current profile, even when SIP signaling is TCP.
 
 ## SDP And RTP
 

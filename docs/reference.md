@@ -5,10 +5,10 @@
 ```yaml
 intercom_api:
   id: intercom
-  protocol: udp
+  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
   sip_port: 5060
   rtp_port: 40000
-  phonebook:
+  static_contacts:
     - name: Kitchen
       ip: 192.168.1.42
       sip_transport: udp
@@ -20,10 +20,10 @@ Important options:
 
 | Option | Meaning |
 | --- | --- |
-| `protocol` | SIP signaling transport: `udp` or `tcp`. SIP is implicit; this is not a protocol-family selector. |
+| `protocol` | SIP signaling transport: `udp` or `tcp`. SIP is implicit; this is not a protocol-family selector and does not move audio to TCP. RTP audio remains UDP. |
 | `sip_port` | Local SIP listener port. |
 | `rtp_port` | Local RTP media port. |
-| `phonebook` | Local SIP dial plan. |
+| `static_contacts` | Optional local contacts loaded at boot. HA-managed `sensor.intercom_phonebook` is recommended for normal installs. |
 | `ha_phonebook_text_sensor_id` | HA-published central roster source. |
 | `on_calling` | Automation hook for outbound INVITE state. |
 | `on_ringing` | Automation hook for inbound INVITE ringing state. |
@@ -47,8 +47,8 @@ Runtime actions:
 - `intercom_api.set_contacts`
 - `intercom_api.set_roster_json`
 
-Local phonebook contacts accept `sip_transport: udp|tcp` when one contact must
-use a different signaling transport from the phone's own `protocol`.
+Static and runtime contacts accept `sip_transport: udp|tcp` when one contact
+must use a different signaling transport from the phone's own `protocol`.
 
 Conditions:
 
@@ -71,7 +71,11 @@ Conditions:
 - `intercom_native.phonebook_remove_contact`
 - `intercom_native.phonebook_set_contacts`
 - `intercom_native.phonebook_clear`
+- `intercom_native.phonebook_export`
 - `intercom_native.phonebook_push`
+- `intercom_native.sip_account_create`
+- `intercom_native.sip_account_remove`
+- `intercom_native.sip_account_rotate_password`
 
 `sip_call` accepts `destination`, `target`, or `call`. Set `ha_bridge: true` to
 force the HA bridge path.
@@ -82,6 +86,25 @@ force the HA bridge path.
 
 `sip_forward` with `call_id` is shorthand for `sip_route` with
 `action: forward`; without `call_id` it originates a new HA bridged SIP call.
+
+`phonebook_add_contact` requires only `name`. Optional fields are `id`, `kind`,
+`address`, `sip_uri`, `number`, `ha_bridge`, `sip_transport`, `sip_port`,
+`rtp_port`, `tx_rate`, `rx_rate`, `tx_formats`, `rx_formats`, and
+`max_payload_bytes`. HA updates `sensor.intercom_phonebook` and pushes the
+roster to online ESP devices.
+
+`phonebook_remove_contact` removes one manual central contact by `name`.
+`phonebook_set_contacts` replaces manual central contacts from JSON.
+`phonebook_clear` removes manual central contacts. `phonebook_push` republishes
+the current merged roster without changing it.
+
+`sip_account_create` creates or replaces a local account for Zoiper, Linphone,
+baresip, pjsua or another standard SIP softphone registering directly to HA. The
+`username` is the SIP username and central roster ID; `display_name`,
+`password`, `enabled`, and `replace` are optional. If `password` is omitted, HA
+generates one and shows it once in a persistent notification and in the
+`intercom_native.call_event` stream with `state: sip_account_created`.
+Registered clients appear in the central phonebook and are pushed to ESPs.
 
 ## HA Setup Options
 

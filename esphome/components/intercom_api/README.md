@@ -153,8 +153,8 @@ back to `intercom_api`.
 
 ## Transport
 
-SIP is the only call-control protocol. `protocol` selects the SIP signaling
-transport exposed by this phone.
+SIP is the only call-control protocol. `protocol` selects only the SIP signaling
+transport exposed by this phone. RTP audio remains UDP in both modes.
 
 SIP/UDP signaling:
 
@@ -176,18 +176,23 @@ intercom_api:
   rtp_port: 40000
 ```
 
-RTP media remains UDP for both signaling transports.
+RTP media remains UDP for both signaling transports. Setting `protocol: tcp`
+does not tunnel audio over TCP; it makes SIP INVITE/ACK/BYE use TCP while SDP
+still negotiates RTP/UDP media.
 
 ## Phonebook And HA Routing
 
 Contacts can be declared directly in `intercom_api` for installs that do not
-want HA to be the only phonebook source:
+want HA to be the only phonebook source. HA-managed sync through
+`sensor.intercom_phonebook` is still the recommended path for normal installs;
+static contacts are for offline installs, diagnostics, direct SIP peers that
+must exist before HA connects, or tiny fixed systems:
 
 ```yaml
 intercom_api:
   id: intercom
-  protocol: udp
-  phonebook:
+  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
+  static_contacts:
     - name: Casa di nonna
       ip: 192.168.1.44
       port: 5060
@@ -198,8 +203,14 @@ intercom_api:
 `name` is required. `ip`, `port`, `rtp_port`, and `sip_transport` are optional.
 When `sip_transport` is omitted, the contact uses the component SIP signaling
 transport (`protocol: udp` or `protocol: tcp` on `intercom_api`). A name-only
-contact is a logical target that can later be upgraded by the HA phonebook or
+contact is a logical target that can later be upgraded by the HA roster or
 routed through HA.
+
+Runtime YAML automations can mutate the local dial plan with
+`intercom_api.add_contact`, `intercom_api.add_contacts`,
+`intercom_api.remove_contact`, `intercom_api.set_contacts` and
+`intercom_api.flush_contacts`. Use those for custom local behavior only; HA
+central contacts should be managed with `intercom_native.phonebook_*` services.
 
 Each ESP publishes an `intercom_endpoint` text sensor. Home Assistant builds the
 central `sensor.intercom_phonebook` from those endpoints and adds itself as the

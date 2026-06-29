@@ -49,7 +49,8 @@ leg to a compatible PCM format.
 ## HA Cannot Route A Name
 
 - Ensure `sensor.intercom_phonebook` contains the target.
-- For local ESP-only routing, declare the contact in `intercom_api.phonebook`.
+- For local ESP-only routing, declare the contact in
+  `intercom_api.static_contacts`.
 - Use a direct SIP URI (`sip:name@host:5060`) when bypassing HA.
 - Use `ha_bridge: true` when HA must bridge a logical target.
 - For external numbers, confirm the optional trunk is configured and registered.

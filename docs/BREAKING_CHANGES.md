@@ -32,7 +32,7 @@ Migration impact:
 - ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
   Provider/PBX registration belongs to Home Assistant's optional trunk client.
 - The old ESP-only network scanning/discovery path is gone. Use explicit SIP
-  URIs, local `phonebook` entries or the HA-managed roster.
+  URIs, ESP `static_contacts` entries or the HA-managed roster.
 - The old project-specific intercom call-control protocol is not a fallback.
 
 ## SIP consolidation audit
@@ -45,7 +45,8 @@ The active branch is intentionally SIP-first and breaking:
   and optional SIP trunk endpoint.
 - The retired proprietary intercom protocol is not a compatibility layer.
 - ESP discovery/scanning between standalone peers is not a functional
-  primitive. Use explicit SIP URIs, local `phonebook` entries or the HA roster.
+  primitive. Use explicit SIP URIs, ESP `static_contacts` entries or the HA
+  roster.
 - Cards mirror their owner. HA cards mirror HA softphone state. ESP cards mirror
   ESPHome entities and controls.
 - Optional HA trunk support is disabled by default. If disabled, no provider

@@ -5,15 +5,16 @@ registered local softphones and the optional trunk. SIP is implicit everywhere:
 fields named `transport`, `sip_transport` or `protocol` only choose SIP/TCP or
 SIP/UDP signaling, never a second call-control protocol.
 
-## ESP Local Phonebook
+## ESP Static Contacts
 
-Declare local entries directly in `intercom_api`:
+Declare static local entries directly in `intercom_api` only when an ESP must
+have contacts before HA sync, work offline, or keep a tiny fixed local roster:
 
 ```yaml
 intercom_api:
   id: intercom
-  protocol: udp
-  phonebook:
+  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
+  static_contacts:
     - name: Kitchen
       ip: 192.168.1.42
       sip_transport: udp
@@ -37,9 +38,11 @@ Rules:
 - `name` is required.
 - `ip`, `port`, `rtp_port`, and `sip_transport` are optional.
 - If `sip_transport` is omitted, the contact uses the ESP phone signaling transport.
-- Name-only entries are logical SIP targets and can be resolved or bridged by HA.
+- Name-only entries are logical targets and can be resolved or bridged by HA.
 - A numeric name/number from an ESP is routed to HA. HA decides whether it is a
   local extension or an external trunk number.
+- HA-managed sync through `sensor.intercom_phonebook` is the recommended path.
+  Static contacts are local additions/fallbacks, not a second central roster.
 
 ## HA Roster
 
@@ -78,6 +81,26 @@ data:
 and are filled by ESP endpoint publication, manual entries or SIP account
 registration when available.
 
+Central roster services:
+
+- `intercom_native.phonebook_add_contact`: add or replace one manual central
+  contact. `name` is the only required field.
+- `intercom_native.phonebook_remove_contact`: remove one manual central contact
+  by name.
+- `intercom_native.phonebook_set_contacts`: replace manual contacts from a JSON
+  roster document.
+- `intercom_native.phonebook_clear`: clear manual central contacts.
+- `intercom_native.phonebook_push`: push the current roster immediately to
+  online ESP devices.
+- `intercom_native.phonebook_export`: emit the current roster as an HA event for
+  diagnostics/backup.
+
+Local softphone accounts are created with `intercom_native.sip_account_create`.
+The `username` becomes the SIP username and central roster ID. If `password` is
+omitted, HA generates one and shows it once in a persistent notification and in
+the `intercom_native.call_event` stream. Registered clients publish a dynamic
+Contact into the roster so ESP devices can call them by name.
+
 ## Routing
 
 - `sip:name@host[:port]` and `name@host[:port]` route direct.
@@ -90,6 +113,8 @@ registration when available.
   as the phonebook. No DTMF route hint means "ring HA". A received explicit
   route hint that cannot be resolved terminates as `route_not_found`; it does
   not silently fall back to HA.
+- HA automations can override a pending route request by listening for
+  `intercom_native.sip_route_request` and calling `intercom_native.sip_route`.
 - Missing or incompatible media routes must fail explicitly with SIP terminal
   reasons such as `media_incompatible` or `transport_unreachable`.
 
