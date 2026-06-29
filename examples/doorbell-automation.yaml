@@ -1,7 +1,7 @@
 # Doorbell Notification Automation
 #
 # When an ESP device calls your Home Assistant location name, it fires an
-# esphome.intercom_call event. This automation sends a push notification with
+# esphome.voip_call event. This automation sends a push notification with
 # action buttons.
 #
 # Event data available:
@@ -11,7 +11,7 @@
 #
 # Replace notify.mobile_app_your_phone with your mobile app service.
 # Replace every /lovelace/intercom value with the dashboard view that contains
-# your intercom-card, for example /your-dashboard/your-view. If Home Assistant
+# your voip-stack-card, for example /your-dashboard/your-view. If Home Assistant
 # generated a URL ending in /0, that simply means the first Lovelace view has no
 # custom path.
 
@@ -19,7 +19,7 @@ alias: Doorbell Notification
 description: Send push notification when doorbell rings - tap to open intercom
 triggers:
   - trigger: event
-    event_type: esphome.intercom_call
+    event_type: esphome.voip_call
 conditions: []
 actions:
   - action: notify.mobile_app_your_phone
@@ -27,7 +27,7 @@ actions:
       title: "Incoming Call"
       message: "{{ trigger.event.data.caller }} is calling..."
       data:
-        tag: intercom_call
+        tag: voip_call
         url: /lovelace/intercom
         clickAction: /lovelace/intercom
         channel: doorbell
@@ -37,14 +37,14 @@ actions:
         actions:
           - action: URI
             title: "Answer"
-            uri: /lovelace/intercom?intercom_answer=1
+            uri: /lovelace/intercom?voip_answer=1
           - action: DECLINE_INTERCOM
             title: "Decline"
   - action: persistent_notification.create
     data:
       title: "Incoming Call"
       message: "{{ trigger.event.data.caller }} is calling..."
-      notification_id: intercom_call
+      notification_id: voip_call
   - wait_for_trigger:
       - trigger: event
         event_type: mobile_app_notification_action
@@ -55,7 +55,7 @@ actions:
       - condition: template
         value_template: "{{ wait.trigger is not none }}"
     then:
-      - action: intercom_native.decline
+      - action: homeassistant_voip_stack.decline
         target:
           device_id: "{{ trigger.event.data.device_id }}"
         data:
@@ -64,11 +64,11 @@ actions:
         data:
           message: clear_notification
           data:
-            tag: intercom_call
+            tag: voip_call
     else:
       - action: notify.mobile_app_your_phone
         data:
           message: clear_notification
           data:
-            tag: intercom_call
+            tag: voip_call
 mode: single

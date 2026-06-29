@@ -15,7 +15,7 @@ views:
       # --- VA + Intercom device (with AEC mode select) ---
       - type: grid
         cards:
-          - type: custom:intercom-card
+          - type: custom:voip-stack-card
             entity_id: <your_device_id>
             name: My Device
           - type: entities
@@ -36,7 +36,7 @@ views:
       # --- Intercom-only device (no VA, no wake word) ---
       - type: grid
         cards:
-          - type: custom:intercom-card
+          - type: custom:voip-stack-card
             entity_id: <your_device_id>
             name: My Intercom
           - type: entities

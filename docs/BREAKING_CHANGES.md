@@ -8,8 +8,8 @@ call-control path.
 
 The practical change:
 
-- ESP `intercom_api` devices are now SIP phones.
-- Home Assistant `intercom_native` is now a SIP softphone, dial-plan authority,
+- ESP `esphome_voip_stack` devices are now SIP phones.
+- Home Assistant `homeassistant_voip_stack` is now a SIP softphone, dial-plan authority,
   SIP router/B2BUA, RTP bridge/resampler and optional SIP trunk client.
 - Standard softphones can register to Home Assistant as local SIP accounts and
   become phonebook contacts.
@@ -26,22 +26,22 @@ The practical change:
 Migration impact:
 
 - Rebuild ESP firmware from the maintained 2026.7.0-dev YAMLs or update custom
-  YAMLs to the SIP `intercom_api` contract.
-- `protocol: udp|tcp` still exists in ESP YAML, but it means SIP signaling
+  YAMLs to the SIP `esphome_voip_stack` contract.
+- `transport: udp|tcp` still exists in ESP YAML, but it means SIP signaling
   transport only. RTP media is UDP.
 - ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
   Provider/PBX registration belongs to Home Assistant's optional trunk client.
 - The old ESP-only network scanning/discovery path is gone. Use explicit SIP
   URIs, ESP `static_contacts` entries or the HA-managed roster.
-- The old project-specific intercom call-control protocol is not a fallback.
+- The old project-specific VoIP call-control protocol is not a fallback.
 
 ## SIP consolidation audit
 
 The active branch is intentionally SIP-first and breaking:
 
-- ESP `intercom_api` is a SIP phone. `protocol: udp|tcp` means SIP signaling
+- ESP `esphome_voip_stack` is a SIP phone. `transport: udp|tcp` means SIP signaling
   transport only.
-- HA `intercom_native` is a SIP softphone, dial-plan authority, SIP/RTP bridge
+- HA `homeassistant_voip_stack` is a SIP softphone, dial-plan authority, SIP/RTP bridge
   and optional SIP trunk endpoint.
 - The retired proprietary intercom protocol is not a compatibility layer.
 - ESP discovery/scanning between standalone peers is not a functional
@@ -87,11 +87,11 @@ that setting automatically.
 
 Sendspin is included in maintained full-experience profiles as a Music Assistant
 media source. It is not required for normal HA media, TTS, timer sounds,
-ringtones, Voice Assistant or intercom calls. WS3, Spotpear and P4 grouped
+ringtones, Voice Assistant or VoIP calls. WS3, Spotpear and P4 grouped
 playback were validated with the shared `speaker_source` path and the
 hardware-clocked ESP audio stack timing model.
 
-Native ESPHome intercom-only presets now use 48 kHz PCM where the actual
+Native ESPHome voip-only presets now use 48 kHz PCM where the actual
 native I2S microphone or speaker path supports it. SIP/TCP profiles may use
 larger packet times; SIP/UDP profiles use short packet times such as 10 ms so
 48 kHz/s16/mono remains below the default 1200-byte UDP datagram limit.
@@ -102,7 +102,7 @@ UDP custom formats are validated against `udp_max_payload` at build time and by
 Home Assistant when publishing the phonebook. The default is intentionally
 conservative at 1200 bytes per audio frame. If you deliberately run larger LAN
 datagrams, set the same larger `udp_max_payload` in the ESPHome YAML and the
-Intercom Native integration options; otherwise use TCP for high-rate, stereo or
+Home Assistant VoIP Stack integration options; otherwise use TCP for high-rate, stereo or
 32-bit PCM.
 
 ESP endpoint publication now waits for a valid IPv4 address from ESPHome's
@@ -141,7 +141,7 @@ wrong frame size when one direction negotiates 48 kHz.
 ESP caller playback now applies the negotiated RX speaker format before the
 call is activated and re-applies it when the SIP answer confirms the effective
 direction formats. Custom ESP integrations that bypass the maintained
-`intercom_api` speaker setup must do the same before feeding high-rate PCM to
+`esphome_voip_stack` speaker setup must do the same before feeding high-rate PCM to
 the local speaker path.
 
 The Lovelace frontend derives ringtone/worklet cache keys from the loaded card

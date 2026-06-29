@@ -30,8 +30,8 @@ This is the working list for refreshing README and documentation media for the
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
 | `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
-| `docs/images/hacs-download-intercom-native.png` | Screenshot | HACS download step | Captured: Intercom Native HACS entry and download menu |
-| `docs/images/intercom-native-config-flow.png` | Screenshot | HA integration setup | Captured: TCP and UDP options visible |
+| `docs/images/hacs-download-homeassistant-voip-stack.png` | Screenshot | HACS download step | Captured: Home Assistant VoIP Stack HACS entry and download menu |
+| `docs/images/homeassistant-voip-stack-config-flow.png` | Screenshot | HA integration setup | Captured: TCP and UDP options visible |
 | `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Replace old screenshot if entity names or UI changed |
 | `docs/images/card-selection.png` | Screenshot | Card picker | Updated custom card name and icon |
 | `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Captured: visual card editor and live preview |

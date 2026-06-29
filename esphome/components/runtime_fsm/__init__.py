@@ -33,8 +33,8 @@ CONF_OUTPUT_SCRIPT = "output_script"
 CONF_STATE_OUTPUTS = "state_outputs"
 CONF_ACTIVITY_MASK = "activity_mask"
 CONF_SEQUENCE = "sequence"
-CONF_INTERCOM_ID = "intercom_id"
-CONF_INTERCOM = "intercom"
+CONF_VOIP_ID = "voip_id"
+CONF_VOIP = "voip"
 CONF_ACTIVITY_PREFIX = "activity_prefix"
 CONF_ACTIVITIES = "activities"
 CONF_GROUPS = "groups"
@@ -149,10 +149,10 @@ CONFIG_SCHEMA = cv.Schema(
                 cv.Optional(CONF_SEQUENCE): cv.use_id(globals_component.GlobalsComponent),
             }
         ),
-        cv.Optional(CONF_INTERCOM): cv.Schema(
+        cv.Optional(CONF_VOIP): cv.Schema(
             {
-                cv.Required(CONF_ID): cv.use_id(cg.esphome_ns.namespace("intercom_api").class_("IntercomApi", cg.Component)),
-                cv.Optional(CONF_ACTIVITY_PREFIX, default="intercom:"): cv.string_strict,
+                cv.Required(CONF_ID): cv.use_id(cg.esphome_ns.namespace("esphome_voip_stack").class_("ESPHomeVoipStack", cg.Component)),
+                cv.Optional(CONF_ACTIVITY_PREFIX, default="voip:"): cv.string_strict,
                 cv.Optional(CONF_STATES, default={}): cv.Schema({cv.string_strict: ACTIVITY_BODY_SCHEMA}),
             }
         ),
@@ -188,14 +188,14 @@ async def to_code(config):
         template_arg = cg.TemplateArguments(full_id.type)
         cg.add(var.set_sequence_output.template(template_arg)(output))
 
-    if CONF_INTERCOM in config:
-        intercom_conf = config[CONF_INTERCOM]
-        intercom = await cg.get_variable(intercom_conf[CONF_ID])
-        cg.add(var.set_intercom(intercom))
-        cg.add(var.set_intercom_activity_prefix(intercom_conf[CONF_ACTIVITY_PREFIX]))
-        cg.add_define("USE_RUNTIME_FSM_INTERCOM")
-        for state, activity in intercom_conf[CONF_STATES].items():
-            name = f"{intercom_conf[CONF_ACTIVITY_PREFIX]}{state}"
+    if CONF_VOIP in config:
+        voip_conf = config[CONF_VOIP]
+        voip = await cg.get_variable(voip_conf[CONF_ID])
+        cg.add(var.set_voip(voip))
+        cg.add(var.set_voip_activity_prefix(voip_conf[CONF_ACTIVITY_PREFIX]))
+        cg.add_define("USE_RUNTIME_FSM_VOIP")
+        for state, activity in voip_conf[CONF_STATES].items():
+            name = f"{voip_conf[CONF_ACTIVITY_PREFIX]}{state}"
             cg.add(var.add_activity(name, activity[CONF_PRIORITY], activity[CONF_INITIAL]))
             for policy, value in activity[CONF_POLICIES].items():
                 cg.add(var.add_activity_policy(name, policy, value))

@@ -1,0 +1,353 @@
+"""Cached SIP phone device resolver; one registry pass per HA instance, cache
+invalidated on registry change."""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+
+from .audio_format import parse_audio_format_list
+from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+_CACHE_KEY = "device_resolver"
+
+
+def _format_tokens(formats: list) -> list[str]:
+    return [fmt.wire_token() for fmt in formats]
+
+
+def slugify_route_id(raw: str) -> str:
+    """Match the slug ESPHome uses for `esphome.{slug}_start_call` services."""
+    return "".join(c if c.isalnum() else "_" for c in (raw or "").lower()).strip("_")
+
+
+def _esphome_entry_for_host(hass: HomeAssistant, host: str):
+    for entry in hass.config_entries.async_entries("esphome"):
+        if entry.data.get("host") == host:
+            return entry
+    return None
+
+
+def _valid_port(value: str) -> int | None:
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+def _valid_audio_mode(value: str | None) -> str:
+    mode = (value or "full_duplex").strip().lower()
+    if mode in ("full_duplex", "mic_only", "speaker_only", "control_only"):
+        return mode
+    return "full_duplex"
+
+
+def _match_name(value: str | None, *candidates: str | None) -> bool:
+    wanted = (value or "").strip()
+    if not wanted:
+        return False
+    wanted_slug = slugify_route_id(wanted).replace("_", "-")
+    for candidate in candidates:
+        text = (candidate or "").strip()
+        if not text:
+            continue
+        if text == wanted:
+            return True
+        if text.lower() == wanted.lower():
+            return True
+        if slugify_route_id(text).replace("_", "-") == wanted_slug:
+            return True
+    return False
+
+
+def parse_voip_endpoint(value: str | None) -> dict | None:
+    """Parse the project endpoint standard published by ESP esphome_voip_stack.
+
+    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if not text or text.lower() in ("unknown", "unavailable"):
+        return None
+    parts = [part.strip() for part in text.split("|")]
+    if len(parts) not in (5, 8):
+        return None
+
+    name, host = parts[0], parts[1]
+    if not name or not host:
+        return None
+
+    def parse_formats(first: int) -> tuple[str, list, list] | None:
+        mode = _valid_audio_mode(parts[first] if len(parts) > first else None)
+        try:
+            tx_formats = parse_audio_format_list(parts[first + 1] if len(parts) > first + 1 else None)
+            rx_formats = parse_audio_format_list(parts[first + 2] if len(parts) > first + 2 else None)
+        except ValueError as err:
+            _LOGGER.warning("Invalid voip endpoint audio formats in %r: %s", text, err)
+            return None
+        if not tx_formats or not rx_formats:
+            _LOGGER.warning("Ignoring voip endpoint without explicit SIP PCM formats: %r", text)
+            return None
+        return mode, tx_formats, rx_formats
+
+    primary_port = _valid_port(parts[2])
+    secondary_port = _valid_port(parts[3])
+    if primary_port is None or secondary_port is None:
+        return None
+    if len(parts) != 8:
+        _LOGGER.warning("Ignoring voip endpoint using obsolete no-format shape: %r", text)
+        return None
+    parsed_tail = parse_formats(4)
+    if parsed_tail is None:
+        return None
+    mode, tx_formats, rx_formats = parsed_tail
+    transport_token = parts[7].lower() if len(parts) == 8 else parts[4].lower()
+    if transport_token not in ("sip_tcp", "sip_udp"):
+        return None
+    sip_transport = "tcp" if transport_token == "sip_tcp" else "udp"
+    return {
+        "name": name,
+        "sip_transport": sip_transport,
+        "host": host,
+        "sip_port": primary_port,
+        "rtp_port": secondary_port,
+        "audio_mode": mode,
+        "tx_formats": tx_formats,
+        "rx_formats": rx_formats,
+    }
+
+
+class VoipDeviceResolver:
+    """Single source of truth for "which VoIP devices exist"."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+        self._devices: Optional[list[dict]] = None
+        self._unsubs: list = []
+
+    def install_listeners(self) -> None:
+        """Idempotent."""
+        if self._unsubs:
+            return
+
+        @callback
+        def _invalidate(_event) -> None:
+            self._devices = None
+
+        self._unsubs.append(
+            self.hass.bus.async_listen("entity_registry_updated", _invalidate)
+        )
+        self._unsubs.append(
+            self.hass.bus.async_listen("device_registry_updated", _invalidate)
+        )
+
+        @callback
+        def _invalidate_endpoint(event) -> None:
+            entity_id = event.data.get("entity_id") or ""
+            if "voip_endpoint" in entity_id:
+                self._devices = None
+
+        self._unsubs.append(
+            self.hass.bus.async_listen("state_changed", _invalidate_endpoint)
+        )
+
+    def shutdown(self) -> None:
+        for unsub in self._unsubs:
+            try:
+                unsub()
+            except Exception:
+                pass
+        self._unsubs.clear()
+        self._devices = None
+
+    def route_id_for_host(self, host: str) -> str:
+        """ESPHome node_name slug for `host`, used as ESPHome service prefix."""
+        entry = _esphome_entry_for_host(self.hass, host)
+        if entry is None:
+            # Fallback: hostname (.local) in entry.data["host"] vs IP from
+            # device_registry. Walk device_registry for any device whose
+            # connections include this IP, then walk its config_entries.
+            entry = self._esphome_entry_via_device(host)
+            if entry is None:
+                return ""
+        raw = entry.data.get("device_name") or entry.title or ""
+        return slugify_route_id(raw)
+
+    def _esphome_entry_via_device(self, host: str):
+        device_registry = dr.async_get(self.hass)
+        for device in device_registry.devices.values():
+            for conn_type, conn_value in device.connections:
+                if conn_value != host:
+                    continue
+                if 'ip' not in conn_type.lower() and conn_type != 'network_ip':
+                    continue
+                for entry_id in device.config_entries:
+                    entry = self.hass.config_entries.async_get_entry(entry_id)
+                    if entry and entry.domain == "esphome":
+                        return entry
+        return None
+
+    async def list_devices(self) -> list[dict]:
+        """Cached VoIP device list (registry events invalidate)."""
+        if self._devices is not None:
+            return self._devices
+
+        entity_registry = er.async_get(self.hass)
+        device_registry = dr.async_get(self.hass)
+
+        # First pass: device IDs owning an voip_endpoint entity, plus
+        # an entities-by-device bucket for the second pass.
+        voip_device_ids: set[str] = set()
+        entities_by_device: dict[str, list] = {}
+        for entity in entity_registry.entities.values():
+            if entity.device_id is None:
+                continue
+            entities_by_device.setdefault(entity.device_id, []).append(entity)
+            if "voip_endpoint" in entity.entity_id:
+                voip_device_ids.add(entity.device_id)
+
+        out: list[dict] = []
+        for device_id in voip_device_ids:
+            device = device_registry.async_get(device_id)
+            if not device:
+                continue
+
+            esphome_id = self._device_esphome_id(device)
+            entities = self._collect_entities(entities_by_device.get(device_id, []))
+            endpoint_entity_id = entities.get("voip_endpoint")
+            endpoint_state = self.hass.states.get(endpoint_entity_id) if endpoint_entity_id else None
+            endpoint = parse_voip_endpoint(endpoint_state.state if endpoint_state else None)
+            if endpoint is None:
+                _LOGGER.debug(
+                    "Skipping VoIP device %s: missing/invalid voip_endpoint",
+                    device.name or esphome_id or device_id,
+                )
+                continue
+            route_id = self.route_id_for_host(endpoint["host"])
+            if not route_id:
+                route_id = self._route_id_from_device(device)
+
+            out.append({
+                "device_id": device_id,
+                "name": endpoint["name"],
+                "route_id": route_id,
+                "host": endpoint["host"],
+                "sip_port": endpoint.get("sip_port"),
+                "rtp_port": endpoint.get("rtp_port"),
+                "sip_transport": endpoint.get("sip_transport") or "",
+                "audio_mode": endpoint["audio_mode"],
+                "tx_formats": _format_tokens(endpoint["tx_formats"]),
+                "rx_formats": _format_tokens(endpoint["rx_formats"]),
+                "esphome_id": esphome_id,
+                "entities": entities,
+            })
+
+        self._devices = out
+        return out
+
+    async def resolve_target(self, call: ServiceCall) -> Optional[dict]:
+        """Match a service call's target selector to one of our devices."""
+        device_ids: set[str] = set()
+        names: list[str] = []
+        entity_registry = er.async_get(self.hass)
+        for source in [call.data, getattr(call, "target", None) or {}]:
+            ids = source.get("device_id")
+            if isinstance(ids, str):
+                device_ids.add(ids)
+            elif isinstance(ids, list):
+                device_ids.update(ids)
+            eids = source.get("entity_id")
+            if isinstance(eids, str):
+                eids = [eids]
+            if eids:
+                for eid in eids:
+                    entry = entity_registry.async_get(eid)
+                    if entry and entry.device_id:
+                        device_ids.add(entry.device_id)
+            name = source.get("name") or source.get("friendly_name")
+            if isinstance(name, str):
+                names.append(name)
+        if not device_ids and not names:
+            return None
+        for dev in await self.list_devices():
+            if dev["device_id"] in device_ids:
+                return dev
+            if any(_match_name(name, dev.get("name"), dev.get("esphome_id"), dev.get("route_id")) for name in names):
+                return dev
+        return None
+
+    async def resolve_selector(self, selector: str | None) -> Optional[dict]:
+        """Resolve a card selector once and return the canonical device."""
+        wanted = (selector or "").strip()
+        if not wanted:
+            return None
+        for dev in await self.list_devices():
+            if dev.get("device_id") == wanted:
+                return dev
+            if _match_name(wanted, dev.get("name"), dev.get("esphome_id"), dev.get("route_id")):
+                return dev
+        return None
+
+    def _route_id_from_device(self, device) -> str:
+        """Walk device.config_entries; slugify the linked esphome entry."""
+        for entry_id in device.config_entries:
+            entry = self.hass.config_entries.async_get_entry(entry_id)
+            if entry and entry.domain == "esphome":
+                raw = entry.data.get("device_name") or entry.title or ""
+                return slugify_route_id(raw)
+        return ""
+
+    @staticmethod
+    def _device_esphome_id(device) -> Optional[str]:
+        for domain, identifier in device.identifiers:
+            if domain == "esphome":
+                return identifier
+        return None
+
+    @staticmethod
+    def _collect_entities(entities) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for entity in entities:
+            eid = entity.entity_id
+            if "voip_state" in eid and "voip_state" not in out:
+                out["voip_state"] = eid
+            elif "voip_endpoint" in eid and "voip_endpoint" not in out:
+                out["voip_endpoint"] = eid
+            elif "voip_transport" in eid and "voip_transport" not in out:
+                # source of truth for "udp"/"tcp".
+                out["voip_transport"] = eid
+            elif ("incoming_caller" in eid or eid.endswith("_caller")) and "incoming_caller" not in out:
+                out["incoming_caller"] = eid
+            elif "destination" in eid and "destination" not in out:
+                out["destination"] = eid
+            elif (
+                ("voip_last_reason" in eid or "last_reason" in eid or "end_reason" in eid)
+                and "last_reason" not in out
+            ):
+                out["last_reason"] = eid
+            elif eid.startswith("button.") and "previous" in eid and "previous" not in out:
+                out["previous"] = eid
+            elif eid.startswith("button.") and "next" in eid and "next" not in out:
+                out["next"] = eid
+            elif eid.startswith("button.") and "decline" in eid and "decline" not in out:
+                out["decline"] = eid
+            elif eid.startswith("button.") and "call" in eid and "decline" not in eid and "call" not in out:
+                out["call"] = eid
+        return out
+
+
+def get_resolver(hass: HomeAssistant) -> VoipDeviceResolver:
+    bucket = hass.data.setdefault(DOMAIN, {})
+    resolver = bucket.get(_CACHE_KEY)
+    if resolver is None:
+        resolver = VoipDeviceResolver(hass)
+        resolver.install_listeners()
+        bucket[_CACHE_KEY] = resolver
+    return resolver

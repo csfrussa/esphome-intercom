@@ -137,11 +137,11 @@ voice_assistant:
         id: media_mixer_input
         decibel_reduction: 0
 
-intercom_api:
+esphome_voip_stack:
   on_in_call:
     - light.turn_on:
         id: status_led
-        effect: intercom_green
+        effect: voip_green
   on_hangup:
     - light.turn_off: status_led
 ```
@@ -177,7 +177,7 @@ voice_assistant:
         id: runtime
         event: assistant_finished
 
-intercom_api:
+esphome_voip_stack:
   on_in_call:
     - runtime_fsm.event:
         id: runtime
@@ -207,10 +207,10 @@ runtime_fsm:
         led_state: assistant_blue
         audio_policy: duck
 
-    intercom_in_call:
+    voip_in_call:
       priority: 900
       policies:
-        led_state: intercom_green
+        led_state: voip_green
         audio_policy: duck
 
   events:
@@ -223,9 +223,9 @@ runtime_fsm:
     assistant_finished:
       deactivate: assistant_response
     call_started:
-      activate: intercom_in_call
+      activate: voip_in_call
     call_ended:
-      deactivate: intercom_in_call
+      deactivate: voip_in_call
 ```
 
 Now the callback order does not need to encode the whole product state. If
@@ -243,7 +243,7 @@ An activity is a named boolean fact:
 activities:
   media:
     priority: 100
-  intercom_in_call:
+  voip_in_call:
     priority: 700
   va_responding:
     priority: 800
@@ -606,7 +606,7 @@ runtime_fsm:
         led_state: assistant
         audio_policy: duck
 
-    intercom_in_call:
+    voip_in_call:
       priority: 900
       policies:
         led_state: intercom
@@ -618,9 +618,9 @@ runtime_fsm:
     assistant_finished:
       deactivate: assistant_response
     call_started:
-      activate: intercom_in_call
+      activate: voip_in_call
     call_ended:
-      deactivate: intercom_in_call
+      deactivate: voip_in_call
 ```
 
 If media is playing and the assistant starts speaking, both facts are active:
@@ -698,8 +698,8 @@ Good activity names describe reality:
 media
 announcement
 timer_ringing
-intercom_ringing
-intercom_in_call
+voip_ringing
+voip_in_call
 va_listening
 va_thinking
 va_responding
@@ -742,7 +742,7 @@ fit between existing ones:
 media: 100
 announcement: 200
 timer_ringing: 500
-intercom_ringing: 700
+voip_ringing: 700
 va_responding: 800
 no_ha: 980
 boot: 1000
@@ -761,7 +761,7 @@ runtime_fsm:
 
 When an activity in a group is activated, the reducer automatically deactivates
 the other activities in that same group. Other activities outside the group,
-such as `media` or `intercom:in_call`, are not touched.
+such as `media` or `voip:in_call`, are not touched.
 
 ### Step 3: Define output policies
 
@@ -785,16 +785,16 @@ policies:
       idle: 0
       media: 12
       responding: 7
-      intercom_ringing: 8
+      voip_ringing: 8
 
   ringtone:
     values:
       stop:
         then:
-          - script.stop: intercom_ringing_loop
+          - script.stop: voip_ringing_loop
       play:
         then:
-          - script.execute: intercom_ringing_loop
+          - script.execute: voip_ringing_loop
 ```
 
 If a policy must stop something, declare the stop value explicitly on the
@@ -940,37 +940,37 @@ Do not send events for derived activities. They are owned by the reducer.
 ## Optional Intercom Observer
 
 The component is generic, but this project also provides an optional
-`intercom_api` observer because intercom state is already centralized in the
+`esphome_voip_stack` observer because VoIP state is already centralized in the
 native component.
 
 ```yaml
 runtime_fsm:
   id: runtime
-  intercom:
-    id: intercom
-    activity_prefix: "intercom:"
+  voip:
+    id: voip_phone
+    activity_prefix: "voip:"
     states:
       ringing:
         priority: 700
         policies:
-          led_status: intercom_ringing
-          display_status: intercom_ringing
+          led_status: voip_ringing
+          display_status: voip_ringing
           audio_policy: duck
           ringtone: play
       in_call:
         priority: 650
         policies:
-          led_status: intercom_in_call
-          display_status: intercom_in_call
+          led_status: voip_in_call
+          display_status: voip_in_call
           audio_policy: duck
           ringtone: stop
 ```
 
-This automatically creates activities named `intercom:ringing`,
-`intercom:calling`, `intercom:in_call`, etc. If `intercom:` is omitted, no
-intercom observer code is compiled.
+This automatically creates activities named `voip:ringing`,
+`voip:calling`, `voip:in_call`, etc. If `voip:` is omitted, no
+VoIP observer code is compiled.
 
-Intercom signaling and transport still belong to `intercom_api`; `runtime_fsm`
+Intercom signaling and transport still belong to `esphome_voip_stack`; `runtime_fsm`
 only observes state and resolves outputs.
 
 ## Actions Reference
@@ -1055,7 +1055,7 @@ if:
   condition:
     runtime_fsm.is_active:
       id: runtime
-      activity: intercom:in_call
+      activity: voip:in_call
   then:
     - logger.log: "Intercom is active"
 ```

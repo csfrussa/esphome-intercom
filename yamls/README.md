@@ -19,7 +19,7 @@ Wi-Fi firmware.
 
 ```
 yamls/
-  intercom-only/         Intercom without Voice Assistant or Wake Word
+  voip-only/         Intercom without Voice Assistant or Wake Word
     single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)
     dual-bus/            Devices using esp_audio_stack rx_bus + tx_bus
     esphome-native/      Native ESPHome mic/speaker examples
@@ -44,7 +44,7 @@ published. Reusable debug building blocks are public packages under
   `rx_bus` and `tx_bus` with official ESP-IDF I2S simplex channels. Simpler setup
   for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
 
-- **Native ESPHome**: `intercom_api` binds directly to ESPHome `microphone`
+- **Native ESPHome**: `esphome_voip_stack` binds directly to ESPHome `microphone`
   and/or `speaker` components. Use it for mic-only/speaker-only endpoints,
   hardware/DSP-processed audio, or independent mic/speaker paths that do not
   need software AEC. Use `esp_audio_stack` instead for shared-bus or
@@ -52,7 +52,7 @@ published. Reusable debug building blocks are public packages under
 
 ## Audio processor: esp_aec vs esp_afe
 
-- **esp_aec**: Lightweight echo cancellation only. Recommended for intercom-only
+- **esp_aec**: Lightweight echo cancellation only. Recommended for voip-only
   and Generic full-experience 4 MB targets.
 - **esp_afe**: Full Espressif AFE pipeline (AEC + NS + VAD + AGC + optional
   dual-mic Speech Enhancement). Higher flash/RAM cost, but adds the full
@@ -69,16 +69,16 @@ cross-transport routes go to HA, which is the stable roster authority and SIP
 bridge/B2BUA.
 
 There is one product mode: SIP-only phone mode. Phonebook, contacts,
-destination and caller entities are always exposed. `protocol: udp` selects
-SIP/UDP signaling and `protocol: tcp` selects SIP/TCP signaling; audio remains
+destination and caller entities are always exposed. `transport: udp` selects
+SIP/UDP signaling and `transport: tcp` selects SIP/TCP signaling; audio remains
 RTP/UDP in the current profile. Static contacts are optional local fallbacks;
-normal shared routing comes from `sensor.intercom_phonebook`.
+normal shared routing comes from `sensor.voip_phonebook`.
 
 ## Optional packages
 
 `packages/voice_assistant/timers.yaml` adds headless Home Assistant timer alarm
 support on top of the full VA/intercom package. It is intentionally not part of
-`va_intercom.yaml`; include it only on devices that should expose timer behavior.
+`va_voip.yaml`; include it only on devices that should expose timer behavior.
 
 ## Production logging
 

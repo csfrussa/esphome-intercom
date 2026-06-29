@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JSON-RPC client for the ESPHome Intercom virtual device."""
+"""JSON-RPC client for the ESPHome VoIP Stack virtual device."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import sys
 from typing import Any
 
 
-DEFAULT_SOCKET = Path("test_runs/simulator/intercom-sim.sock")
+DEFAULT_SOCKET = Path("test_runs/simulator/voip-sim.sock")
 
 
 class SimctlError(RuntimeError):

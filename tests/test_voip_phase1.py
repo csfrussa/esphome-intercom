@@ -14,8 +14,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PKG_NAME = "custom_components.intercom_native"
-PKG_DIR = ROOT / "custom_components" / "intercom_native"
+PKG_NAME = "custom_components.homeassistant_voip_stack"
+PKG_DIR = ROOT / "custom_components" / "homeassistant_voip_stack"
 
 
 def _load_intercom_module(name: str):
@@ -342,9 +342,9 @@ class SipProfileTest(unittest.TestCase):
 
         raw, _ = client.transport.sent[0]  # type: ignore[union-attr]
         parsed = sip.parse_message(raw)
-        self.assertEqual(parsed.header("X-Intercom-Caller-Name"), "Casa")
-        self.assertEqual(parsed.header("X-Intercom-Caller-Route"), "Casa")
-        self.assertEqual(parsed.header("X-Intercom-Dest-Name"), "Cucina")
+        self.assertEqual(parsed.header("X-Voip-Stack-Caller-Name"), "Casa")
+        self.assertEqual(parsed.header("X-Voip-Stack-Caller-Route"), "Casa")
+        self.assertEqual(parsed.header("X-Voip-Stack-Dest-Name"), "Cucina")
 
     def test_tcp_invite_connection_refused_returns_transport_unreachable(self) -> None:
         async def run() -> str:
@@ -456,8 +456,8 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 ("CSeq", "1 INVITE"),
                 ("Contact", "<sip:Waveshare_S3_Audio@192.168.1.47:5060>"),
                 ("Content-Type", "application/sdp"),
-                ("X-Intercom-Caller-Name", "Waveshare S3 Audio"),
-                ("X-Intercom-Dest-Name", "Spotpear Ball v2"),
+                ("X-Voip-Stack-Caller-Name", "Waveshare S3 Audio"),
+                ("X-Voip-Stack-Dest-Name", "Spotpear Ball v2"),
             ],
             body,
         )
@@ -545,8 +545,8 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             status_code=486,
             reason="Busy Here",
             headers=(
-                ("Reason", 'X-Intercom;cause=486;text="DND"'),
-                ("X-Intercom-Decline-Reason", "DND"),
+                ("Reason", 'X-Voip-Stack;cause=486;text="DND"'),
+                ("X-Voip-Stack-Decline-Reason", "DND"),
             ),
         )
         self.assertEqual(sip_client._sip_decline_reason(msg), "DND")
@@ -722,7 +722,7 @@ class SdpPcmProfileTest(unittest.TestCase):
         answer = (
             "v=0\r\n"
             "o=- 0 0 IN IP4 192.168.1.47\r\n"
-            "s=ESPHome Intercom\r\n"
+            "s=ESPHome VoIP Stack\r\n"
             "c=IN IP4 192.168.1.47\r\n"
             "t=0 0\r\n"
             "m=audio 40000 RTP/AVP 96 97\r\n"
@@ -1760,8 +1760,8 @@ class SipTcpProfileTest(unittest.IsolatedAsyncioTestCase):
                     ("CSeq", "1 INVITE"),
                     ("Contact", f"<sip:ESP@{local}:43210>"),
                     ("Content-Type", "application/sdp"),
-                    ("X-Intercom-Caller-Name", "ESP"),
-                    ("X-Intercom-Dest-Name", "HA"),
+                    ("X-Voip-Stack-Caller-Name", "ESP"),
+                    ("X-Voip-Stack-Dest-Name", "HA"),
                 ],
                 body,
             )

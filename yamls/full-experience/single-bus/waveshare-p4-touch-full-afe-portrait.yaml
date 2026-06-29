@@ -33,7 +33,7 @@
 #
 #   Music/radio → media_speaker_input (resampler) ───────────┐
 #   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
-#   Intercom RX → intercom_speaker_input (resampler) ────────┘
+#   Intercom RX → voip_speaker_input (resampler) ────────┘
 #
 # Touch UI:
 #   VA pages:      Status display (idle, listening, thinking, replying, error)
@@ -96,13 +96,13 @@ packages:
   p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
   p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
   p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api_cpp.yaml@dev
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
   voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
   afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
   audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
   speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
@@ -124,7 +124,7 @@ esphome:
   on_boot:
     - priority: 200
       then:
-        - lambda: id(peer_name) = id(intercom).get_current_destination();
+        - lambda: id(peer_name) = id(voip_phone).get_current_destination();
     - priority: -100
       then:
         - logger.log: "Boot: late init start"
@@ -193,12 +193,12 @@ logger:
   # Production profile. Debug packages are opt-in and kept out of device YAMLs.
   level: INFO
   logs:
-    intercom_api: INFO
-    intercom_api.fsm: INFO
-    intercom_api.tcp: INFO
-    intercom_api.udp: INFO
-    intercom_api.audio: INFO
-    intercom_api.settings: INFO
+    esphome_voip_stack: INFO
+    esphome_voip_stack.fsm: INFO
+    esphome_voip_stack.tcp: INFO
+    esphome_voip_stack.udp: INFO
+    esphome_voip_stack.audio: INFO
+    esphome_voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -227,7 +227,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
+    components: [esphome_voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, GT9271)
@@ -355,7 +355,7 @@ speaker:
       - id: tts_mixer_input         # VA TTS announcements (never ducked)
         timeout: 10s
         buffer_duration: 100ms
-      - id: intercom_mixer_input    # Intercom audio
+      - id: voip_mixer_input    # Intercom audio
         timeout: 10s
         buffer_duration: 128ms       # Intercom jitter/mixer staging; RTP ptime is negotiated separately.
 
@@ -371,8 +371,8 @@ speaker:
     task_stack_in_psram: true
 
   - platform: resampler
-    id: intercom_speaker_input           # Intercom RX (16kHz) to 48kHz
-    output_speaker: intercom_mixer_input
+    id: voip_speaker_input           # Intercom RX (16kHz) to 48kHz
+    output_speaker: voip_mixer_input
     task_stack_in_psram: true
     buffer_duration: 128ms
 
@@ -383,7 +383,7 @@ sendspin:
 audio_file:
   - id: timer_finished_sound
     file: ${assets_base}assets/sounds/timer_finished.flac
-  - id: intercom_ringing_sound
+  - id: voip_ringing_sound
     file: ${assets_base}assets/sounds/ringtone.flac
 
 media_source:
@@ -441,7 +441,7 @@ media_player:
           event: announcement_started
       - if:
           condition:
-            intercom_api.is_idle: intercom
+            esphome_voip_stack.is_idle: voip_phone
           then:
             - script.execute: backlight_timer
     on_play:
@@ -499,10 +499,10 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# Intercom API
+# ESPHome VoIP Stack
 # =============================================================================
-intercom_api:
-  id: intercom
+esphome_voip_stack:
+  id: voip_phone
   task_stacks_in_psram: true
   # Set true to save roughly 5-8KB internal RAM from intercom-owned staging
   # buffers. Keep false on P4 full AFE while there is enough heap, because these
@@ -523,8 +523,8 @@ intercom_api:
       channels: 1
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
-    # only because speaker: intercom_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring intercom_api directly to a
+    # only because speaker: voip_speaker_input points at the resampler; do
+    # not advertise additional formats when wiring esphome_voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -540,19 +540,19 @@ intercom_api:
         channels: 1
         frame_ms: 32
   microphone: mic_afe          # Post-AEC: no echo in transmitted audio
-  speaker: intercom_speaker_input
+  speaker: voip_speaker_input
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
   # via the "SIP bridge" switch in the SWITCHES block below.
   delete_contact_missing_from:
     updates_number: 1
   on_update_contacts:
-    - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
+    - lambda: 'id(peer_name) = id(voip_phone).get_current_destination();'
     - script.execute: draw_display
     - delay: 2s
     - script.execute: update_ic_idle_labels
   on_destination_changed:
-    - lambda: 'id(peer_name) = id(intercom).get_current_destination();'
+    - lambda: 'id(peer_name) = id(voip_phone).get_current_destination();'
     - script.execute: update_ic_idle_labels
     - script.execute: draw_display
 
@@ -1297,7 +1297,7 @@ lvgl:
               - row: 0
                 column: 1
                 dir: HOR
-                id: intercom_tile
+                id: voip_tile
                 widgets:
                   # IC IDLE group
                   - obj:
@@ -1358,10 +1358,10 @@ lvgl:
                             clickable: true
                             gesture_bubble: false
                             on_swipe_left:
-                              - intercom_api.next_contact: intercom
+                              - esphome_voip_stack.next_contact: voip_phone
                               - script.execute: update_ic_idle_labels
                             on_swipe_right:
-                              - intercom_api.prev_contact: intercom
+                              - esphome_voip_stack.prev_contact: voip_phone
                               - script.execute: update_ic_idle_labels
                         # Prev
                         - button:
@@ -1373,7 +1373,7 @@ lvgl:
                             bg_color: 0x2D2D44
                             radius: 10
                             on_click:
-                              - intercom_api.prev_contact: intercom
+                              - esphome_voip_stack.prev_contact: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -1389,7 +1389,7 @@ lvgl:
                             bg_color: 0x2ECC71
                             radius: 15
                             on_click:
-                              - intercom_api.call_toggle: intercom
+                              - esphome_voip_stack.call_toggle: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -1406,7 +1406,7 @@ lvgl:
                             bg_color: 0x2D2D44
                             radius: 10
                             on_click:
-                              - intercom_api.next_contact: intercom
+                              - esphome_voip_stack.next_contact: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -1456,7 +1456,7 @@ lvgl:
                             bg_color: 0x2ECC71
                             radius: 15
                             on_click:
-                              - intercom_api.answer_call: intercom
+                              - esphome_voip_stack.answer_call: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -1472,7 +1472,7 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - intercom_api.decline_call: intercom
+                              - esphome_voip_stack.decline_call: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -1524,7 +1524,7 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - intercom_api.call_toggle: intercom
+                              - esphome_voip_stack.call_toggle: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -1573,7 +1573,7 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - intercom_api.call_toggle: intercom
+                              - esphome_voip_stack.call_toggle: voip_phone
                             widgets:
                               - label:
                                   align: CENTER
@@ -2294,8 +2294,8 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // Intercom idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(intercom).get_state_str() == "idle") {
-            id(peer_name) = id(intercom).get_current_destination();
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(voip_phone).get_state_str() == "idle") {
+            id(peer_name) = id(voip_phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
             }
@@ -2360,7 +2360,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(intercom).get_state_str() == "idle";
+                     && id(voip_phone).get_state_str() == "idle";
           then:
             - script.execute: update_ic_idle_labels
       - script.execute: draw_display
@@ -2545,7 +2545,7 @@ script:
             lv_disp_load_scr(id(main_page)->obj);
             // Disable scrolling on tileview tiles (content must not scroll within tiles)
             lv_obj_clear_flag(id(weather_tile), LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_clear_flag(id(intercom_tile), LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(id(voip_tile), LV_OBJ_FLAG_SCROLLABLE);
           }
 
           // === Update VA container (bottom half) ===
@@ -2576,7 +2576,7 @@ script:
           }
 
           // === Update intercom tile (top right) ===
-          auto ic_state = id(intercom).get_state_str();
+          auto ic_state = id(voip_phone).get_state_str();
 
           set_hidden(id(ic_idle_group), true);
           set_hidden(id(ic_ringing_in_group), true);
@@ -2604,7 +2604,7 @@ script:
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);
           } else {
             set_label(id(ic_idle_peer_label), id(peer_name).c_str());
-            auto csv = id(intercom).get_contacts_csv();
+            auto csv = id(voip_phone).get_contacts_csv();
             int count = csv.empty() ? 0 : (int)std::count(csv.begin(), csv.end(), ',') + 1;
             char buf[32];
             snprintf(buf, sizeof(buf), "Contacts: %d", count);
@@ -2616,7 +2616,7 @@ script:
       - if:
           condition:
             lambda: |-
-              std::string ic_state = id(intercom).get_state_str();
+              std::string ic_state = id(voip_phone).get_state_str();
               return id(current_mode) == 0 &&
                      id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
                      !id(init_in_progress) &&
@@ -2641,7 +2641,7 @@ script:
                   return id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
                          !id(init_in_progress);
               - lambda: |-
-                  std::string ic_state = id(intercom).get_state_str();
+                  std::string ic_state = id(voip_phone).get_state_str();
                   return ic_state == "idle" || ic_state.empty();
               - switch.is_off: mute
               - not:
@@ -2673,7 +2673,7 @@ script:
     mode: restart
     then:
       - lambda: |-
-          std::string ic_state = id(intercom).get_state_str();
+          std::string ic_state = id(voip_phone).get_state_str();
           if (id(ic_ended_active) ||
               ic_state == "ringing" ||
               ic_state == "calling" || ic_state == "remote_ringing" ||
@@ -2859,14 +2859,14 @@ script:
   # Used by next/prev_contact_button and by render_ui_state when staying idle.
   - id: update_ic_idle_labels
     then:
-      - lambda: id(peer_name) = id(intercom).get_current_destination();
+      - lambda: id(peer_name) = id(voip_phone).get_current_destination();
       - lvgl.label.update:
           id: ic_idle_peer_label
           text: !lambda 'return id(peer_name);'
       - lvgl.label.update:
           id: ic_idle_contacts_label
           text: !lambda |-
-            auto csv = id(intercom).get_contacts_csv();
+            auto csv = id(voip_phone).get_contacts_csv();
             int count = csv.empty() ? 0 : (int)std::count(csv.begin(), csv.end(), ',') + 1;
             char buf[32];
             snprintf(buf, sizeof(buf), "Contacts: %d", count);
@@ -3085,7 +3085,7 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        intercom_api.is_idle: intercom
+                        esphome_voip_stack.is_idle: voip_phone
                 then:
                   - logger.log:
                       level: WARN
@@ -3195,7 +3195,7 @@ interval:
             and:
               - api.connected:
               - lambda: |-
-                  std::string ic_state = id(intercom).get_state_str();
+                  std::string ic_state = id(voip_phone).get_state_str();
                   return !id(init_in_progress) &&
                          !id(ic_ended_active) &&
                          (ic_state == "idle" || ic_state.empty());

@@ -60,7 +60,7 @@ struct ProcessorTelemetry {
 /// Abstract audio processor interface.
 ///
 /// Implementations: EspAec (standalone AEC), EspAfe (full AFE pipeline).
-/// Consumers: esp_audio_stack, intercom_api.
+/// Consumers: esp_audio_stack, esphome_voip_stack.
 class AudioProcessor {
  public:
   virtual ~AudioProcessor() = default;

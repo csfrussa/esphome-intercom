@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PKG_NAME = "custom_components.intercom_native"
-PKG_DIR = ROOT / "custom_components" / "intercom_native"
+PKG_NAME = "custom_components.homeassistant_voip_stack"
+PKG_DIR = ROOT / "custom_components" / "homeassistant_voip_stack"
 
 
 def _install_ha_fakes() -> None:
@@ -63,7 +63,7 @@ class SipEndpointParseTest(unittest.TestCase):
             "Waveshare S3 Audio | 192.168.1.47 | 5060 | 40000 | "
             "full_duplex | 16000:s16le:1:16 | 48000:s16le:1:10;16000:s16le:1:16;16000:s16le:1:32 | sip_tcp"
         )
-        parsed = device_resolver.parse_intercom_endpoint(endpoint)
+        parsed = device_resolver.parse_voip_endpoint(endpoint)
         self.assertIsNotNone(parsed)
         assert parsed is not None
         self.assertEqual(parsed["sip_transport"], "tcp")
@@ -77,13 +77,13 @@ class SipEndpointParseTest(unittest.TestCase):
         )
 
     def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
-        parsed = device_resolver.parse_intercom_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")
+        parsed = device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")
         self.assertIsNone(parsed)
 
     def test_rejects_malformed_sip_endpoint(self) -> None:
-        self.assertIsNone(device_resolver.parse_intercom_endpoint("Kitchen|sip|192.168.1.4|5060"))
-        self.assertIsNone(device_resolver.parse_intercom_endpoint("Kitchen|192.168.1.4|x|40000|sip_udp"))
-        self.assertIsNone(device_resolver.parse_intercom_endpoint("Kitchen|192.168.1.4|5060|40000|udp"))
+        self.assertIsNone(device_resolver.parse_voip_endpoint("Kitchen|sip|192.168.1.4|5060"))
+        self.assertIsNone(device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|x|40000|sip_udp"))
+        self.assertIsNone(device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|udp"))
 
 
 if __name__ == "__main__":

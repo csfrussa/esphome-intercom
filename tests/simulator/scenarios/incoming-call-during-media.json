@@ -1,6 +1,6 @@
 {
   "name": "incoming-call-during-media",
-  "description": "Incoming intercom call must preempt media without losing ownership state.",
+  "description": "Incoming voip call must preempt media without losing ownership state.",
   "steps": [
     {
       "inject_event": {
@@ -13,7 +13,7 @@
         "media": {
           "state": "playing"
         },
-        "intercom": {
+        "voip": {
           "state": "idle"
         }
       }
@@ -28,7 +28,7 @@
     },
     {
       "expect": {
-        "intercom": {
+        "voip": {
           "state": "ringing",
           "caller": "Casa"
         },
@@ -36,7 +36,7 @@
           "state": "paused"
         },
         "audio": {
-          "owner": "intercom"
+          "owner": "voip"
         }
       }
     }

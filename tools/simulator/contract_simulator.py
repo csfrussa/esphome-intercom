@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small JSON-RPC contract simulator for intercom scenario matrices.
+"""Small JSON-RPC contract simulator for voip scenario matrices.
 
 This is not the ESPHome host backend. It is a deterministic contract runner
 used while the full virtual device is being built, so scenario files can fail
@@ -40,7 +40,7 @@ def _idle_state() -> dict[str, Any]:
         "sip": {"last_status": 0, "decline_reason": "", "auth_reason": ""},
         "led": {"color": "", "effect": None, "forbidden_effect": "Spin"},
         "media": {"state": "idle"},
-        "intercom": {"state": "idle", "caller": ""},
+        "voip": {"state": "idle", "caller": ""},
         "voice_assistant": {"state": "idle", "phase": "idle", "wake_word": "", "events": 0},
         "aec": {"frames": 0, "last_processing_us": 0, "max_processing_us": 0},
         "afe": {"frames": 0, "last_latency_us": 0, "max_latency_us": 0},
@@ -72,7 +72,7 @@ class ContractSimulator:
     def _write_audio_marker(self, label: str) -> None:
         path = Path(self.state["audio"]["speaker_output_path"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        marker = f"intercom_simulator:{label}\n"
+        marker = f"voip_simulator:{label}\n"
         with path.open("ab") as out:
             out.write(marker.encode("utf-8"))
         self.state["audio"]["speaker_output_markers"] += marker
@@ -100,12 +100,12 @@ class ContractSimulator:
                     self.state["sip"]["last_status"] = 0
                 else:
                     self.state["softphone"]["state"] = "in_call"
-                    self.state["audio"].update({"rx_ready": True, "owner": "intercom", "browser_tx_ready_latency_ms": 0})
+                    self.state["audio"].update({"rx_ready": True, "owner": "voip", "browser_tx_ready_latency_ms": 0})
                     self.state["sip"]["last_status"] = 200
                     self.state["ha_answer_pending"] = False
             if self.state["esp"]["state"] == "ringing":
                 self.state["esp"]["state"] = "in_call"
-                self.state["audio"].update({"tx_ready": True, "rx_ready": True, "owner": "intercom"})
+                self.state["audio"].update({"tx_ready": True, "rx_ready": True, "owner": "voip"})
                 self.state["led"].update({"color": "green", "effect": None})
         return self.get_snapshot()
 
@@ -157,7 +157,7 @@ class ContractSimulator:
             self._write_audio_marker("browser_audio_ready")
             if self.state.get("ha_answer_pending") and self.state["softphone"]["state"] == "ringing":
                 self.state["softphone"]["state"] = "in_call"
-                self.state["audio"]["owner"] = "intercom"
+                self.state["audio"]["owner"] = "voip"
                 self.state["sip"]["last_status"] = 200
                 self.state["ha_answer_pending"] = False
         elif typ in {"esp_bye", "remote_bye"}:
@@ -174,7 +174,7 @@ class ContractSimulator:
             self.state["led"].update({"effect": None})
         elif typ == "late_media_after_terminal":
             self.state["esp"].update({"state": "idle"})
-            self.state["intercom"].update({"state": "idle"})
+            self.state["voip"].update({"state": "idle"})
             self.state["led"].update({"effect": None})
         elif typ == "ha_softphone_decline":
             reason = str(event.get("reason") or "declined")
@@ -242,7 +242,7 @@ class ContractSimulator:
             self.state["bridge"].update({"state": "idle"})
         elif typ == "media_start":
             self.state["media"]["state"] = "playing"
-            self.state["intercom"]["state"] = "idle"
+            self.state["voip"]["state"] = "idle"
         elif typ == "phonebook_push":
             contacts = event.get("contacts") if isinstance(event.get("contacts"), list) else []
             self.state["phonebook"].update({"revision": self.state["phonebook"]["revision"] + 1, "duplicate_ids": False})
@@ -263,7 +263,7 @@ class ContractSimulator:
             return
         if self.state["options"]["esp"].get("auto_answer"):
             self.state["esp"].update({"state": "in_call", "caller": caller})
-            self.state["audio"].update({"owner": "intercom"})
+            self.state["audio"].update({"owner": "voip"})
             self.state["led"].update({"color": "green", "effect": None})
             return
         self.state["esp"].update({"state": "ringing", "caller": caller, "destination": target})
@@ -292,11 +292,11 @@ class ContractSimulator:
             self.state["softphone"].update({"state": "ringing", "caller": caller})
             self.state["card"].update({"mode": "ha_softphone", "rendered_state": "ringing", "source": "ha_softphone_snapshot"})
         else:
-            self.state["intercom"].update({"state": "ringing", "caller": caller})
+            self.state["voip"].update({"state": "ringing", "caller": caller})
             self.state["media"]["state"] = "paused"
-            self.state["audio"]["owner"] = "intercom"
+            self.state["audio"]["owner"] = "voip"
             self.state["voice_assistant"].update({"state": "idle", "phase": "idle"})
-            self.state["display"].update({"page": "intercom", "status": "intercom_ringing"})
+            self.state["display"].update({"page": "voip", "status": "voip_ringing"})
 
 
 def serve(socket_path: Path) -> int:
@@ -330,7 +330,7 @@ def serve(socket_path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--socket", type=Path, default=Path("test_runs/simulator/intercom-sim.sock"))
+    parser.add_argument("--socket", type=Path, default=Path("test_runs/simulator/voip-sim.sock"))
     args = parser.parse_args(argv)
     try:
         return serve(args.socket)

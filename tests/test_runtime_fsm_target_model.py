@@ -3,7 +3,7 @@
 
 These tests do not mirror today's YAML implementation line-by-line. They define
 the behavioral contract the refactor must satisfy before it replaces the
-current generic policy soup in full intercom profiles.
+current generic policy soup in full voip profiles.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class MediaOwner(str, Enum):
     NONE = "none"
     USER = "user"
     VA_TTS = "va_tts"
-    INTERCOM_RINGTONE = "intercom_ringtone"
+    INTERCOM_RINGTONE = "voip_ringtone"
     TIMER = "timer"
 
 
@@ -81,24 +81,24 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
 
     if facts.call_state == CallState.RINGING:
         return RuntimeSnapshot(
-            "intercom_ringing",
-            LedSnapshot("intercom_ringing", (255, 0, 0), "Ringing", "intercom"),
+            "voip_ringing",
+            LedSnapshot("voip_ringing", (255, 0, 0), "Ringing", "voip"),
             "duck",
             "play",
             False,
         )
     if facts.call_state == CallState.CALLING:
         return RuntimeSnapshot(
-            "intercom_calling",
-            LedSnapshot("intercom_calling", (255, 150, 0), "Calling", "intercom"),
+            "voip_calling",
+            LedSnapshot("voip_calling", (255, 150, 0), "Calling", "voip"),
             "duck",
             "stop",
             False,
         )
     if facts.call_state == CallState.IN_CALL:
         return RuntimeSnapshot(
-            "intercom_in_call",
-            LedSnapshot("intercom_in_call", (111, 255, 115), None, "intercom"),
+            "voip_in_call",
+            LedSnapshot("voip_in_call", (111, 255, 115), None, "voip"),
             "duck",
             "stop",
             False,
@@ -144,7 +144,7 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
                 media_owner=MediaOwner.USER,
             )
         )
-        self.assertEqual(snap.public_state, "intercom_ringing")
+        self.assertEqual(snap.public_state, "voip_ringing")
         self.assertEqual(snap.led.effect, "Ringing")
         self.assertEqual(snap.led.rgb, (255, 0, 0))
         self.assertEqual(snap.ringtone, "play")
@@ -161,12 +161,12 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
                 ringtone_stopping_generation=7,
             )
         )
-        self.assertEqual(snap.public_state, "intercom_in_call")
+        self.assertEqual(snap.public_state, "voip_in_call")
         self.assertEqual(snap.led.rgb, (111, 255, 115))
         self.assertIsNone(snap.led.effect)
         self.assertNoMediaSpin(snap)
 
-    def test_intercom_ringtone_residue_does_not_become_media_after_hangup(self) -> None:
+    def test_voip_ringtone_residue_does_not_become_media_after_hangup(self) -> None:
         snap = reduce_runtime(
             RuntimeFacts(
                 call_state=CallState.IDLE,
@@ -193,9 +193,9 @@ class RuntimeFsmTargetModelTest(unittest.TestCase):
 
     def test_intercom_led_contract_wins_over_mute_policy(self) -> None:
         snap = reduce_runtime(RuntimeFacts(call_state=CallState.RINGING, mic_muted=True, speaker_muted=True))
-        self.assertEqual(snap.public_state, "intercom_ringing")
+        self.assertEqual(snap.public_state, "voip_ringing")
         self.assertEqual(snap.led.effect, "Ringing")
-        self.assertEqual(snap.led.owner, "intercom")
+        self.assertEqual(snap.led.owner, "voip")
 
     def test_mww_is_disabled_during_call_and_reenabled_when_idle(self) -> None:
         self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.CALLING)).mww_allowed)

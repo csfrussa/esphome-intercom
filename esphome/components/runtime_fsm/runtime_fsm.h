@@ -11,8 +11,8 @@
 #include <string>
 
 namespace esphome {
-namespace intercom_api {
-class IntercomApi;
+namespace esphome_voip_stack {
+class ESPHomeVoipStack;
 }
 namespace runtime_fsm {
 
@@ -30,8 +30,8 @@ class RuntimeFsm : public Component {
 
   void set_debug(bool debug) { this->debug_ = debug; }
   void set_output_script(script::Script<> *script) { this->output_script_ = script; }
-  void set_intercom(intercom_api::IntercomApi *intercom) { this->intercom_ = intercom; }
-  void set_intercom_activity_prefix(const char *prefix) { this->intercom_activity_prefix_ = prefix; }
+  void set_voip(esphome_voip_stack::ESPHomeVoipStack *voip) { this->voip_ = voip; }
+  void set_voip_activity_prefix(const char *prefix) { this->voip_activity_prefix_ = prefix; }
   void add_activity(const char *name, int16_t priority, bool initial);
   void set_activity_group(const char *activity, const char *group);
   void add_activity_policy(const char *activity, const char *policy, const char *value);
@@ -86,7 +86,7 @@ class RuntimeFsm : public Component {
     };
   }
 
-  void on_intercom_event();
+  void on_voip_event();
   void event(const char *name);
   void set_activity(const char *name, bool active);
   void set_activities(const ActivityUpdate *updates, size_t count);
@@ -115,8 +115,8 @@ class RuntimeFsm : public Component {
   bool apply_activity_update_(const char *name, bool active);
   bool set_activity_value_if_known_(const char *name, bool active);
   void commit_outputs_(const char *reason, uint32_t old_mask, const ResolvedPolicies &old_policies);
-  bool sync_intercom_activity_();
-  void build_intercom_activity_name_(const char *state);
+  bool sync_voip_activity_();
+  void build_voip_activity_name_(const char *state);
   int find_activity_(const char *name) const;
   int find_action_(const char *name) const;
   bool rule_matches_(const EventRule &rule) const;
@@ -134,15 +134,15 @@ class RuntimeFsm : public Component {
   void mark_config_error_();
 
   script::Script<> *output_script_{nullptr};
-  intercom_api::IntercomApi *intercom_{nullptr};
-  const char *intercom_activity_prefix_{nullptr};
+  esphome_voip_stack::ESPHomeVoipStack *voip_{nullptr};
+  const char *voip_activity_prefix_{nullptr};
 
   bool debug_{false};
   bool config_error_{false};
   uint32_t sequence_{0};
   ResolvedPolicies resolved_policies_{};
-  char intercom_activity_[64]{};
-  char last_intercom_activity_[64]{};
+  char voip_activity_[64]{};
+  char last_voip_activity_[64]{};
 
   struct ActivityConfig {
     const char *name{nullptr};

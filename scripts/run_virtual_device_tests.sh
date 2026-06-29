@@ -8,7 +8,7 @@ SCENARIO="all"
 REPEAT=1
 SEED=""
 MODE="all"
-SOCKET="${SIM_SOCKET:-test_runs/simulator/intercom-sim.sock}"
+SOCKET="${SIM_SOCKET:-test_runs/simulator/voip-sim.sock}"
 CONTRACT=0
 TRACE_DIR=""
 PROFILE="${SIM_PROFILE:-}"
@@ -68,8 +68,8 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 if [[ -z "$PROFILE" ]]; then
-  "$PYTHON_BIN" tools/simulator/generate_virtual_profiles.py --limit 3 >/tmp/intercom_virtual_profiles.txt
-  PROFILE="$(head -n 1 /tmp/intercom_virtual_profiles.txt)"
+  "$PYTHON_BIN" tools/simulator/generate_virtual_profiles.py --limit 3 >/tmp/voip_virtual_profiles.txt
+  PROFILE="$(head -n 1 /tmp/voip_virtual_profiles.txt)"
 fi
 
 "$PYTHON_BIN" tools/simulator/simctl.py --socket "$SOCKET" doctor

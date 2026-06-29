@@ -12,7 +12,7 @@ on real devices.
 
 In practice, this means the project is moving from the old PBX-lite model to a
 real SIP/SDP/RTP VoIP architecture. ESP devices become local SIP phones, Home
-Assistant becomes a SIP softphone plus SIP router/B2BUA, and `intercom_native`
+Assistant becomes a SIP softphone plus SIP router/B2BUA, and `homeassistant_voip_stack`
 can optionally register a SIP trunk or host local SIP accounts for standard
 softphones such as Zoiper, Linphone, baresip or pjsua.
 
@@ -35,12 +35,12 @@ Action required:
 
 - **This is the VoIP breaking release.** ESP devices are SIP phones. Home
   Assistant is a SIP softphone, SIP router/B2BUA, RTP bridge/resampler and
-  optional trunk client. The retired project-specific intercom call-control path
+  optional trunk client. The retired project-specific VoIP call-control path
   is not a fallback.
-- `intercom_api` remains the ESPHome component name, but `protocol: udp|tcp`
+- `esphome_voip_stack` remains the ESPHome component name, but `transport: udp|tcp`
   now means SIP/UDP or SIP/TCP signaling. RTP audio remains UDP in the current
   phone profile.
-- `intercom_native` can optionally register a provider/PBX trunk and can also
+- `homeassistant_voip_stack` can optionally register a provider/PBX trunk and can also
   host local SIP accounts for standard softphones. Trunk support is off unless
   configured.
 - ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
@@ -60,7 +60,7 @@ Action required:
   the shared `speaker_source` media path. WS3, Spotpear and P4 field tests
   validated grouped 48 kHz mono PCM playback with the hardware-clocked timing
   path.
-- Native ESPHome intercom-only presets advertise 48 kHz PCM where the real
+- Native ESPHome voip-only presets advertise 48 kHz PCM where the real
   native I2S path supports it. AFE/AEC microphone branches remain
   16 kHz/s16/mono because that is the Espressif AFE/AEC output format.
 - UDP audio is validated against `udp_max_payload` and still defaults to a
@@ -75,13 +75,13 @@ Minimum versions for this release:
 - **ESPHome**: `2026.5.x` or newer. The maintained YAMLs use ESPHome 2026.5
   audio/media APIs and IDF component resolution behavior.
 - **Home Assistant Core**: `2026.5.0` or newer for the bundled
-  `intercom_native` integration and Lovelace card.
+  `homeassistant_voip_stack` integration and Lovelace card.
 
 ---
 
 From a single ESPHome full-duplex doorbell to a multi-device intercom over Home Assistant, all the way to a complete Voice Assistant setup with wake word detection, echo cancellation and an LVGL touchscreen UI.
 
-If your goal is simply **"I want a full-duplex intercom with Home Assistant"**, start from the ready YAMLs under [`yamls/intercom-only/`](yamls/intercom-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `intercom_native` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
+If your goal is simply **"I want a full-duplex intercom with Home Assistant"**, start from the ready YAMLs under [`yamls/voip-only/`](yamls/voip-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `homeassistant_voip_stack` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
 
 You will see SIP router/B2BUA language below. Do not let that scare you: it is the internal model that lets ESPs, Home Assistant and the browser card call each other consistently. You can still use it as a normal one-button intercom. The SIP router/B2BUA model matters when you add more rooms, route through HA, bridge SIP TCP and SIP UDP, or want clear ringing, decline, busy and error reasons.
 
@@ -132,7 +132,7 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
   - [2. ESPHome Component](#2-esphome-component)
   - [3. Lovelace Card](#3-lovelace-card)
 - [Product model and routing](#product-model-and-routing)
-- [Reference](#reference): intercom_api, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
+- [Reference](#reference): esphome_voip_stack, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
 - [Call Flow Diagrams](#call-flow-diagrams)
 - [Hardware Support](#hardware-support)
 - [Audio components](#audio-components): esp_audio_stack, esp_aec, esp_afe
@@ -152,7 +152,7 @@ VoIP migration.
 
 Yes, you read that correctly: ESP devices and Home Assistant have been migrated
 to SIP/SDP/RTP. ESPs are SIP phones. Home Assistant is a SIP softphone, SIP
-router/B2BUA, RTP bridge/resampler and optional trunk client. Intercom Native
+router/B2BUA, RTP bridge/resampler and optional trunk client. Home Assistant VoIP Stack
 has been migrated too, so the HA integration can route and bridge real SIP call
 legs instead of wrapping a project-specific intercom protocol.
 
@@ -205,14 +205,14 @@ Changes since `2026.6.3`:
 - Wake-word barge-in during a VA TTS response stops the VA announcement path
   and restarts the assistant from real component states, without stopping normal
   background media.
-- Intercom Native can now register optional Home Assistant Assist intent
+- Home Assistant VoIP Stack can now register optional Home Assistant Assist intent
   handlers. Voice satellites can say commands such as `call kitchen speaker`,
   `hang up`, `answer` and `decline`; the handler uses the Assist `device_id` of
   the satellite that heard the sentence, resolves the spoken contact
-  dynamically against the live intercom phonebook, and calls the existing
+  dynamically against the live VoIP phonebook, and calls the existing
   intercom services. If no contact matches, it can resolve a Home Assistant
-  area name when that area contains exactly one intercom device. The feature is
-  gated by the Intercom Native setup option and is off by default.
+  area name when that area contains exactly one VoIP device. The feature is
+  gated by the Home Assistant VoIP Stack setup option and is off by default.
 - Maintained full-experience YAMLs include an explicit optional local voice
   command package for assistant silence. Users can say "shut up" to stop only
   the current VA/TTS announcement without stopping background media.
@@ -235,10 +235,10 @@ Changes since `2026.6.3`:
 
 - Waveshare P4 full profiles now use the same source-based media path as the
   S3/Spotpear/generic full profiles while preserving their LVGL callbacks.
-- Native ESPHome intercom-only profiles now run their native I2S microphone and
+- Native ESPHome voip-only profiles now run their native I2S microphone and
   speaker paths at 48 kHz. TCP uses 20 ms frames; UDP uses 10 ms frames so the
   48 kHz/s16/mono payload stays under the default 1200-byte UDP limit.
-- AFE/AEC-backed intercom-only profiles intentionally keep 16 kHz TX. That is
+- AFE/AEC-backed voip-only profiles intentionally keep 16 kHz TX. That is
   the format emitted by the Espressif AFE/AEC branch. Use Home Assistant SIP router
   bridging when mixing those endpoints with higher-rate native endpoints.
 - ESP endpoint publication now waits for a real IPv4 address from ESPHome's
@@ -302,26 +302,26 @@ and display-driven voice devices.
 
 | Goal | Start here | Result |
 |---|---|---|
-| One ESP as a full-duplex intercom with Home Assistant | [`yamls/intercom-only/`](yamls/intercom-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
-| Room-to-room ESP intercom | One intercom-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
+| One ESP as a full-duplex intercom with Home Assistant | [`yamls/voip-only/`](yamls/voip-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
+| Room-to-room ESP intercom | One voip-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and intercom on the same ESP. |
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
-| Standalone native ESPHome intercom | [`yamls/intercom-only/esphome-native/`](yamls/intercom-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. Do not use this path for shared single-bus software-AEC builds. |
+| Standalone native ESPHome intercom | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. Do not use this path for shared single-bus software-AEC builds. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and intercom while media/TTS keeps playing. |
 | Media, announcements and optional Music Assistant / Sendspin for full voice profiles | [`speaker_source` media path](docs/reference.md#full-experience-media-path) | One media player feeds the mixer with HA media, announcements, local files and optional Sendspin streams; intercom keeps its own higher-priority mixer source. |
 | Runtime state arbitration for full profiles | [`runtime_fsm`](esphome/components/runtime_fsm/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, intercom and timers overlap. |
 
 For the normal intercom use case, do not start by designing a SIP router. Pick the
 closest YAML, adapt the board pins and audio hardware, add the ESP through the
-ESPHome integration, then install `intercom_native`. Home Assistant is
+ESPHome integration, then install `homeassistant_voip_stack`. Home Assistant is
 discovered as a destination and the ESP can call or be called from a GPIO
 button, LVGL button, automation, service call or Lovelace card.
 
 ### Phonebook Rule
 
 If Home Assistant is part of the setup, use the standard HA-managed phonebook.
-Each ESP publishes `intercom_endpoint` through the native ESPHome API, HA builds
-`sensor.intercom_phonebook`, and standard ESP packages subscribe to that roster.
+Each ESP publishes `voip_endpoint` through the native ESPHome API, HA builds
+`sensor.voip_phonebook`, and standard ESP packages subscribe to that roster.
 ESP-side network scanning is not a SIP routing primitive. If HA is present, it
 is the phonebook authority.
 
@@ -339,7 +339,7 @@ YAMLs. If HA is on the network, it also joins as one more extension and can act
 as a SIP router/B2BUA bridge when routing asks for it.
 
 There is one product mode on top of two SIP signaling transports. HA
-`intercom_native` is a SIP softphone, SIP TCP/UDP listener, RTP bridge/resampler,
+`homeassistant_voip_stack` is a SIP softphone, SIP TCP/UDP listener, RTP bridge/resampler,
 phonebook publisher, optional registrar for local softphones and optional trunk
 client.
 
@@ -383,12 +383,12 @@ the snippets below when you are building a custom target.
 
 ### Normal install: ESPs as intercom extensions
 
-1. Install the Home Assistant `intercom_native` integration.
+1. Install the Home Assistant `homeassistant_voip_stack` integration.
 2. Flash one ready YAML per device, for example:
    - [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml)
    - [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml)
 3. Add each ESP through the ESPHome integration in Home Assistant.
-4. Verify that HA exposes `sensor.intercom_phonebook`. That is the authoritative
+4. Verify that HA exposes `sensor.voip_phonebook`. That is the authoritative
    roster for the standard packages.
 5. Use the ESP buttons, display, Home Assistant service, or Lovelace card to
    call a selected contact.
@@ -412,20 +412,20 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - intercom_api.call_contact:
-          id: intercom
+      - esphome_voip_stack.call_contact:
+          id: voip_phone
           contact: "Home"  # replace with Settings -> System -> General -> Location name
 ```
 
 When the ESP calls that HA contact, the Lovelace card rings and can answer from
-the browser or mobile app. The standard intercom callback package also fires the
-`esphome.intercom_call` event for automations.
+the browser or mobile app. The standard VoIP callback package also fires the
+`esphome.voip_call` event for automations.
 
 For mobile doorbells, the Companion app notification can expose two useful
 actions: **Answer** and **Decline**. Answer deep-links to the Lovelace card with
-`?intercom_answer=1`, so the card can request microphone access and start the
+`?voip_answer=1`, so the card can request microphone access and start the
 full-duplex audio stream. Decline stays in the automation path and calls
-`intercom_native.sip_decline`, which sends the decline reason back to the ESP.
+`homeassistant_voip_stack.sip_decline`, which sends the decline reason back to the ESP.
 
 ### Room-to-room intercom: fixed buttons
 
@@ -442,8 +442,8 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - intercom_api.call_contact:
-          id: intercom
+      - esphome_voip_stack.call_contact:
+          id: voip_phone
           contact: "Kitchen Intercom"
 
   - platform: gpio
@@ -453,8 +453,8 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - intercom_api.call_contact:
-          id: intercom
+      - esphome_voip_stack.call_contact:
+          id: voip_phone
           contact: "Bedroom Intercom"
 ```
 
@@ -463,14 +463,14 @@ or the HA phonebook sensor if a call reports `Contact not found`.
 
 ### Static Contacts And Manual Roster Changes
 
-The recommended path is HA-managed sync through `sensor.intercom_phonebook`.
+The recommended path is HA-managed sync through `sensor.voip_phonebook`.
 Use ESP static contacts only for offline installs, diagnostics, direct SIP
 peers that should exist before HA connects, or very small fixed systems.
 
 ```yaml
-intercom_api:
-  id: intercom
-  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
+esphome_voip_stack:
+  id: voip_phone
+  transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
     - name: "Home"
       ip: "192.168.1.10"
@@ -495,15 +495,15 @@ Runtime ESP automations can still mutate the local dial plan when needed:
 
 ```yaml
 on_press:
-  - intercom_api.add_contacts:
-      id: intercom
+  - esphome_voip_stack.add_contacts:
+      id: voip_phone
       name: "Temporary Desk"
       ip: "192.168.1.55"
       sip_transport: udp
 ```
 
 Home Assistant is the central roster authority when it is present. Add, remove
-or replace central contacts with `intercom_native.phonebook_add_contact`,
+or replace central contacts with `homeassistant_voip_stack.phonebook_add_contact`,
 `phonebook_remove_contact`, `phonebook_set_contacts`, `phonebook_clear` and
 `phonebook_push`. HA pushes the updated roster immediately to online ESPs via
 the ESPHome API; ESP static contacts remain local fallbacks/custom additions.
@@ -515,7 +515,7 @@ the ESPHome API; ESP static contacts remain local fallbacks/custom additions.
 - **Deterministic routing**: direct only with complete SIP endpoint data; unresolved names and numbers go to HA.
 - **SIP TCP + SIP UDP signaling** with RTP media and HA bridge/resampling when needed.
 - **Negotiated PCM audio** - peers advertise per-direction `tx_formats`/`rx_formats` up to 48 kHz where the actual microphone/speaker path supports them.
-- **Dedicated browser audio socket** - The Lovelace softphone uses authenticated binary WebSocket audio on `/api/intercom_native/ws`; it no longer pushes base64 audio over HA's shared frontend WebSocket.
+- **Dedicated browser audio socket** - The Lovelace softphone uses authenticated binary WebSocket audio on `/api/homeassistant_voip_stack/ws`; it no longer pushes base64 audio over HA's shared frontend WebSocket.
 - **Echo Cancellation (AEC)** - Built-in acoustic echo cancellation using ESP-SR. (ES8311 digital feedback mode provides perfect sample-accurate echo cancellation.)
 - **Full Audio Front-End (AFE)** - Complete ESP-SR AFE pipeline via `esp_afe`:
   - **Single-mic (MR)**: AEC + Noise Suppression + VAD + AGC.
@@ -527,12 +527,12 @@ the ESPHome API; ESP static contacts remain local fallbacks/custom additions.
   user speech while music, TTS or ringtone audio is playing from the speaker.
 - **Ready-to-flash YAML configs** - Optimized configurations for real, tested hardware combining Voice Assistant, Micro Wake Word and Intercom on the same device.
 - **Auto Answer** - Configurable automatic call acceptance (ESP-side switch + browser card checkbox).
-- **HA Services** - `intercom_native.sip_answer`, `decline` (with optional `reason`), `hangup`, `call`, `forward`, `purge_devices`. All registered with explicit `voluptuous` schemas (`extra=PREVENT_EXTRA`); empty target-bearing calls fail schema validation before handlers run.
+- **HA Services** - `homeassistant_voip_stack.sip_answer`, `decline` (with optional `reason`), `hangup`, `call`, `forward`, `purge_devices`. All registered with explicit `voluptuous` schemas (`extra=PREVENT_EXTRA`); empty target-bearing calls fail schema validation before handlers run.
 - **Call Forwarding** - Forward active or ringing calls to another device via automation.
 - **Ringtone on incoming calls** - Devices play a looping ringtone while ringing.
 - **Volume Control** - Adjustable Master Volume and microphone gain.
-- **Phonebook** - Dedup by friendly name. HA publishes the SIP-aware `sensor.intercom_phonebook`; ESP packages subscribe to it and locally shape endpoint rows into direct SIP or HA-bridged routes. YAML automations can still call the native `intercom_api` actions/services.
-- **Do Not Disturb** - Native `intercom_api` switch. When enabled, incoming calls are rejected with `SIP reject("DND")` so the caller receives a real reason.
+- **Phonebook** - Dedup by friendly name. HA publishes the SIP-aware `sensor.voip_phonebook`; ESP packages subscribe to it and locally shape endpoint rows into direct SIP or HA-bridged routes. YAML automations can still call the native `esphome_voip_stack` actions/services.
+- **Do Not Disturb** - Native `esphome_voip_stack` switch. When enabled, incoming calls are rejected with `SIP reject("DND")` so the caller receives a real reason.
 - **HA peer name = `hass.config.location_name`** everywhere (NEVER hardcoded).
 - **Status LED** - Visual feedback for call states.
 - **Persistent Settings** - Volume, gain, AEC state saved to flash.
@@ -550,8 +550,8 @@ flowchart TD
 
     subgraph HA["🏠 Home Assistant"]
         WS["🌐 WebSocket API<br/>browser softphone"]
-        Router["🔀 intercom_native SIP router/B2BUA<br/>call / answer / decline / forward"]
-        Roster["📒 phonebook publisher<br/>sensor.intercom_phonebook"]
+        Router["🔀 homeassistant_voip_stack SIP router/B2BUA<br/>call / answer / decline / forward"]
+        Roster["📒 phonebook publisher<br/>sensor.voip_phonebook"]
         Registrar["📲 optional local registrar<br/>Zoiper / Linphone / baresip"]
         Trunk["🌍 optional SIP trunk<br/>provider / PBX"]
         TCP["🔌 SIP TCP listener<br/>:5060"]
@@ -559,19 +559,19 @@ flowchart TD
     end
 
     subgraph ESP["📟 ESP device"]
-        FSM["📞 intercom_api<br/>SIP phone state"]
+        FSM["📞 esphome_voip_stack<br/>SIP phone state"]
         Book["📒 phonebook<br/>name → SIP URI"]
         Audio["🎙️ mic / speaker<br/>AEC or AFE"]
     end
 
-    Browser <-->|"binary PCM + control<br/>/api/intercom_native/ws"| WS
+    Browser <-->|"binary PCM + control<br/>/api/homeassistant_voip_stack/ws"| WS
     WS --> Router
     Registrar --> Router
     Trunk --> Router
     Router --> TCP
     Router --> UDP
     Router --> Roster
-    Book -. "intercom_endpoint" .-> Roster
+    Book -. "voip_endpoint" .-> Roster
     Roster -. "roster update" .-> Book
     TCP <-->|"SIP TCP leg"| FSM
     UDP <-->|"SIP UDP + RTP"| FSM
@@ -654,14 +654,14 @@ SIP/RTP cleanly.
 _ESP endpoint publication, manual contacts and local SIP registrations become one HA-managed roster. Route decisions are direct SIP, HA bridge, trunk or explicit reject._
 
 Standard HA-managed firmware uses the native ESPHome API endpoint sensor plus
-`sensor.intercom_phonebook`. HA is the phonebook authority whenever it is part
+`sensor.voip_phonebook`. HA is the phonebook authority whenever it is part
 of the installation. ESP-side network scanning is not part of the SIP routing
 contract. The canonical roster JSON, SIP URI fields and audio capability fields
 are documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
 
 ### Central Phonebook And Dial Plan Services
 
-HA exposes `sensor.intercom_phonebook` as the central SIP roster. It merges:
+HA exposes `sensor.voip_phonebook` as the central SIP roster. It merges:
 
 - ESP endpoint sensors published by online devices;
 - HA itself as a softphone target;
@@ -671,19 +671,19 @@ HA exposes `sensor.intercom_phonebook` as the central SIP roster. It merges:
 
 Useful services:
 
-- `intercom_native.phonebook_add_contact`: add or replace one central contact.
-- `intercom_native.phonebook_remove_contact`: remove a manual central contact by name.
-- `intercom_native.phonebook_set_contacts`: replace manual contacts from JSON.
-- `intercom_native.phonebook_clear`: clear manual central contacts.
-- `intercom_native.phonebook_push`: push the current roster to online ESPs.
-- `intercom_native.sip_call`: originate a call from HA.
-- `intercom_native.sip_forward`: forward/bridge a pending or new call.
-- `intercom_native.sip_route`: answer, decline, busy, forward or bridge a pending route request.
+- `homeassistant_voip_stack.phonebook_add_contact`: add or replace one central contact.
+- `homeassistant_voip_stack.phonebook_remove_contact`: remove a manual central contact by name.
+- `homeassistant_voip_stack.phonebook_set_contacts`: replace manual contacts from JSON.
+- `homeassistant_voip_stack.phonebook_clear`: clear manual central contacts.
+- `homeassistant_voip_stack.phonebook_push`: push the current roster to online ESPs.
+- `homeassistant_voip_stack.sip_call`: originate a call from HA.
+- `homeassistant_voip_stack.sip_forward`: forward/bridge a pending or new call.
+- `homeassistant_voip_stack.sip_route`: answer, decline, busy, forward or bridge a pending route request.
 
 Example central contact:
 
 ```yaml
-service: intercom_native.phonebook_add_contact
+service: homeassistant_voip_stack.phonebook_add_contact
 data:
   name: "Office Phone"
   kind: phone
@@ -696,12 +696,12 @@ Example dial-plan automation:
 alias: Route trunk calls to kitchen at night
 trigger:
   - platform: event
-    event_type: intercom_native.sip_route_request
+    event_type: homeassistant_voip_stack.sip_route_request
 condition:
   - condition: time
     after: "22:00:00"
 action:
-  - service: intercom_native.sip_route
+  - service: homeassistant_voip_stack.sip_route
     data:
       call_id: "{{ trigger.event.data.call_id }}"
       action: forward
@@ -715,19 +715,19 @@ falling back.
 
 ### Local softphone accounts
 
-Intercom Native can optionally act as a local SIP registrar for standard
+Home Assistant VoIP Stack can optionally act as a local SIP registrar for standard
 softphones. Create an account from Developer Tools -> Services with
-`intercom_native.sip_account_create`:
+`homeassistant_voip_stack.sip_account_create`:
 
 ```yaml
-service: intercom_native.sip_account_create
+service: homeassistant_voip_stack.sip_account_create
 data:
   username: "MobileOffice"
   display_name: "Mobile Office"
 ```
 
 If `password` is omitted, HA generates one and shows it once in an Intercom
-Native persistent notification and in the `intercom_native.call_event` stream.
+Native persistent notification and in the `homeassistant_voip_stack.call_event` stream.
 Then configure Zoiper, Linphone, baresip or pjsua with:
 
 ```text
@@ -753,9 +753,9 @@ only shown at creation/rotation time.
 
 1. In HACS, go to **⋮ → Custom repositories**.
 2. Add `https://github.com/n-IA-hane/esphome-intercom` as **Integration**.
-3. Find "Intercom Native" and click **Download**.
+3. Find "Home Assistant VoIP Stack" and click **Download**.
 4. Restart Home Assistant.
-5. Go to **Settings → Integrations → Add Integration** → search "Intercom Native" → click **Submit**.
+5. Go to **Settings → Integrations → Add Integration** → search "Home Assistant VoIP Stack" → click **Submit**.
 6. In the config flow, tick the SIP signaling transports you want. SIP TCP is on
    by default, SIP UDP is opt-in. Default ports are SIP `5060` and RTP base
    `40000`.
@@ -764,25 +764,25 @@ only shown at creation/rotation time.
 
 _Add the repository as a HACS integration repository._
 
-![HACS download Intercom Native](docs/images/hacs-download-intercom-native.png)
+![HACS download Home Assistant VoIP Stack](docs/images/hacs-download-homeassistant-voip-stack.png)
 
-_After the repository is added, open Intercom Native in HACS and download it._
+_After the repository is added, open Home Assistant VoIP Stack in HACS and download it._
 
-![Intercom Native config flow](docs/images/intercom-native-config-flow.png)
+![Home Assistant VoIP Stack config flow](docs/images/homeassistant-voip-stack-config-flow.png)
 
 _The config flow enables the SIP TCP and SIP UDP listeners used by ESP peers and the HA SIP router/B2BUA bridge._
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
-#### After Every Intercom Native Upgrade: Hard Refresh The Card Page
+#### After Every Home Assistant VoIP Stack Upgrade: Hard Refresh The Card Page
 
-After upgrading `intercom_native`, hard refresh every Home Assistant dashboard
-view that contains an `intercom-card`.
+After upgrading `homeassistant_voip_stack`, hard refresh every Home Assistant dashboard
+view that contains an `voip-stack-card`.
 
 Several reported "broken card" or "intercom not working" issues were eventually
 traced back to the browser or mobile app still running an old cached copy of the
 card JavaScript after the integration had already been upgraded. The card URL is
-versioned from the installed Intercom Native component, but some clients can
+versioned from the installed Home Assistant VoIP Stack component, but some clients can
 still keep stale frontend state until their cache is cleared.
 
 On desktop Chrome or Chromium:
@@ -792,7 +792,7 @@ On desktop Chrome or Chromium:
 3. Right-click the browser refresh button.
 4. Choose **Empty cache and hard reload**.
 5. Check the version shown at the bottom-right of the card. It must match the
-   Intercom Native version you just installed.
+   Home Assistant VoIP Stack version you just installed.
 
 On the Home Assistant Companion app for Android:
 
@@ -801,7 +801,7 @@ On the Home Assistant Companion app for Android:
 3. Tap **Reset frontend cache**.
 4. Close and reopen the app.
 5. Check the version shown at the bottom-right of the card. It must match the
-   Intercom Native version you just installed.
+   Home Assistant VoIP Stack version you just installed.
 
 If that option is not available on your Companion App build, or the stale card
 still remains after the frontend-cache reset, use Android's fallback app-cache
@@ -818,22 +818,22 @@ Home Assistant can update/reload Lovelace resources, and this integration
 already registers the card with a versioned URL. The remaining stale-cache case
 is client-side: the browser or companion app may keep an already loaded
 JavaScript module alive until the page/app is refreshed. Until the card gets its
-own version-mismatch warning, do this after every Intercom Native upgrade,
+own version-mismatch warning, do this after every Home Assistant VoIP Stack upgrade,
 especially after major releases.
 
 #### Option B: Manual install
 
 ```bash
 # From the repository root
-cp -r custom_components/intercom_native /config/custom_components/
+cp -r custom_components/homeassistant_voip_stack /config/custom_components/
 ```
 
-Then add via UI: **Settings → Integrations → Add Integration → Intercom Native**, restart Home Assistant.
+Then add via UI: **Settings → Integrations → Add Integration → Home Assistant VoIP Stack**, restart Home Assistant.
 
 The integration will:
 - Bind SIP TCP and SIP UDP listener sockets on the configured ports.
 - Register the WebSocket API commands for the card.
-- Publish the SIP phonebook (`sensor.intercom_phonebook`) for ESP subscribers.
+- Publish the SIP phonebook (`sensor.voip_phonebook`) for ESP subscribers.
 - Optionally register a provider/PBX trunk.
 - Optionally accept REGISTER from local softphones with generated accounts.
 - Register SIP-first services (`sip_answer`, `sip_decline`, `sip_hangup`, `sip_call`, `sip_forward`, `sip_route`, phonebook and SIP account services).
@@ -861,19 +861,19 @@ by the maintained `esp_audio_stack` YAMLs.
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, intercom_api, esp_audio_stack, esp_aec]
+    components: [audio_processor, esphome_voip_stack, esp_audio_stack, esp_aec]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, intercom_api, esp_afe, esp_audio_stack]
+    components: [audio_processor, esphome_voip_stack, esp_afe, esp_audio_stack]
 ```
 
 > **Note**: `audio_processor` is still listed because it provides shared task
 > and buffer helpers used by the audio components. Use `esp_aec` for
 > lightweight single-mic processing and `esp_afe` for the full pipeline (see
-> [AFE section](#audio-front-end-afe) below). `intercom_api` no longer owns
+> [AFE section](#audio-front-end-afe) below). `esphome_voip_stack` no longer owns
 > software AEC; standalone intercom binds to native ESPHome
 > `microphone`/`speaker`, while software AEC/AFE belongs behind
 > `esp_audio_stack`. Maintained full voice YAMLs use the source-based
@@ -949,9 +949,9 @@ speaker:
     output_speaker: hw_speaker
     bits_per_sample: 16
 
-# Intercom API - SIP router/B2BUA (no mode: needed)
-intercom_api:
-  id: intercom
+# ESPHome VoIP Stack - SIP router/B2BUA (no mode: needed)
+esphome_voip_stack:
+  id: voip_phone
   microphone: mic_component
   speaker: spk_component
   buffers_in_psram: true
@@ -960,10 +960,10 @@ intercom_api:
 #### Complete Configuration (with HA-managed phonebook)
 
 ```yaml
-intercom_api:
-  id: intercom
-  # protocol chooses SIP signaling transport: tcp or udp. Audio is RTP/UDP.
-  protocol: udp
+esphome_voip_stack:
+  id: voip_phone
+  # transport chooses SIP signaling transport: tcp or udp. Audio is RTP/UDP.
+  transport: udp
   microphone: mic_component
   speaker: spk_component
   buffers_in_psram: true
@@ -992,8 +992,8 @@ intercom_api:
 
 # Switches (with restore from flash)
 switch:
-  - platform: intercom_api
-    intercom_api_id: intercom
+  - platform: esphome_voip_stack
+    esphome_voip_stack_id: voip_phone
     auto_answer:
       name: "Auto Answer"
       restore_mode: RESTORE_DEFAULT_OFF
@@ -1019,42 +1019,42 @@ button:
   - platform: template
     name: "Call"
     on_press:
-      - intercom_api.call_toggle: intercom
+      - esphome_voip_stack.call_toggle: voip_phone
 
   - platform: template
     name: "Next Contact"
     on_press:
-      - intercom_api.next_contact: intercom
+      - esphome_voip_stack.next_contact: voip_phone
 
   - platform: template
     name: "Previous Contact"
     on_press:
-      - intercom_api.prev_contact: intercom
+      - esphome_voip_stack.prev_contact: voip_phone
 
   - platform: template
     name: "Decline"
     on_press:
-      - intercom_api.decline_call: intercom
+      - esphome_voip_stack.decline_call: voip_phone
 
 # Example: call a specific room from a YAML automation
 button:
   - platform: template
     name: "Call Kitchen"
     on_press:
-      - intercom_api.call_contact:
-          id: intercom
+      - esphome_voip_stack.call_contact:
+          id: voip_phone
           contact: "Kitchen Intercom"
 ```
 
 Current public YAMLs use shared phonebook subscription packages. HA publishes:
 
 ```text
-sensor.intercom_phonebook                       # short state: "N entries"
-sensor.intercom_phonebook.attributes.roster_json # canonical SIP roster
+sensor.voip_phonebook                       # short state: "N entries"
+sensor.voip_phonebook.attributes.roster_json # canonical SIP roster
 ```
 
 The ESP-side package subscribes to the roster JSON and calls
-`intercom_api.set_roster_json` after a debounce. HA rows, ESP rows, manual SIP
+`esphome_voip_stack.set_roster_json` after a debounce. HA rows, ESP rows, manual SIP
 contacts and registered local softphones share the same route vocabulary.
 Canonical row formats live in
 [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md). For manual/local
@@ -1075,8 +1075,8 @@ data:
 ```
 
 Contact mutation is not exposed as HA-callable ESPHome services in the standard
-packages. Use `sensor.intercom_phonebook` for normal sync, or call the native
-`intercom_api.set_contacts` / `add_contact` / `remove_contact` /
+packages. Use `sensor.voip_phonebook` for normal sync, or call the native
+`esphome_voip_stack.set_contacts` / `add_contact` / `remove_contact` /
 `flush_contacts` actions from YAML scripts when you intentionally need local
 manual mutation.
 
@@ -1084,7 +1084,7 @@ See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contra
 
 #### Apartment intercom panel
 
-For multi-room setups, each GPIO button can call a specific room directly. The full recipe (one button per contact, exact name matching rules, `on_call_failed` handling) lives in the [`intercom_api` README](esphome/components/intercom_api/README.md#example-multi-button-intercom-apartment-doorbell).
+For multi-room setups, each GPIO button can call a specific room directly. The full recipe (one button per contact, exact name matching rules, `on_call_failed` handling) lives in the [`esphome_voip_stack` README](esphome/components/esphome_voip_stack/README.md#example-multi-button-intercom-apartment-doorbell).
 
 ### 3. Lovelace Card
 
@@ -1102,12 +1102,12 @@ Then configure it with the visual editor:
 
 ![Card Configuration](docs/images/card-configuration.png)
 
-_Visual editor path for picking the ESPHome intercom device and display name._
+_Visual editor path for picking the ESPHome VoIP device and display name._
 
 Alternatively, you can add it manually via YAML:
 
 ```yaml
-type: custom:intercom-card
+type: custom:voip-stack-card
 device_id: <your_esp_device_id_or_friendly_name>
 name: Kitchen Intercom
 show_extended_info: true
@@ -1119,7 +1119,7 @@ Home Assistant, the browser acts as the HA softphone leg for that ESP. To use
 Home Assistant as one independent softphone endpoint, add a separate card:
 
 ```yaml
-type: custom:intercom-card
+type: custom:voip-stack-card
 mode: ha_softphone
 name: Home Assistant Intercom
 show_extended_info: true
@@ -1142,14 +1142,14 @@ formats returned by the server before microphone or playback worklets start.
 _Independent Home Assistant softphone mode: one card represents HA itself and
 calls any ESP endpoint from the in-card selector._
 
-The card automatically discovers ESPHome devices with the `intercom_api` component through their `intercom_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- SIP TCP` / `- SIP UDP`; the mode line shows `HA - ESP`, `Home Assistant - ESP`, `ESP - ESP`, or `SIP TCP - SIP UDP bridge` / `SIP UDP - SIP TCP bridge`.
+The card automatically discovers ESPHome devices with the `esphome_voip_stack` component through their `voip_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- SIP TCP` / `- SIP UDP`; the mode line shows `HA - ESP`, `Home Assistant - ESP`, `ESP - ESP`, or `SIP TCP - SIP UDP bridge` / `SIP UDP - SIP TCP bridge`.
 
-`customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.intercom_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
+`customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.voip_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
 
-After every Intercom Native upgrade, hard refresh this dashboard view and verify
+After every Home Assistant VoIP Stack upgrade, hard refresh this dashboard view and verify
 that the version printed at the bottom-right of the card matches the installed
 integration version. See
-[After Every Intercom Native Upgrade: Hard Refresh The Card Page](#after-every-intercom-native-upgrade-hard-refresh-the-card-page).
+[After Every Home Assistant VoIP Stack Upgrade: Hard Refresh The Card Page](#after-every-homeassistant-voip-stack-upgrade-hard-refresh-the-card-page).
 
 The Lovelace card provides **full-duplex bidirectional audio** with the ESP device: you can talk and listen simultaneously through your browser or the Home Assistant Companion app. The card captures audio from your microphone via `getUserMedia()` and plays incoming audio from the ESP in real-time.
 
@@ -1173,7 +1173,7 @@ _Browser softphone path: the card talks only to HA; HA opens the SIP TCP or SIP 
 
 ```mermaid
 flowchart LR
-    Card["🌐 Browser card"] <-->|"WebSocket<br/>browser audio"| HA["🏠 HA<br/>intercom_native"]
+    Card["🌐 Browser card"] <-->|"WebSocket<br/>browser audio"| HA["🏠 HA<br/>homeassistant_voip_stack"]
     HA <-->|"SIP TCP or SIP UDP leg<br/>SIP router/B2BUA messages"| ESP["📟 ESP<br/>rings / streams"]
 ```
 
@@ -1228,7 +1228,7 @@ flowchart TD
 
 ### ESP calling Home Assistant (Doorbell)
 
-When an ESP device has the HA location name selected as destination and initiates a call (via GPIO button press or template button), it fires an `esphome.intercom_call` event for notifications and the Lovelace card goes into ringing state with Answer/Decline buttons:
+When an ESP device has the HA location name selected as destination and initiates a call (via GPIO button press or template button), it fires an `esphome.voip_call` event for notifications and the Lovelace card goes into ringing state with Answer/Decline buttons:
 
 ![ESP calling Home Assistant, Card ringing](docs/images/call-from-esp-to-homeassistant.gif)
 
@@ -1242,7 +1242,7 @@ _Doorbell path: the ESP calls the HA peer name, and the browser card rings with 
 Full options, actions, conditions, entities, services and automation examples are documented in **[docs/reference.md](docs/reference.md)**.
 
 Quick links:
-- [`intercom_api` component options](docs/reference.md#intercom_api-component)
+- [`esphome_voip_stack` component options](docs/reference.md#esphome_voip_stack-component)
 - [Event callbacks](docs/reference.md#event-callbacks)
 - [Actions](docs/reference.md#actions) and [conditions](docs/reference.md#conditions)
 - [`esp_aec`](docs/reference.md#esp_aec-component) / [`esp_afe`](docs/reference.md#esp_afe-component) components
@@ -1257,7 +1257,7 @@ Quick links:
 ```mermaid
 sequenceDiagram
     participant B as 🌐 Browser
-    participant HA as 🏠 HA intercom_native
+    participant HA as 🏠 HA homeassistant_voip_stack
     participant E as 📻 ESP
 
     B->>HA: call selected ESP
@@ -1337,7 +1337,7 @@ sequenceDiagram
 | Device | YAML | Microphone | Speaker | I2S Mode | Audio pipeline | Features |
 |--------|------|------------|---------|----------|----------------|----------|
 | **Spotpear Ball v2 (AFE)** | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + Intercom + LVGL |
-| **Spotpear Ball v2 (intercom)** | [`spotpear-ball-v2-intercom.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | Intercom only |
+| **Spotpear Ball v2 (intercom)** | [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | Intercom only |
 | **Waveshare S3-Audio (AFE)** | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LED + AFE switches/sensors |
 | **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + Intercom + LVGL touch |
 | **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + Intercom |
@@ -1345,11 +1345,11 @@ sequenceDiagram
 | **Generic S3 (full AEC light, dual bus)** | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + Intercom on separated I2S buses |
 | **Generic S3 (full AFE, untested)** | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + Intercom, requires >4 MB app slot |
 | **Generic S3 (full native)** | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends, separated I2S mic/speaker paths, or native audio testing |
-| **Generic S3 (native intercom full-duplex)** | [`generic-s3-intercom-esphome-native-full-duplex.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Separated native ESPHome audio paths | None in firmware; use hardware/DSP AEC if needed | Intercom-only native ESPHome audio for two independent I2S paths, not a shared single-bus AEC backend |
-| **Generic S3 (native intercom mic-only)** | [`generic-s3-intercom-esphome-native-mic-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-mic-only.yaml) | Native ESPHome mic or processed front-end | None | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | One-way microphone endpoint |
-| **Generic S3 (native intercom speaker-only)** | [`generic-s3-intercom-esphome-native-speaker-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-speaker-only.yaml) | None | Native ESPHome speaker | Native ESPHome audio | Not applicable | One-way speaker endpoint |
-| **Generic S3 single bus (intercom)** | [`generic-s3-intercom.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | Intercom only |
-| **Generic S3 dual bus (intercom)** | [`generic-s3-intercom.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | Intercom only |
+| **Generic S3 (native intercom full-duplex)** | [`generic-s3-voip-esphome-native-full-duplex.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-full-duplex.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Separated native ESPHome audio paths | None in firmware; use hardware/DSP AEC if needed | Intercom-only native ESPHome audio for two independent I2S paths, not a shared single-bus AEC backend |
+| **Generic S3 (native intercom mic-only)** | [`generic-s3-voip-esphome-native-mic-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-mic-only.yaml) | Native ESPHome mic or processed front-end | None | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | One-way microphone endpoint |
+| **Generic S3 (native intercom speaker-only)** | [`generic-s3-voip-esphome-native-speaker-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-speaker-only.yaml) | None | Native ESPHome speaker | Native ESPHome audio | Not applicable | One-way speaker endpoint |
+| **Generic S3 single bus (intercom)** | [`generic-s3-voip.yaml`](yamls/voip-only/single-bus/generic-s3-voip.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | Intercom only |
+| **Generic S3 dual bus (intercom)** | [`generic-s3-voip.yaml`](yamls/voip-only/dual-bus/generic-s3-voip.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | Intercom only |
 
 > **Want to help expand this list?** Send me a device to test or consider a [donation](https://github.com/sponsors/n-IA-hane), every bit helps!
 
@@ -1460,7 +1460,7 @@ Three ESPHome components sit between your codec and the intercom / voice assista
 
 _The same audio stack can serve intercom, Voice Assistant, TTS and media workloads on full voice devices._
 
-Plain intercom does **not** always require `esp_audio_stack`: `intercom_api`
+Plain intercom does **not** always require `esp_audio_stack`: `esphome_voip_stack`
 can run on ESPHome's normal `microphone` and/or `speaker` components. This is
 the right fit for hardware/DSP-processed audio such as XMOS front-ends, for
 mic-only or speaker-only endpoints, and for full-duplex tests where microphone
@@ -1474,8 +1474,8 @@ reference capture and mixer arbitration needed by full audio devices.
 
 The full native examples under `yamls/full-experience/esphome-native/` extend
 that idea to VA, MWW, media player and intercom on native ESPHome audio
-components. The intercom-only native examples under
-`yamls/intercom-only/esphome-native/` provide dedicated separated-path
+components. The voip-only native examples under
+`yamls/voip-only/esphome-native/` provide dedicated separated-path
 full-duplex, mic-only and speaker-only starting points without carrying
 unrelated full-experience blocks.
 
@@ -1543,7 +1543,7 @@ runtime_fsm:
 For a composite device, put the microphone and speaker on the same I2S bus and
 use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The
 audio stack driver hands a phase-coherent speaker reference to the AEC each frame;
-standalone `intercom_api` deliberately does not provide software AEC. If your
+standalone `esphome_voip_stack` deliberately does not provide software AEC. If your
 hardware does not already process echo, use an `esp_audio_stack` profile.
 
 ### [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
@@ -1554,7 +1554,7 @@ reference capture, speaker buffering and mic consumer fan-out, then exposes
 normal ESPHome `microphone` and `speaker` platforms above that.
 
 With `esp_aec` or `esp_afe` attached, that `microphone` platform is the cleaned
-post-processor stream. MWW, Voice Assistant and `intercom_api` all consume the
+post-processor stream. MWW, Voice Assistant and `esphome_voip_stack` all consume the
 same echo-cancelled audio while media/TTS/ringtones continue through the shared
 speaker and mixer path.
 
@@ -1587,7 +1587,7 @@ YAML keys cover type (`sr` for speech recognition or `vc` for voice communicatio
 
 **When to use it**
 
-Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you want runtime control of those stages from Home Assistant. For plain intercom-only setups `esp_aec` is lighter and lacks the AFE switches you would not use anyway. `esp_afe` requires `esp_audio_stack` in front of it; it cannot replace `esp_aec` in standalone `intercom_api` configurations (no audio stack driver = no steady frame producer for the AFE feed/fetch tasks).
+Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you want runtime control of those stages from Home Assistant. For plain voip-only setups `esp_aec` is lighter and lacks the AFE switches you would not use anyway. `esp_afe` requires `esp_audio_stack` in front of it; it cannot replace `esp_aec` in standalone `esphome_voip_stack` configurations (no audio stack driver = no steady frame producer for the AFE feed/fetch tasks).
 
 ---
 
@@ -1618,12 +1618,12 @@ Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you wan
 
 The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the same hardware: shared cleaned microphone, shared speaker (via mixer/source arbitration), always-on wake word detection. No display required (works on headless devices like the Waveshare S3 Audio); on devices with a screen, you also get a full touch UI:
 
-- **Always listening**: Micro Wake Word runs continuously on **post-AEC** audio (`stop_after_detection: false`). SR linear AEC preserves the spectral features that the neural wake word model relies on (10/10 detection vs 2/10 with VOIP AEC modes). MWW detects the wake word even while TTS is playing, during music, or during an intercom call
-- **Audio ducking**: When the wake word is detected, background music automatically ducks (-20dB). Volume restores when the VA/TTS cycle ends. During intercom calls, music is also ducked. The source mixer keeps media, announcements and intercom as separately arbitrated inputs.
+- **Always listening**: Micro Wake Word runs continuously on **post-AEC** audio (`stop_after_detection: false`). SR linear AEC preserves the spectral features that the neural wake word model relies on (10/10 detection vs 2/10 with VOIP AEC modes). MWW detects the wake word even while TTS is playing, during music, or during an VoIP call
+- **Audio ducking**: When the wake word is detected, background music automatically ducks (-20dB). Volume restores when the VA/TTS cycle ends. During VoIP calls, music is also ducked. The source mixer keeps media, announcements and intercom as separately arbitrated inputs.
 - **Barge-in**: Say the wake word during a TTS response to interrupt and ask a new question. The state machine tracks VA response pending/active phases from real ESPHome `voice_assistant` and media-player announcement callbacks, so slow TTS engines keep the reply LED state until playback actually starts and finishes.
 - **Touch or voice**: Start the assistant by saying the wake word or tapping the screen (on touch displays)
 - **Intercom calls**: Call other devices or Home Assistant with one tap; incoming calls ring with audio + visual feedback. Ringtone plays over music (via announcement pipeline)
-- **Local voice commands**: Intercom Native can optionally register Home
+- **Local voice commands**: Home Assistant VoIP Stack can optionally register Home
   Assistant Assist intents for calling, hangup, answer and decline from the
   satellite that heard the sentence. Maintained full YAMLs also expose an
   optional ESPHome `voice_quiet` action for "shut up" style assistant silence.
@@ -1658,14 +1658,14 @@ The Voice Assistant, Micro Wake Word, and Intercom coexist seamlessly on the sam
 ### Voice Commands for Intercom and Assistant Quiet
 
 Intercom call control is handled by an optional Home Assistant-side Assist
-adapter in the `intercom_native` integration. Enable **Assist intercom
-intents** in the Intercom Native integration setup/reconfigure dialog, then add
+adapter in the `homeassistant_voip_stack` integration. Enable **Assist VoIP
+intents** in the Home Assistant VoIP Stack integration setup/reconfigure dialog, then add
 the matching custom sentences from:
 
-- [`examples/home-assistant/custom_sentences/en/intercom_native.yaml`](examples/home-assistant/custom_sentences/en/intercom_native.yaml)
-- [`examples/home-assistant/custom_sentences/it/intercom_native.yaml`](examples/home-assistant/custom_sentences/it/intercom_native.yaml)
+- [`examples/home-assistant/custom_sentences/en/homeassistant_voip_stack.yaml`](examples/home-assistant/custom_sentences/en/homeassistant_voip_stack.yaml)
+- [`examples/home-assistant/custom_sentences/it/homeassistant_voip_stack.yaml`](examples/home-assistant/custom_sentences/it/homeassistant_voip_stack.yaml)
 
-The custom sentence uses a wildcard `target`; Intercom Native resolves the
+The custom sentence uses a wildcard `target`; Home Assistant VoIP Stack resolves the
 spoken text dynamically against the live phonebook. For example, if Assist
 hears `call kitchen speaker`, the handler resolves it to the canonical
 `Kitchen Speaker` contact and uses the satellite `device_id` that heard the
@@ -1677,7 +1677,7 @@ If no phonebook contact matches the spoken target, the adapter also tries a
 Home Assistant area-name resolution. This prerelease supports only one intercom
 device per area for voice dialing: `call kitchen` can call the single intercom
 device assigned to the `Kitchen` area, but if the area has zero or multiple
-intercom devices the command fails instead of guessing. Group calls are planned
+VoIP devices the command fails instead of guessing. Group calls are planned
 for a later release.
 
 Supported intercom intents:
@@ -1714,7 +1714,7 @@ matching: if Assist hears a different contact name, the call
 should fail instead of silently calling the wrong peer.
 
 See the Home Assistant `voice_quiet` automation example:
-[`examples/assist-voice-intercom-commands.yaml`](examples/assist-voice-intercom-commands.yaml).
+[`examples/assist-voice-voip-commands.yaml`](examples/assist-voice-voip-commands.yaml).
 
 ### AEC Best Practices
 
@@ -1837,12 +1837,12 @@ logger:
     api.connection: WARN
     component: WARN
     # Project components - uncomment to mute individually:
-    # intercom_api: INFO        # main API + setup
-    # intercom_api.fsm: INFO    # SIP router/B2BUA FSM transitions
-    # intercom_api.audio: INFO  # mic/spk audio task
-    # intercom_api.tcp: INFO    # framed TCP transport
-    # intercom_api.udp: INFO    # UDP audio + control
-    # intercom_api.settings: INFO
+    # esphome_voip_stack: INFO        # main API + setup
+    # esphome_voip_stack.fsm: INFO    # SIP router/B2BUA FSM transitions
+    # esphome_voip_stack.audio: INFO  # mic/spk audio task
+    # esphome_voip_stack.tcp: INFO    # framed TCP transport
+    # esphome_voip_stack.udp: INFO    # UDP audio + control
+    # esphome_voip_stack.settings: INFO
     # audio_stack: INFO          # I2S audio stack driver
     # esp_aec: INFO             # lightweight AEC processor
     # esp_afe: INFO             # full audio front-end
@@ -1856,7 +1856,7 @@ DEBUG logs, which are not needed unless you are debugging this project.
 
 **HA-side log level toggle**
 
-The Home Assistant integration declares its package logger in `manifest.json`, so HA's *Settings → System → Logs → Configure* surfaces `custom_components.intercom_native` as a per-component level switch. Use it to flip the integration to DEBUG live without touching `configuration.yaml`.
+The Home Assistant integration declares its package logger in `manifest.json`, so HA's *Settings → System → Logs → Configure* surfaces `custom_components.homeassistant_voip_stack` as a per-component level switch. Use it to flip the integration to DEBUG live without touching `configuration.yaml`.
 
 ---
 
@@ -1876,34 +1876,34 @@ Common symptoms and fixes are documented in **[docs/troubleshooting.md](docs/tro
 ## Home Assistant Automation
 
 When an ESP device calls the HA location name, it fires an
-`esphome.intercom_call` event. Use this to trigger push notifications, flash
+`esphome.voip_call` event. Use this to trigger push notifications, flash
 lights, play chimes, or any other automation.
 
 The mobile notification can expose real **Answer** and **Decline** actions:
 
 - Replace `/dashboard-intercom/0` below with the real dashboard view that
-  contains your `intercom-card`, for example `/your-dashboard/your-view`. The
+  contains your `voip-stack-card`, for example `/your-dashboard/your-view`. The
   word `intercom` is not special. If Home Assistant generated a URL ending in
   `/0`, that just means the first Lovelace view has no custom path.
 - **Answer** must be a `URI` action that opens the dashboard with
-  `?intercom_answer=1`. The card is the only place that can request microphone
+  `?voip_answer=1`. The card is the only place that can request microphone
   permission and create the full-duplex browser or app audio stream.
 - **Decline** can stay in Home Assistant automation logic. The mobile app emits
-  `mobile_app_notification_action`, then HA calls `intercom_native.sip_decline` and
+  `mobile_app_notification_action`, then HA calls `homeassistant_voip_stack.sip_decline` and
   sends the SIP router/B2BUA decline reason back to the ESP.
 
 ![Answer an ESP call from the Home Assistant mobile notification](docs/images/mobile-notification-answer.gif)
 
 The GIF above shows the tested Android Companion app flow: the ESP calls Home
 Assistant, the notification opens the intercom dashboard with
-`intercom_answer=1`, then the card starts the real full-duplex audio path.
+`voip_answer=1`, then the card starts the real full-duplex audio path.
 
 ```yaml
 alias: Doorbell Notification
 description: Send push notification when an ESP calls Home Assistant
 triggers:
   - trigger: event
-    event_type: esphome.intercom_call
+    event_type: esphome.voip_call
 conditions: []
 actions:
   - action: notify.mobile_app_your_phone
@@ -1911,7 +1911,7 @@ actions:
       title: "🔔 Incoming Call"
       message: "📞 {{ trigger.event.data.caller }} is calling..."
       data:
-        tag: intercom_call
+        tag: voip_call
         clickAction: /dashboard-intercom/0
         url: /dashboard-intercom/0
         channel: doorbell
@@ -1921,14 +1921,14 @@ actions:
         actions:
           - action: URI
             title: "✅ Answer"
-            uri: /dashboard-intercom/0?intercom_answer=1
+            uri: /dashboard-intercom/0?voip_answer=1
           - action: SIP reject_INTERCOM
             title: "❌ Decline"
   - action: persistent_notification.create
     data:
       title: "🔔 Incoming Call"
       message: "📞 {{ trigger.event.data.caller }} is calling..."
-      notification_id: intercom_call
+      notification_id: voip_call
   - wait_for_trigger:
       - trigger: event
         event_type: mobile_app_notification_action
@@ -1939,7 +1939,7 @@ actions:
       - condition: template
         value_template: "{{ wait.trigger is not none }}"
     then:
-      - action: intercom_native.sip_decline
+      - action: homeassistant_voip_stack.sip_decline
         target:
           device_id: "{{ trigger.event.data.device_id }}"
         data:
@@ -1948,13 +1948,13 @@ actions:
         data:
           message: clear_notification
           data:
-            tag: intercom_call
+            tag: voip_call
     else:
       - action: notify.mobile_app_your_phone
         data:
           message: clear_notification
           data:
-            tag: intercom_call
+            tag: voip_call
 mode: single
 ```
 
@@ -1990,16 +1990,16 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement |
 | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
 
-### Intercom Only (no VA, no MWW)
+### VoIP Only (no VA, no MWW)
 
 | File | Device | Audio |
 |------|--------|-------|
-| [`spotpear-ball-v2-intercom.yaml`](yamls/intercom-only/single-bus/spotpear-ball-v2-intercom.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, `esp_aec`, intercom display |
-| [`generic-s3-intercom.yaml`](yamls/intercom-only/single-bus/generic-s3-intercom.yaml) | Generic ESP32-S3 (MEMS+amp, single bus) | Single-bus, `esp_aec` |
-| [`generic-s3-intercom.yaml`](yamls/intercom-only/dual-bus/generic-s3-intercom.yaml) | Generic ESP32-S3 (dual I2S) | Dual-bus, `esp_aec`, previous-frame reference |
-| [`generic-s3-intercom-esphome-native-full-duplex.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-full-duplex.yaml) | Generic ESP32-S3 native full-duplex | Native ESPHome mic and speaker |
-| [`generic-s3-intercom-esphome-native-mic-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-mic-only.yaml) | Generic ESP32-S3 native mic-only | One-way microphone endpoint |
-| [`generic-s3-intercom-esphome-native-speaker-only.yaml`](yamls/intercom-only/esphome-native/generic-s3-intercom-esphome-native-speaker-only.yaml) | Generic ESP32-S3 native speaker-only | One-way speaker endpoint |
+| [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, `esp_aec`, intercom display |
+| [`generic-s3-voip.yaml`](yamls/voip-only/single-bus/generic-s3-voip.yaml) | Generic ESP32-S3 (MEMS+amp, single bus) | Single-bus, `esp_aec` |
+| [`generic-s3-voip.yaml`](yamls/voip-only/dual-bus/generic-s3-voip.yaml) | Generic ESP32-S3 (dual I2S) | Dual-bus, `esp_aec`, previous-frame reference |
+| [`generic-s3-voip-esphome-native-full-duplex.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-full-duplex.yaml) | Generic ESP32-S3 native full-duplex | Native ESPHome mic and speaker |
+| [`generic-s3-voip-esphome-native-mic-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-mic-only.yaml) | Generic ESP32-S3 native mic-only | One-way microphone endpoint |
+| [`generic-s3-voip-esphome-native-speaker-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-speaker-only.yaml) | Generic ESP32-S3 native speaker-only | One-way speaker endpoint |
 
 ---
 

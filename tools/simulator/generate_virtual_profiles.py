@@ -18,7 +18,7 @@ def _profile_paths() -> list[Path]:
     roots = [
         Path("yamls/experimental"),
         Path("yamls/full-experience"),
-        Path("yamls/intercom-only"),
+        Path("yamls/voip-only"),
         Path("yamls/untested"),
     ]
     paths: list[Path] = []
@@ -49,7 +49,7 @@ def _short_path_slug(path: Path) -> str:
         return _slug(path.stem)
     category = {
         "full-experience": "full",
-        "intercom-only": "intercom",
+        "voip-only": "voip",
         "experimental": "exper",
         "untested": "untested",
     }.get(parts[0], parts[0])
@@ -172,7 +172,7 @@ def _profile_content(path: Path) -> str:
     return f"""# Generated ESPHome Host counterpart.
 # Source profile: {path.as_posix()}
 # This is a local test target: ESPHome API, virtual microphone/speaker and the
-# intercom simulator replace ESP32-only hardware so HA can see a separate node.
+# voip simulator replace ESP32-only hardware so HA can see a separate node.
 # No wifi: block is needed on ESPHome Host; it uses the Linux host network.
 
 esphome:
@@ -189,7 +189,7 @@ logger:
 external_components:
   - source: ../../esphome/components
 
-intercom_simulator:
+voip_simulator:
   device_profile: "{device_profile}"
   source_profile: "{path.as_posix()}"
   socket_path: "test_runs/simulator/{host_name}-sim.sock"

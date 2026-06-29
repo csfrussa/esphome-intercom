@@ -17,7 +17,7 @@ The profile exposes:
 - `voice_assistant`
 - `microphone.virtual_microphone`, reading 16 kHz s16 mono PCM from `tests/simulator/audio/mic_input.pcm`
 - `speaker.virtual_speaker`, writing 16 kHz s16 mono PCM to `test_runs/simulator/spotpear-voip-host_va_speaker_output.pcm`
-- `intercom_simulator` JSON-RPC snapshots on `test_runs/simulator/spotpear-voip-host-sim.sock`
+- `voip_simulator` JSON-RPC snapshots on `test_runs/simulator/spotpear-voip-host-sim.sock`
 
 ## Home Assistant
 

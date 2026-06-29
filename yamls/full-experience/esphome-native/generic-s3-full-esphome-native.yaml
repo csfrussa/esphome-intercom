@@ -12,7 +12,7 @@
 # Intended use:
 #   - hardware that already provides processed/AEC audio before ESPHome, for
 #     example XMOS front-ends that output echo-cancelled PCM;
-#   - regression testing intercom_api standalone against standard ESPHome audio;
+#   - regression testing esphome_voip_stack standalone against standard ESPHome audio;
 #   - simple dual-I2S MEMS + amplifier builds where echo cancellation is not
 #     needed.
 #
@@ -21,7 +21,7 @@
 # echo will not be removed. If you need software AEC/AFE, read the
 # esp_audio_stack documentation or use a maintained full AEC/AFE YAML.
 #
-# Endpoint mode: full_duplex. The intercom-only esphome-native folder contains
+# Endpoint mode: full_duplex. The voip-only esphome-native folder contains
 # dedicated mic-only and speaker-only variants; this full-experience profile
 # keeps both audio directions because VA, MWW and media player require them.
 #
@@ -67,15 +67,15 @@ substitutions:
   status_led_rgb_order: GRB
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/va_buttons_switches.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api.yaml@dev
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
   voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands.yaml@dev
   ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_native_audio_maintenance.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/intercom/speaker_mute.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute.yaml@dev
   s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
   native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
   status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
@@ -118,12 +118,12 @@ logger:
   hardware_uart: USB_SERIAL_JTAG
   level: INFO
   logs:
-    intercom_api: INFO
-    intercom_api.fsm: INFO
-    intercom_api.tcp: INFO
-    intercom_api.udp: INFO
-    intercom_api.audio: INFO
-    intercom_api.settings: INFO
+    esphome_voip_stack: INFO
+    esphome_voip_stack.fsm: INFO
+    esphome_voip_stack.tcp: INFO
+    esphome_voip_stack.udp: INFO
+    esphome_voip_stack.audio: INFO
+    esphome_voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -147,7 +147,7 @@ logger:
     mixer_speaker: INFO
     wifi: INFO
     json: INFO
-    intercom_api: INFO
+    esphome_voip_stack: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -156,7 +156,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [intercom_api, audio_processor, speaker]
+    components: [esphome_voip_stack, audio_processor, speaker]
 
 output:
   - platform: gpio
@@ -221,16 +221,16 @@ voice_assistant:
   auto_gain: 31dBFS
   volume_multiplier: 2.0
 
-intercom_api:
+esphome_voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
   microphone_source:
-    id: intercom_mic_source
+    id: voip_mic_source
     microphone: native_mic_raw
     bits_per_sample: 16
     channels: [1]
     gain_factor: 1
-  speaker: intercom_speaker_input
+  speaker: voip_speaker_input
   ringing_timeout: 30s
   delete_contact_missing_from:
     updates_number: 1
@@ -272,7 +272,7 @@ number:
                        : static_cast<uint8_t>(std::lround((100.0f - clamped) * 51.0f / 100.0f));
           duration: 150ms
       - mixer_speaker.apply_ducking:
-          id: intercom_mixer_input
+          id: voip_mixer_input
           decibel_reduction: !lambda |-
             const float clamped = std::max(0.0f, std::min(100.0f, x));
             return clamped <= 0.0f
@@ -300,7 +300,7 @@ number:
           factor = std::max(1, std::min(64, factor));
           id(va_mic_source).set_gain_factor(factor);
           id(mww_mic_source).set_gain_factor(factor);
-          id(intercom_mic_source).set_gain_factor(factor);
+          id(voip_mic_source).set_gain_factor(factor);
           ESP_LOGI("audio", "Native mic boost %.0fdB -> MicrophoneSource gain_factor=%d", clamped, factor);
 
 switch:
@@ -330,9 +330,9 @@ binary_sensor:
           - if:
               condition:
                 not:
-                  - intercom_api.is_idle: intercom
+                  - esphome_voip_stack.is_idle: voip_phone
               then:
-                - intercom_api.call_toggle: intercom
+                - esphome_voip_stack.call_toggle: voip_phone
               else:
                 - if:
                     condition:
@@ -348,7 +348,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - intercom_api.next_contact: intercom
+          - esphome_voip_stack.next_contact: voip_phone
       # Long press (1-3s): toggle mute.
       - timing:
           - ON for 1s to 3s

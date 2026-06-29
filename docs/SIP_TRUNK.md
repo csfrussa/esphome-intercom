@@ -9,7 +9,7 @@ inbound DTMF collector is started.
 
 ## Setup Flow
 
-The first Intercom Native setup step configures HA's local SIP endpoint:
+The first Home Assistant VoIP Stack setup step configures HA's local SIP endpoint:
 
 - SIP/TCP listener
 - SIP/UDP listener

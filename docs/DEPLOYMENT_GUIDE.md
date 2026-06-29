@@ -2,14 +2,14 @@
 
 This guide maps the maintained YAMLs and the Home Assistant integration to the
 current VoIP model. The old TCP/UDP intercom split is gone: every device is a
-SIP phone, and `protocol: udp` or `protocol: tcp` only selects SIP signaling
+SIP phone, and `transport: udp` or `transport: tcp` only selects SIP signaling
 transport.
 
 ## YAML Tree
 
 ```text
 yamls/
-├── intercom-only/       SIP phone + audio stack, no wake word or VA
+├── voip-only/       SIP phone + audio stack, no wake word or VA
 ├── full-experience/     SIP phone + audio stack + MWW/Voice Assistant/media
 ├── experimental/        bring-up/reference profiles
 └── host/                local-only ESPHome host test YAMLs, gitignored
@@ -17,7 +17,7 @@ yamls/
 
 Choose the maintained YAML closest to the hardware and edit identity, pins and
 network settings. Do not start from historical `*-tcp`, `*-udp` or
-`*-sip` filenames; transport is now inside the `intercom_api` declaration.
+`*-sip` filenames; transport is now inside the `esphome_voip_stack` declaration.
 
 ## Network
 
@@ -25,25 +25,25 @@ SIP signaling listens on `sip_port` and may use UDP or TCP. RTP media always
 uses UDP on `rtp_port`.
 
 Use routable IP addresses in `phonebook` or let HA publish the central
-`sensor.intercom_phonebook`. For HA Container/Docker/LXC, host networking or an
+`sensor.voip_phonebook`. For HA Container/Docker/LXC, host networking or an
 explicit advertised host remains the simplest deployment because SIP/RTP use
 inbound UDP/TCP sockets.
 
 ## ESP Devices
 
-Choose SIP signaling transport per device. SIP is implicit; `protocol` selects
+Choose SIP signaling transport per device. SIP is implicit; `transport` selects
 only whether signaling uses UDP or TCP:
 
 ```yaml
-intercom_api:
-  protocol: udp
+esphome_voip_stack:
+  transport: udp
 ```
 
 or:
 
 ```yaml
-intercom_api:
-  protocol: tcp
+esphome_voip_stack:
+  transport: tcp
 ```
 
 Use `phonebook` for manual peers. Use the HA phonebook subscription package when
@@ -60,7 +60,7 @@ These are first-class SIP endpoint shapes. They are not compatibility modes.
 
 ## Home Assistant
 
-Configure `intercom_native` with reachable SIP/RTP ports. HA is always the
+Configure `homeassistant_voip_stack` with reachable SIP/RTP ports. HA is always the
 local softphone and router/B2BUA. The setup toggles only choose whether HA
 listens for SIP/TCP and/or SIP/UDP; there is no separate "HA PBX" mode.
 
@@ -70,7 +70,7 @@ advertise host so ESPs and softphones see a reachable SIP Contact/SDP address.
 Use `ha_bridge` for routed or logical calls that should pass through HA.
 
 Enable the local registrar if standard softphones should register to HA. Create
-accounts with `intercom_native.sip_account_create`; registered clients appear
+accounts with `homeassistant_voip_stack.sip_account_create`; registered clients appear
 in the central phonebook as `kind: softphone`.
 
 ## Optional SIP Trunk

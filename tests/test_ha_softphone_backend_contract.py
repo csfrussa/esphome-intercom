@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INIT = ROOT / "custom_components" / "intercom_native" / "__init__.py"
+INIT = ROOT / "custom_components" / "homeassistant_voip_stack" / "__init__.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -55,7 +55,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("_set_ha_softphone_call_state(", bridge_path)
 
     def test_ha_softphone_busy_excludes_bridge_runtime_maps(self) -> None:
-        ws = (ROOT / "custom_components" / "intercom_native" / "websocket_api.py").read_text()
+        ws = (ROOT / "custom_components" / "homeassistant_voip_stack" / "websocket_api.py").read_text()
         state_body = _function_body(ws, "_ha_softphone_state")
         busy_expr = state_body.split('"busy":', 1)[1].split(",", 1)[0]
         self.assertIn("session_device_id", busy_expr)

@@ -1,0 +1,13 @@
+# =============================================================================
+# Phonebook HA roster push.
+#
+# The canonical phonebook is JSON. HA owns `sensor.voip_phonebook` and pushes
+# that exact JSON to each ESP through the native API action `set_roster_json`.
+# This package deliberately does not subscribe to the JSON through a
+# homeassistant text_sensor: large attributes can be truncated before reaching
+# firmware, which breaks the single-roster contract and leaves cards without
+# contacts.
+# =============================================================================
+
+esphome_voip_stack:
+  use_ha_as_first_contact: true

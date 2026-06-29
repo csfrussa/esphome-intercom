@@ -36,7 +36,7 @@ optional AudioProcessor: esp_aec or esp_afe
         ↓
 ESPHome microphone + speaker surfaces
         ↓
-MWW, Voice Assistant, media_player, mixer, intercom_api, custom components
+MWW, Voice Assistant, media_player, mixer, esphome_voip_stack, custom components
 ```
 
 ## Quick Map
@@ -93,7 +93,7 @@ AEC/AFE reference. `esp_aec` or `esp_afe` subtracts that reference before
 frames are delivered to ESPHome consumers.
 
 Result: the user can play music from the ESP speaker while `micro_wake_word`,
-`voice_assistant` and `intercom_api` all receive the same cleaned user-speech
+`voice_assistant` and `esphome_voip_stack` all receive the same cleaned user-speech
 stream with the speaker audio removed. There is no separate wake-word
 microphone to wire and no need to route VA or MWW around the media player.
 
@@ -101,7 +101,7 @@ If no processor is configured, the facade is still a coordinated full-duplex
 mic/speaker provider, but the microphone is not echo-cancelled. If a configured
 processor cannot produce valid output, the stack emits silence instead of
 falling back to raw mic audio, so speaker echo is not silently leaked into wake
-word, STT or intercom TX.
+word, STT or VoIP TX.
 
 The YAML stays normal ESPHome from the consumer side:
 
@@ -117,7 +117,7 @@ micro_wake_word:
 voice_assistant:
   microphone: clean_mic
 
-intercom_api:
+esphome_voip_stack:
   microphone: clean_mic
 ```
 
@@ -215,8 +215,8 @@ flowchart TD
 | Task | Core | Priority | Role |
 |------|------|----------|------|
 | `audio_stack` (audio_task) | **Core 0** | **19** | I2S read/write + rate conversion + audio processor (esp_aec/esp_afe) |
-| `intercom_tx` | Core 0 | 5 | Only when `intercom_api` is present: mic to network |
-| `intercom_srv` | Core 1 | 5 | Only when `intercom_api` is present: TCP RX, call FSM |
+| `voip_tx` | Core 0 | 5 | Only when `esphome_voip_stack` is present: mic to network |
+| `voip_srv` | Core 1 | 5 | Only when `esphome_voip_stack` is present: TCP RX, call FSM |
 | `mixer` (ESPHome) | Any | 10 | Mix VA + intercom audio to speaker |
 | `MWW inference` (ESPHome) | Unpinned | 3→**8** | Wake word TFLite inference (boost via on_boot lambda) |
 | ESPHome main loop / LVGL | Core 1 | 1 | Switches, sensors, display, etc. |
@@ -255,8 +255,8 @@ external_components:
     # components: [audio_processor, esp_audio_stack, esp_afe]
 ```
 
-`intercom_api` is not required. Add it only when the device is also an
-intercom endpoint:
+`esphome_voip_stack` is not required. Add it only when the device is also an
+voip endpoint:
 
 ```yaml
 external_components:
@@ -264,7 +264,7 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
-    components: [audio_processor, esp_audio_stack, esp_aec, intercom_api]
+    components: [audio_processor, esp_audio_stack, esp_aec, esphome_voip_stack]
 ```
 
 If the device also exposes HA media/TTS playback, maintained full-experience
@@ -276,7 +276,7 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
-    components: [audio_processor, esp_audio_stack, esp_aec, intercom_api]
+    components: [audio_processor, esp_audio_stack, esp_aec, esphome_voip_stack]
 ```
 
 `speaker_source` keeps one media player as the media/announcement owner and
@@ -292,7 +292,7 @@ AEC reference extraction, microphone output and speaker input. It loads
 Espressif `esp_codec_dev` and `esp_audio_effects` internally because those are
 part of the bus backend.
 
-The component does not load or require `intercom_api`. When `intercom_api` is
+The component does not load or require `esphome_voip_stack`. When `esphome_voip_stack` is
 also present, it is just another consumer of the microphone and speaker
 surfaces. Compile-time validation prevents both components from owning the same
 audio processor or DC-offset stage, but that validation is conditional and does
@@ -300,7 +300,7 @@ not create a dependency.
 
 `esp_aec` and `esp_afe` are optional `AudioProcessor` providers:
 
-- `esp_aec` can be called by `esp_audio_stack` or by standalone `intercom_api`
+- `esp_aec` can be called by `esp_audio_stack` or by standalone `esphome_voip_stack`
   on separate mic/speaker hardware.
 - `esp_afe` should be called by `esp_audio_stack`, because the AFE manager
   expects steady 16 kHz frames and stable mic/reference timing.
@@ -685,7 +685,7 @@ at the speaker path rate.
                     │    (native rate, no resampling)
 I2S bus: 48kHz ─────┤
                     │    ┌─ esp_ae_rate_cvt ×3 ─┐
-                    └─── Mic path (48kHz) ───┘──→ 16kHz ──→ AEC / MWW / VA / AFE intercom TX
+                    └─── Mic path (48kHz) ───┘──→ 16kHz ──→ AEC / MWW / VA / AFE VoIP TX
 ```
 
 `esp_ae_rate_cvt` is the standalone C API behind Espressif's GMF `aud_rate_cvt` element. The TDM/stereo path uses one multi-channel converter handle for selected mic/ref channels, so the relative latency between microphones and reference stays coupled. Mono software-reference AEC uses the same converter for both RX mic and TX reference.
@@ -741,7 +741,7 @@ speaker:
     source_speakers:
       - id: va_speaker_mix
         timeout: 10s
-      - id: intercom_speaker_mix
+      - id: voip_speaker_mix
         timeout: 10s
 
   # ResamplerSpeakers: convert any input rate → 48kHz before the mixer
@@ -750,8 +750,8 @@ speaker:
     output_speaker: va_speaker_mix
 
   - platform: resampler
-    id: intercom_speaker         # Converts lower-rate intercom RX only when needed
-    output_speaker: intercom_speaker_mix
+    id: voip_speaker         # Converts lower-rate VoIP RX only when needed
+    output_speaker: voip_speaker_mix
 ```
 
 The `resampler` platform uses polyphase interpolation. For 16kHz→48kHz with default settings (`filters: 16, taps: 16`), CPU overhead on ESP32-S3 is approximately 2% of Core 1 during playback. If you see `[W] component took a long time` warnings for `resampler.speaker` you can try `filters: 8, taps: 8` to reduce CPU at a minimal quality cost, or `filters: 4, taps: 4` for minimal CPU.
@@ -857,22 +857,22 @@ binary_sensor:
               condition:
                 lvgl.page.is_showing: ic_idle_page
               then:
-                - intercom_api.call_toggle:
-                    id: intercom
+                - esphome_voip_stack.call_toggle:
+                    id: voip_phone
           - if:
               condition:
                 lvgl.page.is_showing: ic_ringing_in_page
               then:
-                - intercom_api.answer_call:
-                    id: intercom
+                - esphome_voip_stack.answer_call:
+                    id: voip_phone
           - if:
               condition:
                 or:
                   - lvgl.page.is_showing: ic_ringing_out_page
                   - lvgl.page.is_showing: ic_in_call_page
               then:
-                - intercom_api.call_toggle:
-                    id: intercom
+                - esphome_voip_stack.call_toggle:
+                    id: voip_phone
           # VA pages: start/stop voice assistant (default)
       - min_length: 500ms
         max_length: 1000ms
@@ -882,14 +882,14 @@ binary_sensor:
               condition:
                 lvgl.page.is_showing: ic_idle_page
               then:
-                - intercom_api.next_contact:
-                    id: intercom
+                - esphome_voip_stack.next_contact:
+                    id: voip_phone
           - if:
               condition:
                 lvgl.page.is_showing: ic_ringing_in_page
               then:
-                - intercom_api.decline_call:
-                    id: intercom
+                - esphome_voip_stack.decline_call:
+                    id: voip_phone
     on_multi_click:
       - timing:
           - ON for at least 1s
@@ -942,8 +942,8 @@ binary_sensor:
 - **Mic Gain**: -20 to +30 dB range (applied post-AEC in audio_task). Stored via `ESPPreferenceObject` and restored on boot. Mic gain is applied to post-AEC output (affects VA/intercom/MWW equally). Values at or below 0 dB use ESPHome's Q31 `esp-audio-libs` gain path, including zero as a `memset()` fast path. Positive gain uses Espressif `esp_ae_alc` with the YAML number's 1 dB step. **Clipping warning**: positive gain can still saturate the PCM stream. On loud speech with gain > +6 dB, peak samples can clip and produce harmonic distortion that degrades STT and intercom audio. If you need gain > +6 dB to bring a weak MEMS mic up to working levels, pair this component with `esp_afe` and `agc_enabled: true`; with standalone `esp_aec` there is no automatic ceiling.
 - **Cross-Component Validation**: `FINAL_VALIDATE_SCHEMA` rejects stale copied
   YAMLs that try to put audio processing or DC-offset correction on
-  `intercom_api`. If both components are present, `esp_audio_stack` owns
-  software AEC/AFE and DC-offset correction; `intercom_api` consumes the stack's
+  `esphome_voip_stack`. If both components are present, `esp_audio_stack` owns
+  software AEC/AFE and DC-offset correction; `esphome_voip_stack` consumes the stack's
   microphone/speaker facade.
 
 ### Audio task lifecycle

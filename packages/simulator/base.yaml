@@ -1,7 +1,7 @@
 # Phase 00V virtual-device package root.
 #
 # This package is intentionally minimal until the host backends exist. Generated
-# virtual profiles include `intercom_simulator:` directly so CI fails if the
+# virtual profiles include `voip_simulator:` directly so CI fails if the
 # simulator component is missing instead of silently compiling a fake profile.
 
 logger:

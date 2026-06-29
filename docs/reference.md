@@ -1,11 +1,11 @@
 # Reference
 
-## ESP `intercom_api`
+## ESP `esphome_voip_stack`
 
 ```yaml
-intercom_api:
-  id: intercom
-  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
+esphome_voip_stack:
+  id: voip_phone
+  transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   sip_port: 5060
   rtp_port: 40000
   static_contacts:
@@ -20,10 +20,10 @@ Important options:
 
 | Option | Meaning |
 | --- | --- |
-| `protocol` | SIP signaling transport: `udp` or `tcp`. SIP is implicit; this is not a protocol-family selector and does not move audio to TCP. RTP audio remains UDP. |
+| `transport` | SIP signaling transport: `udp` or `tcp`. SIP is implicit; this is not a protocol-family selector and does not move audio to TCP. RTP audio remains UDP. |
 | `sip_port` | Local SIP listener port. |
 | `rtp_port` | Local RTP media port. |
-| `static_contacts` | Optional local contacts loaded at boot. HA-managed `sensor.intercom_phonebook` is recommended for normal installs. |
+| `static_contacts` | Optional local contacts loaded at boot. HA-managed `sensor.voip_phonebook` is recommended for normal installs. |
 | `ha_phonebook_text_sensor_id` | HA-published central roster source. |
 | `on_calling` | Automation hook for outbound INVITE state. |
 | `on_ringing` | Automation hook for inbound INVITE ringing state. |
@@ -37,45 +37,45 @@ Important options:
 
 Runtime actions:
 
-- `intercom_api.start`
-- `intercom_api.stop`
-- `intercom_api.answer_call`
-- `intercom_api.decline_call`
-- `intercom_api.add_contact`
-- `intercom_api.add_contacts`
-- `intercom_api.remove_contact`
-- `intercom_api.set_contacts`
-- `intercom_api.set_roster_json`
+- `esphome_voip_stack.start`
+- `esphome_voip_stack.stop`
+- `esphome_voip_stack.answer_call`
+- `esphome_voip_stack.decline_call`
+- `esphome_voip_stack.add_contact`
+- `esphome_voip_stack.add_contacts`
+- `esphome_voip_stack.remove_contact`
+- `esphome_voip_stack.set_contacts`
+- `esphome_voip_stack.set_roster_json`
 
 Static and runtime contacts accept `sip_transport: udp|tcp` when one contact
-must use a different signaling transport from the phone's own `protocol`.
+must use a different signaling transport from the phone's own `transport`.
 
 Conditions:
 
-- `intercom_api.is_idle`
-- `intercom_api.is_calling`
-- `intercom_api.is_ringing`
-- `intercom_api.is_in_call`
-- `intercom_api.is_incoming`
+- `esphome_voip_stack.is_idle`
+- `esphome_voip_stack.is_calling`
+- `esphome_voip_stack.is_ringing`
+- `esphome_voip_stack.is_in_call`
+- `esphome_voip_stack.is_incoming`
 
 ## HA Services
 
-- `intercom_native.sip_call`
-- `intercom_native.sip_answer`
-- `intercom_native.sip_decline`
-- `intercom_native.sip_hangup`
-- `intercom_native.sip_forward`
-- `intercom_native.sip_route`
-- `intercom_native.sip_set_dnd`
-- `intercom_native.phonebook_add_contact`
-- `intercom_native.phonebook_remove_contact`
-- `intercom_native.phonebook_set_contacts`
-- `intercom_native.phonebook_clear`
-- `intercom_native.phonebook_export`
-- `intercom_native.phonebook_push`
-- `intercom_native.sip_account_create`
-- `intercom_native.sip_account_remove`
-- `intercom_native.sip_account_rotate_password`
+- `homeassistant_voip_stack.sip_call`
+- `homeassistant_voip_stack.sip_answer`
+- `homeassistant_voip_stack.sip_decline`
+- `homeassistant_voip_stack.sip_hangup`
+- `homeassistant_voip_stack.sip_forward`
+- `homeassistant_voip_stack.sip_route`
+- `homeassistant_voip_stack.sip_set_dnd`
+- `homeassistant_voip_stack.phonebook_add_contact`
+- `homeassistant_voip_stack.phonebook_remove_contact`
+- `homeassistant_voip_stack.phonebook_set_contacts`
+- `homeassistant_voip_stack.phonebook_clear`
+- `homeassistant_voip_stack.phonebook_export`
+- `homeassistant_voip_stack.phonebook_push`
+- `homeassistant_voip_stack.sip_account_create`
+- `homeassistant_voip_stack.sip_account_remove`
+- `homeassistant_voip_stack.sip_account_rotate_password`
 
 `sip_call` accepts `destination`, `target`, or `call`. Set `ha_bridge: true` to
 force the HA bridge path.
@@ -90,7 +90,7 @@ force the HA bridge path.
 `phonebook_add_contact` requires only `name`. Optional fields are `id`, `kind`,
 `address`, `sip_uri`, `number`, `ha_bridge`, `sip_transport`, `sip_port`,
 `rtp_port`, `tx_rate`, `rx_rate`, `tx_formats`, `rx_formats`, and
-`max_payload_bytes`. HA updates `sensor.intercom_phonebook` and pushes the
+`max_payload_bytes`. HA updates `sensor.voip_phonebook` and pushes the
 roster to online ESP devices.
 
 `phonebook_remove_contact` removes one manual central contact by `name`.
@@ -103,7 +103,7 @@ baresip, pjsua or another standard SIP softphone registering directly to HA. The
 `username` is the SIP username and central roster ID; `display_name`,
 `password`, `enabled`, and `replace` are optional. If `password` is omitted, HA
 generates one and shows it once in a persistent notification and in the
-`intercom_native.call_event` stream with `state: sip_account_created`.
+`homeassistant_voip_stack.call_event` stream with `state: sip_account_created`.
 Registered clients appear in the central phonebook and are pushed to ESPs.
 
 ## HA Setup Options
@@ -146,13 +146,13 @@ HA logs the digits and terminates the answered leg as `route_not_found`.
 
 ## HA SIP Events
 
-`intercom_native` fires Home Assistant bus events for automations:
+`homeassistant_voip_stack` fires Home Assistant bus events for automations:
 
-- `intercom_native.sip_call_state`: every SIP phone/bridge state update.
-- `intercom_native.sip_incoming_call`: inbound call or route request.
-- `intercom_native.sip_route_request`: HA dial-plan lookup request.
-- `intercom_native.sip_call_ended`: terminal `ended`, `missed`, or `failed`.
-- `intercom_native.call_event`: aggregate SIP call event for frontend and automations.
+- `homeassistant_voip_stack.sip_call_state`: every SIP phone/bridge state update.
+- `homeassistant_voip_stack.sip_incoming_call`: inbound call or route request.
+- `homeassistant_voip_stack.sip_route_request`: HA dial-plan lookup request.
+- `homeassistant_voip_stack.sip_call_ended`: terminal `ended`, `missed`, or `failed`.
+- `homeassistant_voip_stack.call_event`: aggregate SIP call event for frontend and automations.
 
 The payload includes the canonical SIP fields when available: `state`,
 `sip_state`, `type`, `call_id`, `caller`, `callee`, `peer_name`, `direction`,

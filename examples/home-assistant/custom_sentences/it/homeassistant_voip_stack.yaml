@@ -1,0 +1,26 @@
+language: it
+
+intents:
+  VoipCall:
+    data:
+      - sentences:
+          - "chiama {target}"
+  VoipHangup:
+    data:
+      - sentences:
+          - "riaggancia"
+          - "termina la chiamata"
+  VoipAnswer:
+    data:
+      - sentences:
+          - "rispondi"
+          - "rispondi alla chiamata"
+  VoipDecline:
+    data:
+      - sentences:
+          - "rifiuta"
+          - "rifiuta la chiamata"
+
+lists:
+  target:
+    wildcard: true

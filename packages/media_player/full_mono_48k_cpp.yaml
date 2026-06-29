@@ -11,7 +11,7 @@ sendspin:
   task_stack_in_psram: true
 
 audio_file:
-  - id: intercom_ringing_sound
+  - id: voip_ringing_sound
     file: ${assets_base}assets/sounds/ringtone.flac
 
 media_source:

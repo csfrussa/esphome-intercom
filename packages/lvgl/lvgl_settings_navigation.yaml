@@ -32,7 +32,7 @@ globals:
 
 script:
   # Optional transition hooks. Full-experience devices !extend these to set
-  # page animation globals before draw_display; intercom-only devices can keep
+  # page animation globals before draw_display; voip-only devices can keep
   # the no-op defaults.
   - id: ic_settings_open_transition
     then: []

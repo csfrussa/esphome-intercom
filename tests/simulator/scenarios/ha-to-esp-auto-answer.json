@@ -28,7 +28,7 @@
           "effect": null
         },
         "audio": {
-          "owner": "intercom"
+          "owner": "voip"
         }
       }
     }

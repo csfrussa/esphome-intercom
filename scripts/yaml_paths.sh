@@ -42,7 +42,7 @@
 #   `[a-zA-Z_][a-zA-Z0-9_]*` (identifier shape, not just letters).
 # - Yaml depth varies (3 or 4 levels deep under `yamls/`): all paths
 #   computed dynamically via `realpath --relative-to`. No hardcoded depth.
-# - Yamls without `assets_base` (e.g. minimal intercom-only): the sed
+# - Yamls without `assets_base` (e.g. minimal voip-only): the sed
 #   substitution is a no-op when the line is absent.
 # - Roundtrip local→remote→local is byte-identical (verified via md5sum).
 
@@ -330,7 +330,7 @@ Examples:
   $(basename "$0") local
   $(basename "$0") remote --branch dev
   $(basename "$0") remote --url github://my-fork/esphome-intercom --branch dev
-  $(basename "$0") remote --file yamls/intercom-only/single-bus/xiaozhi-intercom.yaml --branch main
+  $(basename "$0") remote --file yamls/voip-only/single-bus/xiaozhi-intercom.yaml --branch main
 EOF
 }
 

@@ -11,14 +11,14 @@ regression comparison.
   integration proof.
 
 Dual-bus MEMS+amp profiles are no longer experimental; the maintained SIP phone
-profiles live in [`../intercom-only/dual-bus/`](../intercom-only/dual-bus/) and
+profiles live in [`../voip-only/dual-bus/`](../voip-only/dual-bus/) and
 use `esp_audio_stack` `rx_bus` / `tx_bus`.
 
 ## Status
 
 | YAML | Hardware | What's missing |
 |------|----------|----------------|
-| `home-assistant-voice-pe/home-assistant-voice-pe-intercom.yaml` | Home Assistant Voice PE | runtime intercom validation |
+| `home-assistant-voice-pe/home-assistant-voice-pe-voip.yaml` | Home Assistant Voice PE | runtime intercom validation |
 
 ## Contributing
 

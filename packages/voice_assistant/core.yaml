@@ -14,7 +14,7 @@
 #   - script id `barge_failsafe` (provided by intercom/state_machine_full.yaml)
 #   - script id `va_error_flash` (provided by intercom/state_machine_full.yaml)
 #   - script id `ui_tts_started`, `ui_stt_ended` (placeholders or device override)
-#   - id `intercom`              : intercom_api component (for publish_entity_states)
+#   - id `intercom`              : esphome_voip_stack component (for publish_entity_states)
 #   - id `mute`                  : mic mute switch
 # =============================================================================
 

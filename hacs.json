@@ -1,5 +1,5 @@
 {
-  "name": "Intercom Native",
+  "name": "Home Assistant VoIP Stack",
   "render_readme": true,
   "homeassistant": "2026.5.0"
 }

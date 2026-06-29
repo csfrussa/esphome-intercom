@@ -27,7 +27,7 @@
 <text class="title" x="54" y="62">SIP phonebook and dial plan</text><text class="subtitle" x="56" y="92">One roster feeds ESPs, HA card and routing decisions; SIP is implicit</text>
 <rect class="box box-esp" x="60" y="145" width="280" height="135"/>
 <text class="label" x="82" y="181">ESP endpoints</text>
-<text class="small" x="82" y="209">publish intercom_endpoint</text>
+<text class="small" x="82" y="209">publish voip_endpoint</text>
 <text class="small" x="82" y="231">name, host, ports</text>
 <text class="small" x="82" y="253">TX/RX audio formats</text>
 <rect class="box box" x="60" y="335" width="280" height="135"/>
@@ -42,7 +42,7 @@
 <text class="small" x="82" y="633">kind: softphone</text>
 <rect class="box box-ha" x="520" y="245" width="360" height="240"/>
 <text class="label" x="542" y="281">HA central roster</text>
-<text class="small" x="542" y="309">sensor.intercom_phonebook</text>
+<text class="small" x="542" y="309">sensor.voip_phonebook</text>
 <text class="small" x="542" y="331">canonical endpoint rows</text>
 <text class="small" x="542" y="353">enabled, kind, number</text>
 <text class="small" x="542" y="375">sip_uri / transport</text>

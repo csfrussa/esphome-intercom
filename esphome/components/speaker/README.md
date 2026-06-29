@@ -56,7 +56,7 @@ This fork is intentionally narrow:
 - it does not replace `esp_audio_stack`;
 - it does not own I2S or codec hardware;
 - it preserves ESPHome's normal `speaker` and `media_player` YAML shape;
-- native intercom-only YAMLs that do not use `platform: speaker` media playback
+- native voip-only YAMLs that do not use `platform: speaker` media playback
   do not need it.
 
 ## Maintained Usage

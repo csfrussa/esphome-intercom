@@ -34,7 +34,7 @@
 #
 #   Music/radio → media_speaker_input (resampler) ───────────┐
 #   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311 DAC
-#   Intercom RX → intercom_speaker_input (resampler) ────────┘
+#   Intercom RX → voip_speaker_input (resampler) ────────┘
 #
 # =============================================================================
 
@@ -56,14 +56,14 @@ substitutions:
 # Package: shared VA + Intercom state machine, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_intercom_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/intercom/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/intercom/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/intercom/ha_api_cpp.yaml@dev
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
   voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
   ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  intercom_transport: github://n-IA-hane/esphome-intercom/packages/intercom/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/intercom/phonebook_subscribe.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
   s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
   native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
   status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
@@ -125,12 +125,12 @@ logger:
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
-    intercom_api: INFO
-    intercom_api.fsm: INFO
-    intercom_api.tcp: INFO
-    intercom_api.udp: INFO
-    intercom_api.audio: INFO
-    intercom_api.settings: INFO
+    esphome_voip_stack: INFO
+    esphome_voip_stack.fsm: INFO
+    esphome_voip_stack.tcp: INFO
+    esphome_voip_stack.udp: INFO
+    esphome_voip_stack.audio: INFO
+    esphome_voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -157,7 +157,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, intercom_api, esp_audio_stack, esp_afe, runtime_fsm, speaker, voice_assistant]
+    components: [audio_processor, esphome_voip_stack, esp_audio_stack, esp_afe, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, TCA9555)
@@ -305,9 +305,9 @@ voice_assistant:
   volume_multiplier: 2.0
 
 # =============================================================================
-# Intercom API: Hardware config (callbacks from package)
+# ESPHome VoIP Stack: Hardware config (callbacks from package)
 # =============================================================================
-intercom_api:
+esphome_voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # Intercom staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   audio:
@@ -330,8 +330,8 @@ intercom_api:
       channels: 1
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
-    # only because speaker: intercom_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring intercom_api directly to a
+    # only because speaker: voip_speaker_input points at the resampler; do
+    # not advertise additional formats when wiring esphome_voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -347,7 +347,7 @@ intercom_api:
         channels: 1
         frame_ms: 32
   microphone: mic_main
-  speaker: intercom_speaker_input
+  speaker: voip_speaker_input
   ringing_timeout: 30s
   # routing_mode default = device_independent (P2P). Override at runtime
   # via the "SIP bridge" switch in the device-specific switch block below.
@@ -387,9 +387,9 @@ binary_sensor:
                 - if:
                     condition:
                       not:
-                        - intercom_api.is_idle: intercom
+                        - esphome_voip_stack.is_idle: voip_phone
                     then:
-                      - intercom_api.call_toggle: intercom
+                      - esphome_voip_stack.call_toggle: voip_phone
                     else:
                       - runtime_fsm.event:
                           id: runtime_controller
@@ -401,7 +401,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - intercom_api.next_contact: intercom
+          - esphome_voip_stack.next_contact: voip_phone
       # Long press (1-3s): toggle mute
       - timing:
           - ON for 1s to 3s
@@ -421,7 +421,7 @@ binary_sensor:
       mode:
         input: true
     on_press:
-      - intercom_api.call_toggle: intercom
+      - esphome_voip_stack.call_toggle: voip_phone
 
   # KEY2 (TCA9555 EXIO10): Next contact
   - platform: gpio
@@ -435,7 +435,7 @@ binary_sensor:
       mode:
         input: true
     on_press:
-      - intercom_api.next_contact: intercom
+      - esphome_voip_stack.next_contact: voip_phone
 
   # KEY3 (TCA9555 EXIO11): Decline / Previous contact
   - platform: gpio
@@ -451,11 +451,11 @@ binary_sensor:
     on_press:
       - if:
           condition:
-            intercom_api.is_ringing: intercom
+            esphome_voip_stack.is_ringing: voip_phone
           then:
-            - intercom_api.decline_call: intercom
+            - esphome_voip_stack.decline_call: voip_phone
           else:
-            - intercom_api.prev_contact: intercom
+            - esphome_voip_stack.prev_contact: voip_phone
 
 # =============================================================================
 # Switches (device-specific)
@@ -541,7 +541,7 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        intercom_api.is_idle: intercom
+                        esphome_voip_stack.is_idle: voip_phone
                 then:
                   - logger.log:
                       level: WARN

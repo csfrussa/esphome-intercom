@@ -31,7 +31,7 @@ Ready-to-flash full-experience YAMLs include both paths: `generic-s3-full-aec-*`
 | Full AFE presets, codec/TDM boards, or larger flash generic builds | `esp_afe` |
 | Intercom + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
-| Standalone native `intercom_api` without `esp_audio_stack` | No software processor; bind directly to ESPHome microphone/speaker. Use `esp_audio_stack` + `esp_aec` when software echo cancellation is required. |
+| Standalone native `esphome_voip_stack` without `esp_audio_stack` | No software processor; bind directly to ESPHome microphone/speaker. Use `esp_audio_stack` + `esp_aec` when software echo cancellation is required. |
 
 Both components implement `AudioProcessor` at the type level, but `esp_afe` is only safely usable behind `esp_audio_stack`. See [docs/reference.md](../../../docs/reference.md#audio-processing-components).
 
@@ -44,8 +44,8 @@ external_components:
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
     components: [audio_processor, esp_aec, esp_audio_stack]
-    # Add intercom_api only when this device is also an intercom endpoint.
-    # components: [audio_processor, esp_aec, esp_audio_stack, intercom_api]
+    # Add esphome_voip_stack only when this device is also an voip endpoint.
+    # components: [audio_processor, esp_aec, esp_audio_stack, esphome_voip_stack]
 
 esp_aec:
   id: aec_processor
@@ -65,8 +65,8 @@ esp_audio_stack:
 |--------|------|---------|-------------|
 | `id` | ID | required | Component identifier referenced by `esp_audio_stack.processor_id`. |
 | `sample_rate` | int | 16000 | Must match the sample rate of the consumer. esp-sr's AEC only accepts 16 kHz frames; the upstream component is expected to rate-convert from the I²S bus rate when needed. |
-| `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (intercom-only, ~128 ms tail). Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
-| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for intercom-only. Public YAMLs in this repo restrict or order runtime choices per target - see "Runtime mode switching" below. |
+| `filter_length` | int | 4 | AEC tail length in frames. Frame size depends on `mode`: **32 ms in SR modes, 16 ms in VOIP modes**. Range 1 to 8. Use **4** with SR modes (full-experience with MWW, ~128 ms tail), **8** with VOIP modes (voip-only, ~128 ms tail). Higher values exit the esp-sr tested range and can trigger silent calloc failures on cross-engine switches. |
+| `mode` | string | `sr_low_cost` | AEC algorithm. Pick the engine to match the use case: **FD modes** for full-duplex codec devices where speaker echo is audible, **SR modes** where wake-word spectral preservation matters more than residual echo suppression, **VOIP modes** for voip-only. Public YAMLs in this repo restrict or order runtime choices per target - see "Runtime mode switching" below. |
 
 ## AEC modes
 
@@ -77,7 +77,7 @@ esp-sr 2.4.4 ships SR, VOIP and FD AEC modes:
 | `sr_low_cost` | `esp_aec3` linear | **~22 %** | No | **10/10** | VA + MWW when speaker leakage is already mild |
 | `sr_high_perf` | `esp_aec3` FFT | ~25 % | No | 10/10 | Only when contiguous DMA-capable internal RAM is available |
 | `voip_low_cost` | `dios_ssp_aec` Speex | ~58 % | Yes | 2/10 | Intercom-only, mild echo, low CPU budget |
-| `voip_high_perf` | `dios_ssp_aec` | ~64 % | Yes | 2/10 | **Default for intercom-only** (with `filter_length: 8` for 128 ms tail) |
+| `voip_high_perf` | `dios_ssp_aec` | ~64 % | Yes | 2/10 | **Default for voip-only** (with `filter_length: 8` for 128 ms tail) |
 | `fd_low_cost` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Codec-backed full-duplex devices with audible speaker echo, such as Spotpear ES8311 loopback |
 | `fd_high_perf` | Espressif full-duplex AEC | target-dependent | Yes | target-dependent | Same use case when contiguous DMA-capable internal RAM is available |
 

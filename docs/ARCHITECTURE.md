@@ -6,7 +6,7 @@ SDP and RTP are the functional primitives.
 
 ## Product Model
 
-Every ESP running `intercom_api` is a SIP user agent:
+Every ESP running `esphome_voip_stack` is a SIP user agent:
 
 - it can originate and receive SIP calls;
 - it does not register to a PBX;
@@ -32,10 +32,10 @@ to a local endpoint, bridge, group-call, use the trunk or reject.
 ## Components
 
 ```text
-ESP intercom_api
+ESP esphome_voip_stack
   SIP UA + SDP offer/answer + RTP PCM + local phonebook + SipPhoneState
 
-Home Assistant intercom_native
+Home Assistant homeassistant_voip_stack
   HA softphone + SIP UDP/TCP endpoint + router/B2BUA + RTP relay/resampler
   + central phonebook + optional local registrar + optional trunk client
 
@@ -46,11 +46,11 @@ Lovelace card
 
 Component ownership:
 
-- `intercom_api` owns ESP SIP signaling, RTP sockets, selected call formats and
+- `esphome_voip_stack` owns ESP SIP signaling, RTP sockets, selected call formats and
   the public ESP call state.
 - `esp_audio_stack`, native ESPHome microphone/speaker components, `esp_aec`
   and `esp_afe` own physical audio capture/playback and processing.
-- `intercom_native` owns HA-side SIP dialogs, route decisions, trunk
+- `homeassistant_voip_stack` owns HA-side SIP dialogs, route decisions, trunk
   registration, local softphone registrations and HA softphone media sessions.
 - Cards never own the call FSM. They render state pushed by the owner and send
   user commands back to that owner.
@@ -73,7 +73,7 @@ All call control is SIP:
 
 ESP devices do not implement provider/PBX registration. HA trunk registration
 and HA local softphone registration are separate features that live only in
-`intercom_native`.
+`homeassistant_voip_stack`.
 
 For outbound INVITE failures, HA sends the required ACK for non-2xx final
 responses before surfacing the terminal reason. This keeps failed calls SIP
@@ -229,7 +229,7 @@ registration/call legs. UDP signaling still sends datagrams directly.
 Cards do not own call control state.
 
 - The HA softphone card mirrors the HA softphone state pushed by
-  `intercom_native`.
+  `homeassistant_voip_stack`.
 - ESP mirror cards use ESPHome entities and controls from the selected ESP.
 - Frontend buttons issue commands such as call, answer, decline, hangup or
   contact navigation; they do not infer terminal SIP reasons or run a parallel
@@ -238,8 +238,8 @@ Cards do not own call control state.
 ESP mirror cards are synchronized through ESPHome entities and buttons. Contact
 left/right presses go to the ESP and the selected contact shown by the card is
 the ESP selected contact. HA softphone cards are synchronized through
-`intercom_native` snapshots and events. Browser audio belongs to the HA
-softphone leg and is attached through `/api/intercom_native/ws`.
+`homeassistant_voip_stack` snapshots and events. Browser audio belongs to the HA
+softphone leg and is attached through `/api/homeassistant_voip_stack/ws`.
 
 Browser capture runs inside an AudioWorklet. The worklet uses a small reusable
 frame pool and posts fixed negotiated frames to the engine. The engine reuses a

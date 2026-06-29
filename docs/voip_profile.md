@@ -1,6 +1,6 @@
-# intercom-sip-pcm/1
+# voip-pcm/1
 
-`intercom-sip-pcm/1` is the ESPHome Intercom VoIP profile.
+`voip-pcm/1` is the ESPHome Intercom VoIP profile.
 
 It is a SIP/SDP/RTP profile, not a proprietary intercom protocol. ESP devices
 act as SIP user agents and exchange RTP PCM media. Home Assistant may provide

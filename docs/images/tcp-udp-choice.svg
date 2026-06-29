@@ -61,7 +61,7 @@
 <path class="line-green" d="M970 260 C920 280 900 330 875 350"/>
 <path class="line-orange" d="M430 532 C560 585 850 585 970 532"/>
 <path class="line2 dash" d="M875 430 C930 470 940 500 970 520"/>
-<rect class="pill" x="575" y="525" width="130" height="24"/><text class="tiny" x="587" y="542">protocol: tcp</text>
-<rect class="pill" x="725" y="525" width="130" height="24"/><text class="tiny" x="737" y="542">protocol: udp</text>
+<rect class="pill" x="575" y="525" width="130" height="24"/><text class="tiny" x="587" y="542">transport: tcp</text>
+<rect class="pill" x="725" y="525" width="130" height="24"/><text class="tiny" x="737" y="542">transport: udp</text>
 <rect class="pill" x="630" y="563" width="140" height="24"/><text class="tiny" x="642" y="580">RTP stays UDP</text>
 </svg>

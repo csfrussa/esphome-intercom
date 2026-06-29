@@ -7,8 +7,8 @@
 #include <cstring>
 #include <iterator>
 
-#ifdef USE_RUNTIME_FSM_INTERCOM
-#include "esphome/components/intercom_api/intercom_api.h"
+#ifdef USE_RUNTIME_FSM_VOIP
+#include "esphome/components/esphome_voip_stack/esphome_voip_stack.h"
 #endif
 
 namespace esphome::runtime_fsm {
@@ -23,7 +23,7 @@ void RuntimeFsm::setup() {
   }
   const ResolvedPolicies old_policies = this->resolved_policies_;
   const uint32_t old_mask = this->generic_activity_mask_;
-  (void) this->sync_intercom_activity_();
+  (void) this->sync_voip_activity_();
   (void) this->apply_derived_activities_();
   this->apply_generic_outputs_();
   this->commit_outputs_("setup", old_mask, old_policies);
@@ -34,7 +34,7 @@ void RuntimeFsm::loop() {
 
   const uint32_t old_mask = this->generic_activity_mask_;
   const ResolvedPolicies old_policies = this->resolved_policies_;
-  if (!this->sync_intercom_activity_())
+  if (!this->sync_voip_activity_())
     return;
   (void) this->apply_derived_activities_();
   this->apply_generic_outputs_();
@@ -55,8 +55,8 @@ void RuntimeFsm::dump_config() {
                 static_cast<unsigned>(this->derived_activities_.size()));
   ESP_LOGCONFIG(TAG, "  Debug: %s", YESNO(this->debug_));
   ESP_LOGCONFIG(TAG, "  Config valid: %s", YESNO(!this->config_error_));
-#ifdef USE_RUNTIME_FSM_INTERCOM
-  ESP_LOGCONFIG(TAG, "  Intercom observer: %s", this->intercom_ != nullptr ? "configured" : "missing");
+#ifdef USE_RUNTIME_FSM_VOIP
+  ESP_LOGCONFIG(TAG, "  VoIP observer: %s", this->voip_ != nullptr ? "configured" : "missing");
 #endif
 }
 
@@ -264,14 +264,14 @@ void RuntimeFsm::set_policy_change_trigger(const char *policy, Trigger<int32_t> 
   this->policy_change_triggers_[this->policy_change_trigger_count_++] = PolicyChangeTrigger{policy, trigger};
 }
 
-void RuntimeFsm::on_intercom_event() {
+void RuntimeFsm::on_voip_event() {
   const uint32_t old_mask = this->generic_activity_mask_;
   const ResolvedPolicies old_policies = this->resolved_policies_;
-  if (!this->sync_intercom_activity_())
+  if (!this->sync_voip_activity_())
     return;
   (void) this->apply_derived_activities_();
   this->apply_generic_outputs_();
-  this->commit_outputs_("intercom_event", old_mask, old_policies);
+  this->commit_outputs_("voip_event", old_mask, old_policies);
 }
 
 void RuntimeFsm::event(const char *name) {
@@ -383,10 +383,10 @@ void RuntimeFsm::dump_state(const char *reason) {
     ESP_LOGI(TAG, "  policy %s=%s output=%" PRId32, policy.policy != nullptr ? policy.policy : "-",
              policy.value != nullptr ? policy.value : "-", this->resolve_policy_output_(policy.policy, policy.value));
   }
-#ifdef USE_RUNTIME_FSM_INTERCOM
-  if (this->intercom_ != nullptr) {
-    ESP_LOGI(TAG, "  observed intercom=%s activity=%s", this->intercom_->get_call_state_str(),
-             this->last_intercom_activity_[0] != '\0' ? this->last_intercom_activity_ : "-");
+#ifdef USE_RUNTIME_FSM_VOIP
+  if (this->voip_ != nullptr) {
+    ESP_LOGI(TAG, "  observed voip=%s activity=%s", this->voip_->get_call_state_str(),
+             this->last_voip_activity_[0] != '\0' ? this->last_voip_activity_ : "-");
   }
 #endif
 }
@@ -549,35 +549,35 @@ void RuntimeFsm::commit_outputs_(const char *reason, uint32_t old_mask, const Re
     this->drain_pending_events_();
 }
 
-void RuntimeFsm::build_intercom_activity_name_(const char *state) {
-  this->intercom_activity_[0] = '\0';
-#ifdef USE_RUNTIME_FSM_INTERCOM
-  if (this->intercom_activity_prefix_ == nullptr || this->intercom_activity_prefix_[0] == '\0' || state == nullptr ||
+void RuntimeFsm::build_voip_activity_name_(const char *state) {
+  this->voip_activity_[0] = '\0';
+#ifdef USE_RUNTIME_FSM_VOIP
+  if (this->voip_activity_prefix_ == nullptr || this->voip_activity_prefix_[0] == '\0' || state == nullptr ||
       state[0] == '\0')
     return;
-  std::snprintf(this->intercom_activity_, sizeof(this->intercom_activity_), "%s%s", this->intercom_activity_prefix_,
+  std::snprintf(this->voip_activity_, sizeof(this->voip_activity_), "%s%s", this->voip_activity_prefix_,
                 state);
 #else
   (void) state;
 #endif
 }
 
-bool RuntimeFsm::sync_intercom_activity_() {
-#ifdef USE_RUNTIME_FSM_INTERCOM
-  if (this->intercom_ == nullptr || this->intercom_activity_prefix_ == nullptr)
+bool RuntimeFsm::sync_voip_activity_() {
+#ifdef USE_RUNTIME_FSM_VOIP
+  if (this->voip_ == nullptr || this->voip_activity_prefix_ == nullptr)
     return false;
 
-  this->build_intercom_activity_name_(this->intercom_->get_call_state_str());
-  if (std::strcmp(this->intercom_activity_, this->last_intercom_activity_) == 0)
+  this->build_voip_activity_name_(this->voip_->get_call_state_str());
+  if (std::strcmp(this->voip_activity_, this->last_voip_activity_) == 0)
     return false;
 
   bool changed = false;
-  if (this->last_intercom_activity_[0] != '\0')
-    changed |= this->set_activity_value_if_known_(this->last_intercom_activity_, false);
-  if (this->intercom_activity_[0] != '\0')
-    changed |= this->set_activity_value_if_known_(this->intercom_activity_, true);
+  if (this->last_voip_activity_[0] != '\0')
+    changed |= this->set_activity_value_if_known_(this->last_voip_activity_, false);
+  if (this->voip_activity_[0] != '\0')
+    changed |= this->set_activity_value_if_known_(this->voip_activity_, true);
 
-  std::snprintf(this->last_intercom_activity_, sizeof(this->last_intercom_activity_), "%s", this->intercom_activity_);
+  std::snprintf(this->last_voip_activity_, sizeof(this->last_voip_activity_), "%s", this->voip_activity_);
   return changed;
 #else
   return false;

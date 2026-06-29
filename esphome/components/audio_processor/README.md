@@ -41,7 +41,7 @@ I2S owner. It is also unit-testable: the contract can be mocked without bringing
 up DMA.
 
 Maintained intercom profiles route software AEC/AFE through `esp_audio_stack`;
-`intercom_api` is transport/FSM glue in that mode and no longer accepts its own
+`esphome_voip_stack` is transport/FSM glue in that mode and no longer accepts its own
 `processor_id`.
 
 ## YAML usage
@@ -54,7 +54,7 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
-    components: [audio_processor, esp_aec, esp_audio_stack, intercom_api]
+    components: [audio_processor, esp_aec, esp_audio_stack, esphome_voip_stack]
 ```
 
 You never instantiate `audio_processor:` directly in a YAML. Listing it in `external_components` makes its headers available to the other components.

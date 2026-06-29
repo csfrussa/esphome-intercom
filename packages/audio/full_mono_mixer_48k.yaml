@@ -6,8 +6,8 @@
 #
 # Provides:
 #   - `audio_mixer`
-#   - `media_mixer_input`, `tts_mixer_input`, `intercom_mixer_input`
-#   - `media_speaker_input`, `tts_speaker_input`, `intercom_speaker_input`
+#   - `media_mixer_input`, `tts_mixer_input`, `voip_mixer_input`
+#   - `media_speaker_input`, `tts_speaker_input`, `voip_speaker_input`
 #
 # The hardware speaker stays device-local because codec/no-codec and power
 # handling differ by board.
@@ -33,7 +33,7 @@ speaker:
         sample_rate: 48000
         bits_per_sample: 16
         num_channels: 1
-      - id: intercom_mixer_input
+      - id: voip_mixer_input
         timeout: 10s
         # Local mixer staging; RTP packet time is negotiated by SIP/SDP.
         buffer_duration: 128ms
@@ -58,8 +58,8 @@ speaker:
     num_channels: 1
 
   - platform: resampler
-    id: intercom_speaker_input
-    output_speaker: intercom_mixer_input
+    id: voip_speaker_input
+    output_speaker: voip_mixer_input
     task_stack_in_psram: true
     sample_rate: 48000
     bits_per_sample: 16

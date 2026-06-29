@@ -49,7 +49,7 @@ script:
               led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.7f).set_effect("None").perform();
               break;
             case 12: // Media playing: green spin
-              if (id(g_intercom_ringtone_media_suppressed)) {
+              if (id(g_voip_ringtone_media_suppressed)) {
                 led->turn_off().perform();
                 break;
               }

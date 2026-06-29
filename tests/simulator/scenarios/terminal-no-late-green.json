@@ -26,7 +26,7 @@
         "esp": {
           "state": "idle"
         },
-        "intercom": {
+        "voip": {
           "state": "idle"
         },
         "led": {

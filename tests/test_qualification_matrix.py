@@ -14,7 +14,7 @@ TOOL = ROOT / "tests" / "support" / "qualification_matrix.py"
 
 
 def _load_tool():
-    spec = importlib.util.spec_from_file_location("intercom_qualification_matrix", TOOL)
+    spec = importlib.util.spec_from_file_location("voip_qualification_matrix", TOOL)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load qualification matrix tool")
     module = importlib.util.module_from_spec(spec)

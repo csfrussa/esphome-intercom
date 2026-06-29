@@ -2,18 +2,18 @@
 
 The phonebook is the SIP dial plan shared by ESP devices, Home Assistant,
 registered local softphones and the optional trunk. SIP is implicit everywhere:
-fields named `transport`, `sip_transport` or `protocol` only choose SIP/TCP or
+fields named `transport`, `sip_transport` or `transport` only choose SIP/TCP or
 SIP/UDP signaling, never a second call-control protocol.
 
 ## ESP Static Contacts
 
-Declare static local entries directly in `intercom_api` only when an ESP must
+Declare static local entries directly in `esphome_voip_stack` only when an ESP must
 have contacts before HA sync, work offline, or keep a tiny fixed local roster:
 
 ```yaml
-intercom_api:
-  id: intercom
-  protocol: udp  # SIP signaling transport only; audio is always RTP/UDP.
+esphome_voip_stack:
+  id: voip_phone
+  transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
     - name: Kitchen
       ip: 192.168.1.42
@@ -27,7 +27,7 @@ Runtime actions use the same model:
 
 ```yaml
 on_press:
-  - intercom_api.add_contacts:
+  - esphome_voip_stack.add_contacts:
       name: Kitchen
       ip: 192.168.1.42
       sip_transport: udp
@@ -41,12 +41,12 @@ Rules:
 - Name-only entries are logical targets and can be resolved or bridged by HA.
 - A numeric name/number from an ESP is routed to HA. HA decides whether it is a
   local extension or an external trunk number.
-- HA-managed sync through `sensor.intercom_phonebook` is the recommended path.
+- HA-managed sync through `sensor.voip_phonebook` is the recommended path.
   Static contacts are local additions/fallbacks, not a second central roster.
 
 ## HA Roster
 
-HA owns the central `sensor.intercom_phonebook` roster. It contains ESP peers,
+HA owns the central `sensor.voip_phonebook` roster. It contains ESP peers,
 HA itself, local softphones registered to HA, manual phone endpoints,
 trunk-routed external targets when configured, and groups.
 
@@ -69,7 +69,7 @@ SIP is the shared protocol, not a roster kind.
 Manual contacts and service calls use the same minimum contract:
 
 ```yaml
-service: intercom_native.phonebook_add_contact
+service: homeassistant_voip_stack.phonebook_add_contact
 data:
   name: MobileOffice
   kind: softphone
@@ -83,22 +83,22 @@ registration when available.
 
 Central roster services:
 
-- `intercom_native.phonebook_add_contact`: add or replace one manual central
+- `homeassistant_voip_stack.phonebook_add_contact`: add or replace one manual central
   contact. `name` is the only required field.
-- `intercom_native.phonebook_remove_contact`: remove one manual central contact
+- `homeassistant_voip_stack.phonebook_remove_contact`: remove one manual central contact
   by name.
-- `intercom_native.phonebook_set_contacts`: replace manual contacts from a JSON
+- `homeassistant_voip_stack.phonebook_set_contacts`: replace manual contacts from a JSON
   roster document.
-- `intercom_native.phonebook_clear`: clear manual central contacts.
-- `intercom_native.phonebook_push`: push the current roster immediately to
+- `homeassistant_voip_stack.phonebook_clear`: clear manual central contacts.
+- `homeassistant_voip_stack.phonebook_push`: push the current roster immediately to
   online ESP devices.
-- `intercom_native.phonebook_export`: emit the current roster as an HA event for
+- `homeassistant_voip_stack.phonebook_export`: emit the current roster as an HA event for
   diagnostics/backup.
 
-Local softphone accounts are created with `intercom_native.sip_account_create`.
+Local softphone accounts are created with `homeassistant_voip_stack.sip_account_create`.
 The `username` becomes the SIP username and central roster ID. If `password` is
 omitted, HA generates one and shows it once in a persistent notification and in
-the `intercom_native.call_event` stream. Registered clients publish a dynamic
+the `homeassistant_voip_stack.call_event` stream. Registered clients publish a dynamic
 Contact into the roster so ESP devices can call them by name.
 
 ## Routing
@@ -114,7 +114,7 @@ Contact into the roster so ESP devices can call them by name.
   route hint that cannot be resolved terminates as `route_not_found`; it does
   not silently fall back to HA.
 - HA automations can override a pending route request by listening for
-  `intercom_native.sip_route_request` and calling `intercom_native.sip_route`.
+  `homeassistant_voip_stack.sip_route_request` and calling `homeassistant_voip_stack.sip_route`.
 - Missing or incompatible media routes must fail explicitly with SIP terminal
   reasons such as `media_incompatible` or `transport_unreachable`.
 

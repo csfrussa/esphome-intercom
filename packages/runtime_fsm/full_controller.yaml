@@ -11,29 +11,29 @@ runtime_fsm:
   state_outputs:
     activity_mask: g_activity_mask
     sequence: g_fsm_seq
-  intercom:
-    id: intercom
+  voip:
+    id: voip_phone
     states:
       ringing:
         priority: 975
         policies:
-          led_status: intercom_ringing
-          display_status: intercom_ringing
+          led_status: voip_ringing
+          display_status: voip_ringing
           audio_policy: duck
           ringtone: play
           va_state: idle
       calling:
         priority: 974
         policies:
-          led_status: intercom_calling
-          display_status: intercom_calling
+          led_status: voip_calling
+          display_status: voip_calling
           audio_policy: duck
           va_state: idle
       in_call:
         priority: 973
         policies:
-          led_status: intercom_in_call
-          display_status: intercom_in_call
+          led_status: voip_in_call
+          display_status: voip_in_call
           audio_policy: duck
           va_state: idle
   groups:
@@ -373,9 +373,9 @@ runtime_fsm:
         listening: 5
         thinking: 6
         responding: 7
-        intercom_ringing: 8
-        intercom_calling: 9
-        intercom_in_call: 10
+        voip_ringing: 8
+        voip_calling: 9
+        voip_in_call: 10
         error: 11
         media: 12
         boot: 13
@@ -396,9 +396,9 @@ runtime_fsm:
         listening: ${ui_state_va_listening}
         thinking: ${ui_state_va_thinking}
         responding: ${ui_state_va_replying}
-        intercom_ringing: ${ui_state_ic_ringing}
-        intercom_calling: ${ui_state_ic_calling}
-        intercom_in_call: ${ui_state_ic_in_call}
+        voip_ringing: ${ui_state_ic_ringing}
+        voip_calling: ${ui_state_ic_calling}
+        voip_in_call: ${ui_state_ic_in_call}
         error: ${ui_state_va_error}
         media: ${ui_state_media}
         no_va: ${ui_state_no_va}
@@ -437,10 +437,10 @@ runtime_fsm:
       values:
         play:
           then:
-            - script.execute: intercom_ringing_loop
+            - script.execute: voip_ringing_loop
         stop:
           then:
-            - script.execute: intercom_stop_ringtone
+            - script.execute: voip_stop_ringtone
     timer_alarm:
       values:
         play:

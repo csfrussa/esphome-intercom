@@ -18,7 +18,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   note is [RELEASE_2026_7_0_DEV.md](RELEASE_2026_7_0_DEV.md).
 
 - 📚 **Configuration reference**: [reference.md](reference.md) covers every
-  `intercom_api`, `esp_aec` and `esp_afe` option, every action and condition,
+  `esphome_voip_stack`, `esp_aec` and `esp_afe` option, every action and condition,
   Home Assistant services, and worked automation examples.
 
 - 🔌 **Wire protocol**: [INTERCOM_PROTOCOL.md](INTERCOM_PROTOCOL.md) is a
@@ -52,7 +52,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:
 
-- [`intercom_api`](../esphome/components/intercom_api/README.md), the ESP SIP
+- [`esphome_voip_stack`](../esphome/components/esphome_voip_stack/README.md), the ESP SIP
   phone component and Home Assistant bridge integration surface.
 - [`esp_audio_stack`](../esphome/components/esp_audio_stack/README.md), the
   coordinated full-duplex audio backend for shared codec buses, dual I2S

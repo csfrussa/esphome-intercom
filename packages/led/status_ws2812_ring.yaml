@@ -3,7 +3,7 @@
 #
 # Drop-in hardware/effects package for devices with an addressable WS2812 status
 # ring. The state mapping is intentionally separate so the same ring can be used
-# by intercom-only, full-experience, or future media-only reducers.
+# by voip-only, full-experience, or future media-only reducers.
 # =============================================================================
 
 substitutions:
