@@ -48,6 +48,8 @@ class VoipStackCard extends HTMLElement {
     this._activeSessionDeviceId = null;
     this._softphoneDnd = false;
     this._softphoneTargetDeviceId = null;
+    this._softphoneKeypadOpen = false;
+    this._softphoneManualTarget = "";
     this._softphoneStateLoaded = false;
     this._softphoneStateLoading = false;
 
@@ -1114,14 +1116,22 @@ class VoipStackCard extends HTMLElement {
 
     // ESP cards are pure mirrors. Only ha_softphone mode owns an in-card
     // destination selector and browser audio path.
-    els.destRow.hidden = !showCall;
+    const softphoneMode = this._isHaSoftphoneMode();
+    const keypadOpen = softphoneMode && this._softphoneKeypadOpen;
+    els.destRow.hidden = !showCall || keypadOpen;
     els.destValue.textContent = destination;
     if (els.destSelect) {
-      els.destSelect.hidden = !this._isHaSoftphoneMode();
-      els.destValueWrap.classList.toggle("selecting", this._isHaSoftphoneMode());
+      els.destSelect.hidden = !softphoneMode || keypadOpen;
+      els.destValueWrap.classList.toggle("selecting", softphoneMode && !keypadOpen);
       this._renderSoftphoneDestinationSelect(els.destSelect);
     }
-    const softphoneMode = this._isHaSoftphoneMode();
+    if (els.keypadPanel) {
+      els.keypadPanel.hidden = !(showCall && keypadOpen);
+      els.keypadInput.value = this._softphoneManualTarget;
+      for (const btn of Object.values(els.keypadKeys || {})) {
+        btn.disabled = buttonDisabled;
+      }
+    }
     els.prevBtn.disabled = buttonDisabled || softphoneMode;
     els.nextBtn.disabled = buttonDisabled || softphoneMode;
     els.prevBtn.hidden = softphoneMode;
@@ -1151,6 +1161,9 @@ class VoipStackCard extends HTMLElement {
     // cannot be changed mid-call.
     const showRuntimeOptions = showCall && !this._starting && !this._stopping;
     const showSettingsPanel = showRuntimeOptions && this._settingsOpen;
+    els.runtimeControls.hidden = !showRuntimeOptions;
+    els.keypadBtn.hidden = !(showRuntimeOptions && this._isHaSoftphoneMode());
+    els.keypadBtn.textContent = this._softphoneKeypadOpen ? "Contacts" : "Keypad";
     els.settingsBtn.hidden = !showRuntimeOptions;
     els.settingsPanel.hidden = !showSettingsPanel;
     els.autoAnswerRow.hidden = !showSettingsPanel;
@@ -1243,6 +1256,42 @@ class VoipStackCard extends HTMLElement {
         font-size: 0.75em; color: var(--secondary-text-color);
         display: block; margin-bottom: 2px;
       }
+      .keypad-panel {
+        margin: -4px 0 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .keypad-panel[hidden] { display: none; }
+      .keypad-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        border: 1px solid var(--divider-color, #ccc);
+        border-radius: 6px;
+        background: var(--voip-control-surface);
+        color: var(--primary-text-color);
+        font-size: 1.05em;
+        text-align: center;
+        color-scheme: light dark;
+      }
+      .keypad-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .keypad-key {
+        min-height: 42px;
+        border: 1px solid var(--divider-color, #ccc);
+        border-radius: 8px;
+        background: var(--voip-control-surface);
+        color: var(--primary-text-color);
+        font-size: 1.1em;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .keypad-key:hover { background: var(--voip-control-hover-surface); }
+      .keypad-key:disabled { opacity: 0.5; cursor: not-allowed; }
 
       .button-container { display: flex; justify-content: center; gap: 20px; margin-bottom: 16px; }
       .offline-panel {
@@ -1292,6 +1341,13 @@ class VoipStackCard extends HTMLElement {
         font-size: 0.85em;
       }
       .settings-btn[hidden] { display: none; }
+      .runtime-controls {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .runtime-controls[hidden] { display: none; }
       .settings-panel {
         margin-top: 10px;
         padding: 8px 10px;
@@ -1350,6 +1406,31 @@ class VoipStackCard extends HTMLElement {
     destRow.appendChild(destValueWrap);
     destRow.appendChild(nextBtn);
     card.appendChild(destRow);
+
+    const keypadPanel = document.createElement("div");
+    keypadPanel.className = "keypad-panel";
+    keypadPanel.hidden = true;
+    const keypadInput = document.createElement("input");
+    keypadInput.className = "keypad-input";
+    keypadInput.type = "text";
+    keypadInput.inputMode = "tel";
+    keypadInput.autocomplete = "off";
+    keypadInput.spellcheck = false;
+    keypadInput.placeholder = "Number, name or SIP URI";
+    keypadPanel.appendChild(keypadInput);
+    const keypadGrid = document.createElement("div");
+    keypadGrid.className = "keypad-grid";
+    const keypadKeys = {};
+    for (const key of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#", "Clear", "⌫"]) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "keypad-key";
+      btn.textContent = key;
+      keypadKeys[key] = btn;
+      keypadGrid.appendChild(btn);
+    }
+    keypadPanel.appendChild(keypadGrid);
+    card.appendChild(keypadPanel);
 
     const offlinePanel = document.createElement("div");
     offlinePanel.className = "offline-panel";
@@ -1414,11 +1495,21 @@ class VoipStackCard extends HTMLElement {
     statusReason.hidden = true;
     card.appendChild(statusReason);
 
+    const runtimeControls = document.createElement("div");
+    runtimeControls.className = "runtime-controls";
+
+    const keypadBtn = document.createElement("button");
+    keypadBtn.type = "button";
+    keypadBtn.className = "settings-btn";
+    keypadBtn.textContent = "Keypad";
+    runtimeControls.appendChild(keypadBtn);
+
     const settingsBtn = document.createElement("button");
     settingsBtn.type = "button";
     settingsBtn.className = "settings-btn";
     settingsBtn.textContent = "Options";
-    card.appendChild(settingsBtn);
+    runtimeControls.appendChild(settingsBtn);
+    card.appendChild(runtimeControls);
 
     const settingsPanel = document.createElement("div");
     settingsPanel.className = "settings-panel";
@@ -1480,9 +1571,10 @@ class VoipStackCard extends HTMLElement {
     this._els = {
       headerName,
       destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
+      keypadPanel, keypadInput, keypadKeys,
       answerBtn, declineBtn, hangupBtn, callBtn, placeholderBtn,
       statusIndicator, statusText, statusReason,
-      settingsBtn, settingsPanel,
+      runtimeControls, keypadBtn, settingsBtn, settingsPanel,
       autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox,
       stats, err,
     };
@@ -1536,6 +1628,13 @@ class VoipStackCard extends HTMLElement {
   _attachEventHandlers() {
     const els = this._els;
     if (!els) return;
+    if (els.keypadBtn) els.keypadBtn.onclick = () => this._toggleSoftphoneKeypad();
+    if (els.keypadInput) els.keypadInput.oninput = (event) => this._setSoftphoneManualTarget(event.target.value);
+    if (els.keypadKeys) {
+      for (const [key, btn] of Object.entries(els.keypadKeys)) {
+        btn.onclick = () => this._pressSoftphoneKey(key);
+      }
+    }
     if (els.settingsBtn) els.settingsBtn.onclick = () => this._toggleSettings();
     els.autoAnswerCheckbox.onchange = () => this._toggleAutoAnswer();
     if (els.dndCheckbox) els.dndCheckbox.onchange = () => this._toggleDnd();
@@ -1577,6 +1676,35 @@ class VoipStackCard extends HTMLElement {
     this._softphoneTargetDeviceId = deviceId || null;
     this._saveSoftphoneTargetPreference(this._softphoneTargetDeviceId);
     this._render();
+  }
+
+  _toggleSoftphoneKeypad() {
+    if (!this._isHaSoftphoneMode()) return;
+    this._softphoneKeypadOpen = !this._softphoneKeypadOpen;
+    if (this._softphoneKeypadOpen) this._settingsOpen = false;
+    this._render();
+    if (this._softphoneKeypadOpen) {
+      requestAnimationFrame(() => this._els?.keypadInput?.focus());
+    }
+  }
+
+  _setSoftphoneManualTarget(value) {
+    this._softphoneManualTarget = String(value || "").replace(/[\r\n]/g, "").trimStart();
+  }
+
+  _pressSoftphoneKey(key) {
+    if (!this._isHaSoftphoneMode()) return;
+    if (key === "Clear") {
+      this._softphoneManualTarget = "";
+    } else if (key === "⌫") {
+      this._softphoneManualTarget = this._softphoneManualTarget.slice(0, -1);
+    } else {
+      this._softphoneManualTarget += key;
+    }
+    if (this._els?.keypadInput) {
+      this._els.keypadInput.value = this._softphoneManualTarget;
+      this._els.keypadInput.focus();
+    }
   }
 
   async _prevContact() {
@@ -1631,11 +1759,20 @@ class VoipStackCard extends HTMLElement {
   }
 
   async _startHaSoftphoneCall(softphoneInfo) {
-    const target = this._getSoftphoneTargetDevice();
-    if (!target?.device_id) {
+    const manualTarget = this._softphoneKeypadOpen ? this._softphoneManualTarget.trim() : "";
+    const target = manualTarget
+      ? {
+          device_id: `manual:${manualTarget}`,
+          name: manualTarget,
+          audio_mode: "full_duplex",
+          manual: true,
+        }
+      : this._getSoftphoneTargetDevice();
+    if (!target?.name && !target?.device_id) {
       this._showError("No endpoint available");
       return;
     }
+    const callee = manualTarget || target.name || this._getDestination();
 
     const sessionInfo = {
       ...(softphoneInfo || {}),
@@ -1652,7 +1789,7 @@ class VoipStackCard extends HTMLElement {
 
     try {
       const reply = await voipStackEngine.startHaSoftphone(target, sessionInfo, {
-        callee: target.name || this._getDestination(),
+        callee,
       });
       if (reply) {
         this._markSoftphoneMediaOwner(reply.call_id || "");

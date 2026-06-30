@@ -819,6 +819,7 @@ std::string SipTransport::build_sdp_offer_() const {
   this->local_ip_for_peer_(remote_ip, &local_ip);
   std::string payloads;
   std::string maps;
+  std::string flows;
   uint8_t pt = 96;
   const uint8_t selected_ptime =
       choose_common_audio_ptime(this->offer_tx_formats_, this->offer_rx_formats_, this->udp_max_payload_);
@@ -826,7 +827,7 @@ std::string SipTransport::build_sdp_offer_() const {
     ESP_LOGW(TAG, "SIP SDP offer has no shared TX/RX RTP packet time");
     return "";
   }
-  auto append_format = [&](const AudioFormat &fmt) {
+  auto append_format = [&](const AudioFormat &fmt, const char *flow) {
     if (pt >= 120) return;
     if (fmt.frame_ms != selected_ptime) return;
     const char *enc = audio_format_rtp_encoding(fmt, this->udp_max_payload_);
@@ -835,14 +836,17 @@ std::string SipTransport::build_sdp_offer_() const {
     payloads += std::to_string(pt);
     maps += "a=rtpmap:" + std::to_string(pt) + " " + enc + "/" +
             std::to_string(fmt.sample_rate) + "/" + std::to_string(fmt.channels) + "\r\n";
+    flows += "a=x-voip-stack-flow:" + std::to_string(pt) + " " + flow + "\r\n";
     pt++;
   };
   for (uint8_t i = 0; i < this->offer_rx_formats_.count && pt < 120; i++) {
-    append_format(this->offer_rx_formats_.formats[i]);
+    append_format(this->offer_rx_formats_.formats[i],
+                  audio_format_list_contains(this->offer_tx_formats_, this->offer_rx_formats_.formats[i])
+                      ? "sendrecv" : "recv");
   }
   for (uint8_t i = 0; i < this->offer_tx_formats_.count && pt < 120; i++) {
     if (audio_format_list_contains(this->offer_rx_formats_, this->offer_tx_formats_.formats[i])) continue;
-    append_format(this->offer_tx_formats_.formats[i]);
+    append_format(this->offer_tx_formats_.formats[i], "send");
   }
   if (payloads.empty()) {
     ESP_LOGW(TAG, "SIP SDP offer has no common UDP-safe RTP PCM format");
@@ -855,6 +859,7 @@ std::string SipTransport::build_sdp_offer_() const {
          "t=0 0\r\n"
          "m=audio " + std::to_string(this->rtp_port_) + " RTP/AVP " + payloads + "\r\n" +
          maps +
+         flows +
          "a=ptime:" + std::to_string(selected_ptime) + "\r\n"
          "a=maxptime:" + std::to_string(selected_ptime) + "\r\n"
          "a=sendrecv\r\n";
@@ -877,14 +882,18 @@ std::string SipTransport::build_sdp_answer_() const {
   }
   std::string payloads = std::to_string(rx_payload_type);
   std::string maps;
+  std::string flows;
   maps += "a=rtpmap:" + std::to_string(rx_payload_type) + " " + rx_enc + "/" +
           std::to_string(selected_rx.sample_rate) + "/" +
           std::to_string(selected_rx.channels) + "\r\n";
+  flows += "a=x-voip-stack-flow:" + std::to_string(rx_payload_type) +
+           (tx_payload_type == rx_payload_type ? " sendrecv\r\n" : " recv\r\n");
   if (tx_payload_type != rx_payload_type) {
     payloads += " " + std::to_string(tx_payload_type);
     maps += "a=rtpmap:" + std::to_string(tx_payload_type) + " " + tx_enc + "/" +
           std::to_string(selected_tx.sample_rate) + "/" +
           std::to_string(selected_tx.channels) + "\r\n";
+    flows += "a=x-voip-stack-flow:" + std::to_string(tx_payload_type) + " send\r\n";
   }
   return "v=0\r\n"
          "o=- 0 0 IN IP4 " + local_ip + "\r\n"
@@ -893,6 +902,7 @@ std::string SipTransport::build_sdp_answer_() const {
          "t=0 0\r\n"
          "m=audio " + std::to_string(this->rtp_port_) + " RTP/AVP " + payloads + "\r\n" +
          maps +
+         flows +
          "a=ptime:" + std::to_string(selected_rx.frame_ms) + "\r\n"
          "a=maxptime:" + std::to_string(selected_rx.frame_ms) + "\r\n"
          "a=sendrecv\r\n";
@@ -908,6 +918,7 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
   AudioFormat selected_rx_format;
   uint8_t selected_tx_payload_type = 0;
   uint8_t selected_rx_payload_type = 0;
+  uint8_t payload_flow[128]{};
   size_t ptime_pos = 0;
   while (ptime_pos < sdp.size()) {
     size_t end = sdp.find("\r\n", ptime_pos);
@@ -916,6 +927,19 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
     if (line.rfind("a=ptime:", 0) == 0) {
       const unsigned parsed = static_cast<unsigned>(std::strtoul(line.substr(8).c_str(), nullptr, 10));
       if (parsed == 10 || parsed == 16 || parsed == 20 || parsed == 32) media_ptime = static_cast<uint8_t>(parsed);
+    } else if (line.rfind("a=x-voip-stack-flow:", 0) == 0) {
+      const size_t value_start = sizeof("a=x-voip-stack-flow:") - 1;
+      const size_t space = line.find(' ', value_start);
+      if (space != std::string::npos) {
+        const int parsed_pt = std::atoi(line.substr(value_start, space - value_start).c_str());
+        const std::string flow = trim_copy(line.substr(space + 1));
+        if (parsed_pt >= 0 && parsed_pt < 128) {
+          uint8_t flags = 0;
+          if (flow == "send" || flow == "sendrecv") flags |= 0x01;
+          if (flow == "recv" || flow == "sendrecv") flags |= 0x02;
+          payload_flow[parsed_pt] = flags;
+        }
+      }
     }
     if (end == sdp.size()) break;
     ptime_pos = end + 2;
@@ -937,9 +961,15 @@ bool SipTransport::learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t d
         fmt.frame_ms = media_ptime;
         AudioFormat local_rx;
         AudioFormat local_tx;
-        const bool tx_ok = audio_format_list_match_udp_safe(this->offer_tx_formats_, fmt, &local_tx,
+        const uint8_t flow = payload_flow[pt];
+        const bool has_flow_for_payload = flow != 0;
+        const bool peer_can_send = !has_flow_for_payload || (flow & 0x01) != 0;
+        const bool peer_can_recv = !has_flow_for_payload || (flow & 0x02) != 0;
+        const bool tx_ok = peer_can_recv &&
+                           audio_format_list_match_udp_safe(this->offer_tx_formats_, fmt, &local_tx,
                                                             this->udp_max_payload_);
-        const bool rx_ok = audio_format_list_match_udp_safe(this->offer_rx_formats_, fmt, &local_rx,
+        const bool rx_ok = peer_can_send &&
+                           audio_format_list_match_udp_safe(this->offer_rx_formats_, fmt, &local_rx,
                                                             this->udp_max_payload_);
         if (!selected_rx && rx_ok) {
           selected_rx_format = local_rx;
