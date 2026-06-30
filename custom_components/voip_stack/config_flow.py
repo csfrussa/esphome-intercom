@@ -1,8 +1,11 @@
 """Config flow for VoIP Stack."""
 
+from collections.abc import Mapping
+from typing import Any
+
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigEntry, ConfigFlow
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -43,14 +46,45 @@ def _port_selector():
     return NumberSelector(NumberSelectorConfig(min=1, max=65535, step=1, mode="box"))
 
 
+def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
+    """Return entry data with trunk explicitly disabled."""
+    data.update(
+        {
+            CONF_TRUNK_ENABLED: False,
+            CONF_TRUNK_TRANSPORT: "udp",
+            CONF_TRUNK_SERVER: "",
+            CONF_TRUNK_PORT: VOIP_STACK_SIP_PORT,
+            CONF_TRUNK_DOMAIN: "",
+            CONF_TRUNK_USERNAME: "",
+            CONF_TRUNK_AUTH_USERNAME: "",
+            CONF_TRUNK_PASSWORD: "",
+            CONF_TRUNK_EXPIRES: 300,
+            CONF_TRUNK_OUTBOUND_PROXY: "",
+            CONF_TRUNK_INBOUND_DEFAULT_TARGET: "HA",
+            CONF_TRUNK_DTMF_ENABLED: False,
+            CONF_TRUNK_DTMF_TIMEOUT_MS: 1000,
+            CONF_TRUNK_DTMF_TERMINATOR: "",
+            CONF_TRUNK_DTMF_ROUTES: "",
+            "sip_accounts": existing.get("sip_accounts", []),
+            CONF_PHONEBOOK_CONTACTS: existing.get(CONF_PHONEBOOK_CONTACTS, []),
+        }
+    )
+    return data
+
+
 class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VoIP Stack."""
 
     VERSION = 1
     _base_input: dict | None = None
 
-    def _current_entry_data(self) -> tuple[object | None, dict]:
-        current_entry = next(iter(self._async_current_entries()), None)
+    def _current_entry(self) -> ConfigEntry | None:
+        if self.source == SOURCE_RECONFIGURE:
+            return self._get_reconfigure_entry()
+        return next(iter(self._async_current_entries()), None)
+
+    def _current_entry_data(self) -> tuple[ConfigEntry | None, Mapping[str, Any]]:
+        current_entry = self._current_entry()
         return current_entry, (current_entry.data if current_entry else {})
 
     def _store_entry(self, data: dict):
@@ -62,6 +96,10 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 reason="reconfigure_successful",
             )
         return self.async_create_entry(title="VoIP Stack", data=data)
+
+    async def async_step_reconfigure(self, user_input=None):
+        """Reconfigure the existing VoIP Stack entry from HA's native menu."""
+        return await self.async_step_user(user_input)
 
     async def async_step_user(self, user_input=None):
         """Handle install/reconfigure of the single VoIP Stack entry.
@@ -108,26 +146,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 if user_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
                 data = dict(user_input)
-                data.update(
-                    {
-                        CONF_TRUNK_TRANSPORT: "udp",
-                        CONF_TRUNK_SERVER: "",
-                        CONF_TRUNK_PORT: VOIP_STACK_SIP_PORT,
-                        CONF_TRUNK_DOMAIN: "",
-                        CONF_TRUNK_USERNAME: "",
-                        CONF_TRUNK_AUTH_USERNAME: "",
-                        CONF_TRUNK_PASSWORD: "",
-                        CONF_TRUNK_EXPIRES: 300,
-                        CONF_TRUNK_OUTBOUND_PROXY: "",
-                        CONF_TRUNK_INBOUND_DEFAULT_TARGET: "HA",
-                        CONF_TRUNK_DTMF_ENABLED: False,
-                        CONF_TRUNK_DTMF_TIMEOUT_MS: 1000,
-                        CONF_TRUNK_DTMF_TERMINATOR: "",
-                        CONF_TRUNK_DTMF_ROUTES: "",
-                        "sip_accounts": existing.get("sip_accounts", []),
-                        CONF_PHONEBOOK_CONTACTS: existing.get(CONF_PHONEBOOK_CONTACTS, []),
-                    }
-                )
+                _disabled_trunk_data(data, existing)
                 current_entry, _existing = self._current_entry_data()
                 if current_entry is None:
                     await self.async_set_unique_id(DOMAIN)
@@ -197,6 +216,31 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_TRUNK_DTMF_ROUTES,
             ):
                 user_input[k] = (user_input.get(k) or "").strip()
+            trunk_fields_empty = not any(
+                user_input.get(k)
+                for k in (
+                    CONF_TRUNK_SERVER,
+                    CONF_TRUNK_USERNAME,
+                    CONF_TRUNK_AUTH_USERNAME,
+                    CONF_TRUNK_PASSWORD,
+                    CONF_TRUNK_DOMAIN,
+                    CONF_TRUNK_OUTBOUND_PROXY,
+                    CONF_TRUNK_DTMF_ROUTES,
+                )
+            )
+            if trunk_fields_empty:
+                data = dict(
+                    self._base_input
+                    or {
+                        "sip_port": int(existing.get("sip_port", VOIP_STACK_SIP_PORT)),
+                        "rtp_port": int(existing.get("rtp_port", VOIP_STACK_RTP_PORT)),
+                        "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
+                        CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
+                        CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
+                        CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
+                    }
+                )
+                return self._store_entry(_disabled_trunk_data(data, existing))
             if not user_input[CONF_TRUNK_SERVER]:
                 errors["base"] = "trunk_server_required"
             elif not user_input[CONF_TRUNK_USERNAME]:
