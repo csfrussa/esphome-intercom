@@ -55,8 +55,8 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 Want a real full-duplex doorbell or intercom?
 
-Flash one of the ready ESPHome YAMLs, add the ESP to Home Assistant, add the
-VoIP Stack card, and select Home Assistant as the destination.
+Flash one of the ready ESPHome YAMLs, add the ESP to Home Assistant and add the
+VoIP Stack card. Home Assistant is pushed to the ESP phonebook automatically.
 
 Press the button on the ESP: Home Assistant rings. Answer from the browser, a
 wall tablet or the Home Assistant Companion app.
@@ -1210,7 +1210,10 @@ flowchart TD
 
 ### ESP calling Home Assistant (Doorbell)
 
-When an ESP device has the HA location name selected as destination and initiates a call (via GPIO button press or template button), it fires an `esphome.voip_call` event for notifications and the Lovelace card goes into ringing state with Answer/Decline buttons:
+Home Assistant is published to the ESP phonebook automatically. When an ESP
+initiates a call to that HA contact from a GPIO button, LVGL button or template
+button, it fires an `esphome.voip_call` event for notifications and the
+Lovelace card goes into ringing state with Answer/Decline buttons:
 
 ![ESP calling Home Assistant, Card ringing](docs/images/call-from-esp-to-homeassistant.gif)
 
