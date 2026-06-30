@@ -67,7 +67,7 @@
       "trunk_dtmf_routes_invalid": "Le rotte DTMF devono usare una voce cifre=target per riga."
     },
     "abort": {
-      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",
+      "reconfigure_successful": "VoIP Stack riconfigurato correttamente.",
       "already_configured": "VoIP Stack è già configurato."
     }
   }

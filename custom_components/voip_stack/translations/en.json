@@ -67,7 +67,7 @@
       "trunk_dtmf_routes_invalid": "DTMF routes must use one digits=target entry per line."
     },
     "abort": {
-      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",
+      "reconfigure_successful": "VoIP Stack reconfigured successfully.",
       "already_configured": "VoIP Stack is already configured."
     }
   }
