@@ -3,28 +3,6 @@
 [![Platform](https://img.shields.io/badge/Platform-ESP32--S3%20%7C%20ESP32--P4-blue.svg)](#hardware-support)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue.svg)](https://www.home-assistant.io)
 
-## ATTENTION!!! Incoming Breaking Changes
-
-The next release is a major SIP/VoIP migration. If you are following the stable
-branch, start getting familiar with the prerelease work now: the active
-development version is available on the `dev` branch and is already being tested
-on real devices.
-
-In practice, this means the project is moving to a real SIP/SDP/RTP VoIP
-architecture. ESP devices become lightweight local SIP phones. Home Assistant
-becomes a SIP phone too, and also carries the heavier routing, bridge,
-resampling, local registrar and optional trunk work that would be wasteful on
-small ESP devices.
-
-You can still use the project as a simple one-button intercom. The difference is
-that the simple use case now sits on top of a real VoIP foundation: ESP-to-ESP
-calls, ESP-to-Home Assistant calls, Home Assistant-to-ESP calls, local softphone
-extensions, optional external calls through a trunk, negotiated audio quality,
-SIP call reasons and a central SIP phonebook.
-
-This is intentionally breaking. Custom YAMLs from older releases should be
-rebuilt from the maintained `dev` YAMLs before the release lands on `main`.
-
 ## BREAKING CHANGES for 2026.7.0-dev
 
 `2026.7.0-dev` is a prerelease for the SIP/VoIP migration, the new
