@@ -13,7 +13,7 @@ regressions would be a problem.
 
 Yes, you read that correctly. ESP devices are now SIP phones and Home Assistant
 is now a SIP softphone, router/B2BUA, RTP bridge/resampler and optional trunk
-client. Home Assistant VoIP Stack has been migrated with them, so Home Assistant is not a
+client. VoIP Stack has been migrated with them, so Home Assistant is not a
 sidecar around an intercom protocol anymore: it participates in real VoIP call
 flows.
 
@@ -36,7 +36,7 @@ such as Asterisk:
 - A standard softphone such as Zoiper, Linphone, baresip or pjsua can register
   to Home Assistant as a local SIP account and become a phonebook contact.
 - Home Assistant can register one optional provider/PBX trunk. External numbers
-  and provider inbound calls can be routed through Home Assistant VoIP Stack.
+  and provider inbound calls can be routed through VoIP Stack.
 - With a trunk configured, ESPs and Home Assistant can place and receive
   external calls without carrying Asterisk beside the integration.
 - Audio quality is negotiated per direction. A device can receive the best
@@ -52,11 +52,11 @@ provider/PBX and does not require SIP auth. ESPs are local SIP user agents; HA
 is the central router/B2BUA and optional trunk endpoint. The old proprietary
 VoIP call-control path is not a compatibility layer.
 
-## 🏠 Home Assistant VoIP Stack / Home Assistant
+## 🏠 VoIP Stack / Home Assistant
 
-- 🗣️ **Home Assistant VoIP Stack now is able to call other VoIP contacts via Voice
+- 🗣️ **VoIP Stack now is able to call other VoIP contacts via Voice
   Assistant.** An optional Assist intent adapter can be enabled from the
-  Home Assistant VoIP Stack setup/reconfigure dialog. With the provided custom sentences,
+  VoIP Stack setup/reconfigure dialog. With the provided custom sentences,
   voice satellites can call a phonebook contact, hang up, answer or decline
   using the satellite that heard the sentence. Spoken contact names are resolved
   dynamically against the live phonebook, so `call kitchen speaker` can resolve
@@ -86,7 +86,7 @@ VoIP call-control path is not a compatibility layer.
   callee phonebook. The phonebook is the outbound dial plan; inbound
   caller/destination identity comes from SIP headers. This keeps VPN/routed
   callers and HA bridges working without pre-seeding every callee phonebook.
-- ☎️ Home Assistant VoIP Stack can optionally register one SIP trunk account. When
+- ☎️ VoIP Stack can optionally register one SIP trunk account. When
   disabled, trunk code is inactive. When enabled, unresolved outbound numbers
   can route through the trunk and inbound provider calls can select HA or a
   local phonebook target with RFC2833/telephone-event DTMF.
@@ -217,7 +217,7 @@ VoIP call-control path is not a compatibility layer.
   silence commands. It lets `shut up` style commands stop only the active
   VA/TTS announcement on the satellite that heard the sentence, without
   stopping background media. VoIP call/hangup/answer/decline commands are
-  handled by the optional Home Assistant VoIP Stack Assist intent adapter instead of
+  handled by the optional VoIP Stack Assist intent adapter instead of
   YAML automations.
 - 🖼️ Sendspin artwork is promoted for display profiles that opt in to the
   artwork package. Spotpear and Waveshare P4 render Music Assistant album art
@@ -320,7 +320,7 @@ VoIP call-control path is not a compatibility layer.
 
 ## ⚠️ Compatibility / Upgrade Notes from 2026.6.3
 
-- Custom ESP YAMLs using `esphome_voip_stack` should review the new `audio.tx` and
+- Custom ESP YAMLs using `voip_stack` should review the new `audio.tx` and
   `audio.rx` settings if they want anything other than the default 16 kHz/s16/mono.
 - AFE/AEC TX remains 16 kHz/s16/mono. This is expected and should not be treated
   as a global SIP media limitation.

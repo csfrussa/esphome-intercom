@@ -42,7 +42,7 @@ widgets:
             text_color: 0x00FF00
             text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.call_toggle:
+        - voip_stack.call_toggle:
   - button:
       floating: true
       align: RIGHT_MID
@@ -58,7 +58,7 @@ widgets:
             text_color: 0xFFFFFF
             text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.decline_call:
+        - voip_stack.decline_call:
 
 # ========================================================================
 # VOIP: RINGING OUT PAGE

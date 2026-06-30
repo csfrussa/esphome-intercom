@@ -4,7 +4,7 @@
   "steps": [
     {
       "inject_event": {
-        "type": "phonebook_push",
+        "type": "push_phonebook",
         "contacts": [
           {
             "id": "Casa",

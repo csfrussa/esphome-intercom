@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="820" viewBox="0 0 900 820">
+  <defs>
+    <style>
+      .bg { fill: #0f141b; }
+      .panel { fill: #20252d; stroke: #343b45; stroke-width: 1.5; rx: 22; }
+      .title { font: 700 28px sans-serif; fill: #f4f7fb; }
+      .body { font: 400 17px sans-serif; fill: #cbd3df; }
+      .hint { font: 400 14px sans-serif; fill: #96a2b3; }
+      .field { fill: #303743; rx: 8; }
+      .label { font: 500 13px sans-serif; fill: #aeb8c7; }
+      .value { font: 500 20px sans-serif; fill: #f5f7fb; }
+      .switch-track { fill: #33404d; rx: 14; }
+      .switch-on { fill: #1e88e5; rx: 14; }
+      .switch-knob { fill: #8fd3ff; }
+      .line { stroke: #3b4450; stroke-width: 1; }
+      .pill { fill: #29445f; rx: 13; }
+      .pill-text { font: 600 13px sans-serif; fill: #bfe4ff; }
+    </style>
+  </defs>
+  <rect class="bg" width="900" height="820"/>
+  <rect class="panel" x="110" y="52" width="680" height="716" rx="22"/>
+  <text class="title" x="154" y="104">VoIP Stack</text>
+  <text class="body" x="154" y="150">SIP softphone and SIP bridge/router for ESPHome VoIP phones.</text>
+  <text class="body" x="154" y="176">Configure ports, routing helpers and optional VoIP services.</text>
+
+  <rect class="pill" x="154" y="210" width="160" height="28"/>
+  <text class="pill-text" x="169" y="229">RTP remains UDP</text>
+
+  <rect class="field" x="154" y="270" width="592" height="64"/>
+  <text class="label" x="176" y="294">SIP port</text>
+  <text class="value" x="176" y="321">5060</text>
+
+  <rect class="field" x="154" y="354" width="592" height="64"/>
+  <text class="label" x="176" y="378">RTP port</text>
+  <text class="value" x="176" y="405">40000</text>
+
+  <rect class="field" x="154" y="438" width="592" height="64"/>
+  <text class="label" x="176" y="462">Advertised HA host/IP</text>
+  <text class="value" x="176" y="489">192.168.1.10</text>
+
+  <line class="line" x1="154" y1="532" x2="746" y2="532"/>
+  <text class="body" x="154" y="568">Enable Assist intents</text>
+  <rect class="switch-track" x="690" y="548" width="50" height="28"/>
+  <circle class="switch-knob" cx="704" cy="562" r="11"/>
+
+  <text class="body" x="154" y="614">Enable SIP/RTP debug mode</text>
+  <rect class="switch-track" x="690" y="594" width="50" height="28"/>
+  <circle class="switch-knob" cx="704" cy="608" r="11"/>
+
+  <text class="body" x="154" y="660">Enable local SIP softphone accounts</text>
+  <rect class="switch-on" x="690" y="640" width="50" height="28"/>
+  <circle class="switch-knob" cx="725" cy="654" r="11"/>
+
+  <text class="body" x="154" y="706">Enable optional SIP trunk</text>
+  <rect class="switch-on" x="690" y="686" width="50" height="28"/>
+  <circle class="switch-knob" cx="725" cy="700" r="11"/>
+</svg>

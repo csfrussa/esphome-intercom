@@ -2,7 +2,7 @@
 # VoIP-only meta-package.
 # Bundles the core sub-packages that make up a VoIP-only device:
 #   - voip/state_machine.yaml      LED reducer + g_applied_led
-#   - voip/callbacks.yaml          esphome_voip_stack on_* + ui_call_* hooks
+#   - voip/callbacks.yaml          voip_stack on_* + ui_call_* hooks
 #
 # Maintained presets include optional feature packages explicitly next to this
 # core package, so users can comment out one line to remove a feature:
@@ -30,6 +30,6 @@ packages:
   state_machine: !include voip/state_machine.yaml
   callbacks: !include voip/callbacks.yaml
 
-# No CONFIG_LWIP_MAX_SOCKETS override: esphome_voip_stack reserves its socket
+# No CONFIG_LWIP_MAX_SOCKETS override: voip_stack reserves its socket
 # quota through socket.consume_sockets() in its Python validation path,
 # so ESPHome sizes the setting automatically.

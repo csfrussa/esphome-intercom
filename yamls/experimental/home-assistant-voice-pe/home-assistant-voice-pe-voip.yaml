@@ -1,13 +1,13 @@
 # =============================================================================
-# Home Assistant Voice PE + esphome_voip_stack experiment.
+# Home Assistant Voice PE + voip_stack experiment.
 #
 # This YAML keeps the official Voice PE audio stack intact and only adds the
 # native VoIP layer. The Voice PE is not a Generic S3: its microphones are
 # processed by the onboard XMOS voice front-end before ESPHome receives them.
 #
 # Expected audio graph:
-#   XMOS processed mic -> i2s_mics channel 0 -> esphome_voip_stack TX
-#   esphome_voip_stack RX -> VoIP resampler -> Voice PE mixer -> AIC3204 speaker
+#   XMOS processed mic -> i2s_mics channel 0 -> voip_stack TX
+#   voip_stack RX -> VoIP resampler -> Voice PE mixer -> AIC3204 speaker
 #
 # This is an experimental bring-up target, not a validated release preset.
 # =============================================================================
@@ -31,7 +31,7 @@ esphome:
 
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, esphome_voip_stack]
+    components: [audio_processor, voip_stack]
 
 wifi:
   ssid: !secret wifi_ssid
@@ -52,7 +52,7 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
 
-esphome_voip_stack:
+voip_stack:
   id: phone
   microphone_source:
     microphone: i2s_mics
@@ -88,8 +88,8 @@ esphome_voip_stack:
         duration: 1.0s
 
 button:
-  - platform: esphome_voip_stack
-    esphome_voip_stack_id: phone
+  - platform: voip_stack
+    voip_stack_id: phone
     call:
       name: Call
       id: call_button

@@ -14,8 +14,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PKG_NAME = "custom_components.homeassistant_voip_stack"
-PKG_DIR = ROOT / "custom_components" / "homeassistant_voip_stack"
+PKG_NAME = "custom_components.voip_stack"
+PKG_DIR = ROOT / "custom_components" / "voip_stack"
 
 
 def _load_intercom_module(name: str):
@@ -722,7 +722,7 @@ class SdpPcmProfileTest(unittest.TestCase):
         answer = (
             "v=0\r\n"
             "o=- 0 0 IN IP4 192.168.1.47\r\n"
-            "s=ESPHome VoIP Stack\r\n"
+            "s=VoIP Stack\r\n"
             "c=IN IP4 192.168.1.47\r\n"
             "t=0 0\r\n"
             "m=audio 40000 RTP/AVP 96 97\r\n"

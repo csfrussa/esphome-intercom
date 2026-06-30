@@ -35,8 +35,8 @@ options or old component names.
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
 | `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
-| `docs/images/hacs-download-homeassistant-voip-stack.png` | Screenshot | HACS download step | Captured: Home Assistant VoIP Stack HACS entry and download menu |
-| `docs/images/homeassistant-voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
+| `docs/images/hacs-download-voip-stack.png` | Screenshot | HACS download step | Captured: VoIP Stack HACS entry and download menu |
+| `docs/images/voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
 | `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Recapture if entity names, device names or ESPHome onboarding UI changed. |
 | `docs/images/card-selection.png` | Screenshot | Card picker | Must show `VoIP Stack Card`, not old Intercom card names. |
 | `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Must show current `voip-stack-card` modes and options. |

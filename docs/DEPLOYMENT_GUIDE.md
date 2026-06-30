@@ -17,7 +17,7 @@ yamls/
 
 Choose the maintained YAML closest to the hardware and edit identity, pins and
 network settings. Do not start from historical `*-tcp`, `*-udp` or
-`*-sip` filenames; transport is now inside the `esphome_voip_stack` declaration.
+`*-sip` filenames; transport is now inside the `voip_stack` declaration.
 
 ## Network
 
@@ -35,14 +35,14 @@ Choose SIP signaling transport per device. SIP is implicit; `transport` selects
 only whether signaling uses UDP or TCP:
 
 ```yaml
-esphome_voip_stack:
+voip_stack:
   transport: udp
 ```
 
 or:
 
 ```yaml
-esphome_voip_stack:
+voip_stack:
   transport: tcp
 ```
 
@@ -60,7 +60,7 @@ These are first-class SIP endpoint shapes. They are not compatibility modes.
 
 ## Home Assistant
 
-Configure `homeassistant_voip_stack` with reachable SIP/RTP ports. HA is always
+Configure `voip_stack` with reachable SIP/RTP ports. HA is always
 the local softphone and router/B2BUA. There is no separate "HA PBX" mode.
 
 If HA is behind NAT, VPN, LXC, Docker, or multiple subnets, set the integration
@@ -69,7 +69,7 @@ advertise host so ESPs and softphones see a reachable SIP Contact/SDP address.
 Use `ha_bridge` for routed or logical calls that should pass through HA.
 
 Enable the local registrar if standard softphones should register to HA. Create
-accounts with `homeassistant_voip_stack.sip_account_create`; registered clients appear
+accounts with `voip_stack.create_account`; registered clients appear
 in the central phonebook as `kind: softphone`.
 
 ## Optional SIP Trunk

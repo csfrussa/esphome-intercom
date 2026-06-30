@@ -1,10 +1,10 @@
 # ESP AFE - Full Audio Front-End Pipeline
 
 > ⚠ **Important: `esp_afe` requires `esp_audio_stack` in front of it.** It is
-> **not** a drop-in processor for standalone native `esphome_voip_stack` setups
+> **not** a drop-in processor for standalone native `voip_stack` setups
 > (dual-bus MEMS + amp without the stack). The AFE pipeline expects fixed
 > 512-sample 16 kHz frames at a steady cadence, which only `esp_audio_stack`
-> produces. Standalone `esphome_voip_stack` should bind directly to native ESPHome
+> produces. Standalone `voip_stack` should bind directly to native ESPHome
 > microphone/speaker components. See
 > [docs/reference.md](../../../docs/reference.md#audio-processing-components)
 > for the full topology matrix.
@@ -36,7 +36,7 @@ Supports single-mic (MR) and dual-mic (MMR/MMNR) configurations.
 > feature, so AGC changes require AFE reinit. The public dual-mic packages keep
 > AGC disabled and do not expose an AGC switch.
 
-Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full signal processing pipeline. Both components implement the `AudioProcessor` interface, but they are **only** drop-in replacements behind `esp_audio_stack`. With standalone `esphome_voip_stack` (no audio stack driver), use `esp_aec`: the AFE feed/fetch task model needs the steady producer that `esp_audio_stack` provides and that the standalone VoIP path does not.
+Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full signal processing pipeline. Both components implement the `AudioProcessor` interface, but they are **only** drop-in replacements behind `esp_audio_stack`. With standalone `voip_stack` (no audio stack driver), use `esp_aec`: the AFE feed/fetch task model needs the steady producer that `esp_audio_stack` provides and that the standalone VoIP path does not.
 
 ### When to use esp_afe vs esp_aec
 
@@ -60,7 +60,7 @@ Unlike `esp_aec` (standalone echo cancellation only), `esp_afe` provides a full 
 
 - **ESP32-S3** or **ESP32-P4** with PSRAM
 - ESP-IDF framework
-- `esp_audio_stack` in front of the processor. `esphome_voip_stack` can use the
+- `esp_audio_stack` in front of the processor. `voip_stack` can use the
   processed mic only when it sits behind the audio stack driver.
 
 ## Installation
@@ -415,16 +415,16 @@ The reinit is safe: the previous AFE is destroyed first (ESP-SR's FFT resources 
                        |
             +----------+-----------+
             |                      |
-    esp_audio_stack         esphome_voip_stack
+    esp_audio_stack         voip_stack
     (processor_id)         (processor_id)
 ```
 
-Both `EspAec` and `EspAfe` implement `AudioProcessor`. The consumer components (`esp_audio_stack` and `esphome_voip_stack`) call `process(mic, ref, out)` without knowing which implementation is behind it. The supported pairings are:
+Both `EspAec` and `EspAfe` implement `AudioProcessor`. The consumer components (`esp_audio_stack` and `voip_stack`) call `process(mic, ref, out)` without knowing which implementation is behind it. The supported pairings are:
 
 | Consumer | esp_aec | esp_afe |
 |----------|---------|---------|
 | `esp_audio_stack` | yes | yes |
-| `esphome_voip_stack` standalone (no `esp_audio_stack`) | yes | **no** (the GMF AFE manager/pipeline needs the steady frames `esp_audio_stack` produces) |
+| `voip_stack` standalone (no `esp_audio_stack`) | yes | **no** (the GMF AFE manager/pipeline needs the steady frames `esp_audio_stack` produces) |
 
 ### Internal Pipeline
 
@@ -454,7 +454,7 @@ external_components:
       type: git
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
-    components: [audio_processor, esphome_voip_stack, esp_audio_stack, esp_afe]
+    components: [audio_processor, voip_stack, esp_audio_stack, esp_afe]
 
 esp_afe:
   id: afe_processor

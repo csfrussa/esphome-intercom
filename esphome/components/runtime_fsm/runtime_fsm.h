@@ -11,8 +11,8 @@
 #include <string>
 
 namespace esphome {
-namespace esphome_voip_stack {
-class ESPHomeVoipStack;
+namespace voip_stack {
+class VoipStack;
 }
 namespace runtime_fsm {
 
@@ -30,7 +30,7 @@ class RuntimeFsm : public Component {
 
   void set_debug(bool debug) { this->debug_ = debug; }
   void set_output_script(script::Script<> *script) { this->output_script_ = script; }
-  void set_voip(esphome_voip_stack::ESPHomeVoipStack *voip) { this->voip_ = voip; }
+  void set_voip(voip_stack::VoipStack *voip) { this->voip_ = voip; }
   void set_voip_activity_prefix(const char *prefix) { this->voip_activity_prefix_ = prefix; }
   void add_activity(const char *name, int16_t priority, bool initial);
   void set_activity_group(const char *activity, const char *group);
@@ -134,7 +134,7 @@ class RuntimeFsm : public Component {
   void mark_config_error_();
 
   script::Script<> *output_script_{nullptr};
-  esphome_voip_stack::ESPHomeVoipStack *voip_{nullptr};
+  voip_stack::VoipStack *voip_{nullptr};
   const char *voip_activity_prefix_{nullptr};
 
   bool debug_{false};

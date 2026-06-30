@@ -34,7 +34,7 @@ record and keep the Apache-2.0 license text available in this repository.
 
 ## Home Assistant And HACS Integration Surface
 
-The custom integration under `custom_components/homeassistant_voip_stack/` uses Home
+The custom integration under `custom_components/voip_stack/` uses Home
 Assistant integration APIs and is distributed as project code under MIT unless
 a file states otherwise. Home Assistant itself and HACS are not vendored in
 this repository.

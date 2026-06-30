@@ -164,7 +164,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [esphome_voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
+    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # CONNECTIVITY
@@ -182,12 +182,12 @@ logger:
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
-    esphome_voip_stack: INFO
-    esphome_voip_stack.fsm: INFO
-    esphome_voip_stack.tcp: INFO
-    esphome_voip_stack.udp: INFO
-    esphome_voip_stack.audio: INFO
-    esphome_voip_stack.settings: INFO
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -446,7 +446,7 @@ voice_assistant:
 # =============================================================================
 # VOIP STACK
 # =============================================================================
-esphome_voip_stack:
+voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: phone
@@ -471,7 +471,7 @@ esphome_voip_stack:
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
     # only because speaker: voip_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring esphome_voip_stack directly to a
+    # not advertise additional formats when wiring voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -1531,7 +1531,7 @@ binary_sensor:
                     condition:
                       lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
                     then:
-                      - esphome_voip_stack.call_toggle:
+                      - voip_stack.call_toggle:
                     else:
                       - if:
                           condition:
@@ -1540,7 +1540,7 @@ binary_sensor:
                               auto s = id(phone).get_state_str();
                               return s != "idle";
                           then:
-                            - esphome_voip_stack.call_toggle:
+                            - voip_stack.call_toggle:
                           else:
                             - runtime_fsm.event:
                                 id: runtime_controller
@@ -1559,13 +1559,13 @@ binary_sensor:
                   auto s = id(phone).get_state_str();
                   return s == "ringing";
               then:
-                - esphome_voip_stack.decline_call:
+                - voip_stack.decline_call:
               else:
                 - if:
                     condition:
                       lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
                     then:
-                      - esphome_voip_stack.next_contact:
+                      - voip_stack.next_contact:
       # Long press (3s): switch VA <-> VoIP
       - timing:
           - ON for 1s to 3s
@@ -1719,7 +1719,7 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle:
+                        voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN
@@ -2649,10 +2649,10 @@ lvgl:
       # the including firmware variant: full-experience goes VA <-> VoIP <->
       # settings, voip-only keeps the voip/settings stack.
       on_swipe_left:
-        - esphome_voip_stack.next_contact:
+        - voip_stack.next_contact:
         - script.execute: update_call_idle_labels
       on_swipe_right:
-        - esphome_voip_stack.prev_contact:
+        - voip_stack.prev_contact:
         - script.execute: update_call_idle_labels
       on_swipe_up:
         - script.execute: call_to_settings
@@ -2713,7 +2713,7 @@ lvgl:
                   text_color: 0xFFFFFF
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.prev_contact:
+              - voip_stack.prev_contact:
               - script.execute: update_call_idle_labels
         - button:
             id: call_idle_next_contact_btn
@@ -2731,7 +2731,7 @@ lvgl:
                   text_color: 0xFFFFFF
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.next_contact:
+              - voip_stack.next_contact:
               - script.execute: update_call_idle_labels
         # Green call button below the peer name (idle screen only calls).
         - button:
@@ -2749,7 +2749,7 @@ lvgl:
                   text_color: 0x00FF00
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.call_toggle:
+              - voip_stack.call_toggle:
 
       # ========================================================================
       # VOIP: RINGING IN PAGE
@@ -2798,7 +2798,7 @@ lvgl:
                   text_color: 0x00FF00
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.call_toggle:
+              - voip_stack.call_toggle:
         - button:
             floating: true
             align: RIGHT_MID
@@ -2814,7 +2814,7 @@ lvgl:
                   text_color: 0xFFFFFF
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.decline_call:
+              - voip_stack.decline_call:
 
       # ========================================================================
       # VOIP: RINGING OUT PAGE
@@ -2863,7 +2863,7 @@ lvgl:
                   text_color: 0xFF0000
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.decline_call:
+              - voip_stack.decline_call:
 
       # ========================================================================
       # VOIP: IN CALL PAGE
@@ -2912,7 +2912,7 @@ lvgl:
                   text_color: 0xFF0000
                   text_font: call_icons
             on_short_click:
-              - esphome_voip_stack.call_toggle:
+              - voip_stack.call_toggle:
 
       # ========================================================================
       # VOIP: CALL ENDED PAGE

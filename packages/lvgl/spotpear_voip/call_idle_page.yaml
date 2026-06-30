@@ -4,10 +4,10 @@ bg_color: 0x0000FF
 # the including firmware variant: full-experience goes VA <-> VoIP <->
 # settings, voip-only keeps the voip/settings stack.
 on_swipe_left:
-  - esphome_voip_stack.next_contact:
+  - voip_stack.next_contact:
   - script.execute: update_call_idle_labels
 on_swipe_right:
-  - esphome_voip_stack.prev_contact:
+  - voip_stack.prev_contact:
   - script.execute: update_call_idle_labels
 on_swipe_up:
   - script.execute: call_to_settings
@@ -68,7 +68,7 @@ widgets:
             text_color: 0xFFFFFF
             text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.prev_contact:
+        - voip_stack.prev_contact:
         - script.execute: update_call_idle_labels
   - button:
       id: call_idle_next_contact_btn
@@ -86,7 +86,7 @@ widgets:
             text_color: 0xFFFFFF
             text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.next_contact:
+        - voip_stack.next_contact:
         - script.execute: update_call_idle_labels
   # Green call button below the peer name (idle screen only calls).
   - button:
@@ -104,7 +104,7 @@ widgets:
             text_color: 0x00FF00
             text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.call_toggle:
+        - voip_stack.call_toggle:
 
 # ========================================================================
 # VOIP: RINGING IN PAGE

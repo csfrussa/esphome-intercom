@@ -128,7 +128,7 @@ logger:
     mixer_speaker: INFO
     wifi: INFO
     json: INFO
-    esphome_voip_stack: INFO
+    voip_stack: INFO
     audio_processor: INFO
 
 wifi:
@@ -138,7 +138,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [esphome_voip_stack, esp_audio_stack, esp_afe, audio_processor, speaker]
+    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, speaker]
 
 # =============================================================================
 # ESP AFE
@@ -236,9 +236,9 @@ voice_assistant:
     - switch.turn_on: timer_ringing
 
 # =============================================================================
-# ESPHome VoIP Stack: Device part
+# VoIP Stack: Device part
 # =============================================================================
-esphome_voip_stack:
+voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   audio:
@@ -257,7 +257,7 @@ esphome_voip_stack:
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
     # only because speaker: voip_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring esphome_voip_stack directly to a
+    # not advertise additional formats when wiring voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -348,7 +348,7 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle:
+                        voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN
@@ -416,9 +416,9 @@ binary_sensor:
                 - if:
                     condition:
                       not:
-                        - esphome_voip_stack.is_idle:
+                        - voip_stack.is_idle:
                     then:
-                      - esphome_voip_stack.call_toggle:
+                      - voip_stack.call_toggle:
                     else:
                       - if:
                           condition:
@@ -434,7 +434,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - esphome_voip_stack.next_contact:
+          - voip_stack.next_contact:
       # Long press (1-3s): toggle mute
       - timing:
           - ON for 1s to 3s

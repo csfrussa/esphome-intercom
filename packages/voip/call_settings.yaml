@@ -1,19 +1,19 @@
 # =============================================================================
 # VoIP call settings
 # =============================================================================
-# Shared esphome_voip_stack switches exposed by every VoIP device.
+# Shared voip_stack switches exposed by every VoIP device.
 #
 # `Auto Answer` controls whether incoming calls are answered immediately.
 # `Do Not Disturb` rejects incoming SIP INVITE with 486 Busy Here, so the
 # caller, HA bridge, and card can show the real terminal reason.
 #
 # Required IDs:
-#   phone - esphome_voip_stack component
+#   phone - voip_stack component
 # =============================================================================
 
 switch:
-  - platform: esphome_voip_stack
-    esphome_voip_stack_id: phone
+  - platform: voip_stack
+    voip_stack_id: phone
     auto_answer:
       id: auto_answer_switch
       name: Auto Answer

@@ -125,12 +125,12 @@ logger:
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
-    esphome_voip_stack: INFO
-    esphome_voip_stack.fsm: INFO
-    esphome_voip_stack.tcp: INFO
-    esphome_voip_stack.udp: INFO
-    esphome_voip_stack.audio: INFO
-    esphome_voip_stack.settings: INFO
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -157,7 +157,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, esphome_voip_stack, esp_audio_stack, esp_afe, runtime_fsm, speaker, voice_assistant]
+    components: [audio_processor, voip_stack, esp_audio_stack, esp_afe, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, TCA9555)
@@ -305,9 +305,9 @@ voice_assistant:
   volume_multiplier: 2.0
 
 # =============================================================================
-# ESPHome VoIP Stack: Hardware config (callbacks from package)
+# VoIP Stack: Hardware config (callbacks from package)
 # =============================================================================
-esphome_voip_stack:
+voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   audio:
@@ -331,7 +331,7 @@ esphome_voip_stack:
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
     # only because speaker: voip_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring esphome_voip_stack directly to a
+    # not advertise additional formats when wiring voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -387,9 +387,9 @@ binary_sensor:
                 - if:
                     condition:
                       not:
-                        - esphome_voip_stack.is_idle:
+                        - voip_stack.is_idle:
                     then:
-                      - esphome_voip_stack.call_toggle:
+                      - voip_stack.call_toggle:
                     else:
                       - runtime_fsm.event:
                           id: runtime_controller
@@ -401,7 +401,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - esphome_voip_stack.next_contact:
+          - voip_stack.next_contact:
       # Long press (1-3s): toggle mute
       - timing:
           - ON for 1s to 3s
@@ -421,7 +421,7 @@ binary_sensor:
       mode:
         input: true
     on_press:
-      - esphome_voip_stack.call_toggle:
+      - voip_stack.call_toggle:
 
   # KEY2 (TCA9555 EXIO10): Next contact
   - platform: gpio
@@ -435,7 +435,7 @@ binary_sensor:
       mode:
         input: true
     on_press:
-      - esphome_voip_stack.next_contact:
+      - voip_stack.next_contact:
 
   # KEY3 (TCA9555 EXIO11): Decline / Previous contact
   - platform: gpio
@@ -451,11 +451,11 @@ binary_sensor:
     on_press:
       - if:
           condition:
-            esphome_voip_stack.is_ringing:
+            voip_stack.is_ringing:
           then:
-            - esphome_voip_stack.decline_call:
+            - voip_stack.decline_call:
           else:
-            - esphome_voip_stack.prev_contact:
+            - voip_stack.prev_contact:
 
 # =============================================================================
 # Switches (device-specific)
@@ -541,7 +541,7 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle:
+                        voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN

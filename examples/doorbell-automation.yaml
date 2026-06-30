@@ -55,7 +55,7 @@ actions:
       - condition: template
         value_template: "{{ wait.trigger is not none }}"
     then:
-      - action: homeassistant_voip_stack.sip_decline
+      - action: voip_stack.decline
         target:
           device_id: "{{ trigger.event.data.device_id }}"
         data:

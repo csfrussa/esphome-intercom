@@ -2,7 +2,7 @@ import esphome.codegen as cg
 
 # Shared audio processor interface header.
 # No config schema: this component only provides the C++ interface.
-# esp_aec and esp_afe implement it; esp_audio_stack and esphome_voip_stack consume it.
+# esp_aec and esp_afe implement it; esp_audio_stack and voip_stack consume it.
 
 CODEOWNERS = ["@n-IA-hane"]
 AUTO_LOAD = ["ring_buffer"]

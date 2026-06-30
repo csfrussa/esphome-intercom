@@ -1,4 +1,4 @@
-# ESPHome VoIP Stack and Full-Duplex Voice for ESP32
+# VoIP Stack and Full-Duplex Voice for ESP32
 
 [![Platform](https://img.shields.io/badge/Platform-ESP32--S3%20%7C%20ESP32--P4-blue.svg)](#hardware-support)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue.svg)](https://www.home-assistant.io)
@@ -12,7 +12,7 @@ on real devices.
 
 In practice, this means the project is moving from the old PBX-lite model to a
 real SIP/SDP/RTP VoIP architecture. ESP devices become local SIP phones, Home
-Assistant becomes a SIP softphone plus SIP router/B2BUA, and `homeassistant_voip_stack`
+Assistant becomes a SIP softphone plus SIP router/B2BUA, and `voip_stack`
 can optionally register a SIP trunk or host local SIP accounts for standard
 softphones such as Zoiper, Linphone, baresip or pjsua.
 
@@ -41,13 +41,13 @@ Minimum versions for this release:
 - **ESPHome**: `2026.5.x` or newer. The maintained YAMLs use ESPHome 2026.5
   audio/media APIs and IDF component resolution behavior.
 - **Home Assistant Core**: `2026.5.0` or newer for the bundled
-  `homeassistant_voip_stack` integration and Lovelace card.
+  `voip_stack` integration and Lovelace card.
 
 ---
 
 From a single ESPHome full-duplex doorbell to a multi-device VoIP setup over Home Assistant, all the way to a complete Voice Assistant setup with wake word detection, echo cancellation and an LVGL touchscreen UI.
 
-If your goal is simply **"I want a full-duplex intercom with Home Assistant"**, start from the ready YAMLs under [`yamls/voip-only/`](yamls/voip-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `homeassistant_voip_stack` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
+If your goal is simply **"I want a full-duplex intercom with Home Assistant"**, start from the ready YAMLs under [`yamls/voip-only/`](yamls/voip-only/). Pick the closest board, adjust pins and hardware options, add the ESP through the ESPHome integration, then install `voip_stack` in Home Assistant. HA is discovered as a destination and the ESP can call or be called from a GPIO button, LVGL button, automation, service call or Lovelace card.
 
 You will see SIP router/B2BUA language below. Do not let that scare you: it is
 the internal model that lets ESPs, Home Assistant and the browser card call each
@@ -102,7 +102,7 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
   - [2. ESPHome Component](#2-esphome-component)
   - [3. Lovelace Card](#3-lovelace-card)
 - [Product model and routing](#product-model-and-routing)
-- [Reference](#reference): esphome_voip_stack, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
+- [Reference](#reference): voip_stack, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
 - [Call Flow Diagrams](#call-flow-diagrams)
 - [Hardware Support](#hardware-support)
 - [Audio components](#audio-components): esp_audio_stack, esp_aec, esp_afe
@@ -122,7 +122,7 @@ VoIP migration.
 
 Yes, you read that correctly: ESP devices and Home Assistant have been migrated
 to SIP/SDP/RTP. ESPs are SIP phones. Home Assistant is a SIP softphone, SIP
-router/B2BUA, RTP bridge/resampler and optional trunk client. Home Assistant VoIP Stack
+router/B2BUA, RTP bridge/resampler and optional trunk client. VoIP Stack
 has been migrated too, so the HA integration can route and bridge real SIP call
 legs instead of wrapping a project-specific intercom protocol.
 
@@ -175,14 +175,14 @@ Changes since `2026.6.3`:
 - Wake-word barge-in during a VA TTS response stops the VA announcement path
   and restarts the assistant from real component states, without stopping normal
   background media.
-- Home Assistant VoIP Stack can now register optional Home Assistant Assist intent
+- VoIP Stack can now register optional Home Assistant Assist intent
   handlers. Voice satellites can say commands such as `call kitchen speaker`,
   `hang up`, `answer` and `decline`; the handler uses the Assist `device_id` of
   the satellite that heard the sentence, resolves the spoken contact
   dynamically against the live VoIP phonebook, and calls the existing
   VoIP services. If no contact matches, it can resolve a Home Assistant
   area name when that area contains exactly one VoIP device. The feature is
-  gated by the Home Assistant VoIP Stack setup option and is off by default.
+  gated by the VoIP Stack setup option and is off by default.
 - Maintained full-experience YAMLs include an explicit optional local voice
   command package for assistant silence. Users can say "shut up" to stop only
   the current VA/TTS announcement without stopping background media.
@@ -264,7 +264,7 @@ Known prerelease status:
 
 ## Overview
 
-**ESPHome VoIP Stack** is a set of ESPHome components, YAML packages and Home
+**VoIP Stack** is a set of ESPHome components, YAML packages and Home
 Assistant tools for full-duplex SIP/VoIP calls, wake word devices,
 media/TTS playback and display-driven voice devices.
 
@@ -283,7 +283,7 @@ media/TTS playback and display-driven voice devices.
 
 For the normal intercom use case, do not start by designing a SIP router. Pick the
 closest YAML, adapt the board pins and audio hardware, add the ESP through the
-ESPHome integration, then install `homeassistant_voip_stack`. Home Assistant is
+ESPHome integration, then install `voip_stack`. Home Assistant is
 discovered as a destination and the ESP can call or be called from a GPIO
 button, LVGL button, automation, service call or Lovelace card.
 
@@ -308,7 +308,7 @@ ESP-to-ESP calling**. Today HA is the stable phonebook authority in the standard
 YAMLs. If HA is on the network, it also joins as one more extension and can act
 as a SIP router/B2BUA bridge when routing asks for it.
 
-There is one product mode on top of SIP. HA `homeassistant_voip_stack` is a SIP
+There is one product mode on top of SIP. HA `voip_stack` is a SIP
 softphone, router/B2BUA, RTP bridge/resampler, phonebook publisher, optional
 registrar for local softphones and optional trunk client. ESP `transport:
 tcp|udp` controls only that ESP phone's SIP signaling; RTP audio remains UDP.
@@ -349,7 +349,7 @@ the snippets below when you are building a custom target.
 
 ### Normal install: ESPs as VoIP extensions
 
-1. Install the Home Assistant `homeassistant_voip_stack` integration.
+1. Install the Home Assistant `voip_stack` integration.
 2. Flash one ready YAML per device, for example:
    - [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml)
    - [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml)
@@ -378,7 +378,7 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - esphome_voip_stack.call_contact:
+      - voip_stack.call_contact:
           id: phone
           contact: "Home"  # replace with Settings -> System -> General -> Location name
 ```
@@ -391,7 +391,7 @@ For mobile doorbells, the Companion app notification can expose two useful
 actions: **Answer** and **Decline**. Answer deep-links to the Lovelace card with
 `?voip_answer=1`, so the card can request microphone access and start the
 full-duplex audio stream. Decline stays in the automation path and calls
-`homeassistant_voip_stack.sip_decline`, which sends the decline reason back to the ESP.
+`voip_stack.decline`, which sends the decline reason back to the ESP.
 
 ### Room-to-room VoIP: fixed buttons
 
@@ -408,7 +408,7 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - esphome_voip_stack.call_contact:
+      - voip_stack.call_contact:
           id: phone
           contact: "Kitchen Phone"
 
@@ -419,7 +419,7 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - esphome_voip_stack.call_contact:
+      - voip_stack.call_contact:
           id: phone
           contact: "Bedroom Phone"
 ```
@@ -434,7 +434,7 @@ Use ESP static contacts only for offline installs, diagnostics, direct SIP
 peers that should exist before HA connects, or very small fixed systems.
 
 ```yaml
-esphome_voip_stack:
+voip_stack:
   id: phone
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
@@ -461,7 +461,7 @@ Runtime ESP automations can still mutate the local dial plan when needed:
 
 ```yaml
 on_press:
-  - esphome_voip_stack.add_contacts:
+  - voip_stack.add_contacts:
       id: phone
       name: "Temporary Desk"
       ip: "192.168.1.55"
@@ -469,7 +469,7 @@ on_press:
 ```
 
 Home Assistant is the central roster authority when it is present. Add, remove
-or replace central contacts with `homeassistant_voip_stack.phonebook_add_contact`,
+or replace central contacts with `voip_stack.add_contact`,
 `phonebook_remove_contact`, `phonebook_set_contacts`, `phonebook_clear` and
 `phonebook_push`. HA pushes the updated roster immediately to online ESPs via
 the ESPHome API; ESP static contacts remain local offline/custom additions.
@@ -481,7 +481,7 @@ the ESPHome API; ESP static contacts remain local offline/custom additions.
 - **Deterministic routing**: direct only with complete SIP endpoint data; unresolved names and numbers go to HA.
 - **SIP TCP + SIP UDP signaling** with RTP media and HA bridge/resampling when needed.
 - **Negotiated PCM audio** - peers advertise per-direction `tx_formats`/`rx_formats` up to 48 kHz where the actual microphone/speaker path supports them.
-- **Dedicated browser audio socket** - The Lovelace softphone uses authenticated binary WebSocket audio on `/api/homeassistant_voip_stack/ws`; it no longer pushes base64 audio over HA's shared frontend WebSocket.
+- **Dedicated browser audio socket** - The Lovelace softphone uses authenticated binary WebSocket audio on `/api/voip_stack/ws`; it no longer pushes base64 audio over HA's shared frontend WebSocket.
 - **Echo Cancellation (AEC)** - Built-in acoustic echo cancellation using ESP-SR. (ES8311 digital feedback mode provides perfect sample-accurate echo cancellation.)
 - **Full Audio Front-End (AFE)** - Complete ESP-SR AFE pipeline via `esp_afe`:
   - **Single-mic (MR)**: AEC + Noise Suppression + VAD + AGC.
@@ -493,16 +493,16 @@ the ESPHome API; ESP static contacts remain local offline/custom additions.
   user speech while music, TTS or ringtone audio is playing from the speaker.
 - **Ready-to-flash YAML configs** - Optimized configurations for real, tested hardware combining Voice Assistant, Micro Wake Word and VoIP calls on the same device.
 - **Auto Answer** - Configurable automatic call acceptance (ESP-side switch + browser card checkbox).
-- **HA Services** - `homeassistant_voip_stack.sip_call`, `sip_answer`,
-  `sip_decline`, `sip_hangup`, `sip_forward`, `sip_route`, `sip_set_dnd`,
-  phonebook services, local SIP account services and `purge_devices`. All are
+- **HA Services** - `voip_stack.call`, `answer`, `decline`, `hangup`,
+  `forward`, `route`, `set_dnd`, contact services, local SIP account services
+  and `purge_devices`. All are
   registered with explicit `voluptuous` schemas (`extra=PREVENT_EXTRA`);
   empty target-bearing calls fail schema validation before handlers run.
 - **Call Forwarding** - Forward active or ringing calls to another device via automation.
 - **Ringtone on incoming calls** - Devices play a looping ringtone while ringing.
 - **Volume Control** - Adjustable Master Volume and microphone gain.
-- **Phonebook** - Dedup by friendly name. HA publishes the SIP-aware `sensor.voip_phonebook`; ESP packages subscribe to it and locally shape endpoint rows into direct SIP or HA-bridged routes. YAML automations can still call the native `esphome_voip_stack` actions/services.
-- **Do Not Disturb** - Native `esphome_voip_stack` switch. When enabled, incoming calls are rejected with `SIP reject("DND")` so the caller receives a real reason.
+- **Phonebook** - Dedup by friendly name. HA publishes the SIP-aware `sensor.voip_phonebook`; ESP packages subscribe to it and locally shape endpoint rows into direct SIP or HA-bridged routes. YAML automations can still call the native `voip_stack` actions/services.
+- **Do Not Disturb** - Native `voip_stack` switch. When enabled, incoming calls are rejected with `SIP reject("DND")` so the caller receives a real reason.
 - **HA peer name = `hass.config.location_name`** everywhere (NEVER hardcoded).
 - **Status LED** - Visual feedback for call states.
 - **Persistent Settings** - Volume, gain, AEC state saved to flash.
@@ -520,7 +520,7 @@ flowchart TD
 
     subgraph HA["🏠 Home Assistant"]
         WS["🌐 WebSocket API<br/>browser softphone"]
-        Router["🔀 homeassistant_voip_stack SIP router/B2BUA<br/>call / answer / decline / forward"]
+        Router["🔀 voip_stack SIP router/B2BUA<br/>call / answer / decline / forward"]
         Roster["📒 phonebook publisher<br/>sensor.voip_phonebook"]
         Registrar["📲 optional local registrar<br/>Zoiper / Linphone / baresip"]
         Trunk["🌍 optional SIP trunk<br/>provider / PBX"]
@@ -529,12 +529,12 @@ flowchart TD
     end
 
     subgraph ESP["📟 ESP device"]
-        FSM["📞 esphome_voip_stack<br/>SIP phone state"]
+        FSM["📞 voip_stack<br/>SIP phone state"]
         Book["📒 phonebook<br/>name → SIP URI"]
         Audio["🎙️ mic / speaker<br/>AEC or AFE"]
     end
 
-    Browser <-->|"binary PCM + control<br/>/api/homeassistant_voip_stack/ws"| WS
+    Browser <-->|"binary PCM + control<br/>/api/voip_stack/ws"| WS
     WS --> Router
     Registrar --> Router
     Trunk --> Router
@@ -642,19 +642,19 @@ HA exposes `sensor.voip_phonebook` as the central SIP roster. It merges:
 
 Useful services:
 
-- `homeassistant_voip_stack.phonebook_add_contact`: add or replace one central contact.
-- `homeassistant_voip_stack.phonebook_remove_contact`: remove a manual central contact by name.
-- `homeassistant_voip_stack.phonebook_set_contacts`: replace manual contacts from JSON.
-- `homeassistant_voip_stack.phonebook_clear`: clear manual central contacts.
-- `homeassistant_voip_stack.phonebook_push`: push the current roster to online ESPs.
-- `homeassistant_voip_stack.sip_call`: originate a call from HA.
-- `homeassistant_voip_stack.sip_forward`: forward/bridge a pending or new call.
-- `homeassistant_voip_stack.sip_route`: answer, decline, busy, forward or bridge a pending route request.
+- `voip_stack.add_contact`: add or replace one central contact.
+- `voip_stack.remove_contact`: remove a manual central contact by name.
+- `voip_stack.set_contacts`: replace manual contacts from JSON.
+- `voip_stack.clear_contacts`: clear manual central contacts.
+- `voip_stack.push_phonebook`: push the current roster to online ESPs.
+- `voip_stack.call`: originate a call from HA.
+- `voip_stack.forward`: forward/bridge a pending or new call.
+- `voip_stack.route`: answer, decline, busy, forward or bridge a pending route request.
 
 Example central contact:
 
 ```yaml
-service: homeassistant_voip_stack.phonebook_add_contact
+service: voip_stack.add_contact
 data:
   name: "Office Phone"
   kind: phone
@@ -667,12 +667,12 @@ Example dial-plan automation:
 alias: Route trunk calls to kitchen at night
 trigger:
   - platform: event
-    event_type: homeassistant_voip_stack.sip_route_request
+    event_type: voip_stack.route_request
 condition:
   - condition: time
     after: "22:00:00"
 action:
-  - service: homeassistant_voip_stack.sip_route
+  - service: voip_stack.route
     data:
       call_id: "{{ trigger.event.data.call_id }}"
       action: forward
@@ -686,20 +686,20 @@ falling back.
 
 ### Local softphone accounts
 
-Home Assistant VoIP Stack can optionally act as a local SIP registrar for standard
+VoIP Stack can optionally act as a local SIP registrar for standard
 softphones. Create an account from Developer Tools -> Services with
-`homeassistant_voip_stack.sip_account_create`:
+`voip_stack.create_account`:
 
 ```yaml
-service: homeassistant_voip_stack.sip_account_create
+service: voip_stack.create_account
 data:
   username: "MobileOffice"
   display_name: "Mobile Office"
 ```
 
 If `password` is omitted, HA generates one and shows it once in a Home
-Assistant VoIP Stack persistent notification and in the
-`homeassistant_voip_stack.call_event` stream.
+VoIP Stack persistent notification and in the
+`voip_stack.call_event` stream.
 Then configure Zoiper, Linphone, baresip or pjsua with:
 
 ```text
@@ -726,9 +726,9 @@ generated passwords are only shown at creation/rotation time.
 
 1. In HACS, go to **⋮ → Custom repositories**.
 2. Add `https://github.com/n-IA-hane/esphome-intercom` as **Integration**.
-3. Find "Home Assistant VoIP Stack" and click **Download**.
+3. Find "VoIP Stack" and click **Download**.
 4. Restart Home Assistant.
-5. Go to **Settings → Integrations → Add Integration** → search "Home Assistant VoIP Stack" → click **Submit**.
+5. Go to **Settings → Integrations → Add Integration** → search "VoIP Stack" → click **Submit**.
 6. In the config flow, set the SIP and RTP ports only if the defaults do not fit
    your network. Default ports are SIP `5060` and RTP base `40000`.
 
@@ -736,25 +736,25 @@ generated passwords are only shown at creation/rotation time.
 
 _Add the repository as a HACS integration repository._
 
-![HACS download Home Assistant VoIP Stack](docs/images/hacs-download-homeassistant-voip-stack.png)
+![HACS download VoIP Stack](docs/images/hacs-download-voip-stack.png)
 
-_After the repository is added, open Home Assistant VoIP Stack in HACS and download it._
+_After the repository is added, open VoIP Stack in HACS and download it._
 
-![Home Assistant VoIP Stack config flow](docs/images/homeassistant-voip-stack-config-flow.png)
+![VoIP Stack config flow](docs/images/voip-stack-config-flow.png)
 
 _The config flow sets the HA SIP/RTP ports and optional features._
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
-#### After Every Home Assistant VoIP Stack Upgrade: Hard Refresh The Card Page
+#### After Every VoIP Stack Upgrade: Hard Refresh The Card Page
 
-After upgrading `homeassistant_voip_stack`, hard refresh every Home Assistant dashboard
+After upgrading `voip_stack`, hard refresh every Home Assistant dashboard
 view that contains an `voip-stack-card`.
 
 Several reported "broken card" or "VoIP call not working" issues were eventually
 traced back to the browser or mobile app still running an old cached copy of the
 card JavaScript after the integration had already been upgraded. The card URL is
-versioned from the installed Home Assistant VoIP Stack component, but some clients can
+versioned from the installed VoIP Stack component, but some clients can
 still keep stale frontend state until their cache is cleared.
 
 On desktop Chrome or Chromium:
@@ -764,7 +764,7 @@ On desktop Chrome or Chromium:
 3. Right-click the browser refresh button.
 4. Choose **Empty cache and hard reload**.
 5. Check the version shown at the bottom-right of the card. It must match the
-   Home Assistant VoIP Stack version you just installed.
+   VoIP Stack version you just installed.
 
 On the Home Assistant Companion app for Android:
 
@@ -773,7 +773,7 @@ On the Home Assistant Companion app for Android:
 3. Tap **Reset frontend cache**.
 4. Close and reopen the app.
 5. Check the version shown at the bottom-right of the card. It must match the
-   Home Assistant VoIP Stack version you just installed.
+   VoIP Stack version you just installed.
 
 If that option is not available on your Companion App build, or the stale card
 still remains after the frontend-cache reset, use Android's fallback app-cache
@@ -790,17 +790,17 @@ Home Assistant can update/reload Lovelace resources, and this integration
 already registers the card with a versioned URL. The remaining stale-cache case
 is client-side: the browser or companion app may keep an already loaded
 JavaScript module alive until the page/app is refreshed. Until the card gets its
-own version-mismatch warning, do this after every Home Assistant VoIP Stack upgrade,
+own version-mismatch warning, do this after every VoIP Stack upgrade,
 especially after major releases.
 
 #### Option B: Manual install
 
 ```bash
 # From the repository root
-cp -r custom_components/homeassistant_voip_stack /config/custom_components/
+cp -r custom_components/voip_stack /config/custom_components/
 ```
 
-Then add via UI: **Settings → Integrations → Add Integration → Home Assistant VoIP Stack**, restart Home Assistant.
+Then add via UI: **Settings → Integrations → Add Integration → VoIP Stack**, restart Home Assistant.
 
 The integration will:
 - Start the HA SIP endpoint on the configured SIP port.
@@ -808,7 +808,8 @@ The integration will:
 - Publish the SIP phonebook (`sensor.voip_phonebook`) for ESP subscribers.
 - Optionally register a provider/PBX trunk.
 - Optionally accept REGISTER from local softphones with generated accounts.
-- Register SIP-first services (`sip_answer`, `sip_decline`, `sip_hangup`, `sip_call`, `sip_forward`, `sip_route`, phonebook and SIP account services).
+- Register SIP-first services (`answer`, `decline`, `hangup`, `call`, `forward`,
+  `route`, contact and SIP account services).
 - Auto-register the Lovelace card as a frontend resource.
 
 #### Network requirements
@@ -833,19 +834,19 @@ by the maintained `esp_audio_stack` YAMLs.
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, esphome_voip_stack, esp_audio_stack, esp_aec]
+    components: [audio_processor, voip_stack, esp_audio_stack, esp_aec]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: main
-    components: [audio_processor, esphome_voip_stack, esp_afe, esp_audio_stack]
+    components: [audio_processor, voip_stack, esp_afe, esp_audio_stack]
 ```
 
 > **Note**: `audio_processor` is still listed because it provides shared task
 > and buffer helpers used by the audio components. Use `esp_aec` for
 > lightweight single-mic processing and `esp_afe` for the full pipeline (see
-> [AFE section](#audio-front-end-afe) below). `esphome_voip_stack` no longer owns
+> [AFE section](#audio-front-end-afe) below). `voip_stack` no longer owns
 > software AEC; standalone VoIP binds to native ESPHome
 > `microphone`/`speaker`, while software AEC/AFE belongs behind
 > `esp_audio_stack`. Maintained full voice YAMLs use the source-based
@@ -921,8 +922,8 @@ speaker:
     output_speaker: hw_speaker
     bits_per_sample: 16
 
-# ESPHome VoIP Stack - SIP router/B2BUA (no mode: needed)
-esphome_voip_stack:
+# VoIP Stack - SIP router/B2BUA (no mode: needed)
+voip_stack:
   id: phone
   microphone: mic_component
   speaker: spk_component
@@ -932,7 +933,7 @@ esphome_voip_stack:
 #### Complete Configuration (with HA-managed phonebook)
 
 ```yaml
-esphome_voip_stack:
+voip_stack:
   id: phone
   # transport chooses SIP signaling transport: tcp or udp. Audio is RTP/UDP.
   transport: udp
@@ -964,8 +965,8 @@ esphome_voip_stack:
 
 # Switches (with restore from flash)
 switch:
-  - platform: esphome_voip_stack
-    esphome_voip_stack_id: phone
+  - platform: voip_stack
+    voip_stack_id: phone
     auto_answer:
       name: "Auto Answer"
       restore_mode: RESTORE_DEFAULT_OFF
@@ -991,29 +992,29 @@ button:
   - platform: template
     name: "Call"
     on_press:
-      - esphome_voip_stack.call_toggle:
+      - voip_stack.call_toggle:
 
   - platform: template
     name: "Next Contact"
     on_press:
-      - esphome_voip_stack.next_contact:
+      - voip_stack.next_contact:
 
   - platform: template
     name: "Previous Contact"
     on_press:
-      - esphome_voip_stack.prev_contact:
+      - voip_stack.prev_contact:
 
   - platform: template
     name: "Decline"
     on_press:
-      - esphome_voip_stack.decline_call:
+      - voip_stack.decline_call:
 
 # Example: call a specific room from a YAML automation
 button:
   - platform: template
     name: "Call Kitchen"
     on_press:
-      - esphome_voip_stack.call_contact:
+      - voip_stack.call_contact:
           id: phone
           contact: "Kitchen Phone"
 ```
@@ -1026,7 +1027,7 @@ sensor.voip_phonebook.attributes.roster_json # canonical SIP roster
 ```
 
 The ESP-side package subscribes to the roster JSON and calls
-`esphome_voip_stack.set_roster_json` after a debounce. HA rows, ESP rows, manual SIP
+`voip_stack.set_roster_json` after a debounce. HA rows, ESP rows, manual SIP
 contacts and registered local softphones share the same route vocabulary.
 Canonical row formats live in
 [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md). For manual/local
@@ -1048,7 +1049,7 @@ data:
 
 Contact mutation is not exposed as HA-callable ESPHome services in the standard
 packages. Use `sensor.voip_phonebook` for normal sync, or call the native
-`esphome_voip_stack.set_contacts` / `add_contact` / `remove_contact` /
+`voip_stack.set_contacts` / `add_contact` / `remove_contact` /
 `flush_contacts` actions from YAML scripts when you intentionally need local
 manual mutation.
 
@@ -1056,7 +1057,7 @@ See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contra
 
 #### Apartment VoIP panel
 
-For multi-room setups, each GPIO button can call a specific room directly. The full recipe (one button per contact, exact name matching rules, `on_call_failed` handling) lives in the [`esphome_voip_stack` README](esphome/components/esphome_voip_stack/README.md#example-multi-button-intercom-apartment-doorbell).
+For multi-room setups, each GPIO button can call a specific room directly. The full recipe (one button per contact, exact name matching rules, `on_call_failed` handling) lives in the [`voip_stack` README](esphome/components/voip_stack/README.md#example-multi-button-intercom-apartment-doorbell).
 
 ### 3. Lovelace Card
 
@@ -1113,14 +1114,14 @@ formats returned by the server before microphone or playback worklets start.
 _Independent Home Assistant softphone mode: one card represents HA itself and
 calls any ESP endpoint from the in-card selector._
 
-The card automatically discovers ESPHome devices with the `esphome_voip_stack` component through their `voip_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- SIP TCP` / `- SIP UDP`; the mode line shows `HA - ESP`, `Home Assistant - ESP`, `ESP - ESP`, or `SIP TCP - SIP UDP bridge` / `SIP UDP - SIP TCP bridge`.
+The card automatically discovers ESPHome devices with the `voip_stack` component through their `voip_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- SIP TCP` / `- SIP UDP`; the mode line shows `HA - ESP`, `Home Assistant - ESP`, `ESP - ESP`, or `SIP TCP - SIP UDP bridge` / `SIP UDP - SIP TCP bridge`.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.voip_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
 
-After every Home Assistant VoIP Stack upgrade, hard refresh this dashboard view and verify
+After every VoIP Stack upgrade, hard refresh this dashboard view and verify
 that the version printed at the bottom-right of the card matches the installed
 integration version. See
-[After Every Home Assistant VoIP Stack Upgrade: Hard Refresh The Card Page](#after-every-homeassistant-voip-stack-upgrade-hard-refresh-the-card-page).
+[After Every VoIP Stack Upgrade: Hard Refresh The Card Page](#after-every-voip-stack-upgrade-hard-refresh-the-card-page).
 
 The Lovelace card provides **full-duplex bidirectional audio** with the ESP device: you can talk and listen simultaneously through your browser or the Home Assistant Companion app. The card captures audio from your microphone via `getUserMedia()` and plays incoming audio from the ESP in real-time.
 
@@ -1148,7 +1149,7 @@ _Browser softphone path: the card talks only to HA; HA opens the SIP TCP or SIP 
 
 ```mermaid
 flowchart LR
-    Card["🌐 Browser card"] <-->|"WebSocket<br/>browser audio"| HA["🏠 HA<br/>homeassistant_voip_stack"]
+    Card["🌐 Browser card"] <-->|"WebSocket<br/>browser audio"| HA["🏠 HA<br/>voip_stack"]
     HA <-->|"SIP TCP or SIP UDP leg<br/>SIP router/B2BUA messages"| ESP["📟 ESP<br/>rings / streams"]
 ```
 
@@ -1217,7 +1218,7 @@ _Doorbell path: the ESP calls the HA peer name, and the browser card rings with 
 Full options, actions, conditions, entities, services and automation examples are documented in **[docs/reference.md](docs/reference.md)**.
 
 Quick links:
-- [`esphome_voip_stack` component options](docs/reference.md#esphome_voip_stack-component)
+- [`voip_stack` component options](docs/reference.md#voip_stack-component)
 - [Event callbacks](docs/reference.md#event-callbacks)
 - [Actions](docs/reference.md#actions) and [conditions](docs/reference.md#conditions)
 - [`esp_aec`](docs/reference.md#esp_aec-component) / [`esp_afe`](docs/reference.md#esp_afe-component) components
@@ -1232,7 +1233,7 @@ Quick links:
 ```mermaid
 sequenceDiagram
     participant B as 🌐 Browser
-    participant HA as 🏠 HA homeassistant_voip_stack
+    participant HA as 🏠 HA voip_stack
     participant E as 📻 ESP
 
     B->>HA: call selected ESP
@@ -1435,7 +1436,7 @@ Three ESPHome components sit between your codec and the VoIP / voice assistant p
 
 _The same audio stack can serve VoIP, Voice Assistant, TTS and media workloads on full voice devices._
 
-Plain VoIP does **not** always require `esp_audio_stack`: `esphome_voip_stack`
+Plain VoIP does **not** always require `esp_audio_stack`: `voip_stack`
 can run on ESPHome's normal `microphone` and/or `speaker` components. This is
 the right fit for hardware/DSP-processed audio such as XMOS front-ends, for
 mic-only or speaker-only endpoints, and for full-duplex tests where microphone
@@ -1518,7 +1519,7 @@ runtime_fsm:
 For a composite device, put the microphone and speaker on the same I2S bus and
 use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The
 audio stack driver hands a phase-coherent speaker reference to the AEC each frame;
-standalone `esphome_voip_stack` deliberately does not provide software AEC. If your
+standalone `voip_stack` deliberately does not provide software AEC. If your
 hardware does not already process echo, use an `esp_audio_stack` profile.
 
 ### [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
@@ -1529,7 +1530,7 @@ reference capture, speaker buffering and mic consumer fan-out, then exposes
 normal ESPHome `microphone` and `speaker` platforms above that.
 
 With `esp_aec` or `esp_afe` attached, that `microphone` platform is the cleaned
-post-processor stream. MWW, Voice Assistant and `esphome_voip_stack` all consume the
+post-processor stream. MWW, Voice Assistant and `voip_stack` all consume the
 same echo-cancelled audio while media/TTS/ringtones continue through the shared
 speaker and mixer path.
 
@@ -1562,7 +1563,7 @@ YAML keys cover type (`sr` for speech recognition or `vc` for voice communicatio
 
 **When to use it**
 
-Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you want runtime control of those stages from Home Assistant. For plain voip-only setups `esp_aec` is lighter and lacks the AFE switches you would not use anyway. `esp_afe` requires `esp_audio_stack` in front of it; it cannot replace `esp_aec` in standalone `esphome_voip_stack` configurations (no audio stack driver = no steady frame producer for the AFE feed/fetch tasks).
+Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you want runtime control of those stages from Home Assistant. For plain voip-only setups `esp_aec` is lighter and lacks the AFE switches you would not use anyway. `esp_afe` requires `esp_audio_stack` in front of it; it cannot replace `esp_aec` in standalone `voip_stack` configurations (no audio stack driver = no steady frame producer for the AFE feed/fetch tasks).
 
 ---
 
@@ -1598,7 +1599,7 @@ The Voice Assistant, Micro Wake Word, and VoIP call path coexist on the same har
 - **Barge-in**: Say the wake word during a TTS response to interrupt and ask a new question. The state machine tracks VA response pending/active phases from real ESPHome `voice_assistant` and media-player announcement callbacks, so slow TTS engines keep the reply LED state until playback actually starts and finishes.
 - **Touch or voice**: Start the assistant by saying the wake word or tapping the screen (on touch displays)
 - **VoIP calls**: Call other devices or Home Assistant with one tap; incoming calls ring with audio + visual feedback. Ringtone plays over music (via announcement pipeline)
-- **Local voice commands**: Home Assistant VoIP Stack can optionally register Home
+- **Local voice commands**: VoIP Stack can optionally register Home
   Assistant Assist intents for calling, hangup, answer and decline from the
   satellite that heard the sentence. Maintained full YAMLs also expose an
   optional ESPHome `voice_quiet` action for "shut up" style assistant silence.
@@ -1633,14 +1634,14 @@ The Voice Assistant, Micro Wake Word, and VoIP call path coexist on the same har
 ### Voice Commands for VoIP and Assistant Quiet
 
 VoIP call control is handled by an optional Home Assistant-side Assist
-adapter in the `homeassistant_voip_stack` integration. Enable **Assist VoIP
-intents** in the Home Assistant VoIP Stack integration setup/reconfigure dialog, then add
+adapter in the `voip_stack` integration. Enable **Assist VoIP
+intents** in the VoIP Stack integration setup/reconfigure dialog, then add
 the matching custom sentences from:
 
-- [`examples/home-assistant/custom_sentences/en/homeassistant_voip_stack.yaml`](examples/home-assistant/custom_sentences/en/homeassistant_voip_stack.yaml)
-- [`examples/home-assistant/custom_sentences/it/homeassistant_voip_stack.yaml`](examples/home-assistant/custom_sentences/it/homeassistant_voip_stack.yaml)
+- [`examples/home-assistant/custom_sentences/en/voip_stack.yaml`](examples/home-assistant/custom_sentences/en/voip_stack.yaml)
+- [`examples/home-assistant/custom_sentences/it/voip_stack.yaml`](examples/home-assistant/custom_sentences/it/voip_stack.yaml)
 
-The custom sentence uses a wildcard `target`; Home Assistant VoIP Stack resolves the
+The custom sentence uses a wildcard `target`; VoIP Stack resolves the
 spoken text dynamically against the live phonebook. For example, if Assist
 hears `call kitchen speaker`, the handler resolves it to the canonical
 `Kitchen Speaker` contact and uses the satellite `device_id` that heard the
@@ -1812,12 +1813,12 @@ logger:
     api.connection: WARN
     component: WARN
     # Project components - uncomment to mute individually:
-    # esphome_voip_stack: INFO        # main API + setup
-    # esphome_voip_stack.fsm: INFO    # SIP router/B2BUA FSM transitions
-    # esphome_voip_stack.audio: INFO  # mic/spk audio task
-    # esphome_voip_stack.tcp: INFO    # framed TCP transport
-    # esphome_voip_stack.udp: INFO    # UDP audio + control
-    # esphome_voip_stack.settings: INFO
+    # voip_stack: INFO        # main API + setup
+    # voip_stack.fsm: INFO    # SIP router/B2BUA FSM transitions
+    # voip_stack.audio: INFO  # mic/spk audio task
+    # voip_stack.tcp: INFO    # framed TCP transport
+    # voip_stack.udp: INFO    # UDP audio + control
+    # voip_stack.settings: INFO
     # audio_stack: INFO          # I2S audio stack driver
     # esp_aec: INFO             # lightweight AEC processor
     # esp_afe: INFO             # full audio front-end
@@ -1831,7 +1832,7 @@ DEBUG logs, which are not needed unless you are debugging this project.
 
 **HA-side log level toggle**
 
-The Home Assistant integration declares its package logger in `manifest.json`, so HA's *Settings → System → Logs → Configure* surfaces `custom_components.homeassistant_voip_stack` as a per-component level switch. Use it to flip the integration to DEBUG live without touching `configuration.yaml`.
+The Home Assistant integration declares its package logger in `manifest.json`, so HA's *Settings → System → Logs → Configure* surfaces `custom_components.voip_stack` as a per-component level switch. Use it to flip the integration to DEBUG live without touching `configuration.yaml`.
 
 ---
 
@@ -1864,7 +1865,7 @@ The mobile notification can expose real **Answer** and **Decline** actions:
   `?voip_answer=1`. The card is the only place that can request microphone
   permission and create the full-duplex browser or app audio stream.
 - **Decline** can stay in Home Assistant automation logic. The mobile app emits
-  `mobile_app_notification_action`, then HA calls `homeassistant_voip_stack.sip_decline` and
+  `mobile_app_notification_action`, then HA calls `voip_stack.decline` and
   sends the SIP router/B2BUA decline reason back to the ESP.
 
 ![Answer an ESP call from the Home Assistant mobile notification](docs/images/mobile-notification-answer.gif)
@@ -1914,7 +1915,7 @@ actions:
       - condition: template
         value_template: "{{ wait.trigger is not none }}"
     then:
-      - action: homeassistant_voip_stack.sip_decline
+      - action: voip_stack.decline
         target:
           device_id: "{{ trigger.event.data.device_id }}"
         data:

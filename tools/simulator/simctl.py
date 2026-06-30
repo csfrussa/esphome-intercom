@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JSON-RPC client for the ESPHome VoIP Stack virtual device."""
+"""JSON-RPC client for the VoIP Stack virtual device."""
 
 from __future__ import annotations
 

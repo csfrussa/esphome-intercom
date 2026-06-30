@@ -6,7 +6,7 @@
 #            decline_button, restart
 #
 # Prerequisites:
-#   - id `phone` : esphome_voip_stack component
+#   - id `phone` : voip_stack component
 # =============================================================================
 
 button:
@@ -15,28 +15,28 @@ button:
     id: call_button
     icon: mdi:phone
     on_press:
-      - esphome_voip_stack.call_toggle:
+      - voip_stack.call_toggle:
 
   - platform: template
     name: Next Contact
     id: next_contact_button
     icon: mdi:skip-next
     on_press:
-      - esphome_voip_stack.next_contact:
+      - voip_stack.next_contact:
 
   - platform: template
     name: Previous Contact
     id: prev_contact_button
     icon: mdi:skip-previous
     on_press:
-      - esphome_voip_stack.prev_contact:
+      - voip_stack.prev_contact:
 
   - platform: template
     name: Decline
     id: decline_button
     icon: mdi:phone-hangup
     on_press:
-      - esphome_voip_stack.decline_call:
+      - voip_stack.decline_call:
 
   - platform: restart
     name: Restart

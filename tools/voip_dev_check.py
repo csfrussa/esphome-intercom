@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run repeatable local checks for Home Assistant VoIP Stack / ESPHome intercom work."""
+"""Run repeatable local checks for VoIP Stack / ESPHome intercom work."""
 
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ def main() -> int:
 
     py = str(PYTHON if PYTHON.exists() else Path(sys.executable))
     run([py, "-m", "py_compile",
-         "custom_components/homeassistant_voip_stack/__init__.py",
-         "custom_components/homeassistant_voip_stack/sip_client.py",
-         "custom_components/homeassistant_voip_stack/sip_listener.py",
-         "custom_components/homeassistant_voip_stack/websocket_api.py",
+         "custom_components/voip_stack/__init__.py",
+         "custom_components/voip_stack/sip_client.py",
+         "custom_components/voip_stack/sip_listener.py",
+         "custom_components/voip_stack/websocket_api.py",
          "tests/support/qualification_matrix.py"])
     run([py, "tests/test_voip_phase1.py"])
     run([py, "tests/test_device_resolver_sip.py"])
@@ -37,7 +37,7 @@ def main() -> int:
     run([py, "tests/test_qualification_matrix.py"])
     run([py, "tests/test_runtime_fsm_target_model.py"])
     run([py, "tests/support/qualification_matrix.py", "--validate", "--summary"])
-    run(["node", "--check", "custom_components/homeassistant_voip_stack/frontend/voip-stack-card.js"])
+    run(["node", "--check", "custom_components/voip_stack/frontend/voip-stack-card.js"])
     run([
         "g++", "-std=c++17",
         "tests/runtime_fsm_state_test.cpp",

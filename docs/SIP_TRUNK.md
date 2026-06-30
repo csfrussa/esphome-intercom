@@ -9,7 +9,7 @@ inbound DTMF collector is started.
 
 ## Setup Flow
 
-The first Home Assistant VoIP Stack setup step configures HA's local SIP
+The first VoIP Stack setup step configures HA's local SIP
 endpoint identity and media ports:
 
 - SIP port

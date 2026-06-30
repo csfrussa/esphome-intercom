@@ -42,7 +42,7 @@ widgets:
             text_color: 0xFF0000
             text_font: call_icons
       on_short_click:
-        - esphome_voip_stack.decline_call:
+        - voip_stack.decline_call:
 
 # ========================================================================
 # VOIP: IN CALL PAGE

@@ -2,7 +2,7 @@
 # GENERIC ESP32-S3 VOIP - Dual I2S bus, no hardware codec
 # =============================================================================
 # Generic SIP phone profile. It keeps the AEC-only audio pipeline small and
-# exposes standard SIP signaling plus RTP media through esphome_voip_stack.
+# exposes standard SIP signaling plus RTP media through voip_stack.
 #
 # ESP-to-ESP calls use the unified phonebook from HA.
 #
@@ -93,12 +93,12 @@ logger:
   # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
   level: INFO
   logs:
-    esphome_voip_stack: INFO
-    esphome_voip_stack.fsm: INFO
-    esphome_voip_stack.tcp: INFO
-    esphome_voip_stack.udp: INFO
-    esphome_voip_stack.audio: INFO
-    esphome_voip_stack.settings: INFO
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -116,7 +116,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [esphome_voip_stack, esp_audio_stack, esp_aec, audio_processor]
+    components: [voip_stack, esp_audio_stack, esp_aec, audio_processor]
 
 output:
   - platform: gpio
@@ -124,11 +124,11 @@ output:
     pin: ${speaker_enable_pin}
 
 # =============================================================================
-# SIP signaling is owned by esphome_voip_stack. `transport: udp` selects SIP/UDP;
+# SIP signaling is owned by voip_stack. `transport: udp` selects SIP/UDP;
 # audio remains RTP/UDP in the current profile. C++ side:
-#  - esphome_voip_stack.start() sends SIP INVITE
+#  - voip_stack.start() sends SIP INVITE
 #  - peer receives INVITE and enters ringing/in_call from SIP status
-#  - esphome_voip_stack.stop() sends CANCEL or BYE depending on dialog state
+#  - voip_stack.stop() sends CANCEL or BYE depending on dialog state
 # No YAML signaling lambdas and no external helper component.
 # =============================================================================
 
@@ -195,12 +195,12 @@ speaker:
     bits_per_sample: 16
 
 # =============================================================================
-# ESPHome VoIP Stack: Device part (merged with package callbacks)
+# VoIP Stack: Device part (merged with package callbacks)
 # =============================================================================
 # SIP: the HA phonebook subscription provides SIP contacts in the unified
-# roster. esphome_voip_stack.start auto-binds signaling and RTP to the selected
+# roster. voip_stack.start auto-binds signaling and RTP to the selected
 # endpoint.
-esphome_voip_stack:
+voip_stack:
   id: phone
   buffers_in_psram: true
   # SIP signaling transport only. Use `tcp` when this endpoint must signal over
@@ -222,7 +222,7 @@ esphome_voip_stack:
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
     # only because speaker: voip_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring esphome_voip_stack directly to a
+    # not advertise additional formats when wiring voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -272,7 +272,7 @@ select:
       - if:
           condition:
             not:
-              esphome_voip_stack.is_idle:
+              voip_stack.is_idle:
           then:
             - logger.log:
                 level: WARN

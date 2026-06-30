@@ -8,8 +8,8 @@ call-control path.
 
 The practical change:
 
-- ESP `esphome_voip_stack` devices are now SIP phones.
-- Home Assistant `homeassistant_voip_stack` is now a SIP softphone, dial-plan authority,
+- ESP `voip_stack` devices are now SIP phones.
+- Home Assistant `voip_stack` is now a SIP softphone, dial-plan authority,
   SIP router/B2BUA, RTP bridge/resampler and optional SIP trunk client.
 - Home Assistant no longer exposes local SIP transport toggles. Configure ports
   and optional features, not listener modes.
@@ -28,7 +28,7 @@ The practical change:
 Migration impact:
 
 - Rebuild ESP firmware from the maintained 2026.7.0-dev YAMLs or update custom
-  YAMLs to the SIP `esphome_voip_stack` contract.
+  YAMLs to the SIP `voip_stack` contract.
 - `transport: udp|tcp` still exists in ESP YAML, but it means SIP signaling
   transport only. RTP media is UDP.
 - ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.
@@ -41,9 +41,9 @@ Migration impact:
 
 The active branch is intentionally SIP-first and breaking:
 
-- ESP `esphome_voip_stack` is a SIP phone. `transport: udp|tcp` means SIP signaling
+- ESP `voip_stack` is a SIP phone. `transport: udp|tcp` means SIP signaling
   transport only.
-- HA `homeassistant_voip_stack` is a SIP softphone, dial-plan authority, SIP/RTP
+- HA `voip_stack` is a SIP softphone, dial-plan authority, SIP/RTP
   bridge and optional SIP trunk endpoint. Only trunk/provider transport remains
   configurable.
 - The retired proprietary intercom protocol is not a compatibility layer.
@@ -105,7 +105,7 @@ UDP custom formats are validated against `udp_max_payload` at build time and by
 Home Assistant when publishing the phonebook. The default is intentionally
 conservative at 1200 bytes per audio frame. If you deliberately run larger LAN
 datagrams, set the same larger `udp_max_payload` in the ESPHome YAML and the
-Home Assistant VoIP Stack integration options; otherwise use TCP for high-rate, stereo or
+VoIP Stack integration options; otherwise use TCP for high-rate, stereo or
 32-bit PCM.
 
 ESP endpoint publication now waits for a valid IPv4 address from ESPHome's
@@ -144,7 +144,7 @@ wrong frame size when one direction negotiates 48 kHz.
 ESP caller playback now applies the negotiated RX speaker format before the
 call is activated and re-applies it when the SIP answer confirms the effective
 direction formats. Custom ESP integrations that bypass the maintained
-`esphome_voip_stack` speaker setup must do the same before feeding high-rate PCM to
+`voip_stack` speaker setup must do the same before feeding high-rate PCM to
 the local speaker path.
 
 The Lovelace frontend derives ringtone/worklet cache keys from the loaded card

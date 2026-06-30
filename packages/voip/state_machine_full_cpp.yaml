@@ -162,7 +162,7 @@ script:
           value: "true"
       - while:
           condition:
-            esphome_voip_stack.is_ringing:
+            voip_stack.is_ringing:
           then:
             - media_player.play_media:
                 id: speaker_media_player

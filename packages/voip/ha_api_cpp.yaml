@@ -1,6 +1,6 @@
 # =============================================================================
 # VoIP HA-callable actions.
-# Drop-in for devices that integrate with the Home Assistant `homeassistant_voip_stack`
+# Drop-in for devices that integrate with the Home Assistant `voip_stack`
 # integration. Exposes only the call-control actions.
 #
 # Phonebook sync is pushed as the canonical JSON roster through the native API.
@@ -8,7 +8,7 @@
 # sensors.
 #
 # Prerequisites in the device YAML:
-#   - id `phone` : esphome_voip_stack component (voip/callbacks.yaml provides this)
+#   - id `phone` : voip_stack component (voip/callbacks.yaml provides this)
 # =============================================================================
 
 wifi:
@@ -17,7 +17,7 @@ wifi:
         id: runtime_controller
         event: wifi_connected
     - delay: 1s
-    - esphome_voip_stack.publish_entity_states:
+    - voip_stack.publish_entity_states:
   on_disconnect:
     - runtime_fsm.event:
         id: runtime_controller
@@ -39,7 +39,7 @@ api:
               id: runtime_controller
               event: ha_connected
     - delay: 1s
-    - esphome_voip_stack.publish_entity_states:
+    - voip_stack.publish_entity_states:
   on_client_disconnected:
     - if:
         condition:
@@ -75,13 +75,13 @@ api:
         - runtime_fsm.dump:
             id: runtime_controller
             reason: !lambda 'return reason;'
-    # Card/HA -> homeassistant_voip_stack.sip_call(source=this) ends up here. Sets the
+    # Card/HA -> voip_stack.call(source=this) ends up here. Sets the
     # current phonebook entry to `dest` and sends a SIP INVITE locally.
     - action: start_call
       variables:
         dest: string
       then:
-        - esphome_voip_stack.call_contact:
+        - voip_stack.call_contact:
             contact: !lambda 'return dest;'
     # Direct ESP-side decline with an optional free-form reason. This keeps
     # HA automations useful even for ESP<->ESP calls where HA is only
@@ -90,15 +90,15 @@ api:
       variables:
         reason: string
       then:
-        - esphome_voip_stack.decline_call:
+        - voip_stack.decline_call:
             reason: !lambda 'return reason;'
-    # Set by homeassistant_voip_stack at config-entry setup so logical SIP targets can
+    # Set by voip_stack at config-entry setup so logical SIP targets can
     # route through the live HA bridge name from hass.config.location_name.
     - action: set_ha_peer_name
       variables:
         name: string
       then:
-        - esphome_voip_stack.set_ha_peer_name:
+        - voip_stack.set_ha_peer_name:
             name: !lambda 'return name;'
     # Canonical central roster management. HA publishes the same JSON document
     # that cards/services read from sensor.voip_phonebook.
@@ -106,30 +106,30 @@ api:
       variables:
         roster_json: string
       then:
-        - esphome_voip_stack.set_roster_json:
+        - voip_stack.set_roster_json:
             roster_json: !lambda 'return roster_json;'
     # Local/manual SIP phonebook actions for YAML scripts and test tools.
     - action: set_contacts
       variables:
         contacts_csv: string
       then:
-        - esphome_voip_stack.set_contacts:
+        - voip_stack.set_contacts:
             contacts_csv: !lambda 'return contacts_csv;'
     - action: add_contact
       variables:
         entry: string
       then:
-        - esphome_voip_stack.add_contact:
+        - voip_stack.add_contact:
             entry: !lambda 'return entry;'
     - action: remove_contact
       variables:
         entry: string
       then:
-        - esphome_voip_stack.remove_contact:
+        - voip_stack.remove_contact:
             entry: !lambda 'return entry;'
     - action: flush_contacts
       then:
-        - esphome_voip_stack.flush_contacts:
+        - voip_stack.flush_contacts:
     - action: update_contacts
       then:
-        - esphome_voip_stack.update_contacts:
+        - voip_stack.update_contacts:

@@ -27,7 +27,7 @@ ota:
           announcement: true
       - voice_assistant.stop:
       - micro_wake_word.stop:
-      - esphome_voip_stack.stop:
+      - voip_stack.stop:
     on_abort:
       - script.execute: ota_full_native_audio_restore
     on_error:
@@ -44,5 +44,5 @@ script:
       - globals.set:
           id: g_ota_in_progress
           value: "false"
-      - esphome_voip_stack.start:
+      - voip_stack.start:
       - script.execute: start_mww_when_ready

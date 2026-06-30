@@ -151,7 +151,7 @@ CONFIG_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_VOIP): cv.Schema(
             {
-                cv.Required(CONF_ID): cv.use_id(cg.esphome_ns.namespace("esphome_voip_stack").class_("ESPHomeVoipStack", cg.Component)),
+                cv.Required(CONF_ID): cv.use_id(cg.esphome_ns.namespace("voip_stack").class_("VoipStack", cg.Component)),
                 cv.Optional(CONF_ACTIVITY_PREFIX, default="voip:"): cv.string_strict,
                 cv.Optional(CONF_STATES, default={}): cv.Schema({cv.string_strict: ACTIVITY_BODY_SCHEMA}),
             }

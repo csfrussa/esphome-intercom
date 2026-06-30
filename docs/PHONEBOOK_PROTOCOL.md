@@ -7,11 +7,11 @@ signaling, never a second call-control protocol.
 
 ## ESP Static Contacts
 
-Declare static local entries directly in `esphome_voip_stack` only when an ESP must
+Declare static local entries directly in `voip_stack` only when an ESP must
 have contacts before HA sync, work offline, or keep a tiny fixed local roster:
 
 ```yaml
-esphome_voip_stack:
+voip_stack:
   id: phone
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
@@ -27,7 +27,7 @@ Runtime actions use the same model:
 
 ```yaml
 on_press:
-  - esphome_voip_stack.add_contacts:
+  - voip_stack.add_contacts:
       name: Kitchen
       ip: 192.168.1.42
       sip_transport: udp
@@ -70,7 +70,7 @@ SIP is the shared protocol, not a roster kind.
 Manual contacts and service calls use the same minimum contract:
 
 ```yaml
-service: homeassistant_voip_stack.phonebook_add_contact
+service: voip_stack.add_contact
 data:
   name: MobileOffice
   kind: softphone
@@ -84,22 +84,22 @@ registration when available.
 
 Central roster services:
 
-- `homeassistant_voip_stack.phonebook_add_contact`: add or replace one manual central
+- `voip_stack.add_contact`: add or replace one manual central
   contact. `name` is the only required field.
-- `homeassistant_voip_stack.phonebook_remove_contact`: remove one manual central contact
+- `voip_stack.remove_contact`: remove one manual central contact
   by name.
-- `homeassistant_voip_stack.phonebook_set_contacts`: replace manual contacts from a JSON
+- `voip_stack.set_contacts`: replace manual contacts from a JSON
   roster document.
-- `homeassistant_voip_stack.phonebook_clear`: clear manual central contacts.
-- `homeassistant_voip_stack.phonebook_push`: push the current roster immediately to
+- `voip_stack.clear_contacts`: clear manual central contacts.
+- `voip_stack.push_phonebook`: push the current roster immediately to
   online ESP devices.
-- `homeassistant_voip_stack.phonebook_export`: emit the current roster as an HA event for
+- `voip_stack.export_phonebook`: emit the current roster as an HA event for
   diagnostics/backup.
 
-Local softphone accounts are created with `homeassistant_voip_stack.sip_account_create`.
+Local softphone accounts are created with `voip_stack.create_account`.
 The `username` becomes the SIP username and central roster ID. If `password` is
 omitted, HA generates one and shows it once in a persistent notification and in
-the `homeassistant_voip_stack.call_event` stream. Registered clients publish a dynamic
+the `voip_stack.call_event` stream. Registered clients publish a dynamic
 Contact into the roster so ESP devices can call them by name.
 
 ## Routing
@@ -115,7 +115,7 @@ Contact into the roster so ESP devices can call them by name.
   route hint that cannot be resolved terminates as `route_not_found`; it does
   not silently fall back to HA.
 - HA automations can override a pending route request by listening for
-  `homeassistant_voip_stack.sip_route_request` and calling `homeassistant_voip_stack.sip_route`.
+  `voip_stack.route_request` and calling `voip_stack.route`.
 - Missing or incompatible media routes must fail explicitly with SIP terminal
   reasons such as `media_incompatible` or `transport_unreachable`.
 

@@ -42,16 +42,16 @@ The public composition stays modular:
 
 | ESPHome component | Espressif backend it owns | Required project components | Optional peers |
 |---|---|---|---|
-| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `esphome_voip_stack`, MWW and VA as consumers |
-| `esp_aec` | `esp-sr` low-level `afe_aec` API | `audio_processor` | `esp_audio_stack` or standalone `esphome_voip_stack` as the caller |
+| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `voip_stack`, MWW and VA as consumers |
+| `esp_aec` | `esp-sr` low-level `afe_aec` API | `audio_processor` | `esp_audio_stack` or standalone `voip_stack` as the caller |
 | `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | `audio_processor` | `esp_audio_stack` as the required steady-frame caller |
-| `esphome_voip_stack` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `esp_audio_stack` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
+| `voip_stack` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `esp_audio_stack` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
 
-`esp_audio_stack` does not depend on `esphome_voip_stack`. A user can install only
+`esp_audio_stack` does not depend on `voip_stack`. A user can install only
 `audio_processor`, `esp_audio_stack` and optionally `esp_aec` or `esp_afe` for
 a Voice Assistant, media-player, microphone/speaker, or custom callback build.
 The cross-component validation only runs when both `esp_audio_stack` and
-`esphome_voip_stack` appear in the same YAML, to prevent double ownership of AEC or
+`voip_stack` appear in the same YAML, to prevent double ownership of AEC or
 DC-offset correction.
 
 ## Naming And License Boundaries
@@ -215,7 +215,7 @@ audio boards while still keeping fake knobs out:
 2. **TDM layout** exposes `tdm_total_slots`, one or two mic slots, `tdm_ref_slot` and `tdm_tx_slot`. RX slot extraction and TDM TX layout use Espressif audio-effects primitives.
 3. **Codec selection** exposes ES7210 input plus ES8311/ES8388/ES8374/ES8389 generic input/output through `esp_codec_dev`.
 4. **Rate and bit conversion** expose official `esp_ae_rate_cvt` complexity/performance and automatic bit-depth conversion for 24/32-bit bus formats.
-5. **Processor integration** stays behind the `AudioProcessor` facade so users can pick `esp_aec`, `esp_afe`, or no processor without depending on `esphome_voip_stack`.
+5. **Processor integration** stays behind the `AudioProcessor` facade so users can pick `esp_aec`, `esp_afe`, or no processor without depending on `voip_stack`.
 6. **Lifecycle/power hooks** expose audio, mic, speaker and amplifier-required edges for board-level PA and power policy.
 
 Not exposed as YAML switches yet: PDM full-duplex, arbitrary GMF element graphs,

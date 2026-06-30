@@ -13,7 +13,7 @@ collect:
 ## ESP Does Not Ring
 
 - Confirm the peer sends a SIP `INVITE` to the ESP `sip_port`.
-- Check ESP `esphome_voip_stack` `transport` matches the peer signaling transport.
+- Check ESP `voip_stack` `transport` matches the peer signaling transport.
 - Verify SDP offers at least one compatible PCM format.
 - Inspect `sensor.*_voip_sip_snapshot` for `last_sip_event`,
   `sip_status_code`, and `terminal_reason`.
@@ -52,7 +52,7 @@ leg to a compatible PCM format.
 
 - Ensure `sensor.voip_phonebook` contains the target.
 - For local ESP-only routing, declare the contact in
-  `esphome_voip_stack.static_contacts`.
+  `voip_stack.static_contacts`.
 - Use a direct SIP URI (`sip:name@host:5060`) when bypassing HA.
 - Use `ha_bridge: true` when HA must bridge a logical target.
 - For external numbers, confirm the optional trunk is configured and registered.
@@ -64,8 +64,8 @@ leg to a compatible PCM format.
 ## Registered Softphone Cannot Register To HA
 
 - Enable the HA SIP TCP or UDP listener used by the softphone.
-- Enable the local registrar in Home Assistant VoIP Stack setup.
-- Create an account with `homeassistant_voip_stack.sip_account_create`.
+- Enable the local registrar in VoIP Stack setup.
+- Create an account with `voip_stack.create_account`.
 - If no password is supplied, read it from the `sip_account_created` event or
   the persistent notification. The generated password is shown only once.
 - Configure the softphone with HA advertised host, SIP port, username and
@@ -121,7 +121,7 @@ final response.
 
 - ESP mirror cards should follow ESPHome entity state and ESP buttons. They do
   not own RTP counters for the HA softphone leg.
-- HA softphone cards should follow `homeassistant_voip_stack` softphone snapshots/events.
+- HA softphone cards should follow `voip_stack` softphone snapshots/events.
   The card must not infer terminal state locally.
 - Hard-refresh the dashboard after upgrading the frontend resource.
 - If multiple browsers are open, only the browser that attached the HA

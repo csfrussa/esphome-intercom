@@ -12,7 +12,7 @@
 # Intended use:
 #   - hardware that already provides processed/AEC audio before ESPHome, for
 #     example XMOS front-ends that output echo-cancelled PCM;
-#   - regression testing esphome_voip_stack standalone against standard ESPHome audio;
+#   - regression testing voip_stack standalone against standard ESPHome audio;
 #   - simple dual-I2S MEMS + amplifier builds where echo cancellation is not
 #     needed.
 #
@@ -118,12 +118,12 @@ logger:
   hardware_uart: USB_SERIAL_JTAG
   level: INFO
   logs:
-    esphome_voip_stack: INFO
-    esphome_voip_stack.fsm: INFO
-    esphome_voip_stack.tcp: INFO
-    esphome_voip_stack.udp: INFO
-    esphome_voip_stack.audio: INFO
-    esphome_voip_stack.settings: INFO
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -147,7 +147,7 @@ logger:
     mixer_speaker: INFO
     wifi: INFO
     json: INFO
-    esphome_voip_stack: INFO
+    voip_stack: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -156,7 +156,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [esphome_voip_stack, audio_processor, speaker]
+    components: [voip_stack, audio_processor, speaker]
 
 output:
   - platform: gpio
@@ -221,7 +221,7 @@ voice_assistant:
   auto_gain: 31dBFS
   volume_multiplier: 2.0
 
-esphome_voip_stack:
+voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
   microphone_source:
@@ -330,9 +330,9 @@ binary_sensor:
           - if:
               condition:
                 not:
-                  - esphome_voip_stack.is_idle:
+                  - voip_stack.is_idle:
               then:
-                - esphome_voip_stack.call_toggle:
+                - voip_stack.call_toggle:
               else:
                 - if:
                     condition:
@@ -348,7 +348,7 @@ binary_sensor:
           - ON for 50ms to 500ms
           - OFF for at least 400ms
         then:
-          - esphome_voip_stack.next_contact:
+          - voip_stack.next_contact:
       # Long press (1-3s): toggle mute.
       - timing:
           - ON for 1s to 3s

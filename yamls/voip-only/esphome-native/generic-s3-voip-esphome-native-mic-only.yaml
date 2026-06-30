@@ -6,7 +6,7 @@
 # Purpose:
 #   - No esp_audio_stack.
 #   - No esp_aec / esp_afe software processing.
-#   - esphome_voip_stack talks directly to standard ESPHome microphone/speaker.
+#   - voip_stack talks directly to standard ESPHome microphone/speaker.
 #   - Useful for hardware that already outputs processed audio, e.g. XMOS AEC
 #     boards, and for testing mic-only / speaker-only / full-duplex code paths.
 #
@@ -83,12 +83,12 @@ logger:
   hardware_uart: USB_SERIAL_JTAG
   level: INFO
   logs:
-    esphome_voip_stack: INFO
-    esphome_voip_stack.fsm: INFO
-    esphome_voip_stack.tcp: INFO
-    esphome_voip_stack.udp: INFO
-    esphome_voip_stack.audio: INFO
-    esphome_voip_stack.settings: INFO
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -108,7 +108,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [esphome_voip_stack, audio_processor]
+    components: [voip_stack, audio_processor]
 
 i2s_audio:
   - id: rx_i2s
@@ -130,7 +130,7 @@ microphone:
     bits_per_sample: 32bit
     correct_dc_offset: true
 
-esphome_voip_stack:
+voip_stack:
   id: phone
   task_stacks_in_psram: true
   buffers_in_psram: true

@@ -66,34 +66,34 @@ Required simulator scenarios:
 For every service, assert HA event bus output, logs and resulting entity/card
 state.
 
-- `homeassistant_voip_stack.sip_call` without source: HA originates to roster destination.
-- `homeassistant_voip_stack.sip_call` with `source/source_device_id/source_name`: selected
+- `voip_stack.call` without source: HA originates to roster destination.
+- `voip_stack.call` with `source/source_device_id/source_name`: selected
   ESP originates the call through its own `start_call` action.
-- `homeassistant_voip_stack.sip_call destination=Cucina`: resolves roster name.
-- `homeassistant_voip_stack.sip_call destination=sip:Cucina@IP:5060;transport=tcp`: direct
+- `voip_stack.call destination=Cucina`: resolves roster name.
+- `voip_stack.call destination=sip:Cucina@IP:5060;transport=tcp`: direct
   SIP URI.
-- `homeassistant_voip_stack.sip_call destination=0574...`: requires HA SIP bridge route, no direct
+- `voip_stack.call destination=0574...`: requires HA SIP bridge route, no direct
   ESP call.
-- `homeassistant_voip_stack.sip_call destination=...`: HA SIP UA originates using roster
+- `voip_stack.call destination=...`: HA SIP UA originates using roster
   resolver.
-- `homeassistant_voip_stack.sip_answer`: pending inbound SIP receives `200 OK` only
+- `voip_stack.answer`: pending inbound SIP receives `200 OK` only
   after local media setup path is ready.
-- `homeassistant_voip_stack.sip_decline`: pending inbound SIP receives configured final
+- `voip_stack.decline`: pending inbound SIP receives configured final
   response and terminal reason.
-- `homeassistant_voip_stack.sip_hangup`: handles pending INVITE, active client, relay and
+- `voip_stack.hangup`: handles pending INVITE, active client, relay and
   server dialog idempotently.
-- `homeassistant_voip_stack.phonebook_add_contact`: updates central JSON and pushes to
+- `voip_stack.add_contact`: updates central JSON and pushes to
   online ESPs.
-- `homeassistant_voip_stack.phonebook_remove_contact`: removes one manual contact by
+- `voip_stack.remove_contact`: removes one manual contact by
   name and pushes the updated JSON.
-- `homeassistant_voip_stack.phonebook_set_contacts`: rejects invalid JSON roster and
+- `voip_stack.set_contacts`: rejects invalid JSON roster and
   pushes valid JSON.
-- `homeassistant_voip_stack.phonebook_clear`: clears manual contacts and pushes updated
+- `voip_stack.clear_contacts`: clears manual contacts and pushes updated
   JSON.
-- `homeassistant_voip_stack.phonebook_push`: logs every pushed/skipped ESP.
-- `homeassistant_voip_stack.sip_set_dnd`: updates the HA softphone DND store, emits event,
+- `voip_stack.push_phonebook`: logs every pushed/skipped ESP.
+- `voip_stack.set_dnd`: updates the HA softphone DND store, emits event,
   and causes inbound calls to receive `486 Busy Here` with DND reason.
-- `homeassistant_voip_stack.sip_forward`: source leg, destination leg, busy destination and
+- `voip_stack.forward`: source leg, destination leg, busy destination and
   self-forward rejection all publish terminal/forward events.
 
 ## Live Device Call Matrix

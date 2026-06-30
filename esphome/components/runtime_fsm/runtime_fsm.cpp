@@ -8,7 +8,7 @@
 #include <iterator>
 
 #ifdef USE_RUNTIME_FSM_VOIP
-#include "esphome/components/esphome_voip_stack/esphome_voip_stack.h"
+#include "esphome/components/voip_stack/voip_stack.h"
 #endif
 
 namespace esphome::runtime_fsm {

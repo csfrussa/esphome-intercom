@@ -137,7 +137,7 @@ voice_assistant:
         id: media_mixer_input
         decibel_reduction: 0
 
-esphome_voip_stack:
+voip_stack:
   on_in_call:
     - light.turn_on:
         id: status_led
@@ -177,7 +177,7 @@ voice_assistant:
         id: runtime
         event: assistant_finished
 
-esphome_voip_stack:
+voip_stack:
   on_in_call:
     - runtime_fsm.event:
         id: runtime
@@ -940,7 +940,7 @@ Do not send events for derived activities. They are owned by the reducer.
 ## Optional Intercom Observer
 
 The component is generic, but this project also provides an optional
-`esphome_voip_stack` observer because VoIP state is already centralized in the
+`voip_stack` observer because VoIP state is already centralized in the
 native component.
 
 ```yaml
@@ -970,7 +970,7 @@ This automatically creates activities named `voip:ringing`,
 `voip:calling`, `voip:in_call`, etc. If `voip:` is omitted, no
 VoIP observer code is compiled.
 
-Intercom signaling and transport still belong to `esphome_voip_stack`; `runtime_fsm`
+Intercom signaling and transport still belong to `voip_stack`; `runtime_fsm`
 only observes state and resolves outputs.
 
 ## Actions Reference

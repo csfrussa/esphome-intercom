@@ -193,12 +193,12 @@ logger:
   # Production profile. Debug packages are opt-in and kept out of device YAMLs.
   level: INFO
   logs:
-    esphome_voip_stack: INFO
-    esphome_voip_stack.fsm: INFO
-    esphome_voip_stack.tcp: INFO
-    esphome_voip_stack.udp: INFO
-    esphome_voip_stack.audio: INFO
-    esphome_voip_stack.settings: INFO
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN
@@ -227,7 +227,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [esphome_voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
+    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, GT9271)
@@ -441,7 +441,7 @@ media_player:
           event: announcement_started
       - if:
           condition:
-            esphome_voip_stack.is_idle:
+            voip_stack.is_idle:
           then:
             - script.execute: backlight_timer
     on_play:
@@ -499,9 +499,9 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# ESPHome VoIP Stack
+# VoIP Stack
 # =============================================================================
-esphome_voip_stack:
+voip_stack:
   id: phone
   task_stacks_in_psram: true
   # Set true to save roughly 5-8KB internal RAM from VoIP-owned staging
@@ -524,7 +524,7 @@ esphome_voip_stack:
       frame_ms: 10
     # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
     # only because speaker: voip_speaker_input points at the resampler; do
-    # not advertise additional formats when wiring esphome_voip_stack directly to a
+    # not advertise additional formats when wiring voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
       - sample_rate: 32000
@@ -1358,10 +1358,10 @@ lvgl:
                             clickable: true
                             gesture_bubble: false
                             on_swipe_left:
-                              - esphome_voip_stack.next_contact:
+                              - voip_stack.next_contact:
                               - script.execute: update_call_idle_labels
                             on_swipe_right:
-                              - esphome_voip_stack.prev_contact:
+                              - voip_stack.prev_contact:
                               - script.execute: update_call_idle_labels
                         # Prev
                         - button:
@@ -1373,7 +1373,7 @@ lvgl:
                             bg_color: 0x2D2D44
                             radius: 10
                             on_click:
-                              - esphome_voip_stack.prev_contact:
+                              - voip_stack.prev_contact:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1389,7 +1389,7 @@ lvgl:
                             bg_color: 0x2ECC71
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.call_toggle:
+                              - voip_stack.call_toggle:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1406,7 +1406,7 @@ lvgl:
                             bg_color: 0x2D2D44
                             radius: 10
                             on_click:
-                              - esphome_voip_stack.next_contact:
+                              - voip_stack.next_contact:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1456,7 +1456,7 @@ lvgl:
                             bg_color: 0x2ECC71
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.answer_call:
+                              - voip_stack.answer_call:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1472,7 +1472,7 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.decline_call:
+                              - voip_stack.decline_call:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1524,7 +1524,7 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.call_toggle:
+                              - voip_stack.call_toggle:
                             widgets:
                               - label:
                                   align: CENTER
@@ -1573,7 +1573,7 @@ lvgl:
                             bg_color: 0xE74C3C
                             radius: 15
                             on_click:
-                              - esphome_voip_stack.call_toggle:
+                              - voip_stack.call_toggle:
                             widgets:
                               - label:
                                   align: CENTER
@@ -3085,7 +3085,7 @@ select:
                   or:
                     - voice_assistant.is_running:
                     - not:
-                        esphome_voip_stack.is_idle:
+                        voip_stack.is_idle:
                 then:
                   - logger.log:
                       level: WARN

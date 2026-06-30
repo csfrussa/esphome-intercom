@@ -27,7 +27,7 @@ using audio_processor::ProcessorTelemetry;
 /// EspAfe. Intended for devices that only need echo cancellation for an
 /// intercom TX path without the full AFE pipeline.
 ///
-/// Consumers (esp_audio_stack, esphome_voip_stack) see AEC as just another
+/// Consumers (esp_audio_stack, voip_stack) see AEC as just another
 /// AudioProcessor; picking EspAec vs EspAfe is a YAML choice.
 class EspAec : public Component, public AudioProcessor {
  public:

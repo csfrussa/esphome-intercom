@@ -4,7 +4,7 @@
 # (voice_assistant + micro_wake_word + VoIP runtime):
 #   - voip/state_machine_full.yaml shared reducer, failsafes, ringing loop
 #   - voice_assistant/core.yaml        voice_assistant + micro_wake_word config
-#   - voip/va_callbacks.yaml           esphome_voip_stack on_* (with ringing loop)
+#   - voip/va_callbacks.yaml           voip_stack on_* (with ringing loop)
 #
 # Maintained presets include optional feature packages explicitly next to this
 # core package, so users can comment out one line to remove a feature:
@@ -40,7 +40,7 @@ packages:
   voice_assistant_core: !include voice_assistant/core.yaml
   va_callbacks: !include voip/va_callbacks.yaml
 
-esphome_voip_stack:
+voip_stack:
   id: phone
   # Full-experience devices can have HA API/logging, media HTTP, TTS HTTP and
   # VoIP sockets alive together. Reserve that headroom through ESPHome's

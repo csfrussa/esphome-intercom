@@ -1,12 +1,12 @@
 # =============================================================================
-# ESPHome VoIP Stack callbacks for VA-enabled devices.
+# VoIP Stack callbacks for VA-enabled devices.
 # Like voip/callbacks.yaml but also drives voip_ringing_loop (full
 # ringtone playback on incoming call), since VA devices have a media player
 # stack capable of running it. Use this on full-experience devices that
 # include voice_assistant/core.yaml.
 #
 # Prerequisites in the device YAML:
-#   - esphome_voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
+#   - voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
 #   - script id `update_status` (provided by voip/state_machine_full.yaml)
 #   - script id `voip_ringing_loop` (provided by voip/state_machine_full.yaml)
 #   - script ids `ui_call_started`, `ui_call_dest_ringing`, `ui_call_ended`
@@ -17,7 +17,7 @@
 #   ${friendly_name} - used in the homeassistant.event payload on calling call
 # =============================================================================
 
-esphome_voip_stack:
+voip_stack:
   id: phone
   on_calling:
     - script.execute: update_status
@@ -26,7 +26,7 @@ esphome_voip_stack:
         peer: !lambda 'return id(phone).get_current_destination();'
     - if:
         condition:
-          esphome_voip_stack.is_ha_destination:
+          voip_stack.is_ha_destination:
         then:
           - homeassistant.event:
               event: esphome.voip_call

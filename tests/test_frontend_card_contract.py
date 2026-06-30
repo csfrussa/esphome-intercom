@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CARD = ROOT / "custom_components" / "homeassistant_voip_stack" / "frontend" / "voip-stack-card.js"
+CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
 
 
 def _method_body(source: str, method_name: str) -> str:
@@ -58,7 +58,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('this._callMode = "mirror"', esp_branch)
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
         self.assertNotIn("answer_esp_call", esp_branch)
-        self.assertNotIn("homeassistant_voip_stack/answer", esp_branch)
+        self.assertNotIn("voip_stack/answer", esp_branch)
 
     def test_ha_softphone_mode_is_the_only_softphone_context(self) -> None:
         body = _method_body(self.source, "_isSoftphoneContext")
@@ -87,21 +87,21 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")
         ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]
-        self.assertIn('"homeassistant_voip_stack", "sip_answer"', ha_answer)
+        self.assertIn('"voip_stack", "answer"', ha_answer)
         self.assertIn("call_id: this._sessionCallId()", ha_answer)
-        self.assertNotIn('type: "homeassistant_voip_stack/answer"', ha_answer)
+        self.assertNotIn('type: "voip_stack/answer"', ha_answer)
         self.assertNotIn("voipStackEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID", ha_answer)
         self.assertNotIn("this._sessionDeviceId()", ha_answer)
 
         decline = _method_body(self.source, "async _decline")
         ha_decline = decline.split("if (this._isHaSoftphoneMode())", 1)[1].split("} else {", 1)[0]
-        self.assertIn('"homeassistant_voip_stack", "sip_decline"', ha_decline)
+        self.assertIn('"voip_stack", "decline"', ha_decline)
         self.assertIn("call_id: this._sessionCallId()", ha_decline)
         self.assertNotIn("this._sessionDeviceId()", ha_decline)
 
         hangup = _method_body(self.source, "async _hangup")
         softphone_hangup = hangup.split("if (wasSoftphone)", 1)[1].split("} else {", 1)[0]
-        self.assertIn('"homeassistant_voip_stack", "sip_hangup"', softphone_hangup)
+        self.assertIn('"voip_stack", "hangup"', softphone_hangup)
         self.assertIn("call_id: this._sessionCallId()", softphone_hangup)
         self.assertNotIn("this._sessionDeviceId()", softphone_hangup)
 
@@ -120,7 +120,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._ensureHaSoftphoneAudioPath(data)", body)
 
     def test_frontend_has_no_esp_call_control_ws_commands(self) -> None:
-        engine = (ROOT / "custom_components" / "homeassistant_voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         for token in (
             "ENGINE_TRANSITIONS",
             "startP2P",
@@ -137,7 +137,7 @@ class FrontendCardContractTest(unittest.TestCase):
             self.assertNotIn(token, engine)
 
     def test_ha_softphone_browser_audio_survives_hidden_tabs(self) -> None:
-        engine = (ROOT / "custom_components" / "homeassistant_voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         self.assertNotIn("hidden_timeout", engine)
         self.assertNotIn('document.addEventListener("visibilitychange"', engine)
 

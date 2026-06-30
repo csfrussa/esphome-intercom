@@ -2,7 +2,7 @@
 # VoIP phone SIP/RTP transport
 # =============================================================================
 #
-# Configures esphome_voip_stack as a standard SIP phone. `transport` selects only the
+# Configures voip_stack as a standard SIP phone. `transport` selects only the
 # SIP signaling transport: UDP is the default LAN mode; TCP is useful when the
 # network/proxy handles stream signaling better. Audio remains RTP/UDP in the
 # current profile and negotiates PCM through SDP.
@@ -13,7 +13,7 @@ substitutions:
   voip_sip_port: "5060"
   voip_rtp_port: "40000"
 
-esphome_voip_stack:
+voip_stack:
   id: phone
   # SIP signaling transport: `udp` by default; set `voip_transport: tcp`
   # in the device YAML when this phone must use SIP over TCP.

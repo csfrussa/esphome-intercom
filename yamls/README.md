@@ -44,7 +44,7 @@ published. Reusable debug building blocks are public packages under
   `rx_bus` and `tx_bus` with official ESP-IDF I2S simplex channels. Simpler setup
   for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
 
-- **Native ESPHome**: `esphome_voip_stack` binds directly to ESPHome `microphone`
+- **Native ESPHome**: `voip_stack` binds directly to ESPHome `microphone`
   and/or `speaker` components. Use it for mic-only/speaker-only endpoints,
   hardware/DSP-processed audio, or independent mic/speaker paths that do not
   need software AEC. Use `esp_audio_stack` instead for shared-bus or

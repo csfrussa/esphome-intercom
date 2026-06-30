@@ -1,13 +1,13 @@
 # =============================================================================
 # VoIP state machine: g_applied_led + central reducer + LED driver.
-# Drop-in for any device that runs the esphome_voip_stack stack and a status LED.
+# Drop-in for any device that runs the voip_stack stack and a status LED.
 #
 # g_applied_led values (VoIP subset):
 #   0=off, 1=both_muted, 2=mic_muted, 3=spk_muted,
 #   8=call_ringing, 9=calling, 10=call_in_call
 #
 # Prerequisites in the device YAML:
-#   - id `phone`     : esphome_voip_stack component
+#   - id `phone`     : voip_stack component
 #   - id `mute`         : mic mute switch (provided by voip/buttons_switches.yaml)
 #   - id `speaker_mute` : speaker mute switch (provided by voip/buttons_switches.yaml)
 #   - id `status_led`   : light entity for state feedback

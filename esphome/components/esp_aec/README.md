@@ -31,7 +31,7 @@ Ready-to-flash full-experience YAMLs include both paths: `generic-s3-full-aec-*`
 | Full AFE presets, codec/TDM boards, or larger flash generic builds | `esp_afe` |
 | VoIP + VA + dual-mic with Speech Enhancement | `esp_afe` |
 | Need noise suppression or AGC on the mic path | `esp_afe` |
-| Standalone native `esphome_voip_stack` without `esp_audio_stack` | No software processor; bind directly to ESPHome microphone/speaker. Use `esp_audio_stack` + `esp_aec` when software echo cancellation is required. |
+| Standalone native `voip_stack` without `esp_audio_stack` | No software processor; bind directly to ESPHome microphone/speaker. Use `esp_audio_stack` + `esp_aec` when software echo cancellation is required. |
 
 Both components implement `AudioProcessor` at the type level, but `esp_afe` is only safely usable behind `esp_audio_stack`. See [docs/reference.md](../../../docs/reference.md#audio-processing-components).
 
@@ -44,8 +44,8 @@ external_components:
       url: https://github.com/n-IA-hane/esphome-intercom
       ref: main
     components: [audio_processor, esp_aec, esp_audio_stack]
-    # Add esphome_voip_stack only when this device is also an voip endpoint.
-    # components: [audio_processor, esp_aec, esp_audio_stack, esphome_voip_stack]
+    # Add voip_stack only when this device is also an voip endpoint.
+    # components: [audio_processor, esp_aec, esp_audio_stack, voip_stack]
 
 esp_aec:
   id: aec_processor

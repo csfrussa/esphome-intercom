@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PKG_NAME = "custom_components.homeassistant_voip_stack"
-PKG_DIR = ROOT / "custom_components" / "homeassistant_voip_stack"
+PKG_NAME = "custom_components.voip_stack"
+PKG_DIR = ROOT / "custom_components" / "voip_stack"
 
 
 def _install_ha_fakes() -> None:

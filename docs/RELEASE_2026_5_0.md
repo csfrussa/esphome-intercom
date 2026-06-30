@@ -13,7 +13,7 @@ The active architecture is intentionally breaking:
 - RTP/UDP carries media.
 - Endpoint rows are SIP phonebook entries with a required display name and
   optional address, ports, transport, extension and audio capabilities.
-- `esphome_voip_stack.transport` selects SIP signaling transport only: `udp` means
+- `voip_stack.transport` selects SIP signaling transport only: `udp` means
   SIP/UDP and `tcp` means SIP/TCP.
 
 Older proprietary call-control descriptions from this release are obsolete and
