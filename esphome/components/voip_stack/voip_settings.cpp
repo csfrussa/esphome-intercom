@@ -517,7 +517,7 @@ bool VoipStack::apply_roster_json_contacts_(const std::string &roster_json) {
   const uint16_t ha_local_rtp_port = ha_slot.rtp_port;
 
   std::vector<ContactEntry> entries;
-  entries.reserve(std::min(Phonebook::MAX_CONTACTS, slots.size() * 2));
+  entries.reserve(std::min(Phonebook::MAX_CONTACTS, slots.size()));
   for (const auto &slot : slots) {
     if (entries.size() >= Phonebook::MAX_CONTACTS) break;
     ContactEndpointKind endpoint_kind = ContactEndpointKind::UNKNOWN;
@@ -561,19 +561,6 @@ bool VoipStack::apply_roster_json_contacts_(const std::string &roster_json) {
 
     if (this->cycle_active_) this->seen_in_cycle_.insert(entry.name);
     entries.push_back(std::move(entry));
-
-    if (has_ha && !slot.number.empty() && slot.number != slot.name && slot.kind != "ha") {
-      if (entries.size() >= Phonebook::MAX_CONTACTS) break;
-      ContactEntry alias;
-      alias.name = slot.number;
-      alias.endpoint_kind = local_endpoint_kind;
-      alias.ip = ha_slot.address;
-      alias.port = ha_local_port;
-      alias.rtp_port = ha_local_rtp_port;
-      alias.sip_transport_tcp = ha_slot.sip_transport == "tcp";
-      if (this->cycle_active_) this->seen_in_cycle_.insert(alias.name);
-      entries.push_back(std::move(alias));
-    }
   }
   return this->phonebook_.replace_all(std::move(entries));
 }
@@ -619,14 +606,15 @@ void VoipStack::track_csv_(const std::string &csv) {
 
 void VoipStack::commit_cycle_() {
   const bool pruned = this->phonebook_.commit_cycle(this->seen_in_cycle_, this->prune_threshold_);
+  this->seen_in_cycle_.clear();
+  this->cycle_active_ = false;
   if (pruned) {
     ESP_LOGI(TAG, "Phonebook cycle: pruned stale contacts, %zu remain", this->phonebook_.size());
     this->maybe_auto_select_ha_first_();
     this->publish_destination_();
     this->publish_contacts_();
+    this->update_contacts_trigger_.trigger();
   }
-  this->seen_in_cycle_.clear();
-  this->cycle_active_ = false;
 }
 
 bool VoipStack::maybe_auto_select_ha_first_() {
