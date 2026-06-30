@@ -197,6 +197,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.send_override = send_override
         self.signaling_transport = (signaling_transport or "UDP").upper()
         self.transport: asyncio.DatagramTransport | None = None
+        self._closed_waiter: asyncio.Future[None] | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
         self.active_dialogs: dict[str, _ActiveDialog] = {}
         self._logged_incompatible_invites: set[str] = set()
@@ -212,6 +213,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
+        self._closed_waiter = asyncio.get_running_loop().create_future()
         _LOGGER.info("SIP UDP listener ready on %s", transport.get_extra_info("sockname"))
 
     def connection_lost(self, exc: Exception | None) -> None:
@@ -220,6 +222,15 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         else:
             _LOGGER.info("SIP UDP listener closed")
         self.transport = None
+        if self._closed_waiter is not None and not self._closed_waiter.done():
+            self._closed_waiter.set_result(None)
+
+    async def wait_closed(self) -> None:
+        waiter = self._closed_waiter
+        if waiter is None or waiter.done():
+            return
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(waiter, timeout=1.0)
 
     def datagram_received(self, data: bytes, addr) -> None:
         asyncio.create_task(self._handle_datagram(data, addr))
@@ -573,8 +584,11 @@ class SipUdpServer:
 
     async def stop(self) -> None:
         if self.transport is not None:
+            endpoint = self.endpoint
             self.transport.close()
             self.transport = None
+            if endpoint is not None:
+                await endpoint.wait_closed()
         self.endpoint = None
 
 
@@ -751,6 +765,8 @@ class SipTcpServer:
             await tx.close()
         for writer in tuple(self._writers.values()):
             writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
         self.endpoints.clear()
         self._writers.clear()
         self._tcp_writers.clear()

@@ -2459,7 +2459,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sip_registrar import SipRegistrar
 
     if hass.data.get(DOMAIN, {}).get("sip_endpoint") is not None:
-        return True
+        _LOGGER.debug("Stopping existing SIP endpoint before rebinding listeners")
+        await _async_stop_sip_endpoint(hass)
 
     cfg = _get_transport_config(hass)
     local_ip = await _ha_advertise_host(hass)
