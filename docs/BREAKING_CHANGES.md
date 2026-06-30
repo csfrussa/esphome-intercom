@@ -11,8 +11,13 @@ The practical change:
 - ESP `voip_stack` devices are now SIP phones.
 - Home Assistant `voip_stack` is now a SIP softphone, dial-plan authority,
   SIP router/B2BUA, RTP bridge/resampler and optional SIP trunk client.
+- The Home Assistant integration domain and services are `voip_stack.*`.
+  Existing automations that used older development names must be updated.
 - Home Assistant no longer exposes local SIP transport toggles. Configure ports
   and optional features, not listener modes.
+- VoIP Stack supports Home Assistant's native Reconfigure action. You no longer
+  need to remove and re-add the integration to change ports, debug mode,
+  local SIP registrar support, Assist intents or optional trunk settings.
 - Standard softphones can register to Home Assistant as local SIP accounts and
   become phonebook contacts.
 - Home Assistant can register one provider/PBX trunk, so ESPs and the HA

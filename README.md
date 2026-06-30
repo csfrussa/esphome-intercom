@@ -833,13 +833,13 @@ by the maintained `esp_audio_stack` YAMLs.
 # Lightweight (single-mic, echo cancellation only):
 external_components:
   - source: github://n-IA-hane/esphome-intercom
-    ref: main
+    ref: dev
     components: [audio_processor, voip_stack, esp_audio_stack, esp_aec]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
   - source: github://n-IA-hane/esphome-intercom
-    ref: main
+    ref: dev
     components: [audio_processor, voip_stack, esp_afe, esp_audio_stack]
 ```
 

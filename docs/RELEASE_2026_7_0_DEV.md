@@ -90,6 +90,11 @@ VoIP call-control path is not a compatibility layer.
   disabled, trunk code is inactive. When enabled, unresolved outbound numbers
   can route through the trunk and inbound provider calls can select HA or a
   local phonebook target with RFC2833/telephone-event DTMF.
+- 🧭 VoIP Stack now exposes Home Assistant's native **Reconfigure** flow. You
+  can change ports, debug mode, Assist intents, local SIP registrar support and
+  the optional trunk without deleting and recreating the integration.
+- 📴 The trunk setup is truly optional. A fresh setup starts with trunk disabled,
+  and an empty trunk page is treated as "no trunk" instead of failing validation.
 - 🔌 HA local SIP transport toggles were removed from setup. The user configures
   ports and optional features; only provider/PBX trunk transport remains
   configurable.
