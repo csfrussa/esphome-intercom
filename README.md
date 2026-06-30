@@ -1,4 +1,4 @@
-# VoIP Stack for ESPHome
+# VoIP Stack for ESPHome and Home Assistant
 
 [![Platform](https://img.shields.io/badge/Platform-ESP32--S3%20%7C%20ESP32--P4-blue.svg)](#hardware-support)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue.svg)](https://www.home-assistant.io)
