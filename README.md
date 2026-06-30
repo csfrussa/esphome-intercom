@@ -1,44 +1,19 @@
-# VoIP Stack and Full-Duplex Voice for ESP32
+# VoIP Stack for ESPHome
 
 [![Platform](https://img.shields.io/badge/Platform-ESP32--S3%20%7C%20ESP32--P4-blue.svg)](#hardware-support)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-native-blue.svg)](https://www.home-assistant.io)
 
-## BREAKING CHANGES for 2026.7.0-dev
+Turn ESPHome audio devices and Home Assistant into a real local VoIP system.
 
-`2026.7.0-dev` is a prerelease for the SIP/VoIP migration, the new
-full-experience media path and the first high-rate native VoIP presets.
-This is the VoIP breaking release: ESP devices are SIP phones, Home Assistant
-is a SIP softphone/router/bridge/trunk endpoint, and the old project-specific
-call-control path is not a fallback.
+This is no longer just an intercom. ESP devices are SIP phones, Home Assistant
+is a SIP softphone, call router, bridge, local registrar and optional trunk
+endpoint. You can build a door intercom, room phones, HA-routed calls,
+softphone accounts and external SIP trunk calls without running Asterisk next
+to Home Assistant.
 
-Read the full migration list before upgrading custom YAMLs or automations:
-[`docs/BREAKING_CHANGES.md`](docs/BREAKING_CHANGES.md).
-
-Minimum versions for this release:
-
-- **ESPHome**: `2026.5.x` or newer. The maintained YAMLs use ESPHome 2026.5
-  audio/media APIs and IDF component resolution behavior.
-- **Home Assistant Core**: `2026.5.0` or newer for the bundled
-  `voip_stack` integration and Lovelace card.
-
----
-
-From a single ESPHome full-duplex intercom to a small local VoIP system, this
-project turns ESP32 audio boards and Home Assistant into SIP-capable calling
-endpoints.
-
-If your goal is simply **"one ESP calls Home Assistant and I answer from the
-dashboard or mobile app"**, start from the ready YAMLs under
-[`yamls/voip-only/`](yamls/voip-only/). Pick the closest board, adjust pins and
-hardware options, add the ESP through the ESPHome integration, then install
-`voip_stack` in Home Assistant. The ESP appears in the central phonebook and
-can call or be called from a GPIO button, LVGL button, automation, service call
-or Lovelace card.
-
-If you want more, the same foundation can grow naturally: ESP-to-ESP calls,
-Home Assistant as a softphone, registered softphones such as Zoiper or Linphone,
-external calls through an optional trunk, and HA automations that behave like a
-small dial plan.
+Flash a YAML, add the ESP to Home Assistant, install the card, and you already
+have a working full-duplex VoIP endpoint. Add the phonebook, local SIP accounts
+or a trunk when you want the system to grow.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
@@ -74,10 +49,76 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
   </tr>
 </table>
 
+## What Can You Build With It?
+
+### Full-Duplex Door Intercom
+
+Want a real full-duplex doorbell or intercom?
+
+Flash one of the ready ESPHome YAMLs, add the ESP to Home Assistant, add the
+VoIP Stack card, and select Home Assistant as the destination.
+
+Press the button on the ESP: Home Assistant rings. Answer from the browser, a
+wall tablet or the Home Assistant Companion app.
+
+### Room-To-Room ESP Phones
+
+Want your ESP devices to call each other?
+
+Flash one VoIP YAML per room device. Home Assistant publishes the shared
+phonebook. Devices can call contacts by name, for example `Kitchen`, `Bedroom`,
+`Garage` or `Home`.
+
+If the ESP knows the direct SIP endpoint, it calls directly. If not, Home
+Assistant routes the call.
+
+### Home Assistant As A Real Softphone
+
+Want Home Assistant itself to call or receive calls?
+
+The Lovelace card is not just a remote control. In `ha_softphone` mode it is
+the Home Assistant softphone UI: ring, answer, decline, hang up and originate
+calls.
+
+### Standard SIP Softphones
+
+Want to call your ESP devices from Zoiper, Linphone, baresip or pjsua?
+
+Enable the local SIP registrar, create an account with
+`voip_stack.create_account`, register your softphone to Home Assistant, and it
+becomes a normal phonebook contact.
+
+You do not need to assign classic numeric extensions to every ESP. You can call
+contacts by their phonebook names, such as `Home` or `ESP Kitchen`.
+
+### External Calls Through A Trunk
+
+Want Home Assistant or an ESP to call a real phone number?
+
+Configure an optional SIP trunk, add contacts with numbers, or use the card
+dial pad. Home Assistant owns the trunk leg and bridges the call to ESPs, the
+HA softphone or registered softphones.
+
+### Incoming External Calls
+
+Want to call your Home Assistant from outside?
+
+Register a provider/PBX trunk. Incoming calls can ring Home Assistant, follow a
+DTMF route, or be forwarded to an ESP or another VoIP contact.
+
+### Voice Assistant Calling
+
+Want to call contacts by voice?
+
+Enable the optional VoIP Stack Assist intents. A voice satellite can call a
+phonebook contact, answer, decline or hang up through Home Assistant while the
+same ESP remains a VoIP endpoint.
+
 ## Table of Contents
 
-- [Breaking changes](docs/BREAKING_CHANGES.md)
 - [What's New](docs/WHATS_NEW.md)
+- [What can you build with it?](#what-can-you-build-with-it)
+- [Breaking changes](docs/BREAKING_CHANGES.md)
 - [Overview](#overview)
 - [Quick Start Examples](#quick-start-examples)
 - [Features](#features)
@@ -99,15 +140,52 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What's New
 
-The current prerelease is the SIP/VoIP migration, and it is the biggest
-architectural jump this project has made so far: ESP devices are local SIP
-phones, Home Assistant is a SIP endpoint and call router, and the old
+### 2026.7.0-dev: ESPHome Devices Are VoIP Phones Now
+
+This is the release where the project changes category.
+
+It is no longer just a full-duplex ESPHome intercom. It is now a local SIP/VoIP
+system built around Home Assistant.
+
+ESP devices are local SIP phones. Home Assistant is a SIP endpoint, softphone
+UI, call router, bridge, local registrar and optional trunk client. The old
 project-specific call-control path is gone.
+
+That means you can now build setups that previously required an external PBX:
+
+- an ESP doorbell that rings Home Assistant;
+- Home Assistant answering from browser, tablet or Companion app;
+- ESP-to-ESP room calls;
+- Home Assistant calling ESP devices;
+- Zoiper, Linphone, baresip or pjsua registering directly to Home Assistant;
+- ESP devices calling registered softphones;
+- Home Assistant calling real phone numbers through a SIP trunk;
+- external calls reaching Home Assistant and being routed to ESPs or local
+  contacts.
+
+The old intercom use case is still there. It is just sitting on a much bigger
+engine now.
 
 Read the full changelog:
 
 - [What's New](docs/WHATS_NEW.md)
 - [Full 2026.7.0-dev release notes](docs/RELEASE_2026_7_0_DEV.md)
+
+## Breaking Changes
+
+`2026.7.0-dev` is intentionally breaking. ESP devices are SIP phones, Home
+Assistant is a SIP softphone/router/bridge/trunk endpoint, and the old
+project-specific call-control path is not a fallback.
+
+Read the full migration list before upgrading custom YAMLs or automations:
+[`docs/BREAKING_CHANGES.md`](docs/BREAKING_CHANGES.md).
+
+Minimum versions for this release:
+
+- **ESPHome**: `2026.5.x` or newer. The maintained YAMLs use ESPHome 2026.5
+  audio/media APIs and IDF component resolution behavior.
+- **Home Assistant Core**: `2026.5.0` or newer for the bundled
+  `voip_stack` integration and Lovelace card.
 
 ## Overview
 
@@ -115,41 +193,13 @@ Read the full changelog:
 Assistant tools for full-duplex SIP/VoIP calls, wake word devices,
 media/TTS playback and display-driven voice devices.
 
-### What VoIP Stack Can Do
-
-VoIP Stack turns ESPHome audio boards and Home Assistant into a small local
-phone system built on SIP/SDP/RTP.
-
-With the current VoIP model:
-
-- an ESP can call Home Assistant and make the Lovelace card ring;
-- Home Assistant can call an ESP from the card, a service, an automation or
-  Assist;
-- ESP devices can call each other directly when the phonebook contains direct
-  SIP endpoint data;
-- unresolved names and numbers can go through Home Assistant routing instead of
-  being hardcoded into ESP firmware;
-- a standard softphone such as Zoiper, Linphone, baresip or pjsua can register
-  to Home Assistant and become a normal phonebook contact;
-- with an optional trunk, a real phone number can call your Home Assistant
-  instance and you can answer from the Lovelace card;
-- from Home Assistant or from an ESP, you can call a registered softphone or an
-  external mobile/landline number through the configured trunk;
-- Home Assistant can bridge and resample call legs, so each side can use the
-  best compatible audio format instead of forcing one global quality.
-
-The simple one-button intercom use case still exists. The difference is that it
-now sits on top of a real VoIP foundation, so the same installation can grow
-from one ESP and one HA card into ESP phones, HA softphone calls, local
-softphone accounts and external trunk calls without deploying Asterisk beside
-the project.
-
-### Pick your starting point
+### Fastest Paths
 
 | Goal | Start here | Result |
 |---|---|---|
 | One ESP as a full-duplex intercom with Home Assistant | [`yamls/voip-only/`](yamls/voip-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
 | Room-to-room ESP VoIP | One voip-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
+| Softphone or trunk testing | `voip_stack.create_account` or the optional trunk setup | Register a real SIP softphone to HA, or let HA route calls through a provider/PBX trunk. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and VoIP calls on the same ESP. |
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
 | Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. Do not use this path for shared single-bus software-AEC builds. |
