@@ -3095,7 +3095,11 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if decision.reason is RouteReason.TARGET_DISABLED:
                 status = 403
                 sip_reason = "Forbidden"
-            elif decision.reason in {RouteReason.TRUNK_UNAVAILABLE, RouteReason.NO_DIRECT_TRANSPORT}:
+            elif decision.reason in {
+                RouteReason.TRUNK_UNAVAILABLE,
+                RouteReason.NO_DIRECT_TRANSPORT,
+                RouteReason.TARGET_UNREACHABLE,
+            }:
                 status = 480
                 sip_reason = "Temporarily Unavailable"
             else:
@@ -3116,9 +3120,13 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             return SipInviteResult(status, sip_reason, to_tag="", decline_reason=decision.reason.value if decision.reason else TerminalReason.DECLINED.value)
         if not force_ha_softphone and decision.action is RouteAction.TRUNK and not bridge_to_trunk:
             return SipInviteResult(503, "Service Unavailable", to_tag="")
-        if not force_ha_softphone and (
-            bridge_to_trunk or (decision.action in {RouteAction.DIRECT, RouteAction.FORWARD, RouteAction.BRIDGE, RouteAction.GROUP} and decision.entry is not None)
-        ):
+        routeable_sip_target = decision.action in {
+            RouteAction.DIRECT,
+            RouteAction.FORWARD,
+            RouteAction.BRIDGE,
+            RouteAction.GROUP,
+        } and (decision.entry is not None or bool(decision.sip_uri))
+        if not force_ha_softphone and (bridge_to_trunk or routeable_sip_target):
             peer_target = _peer_for_target(decision.target or invite.target, peers)
             bridge_uri = None
             if bridge_to_trunk:

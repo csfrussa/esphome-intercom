@@ -568,7 +568,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 metadata={"sip_port": 5060},
             ),
         ]
-        decision = roster.resolve_target("Spotpear_Ball_v2", entries, ha_bridge=True)
+        decision = router.resolve_esp_origin("Spotpear_Ball_v2", entries, "sip:Spotpear_Ball_v2@192.168.1.10:5060")
         self.assertEqual(decision.action, router.RouteAction.BRIDGE)
         self.assertIsNotNone(decision.entry)
         assert decision.entry is not None
@@ -591,7 +591,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 metadata={"sip_port": 5060},
             ),
         ]
-        decision = roster.resolve_target("Cucina", entries, ha_bridge=False)
+        decision = router.resolve_esp_origin("Cucina", entries, "sip:Cucina@192.168.1.10:5060;transport=tcp")
         self.assertEqual(decision.action, router.RouteAction.BRIDGE)
         self.assertEqual(decision.reason, router.RouteReason.NO_DIRECT_TRANSPORT)
         self.assertIn("transport=tcp", decision.sip_uri)
@@ -979,35 +979,36 @@ class RosterResolverTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(
-            roster.resolve_target("Cucina", entries).sip_uri,
-            "sip:Cucina@192.168.1.10",
-        )
-        self.assertEqual(roster.resolve_target("Cucina", entries).reason, router.RouteReason.NO_DIRECT_TRANSPORT)
-        self.assertEqual(
-            roster.resolve_target("Studio", entries).sip_uri,
-            "sip:Studio@192.168.1.31;transport=tcp",
-        )
-        self.assertEqual(
-            roster.resolve_target("Cucina", entries, ha_bridge=True).sip_uri,
-            "sip:Cucina@192.168.1.10",
-        )
-        self.assertEqual(
-            roster.resolve_target("Corridoio", entries).sip_uri,
-            "sip:Corridoio@192.168.1.10",
-        )
-        phone = roster.resolve_target("Nonna", entries)
-        self.assertEqual(phone.action, router.RouteAction.TRUNK)
-        self.assertEqual(phone.target, "0574863562")
+        ha_uri = "sip:Home@192.168.1.10;transport=tcp"
+        cucina = router.resolve_esp_origin("Cucina", entries, ha_uri)
+        self.assertEqual(cucina.action, router.RouteAction.BRIDGE)
+        self.assertEqual(cucina.reason, router.RouteReason.NO_DIRECT_TRANSPORT)
+        self.assertEqual(cucina.sip_uri, "sip:Cucina@192.168.1.10;transport=tcp")
+
+        studio = router.resolve_esp_origin("Studio", entries, ha_uri)
+        self.assertEqual(studio.action, router.RouteAction.DIRECT)
+        self.assertEqual(studio.sip_uri, "sip:Studio@192.168.1.31;transport=tcp")
+
+        corridoio = router.resolve_esp_origin("Corridoio", entries, ha_uri)
+        self.assertEqual(corridoio.action, router.RouteAction.BRIDGE)
+        self.assertEqual(corridoio.sip_uri, "sip:Corridoio@192.168.1.10;transport=tcp")
+
+        phone_from_esp = router.resolve_esp_origin("Nonna", entries, ha_uri)
+        self.assertEqual(phone_from_esp.action, router.RouteAction.BRIDGE)
+        self.assertEqual(phone_from_esp.target, "0574863562")
+
+        phone_from_ha = router.resolve_ha_router("Nonna", entries, trunk_ready=True)
+        self.assertEqual(phone_from_ha.action, router.RouteAction.TRUNK)
+        self.assertEqual(phone_from_ha.target, "0574863562")
 
     def test_explicit_sip_uri_and_name_at_ip(self) -> None:
         entries = roster.parse_roster_json([{"id": "HA", "kind": "ha", "address": "192.168.1.10"}])
         self.assertEqual(
-            roster.resolve_target("sip:Cucina@192.168.1.30", entries).sip_uri,
+            router.resolve_esp_origin("sip:Cucina@192.168.1.30", entries, "sip:Home@192.168.1.10").sip_uri,
             "sip:Cucina@192.168.1.30",
         )
         self.assertEqual(
-            roster.resolve_target("Cucina@192.168.1.30", entries).sip_uri,
+            router.resolve_esp_origin("Cucina@192.168.1.30", entries, "sip:Home@192.168.1.10").sip_uri,
             "sip:Cucina@192.168.1.30",
         )
 
@@ -1037,15 +1038,30 @@ class RosterResolverTest(unittest.TestCase):
             }
         )
         self.assertEqual(
-            roster.resolve_target("Cucina", entries).sip_uri,
+            router.resolve_esp_origin("Cucina", entries, "sip:Casa@192.168.1.10;transport=tcp").sip_uri,
             "sip:Cucina@192.168.1.30;transport=tcp",
         )
         self.assertEqual(
-            roster.resolve_target("Salotto", entries).sip_uri,
+            router.resolve_esp_origin("Salotto", entries, "sip:Casa@192.168.1.10;transport=tcp").sip_uri,
             "sip:Salotto@192.168.1.31;transport=udp",
         )
+        bridged_entries = [
+            entries[0],
+            entries[1],
+            roster.RosterEntry(
+                id="Salotto",
+                kind="esp",
+                address="192.168.1.31",
+                ha_bridge=True,
+                metadata={"sip_transport": "udp", "sip_port": 5060},
+            ),
+        ]
         self.assertEqual(
-            roster.resolve_target("Salotto", entries, ha_bridge=True).sip_uri,
+            router.resolve_esp_origin(
+                "Salotto",
+                bridged_entries,
+                "sip:Casa@192.168.1.10;transport=tcp",
+            ).sip_uri,
             "sip:Salotto@192.168.1.10;transport=tcp",
         )
 
@@ -1126,6 +1142,13 @@ class RouterContractTest(unittest.TestCase):
         self.assertEqual(decision.action, router.RouteAction.FORWARD)
         self.assertEqual(decision.target, "Waveshare S3 Audio")
         self.assertEqual(decision.sip_uri, "sip:Waveshare S3 Audio@192.168.1.47;transport=udp")
+
+    def test_ha_router_explicit_sip_uri_routes_without_phonebook_entry(self) -> None:
+        decision = router.resolve_ha_router("sip:LabPhone@192.168.1.60:5062;transport=tcp", [], trunk_ready=False)
+        self.assertEqual(decision.action, router.RouteAction.DIRECT)
+        self.assertEqual(decision.target, "sip:LabPhone@192.168.1.60:5062;transport=tcp")
+        self.assertEqual(decision.sip_uri, "sip:LabPhone@192.168.1.60:5062;transport=tcp")
+        self.assertIsNone(decision.entry)
 
     def test_ha_router_public_number_requires_ready_trunk(self) -> None:
         unavailable = router.resolve_ha_router("0551234567", [], trunk_ready=False)
@@ -1383,10 +1406,11 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
             ),
         ]
 
-        decision = roster.resolve_target("Zoiper", entries, ha_bridge=True)
+        decision = router.resolve_ha_router("Zoiper", entries, trunk_ready=False)
 
         self.assertEqual(decision.action, router.RouteAction.REJECT)
-        self.assertEqual(decision.reason, router.RouteReason.TRUNK_UNAVAILABLE)
+        self.assertEqual(decision.status, 480)
+        self.assertEqual(decision.reason, router.RouteReason.TARGET_UNREACHABLE)
 
     def test_sip_uri_parser_accepts_name_addr_with_header_params(self) -> None:
         parsed = sip.parse_sip_uri("<sip:Zoiper@192.168.1.10:41171;transport=udp>;tag=7bc04a5b")
@@ -1453,9 +1477,9 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
         async def ha_invite(invite):
             entries = [
                 roster.RosterEntry(id="HA", kind="ha", address=local, metadata={"sip_port": ha_sip}),
-                roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip}),
+                roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip, "sip_transport": "udp"}),
             ]
-            decision = roster.resolve_target(invite.target, entries, ha_bridge=True)
+            decision = router.resolve_ha_router(invite.target, entries, trunk_ready=False)
             self.assertIsNotNone(decision.entry)
             dest_client = sip_client.SipCallClient(
                 local_ip=local,
@@ -1612,10 +1636,10 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             nonlocal relay, dest_client
             entries = [
                 roster.RosterEntry(id="HA", kind="ha", address=local, metadata={"sip_port": ha_sip}),
-                roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip}),
+                roster.RosterEntry(id="Cucina", kind="esp", address=local, metadata={"sip_port": dest_sip, "sip_transport": "udp"}),
             ]
-            decision = roster.resolve_target(invite.target, entries, ha_bridge=True)
-            self.assertEqual(decision.sip_uri, f"sip:Cucina@{local}:{ha_sip}")
+            decision = router.resolve_ha_router(invite.target, entries, trunk_ready=False)
+            self.assertEqual(decision.sip_uri, f"sip:Cucina@{local}:{dest_sip};transport=udp")
             self.assertIsNotNone(decision.entry)
             dest_client = sip_client.SipCallClient(
                 local_ip=local,

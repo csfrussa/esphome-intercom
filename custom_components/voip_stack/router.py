@@ -29,6 +29,7 @@ class RouteReason(StrEnum):
     NAME_VIA_HA = "name_via_ha"
     DIRECT_URI = "direct_uri"
     TARGET_DISABLED = "target_disabled"
+    TARGET_UNREACHABLE = "target_unreachable"
     ROUTE_NOT_FOUND = "route_not_found"
     DIALPLAN_TIMEOUT = "dialplan_timeout"
     MEDIA_INCOMPATIBLE = "media_incompatible"
@@ -122,6 +123,28 @@ def _entry_port(entry: RosterEntry | None) -> int:
         return 5060
 
 
+def _uri_transport(uri: str) -> str:
+    lower = (uri or "").strip().lower()
+    marker = ";transport="
+    if marker not in lower:
+        return ""
+    value = lower.split(marker, 1)[1].split(";", 1)[0].strip()
+    return value if value in {"tcp", "udp"} else ""
+
+
+def _uri_port(uri: str) -> int:
+    raw = (uri or "").strip()
+    try:
+        user_host = raw[4:] if raw.lower().startswith("sip:") else raw
+        host = user_host.split("@", 1)[1] if "@" in user_host else user_host
+        host = host.split(";", 1)[0]
+        if ":" not in host:
+            return 5060
+        return int(host.rsplit(":", 1)[1])
+    except (IndexError, TypeError, ValueError):
+        return 5060
+
+
 def _uri(user: str, host: str, port: int = 5060, transport: str = "") -> str:
     suffix = "" if int(port) == 5060 else f":{int(port)}"
     transport_suffix = f";transport={transport}" if transport in {"tcp", "udp"} else ""
@@ -132,8 +155,11 @@ def ha_uri_for(target: str, entries: list[RosterEntry], ha_uri: str = "") -> str
     ha = _ha_entry(entries, ha_uri)
     if ha is None or not ha.address:
         return ha_uri
-    transport = _entry_transport(ha)
-    return _uri(target or ha.id or "HA", ha.address, _entry_port(ha), transport)
+    transport = _entry_transport(ha) or _uri_transport(ha_uri)
+    port = _entry_port(ha)
+    if port == 5060 and ha_uri:
+        port = _uri_port(ha_uri)
+    return _uri(target or ha.id or "HA", ha.address, port, transport)
 
 
 def _ha_entry(entries: list[RosterEntry], ha_uri: str = "") -> RosterEntry | None:
@@ -175,7 +201,8 @@ def resolve_esp_origin(target: str, entries: list[RosterEntry], ha_uri: str) -> 
     if direct_uri and transport and not entry.ha_bridge:
         return RouteDecision(RouteAction.DIRECT, target=entry.id, sip_uri=direct_uri, source="phonebook", entry=entry)
     bridge_target = entry.number or entry.id
-    return RouteDecision(RouteAction.BRIDGE, target=bridge_target, sip_uri=ha_uri_for(bridge_target, entries, ha_uri), source="phonebook", entry=entry)
+    reason = RouteReason.NO_DIRECT_TRANSPORT if entry.address and not transport and not entry.sip_uri else RouteReason.NAME_VIA_HA
+    return RouteDecision(RouteAction.BRIDGE, target=bridge_target, sip_uri=ha_uri_for(bridge_target, entries, ha_uri), reason=reason, source="phonebook", entry=entry)
 
 
 def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: bool = False) -> RouteDecision:
@@ -197,6 +224,8 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
             if trunk_ready:
                 return RouteDecision(RouteAction.TRUNK, target=number, source="trunk", entry=entry)
             return RouteDecision(RouteAction.REJECT, target=number, status=503, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
+        if entry.kind == "softphone" and not bool(entry.metadata.get("registered", False)) and not entry.sip_uri and not entry.address:
+            return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.TARGET_UNREACHABLE, entry=entry)
         transport = _entry_transport(entry)
         sip_uri = entry.sip_uri or (_uri(entry.id, entry.address, _entry_port(entry), transport) if entry.address else "")
         if entry.kind == "esp" and entry.address and not transport and not entry.sip_uri:
