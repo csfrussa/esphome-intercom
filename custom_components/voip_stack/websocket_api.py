@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .call_registry import CallRegistry
 from .const import CONF_DEBUG_MODE, DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
-from .fsm import CallState, TerminalReason, sip_phone_state
+from .fsm import CallState, TerminalReason, sip_phone_state, sip_public_state as _sip_public_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,34 +33,6 @@ WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
     return (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
-
-
-def _sip_public_state(state: str) -> str:
-    value = (state or "").strip().lower()
-    mapping = {
-        "": CallState.IDLE.value,
-        "idle": CallState.IDLE.value,
-        "calling": CallState.CALLING.value,
-        "ringing": CallState.RINGING.value,
-        "remote_ringing": CallState.REMOTE_RINGING.value,
-        "connecting": CallState.CONNECTING.value,
-        "in_call": CallState.IN_CALL.value,
-        "terminating": CallState.TERMINATING.value,
-        "busy": CallState.BUSY.value,
-        "declined": CallState.DECLINED.value,
-        "cancelled": CallState.CANCELLED.value,
-        "media_incompatible": CallState.MEDIA_INCOMPATIBLE.value,
-        "transport_unreachable": CallState.TRANSPORT_UNREACHABLE.value,
-        "local_hangup": CallState.IDLE.value,
-        "remote_hangup": CallState.IDLE.value,
-        "not_in_call": CallState.IDLE.value,
-        "timeout": CallState.TRANSPORT_UNREACHABLE.value,
-        "error": CallState.TRANSPORT_UNREACHABLE.value,
-        "protocol_error": CallState.TRANSPORT_UNREACHABLE.value,
-        "auth_required_unsupported": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
-        "proxy_auth_required_unsupported": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
-    }
-    return mapping.get(value, value or CallState.IDLE.value)
 
 
 def _direction_for_local(local_name: str, caller: str, callee: str) -> str:

@@ -53,7 +53,14 @@ from .const import (
 )
 from .dtmf import parse_dtmf_route_map
 from .device_resolver import get_resolver
-from .fsm import CallState, TerminalReason, sip_phone_state
+from .fsm import (
+    CallState,
+    TerminalReason,
+    sip_failure_response as _sip_failure_response,
+    sip_phone_state,
+    sip_public_state as _sip_public_state,
+    sip_terminal_reason as _sip_terminal_reason,
+)
 from .audio_format import (
     AudioFormat,
     HA_SIP_PCM_FORMATS,
@@ -276,57 +283,6 @@ def _roster_entry_formats(entry, key: str) -> list[AudioFormat]:
             err,
         )
         return []
-
-
-def _sip_public_state(state: str) -> str:
-    """Normalize internal SIP client outcomes to the public SipPhoneState."""
-    value = (state or "").strip().lower()
-    if value == "in_call":
-        return CallState.IN_CALL.value
-    if value == "answered":
-        return CallState.IN_CALL.value
-    if value == "sip_486":
-        return CallState.BUSY.value
-    if value == "sip_603":
-        return CallState.DECLINED.value
-    if value == "sip_487":
-        return CallState.CANCELLED.value
-    if value == "sip_488":
-        return CallState.MEDIA_INCOMPATIBLE.value
-    if value in {"sip_401", "sip_407"}:
-        return CallState.AUTH_REQUIRED_UNSUPPORTED.value
-    if value in {"local_hangup", "remote_hangup", "not_in_call"}:
-        return CallState.IDLE.value
-    if value == "timeout":
-        return CallState.TRANSPORT_UNREACHABLE.value
-    if value in {"error", "protocol_error"}:
-        return CallState.TRANSPORT_UNREACHABLE.value
-    return value or CallState.IDLE.value
-
-
-def _sip_terminal_reason(result: str, public_state: str) -> str:
-    value = (result or "").strip().lower()
-    if value == "timeout":
-        return TerminalReason.TIMEOUT.value
-    if value in {"error", "protocol_error"}:
-        return TerminalReason.PROTOCOL_ERROR.value
-    return public_state
-
-
-def _sip_failure_response(result: str) -> tuple[int, str, str, str]:
-    public_state = _sip_public_state(result)
-    terminal_reason = _sip_terminal_reason(result, public_state)
-    if public_state == CallState.BUSY.value:
-        return 486, "Busy Here", terminal_reason, public_state
-    if public_state == CallState.DECLINED.value:
-        return 603, "Decline", terminal_reason, public_state
-    if public_state == CallState.CANCELLED.value:
-        return 487, "Request Terminated", terminal_reason, public_state
-    if public_state == CallState.MEDIA_INCOMPATIBLE.value:
-        return 488, "Not Acceptable Here", terminal_reason, public_state
-    if terminal_reason == TerminalReason.TIMEOUT.value:
-        return 408, "Request Timeout", terminal_reason, public_state
-    return 480, "Temporarily Unavailable", terminal_reason, public_state
 
 
 def _sip_target_audio_profile(

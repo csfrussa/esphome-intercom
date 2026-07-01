@@ -71,6 +71,69 @@ def sip_phone_state(**values: object) -> dict[str, str | int]:
     return SipPhoneState(**clean).as_dict()
 
 
+def sip_public_state(state: str) -> str:
+    """Normalize internal SIP outcomes to the public SipPhoneState state."""
+    value = (state or "").strip().lower()
+    mapping = {
+        "": CallState.IDLE.value,
+        "idle": CallState.IDLE.value,
+        "calling": CallState.CALLING.value,
+        "answered": CallState.IN_CALL.value,
+        "in_call": CallState.IN_CALL.value,
+        "ringing": CallState.RINGING.value,
+        "remote_ringing": CallState.REMOTE_RINGING.value,
+        "connecting": CallState.CONNECTING.value,
+        "terminating": CallState.TERMINATING.value,
+        "busy": CallState.BUSY.value,
+        "declined": CallState.DECLINED.value,
+        "cancelled": CallState.CANCELLED.value,
+        "media_incompatible": CallState.MEDIA_INCOMPATIBLE.value,
+        "transport_unreachable": CallState.TRANSPORT_UNREACHABLE.value,
+        "auth_required_unsupported": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
+        "proxy_auth_required_unsupported": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
+        "sip_486": CallState.BUSY.value,
+        "sip_603": CallState.DECLINED.value,
+        "sip_487": CallState.CANCELLED.value,
+        "sip_488": CallState.MEDIA_INCOMPATIBLE.value,
+        "sip_401": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
+        "sip_407": CallState.AUTH_REQUIRED_UNSUPPORTED.value,
+        "local_hangup": CallState.IDLE.value,
+        "remote_hangup": CallState.IDLE.value,
+        "not_in_call": CallState.IDLE.value,
+        "timeout": CallState.TRANSPORT_UNREACHABLE.value,
+        "error": CallState.TRANSPORT_UNREACHABLE.value,
+        "protocol_error": CallState.TRANSPORT_UNREACHABLE.value,
+    }
+    return mapping.get(value, value or CallState.IDLE.value)
+
+
+def sip_terminal_reason(result: str, public_state: str | None = None) -> str:
+    """Normalize internal SIP outcomes to a terminal reason."""
+    value = (result or "").strip().lower()
+    if value == "timeout":
+        return TerminalReason.TIMEOUT.value
+    if value in {"error", "protocol_error"}:
+        return TerminalReason.PROTOCOL_ERROR.value
+    return public_state or sip_public_state(result)
+
+
+def sip_failure_response(result: str) -> tuple[int, str, str, str]:
+    """Map an outbound SIP failure to status, reason, terminal reason and state."""
+    public_state = sip_public_state(result)
+    terminal_reason = sip_terminal_reason(result, public_state)
+    if public_state == CallState.BUSY.value:
+        return 486, "Busy Here", terminal_reason, public_state
+    if public_state == CallState.DECLINED.value:
+        return 603, "Decline", terminal_reason, public_state
+    if public_state == CallState.CANCELLED.value:
+        return 487, "Request Terminated", terminal_reason, public_state
+    if public_state == CallState.MEDIA_INCOMPATIBLE.value:
+        return 488, "Not Acceptable Here", terminal_reason, public_state
+    if terminal_reason == TerminalReason.TIMEOUT.value:
+        return 408, "Request Timeout", terminal_reason, public_state
+    return 480, "Temporarily Unavailable", terminal_reason, public_state
+
+
 def terminal_state_for_decline(reason: str) -> str:
     """Map SIP final/terminal reasons to public SIP call states."""
     reason = (reason or "").strip()
