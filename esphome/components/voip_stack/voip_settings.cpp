@@ -414,6 +414,7 @@ bool VoipStack::apply_roster_json_contacts_(const std::string &roster_json) {
   const ContactEndpointKind local_endpoint_kind = ContactEndpointKind::SIP;
   const uint16_t ha_local_port = ha_slot.sip_port;
   const uint16_t ha_local_rtp_port = ha_slot.rtp_port;
+  const bool local_sip_transport_tcp = this->protocol_ == TransportType::TCP;
 
   std::vector<ContactEntry> entries;
   entries.reserve(std::min(Phonebook::MAX_CONTACTS, slots.size()));
@@ -431,7 +432,7 @@ bool VoipStack::apply_roster_json_contacts_(const std::string &roster_json) {
       entry.ip = slot.address;
       entry.port = slot.sip_port;
       entry.rtp_port = slot.rtp_port;
-      entry.sip_transport_tcp = slot.sip_transport == "tcp";
+      entry.sip_transport_tcp = local_sip_transport_tcp;
     } else if ((slot.kind == "phone" || slot.kind == "group" || slot.ha_bridge ||
                 slot.address.empty() ||
                 endpoint_kind != ContactEndpointKind::SIP || missing_sip_transport) &&
@@ -440,7 +441,7 @@ bool VoipStack::apply_roster_json_contacts_(const std::string &roster_json) {
       entry.ip = ha_slot.address;
       entry.port = ha_local_port;
       entry.rtp_port = ha_local_rtp_port;
-      entry.sip_transport_tcp = ha_slot.sip_transport == "tcp";
+      entry.sip_transport_tcp = local_sip_transport_tcp;
     } else {
       entry.endpoint_kind = endpoint_kind;
       entry.ip = slot.address;
