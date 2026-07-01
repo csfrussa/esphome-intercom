@@ -128,6 +128,14 @@ def _uri(user: str, host: str, port: int = 5060, transport: str = "") -> str:
     return f"sip:{user}@{host}{suffix}{transport_suffix}"
 
 
+def ha_uri_for(target: str, entries: list[RosterEntry], ha_uri: str = "") -> str:
+    ha = _ha_entry(entries, ha_uri)
+    if ha is None or not ha.address:
+        return ha_uri
+    transport = _entry_transport(ha)
+    return _uri(target or ha.id or "HA", ha.address, _entry_port(ha), transport)
+
+
 def _ha_entry(entries: list[RosterEntry], ha_uri: str = "") -> RosterEntry | None:
     for entry in entries:
         if entry.kind == "ha" and entry.enabled and entry.address:
@@ -153,7 +161,7 @@ def resolve_esp_origin(target: str, entries: list[RosterEntry], ha_uri: str) -> 
     if target_class in {TargetClass.SIP_URI, TargetClass.NAME_AT_HOST}:
         return RouteDecision(RouteAction.DIRECT, target=target, sip_uri=to_sip_uri(target), reason=RouteReason.DIRECT_URI)
     if target_class == TargetClass.NUMERIC:
-        return RouteDecision(RouteAction.BRIDGE, target=target, sip_uri=ha_uri, reason=RouteReason.NUMBER_VIA_HA)
+        return RouteDecision(RouteAction.BRIDGE, target=target, sip_uri=ha_uri_for(target, entries, ha_uri), reason=RouteReason.NUMBER_VIA_HA)
 
     entry = find_entry(entries, target)
     if entry is None:
@@ -167,7 +175,7 @@ def resolve_esp_origin(target: str, entries: list[RosterEntry], ha_uri: str) -> 
     if direct_uri and transport and not entry.ha_bridge:
         return RouteDecision(RouteAction.DIRECT, target=entry.id, sip_uri=direct_uri, source="phonebook", entry=entry)
     bridge_target = entry.number or entry.id
-    return RouteDecision(RouteAction.BRIDGE, target=bridge_target, sip_uri=ha_uri, source="phonebook", entry=entry)
+    return RouteDecision(RouteAction.BRIDGE, target=bridge_target, sip_uri=ha_uri_for(bridge_target, entries, ha_uri), source="phonebook", entry=entry)
 
 
 def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: bool = False) -> RouteDecision:
@@ -191,6 +199,8 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
             return RouteDecision(RouteAction.REJECT, target=number, status=503, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
         transport = _entry_transport(entry)
         sip_uri = entry.sip_uri or (_uri(entry.id, entry.address, _entry_port(entry), transport) if entry.address else "")
+        if entry.kind == "esp" and entry.address and not transport and not entry.sip_uri:
+            return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.NO_DIRECT_TRANSPORT, entry=entry)
         if sip_uri:
             return RouteDecision(RouteAction.FORWARD, target=entry.id, sip_uri=sip_uri, source="phonebook", entry=entry)
         return RouteDecision(RouteAction.REJECT, target=target, status=404, reason=RouteReason.ROUTE_NOT_FOUND, entry=entry)

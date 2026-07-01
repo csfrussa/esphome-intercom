@@ -69,6 +69,8 @@ from .router import (
     RouteAction,
     RouteHintSource,
     RouteReason,
+    ha_uri_for,
+    resolve_ha_router,
     route_inbound_trunk,
 )
 from .sip_bridge import build_invite_client_relay
@@ -1695,7 +1697,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     """Originate a standards SIP call from HA to a roster target or URI-shaped target."""
     from homeassistant.exceptions import ServiceValidationError
 
-    from .roster import parse_roster_json, resolve_target
+    from .roster import parse_roster_json
     from .sip import parse_sip_uri
     from .sip_client import SipCallClient
 
@@ -1717,19 +1719,19 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     local_ip = await _ha_advertise_host(hass)
     if not local_ip:
         raise ServiceValidationError("HA advertise IP is unknown")
-    sensor = hass.states.get("sensor.voip_phonebook")
-    roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
-    contacts = parse_roster_json(roster_json) if roster_json else []
-    route = resolve_target(
-        target,
-        contacts,
-        ha_host=local_ip,
-        ha_sip_port=int(cfg["sip_port"]),
-        force_ha=force_ha_bridge or bool(call.data.get("ha_bridge", False)),
-    )
     trunk = hass.data.get(DOMAIN, {}).get("sip_trunk")
     trunk_cfg = _get_trunk_config(hass)
     trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
+    sensor = hass.states.get("sensor.voip_phonebook")
+    roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
+    contacts = parse_roster_json(roster_json) if roster_json else []
+    route = resolve_ha_router(target, contacts, trunk_ready=trunk_ready)
+    if (force_ha_bridge or bool(call.data.get("ha_bridge", False))) and route.action not in {
+        RouteAction.ANSWER_HA,
+        RouteAction.TRUNK,
+        RouteAction.REJECT,
+    }:
+        route = replace(route, action=RouteAction.BRIDGE, sip_uri=ha_uri_for(route.target or target, contacts))
     use_trunk = route.action is RouteAction.TRUNK and trunk_ready
     use_softphone_codecs = bool(route.entry is not None and route.entry.kind == "softphone")
     if route.action is RouteAction.TRUNK and not use_trunk:
@@ -1741,7 +1743,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             f"sip:{trunk_target}@{trunk_cfg[CONF_TRUNK_SERVER]}:{int(trunk_cfg[CONF_TRUNK_PORT])};"
             f"transport={str(trunk_cfg[CONF_TRUNK_TRANSPORT]).lower()}"
         )
-    if not use_trunk and (route.action not in {RouteAction.DIRECT, RouteAction.BRIDGE} or not route_uri):
+    if not use_trunk and (route.action not in {RouteAction.DIRECT, RouteAction.FORWARD, RouteAction.BRIDGE} or not route_uri):
         raise ServiceValidationError(f"cannot resolve SIP target: {target}")
     await _async_prepare_ha_outbound_call(hass)
     uri = parse_sip_uri(route_uri)
@@ -2472,7 +2474,7 @@ async def _async_stop_sip_trunk(hass: HomeAssistant) -> None:
 
 async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     """Bind the enabled SIP signaling listeners for HA softphone and bridge calls."""
-    from .roster import RosterEntry, resolve_target
+    from .roster import RosterEntry
     from .dtmf import DtmfCollector
     from .sdp import build_answer_directional
     from . import sdp as sip_sdp
@@ -2580,6 +2582,17 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
     def _is_ha_target(value: str) -> bool:
         return _same_route_name(value, _ha_peer_name(hass)) or _same_route_name(value, "ha")
+
+    def _ha_router_decision(target: str, entries: list[RosterEntry]):
+        trunk = hass.data.get(DOMAIN, {}).get("sip_trunk")
+        trunk_cfg = _get_trunk_config(hass)
+        trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
+        return resolve_ha_router(target, entries, trunk_ready=trunk_ready)
+
+    def _inbound_route_decision(invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]):
+        # Once an INVITE reached HA, HA is the router. ESP-origin direct-vs-HA
+        # decisions are made before dialing by the ESP phonebook mirror.
+        return _ha_router_decision(invite.target, entries)
 
     async def _run_trunk_inbound_route(
         invite: SipInvite,
@@ -2714,7 +2727,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return
 
-        decision = resolve_target(destination, _roster_from_peers(peers), ha_bridge=False)
+        decision = _ha_router_decision(destination, _roster_from_peers(peers))
         peer_target = _peer_for_target(decision.target or destination, peers)
         bridge_uri = None
         try:
@@ -2914,7 +2927,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 return SipInviteResult(488, "Not Acceptable Here", to_tag="", decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value)
             invite = replace(invite, send_format=selected.send, recv_format=selected.recv)
-        decision = resolve_target(invite.target, _roster_from_peers(peers), ha_bridge=True)
+        roster_entries = _roster_from_peers(peers)
+        decision = _inbound_route_decision(invite, peers, roster_entries)
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
         route_bucket = _pending_routes(hass)
@@ -3100,7 +3114,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             return SipInviteResult(status, reason, to_tag="", decline_reason=app_reason)
 
         if route_action in {"forward", "bridge"} and route_destination:
-            decision = resolve_target(route_destination, _roster_from_peers(peers), ha_bridge=False)
+            decision = _ha_router_decision(route_destination, roster_entries)
             _LOGGER.info(
                 "SIP route override call_id=%s action=%s destination=%s route=%s uri=%s",
                 invite.call_id,
@@ -3145,7 +3159,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if not force_ha_softphone and decision.action is RouteAction.TRUNK and not bridge_to_trunk:
             return SipInviteResult(503, "Service Unavailable", to_tag="")
         if not force_ha_softphone and (
-            bridge_to_trunk or (decision.action in {RouteAction.DIRECT, RouteAction.BRIDGE, RouteAction.GROUP} and decision.entry is not None)
+            bridge_to_trunk or (decision.action in {RouteAction.DIRECT, RouteAction.FORWARD, RouteAction.BRIDGE, RouteAction.GROUP} and decision.entry is not None)
         ):
             peer_target = _peer_for_target(decision.target or invite.target, peers)
             bridge_uri = None
