@@ -110,6 +110,19 @@ def sip_public_state(state: str) -> str:
 def sip_terminal_reason(result: str, public_state: str | None = None) -> str:
     """Normalize internal SIP outcomes to a terminal reason."""
     value = (result or "").strip().lower()
+    reason_mapping = {
+        "local_hangup": TerminalReason.LOCAL_HANGUP.value,
+        "remote_hangup": TerminalReason.REMOTE_HANGUP.value,
+        "not_in_call": TerminalReason.LOCAL_HANGUP.value,
+        "sip_486": TerminalReason.BUSY.value,
+        "sip_603": TerminalReason.DECLINED.value,
+        "sip_487": TerminalReason.CANCELLED.value,
+        "sip_488": TerminalReason.MEDIA_INCOMPATIBLE.value,
+        "sip_401": TerminalReason.AUTH_REQUIRED_UNSUPPORTED.value,
+        "sip_407": TerminalReason.PROXY_AUTH_REQUIRED_UNSUPPORTED.value,
+    }
+    if value in reason_mapping:
+        return reason_mapping[value]
     if value == "timeout":
         return TerminalReason.TIMEOUT.value
     if value in {"error", "protocol_error"}:
