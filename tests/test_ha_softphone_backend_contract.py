@@ -49,7 +49,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
 
     def test_inbound_bridge_completion_does_not_mutate_ha_softphone(self) -> None:
         body = _function_body(self.source, "_async_start_sip_endpoint")
-        bridge_path = body.split("bridge_to_trunk or (decision.action in", 1)[1]
+        bridge_path = body.split("routeable_sip_target =", 1)[1]
         bridge_path = bridge_path.split("ha_softphone_active = _ha_softphone_has_active_call", 1)[0]
         self.assertIn("_set_sip_bridge_call_state(", bridge_path)
         self.assertNotIn("_set_ha_softphone_call_state(", bridge_path)
