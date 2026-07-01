@@ -51,125 +51,74 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What Can You Build With It?
 
-### Full-Duplex Door Intercom
-
-Want a real full-duplex doorbell or intercom?
-
-Flash one of the ready ESPHome YAMLs, add the ESP to Home Assistant and add the
-VoIP Stack card. Home Assistant is pushed to the ESP phonebook automatically.
-
-Press the button on the ESP: Home Assistant rings. Answer from the browser, a
-wall tablet or the Home Assistant Companion app.
-
-### Room-To-Room ESP Phones
-
-Want your ESP devices to call each other?
-
-Flash one VoIP YAML per room device. Home Assistant publishes the shared
-phonebook. Devices can call contacts by name, for example `Kitchen`, `Bedroom`,
-`Garage` or `Home`.
-
-If the ESP knows the direct SIP endpoint, it calls directly. If not, Home
-Assistant routes the call.
-
-### Home Assistant As A Real Softphone
-
-Want Home Assistant itself to call or receive calls?
-
-The Lovelace card is not just a remote control. In `ha_softphone` mode it is
-the Home Assistant softphone UI: ring, answer, decline, hang up and originate
-calls.
-
-### Standard SIP Softphones
-
-Want to call your ESP devices from Zoiper, Linphone, baresip or pjsua?
-
-Enable the local SIP registrar, create an account with
-`voip_stack.create_account`, register your softphone to Home Assistant, and it
-becomes a normal phonebook contact.
-
-You do not need to assign classic numeric extensions to every ESP. You can call
-contacts by their phonebook names, such as `Home` or `ESP Kitchen`.
-
-### External Calls Through A Trunk
-
-Want Home Assistant or an ESP to call a real phone number?
-
-Configure an optional SIP trunk, add contacts with numbers, or use the card
-dial pad. Home Assistant owns the trunk leg and bridges the call to ESPs, the
-HA softphone or registered softphones.
-
-### Incoming External Calls
-
-Want to call your Home Assistant from outside?
-
-Register a provider/PBX trunk. Incoming calls can ring Home Assistant, follow a
-DTMF route, or be forwarded to an ESP or another VoIP contact.
-
-### Voice Assistant Calling
-
-Want to call contacts by voice?
-
-Enable the optional VoIP Stack Assist intents. A voice satellite can call a
-phonebook contact, answer, decline or hang up through Home Assistant while the
-same ESP remains a VoIP endpoint.
+| You want... | What you do | Result |
+|---|---|---|
+| A full-duplex door intercom | Flash a ready VoIP YAML, add the ESP to Home Assistant and add the card. | Press the ESP button and Home Assistant rings. Answer from browser, wall tablet or Companion app. |
+| Room-to-room ESP phones | Flash one VoIP YAML per room device. | ESP devices call each other by phonebook name, such as `Kitchen`, `Bedroom` or `Garage`. |
+| Home Assistant as a softphone | Use the Lovelace card in `ha_softphone` mode. | HA can ring, answer, decline, hang up and originate calls. |
+| Standard SIP softphones | Enable the local registrar and create an account with `voip_stack.create_account`. | Zoiper, Linphone, baresip or pjsua can register to HA and become phonebook contacts. |
+| External outbound calls | Configure an optional SIP trunk and add contacts with numbers, or use the card dial pad. | HA or ESP devices can call external numbers through the trunk. |
+| Incoming external calls | Register a provider/PBX trunk. | External calls can ring HA, follow DTMF routing, or be forwarded to ESPs/local contacts. |
+| Voice Assistant calling | Enable the optional VoIP Stack Assist intents. | Satellites can call contacts, answer, decline or hang up by voice. |
 
 ## Table of Contents
 
-- [What's New](docs/WHATS_NEW.md)
-- [What can you build with it?](#what-can-you-build-with-it)
-- [Breaking changes](docs/BREAKING_CHANGES.md)
-- [Overview](#overview)
+- [What Can You Build With It?](#what-can-you-build-with-it)
+- [Fastest Start](#fastest-start)
+- [What's New](#whats-new)
+- [Breaking Changes](#breaking-changes)
+- [How It Works](#how-it-works)
+- [Phonebook And Routing](#phonebook-and-routing)
 - [Quick Start Examples](#quick-start-examples)
 - [Features](#features)
-- [Architecture](#architecture)
 - [Installation](#installation)
   - [1. Home Assistant Integration](#1-home-assistant-integration)
   - [2. ESPHome Component](#2-esphome-component)
   - [3. Lovelace Card](#3-lovelace-card)
-- [Product model and routing](#product-model-and-routing)
+- [Architecture](#architecture)
+- [Technical Details](#technical-details)
+- [Call Routing](#call-routing)
 - [Reference](#reference): voip_stack, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
 - [Call Flow Diagrams](#call-flow-diagrams)
 - [Hardware Support](#hardware-support)
-- [Audio components](#audio-components): esp_audio_stack, esp_aec, esp_afe
+- [Audio Components](#audio-components): esp_audio_stack, esp_aec, esp_afe
 - [Voice Assistant + VoIP Experience](#voice-assistant--voip-experience)
 - [Logging](#logging)
 - [Troubleshooting](#troubleshooting) ([docs/troubleshooting.md](docs/troubleshooting.md))
-- [Deep dives and architecture](docs/)
+- [Deep Dives And Architecture](docs/)
 - [License](#license)
+
+## Fastest Start
+
+| Goal | Start here | Result |
+|---|---|---|
+| One ESP as a full-duplex intercom with Home Assistant | [`yamls/voip-only/`](yamls/voip-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
+| Room-to-room ESP VoIP | One voip-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
+| Softphone or trunk testing | `voip_stack.create_account` or the optional trunk setup | Register a real SIP softphone to HA, or let HA route calls through a provider/PBX trunk. |
+| Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and VoIP calls on the same ESP. |
+| Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
+| Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. |
+| Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and VoIP while media/TTS keeps playing. |
+| Runtime state arbitration for full profiles | [`runtime_fsm`](esphome/components/runtime_fsm/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
+
+For the normal intercom use case, do not start by designing a phone system.
+Pick the closest YAML, adapt the board pins and audio hardware, add the ESP
+through the ESPHome integration, then install `voip_stack`. Home Assistant
+publishes the phonebook, and the ESP can call or be called from a GPIO button,
+LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-### 2026.7.0-dev: ESPHome Devices Are VoIP Phones Now
+`2026.7.0-dev` is the SIP/VoIP migration release. It replaces the old
+project-specific call-control path with SIP/SDP/RTP call handling, ESP SIP
+endpoints, Home Assistant routing/bridging, local softphone accounts and
+optional trunk support.
 
-This is the release where the project changes category.
-
-It is no longer just a full-duplex ESPHome intercom. It is now a local SIP/VoIP
-system built around Home Assistant.
-
-ESP devices are local SIP phones. Home Assistant is a SIP endpoint, softphone
-UI, call router, bridge, local registrar and optional trunk client. The old
-project-specific call-control path is gone.
-
-That means you can now build setups that previously required an external PBX:
-
-- an ESP doorbell that rings Home Assistant;
-- Home Assistant answering from browser, tablet or Companion app;
-- ESP-to-ESP room calls;
-- Home Assistant calling ESP devices;
-- Zoiper, Linphone, baresip or pjsua registering directly to Home Assistant;
-- ESP devices calling registered softphones;
-- Home Assistant calling real phone numbers through a SIP trunk;
-- external calls reaching Home Assistant and being routed to ESPs or local
-  contacts.
-
-The old intercom use case is still there. It is just sitting on a much bigger
-engine now.
-
-Read the full changelog:
+Read the release details:
 
 - [What's New](docs/WHATS_NEW.md)
 - [Full 2026.7.0-dev release notes](docs/RELEASE_2026_7_0_DEV.md)
+- [Breaking Changes](docs/BREAKING_CHANGES.md)
 
 ## Breaking Changes
 
@@ -187,147 +136,72 @@ Minimum versions for this release:
 - **Home Assistant Core**: `2026.5.0` or newer for the bundled
   `voip_stack` integration and Lovelace card.
 
-## Overview
+## How It Works
 
-**VoIP Stack** is a set of ESPHome components, YAML packages and Home
-Assistant tools for full-duplex SIP/VoIP calls, wake word devices,
-media/TTS playback and display-driven voice devices.
+VoIP Stack has four main pieces:
 
-### Fastest Paths
+- **ESP device**: a lightweight local SIP phone. It owns its call state,
+  microphone, speaker and local phonebook mirror.
+- **Home Assistant**: SIP softphone plus router, bridge, resampler, central
+  phonebook publisher, local SIP registrar and optional trunk client.
+- **Phonebook**: the shared dial plan. It contains names, numbers, SIP
+  endpoints, softphone registrations and trunk-routed contacts.
+- **Lovelace card**: the UI for the HA softphone or for mirroring/controlling
+  an ESP phone.
 
-| Goal | Start here | Result |
-|---|---|---|
-| One ESP as a full-duplex intercom with Home Assistant | [`yamls/voip-only/`](yamls/voip-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
-| Room-to-room ESP VoIP | One voip-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
-| Softphone or trunk testing | `voip_stack.create_account` or the optional trunk setup | Register a real SIP softphone to HA, or let HA route calls through a provider/PBX trunk. |
-| Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and VoIP calls on the same ESP. |
-| Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
-| Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. Do not use this path for shared single-bus software-AEC builds. |
-| Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and VoIP while media/TTS keeps playing. |
-| Media, announcements and optional Music Assistant / Sendspin for full voice profiles | [`speaker_source` media path](docs/reference.md#full-experience-media-path) | One media player feeds the mixer with HA media, announcements, local files and optional Sendspin streams; VoIP keeps its own higher-priority mixer source. |
-| Runtime state arbitration for full profiles | [`runtime_fsm`](esphome/components/runtime_fsm/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
-
-For the normal intercom use case, do not start by designing a phone system.
-Pick the closest YAML, adapt the board pins and audio hardware, add the ESP
-through the ESPHome integration, then install `voip_stack`. Home Assistant
-publishes the phonebook, and the ESP can call or be called from a GPIO button,
-LVGL button, automation, service call or Lovelace card.
-
-### Mental Model
-
-The project is no longer built around project-specific call control. It is now
-a local SIP/VoIP system.
-
-Each ESP is a lightweight SIP phone. It can call, ring, answer, decline and
-hang up using SIP signaling, SDP negotiation and RTP audio. ESP devices do not
-register to external SIP trunks or provider PBXs, and they do not require SIP
-authentication. That is intentional: ESP devices have limited CPU, memory and
-network resources, so the firmware keeps the phone role small, predictable and
-robust.
-
-Adding an ESP to Home Assistant through the ESPHome integration is already the
-way the system learns that phone. The ESP publishes its VoIP endpoint through
-ESPHome, Home Assistant adds it to the central phonebook, and the standard ESP
-packages subscribe to that phonebook.
-
-An ESP can:
-
-- call another ESP directly when the phonebook contains a complete direct SIP
-  endpoint for that contact;
-- call Home Assistant as a real softphone endpoint;
-- call a name or number without knowing its IP address, letting Home Assistant
-  resolve and route it;
-- call registered softphones or external numbers through Home Assistant when a
-  route or trunk exists.
-
-Home Assistant is also a SIP phone. It can ring, answer, decline, hang up and
-originate calls from the Lovelace softphone card, services, automations or
-Assist intents.
-
-Home Assistant also has the heavier role that ESP devices intentionally do not
-carry: it is the call router, RTP bridge/resampler, central phonebook
-publisher, optional local SIP registrar and optional trunk client. When a call
-must be routed, bridged, resampled or sent to a provider trunk, HA owns that
-work.
-
-In short:
-
-- ESP = lightweight local SIP phone;
-- Home Assistant = SIP phone plus router/bridge/resampler;
-- Home Assistant phonebook = central dial plan;
-- Lovelace card = UI/mirror for either an ESP phone or the HA softphone.
+ESP devices do not register to an external PBX and do not need SIP
+authentication. Adding an ESP through the ESPHome integration is how Home
+Assistant learns its endpoint and publishes it into the central phonebook.
 
 The simple use case stays simple: one ESP can still behave like a normal
 full-duplex intercom device. The difference is that the call foundation is now
-real SIP/VoIP, so the same system can grow to ESP-to-ESP calls, HA calls,
+SIP/VoIP, so the same system can grow to ESP-to-ESP calls, HA calls,
 registered softphones and external trunk calls without requiring Asterisk.
 
-### Central Phonebook
+## Phonebook And Routing
 
-Home Assistant owns the standard phonebook.
+Home Assistant owns the standard phonebook through `sensor.voip_phonebook`.
 
-A contact has one required field:
+The phonebook merges:
 
-- `name`: the visible name and dial name.
+- ESP endpoints published by online ESPHome devices;
+- Home Assistant itself as a softphone target;
+- manual contacts created with HA services;
+- local SIP accounts registered to HA;
+- trunk-routed phone targets and group entries when configured.
 
-Everything else is optional and describes how that contact can be reached:
-
-- `number`: public/internal number routed by Home Assistant or a trunk;
-- `address`: host/IP for a direct SIP endpoint;
-- `sip_port`: SIP signaling port, default `5060`;
-- `rtp_port`: RTP media port, default `40000`;
-- `sip_transport`: `udp` or `tcp` for direct SIP signaling;
-- `kind`: `esp`, `ha`, `phone`, `softphone` or `group`.
+A contact has one required field: `name`. Everything else is optional and
+describes how that contact can be reached: `number`, `address`, `sip_port`,
+`rtp_port`, `sip_transport` and `kind`.
 
 A number is an attribute of the contact, not a second contact. For example,
-`My Cellphone` can have `number: "+15550123456"`, and ESP displays only
-`My Cellphone`.
+`Office Phone` can have `number: "210"`, and both `Office Phone` and `210`
+resolve to that same contact. If a numeric target is not present in the
+phonebook, HA treats it as an external number and uses the configured trunk.
 
-Routing follows the data available in the phonebook:
+Routing follows the data available for the selected contact:
 
-- if a contact has a complete direct SIP endpoint, compatible ESPs can call it
-  directly;
-- if a contact has only a name or number, the ESP sends the call to HA;
-- HA resolves the name/number, bridges to another local endpoint or uses the
-  configured trunk;
-- if no route exists, HA rejects the call with a clear terminal reason.
+- complete direct SIP endpoint: compatible ESPs can call it directly;
+- name or number without direct endpoint: the ESP sends the call to HA;
+- registered softphone: HA routes to the active SIP registration;
+- external number: HA uses the configured trunk;
+- no valid route: HA rejects the call with a clear terminal reason.
+
+Useful services:
+
+- `voip_stack.add_contact`
+- `voip_stack.remove_contact`
+- `voip_stack.set_contacts`
+- `voip_stack.clear_contacts`
+- `voip_stack.push_phonebook`
+- `voip_stack.create_account`
+- `voip_stack.call`
+- `voip_stack.forward`
+- `voip_stack.route`
 
 The updated phonebook is pushed to online ESP devices automatically.
 `voip_stack.push_phonebook` exists for diagnostics or manual recovery, but it
 should not be required during normal use.
-
-### Signaling Transport
-
-ESP `transport: tcp|udp` controls only that ESP phone's SIP signaling; RTP
-audio remains UDP.
-
-Choose ESP `transport: tcp` when routed LANs, VLANs, containers or filtered
-Wi-Fi make reliable SIP signaling easier to operate. Choose ESP
-`transport: udp` on a simple LAN where lower signaling overhead is preferred.
-
-![ESP SIP signaling transport](docs/images/tcp-udp-choice.png)
-
-_SIP TCP and SIP UDP expose the same phone behavior. ESPs choose one signaling
-transport; routing still follows the phonebook._
-
-Routing is deterministic:
-
-- ESP dials direct only when the central phonebook contains a complete direct
-  SIP URI/IP/transport and media is compatible.
-- ESP numeric targets and unresolved names go to HA; HA decides whether they are
-  internal contacts, bridge routes or trunk calls.
-- HA inbound trunk calls with no explicit hint ring the HA softphone; explicit
-  hints must resolve or terminate with a route error.
-
-### Topology At A Glance
-
-![VoIP Stack topology](docs/images/sip-topology.png)
-
-How to read it:
-
-- **ESP-to-ESP direct**: peers call each other from the phonebook when a direct SIP endpoint is complete.
-- **HA as call router**: unresolved names, numeric targets, protocol/media bridges and trunk routes go through HA.
-- **Browser/app calls**: the Lovelace card is the HA softphone UI, using WebSocket for browser audio and SIP/RTP legs toward peers.
 
 ## Quick Start Examples
 
@@ -472,16 +346,9 @@ data:
   name: My Cellphone
 ```
 
-Useful phonebook services:
-
-- `voip_stack.add_contact`
-- `voip_stack.remove_contact`
-- `voip_stack.clear_contacts`
-- `voip_stack.set_contacts`
-- `voip_stack.push_phonebook`
-
 HA pushes the updated roster immediately to online ESPs via the ESPHome API;
-ESP static contacts remain local offline/custom additions.
+ESP static contacts remain local offline/custom additions. See
+[Phonebook And Routing](#phonebook-and-routing) for the full service list.
 
 ## Features
 
@@ -514,213 +381,6 @@ ESP static contacts remain local offline/custom additions.
 - **Status LED** - Visual feedback for call states.
 - **Persistent Settings** - Volume, gain, AEC state saved to flash.
 - **Remote Access** - Works through any HA remote access method (Nabu Casa, reverse proxy, VPN). No WebRTC, no go2rtc, no port forwarding required.
-
----
-
-## Architecture
-
-### System Overview
-
-```mermaid
-flowchart TD
-    Browser["🌐 Browser / HA app<br/>Lovelace card<br/>mic + speaker"]
-
-    subgraph HA["🏠 Home Assistant"]
-        WS["🌐 WebSocket API<br/>browser softphone"]
-        Router["🔀 voip_stack call router<br/>call / answer / decline / forward"]
-        Roster["📒 phonebook publisher<br/>sensor.voip_phonebook"]
-        Registrar["📲 optional local registrar<br/>Zoiper / Linphone / baresip"]
-        Trunk["🌍 optional SIP trunk<br/>provider / PBX"]
-        TCP["🔌 SIP TCP listener<br/>:5060"]
-        UDP["📡 SIP UDP listener + RTP<br/>SIP :5060 / RTP base :40000"]
-    end
-
-    subgraph ESP["📟 ESP device"]
-        FSM["📞 voip_stack<br/>SIP phone state"]
-        Book["📒 phonebook<br/>name → SIP URI"]
-        Audio["🎙️ mic / speaker<br/>AEC or AFE"]
-    end
-
-    Browser <-->|"binary PCM + control<br/>/api/voip_stack/ws"| WS
-    WS --> Router
-    Registrar --> Router
-    Trunk --> Router
-    Router --> TCP
-    Router --> UDP
-    Router --> Roster
-    Book -. "voip_endpoint" .-> Roster
-    Roster -. "roster update" .-> Book
-    TCP <-->|"SIP TCP leg"| FSM
-    UDP <-->|"SIP UDP + RTP"| FSM
-    FSM <--> Book
-    FSM <--> Audio
-```
-
-This is the whole product in one picture: HA is the SIP routing and phonebook
-hub; each ESP owns its SIP phone state, audio path and local dial plan mirror.
-
-### Audio format
-
-The default SIP PCM format is `16000:s16le:1:32`, but VoIP Stack negotiates
-audio per direction. AFE/AEC-backed branches still publish 16 kHz/s16/mono
-because Espressif esp-sr exposes that format; native ESPHome
-microphone/speaker paths and the HA browser softphone can advertise their
-actual PCM format up to 48 kHz and 32-bit containers.
-
-An audio format token is:
-
-```text
-sample_rate:pcm_format:channels:frame_ms
-```
-
-Supported PCM containers are `s16le`, `s24le`, `s24le_in_s32` and `s32le`.
-Supported rates are 8, 12, 16, 24, 32, 44.1 and 48 kHz, with 10/20/32 ms
-frames when the frame contains an integer number of samples.
-
-Home Assistant may bridge different formats by explicit PCM conversion. Direct
-ESP-to-ESP calls require a common format and fail clearly when none exists. UDP
-RTP carries one complete PCM frame per datagram, so high-rate UDP profiles use
-short packet times to stay below the safe datagram size.
-
-VoIP calls intentionally transport negotiated PCM, not MP3/FLAC/Opus. ESPHome's
-codec decoders are useful for media-player and announcement pipelines, but
-ESP-side VoIP is a bidirectional low-latency path: compressed codecs would add
-realtime encode/decode, jitter behavior and extra CPU/PSRAM budget on every
-hop. Keep compressed media on ESPHome media-source pipelines; keep ESP VoIP on
-PCM unless a future measured Opus mode proves worth the cost.
-
-### SIP, SDP and RTP contract
-
-The functional wire contract is standard SIP/2.0 signaling, SDP offer/answer
-and RTP media. ESP devices are SIP user agents; Home Assistant is a SIP
-softphone plus SIP call router. There is no project-specific call-control
-compatibility path.
-
-Supported SIP methods in the local profile are `INVITE`, `ACK`, `CANCEL`,
-`BYE`, `OPTIONS`, `INFO` for DTMF interop where used, and `REGISTER` only for
-optional local softphone accounts on Home Assistant. ESP firmware does not
-register to a PBX and does not require SIP auth.
-
-SDP negotiates PCM RTP media. ESP firmware accepts compatible L16/L24 PCM only;
-Home Assistant may accept common softphone/trunk codecs and convert them at the
-route boundary before sending PCM to ESPs. Generic direct SIP calls select one
-common RTP format per dialog. HA-routed calls may use different formats on each
-leg because HA owns both dialogs and the RTP relay/resampler.
-
-SIP signaling can listen on TCP, UDP or both. RTP audio remains UDP even when
-SIP signaling is TCP, matching normal SIP phone behavior. UDP RTP payloads are
-kept under the safe payload budget for typical home LANs; high-rate ESP
-profiles use short packet times such as 10 ms so 48 kHz mono L16 fits without
-IP fragmentation.
-
-RTP over TCP exists in SIP/SDP standards, but it is not part of the current ESP
-phone profile. Treat it as a future HA-side advanced media transport option
-that needs explicit SDP negotiation and interoperability testing with real
-softphones/providers before it is exposed.
-
-Transport choice is an installation choice, not a feature split. TCP is the
-recommended starting point for routed networks and HA/container deployments
-because connection state is easier to reason about. UDP is best suited to
-simple local LANs where low latency matters and the network is known to pass
-SIP/RTP cleanly.
-
-### Endpoint and phonebook model
-
-![VoIP phonebook and dial plan](docs/images/phonebook-endpoint.png)
-
-_ESP endpoint publication, manual contacts and local SIP registrations become one HA-managed roster. Route decisions are direct SIP, HA route, trunk or explicit reject._
-
-Standard HA-managed firmware uses the native ESPHome API endpoint sensor plus
-`sensor.voip_phonebook`. HA is the phonebook authority whenever it is part
-of the installation. ESP-side network scanning is not part of the SIP routing
-contract. The canonical roster JSON, SIP URI fields and audio capability fields
-are documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
-
-### Central Phonebook And Dial Plan Services
-
-HA exposes `sensor.voip_phonebook` as the central SIP roster. It merges:
-
-- ESP endpoint sensors published by online devices;
-- HA itself as a softphone target;
-- manual contacts created with HA services;
-- local SIP accounts registered to HA;
-- trunk-routed phone targets and group entries when configured.
-
-Useful services:
-
-- `voip_stack.add_contact`: add or replace one central contact.
-- `voip_stack.remove_contact`: remove a manual central contact by name.
-- `voip_stack.set_contacts`: replace manual contacts from JSON.
-- `voip_stack.clear_contacts`: clear manual central contacts.
-- `voip_stack.push_phonebook`: push the current roster to online ESPs.
-- `voip_stack.call`: originate a call from HA.
-- `voip_stack.forward`: forward/bridge a pending or new call.
-- `voip_stack.route`: answer, decline, busy, forward or bridge a pending route request.
-
-Example central contact:
-
-```yaml
-service: voip_stack.add_contact
-data:
-  name: "Office Phone"
-  kind: phone
-  number: "210"
-```
-
-Example dial-plan automation:
-
-```yaml
-alias: Route trunk calls to kitchen at night
-trigger:
-  - platform: event
-    event_type: voip_stack.route_request
-condition:
-  - condition: time
-    after: "22:00:00"
-action:
-  - service: voip_stack.route
-    data:
-      call_id: "{{ trigger.event.data.call_id }}"
-      action: forward
-      destination: "Kitchen Phone"
-```
-
-Without an automation, inbound trunk calls with no route hint ring the HA
-softphone/default target. If an explicit DTMF/SIP route hint arrives and cannot
-resolve, HA terminates that leg with `route_not_found` instead of silently
-falling back.
-
-### Local softphone accounts
-
-VoIP Stack can optionally act as a local SIP registrar for standard
-softphones. Create an account from Developer Tools -> Services with
-`voip_stack.create_account`:
-
-```yaml
-service: voip_stack.create_account
-data:
-  username: "MobileOffice"
-  display_name: "Mobile Office"
-```
-
-If `password` is omitted, HA generates one and shows it once in a Home
-VoIP Stack persistent notification and in the
-`voip_stack.call_event` stream.
-Then configure Zoiper, Linphone, baresip or pjsua with:
-
-```text
-server: <Home Assistant advertised IP or host>
-username: MobileOffice
-password: <password generated by HA>
-transport: SIP TCP or SIP UDP
-```
-
-Pick whichever SIP transport is easiest to operate from the softphone/network
-path. The username is also the central phonebook ID. When `MobileOffice`
-registers, HA adds a dynamic SIP contact with that name to the roster and
-pushes it to ESP devices. Deregistering, disabling the account or letting the
-REGISTER expire removes the dynamic contact. Passwords are not logged;
-generated passwords are only shown at creation/rotation time.
 
 ---
 
@@ -1141,13 +801,178 @@ _The card uses the ESPHome device registry, so the device must be added to HA be
 
 ---
 
+## Architecture
+
+### System Overview
+
+```mermaid
+flowchart TD
+    Browser["🌐 Browser / HA app<br/>Lovelace card<br/>mic + speaker"]
+
+    subgraph HA["🏠 Home Assistant"]
+        WS["🌐 WebSocket API<br/>browser softphone"]
+        Router["🔀 voip_stack call router<br/>call / answer / decline / forward"]
+        Roster["📒 phonebook publisher<br/>sensor.voip_phonebook"]
+        Registrar["📲 optional local registrar<br/>Zoiper / Linphone / baresip"]
+        Trunk["🌍 optional SIP trunk<br/>provider / PBX"]
+        TCP["🔌 SIP TCP listener<br/>:5060"]
+        UDP["📡 SIP UDP listener + RTP<br/>SIP :5060 / RTP base :40000"]
+    end
+
+    subgraph ESP["📟 ESP device"]
+        FSM["📞 voip_stack<br/>SIP phone state"]
+        Book["📒 phonebook<br/>name → SIP URI"]
+        Audio["🎙️ mic / speaker<br/>AEC or AFE"]
+    end
+
+    Browser <-->|"binary PCM + control<br/>/api/voip_stack/ws"| WS
+    WS --> Router
+    Registrar --> Router
+    Trunk --> Router
+    Router --> TCP
+    Router --> UDP
+    Router --> Roster
+    Book -. "voip_endpoint" .-> Roster
+    Roster -. "roster update" .-> Book
+    TCP <-->|"SIP TCP leg"| FSM
+    UDP <-->|"SIP UDP + RTP"| FSM
+    FSM <--> Book
+    FSM <--> Audio
+```
+
+This is the whole product in one picture: HA is the SIP routing and phonebook
+hub; each ESP owns its SIP phone state, audio path and local dial plan mirror.
+
+## Technical Details
+
+### Audio Format
+
+The default SIP PCM format is `16000:s16le:1:32`, but VoIP Stack negotiates
+audio per direction. AFE/AEC-backed branches still publish 16 kHz/s16/mono
+because Espressif esp-sr exposes that format; native ESPHome
+microphone/speaker paths and the HA browser softphone can advertise their
+actual PCM format up to 48 kHz and 32-bit containers.
+
+An audio format token is:
+
+```text
+sample_rate:pcm_format:channels:frame_ms
+```
+
+Supported PCM containers are `s16le`, `s24le`, `s24le_in_s32` and `s32le`.
+Supported rates are 8, 12, 16, 24, 32, 44.1 and 48 kHz, with 10/20/32 ms
+frames when the frame contains an integer number of samples.
+
+Home Assistant may bridge different formats by explicit PCM conversion. Direct
+ESP-to-ESP calls require a common format and fail clearly when none exists. UDP
+RTP carries one complete PCM frame per datagram, so high-rate UDP profiles use
+short packet times to stay below the safe datagram size.
+
+VoIP calls intentionally transport negotiated PCM, not MP3/FLAC/Opus. ESPHome's
+codec decoders are useful for media-player and announcement pipelines, but
+ESP-side VoIP is a bidirectional low-latency path: compressed codecs would add
+realtime encode/decode, jitter behavior and extra CPU/PSRAM budget on every
+hop. Keep compressed media on ESPHome media-source pipelines; keep ESP VoIP on
+PCM unless a future measured Opus mode proves worth the cost.
+
+### SIP, SDP And RTP Contract
+
+The functional wire contract is standard SIP/2.0 signaling, SDP offer/answer
+and RTP media. ESP devices are SIP user agents; Home Assistant is a SIP
+softphone plus SIP call router. There is no project-specific call-control
+compatibility path.
+
+Supported SIP methods in the local profile are `INVITE`, `ACK`, `CANCEL`,
+`BYE`, `OPTIONS`, `INFO` for DTMF interop where used, and `REGISTER` only for
+optional local softphone accounts on Home Assistant. ESP firmware does not
+register to a PBX and does not require SIP auth.
+
+SDP negotiates PCM RTP media. ESP firmware accepts compatible L16/L24 PCM only;
+Home Assistant may accept common softphone/trunk codecs and convert them at the
+route boundary before sending PCM to ESPs. Generic direct SIP calls select one
+common RTP format per dialog. HA-routed calls may use different formats on each
+leg because HA owns both dialogs and the RTP relay/resampler.
+
+SIP signaling can listen on TCP, UDP or both. RTP audio remains UDP even when
+SIP signaling is TCP, matching normal SIP phone behavior. UDP RTP payloads are
+kept under the safe payload budget for typical home LANs; high-rate ESP
+profiles use short packet times such as 10 ms so 48 kHz mono L16 fits without
+IP fragmentation.
+
+RTP over TCP exists in SIP/SDP standards, but it is not part of the current ESP
+phone profile. Treat it as a future HA-side advanced media transport option
+that needs explicit SDP negotiation and interoperability testing with real
+softphones/providers before it is exposed.
+
+### Signaling Transport
+
+SIP signaling can use TCP or UDP. RTP audio remains UDP even when SIP signaling
+is TCP, matching normal SIP phone behavior.
+
+Transport choice is an installation choice, not a feature split. TCP is the
+recommended starting point for routed networks and HA/container deployments
+because connection state is easier to reason about. UDP is best suited to
+simple local LANs where low latency matters and the network is known to pass
+SIP/RTP cleanly.
+
+### Endpoint And Phonebook Wire Format
+
+![VoIP phonebook and dial plan](docs/images/phonebook-endpoint.png)
+
+_ESP endpoint publication, manual contacts and local SIP registrations become one HA-managed roster. Route decisions are direct SIP, HA route, trunk or explicit reject._
+
+Standard HA-managed firmware uses the native ESPHome API endpoint sensor plus
+`sensor.voip_phonebook`. HA is the phonebook authority whenever it is part
+of the installation. ESP-side network scanning is not part of the SIP routing
+contract. The canonical roster JSON, SIP URI fields and audio capability fields
+are documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
+
+### Local Softphone Accounts
+
+VoIP Stack can optionally act as a local SIP registrar for standard
+softphones. Create an account from Developer Tools -> Services with
+`voip_stack.create_account`:
+
+```yaml
+service: voip_stack.create_account
+data:
+  username: "MobileOffice"
+  display_name: "Mobile Office"
+```
+
+If `password` is omitted, HA generates one and shows it once in a Home
+VoIP Stack persistent notification and in the
+`voip_stack.call_event` stream.
+Then configure Zoiper, Linphone, baresip or pjsua with:
+
+```text
+server: <Home Assistant advertised IP or host>
+username: MobileOffice
+password: <password generated by HA>
+transport: SIP TCP or SIP UDP
+```
+
+Pick whichever SIP transport is easiest to operate from the softphone/network
+path. The username is also the central phonebook ID. When `MobileOffice`
+registers, HA adds a dynamic SIP contact with that name to the roster and
+pushes it to ESP devices. Deregistering, disabling the account or letting the
+REGISTER expire removes the dynamic contact. Passwords are not logged;
+generated passwords are only shown at creation/rotation time.
+
+### Trunk Routing
+
+Home Assistant can optionally register a provider/PBX trunk. ESP devices do not
+register to that trunk: they call names or numbers through HA, and HA owns the
+external SIP leg, codec negotiation, RTP bridge and terminal reason propagation.
+
+Inbound trunk calls with no explicit route hint ring the HA softphone/default
+target. Explicit DTMF/SIP route hints must resolve to a phonebook contact or HA
+terminates the leg with a route error instead of silently falling back.
+
 ## Call Routing
 
-There is no simple/full product split. Every ESP runs the same SIP phone state
-machine with a local phonebook mirror. If the phonebook contains one HA peer,
-you have a one-button doorbell/room phone. If it contains multiple ESPs, the
-same firmware can call them directly or through HA depending on the selected
-routing policy.
+These diagrams show the common call paths after the phonebook has resolved a
+destination.
 
 ![Browser calling ESP](docs/images/call-from-home-assistant-to-esp.gif)
 
@@ -1247,7 +1072,7 @@ sequenceDiagram
 
     B->>HA: call selected ESP
     HA->>E: INVITE caller=location_name
-    Note right of E: 180 RingingING or auto-answer
+    Note right of E: 180 Ringing or auto-answer
     E-->>HA: 200 OK
     Note right of E: STREAMING
 
@@ -1296,7 +1121,7 @@ sequenceDiagram
     Note left of A: bridge-required route
     A->>HA: INVITE caller=A dest=B
     HA->>B: INVITE caller=A dest=B
-    Note right of B: 180 RingingING
+    Note right of B: 180 Ringing
     B-->>HA: 200 OK
     HA-->>A: 200 OK
     Note over A,B: STREAMING via HA
@@ -1437,7 +1262,7 @@ host pinned to `2.12.1` may show latest `2.12.1` while the C6 is already on
 
 ---
 
-## Audio components
+## Audio Components
 
 Three ESPHome components sit between your codec and the VoIP / voice assistant pipelines. Each has its own README with the full option list and tuning notes; the highlights below exist just to help you pick.
 
