@@ -1713,8 +1713,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         raise ServiceValidationError(f"{target} requires a registered SIP trunk")
     route_uri = route.sip_uri
     if use_trunk:
+        trunk_target = route.target or target
         route_uri = (
-            f"sip:{target}@{trunk_cfg[CONF_TRUNK_SERVER]}:{int(trunk_cfg[CONF_TRUNK_PORT])};"
+            f"sip:{trunk_target}@{trunk_cfg[CONF_TRUNK_SERVER]}:{int(trunk_cfg[CONF_TRUNK_PORT])};"
             f"transport={str(trunk_cfg[CONF_TRUNK_TRANSPORT]).lower()}"
         )
     if not use_trunk and (route.action not in {RouteAction.DIRECT, RouteAction.BRIDGE} or not route_uri):

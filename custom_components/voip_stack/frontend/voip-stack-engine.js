@@ -404,8 +404,8 @@ class VoipStackEngine extends EventTarget {
       call_id: context.call_id || "",
     });
     if (!["calling", "remote_ringing", "ringing", "in_call"].includes(String(reply?.state || "").toLowerCase())) {
-      this._setState("ERROR");
-      return;
+      this._setState("IDLE");
+      return reply;
     }
     const state = String(reply.state || "calling").toLowerCase();
     if (state === "in_call") {

@@ -1871,6 +1871,7 @@ class VoipStackCard extends HTMLElement {
       this._showError(err.message || String(err));
     } finally {
       this._stopping = false;
+      if (this._isHaSoftphoneMode()) await this._loadSoftphoneState();
       this._render();
     }
   }
@@ -1906,6 +1907,7 @@ class VoipStackCard extends HTMLElement {
     if (wasSoftphone) {
       await voipStackEngine.close("hangup");
       this._markSoftphoneMediaOwner("");
+      await this._loadSoftphoneState();
     }
 
     this._stopping = false;
