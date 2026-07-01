@@ -58,6 +58,7 @@ class SipTrunkClient:
         self.expires_at = 0.0
         self._refresh_task: asyncio.Task | None = None
         self._receive_task: asyncio.Task | None = None
+        self._stopped = False
         self.request_handler: TrunkRequestHandler | None = None
         self.inbound_endpoint: Any | None = None
 
@@ -82,23 +83,35 @@ class SipTrunkClient:
         return str(sip.SipUri(self.config.username, self.domain))
 
     async def start(self) -> None:
-        if self.transport_name == "TCP":
-            await self._connect_tcp()
-        elif self.transport is None:
-            loop = asyncio.get_running_loop()
-            self.protocol = _SipClientProtocol(self.queue)
-            transport, _ = await loop.create_datagram_endpoint(
-                lambda: self.protocol,
-                local_addr=("0.0.0.0", 0),
-                family=socket.AF_INET,
+        self._stopped = False
+        try:
+            if self.transport_name == "TCP":
+                await self._connect_tcp()
+            elif self.transport is None:
+                loop = asyncio.get_running_loop()
+                self.protocol = _SipClientProtocol(self.queue)
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: self.protocol,
+                    local_addr=("0.0.0.0", 0),
+                    family=socket.AF_INET,
+                )
+                self.transport = transport  # type: ignore[assignment]
+            self._ensure_receive_task()
+            await self.register(timeout=2.0)
+        except Exception as err:
+            self.registered = False
+            self.status_code = 0
+            self.status_reason = str(err)
+            _LOGGER.warning(
+                "SIP trunk initial registration failed server=%s transport=%s error=%s; background retry will continue",
+                self.config.server,
+                self.transport_name,
+                err,
             )
-            self.transport = transport  # type: ignore[assignment]
-        self._ensure_receive_task()
-        await self.register(timeout=2.0)
-        if self.registered:
-            self._refresh_task = asyncio.create_task(self._refresh_loop())
+        self._ensure_refresh_task()
 
     async def stop(self) -> None:
+        self._stopped = True
         if self._refresh_task is not None:
             self._refresh_task.cancel()
             try:
@@ -135,14 +148,43 @@ class SipTrunkClient:
             self.writer = None
             self.reader = None
 
+    def _ensure_refresh_task(self) -> None:
+        if self._refresh_task is None or self._refresh_task.done():
+            self._refresh_task = asyncio.create_task(self._refresh_loop())
+
     async def _refresh_loop(self) -> None:
-        while True:
-            delay = max(30.0, min(float(self.config.expires) * 0.8, max(1.0, self.expires_at - time.time() - 10.0)))
+        retry_delay = 30.0
+        while not self._stopped:
+            if self.registered and self.expires_at > 0:
+                delay = max(30.0, min(float(self.config.expires) * 0.8, max(1.0, self.expires_at - time.time() - 10.0)))
+            else:
+                delay = retry_delay
             await asyncio.sleep(delay)
-            if self.transport_name == "TCP" and (self.writer is None or self.writer.is_closing()):
-                await self._connect_tcp()
-            self._ensure_receive_task()
-            await self.register(timeout=2.0)
+            if self._stopped:
+                return
+            try:
+                if self.transport_name == "TCP" and (self.writer is None or self.writer.is_closing()):
+                    await self._connect_tcp()
+                self._ensure_receive_task()
+                result = await self.register(timeout=2.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                self.registered = False
+                self.status_code = 0
+                self.status_reason = str(err)
+                _LOGGER.warning(
+                    "SIP trunk refresh failed server=%s transport=%s error=%s; retrying in %.0fs",
+                    self.config.server,
+                    self.transport_name,
+                    err,
+                    retry_delay,
+                )
+                continue
+            if result == "registered":
+                retry_delay = 30.0
+            else:
+                retry_delay = min(300.0, retry_delay * 2.0)
 
     async def _connect_tcp(self) -> None:
         if self.writer is not None and not self.writer.is_closing():
@@ -156,6 +198,9 @@ class SipTrunkClient:
                 await self.writer.wait_closed()
             self.writer = None
             self.reader = None
+        while not self.responses.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.responses.get_nowait()
         self.reader, self.writer = await asyncio.wait_for(
             asyncio.open_connection(self.registrar_host, int(self.config.port)),
             timeout=2.0,
