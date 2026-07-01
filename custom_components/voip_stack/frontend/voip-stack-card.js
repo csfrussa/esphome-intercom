@@ -1,10 +1,11 @@
 /**
- * VoIP Stack Card v2.0.0 - Pure mirror of ESP state
+ * VoIP Stack Card v2.0.0
  *
- * The card is a simple frontend that mirrors the ESP's voip_state entity.
- * No complex internal state tracking - just read ESP state and render UI.
+ * ESP cards mirror the ESPHome phone entities and send only button/contact
+ * commands. HA softphone cards mirror backend-pushed SIP session state and own
+ * the browser/app audio websocket for that HA call.
  *
- * ESP States -> Card UI:
+ * Public SIP states -> Card UI:
  * - Idle       -> Show destination + Call button
  * - Calling    -> Show "Calling [dest]..." + Hangup
  * - Ringing    -> Show "Incoming [caller]" + Answer/Decline

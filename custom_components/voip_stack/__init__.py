@@ -293,6 +293,8 @@ def _sip_public_state(state: str) -> str:
         return CallState.MEDIA_INCOMPATIBLE.value
     if value in {"sip_401", "sip_407"}:
         return CallState.AUTH_REQUIRED_UNSUPPORTED.value
+    if value in {"local_hangup", "remote_hangup", "not_in_call"}:
+        return CallState.IDLE.value
     if value == "timeout":
         return CallState.TRANSPORT_UNREACHABLE.value
     if value in {"error", "protocol_error"}:
@@ -582,7 +584,12 @@ def _sip_send_bye(hass: HomeAssistant, call_id: str = "") -> bool:
     return False
 
 
-async def _terminate_sip_bridge(hass: HomeAssistant, call_id: str) -> tuple[bool, str, str, bool, bool]:
+async def _terminate_sip_bridge(
+    hass: HomeAssistant,
+    call_id: str,
+    *,
+    terminal_reason: str = TerminalReason.LOCAL_HANGUP.value,
+) -> tuple[bool, str, str, bool, bool]:
     """Terminate a B2BUA bridge by either source or destination leg call-id."""
     if not call_id:
         return False, "", "", False, False
@@ -608,7 +615,7 @@ async def _terminate_sip_bridge(hass: HomeAssistant, call_id: str) -> tuple[bool
             client_closed = True
 
     source_bye = _sip_send_bye(hass, source_call_id)
-    registry.finish_and_pop(source_call_id, reason=TerminalReason.LOCAL_HANGUP.value)
+    registry.finish_and_pop(source_call_id, reason=terminal_reason or TerminalReason.LOCAL_HANGUP.value)
     return True, source_call_id, dest_call_id, client_closed, source_bye
 
 
@@ -3373,19 +3380,20 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             err,
                         )
                         terminal = "error"
+                    terminal_reason = (
+                        TerminalReason.REMOTE_HANGUP.value
+                        if terminal == "remote_hangup"
+                        else _sip_terminal_reason(terminal, _sip_public_state(terminal))
+                    )
                     bridge_handled, source_call_id, dest_call_id, _client_closed, source_bye = await _terminate_sip_bridge(
                         hass,
                         client.dialog_ids.call_id,
+                        terminal_reason=terminal_reason,
                     )
                     if bridge_handled:
-                        terminal_reason = (
-                            TerminalReason.REMOTE_HANGUP.value
-                            if terminal == "remote_hangup"
-                            else _sip_terminal_reason(terminal, _sip_public_state(terminal))
-                        )
                         _set_sip_bridge_call_state(
                             hass,
-                            CallState.IDLE.value,
+                            _sip_public_state(terminal),
                             caller=invite.caller,
                             callee=invite.target,
                             peer_name=invite.target,

@@ -51,6 +51,9 @@ def _sip_public_state(state: str) -> str:
         "cancelled": CallState.CANCELLED.value,
         "media_incompatible": CallState.MEDIA_INCOMPATIBLE.value,
         "transport_unreachable": CallState.TRANSPORT_UNREACHABLE.value,
+        "local_hangup": CallState.IDLE.value,
+        "remote_hangup": CallState.IDLE.value,
+        "not_in_call": CallState.IDLE.value,
         "timeout": CallState.TRANSPORT_UNREACHABLE.value,
         "error": CallState.TRANSPORT_UNREACHABLE.value,
         "protocol_error": CallState.TRANSPORT_UNREACHABLE.value,
@@ -554,7 +557,7 @@ def _set_sip_bridge_call_state(
     target: str = "",
     **extra: Any,
 ) -> None:
-    """Publish PBX/B2BUA state without mutating the HA softphone session."""
+    """Publish SIP bridge/B2BUA state without mutating the HA softphone session."""
     store = _sip_bridge_store(hass)
     state = _sip_public_state(state)
     terminal = state in {
