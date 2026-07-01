@@ -291,7 +291,6 @@ class VoipStack : public Component {
   void track_csv_(const std::string &csv);  // populate seen_in_cycle_ with CSV names
   void commit_cycle_();                      // advance counters + prune via Phonebook::commit_cycle
   std::string normalize_phonebook_for_transport_(const std::string &contacts_csv);
-  std::string normalize_roster_json_for_transport_(const std::string &roster_json);
   bool apply_roster_json_contacts_(const std::string &roster_json);
   bool maybe_auto_select_ha_first_();
 
