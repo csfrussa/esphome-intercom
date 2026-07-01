@@ -20,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SIP_T1 = 0.5
 SIP_T2 = 4.0
+SIP_TIMER_B = 64 * SIP_T1
 
 
 def _rtp_encoding(fmt: AudioFormat | sdp.RtpPcmFormat) -> str:

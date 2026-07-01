@@ -309,6 +309,22 @@ def _sip_terminal_reason(result: str, public_state: str) -> str:
     return public_state
 
 
+def _sip_failure_response(result: str) -> tuple[int, str, str, str]:
+    public_state = _sip_public_state(result)
+    terminal_reason = _sip_terminal_reason(result, public_state)
+    if public_state == CallState.BUSY.value:
+        return 486, "Busy Here", terminal_reason, public_state
+    if public_state == CallState.DECLINED.value:
+        return 603, "Decline", terminal_reason, public_state
+    if public_state == CallState.CANCELLED.value:
+        return 487, "Request Terminated", terminal_reason, public_state
+    if public_state == CallState.MEDIA_INCOMPATIBLE.value:
+        return 488, "Not Acceptable Here", terminal_reason, public_state
+    if terminal_reason == TerminalReason.TIMEOUT.value:
+        return 408, "Request Timeout", terminal_reason, public_state
+    return 480, "Temporarily Unavailable", terminal_reason, public_state
+
+
 def _sip_target_audio_profile(
     *,
     remote_tx_formats: list[AudioFormat] | None,
@@ -2454,7 +2470,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sdp import build_answer_directional
     from . import sdp as sip_sdp
     from .sip import parse_sip_uri
-    from .sip_client import SipCallClient
+    from .sip_client import SIP_TIMER_B, SipCallClient
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
     from .sip_registrar import SipRegistrar
@@ -3193,15 +3209,32 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     target=decision_uri.user,
                     remote_host=decision_uri.host,
                     remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
+                    timeout=SIP_TIMER_B if bridge_to_trunk else 8.0,
                 )
                 if result not in {"ringing", "in_call"}:
-                    decline_reason = result if result and result != "sip_486" else "busy"
+                    status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(result)
                     await client.close()
+                    _set_sip_bridge_call_state(
+                        hass,
+                        public_state,
+                        caller=invite.caller,
+                        callee=invite.target,
+                        peer_name=invite.target,
+                        call_id=invite.call_id,
+                        dest_call_id=client.dialog_ids.call_id,
+                        reason=terminal_reason,
+                        terminal_reason=terminal_reason,
+                        origin="remote",
+                        sip_status_code=status_code,
+                        last_sip_event=client.last_sip_event or "SIP_RESPONSE",
+                        route_kind=decision.action.value,
+                        sip_uri=str(decision_uri),
+                    )
                     return SipInviteResult(
-                        486,
-                        "Busy Here",
+                        status_code,
+                        sip_reason,
                         to_tag="",
-                        decline_reason=decline_reason,
+                        decline_reason=terminal_reason,
                     )
                 registry.register_bridge(
                     source_call_id=invite.call_id,
@@ -3226,20 +3259,13 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     if final == "ringing":
                         final = await client.wait_for_final()
                     if final != "in_call" or client.dialog is None:
-                        decline_reason = final if final and final != "sip_486" else "busy"
-                        status_code = 486
-                        public_state = _sip_public_state(final)
-                        terminal_reason = _sip_terminal_reason(final, public_state)
-                        if public_state == CallState.MEDIA_INCOMPATIBLE.value:
-                            status_code = 488
-                        elif public_state == CallState.CANCELLED.value:
-                            status_code = 487
+                        status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(final)
                         _sip_send_final_response(
                             hass,
                             invite.call_id,
                             status_code,
-                            "Not Acceptable Here" if status_code == 488 else "Request Terminated" if status_code == 487 else "Busy Here",
-                            decline_reason=decline_reason,
+                            sip_reason,
+                            decline_reason=terminal_reason,
                         )
                         registry.discard_bridge_session(
                             invite.call_id,
@@ -3520,7 +3546,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         active_media_invite = registry.softphone_media.pop(call_id, {}).get("invite")
         if invite is None:
             invite = active_media_invite
-        source_call_id, dest_call_id, relay, client, _watcher, _called_by_dest = registry.detach_bridge(call_id)
+        source_call_id, dest_call_id, relay, client, watcher, _called_by_dest = registry.detach_bridge(call_id)
         if source_call_id:
             call_id = source_call_id
         softphone_store = bucket.get("ha_softphone", {})
@@ -3553,6 +3579,10 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
         if relay is not None:
             await relay.stop()
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
         if client is not None:
             await client.terminate()
             await client.close()
