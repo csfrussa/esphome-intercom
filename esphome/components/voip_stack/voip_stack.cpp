@@ -82,10 +82,35 @@ void VoipStack::cleanup_partial_setup_() {
   if (this->tx_audio_chunk_ != nullptr) {
     u8_alloc.deallocate(this->tx_audio_chunk_, this->tx_audio_chunk_alloc_bytes_);
     this->tx_audio_chunk_ = nullptr;
-    this->tx_audio_chunk_alloc_bytes_ = 0;
   }
+  this->tx_audio_chunk_alloc_bytes_ = 0;
 
   this->mic_buffer_.reset();
+#endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+  audio_processor::force_delete_pinned_task(&this->rx_task_handle_, &this->rx_task_stack_,
+                                             VoipStack::kRxTaskStackBytes);
+  RAMAllocator<uint8_t> rx_u8_alloc;
+  if (this->rx_audio_chunk_ != nullptr) {
+    rx_u8_alloc.deallocate(this->rx_audio_chunk_, this->rx_audio_chunk_alloc_bytes_);
+    this->rx_audio_chunk_ = nullptr;
+  }
+  if (this->rx_jitter_pcm_storage_ != nullptr) {
+    rx_u8_alloc.deallocate(this->rx_jitter_pcm_storage_,
+                           this->rx_audio_chunk_alloc_bytes_ * VoipStack::kRxQueuedFrames);
+    this->rx_jitter_pcm_storage_ = nullptr;
+  }
+  if (this->rx_silence_chunk_ != nullptr) {
+    rx_u8_alloc.deallocate(this->rx_silence_chunk_, this->rx_audio_chunk_alloc_bytes_);
+    this->rx_silence_chunk_ = nullptr;
+  }
+  this->rx_audio_chunk_alloc_bytes_ = 0;
+  this->rx_jitter_valid_count_ = 0;
+  this->rx_jitter_buffering_ = true;
+  this->rx_jitter_next_sequence_valid_ = false;
+  for (auto &slot : this->rx_jitter_slots_) {
+    slot = RxJitterSlot{};
+  }
 #endif
   this->transport_.reset();
 }
@@ -126,6 +151,31 @@ bool VoipStack::allocate_setup_buffers_() {
       this->tx_audio_chunk_alloc_bytes_ = 0;
       return false;
     }
+  }
+#endif
+
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+  if (this->has_speaker_()) {
+    size_t rx_frame_bytes = this->rx_audio_format_.nominal_frame_bytes();
+    for (uint8_t i = 0; i < this->rx_audio_formats_.count; i++) {
+      rx_frame_bytes = std::max(rx_frame_bytes, this->rx_audio_formats_.formats[i].nominal_frame_bytes());
+    }
+    this->rx_audio_chunk_alloc_bytes_ = rx_frame_bytes;
+    RAMAllocator<uint8_t> psram_u8 = this->buffers_in_psram_
+        ? RAMAllocator<uint8_t>()
+        : RAMAllocator<uint8_t>(RAMAllocator<uint8_t>::ALLOC_INTERNAL);
+    this->rx_audio_chunk_ = psram_u8.allocate(this->rx_audio_chunk_alloc_bytes_);
+    this->rx_jitter_pcm_storage_ =
+        psram_u8.allocate(this->rx_audio_chunk_alloc_bytes_ * VoipStack::kRxQueuedFrames);
+    this->rx_silence_chunk_ = psram_u8.allocate(this->rx_audio_chunk_alloc_bytes_);
+    if (!this->rx_audio_chunk_ || !this->rx_jitter_pcm_storage_ || !this->rx_silence_chunk_) {
+      ESP_LOGE(TAG, "Failed to allocate RX playout buffers");
+      return false;
+    }
+    for (size_t i = 0; i < VoipStack::kRxQueuedFrames; i++) {
+      this->rx_jitter_slots_[i].pcm = this->rx_jitter_pcm_storage_ + (i * this->rx_audio_chunk_alloc_bytes_);
+    }
+    memset(this->rx_silence_chunk_, 0, this->rx_audio_chunk_alloc_bytes_);
   }
 #endif
 
@@ -178,8 +228,8 @@ bool VoipStack::setup_transport_() {
   return true;
 }
 
-void VoipStack::transport_audio_callback_(void *ctx, const uint8_t *pcm, size_t bytes) {
-  static_cast<VoipStack *>(ctx)->on_audio_received_(pcm, bytes);
+void VoipStack::transport_audio_callback_(void *ctx, const TransportAudioFrame &frame) {
+  static_cast<VoipStack *>(ctx)->on_audio_received_(frame);
 }
 
 void VoipStack::transport_sip_signal_callback_(void *ctx, const SipSignal &signal) {
@@ -200,10 +250,21 @@ bool VoipStack::start_runtime_tasks_() {
   // still accept calls and play incoming audio through the transport recv task.
   if (this->has_microphone_()) {
     if (!audio_processor::start_pinned_task(VoipStack::tx_task, "voip_tx",
-                                             VoipStack::kTxTaskStackBytes, this, 5, 0,
+                                             VoipStack::kTxTaskStackBytes, this, this->tx_task_priority_, 0,
                                              this->task_stacks_in_psram_, TAG,
                                              &this->tx_task_handle_, &this->tx_task_tcb_,
                                              &this->tx_task_stack_)) {
+      return false;
+    }
+  }
+#endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+  if (this->has_speaker_()) {
+    if (!audio_processor::start_pinned_task(VoipStack::rx_task, "voip_rx",
+                                             VoipStack::kRxTaskStackBytes, this, this->rx_task_priority_, 0,
+                                             this->task_stacks_in_psram_, TAG,
+                                             &this->rx_task_handle_, &this->rx_task_tcb_,
+                                             &this->rx_task_stack_)) {
       return false;
     }
   }
@@ -295,10 +356,27 @@ void VoipStack::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_
     ESP_LOGI(TAG, "Calling timeout after %u ms - sending CANCEL (call_id=%s)",
              calling_timeout_ms, cid.c_str());
     this->fire_timeout_decline_();
+    return;
+  }
+
+  if (state == CallState::IN_CALL &&
+      this->first_audio_received_.load(std::memory_order_acquire)) {
+    const uint32_t last_audio = this->last_peer_audio_ms_.load(std::memory_order_acquire);
+    if (last_audio != 0 && now_ms - last_audio >= MEDIA_TIMEOUT_MS) {
+      const std::string cid = this->get_current_call_id_();
+      ESP_LOGW(TAG, "Media timeout after %u ms without RTP - ending call (call_id=%s)",
+               (unsigned) MEDIA_TIMEOUT_MS, cid.c_str());
+      this->set_terminal_response_(cid, kReasonMediaTimeout);
+      this->end_call_(CallEndReason::MEDIA_TIMEOUT, kReasonMediaTimeout);
+      this->set_in_call_(false);
+      this->set_active_(false);
+      if (this->transport_) this->transport_->disconnect();
+    }
   }
 }
 
 void VoipStack::loop() {
+  uint32_t now = millis();
   if (this->endpoint_publish_requested_.exchange(false, std::memory_order_acq_rel)) {
     this->publish_endpoint_();
   }
@@ -315,14 +393,17 @@ void VoipStack::loop() {
 
   // Auto-decline timeouts (0 = disabled). CALLING falls back to
   // ringing_timeout when calling_timeout is unset.
-  uint32_t now = millis();
   const uint32_t calling_to = this->calling_timeout_ms_ > 0
                                 ? this->calling_timeout_ms_
                                 : this->ringing_timeout_ms_;
 
   this->handle_call_timeouts_(now, calling_to);
-  bool keep_loop = this->cycle_active_ ||
-                   this->call_state_.load(std::memory_order_acquire) != CallState::IDLE;
+  const CallState state = this->call_state_.load(std::memory_order_acquire);
+  if (state != CallState::IDLE && now - this->last_sip_snapshot_refresh_ms_ >= 500) {
+    this->last_sip_snapshot_refresh_ms_ = now;
+    this->publish_sip_snapshot_();
+  }
+  bool keep_loop = this->cycle_active_ || state != CallState::IDLE;
   keep_loop = keep_loop || this->endpoint_publish_requested_.load(std::memory_order_acquire);
   if (!keep_loop) {
     this->disable_loop();
@@ -477,6 +558,12 @@ std::string VoipStack::build_sip_snapshot_string_() const {
     }
     return out;
   };
+  auto compact_audio_format = [](const AudioFormat &fmt) -> std::string {
+    char buf[18];
+    const uint32_t khz = fmt.sample_rate / 1000;
+    snprintf(buf, sizeof(buf), "%uk/%u", (unsigned) khz, (unsigned) fmt.frame_ms);
+    return buf;
+  };
   CallSnapshot call = this->snapshot_call_identity_();
   const std::string state = this->get_call_state_str();
   std::string direction;
@@ -495,51 +582,56 @@ std::string VoipStack::build_sip_snapshot_string_() const {
     call.dest_name = this->last_terminal_dest_name_;
     direction = this->last_terminal_direction_;
   }
-  std::string contact = this->phonebook_.current_name();
   uint32_t rtp_tx_packets = 0;
   uint32_t rtp_rx_packets = 0;
-  uint32_t rtp_tx_bytes = 0;
-  uint32_t rtp_rx_bytes = 0;
   uint16_t sip_status = 0;
   const char *last_event = "";
-  std::string selected_tx = VoipStack::audio_format_token_(this->current_tx_audio_format_);
-  std::string selected_rx = VoipStack::audio_format_token_(this->current_rx_audio_format_);
+  AudioFormat selected_tx_format = this->current_tx_audio_format_;
+  AudioFormat selected_rx_format = this->current_rx_audio_format_;
   if (!this->last_terminal_call_id_.empty() && !this->last_reason_.empty() &&
       this->call_state_.load(std::memory_order_acquire) == CallState::IDLE) {
-    selected_tx = VoipStack::audio_format_token_(this->last_terminal_tx_audio_format_);
-    selected_rx = VoipStack::audio_format_token_(this->last_terminal_rx_audio_format_);
+    selected_tx_format = this->last_terminal_tx_audio_format_;
+    selected_rx_format = this->last_terminal_rx_audio_format_;
   }
   if (this->transport_ != nullptr) {
     const SipTransportSnapshot snap = this->transport_->snapshot();
     rtp_tx_packets = snap.rtp_tx_packets;
     rtp_rx_packets = snap.rtp_rx_packets;
-    rtp_tx_bytes = snap.rtp_tx_bytes;
-    rtp_rx_bytes = snap.rtp_rx_bytes;
     sip_status = snap.last_sip_status_code;
     last_event = snap.last_sip_event;
     if (this->call_state_.load(std::memory_order_acquire) != CallState::IDLE || this->last_reason_.empty()) {
-      selected_tx = VoipStack::audio_format_token_(snap.selected_tx_format);
-      selected_rx = VoipStack::audio_format_token_(snap.selected_rx_format);
+      selected_tx_format = snap.selected_tx_format;
+      selected_rx_format = snap.selected_rx_format;
     }
   }
-  char out[256];
+  std::string contact = this->phonebook_.current_name();
+  char out[512];
   snprintf(out, sizeof(out),
            "st=%s;id=%s;dir=%s;from=%s;to=%s;ct=%s;tr=%s;sc=%u;"
-           "tx=%s;rx=%s;pt=%u;pr=%u;bt=%u;br=%u;rs=%s;ev=%s",
+           "tx=%s;rx=%s;pt=%u;pr=%u;"
+           "tqd=%u;tqdrop=%u;tqdb=%u;rqd=%u;rqdrop=%u;rlate=%u;rdup=%u;rsil=%u;"
+           "spkshort=%u;rs=%s;ev=%s",
            field_escape(state, 18).c_str(),
-           field_escape(call.call_id, 24).c_str(),
-           field_escape(direction, 8).c_str(),
-           field_escape(call.caller_name, 20).c_str(),
-           field_escape(call.dest_name, 20).c_str(),
-           field_escape(contact, 20).c_str(),
+           field_escape(call.call_id, 12).c_str(),
+           field_escape(direction, 3).c_str(),
+           field_escape(call.caller_name, 14).c_str(),
+           field_escape(call.dest_name, 14).c_str(),
+           field_escape(contact, 14).c_str(),
            this->protocol_ == TransportType::TCP ? "tcp" : "udp",
            (unsigned) sip_status,
-           field_escape(selected_tx, 20).c_str(),
-           field_escape(selected_rx, 20).c_str(),
+           compact_audio_format(selected_tx_format).c_str(),
+           compact_audio_format(selected_rx_format).c_str(),
            (unsigned) rtp_tx_packets,
            (unsigned) rtp_rx_packets,
-           (unsigned) rtp_tx_bytes,
-           (unsigned) rtp_rx_bytes,
+           (unsigned) this->audio_debug_tx_queue_depth_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_tx_queue_drops_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_tx_queue_drop_bytes_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_rx_queue_depth_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_rx_queue_drops_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_rx_late_frames_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_rx_duplicate_frames_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_rx_silence_frames_.load(std::memory_order_relaxed),
+           (unsigned) this->audio_debug_speaker_short_writes_.load(std::memory_order_relaxed),
            field_escape(this->last_reason_, 22).c_str(),
            field_escape(last_event, 22).c_str());
   return out;

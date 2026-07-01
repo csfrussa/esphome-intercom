@@ -78,6 +78,7 @@ class SipTransport : public SipPhoneTransport {
   bool send_sip_(const std::string &message, uint32_t ip_v4, uint16_t port);
   bool send_sip_tcp_(const std::string &message);
   bool send_request_(const std::string &method, const std::string &body = "", uint32_t cseq = 0);
+  bool send_invite_error_ack_();
   bool send_response_(uint16_t status, const char *reason, const std::string &body = "",
                       const std::string &app_reason = "");
   bool send_stateless_response_(const std::string &request, const sockaddr_in &src,
@@ -91,6 +92,13 @@ class SipTransport : public SipPhoneTransport {
   std::string build_sdp_answer_() const;
   bool learn_remote_rtp_from_sdp_(const std::string &sdp, uint32_t default_ip);
   bool local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) const;
+  void clear_udp_transactions_();
+  void remember_udp_transaction_(const std::string &method, const std::string &message,
+                                 uint32_t ip_v4, uint16_t port);
+  void pump_udp_retransmits_();
+  void clear_invite_transaction_();
+  void clear_bye_transaction_();
+  void reset_rtp_latch_();
   void request_tcp_client_close_();
   void close_tcp_client_from_sip_task_();
   void reset_dialog_();
@@ -126,6 +134,7 @@ class SipTransport : public SipPhoneTransport {
   std::string last_invite_from_;
   std::string last_invite_to_;
   std::string last_invite_cseq_;
+  uint32_t last_invite_cseq_number_{0};
   std::string caller_route_;
   std::string caller_name_;
   std::string dest_route_;
@@ -145,6 +154,18 @@ class SipTransport : public SipPhoneTransport {
   mutable portMUX_TYPE media_config_lock_ = portMUX_INITIALIZER_UNLOCKED;
   uint32_t cseq_{1};
   uint32_t invite_cseq_{1};
+  std::string pending_invite_request_;
+  std::string pending_bye_request_;
+  uint32_t pending_invite_ip_v4_{0};
+  uint32_t pending_bye_ip_v4_{0};
+  uint16_t pending_invite_port_{0};
+  uint16_t pending_bye_port_{0};
+  uint32_t pending_invite_next_ms_{0};
+  uint32_t pending_bye_next_ms_{0};
+  uint16_t pending_invite_interval_ms_{500};
+  uint16_t pending_bye_interval_ms_{500};
+  uint8_t pending_invite_retries_{0};
+  uint8_t pending_bye_retries_{0};
 
   int sip_socket_{-1};
   int sip_tcp_listener_socket_{-1};
@@ -168,6 +189,10 @@ class SipTransport : public SipPhoneTransport {
   std::atomic<uint32_t> rtp_rx_bytes_{0};
   std::atomic<uint16_t> last_sip_status_code_{0};
   std::atomic<uint8_t> last_sip_event_{0};
+  std::atomic<uint32_t> latched_rtp_ip_v4_{0};
+  std::atomic<uint16_t> latched_rtp_port_{0};
+  std::atomic<uint32_t> latched_rtp_ssrc_{0};
+  std::atomic<bool> rtp_ssrc_latched_{false};
 };
 
 }  // namespace voip_stack

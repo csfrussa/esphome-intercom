@@ -61,9 +61,9 @@ enum class ConnectionState : uint8_t {
 /// The phone speaks SIP signaling, SDP offer/answer and RTP PCM media.
 /// Proprietary intercom transports are not selected by this class anymore.
 ///
-/// The recv task is owned by the transport. A TX FreeRTOS task is created only
-/// when a microphone is configured; speaker-only devices play RX audio directly
-/// from the transport callback.
+/// The recv task is owned by the transport. TX is drained by a network task
+/// when a microphone is configured; RX is played by a small playout task when
+/// a speaker is configured.
 /// See README.md.
 class VoipStack : public Component {
  public:
@@ -71,6 +71,10 @@ class VoipStack : public Component {
   // sites stay free of magic numbers. The transport task declares its own
   // stack size inside the transport class.
   static constexpr uint32_t kTxTaskStackBytes = 12288;
+  static constexpr uint32_t kRxTaskStackBytes = 12288;
+  static constexpr size_t kRxQueuedFrames = 12;
+  static constexpr uint32_t kRxPrebufferFrames = 3;
+  static constexpr uint32_t kRxSilenceAfterMs = 60;
 
   enum SchedulerId : uint32_t {
     SCHED_PUBLISH_INITIAL_STATE = 3,
@@ -99,6 +103,8 @@ class VoipStack : public Component {
   void set_dc_offset_removal(bool enabled) { this->dc_offset_removal_ = enabled; }
   void set_task_stacks_in_psram(bool enabled) { this->task_stacks_in_psram_ = enabled; }
   void set_buffers_in_psram(bool enabled) { this->buffers_in_psram_ = enabled; }
+  void set_tx_task_priority(uint8_t priority) { this->tx_task_priority_ = priority; }
+  void set_rx_task_priority(uint8_t priority) { this->rx_task_priority_ = priority; }
   void set_device_name(const std::string &name) { this->device_name_ = name; }
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
   // Matches the slug HA uses for the esphome.{slug}_start_call action.
@@ -107,6 +113,9 @@ class VoipStack : public Component {
   // timeout final response and tear down locally.
   void set_calling_timeout(uint32_t ms) { this->calling_timeout_ms_ = ms; }
   void set_ringing_timeout(uint32_t ms) { this->ringing_timeout_ms_ = ms; }
+  template<typename F> void add_on_state_callback(F &&callback) {
+    this->state_callback_.add(std::forward<F>(callback));
+  }
 
   // Transport configuration (set by codegen from YAML before setup()).
   void set_protocol(TransportType type) {
@@ -339,16 +348,18 @@ class VoipStack : public Component {
   void send_chunk_(const uint8_t *data, size_t length);
   void process_tx_chunk_(const uint8_t *audio_chunk);
 #endif
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   void debug_log_pcm_level_(const char *label, const uint8_t *pcm, size_t bytes,
                             const AudioFormat &format,
                             uint32_t &last_log_ms, uint32_t &frame_count);
+#endif
 
   // Transport callbacks (registered in setup()).
-  static void transport_audio_callback_(void *ctx, const uint8_t *pcm, size_t bytes);
+  static void transport_audio_callback_(void *ctx, const TransportAudioFrame &frame);
   static void transport_sip_signal_callback_(void *ctx, const SipSignal &signal);
   static void transport_connection_callback_(void *ctx, bool connected);
   static bool transport_accept_callback_(void *ctx);
-  void on_audio_received_(const uint8_t *pcm, size_t bytes);
+  void on_audio_received_(const TransportAudioFrame &frame);
   void on_sip_signal_received_(const SipSignal &signal);
   bool ignore_if_idle_or_stale_(const char *message_name, const std::string &call_id) const;
   void on_connection_change_(bool connected);
@@ -356,6 +367,20 @@ class VoipStack : public Component {
 
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
   void on_microphone_data_(const uint8_t *data, size_t len);
+#endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+  static void rx_task(void *param);
+  void rx_task_();
+  void enqueue_rx_frame_(const TransportAudioFrame &frame);
+  enum class RxPlayoutReadResult : uint8_t {
+    FRAME,
+    BUFFERING,
+    MISSING,
+  };
+  RxPlayoutReadResult read_rx_frame_(uint8_t *audio_chunk, uint16_t *sequence,
+                                     uint32_t *timestamp, bool *has_metadata);
+  void play_rx_frame_(const uint8_t *pcm, size_t bytes, bool synthetic_silence, TickType_t ticks_to_wait);
+  void reset_rx_audio_();
 #endif
 
   void set_active_(bool on);
@@ -429,6 +454,7 @@ class VoipStack : public Component {
   std::string last_reason_;
   std::string last_endpoint_;
   std::string last_sip_snapshot_;
+  uint32_t last_sip_snapshot_refresh_ms_{0};
   std::atomic<bool> endpoint_publish_requested_{false};
   std::string last_terminal_call_id_;
   std::string last_terminal_direction_;
@@ -499,7 +525,32 @@ class VoipStack : public Component {
   StaticTask_t tx_task_tcb_{};
   StackType_t *tx_task_stack_{nullptr};
 #endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+  struct RxJitterSlot {
+    bool valid{false};
+    uint16_t sequence{0};
+    uint32_t timestamp{0};
+    size_t bytes{0};
+    uint8_t *pcm{nullptr};
+  };
+
+  uint8_t *rx_audio_chunk_{nullptr};
+  uint8_t *rx_jitter_pcm_storage_{nullptr};
+  uint8_t *rx_silence_chunk_{nullptr};
+  size_t rx_audio_chunk_alloc_bytes_{0};
+  mutable Mutex rx_jitter_mutex_;
+  RxJitterSlot rx_jitter_slots_[kRxQueuedFrames]{};
+  uint32_t rx_jitter_valid_count_{0};
+  bool rx_jitter_buffering_{true};
+  bool rx_jitter_next_sequence_valid_{false};
+  uint16_t rx_jitter_next_sequence_{0};
+  TaskHandle_t rx_task_handle_{nullptr};
+  StaticTask_t rx_task_tcb_{};
+  StackType_t *rx_task_stack_{nullptr};
+#endif
   bool task_stacks_in_psram_{false};
+  uint8_t tx_task_priority_{5};
+  uint8_t rx_task_priority_{5};
 
   std::atomic<float> volume_{1.0f};
   bool audio_debug_{false};
@@ -518,6 +569,7 @@ class VoipStack : public Component {
   }
   std::atomic<size_t> current_tx_audio_frame_bytes_{DEFAULT_AUDIO_FORMAT.nominal_frame_bytes()};
   std::atomic<uint16_t> current_tx_audio_frame_ms_{DEFAULT_AUDIO_FORMAT.frame_ms};
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   uint32_t audio_debug_last_tx_log_ms_{0};
   uint32_t audio_debug_last_rx_log_ms_{0};
   uint32_t audio_debug_last_mic_log_ms_{0};
@@ -525,9 +577,21 @@ class VoipStack : public Component {
   uint32_t audio_debug_tx_frames_{0};
   uint32_t audio_debug_rx_frames_{0};
   uint32_t audio_debug_mic_callbacks_{0};
+#endif
+  std::atomic<uint32_t> audio_debug_tx_queue_drop_bytes_{0};
+  std::atomic<uint32_t> audio_debug_tx_queue_drops_{0};
+  std::atomic<uint32_t> audio_debug_tx_queue_depth_{0};
+  std::atomic<uint32_t> audio_debug_rx_queue_drops_{0};
+  std::atomic<uint32_t> audio_debug_rx_queue_depth_{0};
+  std::atomic<uint32_t> audio_debug_rx_late_frames_{0};
+  std::atomic<uint32_t> audio_debug_rx_duplicate_frames_{0};
+  std::atomic<uint32_t> audio_debug_rx_silence_frames_{0};
+  std::atomic<uint32_t> audio_debug_speaker_short_writes_{0};
+  uint32_t rx_underrun_start_ms_{0};
 
   // First peer audio frame closes the 200 OK echo loop.
   std::atomic<bool> first_audio_received_{false};
+  std::atomic<uint32_t> last_peer_audio_ms_{0};
 
   bool auto_answer_{true};
   bool do_not_disturb_{false};
@@ -538,6 +602,7 @@ class VoipStack : public Component {
   uint32_t ringing_start_time_{0};
   uint32_t calling_start_time_{0};
   static constexpr uint32_t INVITE_NO_RESPONSE_TIMEOUT_MS = 1000;
+  static constexpr uint32_t MEDIA_TIMEOUT_MS = 15000;
 
   // === SIP call state ===
   // SIP Call-ID, opaque and echoed by SIP dialogs.
@@ -620,6 +685,7 @@ class VoipStack : public Component {
   Trigger<std::string> call_failed_trigger_;
   Trigger<> destination_changed_trigger_;
   Trigger<> update_contacts_trigger_;
+  CallbackManager<void(CallState)> state_callback_{};
 };
 
 class VoipStackSwitch : public switch_::Switch, public Parented<VoipStack> {

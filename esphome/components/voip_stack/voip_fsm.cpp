@@ -244,16 +244,17 @@ void VoipStack::stop() {
     this->set_terminal_response_(call_id, "");
   }
   this->end_call_(CallEndReason::LOCAL_HANGUP);
+  bool waiting_for_bye_response = false;
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
     if (state == CallState::IN_CALL) {
-      this->send_sip_bye_(call_id);
+      waiting_for_bye_response = this->send_sip_bye_(call_id);
     } else {
       this->send_sip_cancel_(call_id);
     }
   }
   this->set_active_(false);
   this->set_in_call_(false);
-  if (this->transport_) this->transport_->disconnect();
+  if (this->transport_ && !waiting_for_bye_response) this->transport_->disconnect();
 }
 
 void VoipStack::answer_call() {
@@ -370,6 +371,7 @@ void VoipStack::set_active_(bool on) {
 
   if (on) {
     this->first_audio_received_.store(false, std::memory_order_release);  // re-arm 200 OK echo for new call
+    this->last_peer_audio_ms_.store(0, std::memory_order_release);
 
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
     if (this->microphone_) {
@@ -387,6 +389,7 @@ void VoipStack::set_active_(bool on) {
 #endif
   } else {
     this->first_audio_received_.store(false, std::memory_order_release);
+    this->last_peer_audio_ms_.store(0, std::memory_order_release);
 
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
     if (this->speaker_) {
@@ -428,6 +431,12 @@ void VoipStack::set_in_call_(bool on) {
     if (this->mic_buffer_) {
       this->mic_buffer_->reset();
     }
+    this->audio_debug_tx_queue_drop_bytes_.store(0, std::memory_order_relaxed);
+    this->audio_debug_tx_queue_depth_.store(0, std::memory_order_relaxed);
+    this->audio_debug_tx_queue_drops_.store(0, std::memory_order_relaxed);
+#endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+    this->reset_rx_audio_();
 #endif
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
     this->dc_blocker_ = {};
@@ -436,6 +445,15 @@ void VoipStack::set_in_call_(bool on) {
     this->set_call_state_(CallState::IN_CALL);  // publishes state internally
   } else {
     if (this->transport_) this->transport_->stop_audio_path();
+#ifdef USE_ESPHOME_VOIP_STACK_MIC
+    if (this->mic_buffer_) this->mic_buffer_->reset();
+    this->audio_debug_tx_queue_drop_bytes_.store(0, std::memory_order_relaxed);
+    this->audio_debug_tx_queue_depth_.store(0, std::memory_order_relaxed);
+    this->audio_debug_tx_queue_drops_.store(0, std::memory_order_relaxed);
+#endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+    this->reset_rx_audio_();
+#endif
     this->publish_state_();
   }
 }
@@ -444,6 +462,11 @@ void VoipStack::notify_audio_tasks_() {
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
   if (this->tx_task_handle_ != nullptr) {
     xTaskNotifyGive(this->tx_task_handle_);
+  }
+#endif
+#ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
+  if (this->rx_task_handle_ != nullptr) {
+    xTaskNotifyGive(this->rx_task_handle_);
   }
 #endif
 }
@@ -471,6 +494,7 @@ void VoipStack::set_call_state_(CallState new_state) {
   // Defer trigger fires to the main loop: call-state changes come from
   // the voip_srv task on Core 1, but on_* actions often touch LVGL
   // which must run on the main loop. Running inline trips the WD.
+  this->defer([this, new_state]() { this->state_callback_.call(new_state); });
   switch (new_state) {
     case CallState::IDLE:
       this->defer([this]() { this->idle_trigger_.trigger(); });
@@ -562,6 +586,7 @@ void VoipStack::end_call_(CallEndReason reason, const std::string &detail) {
       reason == CallEndReason::CANCELLED ||
       reason == CallEndReason::TRANSPORT_UNREACHABLE ||
       reason == CallEndReason::MEDIA_INCOMPATIBLE ||
+      reason == CallEndReason::MEDIA_TIMEOUT ||
       reason == CallEndReason::AUTH_REQUIRED_UNSUPPORTED ||
       reason == CallEndReason::PROXY_AUTH_REQUIRED_UNSUPPORTED ||
       reason == CallEndReason::BUSY ||
@@ -579,27 +604,26 @@ void VoipStack::end_call_(CallEndReason reason, const std::string &detail) {
 
 // === Transport callbacks ===
 
-void VoipStack::on_audio_received_(const uint8_t *pcm, size_t bytes) {
+void VoipStack::on_audio_received_(const TransportAudioFrame &frame) {
   const AudioFormat &rx_format = this->current_rx_audio_format_;
   const size_t expected = rx_format.nominal_frame_bytes();
-  if (bytes != expected) {
+  if (frame.bytes != expected) {
     ESP_LOGW(TAG,
              "Dropping VoIP audio frame with wrong size: got %u bytes, expected %u for rx format %u:%u:%u:%u",
-             (unsigned) bytes, (unsigned) expected,
+             (unsigned) frame.bytes, (unsigned) expected,
              (unsigned) rx_format.sample_rate,
              (unsigned) rx_format.pcm_format,
              (unsigned) rx_format.channels,
              (unsigned) rx_format.frame_ms);
     return;
   }
-  // First inbound audio is the strongest "call established" signal; gates
-  // the 200 OK echo loop in on_sip_signal_received_().
-  this->first_audio_received_.store(true, std::memory_order_release);
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   if (this->audio_debug_) {
-    this->debug_log_pcm_level_("rx_network", pcm, bytes,
+    this->debug_log_pcm_level_("rx_network", frame.pcm, frame.bytes,
                                rx_format,
                                this->audio_debug_last_rx_log_ms_, this->audio_debug_rx_frames_);
   }
+#endif
 
   const std::string current_call_id = this->get_current_call_id_();
   std::string terminal_reason;
@@ -609,11 +633,13 @@ void VoipStack::on_audio_received_(const uint8_t *pcm, size_t bytes) {
              terminal_reason.empty() ? "(none)" : terminal_reason.c_str());
     return;
   }
+  // First inbound audio is the strongest "call established" signal; gates
+  // the 200 OK echo loop in on_sip_signal_received_() and arms media timeout.
+  this->first_audio_received_.store(true, std::memory_order_release);
+  this->last_peer_audio_ms_.store(millis(), std::memory_order_release);
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
   if (this->speaker_) {
-    if (this->volume_.load(std::memory_order_relaxed) > 0.001f) {
-      this->speaker_->play(pcm, bytes, 0);
-    }
+    this->enqueue_rx_frame_(frame);
   }
 #endif
 

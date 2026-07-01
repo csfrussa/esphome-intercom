@@ -199,6 +199,14 @@ std::string cseq_method(const std::string &cseq) {
   return trim_copy(trimmed.substr(space + 1));
 }
 
+uint32_t cseq_number(const std::string &cseq) {
+  const std::string trimmed = trim_copy(cseq);
+  const size_t space = trimmed.find_first_of(" \t");
+  const std::string number = space == std::string::npos ? trimmed : trimmed.substr(0, space);
+  if (number.empty()) return 0;
+  return static_cast<uint32_t>(std::strtoul(number.c_str(), nullptr, 10));
+}
+
 bool sip_method_known_(const std::string &method) {
   return method == "INVITE" || method == "ACK" || method == "CANCEL" ||
          method == "BYE" || method == "OPTIONS" || method == "REGISTER";
@@ -608,6 +616,7 @@ void SipTransport::disconnect() {
 
 bool SipTransport::start_audio_path() {
   if (this->rtp_running_.load(std::memory_order_acquire)) return true;
+  this->reset_rtp_latch_();
   if (!this->bind_udp_(&this->rtp_socket_, this->rtp_port_, "RTP")) return false;
   this->rtp_running_.store(true, std::memory_order_release);
   if (!audio_processor::start_pinned_task(SipTransport::rtp_task_trampoline_, "voip_rtp",
@@ -718,6 +727,36 @@ void SipTransport::set_sip_signaling_transport(bool tcp) {
   if (!tcp && was_tcp) this->request_tcp_client_close_();
 }
 
+void SipTransport::clear_invite_transaction_() {
+  this->pending_invite_request_.clear();
+  this->pending_invite_ip_v4_ = 0;
+  this->pending_invite_port_ = 0;
+  this->pending_invite_next_ms_ = 0;
+  this->pending_invite_interval_ms_ = 500;
+  this->pending_invite_retries_ = 0;
+}
+
+void SipTransport::clear_bye_transaction_() {
+  this->pending_bye_request_.clear();
+  this->pending_bye_ip_v4_ = 0;
+  this->pending_bye_port_ = 0;
+  this->pending_bye_next_ms_ = 0;
+  this->pending_bye_interval_ms_ = 500;
+  this->pending_bye_retries_ = 0;
+}
+
+void SipTransport::clear_udp_transactions_() {
+  this->clear_invite_transaction_();
+  this->clear_bye_transaction_();
+}
+
+void SipTransport::reset_rtp_latch_() {
+  this->latched_rtp_ip_v4_.store(0, std::memory_order_release);
+  this->latched_rtp_port_.store(0, std::memory_order_release);
+  this->latched_rtp_ssrc_.store(0, std::memory_order_release);
+  this->rtp_ssrc_latched_.store(false, std::memory_order_release);
+}
+
 void SipTransport::reset_dialog_() {
   this->call_id_.clear();
   this->local_tag_.clear();
@@ -729,12 +768,73 @@ void SipTransport::reset_dialog_() {
   this->last_invite_from_.clear();
   this->last_invite_to_.clear();
   this->last_invite_cseq_.clear();
+  this->last_invite_cseq_number_ = 0;
   this->caller_route_.clear();
   this->caller_name_.clear();
   this->dest_route_.clear();
   this->dest_name_.clear();
   this->call_active_.store(false, std::memory_order_release);
   this->outgoing_invite_pending_.store(false, std::memory_order_release);
+  this->clear_udp_transactions_();
+  this->reset_rtp_latch_();
+}
+
+void SipTransport::remember_udp_transaction_(const std::string &method, const std::string &message,
+                                             uint32_t ip_v4, uint16_t port) {
+  if (this->remote_sip_tcp_.load(std::memory_order_acquire) || message.empty() || ip_v4 == 0 || port == 0) {
+    return;
+  }
+  const uint32_t now = millis();
+  if (method == "INVITE") {
+    this->pending_invite_request_ = message;
+    this->pending_invite_ip_v4_ = ip_v4;
+    this->pending_invite_port_ = port;
+    this->pending_invite_interval_ms_ = 500;
+    this->pending_invite_next_ms_ = now + this->pending_invite_interval_ms_;
+    this->pending_invite_retries_ = 0;
+  } else if (method == "BYE") {
+    this->pending_bye_request_ = message;
+    this->pending_bye_ip_v4_ = ip_v4;
+    this->pending_bye_port_ = port;
+    this->pending_bye_interval_ms_ = 500;
+    this->pending_bye_next_ms_ = now + this->pending_bye_interval_ms_;
+    this->pending_bye_retries_ = 0;
+  }
+}
+
+void SipTransport::pump_udp_retransmits_() {
+  if (this->remote_sip_tcp_.load(std::memory_order_acquire)) return;
+  const uint32_t now = millis();
+  auto pump = [this, now](std::string *request, uint32_t *ip, uint16_t *port,
+                          uint32_t *next_ms, uint16_t *interval_ms,
+                          uint8_t *retries, const char *method) {
+    if (request->empty() || *ip == 0 || *port == 0 || now - *next_ms >= 0x80000000UL) return;
+    if (now < *next_ms) return;
+    const uint8_t max_retries = std::strcmp(method, "BYE") == 0 ? 4 : 6;
+    if (*retries >= max_retries) {
+      ESP_LOGW(TAG, "SIP UDP %s retransmit limit reached", method);
+      request->clear();
+      if (std::strcmp(method, "BYE") == 0) {
+        this->reset_dialog_();
+      }
+      return;
+    }
+    if (this->send_sip_(*request, *ip, *port)) {
+      (*retries)++;
+      ESP_LOGD(TAG, "SIP UDP %s retransmit #%u", method, (unsigned) *retries);
+    }
+    *interval_ms = std::min<uint16_t>(static_cast<uint16_t>(*interval_ms * 2), 4000);
+    *next_ms = now + *interval_ms;
+  };
+
+  if (this->outgoing_invite_pending_.load(std::memory_order_acquire)) {
+    pump(&this->pending_invite_request_, &this->pending_invite_ip_v4_,
+         &this->pending_invite_port_, &this->pending_invite_next_ms_,
+         &this->pending_invite_interval_ms_, &this->pending_invite_retries_, "INVITE");
+  }
+  pump(&this->pending_bye_request_, &this->pending_bye_ip_v4_,
+       &this->pending_bye_port_, &this->pending_bye_next_ms_,
+       &this->pending_bye_interval_ms_, &this->pending_bye_retries_, "BYE");
 }
 
 bool SipTransport::local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) const {
@@ -1072,7 +1172,38 @@ bool SipTransport::send_request_(const std::string &method, const std::string &b
     else if (method == "CANCEL") this->mark_sip_event_(SipEvent::CANCEL);
     else if (method == "BYE") this->mark_sip_event_(SipEvent::BYE);
     else if (method == "OPTIONS") this->mark_sip_event_(SipEvent::OPTIONS);
+    if (method == "INVITE" || method == "BYE") {
+      this->remember_udp_transaction_(method, msg, ip, port);
+    }
   }
+  return sent;
+}
+
+bool SipTransport::send_invite_error_ack_() {
+  const uint32_t ip = this->remote_ip_v4_.load(std::memory_order_acquire);
+  const uint16_t port = this->remote_sip_port_.load(std::memory_order_acquire);
+  if (ip == 0 || port == 0 || this->call_id_.empty() || this->branch_.empty()) return false;
+  std::string local_ip = "0.0.0.0";
+  this->local_ip_for_peer_(ip, &local_ip);
+  const std::string request_uri = this->remote_uri_.empty()
+      ? ("sip:voip@" + local_ip)
+      : strip_angle_uri(this->remote_uri_);
+  const char *transport = this->remote_sip_tcp_.load(std::memory_order_acquire) ? "TCP" : "UDP";
+  std::string msg = "ACK " + request_uri + " SIP/2.0\r\n";
+  msg += "Via: SIP/2.0/" + std::string(transport) + " " + local_ip + ":" +
+         std::to_string(this->sip_port_) + ";branch=" + this->branch_ + ";rport\r\n";
+  msg += "Max-Forwards: 70\r\n";
+  msg += "From: " + this->local_uri_ + ";tag=" + this->local_tag_ + "\r\n";
+  msg += "To: " + this->remote_uri_;
+  if (!this->remote_tag_.empty()) msg += ";tag=" + this->remote_tag_;
+  msg += "\r\n";
+  msg += "Call-ID: " + this->call_id_ + "\r\n";
+  msg += "CSeq: " + std::to_string(this->invite_cseq_) + " ACK\r\n";
+  msg += "Contact: " + this->local_uri_ + "\r\n";
+  msg += "User-Agent: ESPHome-VoIP-Stack-SIP\r\n";
+  msg += "Content-Length: 0\r\n\r\n";
+  const bool sent = this->send_sip_(msg, ip, port);
+  if (sent) this->mark_sip_event_(SipEvent::ACK);
   return sent;
 }
 
@@ -1146,6 +1277,8 @@ bool SipTransport::send_invite(const std::string &call_id,
                                const std::string &caller_name,
                                const std::string &dest_route,
                                const std::string &dest_name) {
+  this->clear_udp_transactions_();
+  this->reset_rtp_latch_();
   this->call_id_ = call_id;
   this->caller_route_ = caller_route;
   this->caller_name_ = caller_name;
@@ -1327,13 +1460,25 @@ bool SipTransport::handle_invite_(const std::string &message, const sockaddr_in 
     this->remember_stateless_invite_final_(incoming_call_id, 486, "Busy Here", "busy");
     return this->send_stateless_response_(message, src, 486, "Busy Here", "busy");
   }
+  const std::string incoming_cseq = header_value(message, "CSeq");
+  const uint32_t incoming_cseq_number = cseq_number(incoming_cseq);
+  if (!incoming_call_id.empty() && incoming_call_id == this->call_id_ &&
+      this->last_invite_cseq_number_ != 0 &&
+      incoming_cseq_number != this->last_invite_cseq_number_) {
+    ESP_LOGW(TAG, "SIP re-INVITE rejected: call_id=%s old_cseq=%u new_cseq=%u",
+             incoming_call_id.c_str(),
+             (unsigned) this->last_invite_cseq_number_,
+             (unsigned) incoming_cseq_number);
+    return this->send_stateless_response_(message, src, 488, "Not Acceptable Here", "reinvite_unsupported");
+  }
   this->remote_ip_v4_.store(src_ip, std::memory_order_release);
   this->remote_sip_port_.store(ntohs(src.sin_port), std::memory_order_release);
   this->call_id_ = incoming_call_id;
   this->last_invite_via_ = header_value(message, "Via");
   this->last_invite_from_ = header_value(message, "From");
   this->last_invite_to_ = header_value(message, "To");
-  this->last_invite_cseq_ = header_value(message, "CSeq");
+  this->last_invite_cseq_ = incoming_cseq;
+  this->last_invite_cseq_number_ = incoming_cseq_number;
   this->remote_tag_ = tag_from_header(this->last_invite_from_);
   if (this->local_tag_.empty()) this->local_tag_ = make_token("tag");
   this->remote_uri_ = this->last_invite_from_;
@@ -1409,6 +1554,9 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
     return true;
   }
   const std::string method = cseq_method(header_value(message, "CSeq"));
+  if (method == "INVITE" && status >= 100) {
+    this->clear_invite_transaction_();
+  }
   if (status == 180 && method == "INVITE") {
     SipSignal signal;
     signal.type = SipSignalType::STATUS_180_RINGING;
@@ -1420,6 +1568,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
   if (status >= 200 && status < 300) {
     if (method == "BYE") {
       ESP_LOGI(TAG, "SIP BYE completed call_id=%s", this->call_id_.c_str());
+      this->clear_bye_transaction_();
       this->reset_dialog_();
       return true;
     }
@@ -1451,6 +1600,8 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
       return true;
     }
     this->outgoing_invite_pending_.store(false, std::memory_order_release);
+    this->remote_tag_ = tag_from_header(header_value(message, "To"));
+    this->send_invite_error_ack_();
     std::string reason = sip_header_token(header_value(message, "X-Voip-Stack-Decline-Reason"));
     if (reason.empty()) reason = reason_text_from_header(header_value(message, "Reason"));
     if (reason.empty()) reason = sip_failure_reason_(status);
@@ -1587,6 +1738,7 @@ void SipTransport::rtp_task_trampoline_(void *param) {
 void SipTransport::sip_task_() {
   uint8_t buf[2048];
   while (this->running_.load(std::memory_order_acquire)) {
+    this->pump_udp_retransmits_();
     if (this->sip_tcp_client_close_requested_.load(std::memory_order_acquire)) {
       this->close_tcp_client_from_sip_task_();
     }
@@ -1671,6 +1823,26 @@ void SipTransport::rtp_task_() {
     int n = recvfrom(this->rtp_socket_, buf, sizeof(buf), 0,
                      reinterpret_cast<struct sockaddr *>(&src), &slen);
     if (n > 12 && (buf[0] & 0xC0) == 0x80) {
+      const uint32_t src_ip = ntohl(src.sin_addr.s_addr);
+      const uint16_t src_port = ntohs(src.sin_port);
+      const uint32_t expected_ip = this->remote_ip_v4_.load(std::memory_order_acquire);
+      const uint16_t expected_port = this->remote_rtp_port_.load(std::memory_order_acquire);
+      if ((expected_ip != 0 && src_ip != expected_ip) ||
+          (expected_port != 0 && src_port != expected_port)) {
+        continue;
+      }
+      const uint32_t ssrc = (static_cast<uint32_t>(buf[8]) << 24) |
+                            (static_cast<uint32_t>(buf[9]) << 16) |
+                            (static_cast<uint32_t>(buf[10]) << 8) |
+                            static_cast<uint32_t>(buf[11]);
+      if (!this->rtp_ssrc_latched_.load(std::memory_order_acquire)) {
+        this->latched_rtp_ip_v4_.store(src_ip, std::memory_order_release);
+        this->latched_rtp_port_.store(src_port, std::memory_order_release);
+        this->latched_rtp_ssrc_.store(ssrc, std::memory_order_release);
+        this->rtp_ssrc_latched_.store(true, std::memory_order_release);
+      } else if (this->latched_rtp_ssrc_.load(std::memory_order_acquire) != ssrc) {
+        continue;
+      }
       const uint8_t csrc_count = buf[0] & 0x0F;
       size_t header = 12u + static_cast<size_t>(csrc_count) * 4u;
       if (static_cast<size_t>(n) <= header) {
@@ -1693,12 +1865,17 @@ void SipTransport::rtp_task_() {
       uint8_t rx_payload_type = 96;
       this->get_media_config_(nullptr, &rx_format, nullptr, &rx_payload_type);
       if ((buf[1] & 0x7F) != rx_payload_type) continue;
+      const uint16_t sequence = static_cast<uint16_t>((buf[2] << 8) | buf[3]);
+      const uint32_t timestamp = (static_cast<uint32_t>(buf[4]) << 24) |
+                                 (static_cast<uint32_t>(buf[5]) << 16) |
+                                 (static_cast<uint32_t>(buf[6]) << 8) |
+                                 static_cast<uint32_t>(buf[7]);
       const uint8_t *payload = buf + header;
       const size_t out_len = rtp_payload_to_pcm(payload, payload_len, rx_format, pcm, sizeof(pcm));
       if (out_len == 0) continue;
       this->rtp_rx_packets_.fetch_add(1, std::memory_order_acq_rel);
       this->rtp_rx_bytes_.fetch_add(static_cast<uint32_t>(n), std::memory_order_acq_rel);
-      this->emit_audio_frame_(pcm, out_len);
+      this->emit_audio_frame_(pcm, out_len, sequence, timestamp);
     } else {
       delay(5);
     }

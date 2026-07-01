@@ -33,6 +33,7 @@ enum class CallEndReason : uint8_t {
   CANCELLED,
   TRANSPORT_UNREACHABLE,
   MEDIA_INCOMPATIBLE,
+  MEDIA_TIMEOUT,
   AUTH_REQUIRED_UNSUPPORTED,
   PROXY_AUTH_REQUIRED_UNSUPPORTED,
   PROTOCOL_ERROR,
@@ -46,6 +47,7 @@ static constexpr const char *kReasonBusy = "busy";
 static constexpr const char *kReasonCancelled = "cancelled";
 static constexpr const char *kReasonTransportUnreachable = "transport_unreachable";
 static constexpr const char *kReasonMediaIncompatible = "media_incompatible";
+static constexpr const char *kReasonMediaTimeout = "media_timeout";
 static constexpr const char *kReasonAuthRequiredUnsupported = "auth_required_unsupported";
 static constexpr const char *kReasonProxyAuthRequiredUnsupported = "proxy_auth_required_unsupported";
 static constexpr const char *kReasonProtocolError = "protocol_error";
@@ -79,6 +81,7 @@ inline const char *call_end_reason_to_str(CallEndReason reason) {
     case CallEndReason::CANCELLED: return kReasonCancelled;
     case CallEndReason::TRANSPORT_UNREACHABLE: return kReasonTransportUnreachable;
     case CallEndReason::MEDIA_INCOMPATIBLE: return kReasonMediaIncompatible;
+    case CallEndReason::MEDIA_TIMEOUT: return kReasonMediaTimeout;
     case CallEndReason::AUTH_REQUIRED_UNSUPPORTED: return kReasonAuthRequiredUnsupported;
     case CallEndReason::PROXY_AUTH_REQUIRED_UNSUPPORTED: return kReasonProxyAuthRequiredUnsupported;
     case CallEndReason::PROTOCOL_ERROR: return kReasonProtocolError;
