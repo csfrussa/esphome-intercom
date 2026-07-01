@@ -605,9 +605,11 @@ async def _terminate_sip_bridge(
     client_closed = False
     if dest_call_id:
         if watcher is not None:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
+            current_task = asyncio.current_task()
+            if watcher is not current_task:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
         if client is not None and not called_by_dest:
             await client.terminate()
             await client.close()
@@ -3294,6 +3296,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             reason=terminal_reason,
                             state=public_state,
                         )
+                        registry.client_watchers.pop(client.dialog_ids.call_id, None)
                         await client.close()
                         _set_sip_bridge_call_state(
                             hass,
@@ -3336,6 +3339,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
                             state=CallState.MEDIA_INCOMPATIBLE.value,
                         )
+                        registry.client_watchers.pop(client.dialog_ids.call_id, None)
                         await client.close()
                         return
                     registry.relays[invite.call_id] = relay
@@ -3429,7 +3433,8 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             source_bye,
                         )
 
-                hass.async_create_task(_finish_bridge(result))
+                finish_task = hass.async_create_task(_finish_bridge(result))
+                registry.client_watchers[client.dialog_ids.call_id] = finish_task
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
             ha_softphone_active = _ha_softphone_has_active_call(hass, ignore_call_id=invite.call_id)
             active_media = len(registry.softphone_media)
