@@ -12,6 +12,16 @@ from pathlib import Path
 SNAPSHOT_RE = re.compile(r"^===== JTAG SNAPSHOT (\d+) =====$")
 THREAD_RE = re.compile(r'^Thread \d+ \(Thread \d+ "([^"]+)"')
 RUNNING_RE = re.compile(r'Thread \d+ "([^"]+)".*State: Running @CPU(\d)')
+TASK_STATUS = {
+    "ready",
+    "blocked",
+    "suspended",
+    "deleted",
+    "running",
+    "delayed",
+    "delayed_1",
+    "delayed_2",
+}
 
 
 def _category(block: str) -> str:
@@ -90,6 +100,43 @@ def _thread_blocks(snapshot: str) -> list[tuple[str, str]]:
     return blocks
 
 
+def _freertos_tasks(snapshot: str) -> list[dict[str, str | int]]:
+    tasks: list[dict[str, str | int]] = []
+    in_table = False
+    for line in snapshot.splitlines():
+        if line.startswith(" CPU") and " NAME " in line and " STATUS " in line:
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.strip() or line.startswith("----"):
+            continue
+        if line.startswith("Thread ") or line.startswith("====="):
+            break
+
+        parts = line.split()
+        status_index = next((i for i, part in enumerate(parts) if part in TASK_STATUS), None)
+        if status_index is None or status_index < 1 or len(parts) < status_index + 6:
+            continue
+        try:
+            tasks.append(
+                {
+                    "name": parts[status_index - 1],
+                    "status": parts[status_index],
+                    "affinity": parts[status_index + 1],
+                    "priority": int(parts[status_index + 2]),
+                    "base_priority": int(parts[status_index + 3]),
+                    "mutexes": int(parts[status_index + 4]),
+                    "stack_used": int(parts[status_index + 5]),
+                    "stack_free": int(parts[status_index + 6]),
+                    "running_cpu": parts[0] if parts and parts[0].startswith("CPU") else "-",
+                }
+            )
+        except (IndexError, ValueError):
+            continue
+    return tasks
+
+
 def summarize(path: Path) -> str:
     text = path.read_text(encoding="utf-8", errors="replace")
     snapshots = _split_snapshots(text)
@@ -98,6 +145,11 @@ def summarize(path: Path) -> str:
     total = Counter()
     running_total = Counter()
     per_task = defaultdict(Counter)
+    task_status = defaultdict(Counter)
+    task_running = defaultdict(Counter)
+    task_stack_min: dict[str, int] = {}
+    task_stack_max_used: dict[str, int] = {}
+    task_priorities: dict[str, int] = {}
 
     for snapshot_id, body in snapshots:
         blocks = _thread_blocks(body)
@@ -110,6 +162,16 @@ def summarize(path: Path) -> str:
             per_task[name][category] += 1
         for task_name, cpu in running:
             running_total[f"{task_name}@CPU{cpu}"] += 1
+        for task in _freertos_tasks(body):
+            name = str(task["name"])
+            task_status[name][str(task["status"])] += 1
+            if str(task["running_cpu"]).startswith("CPU"):
+                task_running[name][str(task["running_cpu"])] += 1
+            stack_free = int(task["stack_free"])
+            stack_used = int(task["stack_used"])
+            task_stack_min[name] = min(task_stack_min.get(name, stack_free), stack_free)
+            task_stack_max_used[name] = max(task_stack_max_used.get(name, stack_used), stack_used)
+            task_priorities[name] = int(task["priority"])
         category_text = ", ".join(f"{key}={value}" for key, value in sorted(categories.items()))
         running_text = ", ".join(f"{name}@CPU{cpu}" for name, cpu in running) or "none"
         lines.append(f"snapshot {snapshot_id:03d}: running={running_text}; {category_text}")
@@ -126,6 +188,18 @@ def summarize(path: Path) -> str:
     for task_name in sorted(per_task):
         category_text = ", ".join(f"{key}={value}" for key, value in per_task[task_name].most_common())
         lines.append(f"  {task_name}: {category_text}")
+
+    if task_status:
+        lines.extend(["", "FreeRTOS task table:"])
+        for task_name in sorted(task_status, key=lambda name: (-task_priorities.get(name, -1), name)):
+            status_text = ", ".join(f"{key}={value}" for key, value in task_status[task_name].most_common())
+            running_text = ", ".join(f"{key}={value}" for key, value in task_running[task_name].most_common()) or "-"
+            lines.append(
+                f"  {task_name}: pri={task_priorities.get(task_name, '?')} "
+                f"status[{status_text}] running[{running_text}] "
+                f"stack_used_max={task_stack_max_used.get(task_name, '?')} "
+                f"stack_free_min={task_stack_min.get(task_name, '?')}"
+            )
     return "\n".join(lines) + "\n"
 
 

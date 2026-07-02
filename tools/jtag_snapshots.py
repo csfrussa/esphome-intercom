@@ -28,6 +28,11 @@ DEFAULT_GDB_CANDIDATES = (
     ROOT.parent / ".platformio/tools/tool-xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb",
     ROOT.parent / ".platformio/packages/tool-xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb",
 )
+DEFAULT_GDB_PYTHON_CANDIDATES = (
+    ROOT.parent / ".platformio/packages/tool-xtensa-esp-elf-gdb/share/gdb/python",
+    ROOT.parent / ".platformio/tools/tool-xtensa-esp-elf-gdb/share/gdb/python",
+    ROOT.parent / ".espressif/tools/xtensa-esp-elf-gdb/16.2_20250811/xtensa-esp-elf-gdb/share/gdb/python",
+)
 
 
 def _free_port() -> int:
@@ -46,6 +51,18 @@ def _find_gdb(explicit: str | None) -> str:
     if found:
         return found
     raise SystemExit("xtensa-esp32s3-elf-gdb not found; build once with ESPHome/PlatformIO first")
+
+
+def _find_gdb_python_path(explicit: str | None) -> Path | None:
+    if explicit:
+        path = Path(explicit).expanduser().resolve()
+        if not path.exists():
+            raise SystemExit(f"GDB Python path not found: {path}")
+        return path
+    for candidate in DEFAULT_GDB_PYTHON_CANDIDATES:
+        if (candidate / "freertos_gdb").exists():
+            return candidate
+    return None
 
 
 def _find_elf(explicit: str | None, device: str | None) -> Path:
@@ -102,7 +119,14 @@ def _openocd_command(
     return cmd
 
 
-def _write_gdb_script(path: Path, samples: int, interval: float, backtrace_depth: int) -> None:
+def _write_gdb_script(
+    path: Path,
+    samples: int,
+    interval: float,
+    backtrace_depth: int,
+    freertos: bool,
+    gdb_python_path: Path | None,
+) -> None:
     lines: list[str] = [
         "set pagination off",
         "set confirm off",
@@ -114,6 +138,21 @@ def _write_gdb_script(path: Path, samples: int, interval: float, backtrace_depth
         '  printf "\\n===== JTAG SNAPSHOT %d =====\\n", $sample',
         "  monitor halt",
         "  info threads",
+    ]
+    if freertos:
+        if gdb_python_path is not None:
+            escaped = str(gdb_python_path).replace("\\", "\\\\").replace("'", "\\'")
+            lines.insert(4, f"python import sys; sys.path.insert(0, '{escaped}'); import freertos_gdb")
+        else:
+            lines.insert(4, "python import freertos_gdb")
+        lines.extend(
+            [
+                '  printf "\\n----- FREERTOS TASKS -----\\n"',
+                "  freertos task",
+            ]
+        )
+    lines.extend(
+        [
         f"  thread apply all bt {backtrace_depth}",
         "  info registers pc a0 a1 a2 a3 ps",
         "  monitor resume",
@@ -122,7 +161,8 @@ def _write_gdb_script(path: Path, samples: int, interval: float, backtrace_depth
         "end",
         "detach",
         "quit",
-    ]
+        ]
+    )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -136,9 +176,11 @@ def main() -> int:
     parser.add_argument("--elf", help="Matching firmware.elf. Required for useful file/line symbols.")
     parser.add_argument("--device", default="spotpear", help="Substring used to auto-pick firmware.elf")
     parser.add_argument("--gdb", help="xtensa-esp32s3-elf-gdb path")
+    parser.add_argument("--gdb-python-path", help="Directory containing freertos_gdb for the selected GDB")
     parser.add_argument("--samples", type=int, default=20, help="Number of stop/resume samples")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between samples")
     parser.add_argument("--bt-depth", type=int, default=12, help="Backtrace depth per FreeRTOS thread")
+    parser.add_argument("--no-freertos-task", action="store_true", help="Do not print FreeRTOS task tables")
     parser.add_argument("--out-dir", default="test_runs/jtag_snapshots", help="Output directory")
     parser.add_argument("--keep-openocd-log", action="store_true", help="Keep the OpenOCD log next to the GDB log")
     parser.add_argument(
@@ -179,6 +221,7 @@ def main() -> int:
     args = parser.parse_args()
 
     gdb = _find_gdb(args.gdb)
+    gdb_python_path = _find_gdb_python_path(args.gdb_python_path)
     elf = _find_elf(args.elf, args.device)
     out_dir = (ROOT / args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -190,6 +233,8 @@ def main() -> int:
 
     print(f"ELF: {elf}")
     print(f"GDB: {gdb}")
+    if not args.no_freertos_task:
+        print(f"GDB Python: {gdb_python_path or 'default sys.path'}")
     print(f"OpenOCD: {'local' if args.local else args.remote}")
     print(f"Output: {gdb_log}")
     print("The target will halt briefly for every sample; audio glitches are expected.")
@@ -227,7 +272,14 @@ def main() -> int:
 
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "snapshot.gdb"
-            _write_gdb_script(script, args.samples, args.interval, args.bt_depth)
+            _write_gdb_script(
+                script,
+                args.samples,
+                args.interval,
+                args.bt_depth,
+                not args.no_freertos_task,
+                gdb_python_path,
+            )
             # The tunnel maps local_port -> remote 3333, but the script keeps the
             # conventional 3333 to stay readable; patch it at runtime.
             text = script.read_text(encoding="utf-8").replace("127.0.0.1:3333", f"127.0.0.1:{local_port}")
