@@ -424,6 +424,12 @@ void VoipStack::set_in_call_(bool on) {
   this->in_call_.store(on, std::memory_order_release);
   this->notify_audio_tasks_();
   if (on) {
+    // A new media leg starts here even if active_ was already true because a
+    // previous call did not fully drain yet. Do not inherit peer-audio liveness
+    // from the previous dialog, or the media watchdog can fire early.
+    this->first_audio_received_.store(false, std::memory_order_release);
+    this->last_peer_audio_ms_.store(0, std::memory_order_release);
+
     if (this->transport_) this->transport_->start_audio_path();
 
     // Drop stale frames from the previous call before audio resumes.

@@ -1583,6 +1583,7 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     }
   }
   if (!processed) {
+    diag_add(this->fetch_timeout_);
     silence_frame(out, os);
   }
 

@@ -218,9 +218,11 @@ def _runtime_counter(store: dict[str, Any], runtime: dict[str, Any], key: str) -
     store_call_id = str(store.get("call_id") or "")
     active_call_ids = {str(call_id) for call_id in runtime.get("active_call_ids", [])}
     pending_call_ids = {str(call_id) for call_id in runtime.get("pending_call_ids", [])}
+    store_value = int(store.get(key, 0) or 0)
+    runtime_value = int(runtime.get(key, 0) or 0)
     if store_call_id and store_call_id in active_call_ids | pending_call_ids:
-        return int(runtime.get(key, 0) or 0)
-    return int(store.get(key, runtime.get(key, 0)) or runtime.get(key, 0) or 0)
+        return max(store_value, runtime_value)
+    return store_value or runtime_value
 
 
 def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
