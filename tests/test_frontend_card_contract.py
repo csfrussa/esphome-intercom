@@ -119,6 +119,21 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._applySoftphoneSnapshot(data)", body)
         self.assertIn("this._ensureHaSoftphoneAudioPath(data)", body)
 
+    def test_deep_link_answer_handles_ha_softphone_session_ringing(self) -> None:
+        apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
+        self.assertIn("this._maybeAnswerFromUrl()", apply_snapshot)
+
+        maybe_answer = _method_body(self.source, "_maybeAnswerFromUrl")
+        self.assertNotIn("if (this._isHaSoftphoneMode() ||", maybe_answer)
+        self.assertIn("if (!this._isHaSoftphoneMode()) return", maybe_answer)
+        self.assertIn("snap.direction", maybe_answer)
+        self.assertIn("snap.call_id", maybe_answer)
+        self.assertIn("this._tryAutoAnswer({ requirePersistentPermission: false })", maybe_answer)
+
+    def test_deep_link_answer_is_not_part_of_esp_mirror_state_updates(self) -> None:
+        setter = _method_body(self.source, "set hass")
+        self.assertNotIn("this._maybeAnswerFromUrl(newEspState)", setter)
+
     def test_frontend_has_no_esp_call_control_ws_commands(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         for token in (

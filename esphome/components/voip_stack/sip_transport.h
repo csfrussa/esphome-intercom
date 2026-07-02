@@ -99,6 +99,8 @@ class SipTransport : public SipPhoneTransport {
   void clear_invite_transaction_();
   void clear_bye_transaction_();
   void reset_rtp_latch_();
+  void open_media_session_();
+  void close_media_session_();
   void request_tcp_client_close_();
   void close_tcp_client_from_sip_task_();
   void reset_dialog_();
@@ -179,7 +181,7 @@ class SipTransport : public SipPhoneTransport {
   StackType_t *rtp_task_stack_{nullptr};
   std::atomic<bool> running_{false};
   std::atomic<bool> rtp_running_{false};
-  std::atomic<bool> call_active_{false};
+  std::atomic<bool> media_active_{false};
   std::atomic<bool> outgoing_invite_pending_{false};
   std::atomic<bool> remote_sip_tcp_{false};
   std::atomic<bool> sip_tcp_client_close_requested_{false};

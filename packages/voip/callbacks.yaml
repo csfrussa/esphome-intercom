@@ -8,10 +8,6 @@
 #   - voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
 #   - script id `update_status` (provided by voip/state_machine.yaml)
 #
-# Required substitutions:
-#   ${friendly_name} - used in the homeassistant.event payload on calling call
-# =============================================================================
-
 voip_stack:
   id: phone
 
@@ -20,16 +16,6 @@ voip_stack:
     - script.execute:
         id: ui_call_started
         peer: !lambda 'return id(phone).get_current_destination();'
-    - if:
-        condition:
-          voip_stack.is_ha_destination:
-        then:
-          - homeassistant.event:
-              event: esphome.voip_call
-              data:
-                caller: "${friendly_name}"
-                destination: !lambda 'return id(phone).get_current_destination();'
-                type: "doorbell"
 
   on_ringing:
     - script.execute: update_status

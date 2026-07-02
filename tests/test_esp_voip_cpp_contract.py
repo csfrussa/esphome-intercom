@@ -97,6 +97,38 @@ def test_reinvite_and_rtp_latch_are_explicit() -> None:
     assert "latched_rtp_ssrc_.load" in sip_cpp
 
 
+def test_rtp_jitter_buffer_is_extracted_and_static() -> None:
+    audio = read("voip_audio.cpp")
+    header = read("voip_stack.h")
+    jitter_h = read("rtp_jitter_buffer.h")
+
+    assert "class RtpJitterBuffer" in jitter_h
+    assert "std::unique_ptr<RtpJitterBuffer> rx_jitter_buffer_" in header
+    assert "RxJitterSlot" not in header
+    assert "rx_jitter_slots_" not in header
+    assert "new Slot" not in jitter_h
+    assert "delete[]" not in jitter_h
+    assert "inline RtpJitterBuffer::ReadResult RtpJitterBuffer::read" in jitter_h
+    assert "static constexpr uint8_t MAX_SLOTS" in jitter_h
+    assert "RtpJitterBuffer::ReadResult::MISSING" in audio
+
+
+def test_media_session_and_silence_policies_are_explicit() -> None:
+    audio = read("voip_audio.cpp")
+    header = read("voip_stack.h")
+    sip_h = read("sip_transport.h")
+    sip_cpp = read("sip_transport.cpp")
+
+    assert "SilenceReason::NETWORK_GAP" in audio
+    assert "SilenceReason::MUTED_SINK" in audio
+    assert "play_silence_frame_(SilenceReason reason" in header
+    assert "media_active_" in sip_h
+    assert "call_active_" not in sip_h
+    assert "open_media_session_" in sip_h
+    assert "close_media_session_" in sip_h
+    assert "if (!this->media_active_.load" in sip_cpp
+
+
 def test_ha_routed_contacts_use_local_esp_signaling_transport() -> None:
     settings = read("voip_settings.cpp")
 

@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 from dataclasses import replace
 import logging
-import socket
 import time
 
 import voluptuous as vol
@@ -23,13 +22,18 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 from homeassistant.helpers import config_validation as cv
 from homeassistant.components import network, persistent_notification
 
-from .call_registry import CallRegistry
+from .config import (
+    debug_mode as _debug_mode,
+    entry_transport_config as _entry_transport_config,
+    entry_trunk_config as _entry_trunk_config,
+    transport_config as _get_transport_config,
+    trunk_config as _get_trunk_config,
+    trunk_enabled as _trunk_enabled,
+)
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
-    CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
-    CONF_SIP_ACCOUNTS,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
     CONF_TRUNK_DTMF_ENABLED,
@@ -53,6 +57,13 @@ from .const import (
 )
 from .dtmf import parse_dtmf_route_map
 from .device_resolver import get_resolver
+from .endpoint_lifecycle import call_registry as _call_registry
+from .endpoint_routing import (
+    peer_audio_formats as _peer_audio_formats,
+    peer_for_target as _peer_for_target,
+    roster_from_peers as _roster_from_peers,
+    same_route_name as _same_route_name,
+)
 from .fsm import (
     CallState,
     TerminalReason,
@@ -61,6 +72,7 @@ from .fsm import (
     sip_public_state as _sip_public_state,
     sip_terminal_reason as _sip_terminal_reason,
 )
+from .media_ports import allocate_sip_rtp_port as _allocate_sip_rtp_port
 from .audio_format import (
     AudioFormat,
     HA_SIP_PCM_FORMATS,
@@ -71,6 +83,12 @@ from .audio_format import (
     parse_audio_format_list,
 )
 from .peer import Peer
+from .phonebook_runtime import (
+    available_esphome_services as _available_esphome_services,
+    format_entry_unified as _format_entry_unified,
+    push_roster_json_to_esps as _push_roster_json_to_esps,
+    registered_roster_entries as _registered_roster_entries,
+)
 from .router import (
     CallContext,
     RouteAction,
@@ -81,6 +99,15 @@ from .router import (
     route_inbound_trunk,
 )
 from .sip_bridge import build_invite_client_relay
+from .store import (
+    config_entry as _config_entry,
+    manual_roster_entries as _manual_roster_entries,
+    phonebook_contact_dicts as _phonebook_contact_dicts,
+    sip_account_dicts as _sip_account_dicts,
+    sip_accounts as _sip_accounts,
+    store_manual_roster_entries as _store_manual_roster_entries,
+    update_sip_accounts as _update_sip_accounts,
+)
 from .websocket_api import (
     async_register_websocket_api,
     _async_load_ha_softphone_store,
@@ -111,95 +138,6 @@ HA_SOFTPHONE_ACTIVE_STATES = {
 
 def _pending_routes(hass: HomeAssistant) -> dict:
     return _call_registry(hass).pending_routes
-
-
-def _call_registry(hass: HomeAssistant) -> CallRegistry:
-    bucket = hass.data.setdefault(DOMAIN, {})
-    registry = bucket.get("call_registry")
-    if not isinstance(registry, CallRegistry):
-        registry = CallRegistry()
-        bucket["call_registry"] = registry
-    return registry
-
-
-def _config_entry(hass: HomeAssistant) -> ConfigEntry | None:
-    return next(iter(hass.config_entries.async_entries(DOMAIN)), None)
-
-
-def _sip_account_dicts(hass: HomeAssistant) -> list[dict]:
-    entry = _config_entry(hass)
-    if entry is None:
-        return []
-    return [dict(item) for item in entry.data.get(CONF_SIP_ACCOUNTS, []) if isinstance(item, dict)]
-
-
-def _sip_accounts(hass: HomeAssistant):
-    from .sip_registrar import account_from_mapping
-
-    accounts = []
-    for raw in _sip_account_dicts(hass):
-        try:
-            accounts.append(account_from_mapping(raw))
-        except ValueError as err:
-            _LOGGER.warning("Ignoring invalid SIP account in config entry: %s", err)
-    return accounts
-
-
-def _phonebook_contact_dicts(hass: HomeAssistant) -> list[dict]:
-    entry = _config_entry(hass)
-    if entry is None:
-        return []
-    return [dict(item) for item in entry.data.get(CONF_PHONEBOOK_CONTACTS, []) if isinstance(item, dict)]
-
-
-def _manual_roster_entries(hass: HomeAssistant):
-    from .roster import RosterError, parse_roster_json
-
-    try:
-        return parse_roster_json(_phonebook_contact_dicts(hass))
-    except (RosterError, ValueError, TypeError) as err:
-        _LOGGER.warning("Ignoring invalid manual phonebook contacts in config entry: %s", err)
-        return []
-
-
-def _store_manual_roster_entries(hass: HomeAssistant, entries) -> None:
-    from .roster import dump_roster_json, parse_roster_json
-
-    entry = _config_entry(hass)
-    if entry is None:
-        raise ConfigEntryError("VoIP Stack config entry is required for phonebook contacts")
-    # Round-trip through JSON so storage is plain dict/list data.
-    contacts = parse_roster_json(dump_roster_json(list(entries)))
-    payload = [
-        {
-            "id": item.id,
-            "name": item.name,
-            "kind": item.kind,
-            "address": item.address,
-            "sip_uri": item.sip_uri,
-            "number": item.number,
-            "ha_bridge": item.ha_bridge,
-            "enabled": item.enabled,
-            "metadata": item.metadata,
-        }
-        for item in contacts
-    ]
-    data = dict(entry.data)
-    data[CONF_PHONEBOOK_CONTACTS] = payload
-    hass.config_entries.async_update_entry(entry, data=data)
-    hass.data.setdefault(DOMAIN, {})["manual_roster_entries"] = contacts
-
-
-def _update_sip_accounts(hass: HomeAssistant, accounts: list[dict]) -> None:
-    entry = _config_entry(hass)
-    if entry is None:
-        raise ConfigEntryError("VoIP Stack config entry is required for SIP accounts")
-    data = dict(entry.data)
-    data[CONF_SIP_ACCOUNTS] = accounts
-    hass.config_entries.async_update_entry(entry, data=data)
-    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
-    if registrar is not None:
-        registrar.update_accounts(_sip_accounts(hass))
 
 
 async def _mark_sip_account_unreachable(hass: HomeAssistant, username: str) -> None:
@@ -346,70 +284,6 @@ def _ha_peer_name(hass: HomeAssistant) -> str:
     return (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
 
 
-def _entry_transport_config(entry: ConfigEntry | None = None) -> dict:
-    """Normalised SIP/RTP config."""
-    data = entry.data if entry is not None else {}
-    return {
-        CONF_REGISTRAR_ENABLED: bool(data.get(CONF_REGISTRAR_ENABLED, False)),
-        "sip_port": int(data.get("sip_port", VOIP_STACK_SIP_PORT)),
-        "rtp_port": int(data.get("rtp_port", VOIP_STACK_RTP_PORT)),
-        "advertise_host": (data.get("advertise_host") or "").strip(),
-    }
-
-
-def _entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
-    data = entry.data if entry is not None else {}
-    return {
-        CONF_TRUNK_ENABLED: bool(data.get(CONF_TRUNK_ENABLED, False)),
-        CONF_TRUNK_TRANSPORT: str(data.get(CONF_TRUNK_TRANSPORT) or "udp").strip().lower(),
-        CONF_TRUNK_SERVER: str(data.get(CONF_TRUNK_SERVER) or "").strip(),
-        CONF_TRUNK_PORT: int(data.get(CONF_TRUNK_PORT) or VOIP_STACK_SIP_PORT),
-        CONF_TRUNK_DOMAIN: str(data.get(CONF_TRUNK_DOMAIN) or "").strip(),
-        CONF_TRUNK_USERNAME: str(data.get(CONF_TRUNK_USERNAME) or "").strip(),
-        CONF_TRUNK_AUTH_USERNAME: str(data.get(CONF_TRUNK_AUTH_USERNAME) or "").strip(),
-        CONF_TRUNK_PASSWORD: str(data.get(CONF_TRUNK_PASSWORD) or ""),
-        CONF_TRUNK_EXPIRES: int(data.get(CONF_TRUNK_EXPIRES) or 300),
-        CONF_TRUNK_OUTBOUND_PROXY: str(data.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip(),
-        CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA",
-        CONF_TRUNK_DTMF_ENABLED: bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)),
-        CONF_TRUNK_DTMF_TIMEOUT_MS: max(100, min(2000, int(data.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 1000))),
-        CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
-        CONF_TRUNK_DTMF_ROUTES: str(data.get(CONF_TRUNK_DTMF_ROUTES) or "").strip(),
-    }
-
-
-def _get_transport_config(hass: HomeAssistant) -> dict:
-    """Return current HA-side network config.
-
-    HA always listens for SIP signaling on both UDP and TCP.
-    """
-    return hass.data.get(DOMAIN, {}).get(
-        "transport_config",
-        {
-            "sip_port": VOIP_STACK_SIP_PORT,
-            "rtp_port": VOIP_STACK_RTP_PORT,
-            "advertise_host": "",
-        },
-    )
-
-
-def _get_trunk_config(hass: HomeAssistant) -> dict:
-    return hass.data.get(DOMAIN, {}).get("trunk_config", _entry_trunk_config(None))
-
-
-def _debug_mode(hass: HomeAssistant) -> bool:
-    return bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
-
-
-def _trunk_enabled(cfg: dict) -> bool:
-    return bool(
-        cfg.get(CONF_TRUNK_ENABLED)
-        and cfg.get(CONF_TRUNK_SERVER)
-        and cfg.get(CONF_TRUNK_USERNAME)
-        and cfg.get(CONF_TRUNK_PASSWORD)
-    )
-
-
 async def _ha_advertise_host(hass: HomeAssistant) -> str:
     """Return the IP/host HA should publish to ESP phonebooks.
 
@@ -425,25 +299,9 @@ async def _ha_advertise_host(hass: HomeAssistant) -> str:
     return addresses[0] if addresses else ""
 
 
-def _select_transport_type(hass: HomeAssistant, host: str | None = None) -> str:
-    """Legacy inference is intentionally disabled for SIP routing."""
-    return ""
-
-
 def _resolve_esphome_route_id(hass: HomeAssistant, host: str) -> str:
     """ESPHome node_name slug for `host`, or '' if not configured."""
     return get_resolver(hass).route_id_for_host(host)
-
-
-def _available_esphome_services(hass: HomeAssistant) -> set[str]:
-    """Return currently registered ESPHome service names."""
-    try:
-        services = hass.services.async_services().get("esphome", {})
-    except Exception:
-        return set()
-    if isinstance(services, dict):
-        return set(services)
-    return set(services or [])
 
 
 def _state_entity_is_busy(hass: HomeAssistant, device: dict) -> bool:
@@ -548,65 +406,14 @@ async def _terminate_sip_bridge(
     *,
     terminal_reason: str = TerminalReason.LOCAL_HANGUP.value,
 ) -> tuple[bool, str, str, bool, bool]:
-    """Terminate a B2BUA bridge by either source or destination leg call-id."""
-    if not call_id:
-        return False, "", "", False, False
-    registry = _call_registry(hass)
-    source_call_id, dest_call_id, relay, client, watcher, called_by_dest = registry.detach_bridge(call_id)
-    if not source_call_id:
-        return False, "", "", False, False
-    if relay is not None:
-        await relay.stop()
+    from .bridge_manager import async_terminate_sip_bridge
 
-    client_closed = False
-    if dest_call_id:
-        if watcher is not None:
-            current_task = asyncio.current_task()
-            if watcher is not current_task:
-                watcher.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await watcher
-        if client is not None and not called_by_dest:
-            await client.terminate()
-            await client.close()
-            client_closed = True
-        elif client is not None:
-            await client.close()
-            client_closed = True
-
-    source_bye = _sip_send_bye(hass, source_call_id)
-    registry.finish_and_pop(source_call_id, reason=terminal_reason or TerminalReason.LOCAL_HANGUP.value)
-    return True, source_call_id, dest_call_id, client_closed, source_bye
-
-
-def _rtp_port_available(port: int) -> bool:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.bind(("0.0.0.0", int(port)))
-        return True
-    except OSError:
-        return False
-    finally:
-        sock.close()
-
-
-def _allocate_sip_rtp_port(hass: HomeAssistant, *, step: int = 2) -> int:
-    cfg = _get_transport_config(hass)
-    bucket = hass.data.setdefault(DOMAIN, {})
-    base_port = int(cfg["rtp_port"])
-    if _rtp_port_available(base_port):
-        bucket["sip_rtp_next_port"] = base_port + int(step)
-        return base_port
-    candidate = int(bucket.get("sip_rtp_next_port", base_port + int(step)))
-    for _ in range(64):
-        if candidate == base_port:
-            candidate += int(step)
-            continue
-        if _rtp_port_available(candidate):
-            bucket["sip_rtp_next_port"] = candidate + int(step)
-            return candidate
-        candidate += int(step)
-    return base_port
+    return await async_terminate_sip_bridge(
+        hass,
+        call_id,
+        terminal_reason=terminal_reason,
+        send_bye=lambda source_call_id: _sip_send_bye(hass, source_call_id),
+    )
 
 
 async def _async_emit_esp_state_event(
@@ -821,30 +628,6 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             "returned empty); HA will not appear in the SIP phonebook until this is fixed."
         )
     return out
-
-
-def _format_entry_unified(peer: Peer) -> str:
-    """Authoritative SIP phonebook entry."""
-    name = peer.name
-    peer_ip = peer.host or ""
-    if not peer_ip:
-        return name
-    tx = ";".join(peer.tx_formats or [])
-    rx = ";".join(peer.rx_formats or [])
-    sip_transport = str((peer.device or {}).get("sip_transport") or ("tcp" if peer.is_ha else "")).lower()
-    if sip_transport not in {"tcp", "udp"}:
-        return name
-    sip_transport_token = "sip_tcp" if sip_transport == "tcp" else "sip_udp"
-    return (
-        f"{name}|{peer_ip}|{peer.sip_port or 5060}|"
-        f"{peer.rtp_port or 40000}|{peer.audio_mode}|{tx}|{rx}|{sip_transport_token}"
-    )
-
-
-def _registered_roster_entries(hass: HomeAssistant):
-    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
-    entries = getattr(registrar, "registered_roster_entries", None)
-    return list(entries()) if callable(entries) else []
 
 
 def _sip_uri_transport(uri) -> str:
@@ -1481,35 +1264,6 @@ async def _current_roster_json(hass: HomeAssistant) -> str:
     return str(state.attributes.get("roster_json") or "")
 
 
-async def _push_roster_json_to_esps(hass: HomeAssistant, roster_json: str) -> None:
-    """Push the canonical JSON roster to every online ESP endpoint."""
-    if not roster_json:
-        return
-    devices = await _get_voip_devices(hass)
-    services = _available_esphome_services(hass)
-    for device in devices:
-        if not device.get("host"):
-            continue
-        slug = _resolve_esphome_route_id(hass, device["host"])
-        if not slug:
-            _LOGGER.debug("Phonebook push skipped for %s: no ESPHome route id", device.get("name"))
-            continue
-        service_name = f"{slug}_set_roster_json"
-        if service_name not in services:
-            _LOGGER.debug("Phonebook push skipped for %s: missing esphome.%s", device.get("name"), service_name)
-            continue
-        try:
-            await hass.services.async_call(
-                "esphome",
-                service_name,
-                {"roster_json": roster_json},
-                blocking=True,
-            )
-            _LOGGER.info("Phonebook JSON pushed to %s via esphome.%s", device.get("name"), service_name)
-        except Exception as err:
-            _LOGGER.error("Phonebook JSON push to %s failed: %s", device.get("name"), err)
-
-
 async def _refresh_and_push_phonebook(hass: HomeAssistant) -> None:
     await _refresh_phonebook_sensor(hass)
     roster_json = await _current_roster_json(hass)
@@ -2068,215 +1822,43 @@ async def _handle_export_accounts_service(call: ServiceCall) -> None:
     _fire_call_event(call.hass, {"state": "export_accounts", "accounts": accounts}, "sip")
 
 
+async def _handle_sip_account_enable_service(call: ServiceCall) -> None:
+    await _handle_enable_accountd_service(call, enabled=True)
+
+
+async def _handle_sip_account_disable_service(call: ServiceCall) -> None:
+    await _handle_enable_accountd_service(call, enabled=False)
+
+
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register HA services for SIP phone control."""
+    from .services import async_register_services
 
-    async def handle_purge_devices(call: ServiceCall) -> None:
-        await _handle_purge_devices_service(call)
-
-    async def handle_sip_answer(call: ServiceCall) -> None:
-        await _handle_sip_answer_service(call)
-
-    async def handle_sip_decline(call: ServiceCall) -> None:
-        await _handle_sip_decline_service(call)
-
-    async def handle_sip_hangup(call: ServiceCall) -> None:
-        await _handle_sip_hangup_service(call)
-
-    async def handle_phonebook_add_contact(call: ServiceCall) -> None:
-        await _handle_phonebook_add_contact_service(call)
-
-    async def handle_phonebook_set_contacts(call: ServiceCall) -> None:
-        await _handle_phonebook_set_contacts_service(call)
-
-    async def handle_phonebook_remove_contact(call: ServiceCall) -> None:
-        await _handle_phonebook_remove_contact_service(call)
-
-    async def handle_phonebook_clear(call: ServiceCall) -> None:
-        await _handle_phonebook_clear_service(call)
-
-    async def handle_phonebook_export(call: ServiceCall) -> None:
-        await _handle_phonebook_export_service(call)
-
-    async def handle_phonebook_push(call: ServiceCall) -> None:
-        await _handle_phonebook_push_service(call)
-
-    async def handle_sip_set_dnd(call: ServiceCall) -> None:
-        await _handle_set_dnd_service(call)
-
-    async def handle_sip_call(call: ServiceCall) -> None:
-        await _handle_sip_call_target_service(call)
-
-    async def handle_sip_forward(call: ServiceCall) -> None:
-        await _handle_sip_forward_service(call)
-
-    async def handle_sip_route(call: ServiceCall) -> None:
-        await _handle_sip_route_service(call)
-
-    async def handle_sip_account_create(call: ServiceCall) -> None:
-        await _handle_sip_account_create_service(call)
-
-    async def handle_sip_account_remove(call: ServiceCall) -> None:
-        await _handle_sip_account_remove_service(call)
-
-    async def handle_sip_account_rotate_password(call: ServiceCall) -> None:
-        await _handle_sip_account_rotate_password_service(call)
-
-    async def handle_enable_account(call: ServiceCall) -> None:
-        await _handle_enable_accountd_service(call, enabled=True)
-
-    async def handle_disable_account(call: ServiceCall) -> None:
-        await _handle_enable_accountd_service(call, enabled=False)
-
-    async def handle_export_accounts(call: ServiceCall) -> None:
-        await _handle_export_accounts_service(call)
-
-    target_fields = {
-        vol.Optional("device_id"): vol.Any(cv.string, [cv.string]),
-        vol.Optional("entity_id"): vol.Any(cv.entity_id, [cv.entity_id]),
-        vol.Optional("name"): cv.string,
-        vol.Optional("friendly_name"): cv.string,
-    }
-    purge_schema = vol.Schema(
-        {**target_fields, vol.Optional("min_unavailable_hours", default=0): vol.Coerce(float)},
-        extra=vol.PREVENT_EXTRA,
-    )
-    sip_answer_schema = vol.Schema(
+    await async_register_services(
+        hass,
         {
-            **target_fields,
-            vol.Optional("source"): cv.string,
-            vol.Optional("source_device_id"): cv.string,
-            vol.Optional("source_name"): cv.string,
-            vol.Optional("call_id", default=""): cv.string,
+            "purge_devices": _handle_purge_devices_service,
+            "answer": _handle_sip_answer_service,
+            "decline": _handle_sip_decline_service,
+            "hangup": _handle_sip_hangup_service,
+            "add_contact": _handle_phonebook_add_contact_service,
+            "set_contacts": _handle_phonebook_set_contacts_service,
+            "remove_contact": _handle_phonebook_remove_contact_service,
+            "clear_contacts": _handle_phonebook_clear_service,
+            "export_phonebook": _handle_phonebook_export_service,
+            "push_phonebook": _handle_phonebook_push_service,
+            "set_dnd": _handle_set_dnd_service,
+            "call": _handle_sip_call_target_service,
+            "forward": _handle_sip_forward_service,
+            "route": _handle_sip_route_service,
+            "create_account": _handle_sip_account_create_service,
+            "remove_account": _handle_sip_account_remove_service,
+            "rotate_account_password": _handle_sip_account_rotate_password_service,
+            "enable_account": _handle_sip_account_enable_service,
+            "disable_account": _handle_sip_account_disable_service,
+            "export_accounts": _handle_export_accounts_service,
         },
-        extra=vol.PREVENT_EXTRA,
     )
-    sip_decline_schema = vol.Schema(
-        {
-            **target_fields,
-            vol.Optional("source"): cv.string,
-            vol.Optional("source_device_id"): cv.string,
-            vol.Optional("source_name"): cv.string,
-            vol.Optional("call_id", default=""): cv.string,
-            vol.Optional("status", default=603): vol.Coerce(int),
-            vol.Optional("reason", default="Decline"): cv.string,
-            vol.Optional("decline_reason", default=""): cv.string,
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
-    sip_hangup_schema = vol.Schema(
-        {
-            **target_fields,
-            vol.Optional("source"): cv.string,
-            vol.Optional("source_device_id"): cv.string,
-            vol.Optional("source_name"): cv.string,
-            vol.Optional("call_id", default=""): cv.string,
-            vol.Optional("reason", default="local_hangup"): cv.string,
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
-    sip_call_schema = vol.Schema(
-        {
-            **target_fields,
-            vol.Optional("source"): cv.string,
-            vol.Optional("source_device_id"): cv.string,
-            vol.Optional("source_name"): cv.string,
-            vol.Optional("call_id", default=""): cv.string,
-            vol.Optional("destination"): cv.string,
-            vol.Optional("target"): cv.string,
-            vol.Optional("call"): cv.string,
-            vol.Optional("ha_bridge", default=False): cv.boolean,
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
-    sip_route_schema = vol.Schema(
-        {
-            vol.Required("call_id"): cv.string,
-            vol.Optional("action", default="default"): vol.In(
-                ["answer_ha", "decline", "busy", "forward", "bridge", "default", "cancel"]
-            ),
-            vol.Optional("destination"): cv.string,
-            vol.Optional("target"): cv.string,
-            vol.Optional("call"): cv.string,
-            vol.Optional("status", default=0): vol.Coerce(int),
-            vol.Optional("reason", default=""): cv.string,
-            vol.Optional("decline_reason", default=""): cv.string,
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
-    phonebook_add_schema = vol.Schema(
-        {
-            vol.Required("name"): cv.string,
-            vol.Optional("id", default=""): cv.string,
-            vol.Optional("kind", default="esp"): vol.In(["ha", "esp", "phone", "softphone", "group"]),
-            vol.Optional("address", default=""): cv.string,
-            vol.Optional("sip_uri", default=""): cv.string,
-            vol.Optional("number", default=""): cv.string,
-            vol.Optional("ha_bridge", default=False): cv.boolean,
-            vol.Optional("sip_transport", default=""): vol.Any("", vol.In(["tcp", "udp"])),
-            vol.Optional("signaling_transport", default=""): vol.Any("", vol.In(["tcp", "udp"])),
-            vol.Optional("sip_port"): vol.Coerce(int),
-            vol.Optional("rtp_port"): vol.Coerce(int),
-            vol.Optional("tx_rate"): vol.Any("auto", vol.Coerce(int)),
-            vol.Optional("rx_rate"): vol.Any("auto", vol.Coerce(int)),
-            vol.Optional("tx_formats"): vol.Any(cv.string, [cv.string]),
-            vol.Optional("rx_formats"): vol.Any(cv.string, [cv.string]),
-            vol.Optional("max_payload_bytes"): vol.Coerce(int),
-            vol.Optional("audio_mode", default=""): cv.string,
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
-    phonebook_remove_schema = vol.Schema(
-        {vol.Required("name"): cv.string},
-        extra=vol.PREVENT_EXTRA,
-    )
-    phonebook_set_schema = vol.Schema(
-        {vol.Required("roster_json"): cv.string},
-        extra=vol.PREVENT_EXTRA,
-    )
-    set_dnd_schema = vol.Schema(
-        {vol.Required("dnd"): cv.boolean},
-        extra=vol.PREVENT_EXTRA,
-    )
-    sip_account_create_schema = vol.Schema(
-        {
-            vol.Required("username"): cv.string,
-            vol.Optional("display_name", default=""): cv.string,
-            vol.Optional("password", default=""): cv.string,
-            vol.Optional("enabled", default=True): cv.boolean,
-            vol.Optional("replace", default=False): cv.boolean,
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
-    sip_account_name_schema = vol.Schema({vol.Required("username"): cv.string}, extra=vol.PREVENT_EXTRA)
-    hass.services.async_register(DOMAIN, "purge_devices", handle_purge_devices, schema=purge_schema)
-    hass.services.async_register(DOMAIN, "answer", handle_sip_answer, schema=sip_answer_schema)
-    hass.services.async_register(DOMAIN, "decline", handle_sip_decline, schema=sip_decline_schema)
-    hass.services.async_register(DOMAIN, "hangup", handle_sip_hangup, schema=sip_hangup_schema)
-    hass.services.async_register(DOMAIN, "call", handle_sip_call, schema=sip_call_schema)
-    hass.services.async_register(DOMAIN, "forward", handle_sip_forward, schema=sip_call_schema)
-    hass.services.async_register(DOMAIN, "route", handle_sip_route, schema=sip_route_schema)
-    hass.services.async_register(
-        DOMAIN, "add_contact", handle_phonebook_add_contact, schema=phonebook_add_schema
-    )
-    hass.services.async_register(
-        DOMAIN, "remove_contact", handle_phonebook_remove_contact, schema=phonebook_remove_schema
-    )
-    hass.services.async_register(
-        DOMAIN, "set_contacts", handle_phonebook_set_contacts, schema=phonebook_set_schema
-    )
-    hass.services.async_register(DOMAIN, "clear_contacts", handle_phonebook_clear)
-    hass.services.async_register(DOMAIN, "export_phonebook", handle_phonebook_export)
-    hass.services.async_register(DOMAIN, "push_phonebook", handle_phonebook_push)
-    hass.services.async_register(DOMAIN, "set_dnd", handle_sip_set_dnd, schema=set_dnd_schema)
-    hass.services.async_register(DOMAIN, "create_account", handle_sip_account_create, schema=sip_account_create_schema)
-    hass.services.async_register(DOMAIN, "remove_account", handle_sip_account_remove, schema=sip_account_name_schema)
-    hass.services.async_register(
-        DOMAIN, "rotate_account_password", handle_sip_account_rotate_password, schema=sip_account_name_schema
-    )
-    hass.services.async_register(DOMAIN, "enable_account", handle_enable_account, schema=sip_account_name_schema)
-    hass.services.async_register(DOMAIN, "disable_account", handle_disable_account, schema=sip_account_name_schema)
-    hass.services.async_register(DOMAIN, "export_accounts", handle_export_accounts)
 
 
 async def _async_apply_assist_intents(hass: HomeAssistant, enabled: bool) -> None:
@@ -2383,56 +1965,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_start_sip_trunk(hass: HomeAssistant) -> bool:
-    cfg = _get_trunk_config(hass)
-    if not _trunk_enabled(cfg):
-        hass.data.setdefault(DOMAIN, {}).pop("sip_trunk", None)
-        return True
-    from .sip_trunk import SipTrunkClient, SipTrunkConfig
+    from .trunk_runtime import async_start_sip_trunk
 
-    local_ip = await _ha_advertise_host(hass)
-    if not local_ip:
-        _LOGGER.warning("SIP trunk disabled: HA advertise IP is unknown")
-        return False
-    trunk = SipTrunkClient(
-        config=SipTrunkConfig(
-            enabled=True,
-            transport=str(cfg[CONF_TRUNK_TRANSPORT]),
-            server=str(cfg[CONF_TRUNK_SERVER]),
-            port=int(cfg[CONF_TRUNK_PORT]),
-            domain=str(cfg[CONF_TRUNK_DOMAIN]),
-            username=str(cfg[CONF_TRUNK_USERNAME]),
-            auth_username=str(cfg[CONF_TRUNK_AUTH_USERNAME]),
-            password=str(cfg[CONF_TRUNK_PASSWORD]),
-            expires=int(cfg[CONF_TRUNK_EXPIRES]),
-            outbound_proxy=str(cfg[CONF_TRUNK_OUTBOUND_PROXY]),
-        ),
-        local_ip=local_ip,
-        local_sip_port=int(_get_transport_config(hass)["sip_port"]),
-    )
-    endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
-    if endpoint is not None:
-        trunk.attach_endpoint_manager(endpoint)
-    hass.data.setdefault(DOMAIN, {})["sip_trunk"] = trunk
-    try:
-        await trunk.start()
-    except Exception as err:
-        _LOGGER.warning("SIP trunk registration failed: %s", err)
-    return True
+    return await async_start_sip_trunk(hass, local_ip=await _ha_advertise_host(hass))
 
 
 async def _async_stop_sip_trunk(hass: HomeAssistant) -> None:
-    trunk = hass.data.get(DOMAIN, {}).pop("sip_trunk", None)
-    if trunk is None:
-        return
-    try:
-        await trunk.stop()
-    except Exception:
-        _LOGGER.debug("Ignoring SIP trunk stop error", exc_info=True)
+    from .trunk_runtime import async_stop_sip_trunk
+
+    await async_stop_sip_trunk(hass)
 
 
 async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     """Bind the enabled SIP signaling listeners for HA softphone and bridge calls."""
-    from .roster import RosterEntry
     from .dtmf import DtmfCollector
     from .sdp import build_answer_directional
     from . import sdp as sip_sdp
@@ -2464,59 +2009,6 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if 200 <= int(result.status) < 300:
             await _refresh_and_push_phonebook(hass)
         return result
-
-    def _roster_from_peers(peers: list[Peer]) -> list[RosterEntry]:
-        from .roster import merge_roster_overrides
-
-        entries: list[RosterEntry] = []
-        for peer in peers:
-            entries.append(
-                RosterEntry(
-                    id=peer.name,
-                    name=peer.name,
-                    kind="ha" if peer.is_ha else "esp",
-                    address=peer.host,
-                    metadata={
-                        "sip_transport": (
-                            str((peer.device or {}).get("sip_transport") or "tcp").lower()
-                            if peer.is_ha or peer.device is not None
-                            else ""
-                        ),
-                        "sip_port": peer.sip_port,
-                        "rtp_port": peer.rtp_port,
-                        "audio_mode": peer.audio_mode,
-                    },
-                )
-            )
-        entries = merge_roster_overrides(entries, _manual_roster_entries(hass))
-        entries.extend(_registered_roster_entries(hass))
-        return entries
-
-    def _same_route_name(left: str, right: str) -> bool:
-        def norm(value: str) -> str:
-            return "".join(ch for ch in value.lower() if ch.isalnum())
-
-        return bool(left and right and norm(left) == norm(right))
-
-    def _peer_for_target(target: str, peers: list[Peer]) -> Peer | None:
-        for peer in peers:
-            if peer.is_ha:
-                continue
-            if _same_route_name(target, peer.name):
-                return peer
-        return None
-
-    def _peer_audio_formats(peer: Peer | None, key: str) -> list[AudioFormat]:
-        if peer is None:
-            return []
-        raw = ";".join(str(item) for item in (peer.tx_formats if key == "tx_formats" else peer.rx_formats) or [])
-        if not raw.strip():
-            return []
-        try:
-            return parse_audio_format_list(raw)
-        except ValueError as err:
-            _LOGGER.warning("Ignoring invalid peer %s on %s: %s", key, peer.name, err)
-            return []
 
     def _is_trunk_invite(invite: SipInvite) -> bool:
         trunk_cfg = _get_trunk_config(hass)
@@ -2596,7 +2088,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 route_hint_source=RouteHintSource.DTMF if route_hint else RouteHintSource.NONE,
                 source_host=invite.source_host,
             ),
-            _roster_from_peers(peers),
+            _roster_from_peers(hass, peers, _registered_roster_entries(hass)),
             trunk_ready=False,
         )
         if decision.action is RouteAction.ANSWER_HA:
@@ -2685,7 +2177,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return
 
-        decision = _ha_router_decision(destination, _roster_from_peers(peers))
+        decision = _ha_router_decision(destination, _roster_from_peers(hass, peers, _registered_roster_entries(hass)))
         peer_target = _peer_for_target(decision.target or destination, peers)
         bridge_uri = None
         try:
@@ -2885,7 +2377,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 return SipInviteResult(488, "Not Acceptable Here", to_tag="", decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value)
             invite = replace(invite, send_format=selected.send, recv_format=selected.recv)
-        roster_entries = _roster_from_peers(peers)
+        roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
         decision = _inbound_route_decision(invite, peers, roster_entries)
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
@@ -3638,23 +3130,6 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
 
 async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
-    registry = _call_registry(hass)
-    relays = dict(registry.relays)
-    for relay in list(relays.values()):
-        try:
-            await relay.stop()
-        except Exception:
-            _LOGGER.debug("Ignoring SIP RTP relay stop error", exc_info=True)
-    clients = dict(registry.sip_clients)
-    for client in list(clients.values()):
-        try:
-            client.bye()
-            await client.close()
-        except Exception:
-            _LOGGER.debug("Ignoring SIP client stop error", exc_info=True)
-    registry.clear_runtime()
-    endpoint = hass.data.get(DOMAIN, {}).pop("sip_endpoint", None)
-    hass.data.get(DOMAIN, {}).pop("sip_server", None)
-    hass.data.get(DOMAIN, {}).pop("sip_tcp_server", None)
-    if endpoint is not None:
-        await endpoint.stop()
+    from .endpoint_lifecycle import async_stop_sip_endpoint
+
+    await async_stop_sip_endpoint(hass)

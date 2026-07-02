@@ -123,18 +123,16 @@ class VoipPhonebookSensor(SensorEntity):
         await self._recompute()
 
     async def _recompute(self) -> None:
-        # Reuse the existing peer builders from __init__.py so routing logic
-        # stays in one place.
-        from . import (
-            _async_build_peer_snapshot,
-            _format_entry_unified,
-            _push_roster_json_to_esps,
-            _registered_roster_entries,
+        from . import _async_build_peer_snapshot
+        from .phonebook_runtime import (
+            format_entry_unified,
+            push_roster_json_to_esps,
+            registered_roster_entries,
         )
         from .roster import RosterEntry, dump_roster_json, merge_roster_overrides
 
         peers = await _async_build_peer_snapshot(self.hass)
-        entries = [_format_entry_unified(p) for p in peers]
+        entries = [format_entry_unified(p) for p in peers]
         roster_entries = [
             RosterEntry(
                 id=p.name,
@@ -161,7 +159,7 @@ class VoipPhonebookSensor(SensorEntity):
             if isinstance(raw, RosterEntry):
                 manual_entries.append(raw)
         roster_entries = merge_roster_overrides(roster_entries, manual_entries)
-        roster_entries.extend(_registered_roster_entries(self.hass))
+        roster_entries.extend(registered_roster_entries(self.hass))
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
         visible_count = len(roster_entries)
@@ -180,7 +178,7 @@ class VoipPhonebookSensor(SensorEntity):
             )
             if self.hass and self.entity_id:
                 self.async_write_ha_state()
-                self.hass.async_create_task(_push_roster_json_to_esps(self.hass, roster_json))
+                self.hass.async_create_task(push_roster_json_to_esps(self.hass, roster_json))
 
     async def async_update(self) -> None:
         await self._recompute()

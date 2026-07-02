@@ -2,7 +2,7 @@
 #
 # Paste this into automations.yaml when you want "shut up" style commands to
 # stop only the local VA/TTS announcement on the satellite that heard the
-# sentence. Intercom call/hangup/answer/decline commands are handled by the
+# sentence. VoIP call/hangup/answer/decline commands are handled by the
 # optional VoIP Stack Assist intents instead; see:
 #   examples/home-assistant/custom_sentences/
 #

@@ -142,8 +142,10 @@ Use Playwright/Chromium screenshots plus HA events/logs.
   clickable and perform HA softphone actions.
 - HA softphone card after remote BYE/CANCEL: returns idle from backend event,
   not from local optimistic state.
-- `/dashboard-intercom/0`: first ESP mirror card mirrors WS3 only.
-- `/dashboard-intercom/0`: second ESP mirror card mirrors Spotpear only.
+- `/lovelace/default_view` or the configured VoIP dashboard: ESP mirror card
+  mirrors WS3 only.
+- `/lovelace/default_view` or the configured VoIP dashboard: ESP mirror card
+  mirrors Spotpear only.
 - ESP mirror next/prev press ESP buttons and update ESP destination.
 - ESP mirror Call presses ESP call button; no browser audio backend starts.
 - ESP mirror Answer/Decline/Hangup press ESP controls.

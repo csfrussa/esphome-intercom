@@ -269,6 +269,7 @@ class VoipStackCard extends HTMLElement {
       this._autoAnswering = true;
       this._tryAutoAnswer();
     }
+    this._maybeAnswerFromUrl();
   }
 
   _ensureHaSoftphoneAudioPath(snapshot = {}) {
@@ -540,8 +541,6 @@ class VoipStackCard extends HTMLElement {
           this._tryAutoAnswer();
       }
 
-      this._maybeAnswerFromUrl(newEspState);
-
       if (needsRender) {
         this._render();
       }
@@ -573,8 +572,12 @@ class VoipStackCard extends HTMLElement {
   _maybeAnswerFromUrl(espState) {
     if (!this._shouldAnswerFromUrl()) return;
     if (this._autoAnswering || this._starting) return;
+    if (!this._isHaSoftphoneMode()) return;
     const state = (espState || this._getEspState()).toLowerCase();
-    if (this._isHaSoftphoneMode() || (state !== "ringing" && state !== "incoming")) return;
+    if (state !== "ringing" && state !== "incoming") return;
+    const snap = this._softphoneSnapshot || {};
+    if (String(snap.direction || "").toLowerCase() !== "incoming") return;
+    if (!snap.call_id) return;
 
     this._deepLinkAnswerConsumed = true;
     this._clearAnswerUrlParam();

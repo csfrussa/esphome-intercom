@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
+SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -68,6 +69,12 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("return []", body)
         self.assertIn("if value in (None, \"\"):", body)
         self.assertIn("if not raw.strip():", body)
+
+    def test_services_register_async_handlers_not_coroutine_returning_lambdas(self) -> None:
+        services = SERVICES.read_text()
+        self.assertIn("async def _handle(call: ServiceCall) -> None:", services)
+        self.assertNotIn("lambda call:", services)
+        self.assertNotIn("call_handler(", services)
 
 
 if __name__ == "__main__":

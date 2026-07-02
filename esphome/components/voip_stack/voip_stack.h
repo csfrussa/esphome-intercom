@@ -26,6 +26,7 @@
 #include "voip_fsm.h"
 #include "sip_types.h"
 #include "phonebook.h"
+#include "rtp_jitter_buffer.h"
 #include "transport.h"
 
 #include <freertos/FreeRTOS.h>
@@ -370,14 +371,13 @@ class VoipStack : public Component {
   static void rx_task(void *param);
   void rx_task_();
   void enqueue_rx_frame_(const TransportAudioFrame &frame);
-  enum class RxPlayoutReadResult : uint8_t {
-    FRAME,
-    BUFFERING,
-    MISSING,
+  enum class SilenceReason : uint8_t {
+    NONE,
+    NETWORK_GAP,
+    MUTED_SINK,
   };
-  RxPlayoutReadResult read_rx_frame_(uint8_t *audio_chunk, uint16_t *sequence,
-                                     uint32_t *timestamp, bool *has_metadata);
-  void play_rx_frame_(const uint8_t *pcm, size_t bytes, bool synthetic_silence, TickType_t ticks_to_wait);
+  void play_rx_frame_(const uint8_t *pcm, size_t bytes, SilenceReason silence_reason, TickType_t ticks_to_wait);
+  void play_silence_frame_(SilenceReason reason, TickType_t ticks_to_wait);
   void reset_rx_audio_();
 #endif
 
@@ -524,24 +524,11 @@ class VoipStack : public Component {
   StackType_t *tx_task_stack_{nullptr};
 #endif
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
-  struct RxJitterSlot {
-    bool valid{false};
-    uint16_t sequence{0};
-    uint32_t timestamp{0};
-    size_t bytes{0};
-    uint8_t *pcm{nullptr};
-  };
-
   uint8_t *rx_audio_chunk_{nullptr};
   uint8_t *rx_jitter_pcm_storage_{nullptr};
   uint8_t *rx_silence_chunk_{nullptr};
   size_t rx_audio_chunk_alloc_bytes_{0};
-  mutable Mutex rx_jitter_mutex_;
-  RxJitterSlot rx_jitter_slots_[kRxQueuedFrames]{};
-  uint32_t rx_jitter_valid_count_{0};
-  bool rx_jitter_buffering_{true};
-  bool rx_jitter_next_sequence_valid_{false};
-  uint16_t rx_jitter_next_sequence_{0};
+  std::unique_ptr<RtpJitterBuffer> rx_jitter_buffer_;
   TaskHandle_t rx_task_handle_{nullptr};
   StaticTask_t rx_task_tcb_{};
   StackType_t *rx_task_stack_{nullptr};

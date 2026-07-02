@@ -245,8 +245,8 @@ binary_sensor:
 ```
 
 When the ESP calls that HA contact, the Lovelace card rings and can answer from
-the browser or mobile app. The standard VoIP callback package also fires the
-`esphome.voip_call` event for automations.
+the browser or mobile app. Home Assistant also emits `voip_stack.incoming_call`
+for automations.
 
 For mobile doorbells, the Companion app notification can expose two useful
 actions: **Answer** and **Decline**. Answer deep-links to the Lovelace card with
@@ -696,8 +696,8 @@ The ESP-side package subscribes to the roster JSON and calls
 `voip_stack.set_roster_json` after a debounce. HA rows, ESP rows, manual SIP
 contacts and registered local softphones share the same route vocabulary.
 Canonical row formats live in
-[`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md). For manual/local
-automations you can still use the remaining call-control ESPHome actions:
+[`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md). For manual/local automations you can still use the ESPHome API actions exposed
+by the standard packages:
 
 ```yaml
 action: esphome.<slug>_set_ha_peer_name
@@ -723,7 +723,9 @@ See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contra
 
 #### Apartment VoIP panel
 
-For multi-room setups, each GPIO button can call a specific room directly. The full recipe (one button per contact, exact name matching rules, `on_call_failed` handling) lives in the [`voip_stack` README](esphome/components/voip_stack/README.md#example-multi-button-intercom-apartment-doorbell).
+For multi-room setups, each GPIO button can call a specific room directly. Use
+`voip_stack.call_contact` with the exact phonebook name and handle terminal
+failures with `on_call_failed` when the UI needs explicit feedback.
 
 ### 3. Lovelace Card
 
@@ -915,17 +917,15 @@ because connection state is easier to reason about. UDP is best suited to
 simple local LANs where low latency matters and the network is known to pass
 SIP/RTP cleanly.
 
-### Endpoint And Phonebook Wire Format
+### Phonebook Wire Format
 
 ![VoIP phonebook and dial plan](docs/images/phonebook-endpoint.png)
 
 _ESP endpoint publication, manual contacts and local SIP registrations become one HA-managed roster. Route decisions are direct SIP, HA route, trunk or explicit reject._
 
-Standard HA-managed firmware uses the native ESPHome API endpoint sensor plus
-`sensor.voip_phonebook`. HA is the phonebook authority whenever it is part
-of the installation. ESP-side network scanning is not part of the SIP routing
-contract. The canonical roster JSON, SIP URI fields and audio capability fields
-are documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
+The high-level model is described in [Phonebook And Routing](#phonebook-and-routing).
+The canonical roster JSON, SIP URI fields and audio capability fields are
+documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
 
 ### Local Softphone Accounts
 
@@ -1037,8 +1037,8 @@ flowchart TD
 
 Home Assistant is published to the ESP phonebook automatically. When an ESP
 initiates a call to that HA contact from a GPIO button, LVGL button or template
-button, it fires an `esphome.voip_call` event for notifications and the
-Lovelace card goes into ringing state with Answer/Decline buttons:
+button, Home Assistant emits `voip_stack.incoming_call` for notifications and
+the Lovelace card goes into ringing state with Answer/Decline buttons:
 
 ![ESP calling Home Assistant, Card ringing](docs/images/call-from-esp-to-homeassistant.gif)
 
@@ -1685,22 +1685,22 @@ Common symptoms and fixes are documented in **[docs/troubleshooting.md](docs/tro
 
 ## Home Assistant Automation
 
-When an ESP device calls the HA location name, it fires an
-`esphome.voip_call` event. Use this to trigger push notifications, flash
-lights, play chimes, or any other automation.
+When an ESP device calls the HA location name, VoIP Stack emits a
+`voip_stack.incoming_call` event. Use this to trigger push notifications, flash
+lights, play chimes, or any other automation. For a doorbell-style flow, filter
+the caller name and handle the call through the standard HA softphone services.
 
 The mobile notification can expose real **Answer** and **Decline** actions:
 
-- Replace `/dashboard-intercom/0` below with the real dashboard view that
-  contains your `voip-stack-card`, for example `/your-dashboard/your-view`. The
-  word `intercom` is not special. If Home Assistant generated a URL ending in
-  `/0`, that just means the first Lovelace view has no custom path.
+- Replace `/lovelace/default_view` below with the real dashboard view that
+  contains the `voip-stack-card` configured in **Home Assistant softphone**
+  mode. The deep link is not handled by ESP mirror cards.
 - **Answer** must be a `URI` action that opens the dashboard with
   `?voip_answer=1`. The card is the only place that can request microphone
   permission and create the full-duplex browser or app audio stream.
 - **Decline** can stay in Home Assistant automation logic. The mobile app emits
-  `mobile_app_notification_action`, then HA calls `voip_stack.decline` and
-  sends the SIP decline reason back to the ESP.
+  `mobile_app_notification_action`, then HA calls `voip_stack.decline` with the
+  SIP `call_id` from the event and sends the decline reason back to the ESP.
 
 ![Answer an ESP call from the Home Assistant mobile notification](docs/images/mobile-notification-answer.gif)
 
@@ -1710,11 +1710,15 @@ Assistant, the notification opens the VoIP dashboard with
 
 ```yaml
 alias: Doorbell Notification
-description: Send push notification when an ESP calls Home Assistant
+description: Send push notification when Spotpear calls Home Assistant
 triggers:
   - trigger: event
-    event_type: esphome.voip_call
-conditions: []
+    event_type: voip_stack.incoming_call
+conditions:
+  - condition: template
+    value_template: "{{ trigger.event.data.state == 'ringing' }}"
+  - condition: template
+    value_template: "{{ 'spotpear' in (trigger.event.data.caller | default('') | lower) }}"
 actions:
   - action: notify.mobile_app_your_phone
     data:
@@ -1722,8 +1726,8 @@ actions:
       message: "📞 {{ trigger.event.data.caller }} is calling..."
       data:
         tag: voip_call
-        clickAction: /dashboard-intercom/0
-        url: /dashboard-intercom/0
+        clickAction: /lovelace/default_view
+        url: /lovelace/default_view
         channel: doorbell
         importance: high
         ttl: 0
@@ -1731,7 +1735,7 @@ actions:
         actions:
           - action: URI
             title: "✅ Answer"
-            uri: /dashboard-intercom/0?voip_answer=1
+            uri: /lovelace/default_view?voip_answer=1
           - action: VOIP_DECLINE
             title: "❌ Decline"
   - action: persistent_notification.create
@@ -1750,9 +1754,8 @@ actions:
         value_template: "{{ wait.trigger is not none }}"
     then:
       - action: voip_stack.decline
-        target:
-          device_id: "{{ trigger.event.data.device_id }}"
         data:
+          call_id: "{{ trigger.event.data.call_id }}"
           reason: declined
       - action: notify.mobile_app_your_phone
         data:

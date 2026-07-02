@@ -433,7 +433,7 @@ SipTransportSnapshot SipTransport::snapshot() const {
   SipTransportSnapshot out;
   out.running = this->running_.load(std::memory_order_acquire);
   out.rtp_running = this->rtp_running_.load(std::memory_order_acquire);
-  out.call_active = this->call_active_.load(std::memory_order_acquire);
+  out.call_active = this->media_active_.load(std::memory_order_acquire);
   out.pending_invite = this->outgoing_invite_pending_.load(std::memory_order_acquire);
   out.sip_tcp = this->remote_sip_tcp_.load(std::memory_order_acquire);
   out.remote_sip_port = this->remote_sip_port_.load(std::memory_order_acquire);
@@ -633,7 +633,7 @@ bool SipTransport::start_audio_path() {
 }
 
 void SipTransport::stop_audio_path() {
-  this->call_active_.store(false, std::memory_order_release);
+  this->close_media_session_();
   if (!this->rtp_running_.exchange(false, std::memory_order_acq_rel)) return;
   if (this->rtp_socket_ >= 0) {
     close(this->rtp_socket_);
@@ -758,6 +758,14 @@ void SipTransport::reset_rtp_latch_() {
   this->rtp_ssrc_latched_.store(false, std::memory_order_release);
 }
 
+void SipTransport::open_media_session_() {
+  this->media_active_.store(true, std::memory_order_release);
+}
+
+void SipTransport::close_media_session_() {
+  this->media_active_.store(false, std::memory_order_release);
+}
+
 void SipTransport::reset_dialog_() {
   this->stop_audio_path();
   this->call_id_.clear();
@@ -775,7 +783,7 @@ void SipTransport::reset_dialog_() {
   this->caller_name_.clear();
   this->dest_route_.clear();
   this->dest_name_.clear();
-  this->call_active_.store(false, std::memory_order_release);
+  this->close_media_session_();
   this->outgoing_invite_pending_.store(false, std::memory_order_release);
   this->clear_udp_transactions_();
   this->reset_rtp_latch_();
@@ -1374,14 +1382,15 @@ bool SipTransport::send_answer(const std::string &call_id,
   this->set_media_config_(dest_to_caller_format, caller_to_dest_format,
                           tx_payload_type, rx_payload_type);
   this->outgoing_invite_pending_.store(false, std::memory_order_release);
-  this->call_active_.store(true, std::memory_order_release);
   const std::string answer = this->build_sdp_answer_();
   if (answer.empty()) {
     const bool sent = this->send_response_(488, "Not Acceptable Here", "", "media_incompatible");
     this->reset_dialog_();
     return sent;
   }
-  return this->send_response_(200, "OK", answer);
+  const bool sent = this->send_response_(200, "OK", answer);
+  if (sent) this->open_media_session_();
+  return sent;
 }
 
 bool SipTransport::send_cancel(const std::string &call_id) {
@@ -1588,7 +1597,7 @@ bool SipTransport::handle_response_(const std::string &message, const sockaddr_i
     this->remote_tag_ = tag_from_header(to);
     this->learn_remote_rtp_from_sdp_(message_body(message), src_ip);
     this->send_request_("ACK", "", this->invite_cseq_);
-    this->call_active_.store(true, std::memory_order_release);
+    this->open_media_session_();
     SipSignal signal;
     signal.type = SipSignalType::STATUS_200_OK;
     signal.status_code = static_cast<uint16_t>(status);
@@ -1645,7 +1654,7 @@ void SipTransport::handle_sip_datagram_(const char *data, size_t len, const sock
       return;
     }
     this->outgoing_invite_pending_.store(false, std::memory_order_release);
-    this->call_active_.store(true, std::memory_order_release);
+    this->open_media_session_();
   } else if (method == "BYE") {
     this->mark_sip_event_(SipEvent::BYE);
     const std::string request_call_id = header_value(msg, "Call-ID");
@@ -1826,7 +1835,7 @@ void SipTransport::rtp_task_() {
     int n = recvfrom(this->rtp_socket_, buf, sizeof(buf), 0,
                      reinterpret_cast<struct sockaddr *>(&src), &slen);
     if (n > 12 && (buf[0] & 0xC0) == 0x80) {
-      if (!this->call_active_.load(std::memory_order_acquire)) {
+      if (!this->media_active_.load(std::memory_order_acquire)) {
         continue;
       }
       const uint32_t src_ip = ntohl(src.sin_addr.s_addr);

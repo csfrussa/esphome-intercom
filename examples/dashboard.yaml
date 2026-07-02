@@ -1,23 +1,29 @@
-# Example Lovelace Dashboard for Intercom
+# Example Lovelace Dashboard for VoIP Stack
 #
-# Each device section includes the intercom card plus all available controls:
+# Each device section includes the VoIP Stack card plus common device controls:
 # volume, mic gain, AEC on/off, AEC mode select, auto answer, wake word,
 # mic mute, and speaker mute.
 
-title: Intercom
+title: VoIP Stack
 views:
-  - title: Intercom
+  - title: VoIP Stack
     icon: mdi:phone-voip
     cards: []
     type: sections
     max_columns: 2
     sections:
-      # --- VA + Intercom device (with AEC mode select) ---
+      # --- Home Assistant softphone ---
+      - type: grid
+        cards:
+          - type: custom:voip-stack-card
+            mode: ha_softphone
+            name: Home Assistant Phone
+      # --- VA + VoIP device (with AEC mode select) ---
       - type: grid
         cards:
           - type: custom:voip-stack-card
             entity_id: <your_device_id>
-            name: My Device
+            name: My ESP Phone
           - type: entities
             entities:
               - entity: number.<your_device>_master_volume
@@ -38,7 +44,7 @@ views:
         cards:
           - type: custom:voip-stack-card
             entity_id: <your_device_id>
-            name: My Intercom
+            name: Room Phone
           - type: entities
             entities:
               - entity: number.<your_device>_master_volume
