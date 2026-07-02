@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
+ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -64,7 +65,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("active_dialogs", busy_expr)
 
     def test_missing_roster_formats_do_not_force_implicit_16k_default(self) -> None:
-        body = _function_body(self.source, "_roster_entry_formats")
+        endpoint_routing = ENDPOINT_ROUTING.read_text()
+        body = _function_body(endpoint_routing, "roster_entry_formats")
         self.assertIn("if entry is None:", body)
         self.assertIn("return []", body)
         self.assertIn("if value in (None, \"\"):", body)

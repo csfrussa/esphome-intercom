@@ -20,7 +20,7 @@ from homeassistant.exceptions import ConfigEntryError
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 from homeassistant.helpers import config_validation as cv
-from homeassistant.components import network, persistent_notification
+from homeassistant.components import network
 
 from .config import (
     debug_mode as _debug_mode,
@@ -59,10 +59,13 @@ from .dtmf import parse_dtmf_route_map
 from .device_resolver import get_resolver
 from .endpoint_lifecycle import call_registry as _call_registry
 from .endpoint_routing import (
+    device_formats as _device_formats,
     peer_audio_formats as _peer_audio_formats,
     peer_for_target as _peer_for_target,
     roster_from_peers as _roster_from_peers,
+    roster_entry_formats as _roster_entry_formats,
     same_route_name as _same_route_name,
+    sip_target_audio_profile as _sip_target_audio_profile,
 )
 from .fsm import (
     CallState,
@@ -74,13 +77,10 @@ from .fsm import (
 )
 from .media_ports import allocate_sip_rtp_port as _allocate_sip_rtp_port
 from .audio_format import (
-    AudioFormat,
     HA_SIP_PCM_FORMATS,
     HA_SIP_PCM_RX_FORMATS,
     HA_SIP_PCM_TX_FORMATS,
     HA_TRUNK_AUDIO_FORMATS,
-    choose_common_frame_ms,
-    parse_audio_format_list,
 )
 from .peer import Peer
 from .phonebook_runtime import (
@@ -98,15 +98,12 @@ from .router import (
     resolve_ha_router,
     route_inbound_trunk,
 )
+from .route_decisions import set_pending_route_decision as _set_pending_route_decision
 from .sip_bridge import build_invite_client_relay
 from .store import (
     config_entry as _config_entry,
     manual_roster_entries as _manual_roster_entries,
-    phonebook_contact_dicts as _phonebook_contact_dicts,
-    sip_account_dicts as _sip_account_dicts,
     sip_accounts as _sip_accounts,
-    store_manual_roster_entries as _store_manual_roster_entries,
-    update_sip_accounts as _update_sip_accounts,
 )
 from .websocket_api import (
     async_register_websocket_api,
@@ -171,107 +168,6 @@ def _ha_softphone_has_active_call(hass: HomeAssistant, *, ignore_call_id: str = 
 def _single_pending_route_call_id(hass: HomeAssistant) -> str:
     routes = _pending_routes(hass)
     return next(iter(routes)) if len(routes) == 1 else ""
-
-
-def _device_formats(device: dict | None, key: str):
-    if not device:
-        return []
-    value = device.get(key)
-    if value in (None, ""):
-        return []
-    if isinstance(value, str):
-        raw = value
-    else:
-        raw = ";".join(value or [])
-    if not raw.strip():
-        return []
-    try:
-        return parse_audio_format_list(raw)
-    except ValueError as err:
-        _LOGGER.warning(
-            "Ignoring invalid %s on %s: %s",
-            key,
-            (device or {}).get("name") or (device or {}).get("device_id"),
-            err,
-        )
-        return []
-
-
-def _roster_entry_formats(entry, key: str) -> list[AudioFormat]:
-    """Return audio formats from a canonical roster entry metadata field."""
-    if entry is None:
-        return []
-    metadata = getattr(entry, "metadata", {}) or {}
-    value = metadata.get(key)
-    if value in (None, ""):
-        return []
-    if isinstance(value, list):
-        raw = ";".join(str(item) for item in value)
-    else:
-        raw = str(value or "")
-    if not raw.strip():
-        return []
-    try:
-        return parse_audio_format_list(raw)
-    except ValueError as err:
-        _LOGGER.warning(
-            "Ignoring invalid roster %s on %s: %s",
-            key,
-            getattr(entry, "display_name", None) or getattr(entry, "id", ""),
-            err,
-        )
-        return []
-
-
-def _sip_target_audio_profile(
-    *,
-    remote_tx_formats: list[AudioFormat] | None,
-    remote_rx_formats: list[AudioFormat] | None,
-    target: str,
-) -> tuple[list[AudioFormat], list[AudioFormat]]:
-    """Constrain HA SIP offers to formats that can actually work with target."""
-    remote_tx = list(remote_tx_formats or [])
-    remote_rx = list(remote_rx_formats or [])
-    send_candidates = (
-        [fmt for fmt in HA_SIP_PCM_TX_FORMATS if fmt in set(remote_rx)]
-        if remote_rx else list(HA_SIP_PCM_TX_FORMATS)
-    )
-    recv_candidates = (
-        [fmt for fmt in HA_SIP_PCM_RX_FORMATS if fmt in set(remote_tx)]
-        if remote_tx else list(HA_SIP_PCM_RX_FORMATS)
-    )
-    if not send_candidates or not recv_candidates:
-        _LOGGER.warning(
-            "No compatible directional SIP PCM profile for %s "
-            "(ha_send=%s ha_recv=%s remote_tx=%s remote_rx=%s)",
-            target,
-            [fmt.wire_token() for fmt in HA_SIP_PCM_TX_FORMATS],
-            [fmt.wire_token() for fmt in HA_SIP_PCM_RX_FORMATS],
-            [fmt.wire_token() for fmt in remote_tx],
-            [fmt.wire_token() for fmt in remote_rx],
-        )
-        return [], []
-
-    common_frame_ms = choose_common_frame_ms(send_candidates, recv_candidates)
-    if common_frame_ms is None:
-        _LOGGER.warning(
-            "No common SIP ptime for %s (send=%s recv=%s)",
-            target,
-            [fmt.wire_token() for fmt in send_candidates],
-            [fmt.wire_token() for fmt in recv_candidates],
-        )
-        return [], []
-
-    send_candidates = [fmt for fmt in send_candidates if fmt.frame_ms == common_frame_ms]
-    recv_candidates = [fmt for fmt in recv_candidates if fmt.frame_ms == common_frame_ms]
-    _LOGGER.debug(
-        "Directional SIP PCM profile for %s: ptime=%sms send=%s recv=%s",
-        target,
-        common_frame_ms,
-        [fmt.wire_token() for fmt in send_candidates],
-        [fmt.wire_token() for fmt in recv_candidates],
-    )
-    return send_candidates, recv_candidates
 
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
@@ -1276,124 +1172,6 @@ async def _deferred_phonebook_sync(hass: HomeAssistant) -> None:
     await _refresh_and_push_phonebook(hass)
 
 
-async def _handle_phonebook_add_contact_service(call: ServiceCall) -> None:
-    from .roster import RosterEntry
-
-    hass: HomeAssistant = call.hass
-    name = str(call.data["name"]).strip()
-    entry_id = str(call.data.get("id") or name).strip()
-
-    def _metadata_value(key: str):
-        value = call.data.get(key)
-        if value in (None, ""):
-            return None
-        return value
-
-    metadata = {
-        key: _metadata_value(key)
-        for key in (
-            "sip_transport",
-            "signaling_transport",
-            "sip_port",
-            "rtp_port",
-            "tx_rate",
-            "rx_rate",
-            "tx_formats",
-            "rx_formats",
-            "max_payload_bytes",
-            "audio_mode",
-        )
-        if key in call.data and _metadata_value(key) is not None
-    }
-    entry = RosterEntry(
-        id=entry_id,
-        name=name,
-        kind=str(call.data.get("kind") or "esp").strip().lower(),
-        address=str(call.data.get("address") or "").strip(),
-        sip_uri=str(call.data.get("sip_uri") or "").strip(),
-        number=str(call.data.get("number") or "").strip(),
-        ha_bridge=bool(call.data.get("ha_bridge", False)),
-        metadata=metadata,
-    )
-    entries = [
-        item for item in _manual_roster_entries(hass)
-        if getattr(item, "id", "").lower() != entry.id.lower()
-        and getattr(item, "name", "").lower() != entry.name.lower()
-    ]
-    entries.append(entry)
-    _store_manual_roster_entries(hass, entries)
-    await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("Phonebook contact added: %s (%s)", entry.id, entry.kind)
-
-
-async def _handle_phonebook_remove_contact_service(call: ServiceCall) -> None:
-    hass: HomeAssistant = call.hass
-    name = str(call.data["name"]).strip()
-    wanted = name.lower()
-    entries = _manual_roster_entries(hass)
-    before = len(entries)
-    entries = [
-        item
-        for item in entries
-        if getattr(item, "id", "").lower() != wanted
-        and getattr(item, "name", "").lower() != wanted
-        and getattr(item, "number", "").lower() != wanted
-    ]
-    _store_manual_roster_entries(hass, entries)
-    await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("Phonebook contact removed: %s (%d removed)", name, before - len(entries))
-
-
-async def _handle_phonebook_set_contacts_service(call: ServiceCall) -> None:
-    from .roster import parse_roster_json
-
-    hass: HomeAssistant = call.hass
-    entries = parse_roster_json(str(call.data.get("roster_json") or "[]"))
-    _store_manual_roster_entries(hass, entries)
-    await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("Phonebook manual contacts replaced: %d entries", len(entries))
-
-
-async def _handle_phonebook_clear_service(call: ServiceCall) -> None:
-    hass: HomeAssistant = call.hass
-    _store_manual_roster_entries(hass, [])
-    await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("Phonebook manual contacts cleared")
-
-
-async def _handle_phonebook_export_service(call: ServiceCall) -> None:
-    hass: HomeAssistant = call.hass
-    sensor = hass.data.get(DOMAIN, {}).get("phonebook_sensor")
-    if sensor is not None:
-        await sensor.async_update()
-        roster_json = sensor.extra_state_attributes.get("roster_json", "")
-    else:
-        roster_json = ""
-    _fire_call_event(
-        hass,
-        {
-            "state": "export_phonebook",
-            "roster_json": roster_json,
-            "call_id": "",
-        },
-        "phonebook",
-    )
-    _LOGGER.info("Phonebook exported (%d bytes)", len(roster_json))
-
-
-async def _handle_phonebook_push_service(call: ServiceCall) -> None:
-    hass: HomeAssistant = call.hass
-    sensor = hass.data.get(DOMAIN, {}).get("phonebook_sensor")
-    if sensor is not None:
-        await sensor.async_update()
-        roster_json = sensor.extra_state_attributes.get("roster_json", "")
-    else:
-        state = hass.states.get("sensor.voip_phonebook")
-        roster_json = str(state.attributes.get("roster_json") or "") if state is not None else ""
-    await _push_roster_json_to_esps(hass, roster_json)
-    _LOGGER.info("Phonebook push requested (%d bytes)", len(roster_json))
-
-
 async def _handle_set_dnd_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     enabled = bool(call.data.get("dnd"))
@@ -1593,107 +1371,6 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route_uri, result)
 
 
-def _set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
-    """Apply an automation dial-plan decision to a pending inbound SIP route."""
-    from homeassistant.exceptions import ServiceValidationError
-
-    call_id = str(data.get("call_id") or "").strip()
-    if not call_id:
-        raise ServiceValidationError("call_id is required")
-    action = str(data.get("action") or "default").strip().lower()
-    destination = str(
-        data.get("destination") or data.get("target") or data.get("call") or ""
-    ).strip()
-    if action in {"forward", "bridge"} and not destination:
-        raise ServiceValidationError(f"{action} requires destination, target, or call")
-    route = _pending_routes(hass).get(call_id)
-    if route is None:
-        raise ServiceValidationError(f"no pending SIP route for call_id {call_id}")
-    future = route.get("future")
-    if future is None or future.done():
-        raise ServiceValidationError(f"SIP route for call_id {call_id} is no longer decidable")
-    future.set_result(
-        {
-            "action": action,
-            "destination": destination,
-            "status": int(data.get("status") or 0),
-            "reason": str(data.get("reason") or "").strip(),
-            "decline_reason": str(data.get("decline_reason") or "").strip(),
-        }
-    )
-    invite = route.get("invite")
-    if action in {"decline", "busy", "cancel"} and invite is not None:
-        status = int(data.get("status") or 0)
-        app_reason = str(data.get("decline_reason") or "").strip()
-        if action == "busy":
-            status = status or 486
-            app_reason = app_reason or TerminalReason.BUSY.value
-            state = CallState.BUSY.value
-        elif action == "cancel":
-            status = status or 487
-            app_reason = app_reason or TerminalReason.CANCELLED.value
-            state = CallState.CANCELLED.value
-        else:
-            status = status or 603
-            app_reason = app_reason or TerminalReason.DECLINED.value
-            state = "declined"
-        _set_ha_softphone_call_state(
-            hass,
-            state,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=getattr(invite, "caller", ""),
-            callee=getattr(invite, "target", ""),
-            peer_name=getattr(invite, "caller", ""),
-            direction="incoming",
-            call_id=call_id,
-            reason=app_reason,
-            terminal_reason=app_reason,
-            origin="self",
-            sip_status_code=status,
-            last_sip_event="SIP_RESPONSE",
-        )
-    elif action in {"answer_ha", "default"} and invite is not None:
-        _set_ha_softphone_call_state(
-            hass,
-            CallState.CONNECTING.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=getattr(invite, "caller", ""),
-            callee=getattr(invite, "target", ""),
-            peer_name=getattr(invite, "caller", ""),
-            direction="incoming",
-            call_id=call_id,
-            selected_tx_format=invite.send_format.audio_format.wire_token(),
-            selected_rx_format=invite.recv_format.audio_format.wire_token(),
-            selected_tx_rtp_format=invite.send_format.wire_token(),
-            selected_rx_rtp_format=invite.recv_format.wire_token(),
-            audio_mode="full_duplex",
-            sip_status_code=180,
-            last_sip_event="SIP_RESPONSE",
-        )
-    elif action in {"forward", "bridge"} and invite is not None:
-        _set_sip_bridge_call_state(
-            hass,
-            CallState.CONNECTING.value,
-            caller=getattr(invite, "caller", ""),
-            callee=destination or getattr(invite, "target", ""),
-            peer_name=getattr(invite, "caller", ""),
-            call_id=call_id,
-            selected_tx_format=invite.send_format.audio_format.wire_token(),
-            selected_rx_format=invite.recv_format.audio_format.wire_token(),
-            selected_tx_rtp_format=invite.send_format.wire_token(),
-            selected_rx_rtp_format=invite.recv_format.wire_token(),
-            audio_mode="full_duplex",
-            sip_status_code=180,
-            last_sip_event="SIP_RESPONSE",
-        )
-    _LOGGER.info(
-        "SIP route decision call_id=%s action=%s destination=%s",
-        call_id,
-        action,
-        destination or "-",
-    )
-
-
 async def _handle_sip_route_service(call: ServiceCall) -> None:
     _set_pending_route_decision(call.hass, dict(call.data))
 
@@ -1709,130 +1386,14 @@ async def _handle_sip_forward_service(call: ServiceCall) -> None:
     await _handle_sip_call_target_service(call, force_ha_bridge=True)
 
 
-async def _handle_sip_account_create_service(call: ServiceCall) -> None:
-    from homeassistant.exceptions import ServiceValidationError
-    from .sip_registrar import SipAccount, dump_account, generate_password, normalize_username
-
-    hass = call.hass
-    username = normalize_username(str(call.data["username"]))
-    display_name = str(call.data.get("display_name") or username).strip()
-    replace_existing = bool(call.data.get("replace", False))
-    accounts = _sip_account_dicts(hass)
-    if any(str(item.get("username") or "").lower() == username.lower() for item in accounts) and not replace_existing:
-        raise ServiceValidationError(f"SIP account {username} already exists")
-    provided_password = str(call.data.get("password") or "").strip()
-    password = provided_password or generate_password()
-    account = SipAccount(username=username, display_name=display_name, password=password, enabled=bool(call.data.get("enabled", True)))
-    accounts = [item for item in accounts if str(item.get("username") or "").lower() != username.lower()]
-    accounts.append(dump_account(account))
-    _update_sip_accounts(hass, accounts)
-    await _refresh_and_push_phonebook(hass)
-    _fire_call_event(
-        hass,
-        {"state": "sip_account_created", "username": username, "display_name": display_name, "password": password},
-        "sip",
-    )
-    if not provided_password:
-        persistent_notification.async_create(
-            hass,
-            (
-                f"SIP account `{username}` created for `{display_name}`.\n\n"
-                f"Password: `{password}`\n\n"
-                "This generated password is shown only now. Save it in the softphone "
-                "configuration or rotate the account password later."
-            ),
-            title="VoIP Stack SIP Account",
-            notification_id=f"{DOMAIN}_sip_account_{username.lower()}",
-        )
-    _LOGGER.info("SIP local account created username=%s enabled=%s", username, account.enabled)
-
-
-async def _handle_sip_account_remove_service(call: ServiceCall) -> None:
-    from .sip_registrar import normalize_username
-
-    hass = call.hass
-    username = normalize_username(str(call.data["username"]))
-    accounts = [item for item in _sip_account_dicts(hass) if str(item.get("username") or "").lower() != username.lower()]
-    _update_sip_accounts(hass, accounts)
-    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
-    if registrar is not None:
-        registrar.registrations.pop(username, None)
-    await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("SIP local account removed username=%s", username)
-
-
-async def _handle_sip_account_rotate_password_service(call: ServiceCall) -> None:
-    from homeassistant.exceptions import ServiceValidationError
-    from .sip_registrar import generate_password, normalize_username
-
-    hass = call.hass
-    username = normalize_username(str(call.data["username"]))
-    password = generate_password()
-    found = False
-    accounts = []
-    for item in _sip_account_dicts(hass):
-        if str(item.get("username") or "").lower() == username.lower():
-            item["password"] = password
-            found = True
-        accounts.append(item)
-    if not found:
-        raise ServiceValidationError(f"SIP account {username} does not exist")
-    _update_sip_accounts(hass, accounts)
-    registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
-    if registrar is not None:
-        registrar.registrations.pop(username, None)
-    await _refresh_and_push_phonebook(hass)
-    _fire_call_event(hass, {"state": "sip_account_password_rotated", "username": username, "password": password}, "sip")
-    _LOGGER.info("SIP local account password rotated username=%s", username)
-
-
-async def _handle_enable_accountd_service(call: ServiceCall, *, enabled: bool) -> None:
-    from homeassistant.exceptions import ServiceValidationError
-    from .sip_registrar import normalize_username
-
-    hass = call.hass
-    username = normalize_username(str(call.data["username"]))
-    found = False
-    accounts = []
-    for item in _sip_account_dicts(hass):
-        if str(item.get("username") or "").lower() == username.lower():
-            item["enabled"] = enabled
-            found = True
-        accounts.append(item)
-    if not found:
-        raise ServiceValidationError(f"SIP account {username} does not exist")
-    _update_sip_accounts(hass, accounts)
-    if not enabled:
-        registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
-        if registrar is not None:
-            registrar.registrations.pop(username, None)
-    await _refresh_and_push_phonebook(hass)
-    _LOGGER.info("SIP local account %s username=%s", "enabled" if enabled else "disabled", username)
-
-
-async def _handle_export_accounts_service(call: ServiceCall) -> None:
-    accounts = [
-        {
-            "username": item.get("username", ""),
-            "display_name": item.get("display_name", ""),
-            "enabled": bool(item.get("enabled", True)),
-        }
-        for item in _sip_account_dicts(call.hass)
-    ]
-    _fire_call_event(call.hass, {"state": "export_accounts", "accounts": accounts}, "sip")
-
-
-async def _handle_sip_account_enable_service(call: ServiceCall) -> None:
-    await _handle_enable_accountd_service(call, enabled=True)
-
-
-async def _handle_sip_account_disable_service(call: ServiceCall) -> None:
-    await _handle_enable_accountd_service(call, enabled=False)
-
-
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register HA services for SIP phone control."""
+    from .account_services import build_account_service_handlers
+    from .phonebook_services import build_phonebook_service_handlers
     from .services import async_register_services
+
+    account_handlers = build_account_service_handlers(_refresh_and_push_phonebook)
+    phonebook_handlers = build_phonebook_service_handlers(_refresh_and_push_phonebook)
 
     await async_register_services(
         hass,
@@ -1841,22 +1402,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "answer": _handle_sip_answer_service,
             "decline": _handle_sip_decline_service,
             "hangup": _handle_sip_hangup_service,
-            "add_contact": _handle_phonebook_add_contact_service,
-            "set_contacts": _handle_phonebook_set_contacts_service,
-            "remove_contact": _handle_phonebook_remove_contact_service,
-            "clear_contacts": _handle_phonebook_clear_service,
-            "export_phonebook": _handle_phonebook_export_service,
-            "push_phonebook": _handle_phonebook_push_service,
+            **phonebook_handlers,
             "set_dnd": _handle_set_dnd_service,
             "call": _handle_sip_call_target_service,
             "forward": _handle_sip_forward_service,
             "route": _handle_sip_route_service,
-            "create_account": _handle_sip_account_create_service,
-            "remove_account": _handle_sip_account_remove_service,
-            "rotate_account_password": _handle_sip_account_rotate_password_service,
-            "enable_account": _handle_sip_account_enable_service,
-            "disable_account": _handle_sip_account_disable_service,
-            "export_accounts": _handle_export_accounts_service,
+            **account_handlers,
         },
     )
 
