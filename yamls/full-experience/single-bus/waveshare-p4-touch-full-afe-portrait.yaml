@@ -410,7 +410,7 @@ audio_file:
 media_source:
   - platform: audio_http
     id: media_http_source
-    buffer_size: 131072
+    buffer_size: 65536
     task_stack_in_psram: true
   - platform: audio_http
     id: announcement_http_source
@@ -422,7 +422,7 @@ media_source:
   - platform: sendspin
     id: sendspin_media_source
     sample_rate: 48000
-    buffer_size: 524288
+    buffer_size: 262144
     task_stack_in_psram: true
     decode_memory: psram
 

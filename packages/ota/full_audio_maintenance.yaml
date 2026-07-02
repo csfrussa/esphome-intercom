@@ -16,11 +16,10 @@
 ota:
   - platform: esphome
     on_begin:
-      - esp_audio_stack.suspend_ota_watchdog: audio_stack
       - logger.log:
           level: INFO
           tag: ota
-          format: "OTA begin: loop watchdog suspended, pausing full audio runtime"
+          format: "OTA begin: pausing full audio runtime"
       - globals.set:
           id: g_ota_in_progress
           value: "true"
@@ -37,8 +36,6 @@ ota:
       - script.execute: ota_full_audio_restore
     on_error:
       - script.execute: ota_full_audio_restore
-    on_end:
-      - esp_audio_stack.restore_ota_watchdog: audio_stack
 
 script:
   - id: ota_full_audio_restore
@@ -54,4 +51,3 @@ script:
       - esp_audio_stack.start: audio_stack
       - voip_stack.start:
       - script.execute: start_mww_when_ready
-      - esp_audio_stack.restore_ota_watchdog: audio_stack

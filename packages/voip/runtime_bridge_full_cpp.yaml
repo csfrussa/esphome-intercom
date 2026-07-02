@@ -218,6 +218,3 @@ script:
       - globals.set:
           id: g_voip_ringtone_active
           value: "false"
-      - runtime_controller.event:
-          id: runtime
-          event: media_idle
