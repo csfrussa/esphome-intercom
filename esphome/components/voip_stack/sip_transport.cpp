@@ -576,9 +576,13 @@ bool SipTransport::start() {
 
 void SipTransport::request_tcp_client_close_() {
   const int socket = this->sip_tcp_client_socket_.load(std::memory_order_acquire);
-  if (socket < 0) return;
+  this->tcp_connect_requested_.store(false, std::memory_order_release);
+  {
+    LockGuard lock(this->tcp_tx_pending_mutex_);
+    this->tcp_tx_pending_.clear();
+  }
   this->sip_tcp_client_close_requested_.store(true, std::memory_order_release);
-  shutdown(socket, SHUT_RDWR);
+  if (socket >= 0) shutdown(socket, SHUT_RDWR);
 }
 
 void SipTransport::close_tcp_client_from_sip_task_() {
@@ -652,68 +656,15 @@ bool SipTransport::originate(const std::string &host, uint16_t port) {
   }
 
   this->request_tcp_client_close_();
-  for (uint8_t i = 0; i < 20 && this->sip_tcp_client_socket_.load(std::memory_order_acquire) >= 0; i++) {
-    delay(5);
-  }
-  if (this->sip_tcp_client_socket_.load(std::memory_order_acquire) >= 0) {
-    ESP_LOGW(TAG, "SIP TCP previous client did not close in time");
-    return false;
-  }
-
   const uint32_t ip_v4 = this->remote_ip_v4_.load(std::memory_order_acquire);
   if (ip_v4 == 0) return false;
-  const int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (fd < 0) {
-    const int err = errno;
-    ESP_LOGW(TAG, "SIP TCP socket create failed: %s (%d: %s)",
-             socket_errno_name(err), err, socket_errno_text(err));
-    return false;
+  {
+    LockGuard lock(this->tcp_tx_pending_mutex_);
+    this->tcp_tx_pending_.clear();
   }
-
-  int opt = 1;
-  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-  struct sockaddr_in dest{};
-  dest.sin_family = AF_INET;
-  dest.sin_addr.s_addr = htonl(ip_v4);
-  dest.sin_port = htons(sip_port);
-  int rc = connect(fd, reinterpret_cast<struct sockaddr *>(&dest), sizeof(dest));
-  if (rc != 0 && errno == EINPROGRESS) {
-    fd_set writefds;
-    FD_ZERO(&writefds);
-    FD_SET(fd, &writefds);
-    struct timeval timeout{};
-    timeout.tv_sec = 2;
-    timeout.tv_usec = 0;
-    rc = select(fd + 1, nullptr, &writefds, nullptr, &timeout);
-    if (rc > 0) {
-      int so_error = 0;
-      socklen_t len = sizeof(so_error);
-      if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) == 0) {
-        errno = so_error;
-        rc = so_error == 0 ? 0 : -1;
-      } else {
-        rc = -1;
-      }
-    } else {
-      errno = ETIMEDOUT;
-      rc = -1;
-    }
-  }
-  if (rc != 0) {
-    const int err = errno;
-    close(fd);
-    ESP_LOGW(TAG, "SIP TCP connect to %s:%u failed: %s (%d: %s)",
-             host.c_str(), (unsigned) sip_port, socket_errno_name(err), err, socket_errno_text(err));
-    return false;
-  }
-
-  this->sip_tcp_client_socket_.store(fd, std::memory_order_release);
-  this->sip_tcp_client_close_requested_.store(false, std::memory_order_release);
-  this->sip_tcp_rx_buffer_.clear();
-  ESP_LOGI(TAG, "SIP TCP originate connected to %s:%u", host.c_str(), (unsigned) sip_port);
+  this->tcp_connect_ip_v4_.store(ip_v4, std::memory_order_release);
+  this->tcp_connect_port_.store(sip_port, std::memory_order_release);
+  this->tcp_connect_requested_.store(true, std::memory_order_release);
   return true;
 }
 
@@ -729,21 +680,11 @@ void SipTransport::set_sip_signaling_transport(bool tcp) {
 }
 
 void SipTransport::clear_invite_transaction_() {
-  this->pending_invite_request_.clear();
-  this->pending_invite_ip_v4_ = 0;
-  this->pending_invite_port_ = 0;
-  this->pending_invite_next_ms_ = 0;
-  this->pending_invite_interval_ms_ = 500;
-  this->pending_invite_retries_ = 0;
+  this->pending_invite_.clear();
 }
 
 void SipTransport::clear_bye_transaction_() {
-  this->pending_bye_request_.clear();
-  this->pending_bye_ip_v4_ = 0;
-  this->pending_bye_port_ = 0;
-  this->pending_bye_next_ms_ = 0;
-  this->pending_bye_interval_ms_ = 500;
-  this->pending_bye_retries_ = 0;
+  this->pending_bye_.clear();
 }
 
 void SipTransport::clear_udp_transactions_() {
@@ -794,57 +735,49 @@ void SipTransport::remember_udp_transaction_(const std::string &method, const st
   if (this->remote_sip_tcp_.load(std::memory_order_acquire) || message.empty() || ip_v4 == 0 || port == 0) {
     return;
   }
-  const uint32_t now = millis();
+  UdpTransaction *txn = nullptr;
   if (method == "INVITE") {
-    this->pending_invite_request_ = message;
-    this->pending_invite_ip_v4_ = ip_v4;
-    this->pending_invite_port_ = port;
-    this->pending_invite_interval_ms_ = 500;
-    this->pending_invite_next_ms_ = now + this->pending_invite_interval_ms_;
-    this->pending_invite_retries_ = 0;
+    txn = &this->pending_invite_;
   } else if (method == "BYE") {
-    this->pending_bye_request_ = message;
-    this->pending_bye_ip_v4_ = ip_v4;
-    this->pending_bye_port_ = port;
-    this->pending_bye_interval_ms_ = 500;
-    this->pending_bye_next_ms_ = now + this->pending_bye_interval_ms_;
-    this->pending_bye_retries_ = 0;
+    txn = &this->pending_bye_;
   }
+  if (txn == nullptr) return;
+  const uint32_t now = millis();
+  txn->request = message;
+  txn->ip_v4 = ip_v4;
+  txn->port = port;
+  txn->interval_ms = 500;
+  txn->next_ms = now + txn->interval_ms;
+  txn->retries = 0;
 }
 
 void SipTransport::pump_udp_retransmits_() {
   if (this->remote_sip_tcp_.load(std::memory_order_acquire)) return;
   const uint32_t now = millis();
-  auto pump = [this, now](std::string *request, uint32_t *ip, uint16_t *port,
-                          uint32_t *next_ms, uint16_t *interval_ms,
-                          uint8_t *retries, const char *method) {
-    if (request->empty() || *ip == 0 || *port == 0 || now - *next_ms >= 0x80000000UL) return;
-    if (now < *next_ms) return;
+  auto pump = [this, now](UdpTransaction &txn, const char *method) {
+    if (txn.empty() || txn.ip_v4 == 0 || txn.port == 0 || now - txn.next_ms >= 0x80000000UL) return;
+    if (now < txn.next_ms) return;
     const uint8_t max_retries = std::strcmp(method, "BYE") == 0 ? 4 : 6;
-    if (*retries >= max_retries) {
+    if (txn.retries >= max_retries) {
       ESP_LOGW(TAG, "SIP UDP %s retransmit limit reached", method);
-      request->clear();
+      txn.request.clear();
       if (std::strcmp(method, "BYE") == 0) {
         this->reset_dialog_();
       }
       return;
     }
-    if (this->send_sip_(*request, *ip, *port)) {
-      (*retries)++;
-      ESP_LOGD(TAG, "SIP UDP %s retransmit #%u", method, (unsigned) *retries);
+    if (this->send_sip_(txn.request, txn.ip_v4, txn.port)) {
+      txn.retries++;
+      ESP_LOGD(TAG, "SIP UDP %s retransmit #%u", method, (unsigned) txn.retries);
     }
-    *interval_ms = std::min<uint16_t>(static_cast<uint16_t>(*interval_ms * 2), 4000);
-    *next_ms = now + *interval_ms;
+    txn.interval_ms = std::min<uint16_t>(static_cast<uint16_t>(txn.interval_ms * 2), 4000);
+    txn.next_ms = now + txn.interval_ms;
   };
 
   if (this->outgoing_invite_pending_.load(std::memory_order_acquire)) {
-    pump(&this->pending_invite_request_, &this->pending_invite_ip_v4_,
-         &this->pending_invite_port_, &this->pending_invite_next_ms_,
-         &this->pending_invite_interval_ms_, &this->pending_invite_retries_, "INVITE");
+    pump(this->pending_invite_, "INVITE");
   }
-  pump(&this->pending_bye_request_, &this->pending_bye_ip_v4_,
-       &this->pending_bye_port_, &this->pending_bye_next_ms_,
-       &this->pending_bye_interval_ms_, &this->pending_bye_retries_, "BYE");
+  pump(this->pending_bye_, "BYE");
 }
 
 bool SipTransport::local_ip_for_peer_(uint32_t peer_ip_v4, std::string *out) const {
@@ -908,7 +841,15 @@ bool SipTransport::send_sip_(const std::string &message, uint32_t ip_v4, uint16_
 
 bool SipTransport::send_sip_tcp_(const std::string &message) {
   const int socket = this->sip_tcp_client_socket_.load(std::memory_order_acquire);
-  if (socket < 0 || message.empty()) return false;
+  if (message.empty()) return false;
+  if (socket < 0) {
+    if (this->remote_sip_tcp_.load(std::memory_order_acquire)) {
+      LockGuard lock(this->tcp_tx_pending_mutex_);
+      this->tcp_tx_pending_ = message;
+      return true;
+    }
+    return false;
+  }
   size_t sent_total = 0;
   while (sent_total < message.size()) {
     const int sent = send(socket, message.data() + sent_total, message.size() - sent_total, 0);
@@ -1749,13 +1690,101 @@ void SipTransport::rtp_task_trampoline_(void *param) {
 
 void SipTransport::sip_task_() {
   uint8_t buf[2048];
+  int connecting_fd = -1;
+  uint32_t connect_deadline_ms = 0;
+  uint32_t connecting_ip_v4 = 0;
+  uint16_t connecting_port = 0;
+  auto close_connecting = [&]() {
+    if (connecting_fd >= 0) close(connecting_fd);
+    connecting_fd = -1;
+    connect_deadline_ms = 0;
+    connecting_ip_v4 = 0;
+    connecting_port = 0;
+  };
+  auto drop_tcp_pending = [this]() {
+    LockGuard lock(this->tcp_tx_pending_mutex_);
+    this->tcp_tx_pending_.clear();
+  };
+  auto fail_tcp_connect = [&](int err) {
+    char ip[16];
+    struct in_addr a{};
+    a.s_addr = htonl(connecting_ip_v4);
+    inet_ntoa_r(a, ip, sizeof(ip));
+    ESP_LOGW(TAG, "SIP TCP connect to %s:%u failed: %s (%d: %s)",
+             ip, (unsigned) connecting_port, socket_errno_name(err), err, socket_errno_text(err));
+    close_connecting();
+    this->tcp_connect_requested_.store(false, std::memory_order_release);
+    drop_tcp_pending();
+    this->emit_connection_change_(false);
+  };
+  auto promote_tcp_connect = [&]() {
+    this->sip_tcp_client_socket_.store(connecting_fd, std::memory_order_release);
+    this->sip_tcp_client_close_requested_.store(false, std::memory_order_release);
+    this->sip_tcp_rx_buffer_.clear();
+    char ip[16];
+    struct in_addr a{};
+    a.s_addr = htonl(connecting_ip_v4);
+    inet_ntoa_r(a, ip, sizeof(ip));
+    ESP_LOGI(TAG, "SIP TCP originate connected to %s:%u", ip, (unsigned) connecting_port);
+    connecting_fd = -1;
+    connect_deadline_ms = 0;
+    connecting_ip_v4 = 0;
+    connecting_port = 0;
+    this->tcp_connect_requested_.store(false, std::memory_order_release);
+    std::string pending;
+    {
+      LockGuard lock(this->tcp_tx_pending_mutex_);
+      pending.swap(this->tcp_tx_pending_);
+    }
+    if (!pending.empty()) {
+      this->send_sip_tcp_(pending);
+    }
+  };
   while (this->running_.load(std::memory_order_acquire)) {
     this->pump_udp_retransmits_();
     if (this->sip_tcp_client_close_requested_.load(std::memory_order_acquire)) {
+      close_connecting();
       this->close_tcp_client_from_sip_task_();
     }
+    if (this->tcp_connect_requested_.load(std::memory_order_acquire)) {
+      close_connecting();
+      this->close_tcp_client_from_sip_task_();
+      connecting_ip_v4 = this->tcp_connect_ip_v4_.load(std::memory_order_acquire);
+      connecting_port = this->tcp_connect_port_.load(std::memory_order_acquire);
+      if (connecting_ip_v4 == 0 || connecting_port == 0) {
+        this->tcp_connect_requested_.store(false, std::memory_order_release);
+        drop_tcp_pending();
+        this->emit_connection_change_(false);
+      } else {
+        connecting_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (connecting_fd < 0) {
+          fail_tcp_connect(errno);
+        } else {
+          int opt = 1;
+          setsockopt(connecting_fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+          int flags = fcntl(connecting_fd, F_GETFL, 0);
+          fcntl(connecting_fd, F_SETFL, flags | O_NONBLOCK);
+
+          struct sockaddr_in dest{};
+          dest.sin_family = AF_INET;
+          dest.sin_addr.s_addr = htonl(connecting_ip_v4);
+          dest.sin_port = htons(connecting_port);
+          const int rc = connect(connecting_fd, reinterpret_cast<struct sockaddr *>(&dest), sizeof(dest));
+          if (rc == 0) {
+            promote_tcp_connect();
+          } else if (errno == EINPROGRESS) {
+            connect_deadline_ms = millis() + 2000;
+            this->tcp_connect_requested_.store(false, std::memory_order_release);
+          } else {
+            fail_tcp_connect(errno);
+          }
+        }
+      }
+    }
     fd_set readfds;
+    fd_set writefds;
     FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
     int max_fd = -1;
     if (this->sip_socket_ >= 0) {
       FD_SET(this->sip_socket_, &readfds);
@@ -1770,13 +1799,31 @@ void SipTransport::sip_task_() {
       FD_SET(tcp_client, &readfds);
       max_fd = std::max(max_fd, tcp_client);
     }
+    if (connecting_fd >= 0) {
+      FD_SET(connecting_fd, &writefds);
+      max_fd = std::max(max_fd, connecting_fd);
+    }
     struct timeval timeout{};
     timeout.tv_sec = 0;
     timeout.tv_usec = 10000;
-    const int ready = max_fd >= 0 ? select(max_fd + 1, &readfds, nullptr, nullptr, &timeout) : 0;
+    const int ready = max_fd >= 0 ? select(max_fd + 1, &readfds, &writefds, nullptr, &timeout) : 0;
+    if (connecting_fd >= 0 && millis() - connect_deadline_ms < 0x80000000UL && millis() >= connect_deadline_ms) {
+      fail_tcp_connect(ETIMEDOUT);
+      continue;
+    }
     if (ready <= 0) {
       delay(1);
       continue;
+    }
+
+    if (connecting_fd >= 0 && FD_ISSET(connecting_fd, &writefds)) {
+      int so_error = 0;
+      socklen_t len = sizeof(so_error);
+      if (getsockopt(connecting_fd, SOL_SOCKET, SO_ERROR, &so_error, &len) == 0 && so_error == 0) {
+        promote_tcp_connect();
+      } else {
+        fail_tcp_connect(so_error == 0 ? errno : so_error);
+      }
     }
 
     if (this->sip_tcp_listener_socket_ >= 0 && FD_ISSET(this->sip_tcp_listener_socket_, &readfds)) {
@@ -1822,6 +1869,7 @@ void SipTransport::sip_task_() {
       this->handle_sip_stream_(active_tcp_client, src);
     }
   }
+  close_connecting();
   this->close_tcp_client_from_sip_task_();
   vTaskDelete(nullptr);
 }
@@ -1841,9 +1889,7 @@ void SipTransport::rtp_task_() {
       const uint32_t src_ip = ntohl(src.sin_addr.s_addr);
       const uint16_t src_port = ntohs(src.sin_port);
       const uint32_t expected_ip = this->remote_ip_v4_.load(std::memory_order_acquire);
-      const uint16_t expected_port = this->remote_rtp_port_.load(std::memory_order_acquire);
-      if ((expected_ip != 0 && src_ip != expected_ip) ||
-          (expected_port != 0 && src_port != expected_port)) {
+      if (expected_ip != 0 && src_ip != expected_ip) {
         continue;
       }
       const uint32_t ssrc = (static_cast<uint32_t>(buf[8]) << 24) |
@@ -1855,8 +1901,12 @@ void SipTransport::rtp_task_() {
         this->latched_rtp_port_.store(src_port, std::memory_order_release);
         this->latched_rtp_ssrc_.store(ssrc, std::memory_order_release);
         this->rtp_ssrc_latched_.store(true, std::memory_order_release);
-      } else if (this->latched_rtp_ssrc_.load(std::memory_order_acquire) != ssrc) {
-        continue;
+      } else {
+        if (this->latched_rtp_ip_v4_.load(std::memory_order_acquire) != src_ip ||
+            this->latched_rtp_port_.load(std::memory_order_acquire) != src_port ||
+            this->latched_rtp_ssrc_.load(std::memory_order_acquire) != ssrc) {
+          continue;
+        }
       }
       const uint8_t csrc_count = buf[0] & 0x0F;
       size_t header = 12u + static_cast<size_t>(csrc_count) * 4u;

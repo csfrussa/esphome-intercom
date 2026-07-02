@@ -390,6 +390,16 @@ class SipTrunkClient:
                 return "registered" if self.registered else "unregistered"
             self.registered = False
             result = sip.sip_failure_reason(msg.status_code)
+            if expires_value <= 0:
+                _LOGGER.info(
+                    "SIP trunk unregister rejected server=%s transport=%s status=%s %s reason=%s; continuing shutdown/reconfigure",
+                    self.config.server,
+                    self.transport_name,
+                    msg.status_code,
+                    msg.reason,
+                    result,
+                )
+                return result
             _LOGGER.warning(
                 "SIP trunk registration rejected server=%s transport=%s status=%s %s reason=%s",
                 self.config.server,

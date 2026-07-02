@@ -114,6 +114,11 @@ receive DTMF routing digits when a standard digit channel exists, then
 originates a normal SIP call to HA softphone or a local phonebook target and
 bridges RTP with the same relay.
 
+Current non-goals are RTCP, SRTP and SIP/TLS on ESP devices. The supported
+trust boundary is a local LAN/VPN plus Home Assistant and ESPHome API security.
+Codec-rich or encrypted external legs should terminate on Home Assistant, where
+the bridge can convert and route them to lightweight ESP PCM endpoints.
+
 ## State
 
 The public contract is `SipPhoneState`, including:

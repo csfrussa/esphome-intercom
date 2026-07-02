@@ -209,7 +209,7 @@ void VoipStack::start() {
   this->current_dest_to_caller_format_ = this->rx_audio_format_;
   this->set_current_tx_audio_format_(this->tx_audio_format_);
   this->current_rx_audio_format_ = this->rx_audio_format_;
-  this->set_active_(true);
+  this->set_audio_devices_active_(true);
   this->set_call_state_(CallState::CALLING);
   this->calling_start_time_ = millis();
 
@@ -229,7 +229,9 @@ void VoipStack::start() {
 }
 
 void VoipStack::stop() {
-  if (!this->active_.load(std::memory_order_acquire) && this->call_state_.load(std::memory_order_acquire) == CallState::IDLE) {
+  // Re-entrancy guard: the FSM may already be IDLE while audio devices are
+  // still draining from teardown, so both layers are checked intentionally.
+  if (!this->audio_devices_active_.load(std::memory_order_acquire) && this->call_state_.load(std::memory_order_acquire) == CallState::IDLE) {
     return;
   }
 
@@ -252,7 +254,7 @@ void VoipStack::stop() {
       this->send_sip_cancel_(call_id);
     }
   }
-  this->set_active_(false);
+  this->set_audio_devices_active_(false);
   this->set_in_call_(false);
   if (this->transport_ && !waiting_for_bye_response) this->transport_->disconnect();
 }
@@ -274,7 +276,7 @@ void VoipStack::answer_call() {
   if (this->transport_ && !call_id.empty()) {
     this->send_sip_answer_(call_id);
   }
-  this->set_active_(true);
+  this->set_audio_devices_active_(true);
   this->set_in_call_(true);  // also publishes IN_CALL state
 }
 
@@ -311,8 +313,7 @@ void VoipStack::decline_call(const std::string &reason) {
   if (this->transport_ && this->transport_->is_connected() && !call_id.empty()) {
     this->send_sip_final_response_(call_id, reason);
   }
-  this->set_active_(false);
-  this->in_call_.store(false, std::memory_order_release);
+  this->set_audio_devices_active_(false);
 
   // Disconnect after end_call_ so on_connection_change_(false) sees IDLE
   // and skips the REMOTE_HANGUP path that would mask our trigger.
@@ -364,8 +365,8 @@ void VoipStack::publish_last_reason_(const std::string &reason) {
   this->publish_sip_snapshot_();
 }
 
-void VoipStack::set_active_(bool on) {
-  bool was = this->active_.exchange(on, std::memory_order_acq_rel);
+void VoipStack::set_audio_devices_active_(bool on) {
+  bool was = this->audio_devices_active_.exchange(on, std::memory_order_acq_rel);
   if (was == on) return;
   this->notify_audio_tasks_();
 
@@ -418,15 +419,12 @@ void VoipStack::set_in_call_(bool on) {
       ESP_LOGD(TAG, "Refusing IN_CALL for terminal call_id=%s reason=%s",
                call_id.c_str(),
                terminal_reason.empty() ? "(none)" : terminal_reason.c_str());
-      this->in_call_.store(false, std::memory_order_release);
       this->publish_state_();
       return;
     }
   }
-  this->in_call_.store(on, std::memory_order_release);
-  this->notify_audio_tasks_();
   if (on) {
-    // A new media leg starts here even if active_ was already true because a
+    // A new media leg starts here even if audio_devices_active_ was already true because a
     // previous call did not fully drain yet. Do not inherit peer-audio liveness
     // from the previous dialog, or the media watchdog can fire early.
     this->first_audio_received_.store(false, std::memory_order_release);
@@ -453,6 +451,7 @@ void VoipStack::set_in_call_(bool on) {
     this->dc_blocker_ = {};
 #endif
 
+    // The state flip is the media gate observed by the audio tasks.
     this->set_call_state_(CallState::IN_CALL);  // publishes state internally
   } else {
     if (this->transport_) this->transport_->stop_audio_path();
@@ -493,6 +492,9 @@ void VoipStack::set_call_state_(CallState new_state) {
   // old==new and returns.
   CallState old_state = this->call_state_.exchange(new_state, std::memory_order_acq_rel);
   if (old_state == new_state) return;
+  if ((old_state == CallState::IN_CALL) != (new_state == CallState::IN_CALL)) {
+    this->notify_audio_tasks_();
+  }
 
   if (new_state == CallState::IN_CALL && this->caller_sensor_ != nullptr &&
       !this->caller_sensor_->state.empty()) {
@@ -730,7 +732,7 @@ void VoipStack::on_sip_signal_received_(const SipSignal &msg) {
         // Retract silently. The peer never sees our 200 OK, so its
         // outgoing leg dies on its own timeout; a final response here would
         // just race the peer's success.
-        this->set_active_(false);
+        this->set_audio_devices_active_(false);
         this->set_call_state_(CallState::IDLE);
         goto handle_incoming_invite_in_idle;
       }
@@ -801,7 +803,7 @@ handle_incoming_invite_in_idle:
 
       if (this->auto_answer_) {
         this->send_sip_answer_(incoming_cid);
-        this->set_active_(true);
+        this->set_audio_devices_active_(true);
         this->set_call_state_(CallState::CONNECTING);
         this->set_in_call_(true);
       } else {
@@ -821,7 +823,7 @@ handle_incoming_invite_in_idle:
       this->set_call_state_(CallState::TERMINATING);
       this->end_call_(CallEndReason::REMOTE_HANGUP);
       this->set_in_call_(false);
-      this->set_active_(false);
+      this->set_audio_devices_active_(false);
       if (this->transport_) this->transport_->disconnect();
       break;
     }
@@ -851,7 +853,7 @@ handle_incoming_invite_in_idle:
                    this->device_name_.c_str());
           this->end_call_(CallEndReason::MEDIA_INCOMPATIBLE);
           this->set_in_call_(false);
-          this->set_active_(false);
+          this->set_audio_devices_active_(false);
           if (this->transport_) this->transport_->disconnect();
           break;
         }
@@ -862,7 +864,7 @@ handle_incoming_invite_in_idle:
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
         if (this->speaker_) {
           this->speaker_->set_audio_stream_info(audio_stream_info_from_format(this->current_rx_audio_format_));
-          if (this->active_.load(std::memory_order_acquire)) {
+          if (this->audio_devices_active_.load(std::memory_order_acquire)) {
             this->speaker_->start();
           }
         }
@@ -873,7 +875,7 @@ handle_incoming_invite_in_idle:
         this->set_in_call_(true);
       } else if (state == CallState::RINGING) {
         ESP_LOGI(TAG, "%s: answered remotely (by HA)", this->device_name_.c_str());
-        this->set_active_(true);
+        this->set_audio_devices_active_(true);
         this->set_in_call_(true);
         this->send_sip_answer_(this->get_current_call_id_());
       } else if (state == CallState::IN_CALL &&
@@ -893,7 +895,7 @@ handle_incoming_invite_in_idle:
       ESP_LOGI(TAG, "%s: remote cancelled call (call_id=%s)",
                this->device_name_.c_str(), in_call_id.c_str());
       this->end_call_(CallEndReason::CANCELLED);
-      this->set_active_(false);
+      this->set_audio_devices_active_(false);
       if (this->transport_) this->transport_->disconnect();
       break;
 
@@ -919,7 +921,7 @@ handle_incoming_invite_in_idle:
                detail.empty() ? call_end_reason_to_str(reason) : detail.c_str(),
                in_call_id.c_str());
       this->end_call_(reason, detail);
-      this->set_active_(false);
+      this->set_audio_devices_active_(false);
       if (this->transport_) this->transport_->disconnect();
       break;
     }
@@ -953,8 +955,7 @@ void VoipStack::on_connection_change_(bool connected) {
   }
 
   ESP_LOGI(TAG, "Transport disconnected");
-  this->in_call_.store(false, std::memory_order_release);
-  this->set_active_(false);
+  this->set_audio_devices_active_(false);
   if (this->call_state_.load(std::memory_order_acquire) != CallState::IDLE) {
     this->end_call_(CallEndReason::TRANSPORT_UNREACHABLE);
   } else {

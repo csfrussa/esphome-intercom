@@ -73,8 +73,8 @@ void VoipStack::tx_task(void *param) {
 }
 
 bool VoipStack::is_tx_stream_ready_() const {
-  return this->active_.load(std::memory_order_acquire) &&
-         this->in_call_.load(std::memory_order_acquire) &&
+  return this->audio_devices_active_.load(std::memory_order_acquire) &&
+         this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL &&
          this->transport_ != nullptr && this->transport_->is_connected();
 }
 
@@ -263,6 +263,9 @@ void VoipStack::enqueue_rx_frame_(const TransportAudioFrame &frame) {
   if (after.late != before.late) {
     this->audio_debug_rx_late_frames_.fetch_add(after.late - before.late, std::memory_order_relaxed);
   }
+  if (after.missing != before.missing) {
+    this->audio_debug_rx_missing_frames_.fetch_add(after.missing - before.missing, std::memory_order_relaxed);
+  }
   if (after.duplicates != before.duplicates) {
     this->audio_debug_rx_duplicate_frames_.fetch_add(after.duplicates - before.duplicates, std::memory_order_relaxed);
   }
@@ -280,7 +283,7 @@ void VoipStack::play_rx_frame_(const uint8_t *pcm, size_t bytes, SilenceReason s
 
   size_t offset = 0;
   uint8_t stalls = 0;
-  while (offset < bytes && this->in_call_.load(std::memory_order_acquire)) {
+  while (offset < bytes && this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL) {
     const size_t written = this->speaker_->play(pcm + offset, bytes - offset, ticks_to_wait);
     if (written == 0) {
       if (++stalls >= 4) {
@@ -317,8 +320,8 @@ void VoipStack::rx_task_() {
   ESP_LOGD(TAG, "RX playout task started");
 
   while (true) {
-    if (!this->active_.load(std::memory_order_acquire) ||
-        !this->in_call_.load(std::memory_order_acquire)) {
+    if (!this->audio_devices_active_.load(std::memory_order_acquire) ||
+        this->call_state_.load(std::memory_order_acquire) != CallState::IN_CALL) {
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
       continue;
     }
@@ -345,7 +348,9 @@ void VoipStack::rx_task_() {
         continue;
       }
 #ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
-      this->audio_debug_rx_late_frames_.fetch_add(1, std::memory_order_relaxed);
+      if (read_result == RtpJitterBuffer::ReadResult::MISSING) {
+        this->audio_debug_rx_missing_frames_.fetch_add(1, std::memory_order_relaxed);
+      }
 #endif
       ulTaskNotifyTake(pdTRUE, frame_ticks);
       const uint32_t now = millis();
@@ -356,8 +361,8 @@ void VoipStack::rx_task_() {
       }
       if (now - this->rx_underrun_start_ms_ >= VoipStack::kRxSilenceAfterMs &&
           this->first_audio_received_.load(std::memory_order_acquire) &&
-          this->active_.load(std::memory_order_acquire) &&
-          this->in_call_.load(std::memory_order_acquire)) {
+          this->audio_devices_active_.load(std::memory_order_acquire) &&
+          this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL) {
         this->play_silence_frame_(SilenceReason::NETWORK_GAP, frame_ticks);
       }
       continue;
@@ -374,6 +379,7 @@ void VoipStack::reset_rx_audio_() {
 #ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   this->media_tx_queue_drop_bytes_.store(0, std::memory_order_relaxed);
   this->audio_debug_rx_late_frames_.store(0, std::memory_order_relaxed);
+  this->audio_debug_rx_missing_frames_.store(0, std::memory_order_relaxed);
   this->audio_debug_rx_duplicate_frames_.store(0, std::memory_order_relaxed);
   this->audio_debug_rx_silence_frames_.store(0, std::memory_order_relaxed);
   this->audio_debug_speaker_short_writes_.store(0, std::memory_order_relaxed);

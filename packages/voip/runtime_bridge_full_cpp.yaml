@@ -81,6 +81,10 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  - id: g_voip_ringtone_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
 
 esphome:
   on_boot:
@@ -148,17 +152,15 @@ script:
                 tag: mww
                 format: "MWW: safe start"
             - micro_wake_word.start:
-            - lambda: |-
-                TaskHandle_t mww_task = xTaskGetHandle("mww");
-                if (mww_task) {
-                  vTaskPrioritySet(mww_task, 8);
-                }
 
   - id: voip_ringing_loop
     mode: restart
     then:
       - globals.set:
           id: g_voip_ringtone_media_suppressed
+          value: "true"
+      - globals.set:
+          id: g_voip_ringtone_active
           value: "true"
       - while:
           condition:
@@ -179,24 +181,37 @@ script:
                     media_player.is_announcing:
                       id: speaker_media_player
                 timeout: 5s
+      - globals.set:
+          id: g_voip_ringtone_active
+          value: "false"
+      - globals.set:
+          id: g_voip_ringtone_media_suppressed
+          value: "false"
   - id: voip_stop_ringtone
     mode: restart
     then:
       - script.stop: voip_ringing_loop
-      - globals.set:
-          id: g_voip_ringtone_media_suppressed
-          value: "true"
-      - media_player.stop:
-          id: speaker_media_player
-          announcement: true
-      - wait_until:
+      - if:
           condition:
-            not:
-              media_player.is_announcing:
+            lambda: 'return id(g_voip_ringtone_active);'
+          then:
+            - globals.set:
+                id: g_voip_ringtone_media_suppressed
+                value: "true"
+            - media_player.stop:
                 id: speaker_media_player
-          timeout: 1500ms
+                announcement: true
+            - wait_until:
+                condition:
+                  not:
+                    media_player.is_announcing:
+                      id: speaker_media_player
+                timeout: 1500ms
       - globals.set:
           id: g_voip_ringtone_media_suppressed
+          value: "false"
+      - globals.set:
+          id: g_voip_ringtone_active
           value: "false"
       - runtime_controller.event:
           id: runtime

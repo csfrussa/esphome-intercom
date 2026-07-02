@@ -68,7 +68,7 @@ static void esp_like_combinations() {
       {"boot", activity(1u << 0, 1000, {policy("led_status", "boot"), policy("display_status", "boot")})},
       {"no_wifi", activity(1u << 1, 990, {policy("led_status", "no_wifi"), policy("display_status", "no_wifi")})},
       {"no_ha", activity(1u << 2, 980, {policy("led_status", "no_ha"), policy("display_status", "no_ha")})},
-      {"muted", activity(1u << 3, 950, {policy("led_status", "mic_muted"), policy("display_status", "muted")})},
+      {"muted", activity(1u << 3, 650, {policy("led_status", "mic_muted"), policy("display_status", "muted")})},
       {"media", activity(1u << 4, 100, {policy("led_status", "media"), policy("display_status", "media"), policy("audio_policy", "normal")})},
       {"announcement", activity(1u << 5, 200, {policy("led_status", "announcement"), policy("display_status", "announcement"), policy("audio_policy", "duck")})},
       {"voip_ringing", activity(1u << 6, 975, {policy("led_status", "ringing"), policy("display_status", "voip_ringing"), policy("audio_policy", "duck")})},

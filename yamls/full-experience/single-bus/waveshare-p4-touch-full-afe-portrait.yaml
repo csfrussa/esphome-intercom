@@ -92,6 +92,8 @@ substitutions:
   # audibly when AEC is disabled.
   afe_aec_restore_mode: ALWAYS_ON
 
+# Shared packages: P4 base/hosted Wi-Fi, full VA/VoIP runtime, runtime
+# controller, phonebook sync, ESP AFE controls, LVGL dashboard and media assets.
 packages:
   p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
   p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
@@ -142,6 +144,8 @@ esphome:
         - delay: 1s
         - script.execute: start_mww_when_ready
 
+# External PSRAM used by LVGL assets, media buffers and selected component task
+# stacks. The P4 board exposes hex PSRAM at high speed.
 psram:
   mode: hex
   speed: 200MHz
@@ -167,6 +171,8 @@ esp32_hosted:
   d3_pin: GPIO17
   active_high: true
 
+# Network link for HA API, VoIP signaling/RTP and media streams. Power save is
+# disabled because calls and dashboard state updates are latency-sensitive.
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -180,15 +186,21 @@ wifi:
     - logger.log: "WiFi disconnected"
     - script.execute: draw_display
 
+# Home Assistant native API. It carries entity state, service actions and the
+# central phonebook updates used by VoIP Stack.
 api:
   on_client_connected:
     - script.execute: set_idle_or_mute_phase
     - script.execute: draw_display
     - delay: 5s
     - script.execute: fetch_forecast
+
+# OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
 ota:
   - platform: esphome
 
+# UART logger. Keep VoIP domains visible at INFO; noisy entity/component domains
+# stay WARN unless the board is being actively debugged.
 logger:
   hardware_uart: UART0
   # Production profile. Debug packages are opt-in and kept out of device YAMLs.
@@ -210,12 +222,15 @@ logger:
     api.connection: WARN
     component: WARN
 
+# Conservative lwIP profile for ESP32-P4 hosted Wi-Fi. Display, AFE and VoIP are
+# more sensitive to internal DMA heap pressure than to peak network throughput.
 network:
   # ESPHome's high-performance preset uses large lwIP windows/mailboxes and
   # Wi-Fi buffer counts. On hosted P4+C6 the bottleneck is INTERNAL|DMA
   # headroom, not iperf throughput, so keep the network profile conservative.
   enable_high_performance: false
 
+# SNTP clock used by the dashboard page and runtime labels.
 time:
   - platform: sntp
     id: my_time
@@ -286,6 +301,8 @@ esp_afe:
   feed_ring_in_psram: false
   fetch_ring_in_psram: false
 
+# Hardware audio stack: ES7210/ES8311 codec control, 48 kHz TDM bus, AFE feed
+# and speaker output through the shared esp_audio_stack component.
 esp_audio_stack:
   id: audio_stack
   # Concurrent TLS streams (music + TTS + VoIP) are tight on internal RAM.
@@ -377,16 +394,19 @@ speaker:
     task_stack_in_psram: true
     buffer_duration: 128ms
 
+# Sendspin media hub used by the full dashboard media experience.
 sendspin:
   id: sendspin_hub
   task_stack_in_psram: true
 
+# Local FLAC assets for timer completion and VoIP ringing.
 audio_file:
   - id: timer_finished_sound
     file: ${assets_base}assets/sounds/timer_finished.flac
   - id: voip_ringing_sound
     file: ${assets_base}assets/sounds/ringtone.flac
 
+# Media sources for music, announcements, bundled sounds and Sendspin artwork.
 media_source:
   - platform: audio_http
     id: media_http_source
@@ -608,6 +628,7 @@ output:
     id: speaker_enable
     pin: GPIO53
 
+# Display backlight entity backed by the PWM output above.
 light:
   - platform: monochromatic
     id: display_backlight

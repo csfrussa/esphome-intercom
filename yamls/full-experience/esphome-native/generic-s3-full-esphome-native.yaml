@@ -67,6 +67,8 @@ substitutions:
   status_led_chipset: WS2812
   status_led_rgb_order: GRB
 
+# Shared packages: full VA/VoIP runtime, runtime controller, phonebook sync,
+# native diagnostics and the 48 kHz mixer/media-player path.
 packages:
   core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
   runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
@@ -86,10 +88,13 @@ packages:
   va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
 
+# Device identity exposed to ESPHome, Home Assistant and OTA.
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
 
+# ESP32-S3 target and ESP-IDF tuning. External mbedTLS allocation allows TLS
+# clients and media buffers to use PSRAM where supported.
 esp32:
   board: freenove_esp32_s3_wroom
   variant: esp32s3
@@ -103,19 +108,27 @@ esp32:
       CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: "y"
       CONFIG_ESP_CONSOLE_SECONDARY_NONE: "y"
 
+# OPI PSRAM is required by the full native profile for media buffers, codecs and
+# larger task stacks.
 psram:
   mode: octal
   speed: 80MHz
 
+# Keep restored settings durable without writing flash on every slider change.
 preferences:
   flash_write_interval: 5min
 
+# Home Assistant native API. The included VoIP packages add service actions for
+# call control, phonebook sync and runtime diagnostics.
 api:
 
+# OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
 ota:
   - platform: esphome
     id: ota_esphome
 
+# USB Serial/JTAG logger. Keep core VoIP logs at INFO for field diagnostics;
+# noisy ESPHome component domains stay WARN unless this YAML is being debugged.
 logger:
   hardware_uart: USB_SERIAL_JTAG
   level: INFO
@@ -150,20 +163,30 @@ logger:
     wifi: INFO
     json: INFO
 
+# Normal Wi-Fi client mode. Power save is disabled because VoIP media and HA
+# API updates are latency-sensitive.
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: NONE
 
+# Project components pulled from the selected source. This native profile avoids
+# esp_audio_stack on purpose, but still uses voip_stack/runtime_controller and
+# the shared speaker/voice_assistant component patches.
 external_components:
   - source: ${ext_components_source}
     components: [voip_stack, audio_processor, runtime_controller, speaker, voice_assistant]
 
+# Speaker amplifier enable pin. If your MAX98357A board has SD/EN tied high,
+# this output can remain unused or be removed in a custom YAML.
 output:
   - platform: gpio
     id: speaker_enable
     pin: ${speaker_enable_pin}
 
+# Two independent native ESPHome I2S buses: one for the microphone and one for
+# the amplifier. This is the reference path for testing VoIP without
+# esp_audio_stack.
 i2s_audio:
   - id: rx_i2s
     i2s_bclk_pin: GPIO9
@@ -173,6 +196,8 @@ i2s_audio:
     i2s_bclk_pin: GPIO12
     i2s_lrclk_pin: GPIO13
 
+# Native ESPHome microphone. It feeds three consumers through MicrophoneSource:
+# Voice Assistant, Micro Wake Word and VoIP TX.
 # INMP441 is strapped to the right slot. Keep the wire in stereo and let each
 # MicrophoneSource select channel 1; this matches the stable full-duplex path
 # and avoids mono-slot silence on some IDF/board combinations.
@@ -187,6 +212,8 @@ microphone:
     bits_per_sample: 32bit
     correct_dc_offset: true
 
+# Native ESPHome speaker sink. The mixer/resampler package above provides the
+# shared 48 kHz software input used by media playback, TTS, ringtone and VoIP RX.
 speaker:
   - platform: i2s_audio
     id: hw_speaker
@@ -199,6 +226,7 @@ speaker:
     buffer_duration: 100ms
     timeout: 500ms
 
+# Micro Wake Word listens to the same native microphone on channel 1.
 micro_wake_word:
   microphone:
     id: mww_mic_source
@@ -209,6 +237,8 @@ micro_wake_word:
   models:
     - model: alexa
 
+# Voice Assistant uses the native mic and the shared media_player output. This
+# profile has no software AEC, so plain speakers may echo into VA.
 voice_assistant:
   microphone:
     - id: va_mic_source
@@ -222,6 +252,9 @@ voice_assistant:
   auto_gain: 31dBFS
   volume_multiplier: 2.0
 
+# Local SIP phone. TX comes from the native microphone source; RX goes through
+# the shared speaker mixer at 48 kHz. HA owns the normal central phonebook and
+# pushes updates through the included API package.
 voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
@@ -242,6 +275,8 @@ voip_stack:
   delete_contact_missing_from:
     updates_number: 1
 
+# User-facing master volume. The mixer ducking value is derived here so media,
+# TTS, ringtone and VoIP share one perceived output level.
 number:
   - platform: template
     id: master_volume
@@ -310,6 +345,8 @@ number:
           id(voip_mic_source).set_gain_factor(factor);
           ESP_LOGI("audio", "Native mic boost %.0fdB -> MicrophoneSource gain_factor=%d", clamped, factor);
 
+# Hardware speaker power switch. It controls the amplifier enable pin only; the
+# mixer/media/VoIP software paths remain configured while the amp is off.
 switch:
   - platform: output
     id: speaker_power
@@ -317,6 +354,8 @@ switch:
     output: speaker_enable
     restore_mode: RESTORE_DEFAULT_ON
 
+# Local BOOT button: short press controls VA/call toggle, double press changes
+# contact, long press toggles microphone mute.
 binary_sensor:
   # BOOT button (GPIO0), multi-click.
   - platform: gpio

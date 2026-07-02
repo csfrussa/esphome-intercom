@@ -6,6 +6,8 @@
 
 #include "transport.h"
 
+#include "esphome/core/helpers.h"
+
 #include <lwip/sockets.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
@@ -115,6 +117,24 @@ class SipTransport : public SipPhoneTransport {
   void get_media_config_(AudioFormat *tx, AudioFormat *rx,
                          uint8_t *tx_payload_type, uint8_t *rx_payload_type) const;
 
+  struct UdpTransaction {
+    std::string request;
+    uint32_t ip_v4{0};
+    uint16_t port{0};
+    uint32_t next_ms{0};
+    uint16_t interval_ms{500};
+    uint8_t retries{0};
+    void clear() {
+      this->request.clear();
+      this->ip_v4 = 0;
+      this->port = 0;
+      this->next_ms = 0;
+      this->interval_ms = 500;
+      this->retries = 0;
+    }
+    bool empty() const { return this->request.empty(); }
+  };
+
   uint16_t sip_port_{5060};
   uint16_t rtp_port_{40000};
   size_t udp_max_payload_{UDP_SAFE_AUDIO_PAYLOAD_BYTES};
@@ -156,22 +176,17 @@ class SipTransport : public SipPhoneTransport {
   mutable portMUX_TYPE media_config_lock_ = portMUX_INITIALIZER_UNLOCKED;
   uint32_t cseq_{1};
   uint32_t invite_cseq_{1};
-  std::string pending_invite_request_;
-  std::string pending_bye_request_;
-  uint32_t pending_invite_ip_v4_{0};
-  uint32_t pending_bye_ip_v4_{0};
-  uint16_t pending_invite_port_{0};
-  uint16_t pending_bye_port_{0};
-  uint32_t pending_invite_next_ms_{0};
-  uint32_t pending_bye_next_ms_{0};
-  uint16_t pending_invite_interval_ms_{500};
-  uint16_t pending_bye_interval_ms_{500};
-  uint8_t pending_invite_retries_{0};
-  uint8_t pending_bye_retries_{0};
+  UdpTransaction pending_invite_;
+  UdpTransaction pending_bye_;
 
   int sip_socket_{-1};
   int sip_tcp_listener_socket_{-1};
   std::atomic<int> sip_tcp_client_socket_{-1};
+  std::atomic<uint32_t> tcp_connect_ip_v4_{0};
+  std::atomic<uint16_t> tcp_connect_port_{0};
+  std::atomic<bool> tcp_connect_requested_{false};
+  mutable Mutex tcp_tx_pending_mutex_;
+  std::string tcp_tx_pending_;
   int rtp_socket_{-1};
   TaskHandle_t sip_task_handle_{nullptr};
   StaticTask_t sip_task_tcb_{};

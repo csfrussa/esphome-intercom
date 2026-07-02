@@ -212,7 +212,7 @@ class VoipStack : public Component {
   ConnectionState get_state() const {
     if (this->transport_ == nullptr || !this->transport_->is_connected())
       return ConnectionState::DISCONNECTED;
-    return this->in_call_.load(std::memory_order_acquire)
+    return this->call_state_.load(std::memory_order_acquire) == CallState::IN_CALL
                ? ConnectionState::IN_CALL
                : ConnectionState::CONNECTED;
   }
@@ -383,7 +383,7 @@ class VoipStack : public Component {
   void reset_rx_audio_();
 #endif
 
-  void set_active_(bool on);
+  void set_audio_devices_active_(bool on);
   void set_in_call_(bool on);
   void notify_audio_tasks_();
 
@@ -428,9 +428,10 @@ class VoipStack : public Component {
   speaker::Speaker *speaker_{nullptr};
 #endif
 
-  // Mode and state
-  std::atomic<bool> active_{false};
-  std::atomic<bool> in_call_{false};
+  // Call state is the public FSM source of truth. is_active() is true for
+  // ringing/calling too; audio_devices_active_ only gates mic/speaker hardware
+  // and is intentionally false while a call is merely ringing.
+  std::atomic<bool> audio_devices_active_{false};
   std::atomic<CallState> call_state_{CallState::IDLE};  // FSM source of truth
 
   // Transport configuration (set from YAML before setup()). Defaults:
@@ -572,6 +573,7 @@ class VoipStack : public Component {
 #ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   std::atomic<uint32_t> media_tx_queue_drop_bytes_{0};
   std::atomic<uint32_t> audio_debug_rx_late_frames_{0};
+  std::atomic<uint32_t> audio_debug_rx_missing_frames_{0};
   std::atomic<uint32_t> audio_debug_rx_duplicate_frames_{0};
   std::atomic<uint32_t> audio_debug_rx_silence_frames_{0};
   std::atomic<uint32_t> audio_debug_speaker_short_writes_{0};

@@ -31,6 +31,7 @@ class RtpJitterBuffer {
     uint32_t depth{0};
     uint32_t drops{0};
     uint32_t late{0};
+    uint32_t missing{0};
     uint32_t duplicates{0};
   };
 
@@ -152,7 +153,6 @@ inline bool RtpJitterBuffer::push(const Frame &frame) {
   if (this->buffering_ && this->valid_count_ >= this->prebuffer_) {
     this->buffering_ = false;
   }
-  this->counters_.depth = this->valid_count_;
   return true;
 }
 
@@ -167,7 +167,6 @@ inline RtpJitterBuffer::ReadResult RtpJitterBuffer::read(uint8_t *out, size_t ex
     if (this->next_sequence_valid_ && this->valid_count_ >= this->prebuffer_) {
       this->buffering_ = false;
     } else {
-      this->counters_.depth = this->valid_count_;
       return ReadResult::BUFFERING;
     }
   }
@@ -182,20 +181,17 @@ inline RtpJitterBuffer::ReadResult RtpJitterBuffer::read(uint8_t *out, size_t ex
     slot.bytes = 0;
     if (this->valid_count_ > 0) this->valid_count_--;
     this->next_sequence_ = static_cast<uint16_t>(this->next_sequence_ + 1);
-    this->counters_.depth = this->valid_count_;
     return ReadResult::FRAME;
   }
 
   if (this->valid_count_ == 0) {
     this->buffering_ = true;
     this->next_sequence_valid_ = false;
-    this->counters_.depth = 0;
     return ReadResult::BUFFERING;
   }
 
-  this->counters_.late++;
+  this->counters_.missing++;
   this->next_sequence_ = static_cast<uint16_t>(this->next_sequence_ + 1);
-  this->counters_.depth = this->valid_count_;
   return ReadResult::MISSING;
 }
 

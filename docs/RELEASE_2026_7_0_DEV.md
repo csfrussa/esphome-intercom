@@ -171,6 +171,10 @@ VoIP call-control path is not a compatibility layer.
   remote side will send audio.
 - 🧯 Unsupported high-rate or oversized media profiles are rejected with a SIP
   terminal reason instead of playing garbage.
+- 🧭 Direct ESP-to-softphone calls without HA in the media path require a
+  softphone that accepts the ESP PCM/L16 profile. G.711, Opus, trunk and normal
+  softphone interoperability are handled by HA bridge/trunk legs, where HA owns
+  codec conversion and sends compatible PCM to ESP devices.
 - 📚 `docs/INTERCOM_PROTOCOL.md` and `docs/PHONEBOOK_PROTOCOL.md` were updated
   for the format-aware endpoint rows and negotiated call setup.
 

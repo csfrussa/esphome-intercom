@@ -377,7 +377,7 @@ void VoipStack::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_
         waiting_for_bye_response = this->send_sip_bye_(cid);
       }
       this->set_in_call_(false);
-      this->set_active_(false);
+      this->set_audio_devices_active_(false);
       if (this->transport_ && !waiting_for_bye_response) this->transport_->disconnect();
     }
   }
@@ -425,8 +425,7 @@ void VoipStack::fire_timeout_decline_() {
     this->send_sip_final_response_(call_id, kReasonTimeout);
   }
   this->set_terminal_response_(call_id, kReasonTimeout);
-  this->set_active_(false);
-  this->in_call_.store(false, std::memory_order_release);
+  this->set_audio_devices_active_(false);
   this->end_call_(CallEndReason::TIMEOUT, kReasonTimeout);
   if (this->transport_) this->transport_->disconnect();
 }
@@ -640,9 +639,10 @@ std::string VoipStack::build_sip_snapshot_string_() const {
 #ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   if (this->audio_debug_) {
     char debug[160];
-    snprintf(debug, sizeof(debug), ";tqdb=%u;rlate=%u;rdup=%u;rsil=%u;spkshort=%u",
+    snprintf(debug, sizeof(debug), ";tqdb=%u;rlate=%u;rmiss=%u;rdup=%u;rsil=%u;spkshort=%u",
              (unsigned) this->media_tx_queue_drop_bytes_.load(std::memory_order_relaxed),
              (unsigned) this->audio_debug_rx_late_frames_.load(std::memory_order_relaxed),
+             (unsigned) this->audio_debug_rx_missing_frames_.load(std::memory_order_relaxed),
              (unsigned) this->audio_debug_rx_duplicate_frames_.load(std::memory_order_relaxed),
              (unsigned) this->audio_debug_rx_silence_frames_.load(std::memory_order_relaxed),
              (unsigned) this->audio_debug_speaker_short_writes_.load(std::memory_order_relaxed));

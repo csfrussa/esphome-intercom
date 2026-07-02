@@ -61,14 +61,31 @@ def test_sip_udp_transactions_are_minimal_and_explicit() -> None:
     sip_h = read("sip_transport.h")
     sip_cpp = read("sip_transport.cpp")
 
-    assert "pending_invite_request_" in sip_h
-    assert "pending_bye_request_" in sip_h
+    assert "struct UdpTransaction" in sip_h
+    assert "UdpTransaction pending_invite_" in sip_h
+    assert "UdpTransaction pending_bye_" in sip_h
+    assert "pending_invite_request_" not in sip_h
+    assert "pending_bye_request_" not in sip_h
     assert "remember_udp_transaction_" in sip_h
     assert "pump_udp_retransmits_" in sip_h
     assert 'remember_udp_transaction_(method, msg, ip, port)' in sip_cpp
     assert "clear_invite_transaction_();" in sip_cpp
     assert "clear_bye_transaction_();" in sip_cpp
     assert "SIP UDP %s retransmit" in sip_cpp
+
+
+def test_sip_tcp_originate_is_async() -> None:
+    sip_cpp = read("sip_transport.cpp")
+    start = sip_cpp.index("bool SipTransport::originate(")
+    end = sip_cpp.index("\nvoid SipTransport::set_remote", start)
+    originate = sip_cpp[start:end]
+
+    assert "tcp_connect_requested_" in originate
+    assert "tcp_tx_pending_" in sip_cpp
+    assert "delay(" not in originate
+    assert "select(" not in originate
+    assert "socket(" not in originate
+    assert "connect(" not in originate
 
 
 def test_non_2xx_invite_final_response_sends_ack() -> None:
@@ -93,7 +110,7 @@ def test_reinvite_and_rtp_latch_are_explicit() -> None:
     assert "latched_rtp_port_" in sip_h
     assert "latched_rtp_ssrc_" in sip_h
     assert "rtp_ssrc_latched_" in sip_h
-    assert "expected_port = this->remote_rtp_port_" in sip_cpp
+    assert "latched_rtp_port_.store" in sip_cpp
     assert "latched_rtp_ssrc_.load" in sip_cpp
 
 
