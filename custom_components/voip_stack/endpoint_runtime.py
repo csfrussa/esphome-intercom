@@ -47,7 +47,7 @@ from .fsm import (
 )
 from .media_ports import allocate_sip_rtp_port as _allocate_sip_rtp_port
 from .phonebook_runtime import registered_roster_entries as _registered_roster_entries
-from .router import CallContext, RouteAction, RouteHintSource, route_inbound_trunk, resolve_ha_router
+from .router import CallContext, RouteAction, RouteHintSource, RouteReason, route_inbound_trunk, resolve_ha_router
 from .sip_bridge import build_invite_client_relay
 from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphone_call_state, _set_sip_bridge_call_state
 

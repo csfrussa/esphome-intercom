@@ -1158,6 +1158,18 @@ class RouterContractTest(unittest.TestCase):
         ready = router.resolve_ha_router("0551234567", [], trunk_ready=True)
         self.assertEqual(ready.action, router.RouteAction.TRUNK)
 
+    def test_ha_router_name_with_number_and_no_endpoint_uses_trunk(self) -> None:
+        entries = roster.parse_roster_json(
+            [{"id": "Daniele", "name": "Daniele", "kind": "esp", "number": "418"}]
+        )
+        unavailable = router.resolve_ha_router("Daniele", entries, trunk_ready=False)
+        self.assertEqual(unavailable.action, router.RouteAction.REJECT)
+        self.assertEqual(unavailable.target, "418")
+        self.assertEqual(unavailable.reason, router.RouteReason.TRUNK_UNAVAILABLE)
+        ready = router.resolve_ha_router("Daniele", entries, trunk_ready=True)
+        self.assertEqual(ready.action, router.RouteAction.TRUNK)
+        self.assertEqual(ready.target, "418")
+
     def test_trunk_inbound_no_hint_answers_ha(self) -> None:
         ctx = router.CallContext(call_id="trunk-1", direction="inbound", origin="trunk")
         decision = router.route_inbound_trunk(ctx, [], trunk_ready=False)

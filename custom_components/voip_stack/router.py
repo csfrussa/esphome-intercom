@@ -224,6 +224,10 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
             if trunk_ready:
                 return RouteDecision(RouteAction.TRUNK, target=number, source="trunk", entry=entry)
             return RouteDecision(RouteAction.REJECT, target=number, status=503, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
+        if entry.number and not entry.address and not entry.sip_uri:
+            if trunk_ready:
+                return RouteDecision(RouteAction.TRUNK, target=entry.number, source="trunk", entry=entry)
+            return RouteDecision(RouteAction.REJECT, target=entry.number, status=503, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
         if entry.kind == "softphone" and not bool(entry.metadata.get("registered", False)) and not entry.sip_uri and not entry.address:
             return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.TARGET_UNREACHABLE, entry=entry)
         transport = _entry_transport(entry)

@@ -48,13 +48,19 @@ def build_phonebook_service_handlers(
             )
             if key in call.data and metadata_value(key) is not None
         }
+        kind = str(call.data.get("kind") or "").strip().lower()
+        address = str(call.data.get("address") or "").strip()
+        sip_uri = str(call.data.get("sip_uri") or "").strip()
+        number = str(call.data.get("number") or "").strip()
+        if not kind:
+            kind = "phone" if number and not address and not sip_uri else "esp"
         entry = RosterEntry(
             id=entry_id,
             name=name,
-            kind=str(call.data.get("kind") or "esp").strip().lower(),
-            address=str(call.data.get("address") or "").strip(),
-            sip_uri=str(call.data.get("sip_uri") or "").strip(),
-            number=str(call.data.get("number") or "").strip(),
+            kind=kind,
+            address=address,
+            sip_uri=sip_uri,
+            number=number,
             ha_bridge=bool(call.data.get("ha_bridge", False)),
             metadata=metadata,
         )
