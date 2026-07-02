@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from dataclasses import replace
 import logging
+import time
 
 from homeassistant.core import HomeAssistant
 
@@ -50,6 +51,7 @@ from .sip_bridge import build_invite_client_relay
 from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphone_call_state, _set_sip_bridge_call_state
 
 _LOGGER = logging.getLogger(__name__)
+SIP_ROUTE_DECISION_TIMEOUT = 1.5
 
 
 async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
