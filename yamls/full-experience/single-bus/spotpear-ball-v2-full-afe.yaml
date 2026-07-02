@@ -811,6 +811,7 @@ script:
             else if (r == "bridge_error")    return std::string("Bridge error");
             return r.empty() ? std::string("Ended") : ("Declined: " + r);
       - script.execute: backlight_timer
+      - script.execute: draw_display
       - delay: 4s
       - if:
           condition:

@@ -31,6 +31,15 @@ class ContactResolution:
     source: str = "contact"
 
 
+@dataclass(frozen=True)
+class ContactCandidate:
+    """Searchable phonebook entry for Assist target resolution."""
+
+    canonical: str
+    tokens: tuple[str, ...]
+    source: str = "contact"
+
+
 def _slot_value(intent_obj: Intent, name: str) -> str:
     slot = intent_obj.slots.get(name) or {}
     value = slot.get("value", "") if isinstance(slot, dict) else ""
@@ -41,30 +50,49 @@ def _normalize_contact(value: str) -> str:
     return " ".join(str(value or "").strip().casefold().split())
 
 
-def _resolve_contact_name(raw_name: str, contacts: list[str]) -> ContactResolution:
+def _compact_contact(value: str) -> str:
+    return "".join(ch for ch in _normalize_contact(value) if ch.isalnum())
+
+
+def _metadata_tokens(metadata: dict[str, Any]) -> list[str]:
+    tokens: list[str] = []
+    for key in ("alias", "aliases", "area", "room", "zone", "friendly_name"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            tokens.append(value)
+        elif isinstance(value, (list, tuple, set)):
+            tokens.extend(str(item) for item in value)
+    return tokens
+
+
+def _resolve_contact_name(raw_name: str, contacts: list[ContactCandidate]) -> ContactResolution:
     """Resolve a spoken contact to exactly one canonical phonebook contact."""
     normalized = _normalize_contact(raw_name)
+    compact = _compact_contact(raw_name)
     if not normalized:
         return ContactResolution(error="missing")
 
-    matches: list[str] = []
+    matches: list[ContactCandidate] = []
     seen: set[str] = set()
     for contact in contacts:
-        canonical = str(contact or "").strip()
+        canonical = str(contact.canonical or "").strip()
         if not canonical:
             continue
-        if _normalize_contact(canonical) != normalized:
+        token_set = {_normalize_contact(token) for token in contact.tokens if str(token or "").strip()}
+        compact_set = {_compact_contact(token) for token in contact.tokens if str(token or "").strip()}
+        if normalized not in token_set and compact not in compact_set:
             continue
         if canonical in seen:
             continue
         seen.add(canonical)
-        matches.append(canonical)
+        matches.append(contact)
 
     if not matches:
         return ContactResolution(error="not_found")
     if len(matches) > 1:
-        return ContactResolution(error="ambiguous", matches=tuple(matches))
-    return ContactResolution(canonical=matches[0], matches=(matches[0],))
+        return ContactResolution(error="ambiguous", matches=tuple(item.canonical for item in matches))
+    match = matches[0]
+    return ContactResolution(canonical=match.canonical, matches=(match.canonical,), source=match.source)
 
 
 def _response(intent_obj: Intent, speech: str) -> IntentResponse:
@@ -89,24 +117,66 @@ async def _origin_device(intent_obj: Intent) -> dict[str, Any] | None:
     return None
 
 
-async def _phonebook_contacts(hass: HomeAssistant) -> list[str]:
+async def _phonebook_contacts(hass: HomeAssistant) -> list[ContactCandidate]:
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import device_registry as dr
+
+    from .roster import parse_roster_json
+
     devices = await _voip_devices(hass)
-    contacts = [str(device.get("name") or "").strip() for device in devices]
+    area_registry = ar.async_get(hass)
+    device_registry = dr.async_get(hass)
+    contacts: list[ContactCandidate] = []
+
+    def area_name_for_device(device_id: str) -> str:
+        registry_device = device_registry.async_get(device_id)
+        if registry_device is None or not registry_device.area_id:
+            return ""
+        area = area_registry.async_get_area(registry_device.area_id)
+        return "" if area is None else str(area.name or "")
+
+    for device in devices:
+        name = str(device.get("name") or "").strip()
+        if not name:
+            continue
+        tokens = [
+            name,
+            str(device.get("route_id") or ""),
+            str(device.get("esphome_id") or ""),
+            area_name_for_device(str(device.get("device_id") or "")),
+        ]
+        contacts.append(ContactCandidate(canonical=name, tokens=tuple(tokens), source="device"))
 
     ha_phonebook = hass.states.get("sensor.voip_phonebook")
-    raw = ""
     if ha_phonebook is not None:
-        raw = str(ha_phonebook.attributes.get("phonebook") or "")
-    for row in raw.split(","):
-        name = row.split("|", 1)[0].strip()
-        if name:
-            contacts.append(name)
+        roster_json = str(ha_phonebook.attributes.get("roster_json") or "")
+        if roster_json:
+            try:
+                for entry in parse_roster_json(roster_json):
+                    canonical = entry.display_name
+                    tokens = [
+                        entry.id,
+                        entry.name,
+                        entry.number,
+                        entry.address,
+                        *_metadata_tokens(entry.metadata or {}),
+                    ]
+                    contacts.append(ContactCandidate(canonical=canonical, tokens=tuple(tokens), source="phonebook"))
+            except Exception as err:
+                _LOGGER.warning("Assist could not parse VoIP phonebook roster_json: %s", err)
+        else:
+            raw = str(ha_phonebook.attributes.get("phonebook") or "")
+            for row in raw.split(","):
+                name = row.split("|", 1)[0].strip()
+                if name:
+                    contacts.append(ContactCandidate(canonical=name, tokens=(name,), source="phonebook"))
 
-    out: list[str] = []
+    out: list[ContactCandidate] = []
     seen: set[str] = set()
     for contact in contacts:
-        if contact and contact not in seen:
-            seen.add(contact)
+        key = _compact_contact(contact.canonical)
+        if key and key not in seen:
+            seen.add(key)
             out.append(contact)
     return out
 
@@ -137,9 +207,9 @@ async def _resolve_area_contact(hass: HomeAssistant, raw_name: str) -> ContactRe
 
     device_registry = dr.async_get(hass)
     area_id = matching_areas[0].id
-    devices = []
+    devices: list[str] = []
     for device in await _voip_devices(hass):
-        registry_device = device_registry.async_get(device["device_id"])
+        registry_device = device_registry.async_get(str(device.get("device_id") or ""))
         if registry_device is None or registry_device.area_id != area_id:
             continue
         devices.append(str(device.get("name") or "").strip())
