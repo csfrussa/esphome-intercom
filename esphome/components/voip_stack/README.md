@@ -207,12 +207,15 @@ contact is a logical target that can later be upgraded by the HA roster or
 routed through HA.
 
 Runtime YAML automations can mutate the local dial plan with
-`voip_stack.add_contact`, `voip_stack.add_contacts`,
-`voip_stack.remove_contact`, `voip_stack.set_contacts` and
-`voip_stack.flush_contacts`. Use those for custom local behavior only; HA
+`voip_stack.add_contact`, `voip_stack.remove_contact`,
+`voip_stack.set_contacts` and `voip_stack.flush_contacts`. The standard
+packages expose those through ESPHome native API actions named
+`esphome.<slug>_add_contact`, `esphome.<slug>_remove_contact`,
+`esphome.<slug>_set_contacts`, `esphome.<slug>_flush_contacts` and
+`esphome.<slug>_update_contacts`. Use them for custom local behavior only; HA
 central contacts should be managed with HA `voip_stack.add_contact`,
-`voip_stack.remove_contact`, `voip_stack.set_contacts`, `voip_stack.clear_contacts`
-and `voip_stack.push_phonebook` services.
+`voip_stack.remove_contact`, `voip_stack.set_contacts`,
+`voip_stack.clear_contacts` and `voip_stack.push_phonebook` services.
 
 Each ESP publishes an `voip_endpoint` text sensor. Home Assistant builds the
 central `sensor.voip_phonebook` from those endpoints and adds itself as the

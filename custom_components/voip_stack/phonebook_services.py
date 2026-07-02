@@ -36,16 +36,12 @@ def build_phonebook_service_handlers(
             key: metadata_value(key)
             for key in (
                 "transport",
-                "sip_transport",
-                "signaling_transport",
-                "sip_port",
                 "rtp_port",
                 "tx_rate",
                 "rx_rate",
                 "tx_formats",
                 "rx_formats",
                 "max_payload_bytes",
-                "audio_mode",
             )
             if key in call.data and metadata_value(key) is not None
         }
@@ -53,7 +49,7 @@ def build_phonebook_service_handlers(
         sip_uri = str(call.data.get("sip_uri") or "").strip()
         extension = str(call.data.get("extension") or "").strip()
         number = str(call.data.get("number") or "").strip()
-        port = int(call.data.get("port") or call.data.get("sip_port") or 0)
+        port = int(call.data.get("port") or 0)
         entry = RosterEntry(
             id=entry_id,
             name=name,

@@ -63,7 +63,6 @@ CONF_REASON = "reason"
 
 # SIP signaling transport selection. RTP media is always UDP.
 CONF_TRANSPORT = "transport"
-CONF_SIP_TRANSPORT = "sip_transport"
 CONF_SIP_PORT = "sip_port"
 CONF_RTP_PORT = "rtp_port"
 CONF_USE_HA_AS_FIRST_CONTACT = "use_ha_as_first_contact"
@@ -407,7 +406,6 @@ PHONEBOOK_CONTACT_SCHEMA = cv.Schema(
         cv.Optional(CONF_PORT, default=5060): cv.port,
         cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.port,
         cv.Optional(CONF_TRANSPORT): cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True),
-        cv.Optional(CONF_SIP_TRANSPORT): cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True),
     }
 )
 
@@ -428,7 +426,7 @@ def _static_contact_entry(contact, default_transport: str) -> str:
     ip = contact.get(CONF_IP, "")
     if not ip:
         return name
-    transport = contact.get(CONF_TRANSPORT) or contact.get(CONF_SIP_TRANSPORT) or default_transport
+    transport = contact.get(CONF_TRANSPORT) or default_transport
     transport = "sip_tcp" if transport == TRANSPORT_TCP else "sip_udp"
     return f"{name}|{ip}|{contact[CONF_PORT]}|{contact[CONF_RTP_PORT_ACTION]}|{transport}"
 
@@ -1170,7 +1168,6 @@ ADD_CONTACT_SCHEMA = cv.Schema(
         cv.Optional(CONF_PORT, default=5060): cv.templatable(cv.port),
         cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.templatable(cv.port),
         cv.Optional(CONF_TRANSPORT): cv.templatable(cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True)),
-        cv.Optional(CONF_SIP_TRANSPORT): cv.templatable(cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True)),
     }
 )
 
@@ -1198,19 +1195,18 @@ async def _add_contact_action_to_code(config, action_id, template_arg, args):
     cg.add(var.set_port(templ_port))
     templ_rtp_port = await cg.templatable(config[CONF_RTP_PORT_ACTION], args, cg.uint16)
     cg.add(var.set_rtp_port(templ_rtp_port))
-    if CONF_TRANSPORT in config or CONF_SIP_TRANSPORT in config:
-        templ_transport = await cg.templatable(config.get(CONF_TRANSPORT, config.get(CONF_SIP_TRANSPORT)), args, cg.std_string)
+    if CONF_TRANSPORT in config:
+        templ_transport = await cg.templatable(config[CONF_TRANSPORT], args, cg.std_string)
         cg.add(var.set_sip_transport(templ_transport))
     return var
 
 
-for _add_contact_action_name in ("voip_stack.add_contact", "voip_stack.add_contacts"):
-    automation.register_action(
-        _add_contact_action_name,
-        AddContactAction,
-        cv.All(ADD_CONTACT_SCHEMA, _validate_add_contact_action),
-        synchronous=True,
-    )(_add_contact_action_to_code)
+automation.register_action(
+    "voip_stack.add_contact",
+    AddContactAction,
+    cv.All(ADD_CONTACT_SCHEMA, _validate_add_contact_action),
+    synchronous=True,
+)(_add_contact_action_to_code)
 
 _register_templated_action(
     "voip_stack.remove_contact",

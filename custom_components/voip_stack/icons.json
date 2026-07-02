@@ -1,0 +1,64 @@
+{
+  "services": {
+    "purge_devices": {
+      "service": "mdi:phone-remove"
+    },
+    "answer": {
+      "service": "mdi:phone-in-talk"
+    },
+    "decline": {
+      "service": "mdi:phone-hangup"
+    },
+    "call": {
+      "service": "mdi:phone-outgoing"
+    },
+    "forward": {
+      "service": "mdi:phone-forward"
+    },
+    "route": {
+      "service": "mdi:routes"
+    },
+    "hangup": {
+      "service": "mdi:phone-hangup"
+    },
+    "add_contact": {
+      "service": "mdi:card-account-phone"
+    },
+    "remove_contact": {
+      "service": "mdi:card-account-phone-outline"
+    },
+    "set_contacts": {
+      "service": "mdi:card-account-details"
+    },
+    "clear_contacts": {
+      "service": "mdi:book-remove"
+    },
+    "export_phonebook": {
+      "service": "mdi:book-arrow-up"
+    },
+    "push_phonebook": {
+      "service": "mdi:book-sync"
+    },
+    "set_dnd": {
+      "service": "mdi:minus-circle"
+    },
+    "create_account": {
+      "service": "mdi:account-voice"
+    },
+    "remove_account": {
+      "service": "mdi:account-remove"
+    },
+    "rotate_account_password": {
+      "service": "mdi:lock-reset"
+    },
+    "enable_account": {
+      "service": "mdi:account-check"
+    },
+    "disable_account": {
+      "service": "mdi:account-cancel"
+    },
+    "export_accounts": {
+      "service": "mdi:account-arrow-up"
+    }
+  }
+}

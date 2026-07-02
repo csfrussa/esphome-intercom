@@ -134,9 +134,6 @@ bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {
     slot->sip_transport = Phonebook::trim(json_metadata_string(obj, "transport"));
   }
   if (slot->sip_transport.empty()) {
-    slot->sip_transport = Phonebook::trim(json_metadata_string(obj, "signaling_transport"));
-  }
-  if (slot->sip_transport.empty()) {
     slot->sip_transport = Phonebook::trim(json_string(obj, "sip_transport"));
   }
   if (slot->sip_transport.empty()) {

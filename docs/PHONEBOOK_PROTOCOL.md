@@ -27,9 +27,10 @@ Runtime actions use the same model:
 
 ```yaml
 on_press:
-  - voip_stack.add_contacts:
+  - voip_stack.add_contact:
       name: Kitchen
       ip: 192.168.1.42
+      port: 5060
       transport: udp
 ```
 
@@ -102,6 +103,14 @@ Central roster services:
   online ESP devices.
 - `voip_stack.export_phonebook`: emit the current roster as an HA event for
   diagnostics/backup.
+
+ESPHome also exposes native API actions such as
+`esphome.<slug>_add_contact`, `esphome.<slug>_remove_contact`,
+`esphome.<slug>_set_contacts`, `esphome.<slug>_flush_contacts` and
+`esphome.<slug>_update_contacts`. These are local ESP actions: they change only
+that device's mirror/manual entries. In HA-managed installs, prefer the central
+`voip_stack.*` services above and let HA push `sensor.voip_phonebook` to the
+devices.
 
 Local softphone accounts are created with `voip_stack.create_account`.
 The `username` becomes the SIP username and central roster ID. If `password` is

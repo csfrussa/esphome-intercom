@@ -1,6 +1,5 @@
 purge_devices:
   name: Purge Stale Devices
-  icon: mdi:phone-remove
   description: >-
     Remove VoIP devices that are no longer reachable from the device
     registry. The HA phonebook sensor rebuilds from live voip_endpoint
@@ -36,7 +35,6 @@ purge_devices:
 
 answer:
   name: Answer SIP Call
-  icon: mdi:phone-in-talk
   description: Send 200 OK for a pending SIP call addressed to Home Assistant.
   fields:
     call_id:
@@ -48,7 +46,6 @@ answer:
 
 decline:
   name: Decline SIP Call
-  icon: mdi:phone-hangup
   description: Send a final SIP rejection for a pending SIP call.
   fields:
     call_id:
@@ -85,7 +82,6 @@ decline:
 
 call:
   name: SIP Call
-  icon: mdi:phone-outgoing
   description: Originate a standards-SIP call from Home Assistant to a roster target or SIP URI.
   fields:
     destination:
@@ -116,7 +112,6 @@ call:
 
 forward:
   name: SIP Forward
-  icon: mdi:phone-forward
   description: Route a standards-SIP call through Home Assistant's SIP dial plan and bridge. With Call ID, forwards a pending inbound SIP route.
   fields:
     call_id:
@@ -146,7 +141,6 @@ forward:
 
 route:
   name: SIP Route Decision
-  icon: mdi:routes
   description: Apply an automation dial-plan decision to a pending inbound SIP route.
   fields:
     call_id:
@@ -213,7 +207,6 @@ route:
 
 hangup:
   name: SIP Hang Up
-  icon: mdi:phone-hangup
   description: Send BYE and stop any SIP RTP relay for an active SIP call.
   fields:
     call_id:
@@ -225,7 +218,6 @@ hangup:
 
 add_contact:
   name: Add Phonebook Contact
-  icon: mdi:card-account-phone
   description: Add or replace one manual contact in the central JSON phonebook.
   fields:
     name:
@@ -337,7 +329,6 @@ add_contact:
 
 remove_contact:
   name: Remove Phonebook Contact
-  icon: mdi:card-account-phone-outline
   description: Remove one manual contact from the central JSON phonebook by name.
   fields:
     name:
@@ -348,7 +339,6 @@ remove_contact:
 
 set_contacts:
   name: Set Phonebook Contacts
-  icon: mdi:card-account-details
   description: Replace manual contacts with a JSON roster document.
   fields:
     roster_json:
@@ -360,22 +350,18 @@ set_contacts:
 
 clear_contacts:
   name: Clear Phonebook Contacts
-  icon: mdi:book-remove
   description: Clear manual contacts from the central JSON phonebook.
 
 export_phonebook:
   name: Export Phonebook
-  icon: mdi:book-arrow-up
   description: Emit the current central JSON phonebook as a VoIP Stack call event.
 
 push_phonebook:
   name: Push Phonebook
-  icon: mdi:book-sync
   description: Push the current central JSON phonebook to all online ESP endpoints.
 
 set_dnd:
   name: Set SIP DND
-  icon: mdi:minus-circle
   description: Enable or disable Do Not Disturb on the Home Assistant softphone.
   fields:
     dnd:
@@ -386,7 +372,6 @@ set_dnd:
 
 create_account:
   name: Create SIP Softphone Account
-  icon: mdi:account-voice
   description: Create or replace a local SIP account for a standard softphone registering to Home Assistant.
   fields:
     username:
@@ -422,7 +407,6 @@ create_account:
 
 remove_account:
   name: Remove SIP Softphone Account
-  icon: mdi:account-remove
   description: Remove one local SIP account and its active registration.
   fields:
     username:
@@ -433,7 +417,6 @@ remove_account:
 
 rotate_account_password:
   name: Rotate SIP Softphone Password
-  icon: mdi:lock-reset
   description: Generate a new password for a local SIP account and clear its active registration.
   fields:
     username:
@@ -444,7 +427,6 @@ rotate_account_password:
 
 enable_account:
   name: Enable SIP Softphone Account
-  icon: mdi:account-check
   description: Enable a local SIP account.
   fields:
     username:
@@ -455,7 +437,6 @@ enable_account:
 
 disable_account:
   name: Disable SIP Softphone Account
-  icon: mdi:account-cancel
   description: Disable a local SIP account and clear its active registration.
   fields:
     username:
@@ -466,5 +447,4 @@ disable_account:
 
 export_accounts:
   name: Export SIP Softphone Accounts
-  icon: mdi:account-arrow-up
   description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.

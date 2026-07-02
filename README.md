@@ -57,6 +57,20 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 | Incoming external calls | Register a provider/PBX trunk. | External calls can ring HA, follow DTMF routing, or be forwarded to ESPs/local contacts. |
 | Voice Assistant calling | Enable the optional VoIP Stack Assist intents. | Satellites can call contacts, answer, decline or hang up by voice. |
 
+### One-Way Audio Endpoints
+
+VoIP Stack also supports intentionally one-way audio devices:
+
+- **mic-only** endpoints send microphone audio but do not play remote audio;
+- **speaker-only** endpoints play incoming audio but do not transmit a
+  microphone stream;
+- **control-only** endpoints keep SIP signaling, call state and phonebook
+  behavior without media.
+
+This is useful for boards with only one audio direction populated, external
+amplifiers, paging speakers, monitor microphones or custom installations where
+full-duplex hardware is not available.
+
 ## Table of Contents
 
 - [What Can You Build With It?](#what-can-you-build-with-it)
@@ -318,10 +332,11 @@ Runtime ESP automations can still mutate the local dial plan when needed:
 
 ```yaml
 on_press:
-  - voip_stack.add_contacts:
+  - voip_stack.add_contact:
       id: phone
       name: "Temporary Desk"
       ip: "192.168.1.55"
+      port: 5060
       transport: udp
 ```
 
@@ -407,7 +422,28 @@ _After restart, add the VoIP Stack integration from Home Assistant Settings._
 
 ![VoIP Stack config flow](docs/images/voip-stack-config-flow.png)
 
-_The config flow sets the HA SIP/RTP ports and optional features._
+_The config flow sets the HA SIP/RTP ports, local VoIP features and optional trunk routing._
+
+Recommended first setup:
+
+- **SIP port**: keep `5060` unless another SIP service already uses it. HA
+  listens on both SIP/UDP and SIP/TCP on this port.
+- **RTP port**: keep `40000` unless that UDP range conflicts with another
+  service. HA uses it as the base for softphone and bridge media.
+- **Advertise host**: leave empty on a normal LAN. Set it only when HA must
+  publish a specific reachable IP/host, for example LXC, Docker, VPN,
+  multihomed hosts or routed networks.
+- **Assist intents**: enable if you want Home Assistant Assist phrases such as
+  call, answer, decline and hang up.
+- **Debug mode**: keep disabled for normal use. Enable only while collecting
+  SIP/RTP diagnostics.
+- **Trunk enabled**: leave disabled unless you want HA to register to a
+  provider/PBX account for external inbound/outbound calls.
+
+When trunk is enabled, the next step asks for provider/PBX credentials. The
+DTMF timeout controls incoming external calls: `0` skips DTMF collection and
+rings HA immediately; a value from `1` to `10` seconds lets callers dial a
+route such as `101` before HA falls back to the default target.
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
@@ -712,11 +748,13 @@ data:
   reason: "DND"
 ```
 
-Contact mutation is not exposed as HA-callable ESPHome services in the standard
-packages. Use `sensor.voip_phonebook` for normal sync, or call the native
-`voip_stack.set_contacts` / `add_contact` / `remove_contact` /
-`flush_contacts` actions from YAML scripts when you intentionally need local
-manual mutation.
+The standard packages also expose ESPHome native API actions such as
+`esphome.<slug>_add_contact`, `esphome.<slug>_remove_contact`,
+`esphome.<slug>_set_contacts`, `esphome.<slug>_flush_contacts` and
+`esphome.<slug>_update_contacts`. Those mutate only that ESP's local phonebook
+mirror and are meant for offline devices, diagnostics or custom YAML logic.
+For normal installs, manage the central roster with HA `voip_stack.*`
+phonebook services and let HA push the canonical JSON to every online ESP.
 
 See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contract.
 
