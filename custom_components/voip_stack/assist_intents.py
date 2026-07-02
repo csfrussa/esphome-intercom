@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import intent
 from homeassistant.helpers.intent import Intent, IntentHandler, IntentResponse
 
@@ -108,12 +109,64 @@ async def _voip_devices(hass: HomeAssistant) -> list[dict[str, Any]]:
 
 
 async def _origin_device(intent_obj: Intent) -> dict[str, Any] | None:
+    from homeassistant.helpers import device_registry as dr
+
     device_id = str(intent_obj.device_id or "").strip()
     if not device_id:
+        _LOGGER.info("Assist VoIP command has no source device_id")
         return None
-    for device in await _voip_devices(intent_obj.hass):
-        if device.get("device_id") == device_id:
+    devices = await _voip_devices(intent_obj.hass)
+    for device in devices:
+        if str(device.get("device_id") or "") == device_id:
             return device
+
+    device_registry = dr.async_get(intent_obj.hass)
+    source_device = device_registry.async_get(device_id)
+    if source_device is None:
+        _LOGGER.info("Assist VoIP command source device_id=%s is not in HA device registry", device_id)
+        return None
+
+    source_entries = set(source_device.config_entries or ())
+    if source_entries:
+        entry_matches: list[dict[str, Any]] = []
+        for device in devices:
+            registry_device = device_registry.async_get(str(device.get("device_id") or ""))
+            if registry_device is None:
+                continue
+            if source_entries.intersection(set(registry_device.config_entries or ())):
+                entry_matches.append(device)
+        if len(entry_matches) == 1:
+            _LOGGER.info(
+                "Assist VoIP source %s mapped to %s by shared config entry",
+                source_device.name or device_id,
+                entry_matches[0].get("name"),
+            )
+            return entry_matches[0]
+
+    if source_device.area_id:
+        area_matches: list[dict[str, Any]] = []
+        for device in devices:
+            registry_device = device_registry.async_get(str(device.get("device_id") or ""))
+            if registry_device is not None and registry_device.area_id == source_device.area_id:
+                area_matches.append(device)
+        if len(area_matches) == 1:
+            _LOGGER.info(
+                "Assist VoIP source %s mapped to %s by HA area",
+                source_device.name or device_id,
+                area_matches[0].get("name"),
+            )
+            return area_matches[0]
+        if area_matches:
+            _LOGGER.info(
+                "Assist VoIP source %s area has multiple VoIP devices: %s",
+                source_device.name or device_id,
+                ", ".join(str(item.get("name") or "") for item in area_matches),
+            )
+
+    _LOGGER.info(
+        "Assist VoIP command source %s is not a VoIP device and could not be mapped",
+        source_device.name or device_id,
+    )
     return None
 
 
@@ -276,6 +329,7 @@ class _VoipIntentHandler(IntentHandler):
     async def _require_origin(self, intent_obj: Intent) -> dict[str, Any] | IntentResponse:
         origin = await _origin_device(intent_obj)
         if origin is None:
+            _LOGGER.info("Assist VoIP command rejected: unknown source device_id=%s", intent_obj.device_id)
             return _response(intent_obj, "I do not know which VoIP device heard that.")
         return origin
 
@@ -284,6 +338,17 @@ class VoipCallIntentHandler(_VoipIntentHandler):
     """Start an VoIP call from the satellite that heard the command."""
 
     intent_type = INTENT_CALL
+    description = (
+        "Start a real VoIP phone call from the voice satellite that heard the command. "
+        "Use this for requests like 'call kitchen', 'call home', 'call the phone', "
+        "or calling an ESPHome VoIP endpoint, Home Assistant softphone, registered "
+        "softphone, contact name, area name, or phone number. Do not use broadcast "
+        "or announcement tools for call requests."
+    )
+
+    @property
+    def slot_schema(self) -> dict:
+        return {"target": cv.string}
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         origin = await self._require_origin(intent_obj)
@@ -293,16 +358,45 @@ class VoipCallIntentHandler(_VoipIntentHandler):
         spoken_target = _slot_value(intent_obj, "target")
         resolved = await _resolve_contact_or_area(intent_obj.hass, spoken_target)
         if resolved.error == "missing":
+            _LOGGER.info("Assist VoIP call rejected: missing target source=%s", origin.get("name"))
             return _response(intent_obj, "Which VoIP contact should I call?")
         if resolved.error == "not_found":
+            _LOGGER.info(
+                "Assist VoIP call rejected: target not found source=%s spoken=%r",
+                origin.get("name"),
+                spoken_target,
+            )
             return _response(intent_obj, f"I cannot find an VoIP contact named {spoken_target}.")
         if resolved.error == "ambiguous":
+            _LOGGER.info(
+                "Assist VoIP call rejected: ambiguous contact source=%s spoken=%r matches=%s",
+                origin.get("name"),
+                spoken_target,
+                ", ".join(resolved.matches),
+            )
             return _response(intent_obj, f"The VoIP contact {spoken_target} is ambiguous.")
         if resolved.error == "ambiguous_area":
+            _LOGGER.info(
+                "Assist VoIP call rejected: ambiguous area source=%s spoken=%r matches=%s",
+                origin.get("name"),
+                spoken_target,
+                ", ".join(resolved.matches),
+            )
             return _response(intent_obj, f"The Home Assistant area {spoken_target} is ambiguous.")
         if resolved.error == "area_empty":
+            _LOGGER.info(
+                "Assist VoIP call rejected: empty area source=%s spoken=%r",
+                origin.get("name"),
+                spoken_target,
+            )
             return _response(intent_obj, f"The Home Assistant area {spoken_target} has no VoIP device.")
         if resolved.error == "ambiguous_area_device":
+            _LOGGER.info(
+                "Assist VoIP call rejected: area has multiple VoIP devices source=%s spoken=%r matches=%s",
+                origin.get("name"),
+                spoken_target,
+                ", ".join(resolved.matches),
+            )
             return _response(
                 intent_obj,
                 f"The Home Assistant area {spoken_target} has more than one VoIP device.",
@@ -344,6 +438,7 @@ class VoipHangupIntentHandler(_VoipIntentHandler):
     """Hang up the call owned by the satellite that heard the command."""
 
     intent_type = INTENT_HANGUP
+    description = "Hang up the active VoIP call on the voice satellite that heard the command."
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         origin = await self._require_origin(intent_obj)
@@ -366,6 +461,7 @@ class VoipAnswerIntentHandler(_VoipIntentHandler):
     """Answer the call on the satellite that heard the command."""
 
     intent_type = INTENT_ANSWER
+    description = "Answer the ringing VoIP call on the voice satellite that heard the command."
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         origin = await self._require_origin(intent_obj)
@@ -388,6 +484,7 @@ class VoipDeclineIntentHandler(_VoipIntentHandler):
     """Decline the call on the satellite that heard the command."""
 
     intent_type = INTENT_DECLINE
+    description = "Decline the ringing VoIP call on the voice satellite that heard the command."
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         origin = await self._require_origin(intent_obj)
