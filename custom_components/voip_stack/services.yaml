@@ -445,6 +445,10 @@ disable_account:
       selector:
         text:
 
+list_accounts:
+  name: List SIP Softphone Accounts
+  description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.
+
 export_accounts:
   name: Export SIP Softphone Accounts
   description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.

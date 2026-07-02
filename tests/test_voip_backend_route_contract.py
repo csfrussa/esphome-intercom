@@ -9,6 +9,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
+SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
+ACCOUNT_SERVICES = ROOT / "custom_components" / "voip_stack" / "account_services.py"
+SERVICES_YAML = ROOT / "custom_components" / "voip_stack" / "services.yaml"
+ICONS_JSON = ROOT / "custom_components" / "voip_stack" / "icons.json"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -29,6 +33,17 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"ringing"', answer_ha_branch)
         self.assertIn('return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)', answer_ha_branch)
         self.assertNotIn('return SipInviteResult(200, "OK"', answer_ha_branch)
+
+    def test_softphone_account_list_service_is_registered_and_documented(self) -> None:
+        services = SERVICES.read_text()
+        account_services = ACCOUNT_SERVICES.read_text()
+        services_yaml = SERVICES_YAML.read_text()
+        icons_json = ICONS_JSON.read_text()
+
+        self.assertIn('"list_accounts", handler_for("list_accounts")', services)
+        self.assertIn('"list_accounts": list_accounts', account_services)
+        self.assertIn("list_accounts:", services_yaml)
+        self.assertIn('"list_accounts"', icons_json)
 
 
 if __name__ == "__main__":

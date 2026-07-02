@@ -116,7 +116,7 @@ def build_account_service_handlers(
         await refresh_and_push_phonebook(hass)
         _LOGGER.info("SIP local account %s username=%s", "enabled" if enabled else "disabled", username)
 
-    async def export_accounts(call: ServiceCall) -> None:
+    def emit_accounts(call: ServiceCall, state: str) -> None:
         accounts = [
             {
                 "username": item.get("username", ""),
@@ -125,7 +125,13 @@ def build_account_service_handlers(
             }
             for item in sip_account_dicts(call.hass)
         ]
-        _fire_call_event(call.hass, {"state": "export_accounts", "accounts": accounts}, "sip")
+        _fire_call_event(call.hass, {"state": state, "accounts": accounts}, "sip")
+
+    async def list_accounts(call: ServiceCall) -> None:
+        emit_accounts(call, "list_accounts")
+
+    async def export_accounts(call: ServiceCall) -> None:
+        emit_accounts(call, "export_accounts")
 
     async def enable_account(call: ServiceCall) -> None:
         await set_account_enabled(call, enabled=True)
@@ -139,5 +145,6 @@ def build_account_service_handlers(
         "rotate_account_password": rotate_account_password,
         "enable_account": enable_account,
         "disable_account": disable_account,
+        "list_accounts": list_accounts,
         "export_accounts": export_accounts,
     }

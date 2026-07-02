@@ -84,6 +84,8 @@ Conditions:
 - `voip_stack.create_account`
 - `voip_stack.remove_account`
 - `voip_stack.rotate_account_password`
+- `voip_stack.list_accounts`
+- `voip_stack.export_accounts`
 
 `call` accepts `destination`, `target`, or `call`. Set `ha_bridge: true` to
 force the HA bridge path.
@@ -113,6 +115,8 @@ baresip, pjsua or another standard SIP softphone registering directly to HA. The
 generates one and shows it once in a persistent notification and in the
 `voip_stack.call_event` stream with `state: sip_account_created`.
 Registered clients appear in the central phonebook and are pushed to ESPs.
+Use `list_accounts` or `export_accounts` to emit the configured accounts
+without passwords in the call event stream.
 
 ## HA Setup Options
 

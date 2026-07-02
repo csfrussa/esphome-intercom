@@ -144,4 +144,5 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     hass.services.async_register(DOMAIN, "rotate_account_password", handler_for("rotate_account_password"), schema=sip_account_name_schema)
     hass.services.async_register(DOMAIN, "enable_account", handler_for("enable_account"), schema=sip_account_name_schema)
     hass.services.async_register(DOMAIN, "disable_account", handler_for("disable_account"), schema=sip_account_name_schema)
+    hass.services.async_register(DOMAIN, "list_accounts", handler_for("list_accounts"))
     hass.services.async_register(DOMAIN, "export_accounts", handler_for("export_accounts"))

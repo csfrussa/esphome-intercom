@@ -205,6 +205,7 @@ Useful services:
 - `voip_stack.clear_contacts`
 - `voip_stack.push_phonebook`
 - `voip_stack.create_account`
+- `voip_stack.list_accounts`
 - `voip_stack.call`
 - `voip_stack.forward`
 - `voip_stack.route`

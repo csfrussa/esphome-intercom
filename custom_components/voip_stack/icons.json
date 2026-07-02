@@ -57,6 +57,9 @@
     "disable_account": {
       "service": "mdi:account-cancel"
     },
+    "list_accounts": {
+      "service": "mdi:account-search"
+    },
     "export_accounts": {
       "service": "mdi:account-arrow-up"
     }
