@@ -64,11 +64,13 @@ def _find_elf(explicit: str | None, device: str | None) -> Path:
     raise SystemExit("No firmware.elf found; pass --elf explicitly")
 
 
-def _remote_openocd_command(gdb_port: int) -> str:
+def _remote_openocd_command(gdb_port: int, openocd_bin: str, scripts: list[str], config: list[str]) -> str:
+    script_args = " ".join(f"-s {path}" for path in scripts)
+    config_args = " ".join(f"-f {path}" for path in config)
     return (
-        "exec openocd "
-        "-s /usr/share/openocd-esp32/scripts "
-        "-f board/esp32s3-builtin.cfg "
+        f"exec {openocd_bin} "
+        f"{script_args} "
+        f"{config_args} "
         f"-c 'gdb_port {gdb_port}' "
         "-c 'telnet_port disabled' "
         "-c 'tcl_port disabled'"
@@ -113,6 +115,21 @@ def main() -> int:
     parser.add_argument("--bt-depth", type=int, default=12, help="Backtrace depth per FreeRTOS thread")
     parser.add_argument("--out-dir", default="test_runs/jtag_snapshots", help="Output directory")
     parser.add_argument("--keep-openocd-log", action="store_true", help="Keep the OpenOCD log next to the GDB log")
+    parser.add_argument("--openocd-bin", default="/usr/bin/openocd-esp32openocd", help="Remote OpenOCD binary")
+    parser.add_argument(
+        "--openocd-scripts",
+        action="append",
+        default=["/usr/share/openocd-esp32/scripts"],
+        help="Remote OpenOCD script directory; repeatable",
+    )
+    parser.add_argument(
+        "--openocd-config",
+        action="append",
+        default=[
+            "board/esp32s3-builtin.cfg",
+        ],
+        help="Remote OpenOCD config file; repeatable and order-sensitive",
+    )
     args = parser.parse_args()
 
     gdb = _find_gdb(args.gdb)
@@ -131,7 +148,7 @@ def main() -> int:
     print(f"Output: {gdb_log}")
     print("The target will halt briefly for every sample; audio glitches are expected.")
 
-    openocd_cmd = _remote_openocd_command(3333)
+    openocd_cmd = _remote_openocd_command(3333, args.openocd_bin, args.openocd_scripts, args.openocd_config)
     ssh_openocd = subprocess.Popen(
         ["ssh", "-tt", "-L", f"{local_port}:127.0.0.1:3333", args.remote, openocd_cmd],
         stdout=open(openocd_log, "w", encoding="utf-8"),
@@ -142,6 +159,7 @@ def main() -> int:
     try:
         time.sleep(2.0)
         if ssh_openocd.poll() is not None:
+            keep_log = True
             raise SystemExit(f"OpenOCD exited early; see {openocd_log}")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,6 +172,7 @@ def main() -> int:
             with open(gdb_log, "w", encoding="utf-8") as log:
                 result = subprocess.run([gdb, str(elf), "-x", str(script)], stdout=log, stderr=subprocess.STDOUT)
             if result.returncode != 0:
+                keep_log = True
                 print(f"GDB failed with exit code {result.returncode}; see {gdb_log}", file=sys.stderr)
                 return result.returncode
     finally:
@@ -162,7 +181,7 @@ def main() -> int:
             ssh_openocd.wait(timeout=3)
         except subprocess.TimeoutExpired:
             ssh_openocd.kill()
-        if not args.keep_openocd_log and openocd_log.exists():
+        if not args.keep_openocd_log and not locals().get("keep_log", False) and openocd_log.exists():
             openocd_log.unlink()
 
     print(f"Wrote {gdb_log}")
