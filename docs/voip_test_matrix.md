@@ -16,8 +16,8 @@ agree. Counters alone are not proof of audible bidirectional audio.
 - `Via` and `Contact` include correct transport and host:port.
 - SDP never emits `a=fmtp:<pt> ptime=N`; only `a=ptime` and `a=maxptime`.
 - Default payload limit rejects `48000:s16le:1:20`.
-- JSON roster entries include explicit `kind`; direct ESP and softphone entries
-  include explicit SIP transport or route through HA.
+- JSON roster entries are data-driven; direct ESP and softphone entries include
+  explicit SIP transport or route through HA without user-authored `kind`.
 - ESP endpoint declarations never include a separate `sip` protocol column.
   SIP is implicit; the only transport choice is SIP/TCP or SIP/UDP signaling.
 

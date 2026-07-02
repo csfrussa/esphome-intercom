@@ -202,11 +202,12 @@ field. Optional fields include:
 - `number`: local extension/alias;
 - `address`, `sip_uri`, `sip_port`, `rtp_port`;
 - `sip_transport`: `udp` or `tcp`;
-- `kind`: `ha`, `esp`, `phone`, `softphone`, or `group`;
 - `ha_bridge`: force HA bridge routing.
 
-`kind: softphone` is reserved for standard SIP clients registered to HA's local
-registrar. SIP is implicit; there is no `kind: sip`.
+The merged roster may expose an internal `kind` value, but user-facing contacts
+are data-driven. Name-only contacts route through HA, number-only targets use
+HA's dial plan/trunk, endpoint contacts expose `address` or `sip_uri`, and
+local SIP accounts are published by the registrar.
 
 ESP phonebook storage is bounded. The runtime accepts up to 64 normalized
 contacts per ESP phonebook and replaces existing names in place. Larger rosters

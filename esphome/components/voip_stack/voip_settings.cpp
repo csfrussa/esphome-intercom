@@ -116,8 +116,11 @@ bool parse_json_roster_slot(const cJSON *obj, JsonRosterSlot *slot) {
   slot->name = name;
   slot->kind = Phonebook::trim(json_string(obj, "kind"));
   if (slot->kind.empty()) {
-    ESP_LOGW(TAG, "Ignoring roster JSON entry '%s': kind is required", name.c_str());
-    return false;
+    const std::string number = Phonebook::trim(json_string(obj, "number"));
+    std::string address = Phonebook::trim(json_string(obj, "address"));
+    if (address.empty()) address = Phonebook::trim(json_string(obj, "host"));
+    const std::string sip_uri = Phonebook::trim(json_string(obj, "sip_uri"));
+    slot->kind = (!number.empty() && address.empty() && sip_uri.empty()) ? "phone" : "esp";
   }
   std::transform(slot->kind.begin(), slot->kind.end(), slot->kind.begin(), ::tolower);
   if (slot->kind == "softphone" && !id.empty()) {

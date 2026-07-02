@@ -36,18 +36,21 @@ def _entry_from_mapping(raw: dict[str, Any]) -> RosterEntry:
     entry_id = str(raw.get("id") or raw.get("name") or "").strip()
     if not entry_id:
         raise RosterError("roster entry missing id")
-    if not raw.get("kind"):
-        raise RosterError(f"roster entry {entry_id!r} missing kind")
     kind = str(raw.get("kind") or "").strip().lower()
+    address = str(raw.get("address") or raw.get("host") or "").strip()
+    sip_uri = str(raw.get("sip_uri") or "").strip()
+    number = str(raw.get("number") or "").strip()
+    if not kind:
+        kind = "phone" if number and not address and not sip_uri else "esp"
     if kind not in {"ha", "esp", "phone", "softphone", "group"}:
         raise RosterError(f"unsupported roster kind {kind!r}")
     return RosterEntry(
         id=entry_id,
         name=str(raw.get("name") or entry_id).strip(),
         kind=kind,  # type: ignore[arg-type]
-        address=str(raw.get("address") or raw.get("host") or "").strip(),
-        sip_uri=str(raw.get("sip_uri") or "").strip(),
-        number=str(raw.get("number") or "").strip(),
+        address=address,
+        sip_uri=sip_uri,
+        number=number,
         ha_bridge=bool(raw.get("ha_bridge", False)),
         enabled=bool(raw.get("enabled", True)),
         metadata=dict(raw.get("metadata") or {}),

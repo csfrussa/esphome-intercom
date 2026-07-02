@@ -1158,9 +1158,21 @@ class RouterContractTest(unittest.TestCase):
         ready = router.resolve_ha_router("0551234567", [], trunk_ready=True)
         self.assertEqual(ready.action, router.RouteAction.TRUNK)
 
+    def test_roster_kind_is_derived_from_contact_data(self) -> None:
+        entries = roster.parse_roster_json(
+            [
+                {"name": "Daniele", "number": "418"},
+                {"name": "Desk", "address": "192.168.1.55", "metadata": {"sip_transport": "udp"}},
+                {"name": "Logical HA Target"},
+            ]
+        )
+        self.assertEqual(entries[0].kind, "phone")
+        self.assertEqual(entries[1].kind, "esp")
+        self.assertEqual(entries[2].kind, "esp")
+
     def test_ha_router_name_with_number_and_no_endpoint_uses_trunk(self) -> None:
         entries = roster.parse_roster_json(
-            [{"id": "Daniele", "name": "Daniele", "kind": "esp", "number": "418"}]
+            [{"id": "Daniele", "name": "Daniele", "number": "418"}]
         )
         unavailable = router.resolve_ha_router("Daniele", entries, trunk_ready=False)
         self.assertEqual(unavailable.action, router.RouteAction.REJECT)
@@ -1169,6 +1181,12 @@ class RouterContractTest(unittest.TestCase):
         ready = router.resolve_ha_router("Daniele", entries, trunk_ready=True)
         self.assertEqual(ready.action, router.RouteAction.TRUNK)
         self.assertEqual(ready.target, "418")
+
+    def test_ha_router_name_only_contact_answers_ha(self) -> None:
+        entries = roster.parse_roster_json([{"id": "Casa Logica", "name": "Casa Logica"}])
+        decision = router.resolve_ha_router("Casa Logica", entries, trunk_ready=True)
+        self.assertEqual(decision.action, router.RouteAction.ANSWER_HA)
+        self.assertEqual(decision.reason, router.RouteReason.NAME_VIA_HA)
 
     def test_trunk_inbound_no_hint_answers_ha(self) -> None:
         ctx = router.CallContext(call_id="trunk-1", direction="inbound", origin="trunk")

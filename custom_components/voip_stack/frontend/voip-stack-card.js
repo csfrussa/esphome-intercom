@@ -749,7 +749,7 @@ class VoipStackCard extends HTMLElement {
       .map(entry => ({
         id: String(entry.id || entry.name || "").trim(),
         name: String(entry.name || entry.id || "").trim(),
-        kind: String(entry.kind || "esp").trim().toLowerCase(),
+        kind: this._rosterEntryKind(entry),
         address: String(entry.address || entry.host || "").trim(),
         sip_uri: String(entry.sip_uri || "").trim(),
         number: String(entry.number || "").trim(),
@@ -769,6 +769,15 @@ class VoipStackCard extends HTMLElement {
     if (!name || this._isHaName(name)) return false;
     if (entry.kind === "ha") return false;
     return ["esp", "softphone", "phone", "group"].includes(entry.kind);
+  }
+
+  _rosterEntryKind(entry) {
+    const explicit = String(entry?.kind || "").trim().toLowerCase();
+    if (explicit) return explicit;
+    const address = String(entry?.address || entry?.host || "").trim();
+    const sipUri = String(entry?.sip_uri || "").trim();
+    const number = String(entry?.number || "").trim();
+    return number && !address && !sipUri ? "phone" : "esp";
   }
 
   _formatListFromMetadata(value) {

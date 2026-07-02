@@ -55,7 +55,6 @@ Roster entries use JSON fields:
 
 - `id`
 - `name`
-- `kind`: `ha`, `esp`, `phone`, `softphone`, or `group`
 - `address`
 - `sip_uri`
 - `number`
@@ -63,9 +62,13 @@ Roster entries use JSON fields:
 - `metadata`, including `sip_transport`, `sip_port`, `rtp_port`, and audio
   format metadata
 
-`kind: softphone` is for a standard SIP client registered to HA's local
-registrar, for example Zoiper, Linphone or baresip. Do not use `kind: sip`;
-SIP is the shared protocol, not a roster kind.
+The roster may expose an internal `kind` field for HA, ESP and card consumers,
+but users do not need to set it. HA derives it from the contact data:
+
+- `number` without a direct endpoint becomes a trunk/phone target;
+- `address` or `sip_uri` becomes a direct SIP endpoint;
+- registered SIP accounts become softphone contacts;
+- HA and discovered ESP entries are generated automatically.
 
 Manual contacts and service calls use the same minimum contract:
 
@@ -73,7 +76,6 @@ Manual contacts and service calls use the same minimum contract:
 service: voip_stack.add_contact
 data:
   name: MobileOffice
-  kind: softphone
   number: "210"
 ```
 

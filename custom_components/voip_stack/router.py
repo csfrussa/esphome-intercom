@@ -232,6 +232,8 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
             return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.TARGET_UNREACHABLE, entry=entry)
         transport = _entry_transport(entry)
         sip_uri = entry.sip_uri or (_uri(entry.id, entry.address, _entry_port(entry), transport) if entry.address else "")
+        if not sip_uri and not entry.number:
+            return RouteDecision(RouteAction.ANSWER_HA, target=entry.id, reason=RouteReason.NAME_VIA_HA, source="phonebook", entry=entry)
         if entry.kind == "esp" and entry.address and not transport and not entry.sip_uri:
             return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.NO_DIRECT_TRANSPORT, entry=entry)
         if sip_uri:

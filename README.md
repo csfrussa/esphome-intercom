@@ -172,7 +172,7 @@ The phonebook merges:
 
 A contact has one required field: `name`. Everything else is optional and
 describes how that contact can be reached: `number`, `address`, `sip_port`,
-`rtp_port`, `sip_transport` and `kind`.
+`rtp_port` and `sip_transport`.
 
 A number is an attribute of the contact, not a second contact. For example,
 `Office Phone` can have `number: "210"`, and both `Office Phone` and `210`
@@ -336,7 +336,6 @@ central contacts with HA services:
 service: voip_stack.add_contact
 data:
   name: My Cellphone
-  kind: phone
   number: "+15550123456"
 ```
 

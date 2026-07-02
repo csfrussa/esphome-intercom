@@ -87,7 +87,7 @@ force the HA bridge path.
 `forward` with `call_id` is shorthand for `route` with
 `action: forward`; without `call_id` it originates a new HA bridged SIP call.
 
-`add_contact` requires only `name`. Optional fields are `id`, `kind`,
+`add_contact` requires only `name`. Optional fields are `id`,
 `address`, `sip_uri`, `number`, `ha_bridge`, `sip_transport`, `sip_port`,
 `rtp_port`, `tx_rate`, `rx_rate`, `tx_formats`, `rx_formats`, and
 `max_payload_bytes`. HA updates `sensor.voip_phonebook` and pushes the

@@ -232,18 +232,6 @@ add_contact:
       required: false
       selector:
         text:
-    kind:
-      name: Kind
-      required: false
-      default: esp
-      selector:
-        select:
-          options:
-            - ha
-            - esp
-            - phone
-            - softphone
-            - group
     address:
       name: Address
       description: IP or host for HA/ESP/SIP contacts.

@@ -39,12 +39,12 @@
 <text class="label" x="82" y="561">Local SIP accounts</text>
 <text class="small" x="82" y="589">softphone REGISTER</text>
 <text class="small" x="82" y="611">Contact from registrar</text>
-<text class="small" x="82" y="633">kind: softphone</text>
+<text class="small" x="82" y="633">published as contact</text>
 <rect class="box box-ha" x="520" y="245" width="360" height="240"/>
 <text class="label" x="542" y="281">HA central roster</text>
 <text class="small" x="542" y="309">sensor.voip_phonebook</text>
 <text class="small" x="542" y="331">canonical endpoint rows</text>
-<text class="small" x="542" y="353">enabled, kind, number</text>
+<text class="small" x="542" y="353">enabled, number, endpoint</text>
 <text class="small" x="542" y="375">sip_uri / signaling transport</text>
 <text class="small" x="542" y="397">tx_formats / rx_formats</text>
 <rect class="box box-esp" x="1040" y="110" width="300" height="120"/>

@@ -34,7 +34,7 @@ collect:
 - For trunk calls, no route hint means HA/default target; an explicit unresolved
   route hint terminates as `route_not_found`.
 - For local registered softphones, confirm the REGISTER Contact is present in
-  HA logs and the phonebook includes `kind: softphone`.
+  HA logs and the phonebook includes the registered softphone contact.
 
 ## Call Fails With `media_incompatible`
 

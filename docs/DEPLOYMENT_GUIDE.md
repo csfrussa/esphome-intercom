@@ -70,7 +70,7 @@ Use `ha_bridge` for routed or logical calls that should pass through HA.
 
 Enable the local registrar if standard softphones should register to HA. Create
 accounts with `voip_stack.create_account`; registered clients appear
-in the central phonebook as `kind: softphone`.
+in the central phonebook as softphone contacts.
 
 ## Optional SIP Trunk
 

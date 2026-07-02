@@ -88,7 +88,6 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         {
             vol.Required("name"): cv.string,
             vol.Optional("id", default=""): cv.string,
-            vol.Optional("kind", default=""): vol.Any("", vol.In(["ha", "esp", "phone", "softphone", "group"])),
             vol.Optional("address", default=""): cv.string,
             vol.Optional("sip_uri", default=""): cv.string,
             vol.Optional("number", default=""): cv.string,
