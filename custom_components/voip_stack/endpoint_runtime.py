@@ -148,6 +148,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         dest_relay_port: int,
     ) -> None:
         bucket = hass.data.setdefault(DOMAIN, {})
+        bucket.setdefault("trunk_closed_calls", set()).discard(invite.call_id)
         trunk_cfg = _get_trunk_config(hass)
         routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
         dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
@@ -161,14 +162,23 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     port=source_relay_port,
                     payload_type=dtmf_format.payload_type,
                     routes=routes,
-                    timeout=float(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 1000) / 1000.0,
+                    timeout=float(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 3000) / 1000.0,
                     terminator=str(trunk_cfg.get(CONF_TRUNK_DTMF_TERMINATOR) or ""),
                 )
                 digits, destination = await collector.collect()
             except Exception as err:
                 _LOGGER.info("SIP trunk DTMF collection unavailable: %s", err)
         elif trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes:
-            _LOGGER.info("SIP trunk inbound call has no telephone-event SDP offer; using default destination")
+            timeout = float(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 3000) / 1000.0
+            _LOGGER.info(
+                "SIP trunk inbound call has no telephone-event SDP offer; ringing default destination after %.1fs",
+                timeout,
+            )
+            await asyncio.sleep(timeout)
+            if invite.call_id in bucket.get("trunk_closed_calls", set()):
+                bucket["trunk_closed_calls"].discard(invite.call_id)
+                _LOGGER.info("SIP trunk inbound call_id=%s closed before default routing", invite.call_id)
+                return
 
         default_target = str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA"
         route_hint = destination or digits
@@ -1111,6 +1121,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
         route = _pending_routes(hass).pop(call_id, None)
+        bucket.setdefault("trunk_closed_calls", set()).add(call_id)
         if route is not None:
             future = route.get("future")
             if future is not None and not future.done():

@@ -53,7 +53,7 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
         CONF_TRUNK_OUTBOUND_PROXY: str(data.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip(),
         CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA",
         CONF_TRUNK_DTMF_ENABLED: bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)),
-        CONF_TRUNK_DTMF_TIMEOUT_MS: max(100, min(2000, int(data.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 1000))),
+        CONF_TRUNK_DTMF_TIMEOUT_MS: max(100, min(3000, int(data.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 3000))),
         CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
         CONF_TRUNK_DTMF_ROUTES: str(data.get(CONF_TRUNK_DTMF_ROUTES) or "").strip(),
     }

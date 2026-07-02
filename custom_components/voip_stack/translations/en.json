@@ -54,7 +54,7 @@
           "trunk_outbound_proxy": "Optional proxy host or sip:host:port used as signaling next hop.",
           "trunk_inbound_default_target": "Local phonebook target used when no DTMF route resolves. Use HA for the HA softphone.",
           "trunk_dtmf_enabled": "Collect RFC2833/telephone-event digits after answering inbound trunk calls.",
-          "trunk_dtmf_timeout_ms": "Digit collection window. Keep this short; 1000 ms is the default and 2000 ms is the maximum.",
+          "trunk_dtmf_timeout_ms": "Digit collection window. Keep this short; 3000 ms is the default and maximum.",
           "trunk_dtmf_terminator": "Optional terminator digit such as #. Empty means timeout or exact route match decides.",
           "trunk_dtmf_routes": "One route per line using digits=target, for example 100=Kitchen."
         }

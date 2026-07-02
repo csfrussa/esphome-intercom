@@ -138,24 +138,15 @@ class VoipStackCard extends HTMLElement {
   _eventConcernsThisCard(payload) {
     const myId = this._activeDeviceInfo?.device_id || this._getConfigDeviceId();
     if (!myId || !payload) return false;
+    if (this._isHaSoftphoneMode()) return true;
     const nameMatches = (value) => this._samePeerName(value, this._cardPeerName());
     if (payload.local_name || payload.peer_name || payload.caller || payload.callee) {
-      if (this._isHaSoftphoneMode()) {
-        return nameMatches(payload.local_name) ||
-          this._samePeerName(payload.local_name, this._getHaName()) ||
-          payload.device_id === HA_SOFTPHONE_DEVICE_ID;
-      }
       if (nameMatches(payload.local_name) ||
           nameMatches(payload.peer_name) ||
           nameMatches(payload.caller) ||
           nameMatches(payload.callee)) {
         return true;
       }
-    }
-    if (this._isHaSoftphoneMode()) {
-      return payload.device_id === HA_SOFTPHONE_DEVICE_ID
-          || payload.session_device_id === this._activeSessionDeviceId
-          || payload.device_id === this._activeSessionDeviceId;
     }
     return payload.source_device_id === myId
         || payload.dest_device_id === myId

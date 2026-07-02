@@ -112,7 +112,7 @@ final response.
 - If the SDP has no `telephone-event` and the provider does not send SIP INFO,
   HA cannot read post-answer digits from that provider leg.
 - Check `trunk_dtmf_routes` entries use `digits=target`, one route per line.
-- Keep `trunk_dtmf_timeout_ms` short, normally 1000 ms and never above 2000 ms.
+- Keep `trunk_dtmf_timeout_ms` short, normally 3000 ms.
 - If no digits arrive, HA uses `trunk_inbound_default_target`.
 - If digits arrive but do not resolve, HA logs them and terminates the answered
   trunk leg as `route_not_found`.
