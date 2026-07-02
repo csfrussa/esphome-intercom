@@ -8,6 +8,7 @@
 #   - audio_stack
 #   - VoIP
 #   - mww
+#   - sendspin_hub
 #   - speaker_media_player
 #   - scripts: ai_animation_loop, timer_alarm_loop, start_mww_when_ready, draw_display
 # =============================================================================
@@ -23,6 +24,8 @@ ota:
       - globals.set:
           id: g_ota_in_progress
           value: "true"
+      - lambda: |-
+          id(sendspin_hub).disconnect_from_server(sendspin::SendspinGoodbyeReason::SHUTDOWN);
       - script.stop: ai_animation_loop
       - script.stop: timer_alarm_loop
       - runtime_controller.event:

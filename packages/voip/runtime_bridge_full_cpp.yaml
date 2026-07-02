@@ -152,6 +152,11 @@ script:
                 tag: mww
                 format: "MWW: safe start"
             - micro_wake_word.start:
+            - lambda: |-
+                TaskHandle_t mww_task = xTaskGetHandle("mww");
+                if (mww_task) {
+                  vTaskPrioritySet(mww_task, 8);
+                }
 
   - id: voip_ringing_loop
     mode: restart

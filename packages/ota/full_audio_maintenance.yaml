@@ -8,6 +8,7 @@
 #   - audio_stack
 #   - VoIP
 #   - mww
+#   - sendspin_hub
 #   - speaker_media_player
 #   - script: start_mww_when_ready
 # =============================================================================
@@ -23,6 +24,8 @@ ota:
       - globals.set:
           id: g_ota_in_progress
           value: "true"
+      - lambda: |-
+          id(sendspin_hub).disconnect_from_server(sendspin::SendspinGoodbyeReason::SHUTDOWN);
       - media_player.stop:
           id: speaker_media_player
           announcement: true

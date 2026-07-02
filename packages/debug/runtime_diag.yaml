@@ -1,5 +1,47 @@
-# Serial-first runtime diagnostics for ESP devices that become unreachable
-# while still appearing alive locally. Include only for focused debug sessions.
+# =============================================================================
+# Runtime diagnostics flight recorder.
+#
+# Include only while investigating device starvation or watchdog-like behavior.
+# It exposes an on-demand API action/button that prints heap, main-loop gap,
+# API timestamps and FreeRTOS task stack/runtime data to the ESP logger only.
+# Do not publish the full snapshot as HA state: on a starving ESP that extra
+# API payload can distort the failure we are trying to measure.
+# =============================================================================
+
+runtime_diag:
+  id: runtime_diag_component
+
+api:
+  on_client_connected:
+    - lambda: 'id(runtime_diag_component).mark_api_connected();'
+  on_client_disconnected:
+    - lambda: 'id(runtime_diag_component).mark_api_disconnected();'
+  actions:
+    - action: capture_runtime_snapshot
+      variables:
+        reason: string
+      then:
+        - lambda: 'id(runtime_diag_component).capture(reason.c_str());'
+    - action: start_runtime_burst
+      variables:
+        reason: string
+        samples: int
+        interval_ms: int
+      then:
+        - lambda: |-
+            id(runtime_diag_component).start_burst(
+              reason.c_str(),
+              static_cast<uint32_t>(std::max(1, samples)),
+              static_cast<uint32_t>(std::max(250, interval_ms))
+            );
+
+button:
+  - platform: template
+    name: Capture Runtime Snapshot
+    icon: mdi:camera-metering-center
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(runtime_diag_component).capture("button");'
 
 esp32:
   framework:
@@ -7,47 +49,4 @@ esp32:
       CONFIG_FREERTOS_USE_TRACE_FACILITY: "y"
       CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS: "y"
       CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS: "y"
-      CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER: "y"
       CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID: "y"
-      CONFIG_ESP_GDBSTUB_SUPPORT_TASKS: "y"
-      # RISC-V targets such as ESP32-P4 need EH frames for useful runtime
-      # backtraces. Keep this package debug-only; EH frames increase binary size.
-      CONFIG_ESP_SYSTEM_USE_EH_FRAME: "y"
-      CONFIG_ESP_DEBUG_OCDAWARE: "y"
-      CONFIG_FREERTOS_DEBUG_OCDAWARE: "y"
-      # GDBSTUB blocks UART after panic and needs a live GDB session within 5s;
-      # coredump-to-UART writes a base64 ELF snapshot on the same UART and then
-      # reboots, letting `esphome logs` capture both the snapshot and the next
-      # boot. Decode offline with `espcoredump.py info_corefile -t b64 firmware.elf`.
-      CONFIG_ESP_SYSTEM_PANIC_GDBSTUB: "n"
-      CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT: "y"
-      CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS: "3"
-      # Coredump-to-UART belongs to a Kconfig choice (ESP_COREDUMP_TO_FLASH_OR_UART)
-      # whose default is ENABLE_TO_NONE. Setting only ENABLE_TO_UART=y was
-      # silently ignored on the previous build, so disable the other branches
-      # explicitly to force the choice.
-      CONFIG_ESP_COREDUMP_ENABLE_TO_NONE: "n"
-      CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH: "n"
-      CONFIG_ESP_COREDUMP_ENABLE_TO_UART: "y"
-      CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF: "y"
-      CONFIG_ESP_COREDUMP_CAPTURE_DRAM: "y"
-      CONFIG_ESP_COREDUMP_MAX_TASKS_NUM: "32"
-      CONFIG_ESP_COREDUMP_CHECKSUM_CRC32: "y"
-      CONFIG_ESP_COREDUMP_LOGS: "y"
-      CONFIG_ESP_COREDUMP_USE_STACK_SIZE: "2048"
-
-runtime_diag:
-  id: runtime_diag_component
-  dump_interval: 5s
-  dump_window: 10min
-  # Keep disabled by default even in the debug package. Enable only for focused
-  # serial captures; periodic dumps are noisy on normal development builds.
-  periodic_dump: false
-  dump_network: false
-  task_log_limit: 12
-  loop_watch: true
-  loop_watch_interval: 500ms
-  loop_stall_threshold: 2500ms
-  loop_watch_stack_size: 12288
-  loop_watch_priority: 10
-  dump_backtraces: false

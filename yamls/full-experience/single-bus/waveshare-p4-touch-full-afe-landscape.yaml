@@ -610,7 +610,6 @@ touchscreen:
     # On this hardware revision GT9271 is detected on 0x5D.
     address: 0x5D
     display: main_display
-    update_interval: 50ms
     on_touch:
       - output.set_level:
           id: backlight_pwm
