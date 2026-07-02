@@ -376,9 +376,13 @@ void VoipStack::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_
                (unsigned) MEDIA_TIMEOUT_MS, cid.c_str());
       this->set_terminal_response_(cid, kReasonMediaTimeout);
       this->end_call_(CallEndReason::MEDIA_TIMEOUT, kReasonMediaTimeout);
+      bool waiting_for_bye_response = false;
+      if (this->transport_ && this->transport_->is_connected() && !cid.empty()) {
+        waiting_for_bye_response = this->send_sip_bye_(cid);
+      }
       this->set_in_call_(false);
       this->set_active_(false);
-      if (this->transport_) this->transport_->disconnect();
+      if (this->transport_ && !waiting_for_bye_response) this->transport_->disconnect();
     }
   }
 }

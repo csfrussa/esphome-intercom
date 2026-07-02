@@ -633,6 +633,7 @@ bool SipTransport::start_audio_path() {
 }
 
 void SipTransport::stop_audio_path() {
+  this->call_active_.store(false, std::memory_order_release);
   if (!this->rtp_running_.exchange(false, std::memory_order_acq_rel)) return;
   if (this->rtp_socket_ >= 0) {
     close(this->rtp_socket_);
@@ -758,6 +759,7 @@ void SipTransport::reset_rtp_latch_() {
 }
 
 void SipTransport::reset_dialog_() {
+  this->stop_audio_path();
   this->call_id_.clear();
   this->local_tag_.clear();
   this->remote_tag_.clear();
@@ -1394,6 +1396,7 @@ bool SipTransport::send_cancel(const std::string &call_id) {
 
 bool SipTransport::send_bye(const std::string &call_id) {
   if (!call_id.empty()) this->call_id_ = call_id;
+  this->stop_audio_path();
   return this->send_request_("BYE");
 }
 
@@ -1823,6 +1826,9 @@ void SipTransport::rtp_task_() {
     int n = recvfrom(this->rtp_socket_, buf, sizeof(buf), 0,
                      reinterpret_cast<struct sockaddr *>(&src), &slen);
     if (n > 12 && (buf[0] & 0xC0) == 0x80) {
+      if (!this->call_active_.load(std::memory_order_acquire)) {
+        continue;
+      }
       const uint32_t src_ip = ntohl(src.sin_addr.s_addr);
       const uint16_t src_port = ntohs(src.sin_port);
       const uint32_t expected_ip = this->remote_ip_v4_.load(std::memory_order_acquire);

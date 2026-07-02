@@ -242,6 +242,7 @@ async def _run_audio_session(
         "drop_error": 0,
         "drop_tx_queue": 0,
         "tx_error": 0,
+        "tx_silence_keepalive": 0,
     }
     logged_first_rtp = False
     last_counter_event = 0.0
@@ -355,8 +356,15 @@ async def _run_audio_session(
         nonlocal sequence, timestamp
         frame_delay = max(0.001, session.send_format.audio_format.frame_ms / 1000.0)
         next_send = loop.time()
+        silence_pcm = bytes(int(session.send_format.audio_format.nominal_frame_bytes))
         while not closed.is_set():
-            payload = await tx_queue.get()
+            try:
+                payload = await asyncio.wait_for(tx_queue.get(), timeout=frame_delay)
+            except asyncio.TimeoutError:
+                payload = rtp_encoder.encode(silence_pcm)
+                counters["tx_silence_keepalive"] += 1
+            if not payload:
+                continue
             packet = rtp.build_packet(
                 rtp.RtpPacket(
                     payload_type=session.send_format.payload_type,
