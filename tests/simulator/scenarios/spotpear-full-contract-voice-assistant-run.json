@@ -1,6 +1,6 @@
 {
-  "name": "spotpear-full-host-voice-assistant-run",
-  "description": "Spotpear full host profile: complete Micro Wake Word + Voice Assistant run with AEC/AFE visibility.",
+  "name": "spotpear-full-contract-voice-assistant-run",
+  "description": "Spotpear full contract profile: complete Micro Wake Word + Voice Assistant run with AEC/AFE visibility.",
   "steps": [
     {
       "inject_event": {

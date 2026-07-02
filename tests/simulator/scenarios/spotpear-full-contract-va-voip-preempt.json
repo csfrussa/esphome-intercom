@@ -1,6 +1,6 @@
 {
-  "name": "spotpear-full-host-va-voip-preempt",
-  "description": "Spotpear full host profile: SIP incoming call preempts VA response/media and exposes AEC/AFE counters.",
+  "name": "spotpear-full-contract-va-voip-preempt",
+  "description": "Spotpear full contract profile: SIP incoming call preempts VA response/media and exposes AEC/AFE counters.",
   "steps": [
     {
       "inject_event": {

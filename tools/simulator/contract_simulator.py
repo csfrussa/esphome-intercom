@@ -33,7 +33,7 @@ def _idle_state() -> dict[str, Any]:
             "browser_tx_ready_latency_ms": -1,
             "mic_input_path": "tests/simulator/audio/mic_input.pcm",
             "mic_input_bytes": 80000,
-            "speaker_output_path": "test_runs/simulator/spotpear-voip-host_speaker_output.pcm",
+            "speaker_output_path": "test_runs/simulator/spotpear-voip-contract_speaker_output.pcm",
             "speaker_output_bytes": 0,
             "speaker_output_markers": "",
         },
@@ -243,7 +243,7 @@ class ContractSimulator:
         elif typ == "media_start":
             self.state["media"]["state"] = "playing"
             self.state["voip"]["state"] = "idle"
-        elif typ == "phonebook_push":
+        elif typ in {"phonebook_push", "push_phonebook"}:
             contacts = event.get("contacts") if isinstance(event.get("contacts"), list) else []
             self.state["phonebook"].update({"revision": self.state["phonebook"]["revision"] + 1, "duplicate_ids": False})
             visible = max(0, len(contacts) - 1)

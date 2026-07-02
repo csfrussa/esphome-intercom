@@ -21,7 +21,7 @@ agree. Counters alone are not proof of audible bidirectional audio.
 - ESP endpoint declarations never include a separate `sip` protocol column.
   SIP is implicit; the only transport choice is SIP/TCP or SIP/UDP signaling.
 
-## Local/Host Tests
+## Local Contract Tests
 
 Run after implementation is complete:
 
@@ -30,6 +30,9 @@ Run after implementation is complete:
 - `python tests/support/qualification_matrix.py --validate --summary`
 - `./scripts/run_virtual_device_tests.sh --all`
 - `./scripts/run_virtual_device_tests.sh --repeat 1000 --seed 1234 --scenario terminal-no-late-green`
+
+`run_virtual_device_tests.sh` uses the deterministic contract simulator. It is
+not a virtual ESP device and it is not proof of physical audio timing.
 
 `tests/support/qualification_matrix.py` is the authoritative automatic
 coverage map. It must include every supported SIP transport pair, route mode,

@@ -22,7 +22,7 @@ def _json_rpc(socket_path: Path, method: str, params: dict[str, Any]) -> dict[st
     if not socket_path.exists():
         raise SimctlError(
             f"simulator socket not found: {socket_path}. "
-            "Build/start the host virtual device before running scenarios."
+            "Start the contract simulator before running scenarios."
         )
     payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode("utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -59,7 +59,6 @@ def doctor(socket_path: Path) -> int:
         "scenarios": Path("tests/simulator/scenarios").is_dir(),
         "audio": Path("tests/simulator/audio").is_dir(),
         "golden": Path("tests/simulator/golden").is_dir(),
-        "host_yamls": Path("yamls/host").is_dir(),
     }
     print(json.dumps(checks, indent=2, sort_keys=True))
     return 0 if all(value for key, value in checks.items() if key != "socket") else 2
