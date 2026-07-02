@@ -126,7 +126,7 @@ void VoipStack::tx_task_() {
       if (!this->is_tx_stream_ready_())
         break;
     }
-    this->audio_debug_tx_queue_depth_.store(
+    this->media_tx_queue_depth_.store(
         static_cast<uint32_t>(this->mic_buffer_->available() / std::max<size_t>(1, frame_bytes)),
         std::memory_order_relaxed);
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
@@ -158,9 +158,9 @@ void VoipStack::on_microphone_data_(const uint8_t *data, size_t len) {
                (unsigned) this->audio_debug_mic_callbacks_, (unsigned) len, (unsigned) delta,
                (unsigned) this->tx_audio_chunk_bytes_(),
                (unsigned) this->mic_buffer_->available(),
-               (unsigned) this->audio_debug_tx_queue_depth_.load(std::memory_order_relaxed),
-               (unsigned) this->audio_debug_tx_queue_drops_.load(std::memory_order_relaxed),
-               (unsigned) this->audio_debug_tx_queue_drop_bytes_.load(std::memory_order_relaxed),
+               (unsigned) this->media_tx_queue_depth_.load(std::memory_order_relaxed),
+               (unsigned) this->media_tx_queue_drops_.load(std::memory_order_relaxed),
+               (unsigned) this->media_tx_queue_drop_bytes_.load(std::memory_order_relaxed),
                (unsigned) this->current_tx_audio_format_.sample_rate,
                (unsigned) this->current_tx_audio_format_.pcm_format,
                (unsigned) this->current_tx_audio_format_.channels,
@@ -200,8 +200,10 @@ void VoipStack::on_microphone_data_(const uint8_t *data, size_t len) {
       const size_t written = this->mic_buffer_->write(mic_converted, bytes);
       const size_t dropped = replaced + (written < bytes ? bytes - written : 0);
       if (dropped > 0) {
-        this->audio_debug_tx_queue_drop_bytes_.fetch_add(static_cast<uint32_t>(dropped), std::memory_order_relaxed);
-        this->audio_debug_tx_queue_drops_.fetch_add(frames_for_bytes(dropped, frame_bytes), std::memory_order_relaxed);
+        this->media_tx_queue_drops_.fetch_add(frames_for_bytes(dropped, frame_bytes), std::memory_order_relaxed);
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
+        this->media_tx_queue_drop_bytes_.fetch_add(static_cast<uint32_t>(dropped), std::memory_order_relaxed);
+#endif
       }
       if (this->tx_task_handle_ != nullptr) {
         xTaskNotifyGive(this->tx_task_handle_);
@@ -215,8 +217,10 @@ void VoipStack::on_microphone_data_(const uint8_t *data, size_t len) {
     const size_t written = this->mic_buffer_->write(data, len);
     const size_t dropped = replaced + (written < len ? len - written : 0);
     if (dropped > 0) {
-      this->audio_debug_tx_queue_drop_bytes_.fetch_add(static_cast<uint32_t>(dropped), std::memory_order_relaxed);
-      this->audio_debug_tx_queue_drops_.fetch_add(frames_for_bytes(dropped, frame_bytes), std::memory_order_relaxed);
+      this->media_tx_queue_drops_.fetch_add(frames_for_bytes(dropped, frame_bytes), std::memory_order_relaxed);
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
+      this->media_tx_queue_drop_bytes_.fetch_add(static_cast<uint32_t>(dropped), std::memory_order_relaxed);
+#endif
     }
     if (this->tx_task_handle_ != nullptr) {
       xTaskNotifyGive(this->tx_task_handle_);
@@ -259,7 +263,9 @@ void VoipStack::enqueue_rx_frame_(const TransportAudioFrame &frame) {
   if (!this->rx_jitter_buffering_) {
     const int16_t delta = rtp_sequence_delta(sequence, this->rx_jitter_next_sequence_);
     if (delta < 0) {
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
       this->audio_debug_rx_late_frames_.fetch_add(1, std::memory_order_relaxed);
+#endif
       return;
     }
     if (delta >= static_cast<int16_t>(VoipStack::kRxQueuedFrames)) {
@@ -270,21 +276,23 @@ void VoipStack::enqueue_rx_frame_(const TransportAudioFrame &frame) {
       this->rx_jitter_valid_count_ = 0;
       this->rx_jitter_buffering_ = true;
       this->rx_jitter_next_sequence_ = sequence;
-      this->audio_debug_rx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
+      this->media_rx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
     }
   }
 
   RxJitterSlot &slot = this->rx_jitter_slots_[sequence % VoipStack::kRxQueuedFrames];
   if (slot.valid) {
     if (slot.sequence == sequence) {
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
       this->audio_debug_rx_duplicate_frames_.fetch_add(1, std::memory_order_relaxed);
+#endif
       return;
     }
     slot.valid = false;
     slot.bytes = 0;
     if (this->rx_jitter_valid_count_ > 0)
       this->rx_jitter_valid_count_--;
-    this->audio_debug_rx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
+    this->media_rx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
   }
 
   memcpy(slot.pcm, frame.pcm, frame.bytes);
@@ -298,7 +306,7 @@ void VoipStack::enqueue_rx_frame_(const TransportAudioFrame &frame) {
     this->rx_jitter_buffering_ = false;
     this->rx_underrun_start_ms_ = 0;
   }
-  this->audio_debug_rx_queue_depth_.store(this->rx_jitter_valid_count_, std::memory_order_relaxed);
+  this->media_rx_queue_depth_.store(this->rx_jitter_valid_count_, std::memory_order_relaxed);
   if (this->rx_task_handle_ != nullptr) {
     xTaskNotifyGive(this->rx_task_handle_);
   }
@@ -330,20 +338,22 @@ VoipStack::RxPlayoutReadResult VoipStack::read_rx_frame_(uint8_t *audio_chunk, u
     if (this->rx_jitter_valid_count_ > 0)
       this->rx_jitter_valid_count_--;
     this->rx_jitter_next_sequence_ = static_cast<uint16_t>(this->rx_jitter_next_sequence_ + 1);
-    this->audio_debug_rx_queue_depth_.store(this->rx_jitter_valid_count_, std::memory_order_relaxed);
+    this->media_rx_queue_depth_.store(this->rx_jitter_valid_count_, std::memory_order_relaxed);
     return RxPlayoutReadResult::FRAME;
   }
 
   if (this->rx_jitter_valid_count_ == 0) {
     this->rx_jitter_buffering_ = true;
     this->rx_jitter_next_sequence_valid_ = false;
-    this->audio_debug_rx_queue_depth_.store(0, std::memory_order_relaxed);
+    this->media_rx_queue_depth_.store(0, std::memory_order_relaxed);
     return RxPlayoutReadResult::BUFFERING;
   }
 
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   this->audio_debug_rx_late_frames_.fetch_add(1, std::memory_order_relaxed);
+#endif
   this->rx_jitter_next_sequence_ = static_cast<uint16_t>(this->rx_jitter_next_sequence_ + 1);
-  this->audio_debug_rx_queue_depth_.store(this->rx_jitter_valid_count_, std::memory_order_relaxed);
+  this->media_rx_queue_depth_.store(this->rx_jitter_valid_count_, std::memory_order_relaxed);
   return RxPlayoutReadResult::MISSING;
 }
 
@@ -361,19 +371,25 @@ void VoipStack::play_rx_frame_(const uint8_t *pcm, size_t bytes, bool synthetic_
     const size_t written = this->speaker_->play(pcm + offset, bytes - offset, ticks_to_wait);
     if (written == 0) {
       if (++stalls >= 4) {
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
         this->audio_debug_speaker_short_writes_.fetch_add(1, std::memory_order_relaxed);
+#endif
         break;
       }
       continue;
     }
     if (written < bytes - offset) {
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
       this->audio_debug_speaker_short_writes_.fetch_add(1, std::memory_order_relaxed);
+#endif
     }
     stalls = 0;
     offset += written;
   }
   if (synthetic_silence) {
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
     this->audio_debug_rx_silence_frames_.fetch_add(1, std::memory_order_relaxed);
+#endif
   }
 }
 
@@ -436,13 +452,15 @@ void VoipStack::reset_rx_audio_() {
     this->rx_jitter_next_sequence_valid_ = false;
     this->rx_jitter_next_sequence_ = 0;
   }
-  this->audio_debug_rx_queue_depth_.store(0, std::memory_order_relaxed);
-  this->audio_debug_tx_queue_drop_bytes_.store(0, std::memory_order_relaxed);
-  this->audio_debug_rx_queue_drops_.store(0, std::memory_order_relaxed);
+  this->media_rx_queue_depth_.store(0, std::memory_order_relaxed);
+  this->media_rx_queue_drops_.store(0, std::memory_order_relaxed);
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
+  this->media_tx_queue_drop_bytes_.store(0, std::memory_order_relaxed);
   this->audio_debug_rx_late_frames_.store(0, std::memory_order_relaxed);
   this->audio_debug_rx_duplicate_frames_.store(0, std::memory_order_relaxed);
   this->audio_debug_rx_silence_frames_.store(0, std::memory_order_relaxed);
   this->audio_debug_speaker_short_writes_.store(0, std::memory_order_relaxed);
+#endif
   this->rx_underrun_start_ms_ = 0;
 }
 #endif  // USE_ESPHOME_VOIP_STACK_SPEAKER

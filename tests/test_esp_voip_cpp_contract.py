@@ -36,7 +36,10 @@ def test_audio_path_is_not_timer_paced_or_sink_callback_paced() -> None:
     assert "speaker_->play(pcm + offset, bytes - offset, ticks_to_wait)" in audio
     assert "offset += written" in audio
     assert "written == 0" in audio
-    assert "audio_debug_tx_queue_drops_" in audio
+    assert "media_tx_queue_drops_" in audio
+    assert "media_rx_queue_drops_" in audio
+    assert "tx_task_priority" not in combined
+    assert "rx_task_priority" not in combined
 
 
 def test_media_timeout_is_a_terminal_phone_reason() -> None:

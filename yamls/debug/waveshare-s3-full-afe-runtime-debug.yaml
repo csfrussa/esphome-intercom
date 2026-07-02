@@ -1,8 +1,0 @@
-substitutions:
-  ext_components_source: ../../esphome/components
-  assets_base: ../../
-  runtime_controller_debug: "true"
-
-packages:
-  base: !include ../full-experience/single-bus/waveshare-s3-full-afe.yaml
-  runtime_debug: !include ../../packages/debug/runtime_controller_snapshot.yaml

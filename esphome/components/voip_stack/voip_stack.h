@@ -103,8 +103,6 @@ class VoipStack : public Component {
   void set_dc_offset_removal(bool enabled) { this->dc_offset_removal_ = enabled; }
   void set_task_stacks_in_psram(bool enabled) { this->task_stacks_in_psram_ = enabled; }
   void set_buffers_in_psram(bool enabled) { this->buffers_in_psram_ = enabled; }
-  void set_tx_task_priority(uint8_t priority) { this->tx_task_priority_ = priority; }
-  void set_rx_task_priority(uint8_t priority) { this->rx_task_priority_ = priority; }
   void set_device_name(const std::string &name) { this->device_name_ = name; }
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
   // Matches the slug HA uses for the esphome.{slug}_start_call action.
@@ -549,8 +547,7 @@ class VoipStack : public Component {
   StackType_t *rx_task_stack_{nullptr};
 #endif
   bool task_stacks_in_psram_{false};
-  uint8_t tx_task_priority_{5};
-  uint8_t rx_task_priority_{5};
+  static constexpr uint8_t kMediaTaskPriority = 5;
 
   std::atomic<float> volume_{1.0f};
   bool audio_debug_{false};
@@ -578,15 +575,17 @@ class VoipStack : public Component {
   uint32_t audio_debug_rx_frames_{0};
   uint32_t audio_debug_mic_callbacks_{0};
 #endif
-  std::atomic<uint32_t> audio_debug_tx_queue_drop_bytes_{0};
-  std::atomic<uint32_t> audio_debug_tx_queue_drops_{0};
-  std::atomic<uint32_t> audio_debug_tx_queue_depth_{0};
-  std::atomic<uint32_t> audio_debug_rx_queue_drops_{0};
-  std::atomic<uint32_t> audio_debug_rx_queue_depth_{0};
+  std::atomic<uint32_t> media_tx_queue_drops_{0};
+  std::atomic<uint32_t> media_tx_queue_depth_{0};
+  std::atomic<uint32_t> media_rx_queue_drops_{0};
+  std::atomic<uint32_t> media_rx_queue_depth_{0};
+#ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
+  std::atomic<uint32_t> media_tx_queue_drop_bytes_{0};
   std::atomic<uint32_t> audio_debug_rx_late_frames_{0};
   std::atomic<uint32_t> audio_debug_rx_duplicate_frames_{0};
   std::atomic<uint32_t> audio_debug_rx_silence_frames_{0};
   std::atomic<uint32_t> audio_debug_speaker_short_writes_{0};
+#endif
   uint32_t rx_underrun_start_ms_{0};
 
   // First peer audio frame closes the 200 OK echo loop.

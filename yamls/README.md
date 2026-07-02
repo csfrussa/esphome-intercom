@@ -32,9 +32,10 @@ yamls/
   experimental/          Untested topologies (compile-only, contributions welcome)
 ```
 
-Device-specific debug YAMLs live in local-only `yamls/debug/` and are not
-published. Reusable debug building blocks are public packages under
-`packages/debug/`.
+Debug should be enabled through component options such as `debug: true`,
+`audio_debug: true`, or component-specific telemetry flags, then disabled again
+for release builds. The repository does not publish separate debug device YAMLs;
+reusable opt-in debug packages can live under `packages/debug/`.
 
 ## Single-bus vs Dual-bus
 

@@ -32,8 +32,6 @@ CONF_VOIP_STACK_ID = "voip_stack_id"
 CONF_DC_OFFSET_REMOVAL = "dc_offset_removal"
 CONF_TASK_STACKS_IN_PSRAM = "task_stacks_in_psram"
 CONF_BUFFERS_IN_PSRAM = "buffers_in_psram"
-CONF_TX_TASK_PRIORITY = "tx_task_priority"
-CONF_RX_TASK_PRIORITY = "rx_task_priority"
 CONF_AUTO_ENTITIES = "auto_entities"
 CONF_MICROPHONE_SOURCE = "microphone_source"
 
@@ -491,8 +489,6 @@ CONFIG_SCHEMA = cv.Schema(
         # required on plain ESP32 boards without PSRAM. Set true on heavy S3/P4
         # builds when PSRAM stacks are enabled in sdkconfig.
         cv.Optional(CONF_TASK_STACKS_IN_PSRAM, default=False): cv.boolean,
-        cv.Optional(CONF_TX_TASK_PRIORITY, default=5): cv.int_range(min=1, max=24),
-        cv.Optional(CONF_RX_TASK_PRIORITY, default=5): cv.int_range(min=1, max=24),
         # Auto-create the boilerplate switches/numbers (auto_answer, volume,
         # mic_gain). Default false for YAMLs that already declare them via
         # `switch:`/`number: - platform: voip_stack`.
@@ -693,8 +689,6 @@ async def _add_core_settings(var, config):
     cg.add(var.set_dc_offset_removal(config[CONF_DC_OFFSET_REMOVAL]))
     cg.add(var.set_task_stacks_in_psram(config[CONF_TASK_STACKS_IN_PSRAM]))
     cg.add(var.set_buffers_in_psram(config[CONF_BUFFERS_IN_PSRAM]))
-    cg.add(var.set_tx_task_priority(config[CONF_TX_TASK_PRIORITY]))
-    cg.add(var.set_rx_task_priority(config[CONF_RX_TASK_PRIORITY]))
     cg.add(var.set_use_ha_as_first_contact(config[CONF_USE_HA_AS_FIRST_CONTACT]))
     cg.add(var.set_audio_debug(config[CONF_AUDIO_DEBUG]))
     if config[CONF_AUDIO_DEBUG]:
