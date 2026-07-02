@@ -124,13 +124,34 @@ def _header_param(header: str, name: str) -> str:
     return ""
 
 
-def _expires(request: sip.SipMessage) -> int:
-    contact_expires = _header_param(request.header("Contact"), "expires")
-    raw = contact_expires or request.header("Expires") or "3600"
+def _parse_expires(raw: str, default: int = 3600) -> int:
     try:
         return max(0, min(int(raw), 86400))
-    except ValueError:
-        return 3600
+    except (TypeError, ValueError):
+        return default
+
+
+def _register_contacts(request: sip.SipMessage) -> list[tuple[str, int, str]]:
+    default_expires = _parse_expires(request.header("Expires") or "3600")
+    contacts: list[tuple[str, int, str]] = []
+    for raw in request.header_values("Contact"):
+        header = raw.strip()
+        if not header:
+            continue
+        if header == "*":
+            contacts.append(("*", 0, header))
+            continue
+        uri = _extract_uri(header)
+        if not uri:
+            continue
+        contact_expires = _header_param(header, "expires")
+        expires = _parse_expires(contact_expires, default_expires) if contact_expires else default_expires
+        contacts.append((uri, expires, header))
+    return contacts
+
+
+def _same_contact(left: str, right: str) -> bool:
+    return _extract_uri(left).strip().lower() == _extract_uri(right).strip().lower()
 
 
 class SipRegistrar:
@@ -199,25 +220,57 @@ class SipRegistrar:
             _nonce, challenge = self._challenge()
             return self._result(401, "Unauthorized", (("WWW-Authenticate", challenge),))
 
-        expires = _expires(request)
-        if expires <= 0:
-            self.registrations.pop(account.username, None)
-            _LOGGER.info("SIP registrar unregistered user=%s transport=%s", account.username, transport.upper())
-            return self._result(200, "OK", (("Expires", "0"),))
-        contact = _extract_uri(request.header("Contact"))
-        if not contact:
+        contacts = _register_contacts(request)
+        if not contacts:
             return self._result(400, "Bad Request")
-        self.registrations[account.username] = SipRegistration(
-            username=account.username,
-            contact_uri=contact,
-            source_host=addr[0],
-            source_port=int(addr[1]),
-            transport=transport,
-            expires_at=time.time() + expires,
-            user_agent=request.header("User-Agent"),
-        )
-        _LOGGER.info("SIP registrar registered user=%s transport=%s expires=%ss", account.username, transport.upper(), expires)
-        return self._result(200, "OK", (("Expires", str(expires)), ("Contact", request.header("Contact"))))
+        active_contacts = [contact for contact in contacts if contact[0] != "*" and contact[1] > 0]
+        remove_contacts = [contact for contact in contacts if contact[0] == "*" or contact[1] <= 0]
+
+        if active_contacts:
+            contact_uri, expires, raw_contact = active_contacts[-1]
+            self.registrations[account.username] = SipRegistration(
+                username=account.username,
+                contact_uri=contact_uri,
+                source_host=addr[0],
+                source_port=int(addr[1]),
+                transport=transport,
+                expires_at=time.time() + expires,
+                user_agent=request.header("User-Agent"),
+            )
+            _LOGGER.info(
+                "SIP registrar registered user=%s transport=%s expires=%ss contact=%s contacts=%s",
+                account.username,
+                transport.upper(),
+                expires,
+                contact_uri,
+                len(contacts),
+            )
+            return self._result(200, "OK", (("Expires", str(expires)), ("Contact", raw_contact)))
+
+        if remove_contacts:
+            current = self.registrations.get(account.username)
+            contact_uri, _expires_value, _raw_contact = remove_contacts[-1]
+            if contact_uri == "*" or (
+                current is not None and contact_uri and _same_contact(contact_uri, current.contact_uri)
+            ):
+                self.registrations.pop(account.username, None)
+                _LOGGER.info(
+                    "SIP registrar unregistered user=%s transport=%s contact=%s contacts=%s",
+                    account.username,
+                    transport.upper(),
+                    contact_uri or "*",
+                    len(contacts),
+                )
+            else:
+                _LOGGER.info(
+                    "SIP registrar ignored unregister for stale contact user=%s transport=%s contact=%s active=%s",
+                    account.username,
+                    transport.upper(),
+                    contact_uri or "-",
+                    current.contact_uri if current is not None else "-",
+                )
+            return self._result(200, "OK", (("Expires", "0"),))
+        return self._result(400, "Bad Request")
 
     def _result(self, status: int, reason: str, headers: tuple[tuple[str, str], ...] = ()) -> SipRegisterResult:
         self.last_sip_status_code = int(status)
@@ -234,34 +287,7 @@ class SipRegistrar:
         return bool(expired)
 
     def roster_entries(self) -> list[RosterEntry]:
-        self.expire()
-        entries: list[RosterEntry] = []
-        for username, account in sorted(self.accounts.items()):
-            if not account.enabled:
-                continue
-            registration = self.registrations.get(account.username)
-            metadata = {
-                "registered": bool(registration),
-            }
-            sip_uri = ""
-            if registration is not None:
-                sip_uri = registration.contact_uri
-                metadata.update(
-                    {
-                        "sip_transport": registration.transport.lower(),
-                        "user_agent": registration.user_agent,
-                    }
-                )
-            entries.append(
-                RosterEntry(
-                    id=account.username,
-                    name=account.roster_name,
-                    kind="softphone",
-                    sip_uri=sip_uri,
-                    metadata=metadata,
-                )
-            )
-        return entries
+        return self.registered_roster_entries()
 
     def registered_roster_entries(self) -> list[RosterEntry]:
         self.expire()
@@ -274,7 +300,6 @@ class SipRegistrar:
                 RosterEntry(
                     id=account.username,
                     name=account.roster_name,
-                    kind="softphone",
                     sip_uri=registration.contact_uri,
                     metadata={
                         "sip_transport": registration.transport.lower(),

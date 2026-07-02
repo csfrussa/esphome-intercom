@@ -35,6 +35,7 @@ def build_phonebook_service_handlers(
         metadata = {
             key: metadata_value(key)
             for key in (
+                "transport",
                 "sip_transport",
                 "signaling_transport",
                 "sip_port",
@@ -50,15 +51,17 @@ def build_phonebook_service_handlers(
         }
         address = str(call.data.get("address") or "").strip()
         sip_uri = str(call.data.get("sip_uri") or "").strip()
+        extension = str(call.data.get("extension") or "").strip()
         number = str(call.data.get("number") or "").strip()
-        kind = "phone" if number and not address and not sip_uri else "esp"
+        port = int(call.data.get("port") or call.data.get("sip_port") or 0)
         entry = RosterEntry(
             id=entry_id,
             name=name,
-            kind=kind,
             address=address,
             sip_uri=sip_uri,
+            extension=extension,
             number=number,
+            port=port,
             ha_bridge=bool(call.data.get("ha_bridge", False)),
             metadata=metadata,
         )
@@ -70,7 +73,7 @@ def build_phonebook_service_handlers(
         entries.append(entry)
         store_manual_roster_entries(hass, entries)
         await refresh_and_push_phonebook(hass)
-        _LOGGER.info("Phonebook contact added: %s (%s)", entry.id, entry.kind)
+        _LOGGER.info("Phonebook contact added: %s", entry.id)
 
     async def remove_contact(call: ServiceCall) -> None:
         hass = call.hass
@@ -83,6 +86,7 @@ def build_phonebook_service_handlers(
             for item in entries
             if getattr(item, "id", "").lower() != wanted
             and getattr(item, "name", "").lower() != wanted
+            and getattr(item, "extension", "").lower() != wanted
             and getattr(item, "number", "").lower() != wanted
         ]
         store_manual_roster_entries(hass, entries)

@@ -1,5 +1,5 @@
 # =============================================================================
-# ESP Audio Stack user controls
+# User controls for audio-stack devices
 # =============================================================================
 # Drop-in for devices using:
 #   esp_audio_stack id: audio_stack

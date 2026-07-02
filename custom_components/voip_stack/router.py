@@ -7,7 +7,7 @@ from enum import StrEnum
 import re
 from typing import Literal
 
-from .roster import RosterEntry, find_entry
+from .roster import RosterEntry, entry_matches_extension, find_entry
 
 
 class RouteAction(StrEnum):
@@ -34,7 +34,6 @@ class RouteReason(StrEnum):
     DIALPLAN_TIMEOUT = "dialplan_timeout"
     MEDIA_INCOMPATIBLE = "media_incompatible"
     TRUNK_UNAVAILABLE = "trunk_unavailable"
-    NO_DIRECT_TRANSPORT = "no_direct_transport"
 
 
 class RouteHintSource(StrEnum):
@@ -112,13 +111,15 @@ def to_sip_uri(target: str) -> str:
 
 
 def _entry_transport(entry: RosterEntry | None) -> str:
-    value = str((entry.metadata if entry is not None else {}).get("sip_transport") or "").strip().lower()
+    metadata = entry.metadata if entry is not None else {}
+    value = str(metadata.get("transport") or metadata.get("sip_transport") or "").strip().lower()
     return value if value in {"tcp", "udp"} else ""
 
 
 def _entry_port(entry: RosterEntry | None) -> int:
     try:
-        return int((entry.metadata if entry is not None else {}).get("sip_port") or 5060)
+        metadata = entry.metadata if entry is not None else {}
+        return int((entry.port if entry is not None and entry.port else 0) or metadata.get("port") or metadata.get("sip_port") or 5060)
     except (TypeError, ValueError):
         return 5060
 
@@ -146,9 +147,10 @@ def _uri_port(uri: str) -> int:
 
 
 def _uri(user: str, host: str, port: int = 5060, transport: str = "") -> str:
+    safe_user = re.sub(r"[^A-Za-z0-9_.!~*'()-]+", "_", (user or "voip").strip()).strip("_") or "voip"
     suffix = "" if int(port) == 5060 else f":{int(port)}"
     transport_suffix = f";transport={transport}" if transport in {"tcp", "udp"} else ""
-    return f"sip:{user}@{host}{suffix}{transport_suffix}"
+    return f"sip:{safe_user}@{host}{suffix}{transport_suffix}"
 
 
 def ha_uri_for(target: str, entries: list[RosterEntry], ha_uri: str = "") -> str:
@@ -164,7 +166,7 @@ def ha_uri_for(target: str, entries: list[RosterEntry], ha_uri: str = "") -> str
 
 def _ha_entry(entries: list[RosterEntry], ha_uri: str = "") -> RosterEntry | None:
     for entry in entries:
-        if entry.kind == "ha" and entry.enabled and entry.address:
+        if bool(entry.metadata.get("local_ha")) and entry.enabled and entry.address:
             return entry
     if ha_uri:
         try:
@@ -175,7 +177,7 @@ def _ha_entry(entries: list[RosterEntry], ha_uri: str = "") -> RosterEntry | Non
                 host, port = host.rsplit(":", 1)
             else:
                 port = "5060"
-            return RosterEntry(id=user or "HA", kind="ha", address=host, metadata={"sip_port": int(port)})
+            return RosterEntry(id=user or "HA", address=host, port=int(port), metadata={"local_ha": True})
         except Exception:
             return None
     return None
@@ -189,20 +191,17 @@ def resolve_esp_origin(target: str, entries: list[RosterEntry], ha_uri: str) -> 
     if target_class == TargetClass.NUMERIC:
         return RouteDecision(RouteAction.BRIDGE, target=target, sip_uri=ha_uri_for(target, entries, ha_uri), reason=RouteReason.NUMBER_VIA_HA)
 
-    entry = find_entry(entries, target)
+    entry = find_entry(entries, target, include_number=False)
     if entry is None:
         return RouteDecision(RouteAction.BRIDGE, target=target, sip_uri=ha_uri, reason=RouteReason.NAME_VIA_HA)
     if not entry.enabled:
         return RouteDecision(RouteAction.REJECT, target=target, status=403, reason=RouteReason.TARGET_DISABLED, entry=entry)
-    if entry.kind == "group":
-        return RouteDecision(RouteAction.GROUP, target=entry.id, source="phonebook", entry=entry)
     transport = _entry_transport(entry)
     direct_uri = entry.sip_uri or (_uri(entry.id, entry.address, _entry_port(entry), transport) if entry.address else "")
-    if direct_uri and transport and not entry.ha_bridge:
+    if direct_uri and not entry.ha_bridge:
         return RouteDecision(RouteAction.DIRECT, target=entry.id, sip_uri=direct_uri, source="phonebook", entry=entry)
-    bridge_target = entry.number or entry.id
-    reason = RouteReason.NO_DIRECT_TRANSPORT if entry.address and not transport and not entry.sip_uri else RouteReason.NAME_VIA_HA
-    return RouteDecision(RouteAction.BRIDGE, target=bridge_target, sip_uri=ha_uri_for(bridge_target, entries, ha_uri), reason=reason, source="phonebook", entry=entry)
+    bridge_target = entry.extension or entry.id
+    return RouteDecision(RouteAction.BRIDGE, target=bridge_target, sip_uri=ha_uri_for(bridge_target, entries, ha_uri), reason=RouteReason.NAME_VIA_HA, source="phonebook", entry=entry)
 
 
 def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: bool = False) -> RouteDecision:
@@ -215,27 +214,17 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
     if entry is not None and not entry.enabled:
         return RouteDecision(RouteAction.REJECT, target=target, status=403, reason=RouteReason.TARGET_DISABLED, entry=entry)
     if entry is not None:
-        if entry.kind == "ha":
+        if bool(entry.metadata.get("local_ha")):
             return RouteDecision(RouteAction.ANSWER_HA, target=entry.id, reason=RouteReason.DEFAULT_HA, source="phonebook", entry=entry)
-        if entry.kind == "group":
-            return RouteDecision(RouteAction.GROUP, target=entry.id, source="phonebook", entry=entry)
-        if entry.kind == "phone":
-            number = entry.number or entry.id
-            if trunk_ready:
-                return RouteDecision(RouteAction.TRUNK, target=number, source="trunk", entry=entry)
-            return RouteDecision(RouteAction.REJECT, target=number, status=503, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
-        if entry.number and not entry.address and not entry.sip_uri:
+        matched_extension = entry_matches_extension(entry, target)
+        if entry.number and not entry.address and not entry.sip_uri and not matched_extension:
             if trunk_ready:
                 return RouteDecision(RouteAction.TRUNK, target=entry.number, source="trunk", entry=entry)
             return RouteDecision(RouteAction.REJECT, target=entry.number, status=503, reason=RouteReason.TRUNK_UNAVAILABLE, entry=entry)
-        if entry.kind == "softphone" and not bool(entry.metadata.get("registered", False)) and not entry.sip_uri and not entry.address:
-            return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.TARGET_UNREACHABLE, entry=entry)
         transport = _entry_transport(entry)
         sip_uri = entry.sip_uri or (_uri(entry.id, entry.address, _entry_port(entry), transport) if entry.address else "")
         if not sip_uri and not entry.number:
             return RouteDecision(RouteAction.ANSWER_HA, target=entry.id, reason=RouteReason.NAME_VIA_HA, source="phonebook", entry=entry)
-        if entry.kind == "esp" and entry.address and not transport and not entry.sip_uri:
-            return RouteDecision(RouteAction.REJECT, target=entry.id, status=480, reason=RouteReason.NO_DIRECT_TRANSPORT, entry=entry)
         if sip_uri:
             return RouteDecision(RouteAction.FORWARD, target=entry.id, sip_uri=sip_uri, source="phonebook", entry=entry)
         return RouteDecision(RouteAction.REJECT, target=target, status=404, reason=RouteReason.ROUTE_NOT_FOUND, entry=entry)
@@ -249,7 +238,10 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
 def route_inbound_trunk(ctx: CallContext, entries: list[RosterEntry], *, trunk_ready: bool = False) -> RouteDecision:
     if not ctx.has_explicit_route_hint:
         return RouteDecision(RouteAction.ANSWER_HA, reason=RouteReason.DEFAULT_HA)
-    resolved = resolve_ha_router(ctx.route_hint, entries, trunk_ready=trunk_ready)
+    internal_entry = find_entry(entries, ctx.route_hint, include_number=False)
+    if internal_entry is None:
+        return RouteDecision(RouteAction.REJECT, target=ctx.route_hint, status=404, reason=RouteReason.ROUTE_NOT_FOUND)
+    resolved = resolve_ha_router(internal_entry.extension or internal_entry.id, entries, trunk_ready=trunk_ready)
     if resolved.action is RouteAction.REJECT:
         return RouteDecision(RouteAction.REJECT, target=ctx.route_hint, status=404, reason=RouteReason.ROUTE_NOT_FOUND)
     return resolved

@@ -11,7 +11,7 @@ voip_stack:
   static_contacts:
     - name: Kitchen
       ip: 192.168.1.42
-      sip_transport: udp
+      transport: udp
       port: 5060
       rtp_port: 40000
 ```
@@ -47,7 +47,7 @@ Runtime actions:
 - `voip_stack.set_contacts`
 - `voip_stack.set_roster_json`
 
-Static and runtime contacts accept `sip_transport: udp|tcp` when one contact
+Static and runtime contacts accept `transport: udp|tcp` when one contact
 must use a different signaling transport from the phone's own `transport`.
 
 Conditions:
@@ -88,7 +88,7 @@ force the HA bridge path.
 `action: forward`; without `call_id` it originates a new HA bridged SIP call.
 
 `add_contact` requires only `name`. Optional fields are `id`,
-`address`, `sip_uri`, `number`, `ha_bridge`, `sip_transport`, `sip_port`,
+`address`, `sip_uri`, `extension`, `number`, `ha_bridge`, `transport`, `port`,
 `rtp_port`, `tx_rate`, `rx_rate`, `tx_formats`, `rx_formats`, and
 `max_payload_bytes`. HA updates `sensor.voip_phonebook` and pushes the
 roster to online ESP devices.
@@ -133,7 +133,7 @@ When `trunk_enabled` is true, the second step adds:
 | `trunk_outbound_proxy` | Optional proxy host or `sip:host:port` used as signaling next hop. |
 | `trunk_inbound_default_target` | Local target used when no DTMF route hint arrives. Default `HA`. |
 | `trunk_dtmf_enabled` | Enable inbound RFC2833/telephone-event digit collection. |
-| `trunk_dtmf_timeout_ms` | Digit collection window, clamped to 100-3000 ms. Default 3000 ms. |
+| `trunk_dtmf_timeout_ms` | Digit collection window. The setup UI shows seconds; internally this is stored in milliseconds. Default 3 s, maximum 10 s. `0` skips DTMF/pre-answer and uses the normal inbound dialplan. |
 | `trunk_dtmf_terminator` | Optional terminator digit such as `#`. Empty means timeout or exact route match decides. |
 | `trunk_dtmf_routes` | Newline-separated `digits=target` routes, for example `100=Cucina`. |
 

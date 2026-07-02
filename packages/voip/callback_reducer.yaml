@@ -1,5 +1,5 @@
 # =============================================================================
-# VoIP state machine: g_applied_led + central reducer + LED driver.
+# VoIP-only YAML LED reducer: g_applied_led + LED driver.
 # Drop-in for any device that runs the voip_stack stack and a status LED.
 #
 # g_applied_led values (VoIP subset):
@@ -24,7 +24,7 @@ globals:
     initial_value: "false"
 
 script:
-  # Central reducer: collapses inputs into a single LED target index.
+  # Collapse simple voip_stack callback inputs into one LED target index.
   - id: update_status
     mode: restart
     then:

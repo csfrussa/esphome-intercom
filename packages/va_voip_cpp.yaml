@@ -11,7 +11,7 @@
 # =============================================================================
 
 packages:
-  state_machine_full: !include voip/state_machine_full_cpp.yaml
+  runtime_bridge: !include voip/runtime_bridge_full_cpp.yaml
   voice_assistant_core: !include voice_assistant/core_cpp.yaml
   va_callbacks: !include voip/va_callbacks_cpp.yaml
 

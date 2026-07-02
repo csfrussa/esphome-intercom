@@ -127,6 +127,48 @@ int find_json_int(const std::string &json, const std::string &key, int default_v
   return end == json.c_str() + pos ? default_value : static_cast<int>(value);
 }
 
+int count_json_contact_objects(const std::string &json) {
+  const size_t contacts_key = json.find("\"contacts\"");
+  if (contacts_key == std::string::npos)
+    return 0;
+  const size_t array_begin = json.find('[', contacts_key);
+  if (array_begin == std::string::npos)
+    return 0;
+  int depth = 0;
+  int contacts = 0;
+  bool in_string = false;
+  bool escaped = false;
+  for (size_t i = array_begin; i < json.size(); i++) {
+    const char ch = json[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch == '\\' && in_string) {
+      escaped = true;
+      continue;
+    }
+    if (ch == '"') {
+      in_string = !in_string;
+      continue;
+    }
+    if (in_string)
+      continue;
+    if (ch == '[' || ch == '{') {
+      depth++;
+      if (ch == '{' && depth == 2)
+        contacts++;
+      continue;
+    }
+    if (ch == ']' || ch == '}') {
+      depth--;
+      if (ch == ']' && depth == 0)
+        break;
+    }
+  }
+  return contacts;
+}
+
 std::string endpoint_json(const VoipSimulator::EndpointState &endpoint, bool include_visible = false) {
   std::ostringstream out;
   out << "{\"state\":" << q(endpoint.state)
@@ -593,12 +635,7 @@ void VoipSimulator::inject_event_(const std::string &params) {
   } else if (type == "phonebook_push") {
     this->state_.phonebook_revision++;
     this->state_.phonebook_duplicate_ids = false;
-    int contacts = 0;
-    size_t pos = 0;
-    while ((pos = params.find("\"kind\"", pos)) != std::string::npos) {
-      contacts++;
-      pos += 6;
-    }
+    const int contacts = count_json_contact_objects(params);
     int visible = std::max(0, contacts - 1);
     this->state_.ha_visible_contacts = visible;
     this->state_.esp.visible_contacts = visible;

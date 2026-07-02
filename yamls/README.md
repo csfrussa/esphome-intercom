@@ -77,13 +77,13 @@ offline/custom installs; normal shared routing comes from `sensor.voip_phonebook
 
 ## Optional packages
 
-`packages/voice_assistant/timers.yaml` adds headless Home Assistant timer alarm
-support on top of the full VA/VoIP package. It is intentionally not part of
-`va_voip.yaml`; include it only on devices that should expose timer behavior.
+`packages/voice_assistant/timers_cpp.yaml` adds Home Assistant timer alarm
+support on top of the runtime_controller full VA/VoIP package. Include it only
+on devices that should expose timer behavior.
 
 ## Production logging
 
-Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; the per-frame telemetry path is additionally gated behind `esp_audio_stack.telemetry: true`. Audio deep-debug lives in `packages/debug/p4_audio_deep_debug.yaml`.
+Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; deep audio paths stay behind component options such as `audio_debug: true` or `esp_audio_stack.telemetry: true`. Local debug packages and generated host YAMLs are intentionally ignored by git.
 
 ## P4 status
 

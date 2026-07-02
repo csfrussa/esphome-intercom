@@ -152,9 +152,11 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
             RosterEntry(
                 id=peer.name,
                 name=peer.name,
-                kind="ha" if peer.is_ha else "esp",
                 address=peer.host,
+                extension=peer.extension,
+                port=int(peer.sip_port or 0),
                 metadata={
+                    "local_ha": bool(peer.is_ha),
                     "sip_transport": (
                         str((peer.device or {}).get("sip_transport") or "tcp").lower()
                         if peer.is_ha or peer.device is not None

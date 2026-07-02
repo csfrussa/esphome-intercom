@@ -12,16 +12,16 @@
 namespace esphome {
 namespace voip_stack {
 
-enum class ContactEndpointKind : uint8_t {
+enum class ContactEndpointType : uint8_t {
   UNKNOWN,
   SIP,
 };
 
-inline const char *contact_endpoint_kind_to_str(ContactEndpointKind endpoint_kind) {
-  switch (endpoint_kind) {
-    case ContactEndpointKind::SIP:
+inline const char *contact_endpoint_type_to_str(ContactEndpointType endpoint_type) {
+  switch (endpoint_type) {
+    case ContactEndpointType::SIP:
       return "sip";
-    case ContactEndpointKind::UNKNOWN:
+    case ContactEndpointType::UNKNOWN:
     default:
       return "unknown";
   }
@@ -37,7 +37,7 @@ inline const char *contact_endpoint_kind_to_str(ContactEndpointKind endpoint_kin
 struct ContactEntry {
   std::string name;
   std::string ip;
-  ContactEndpointKind endpoint_kind{ContactEndpointKind::UNKNOWN};
+  ContactEndpointType endpoint_type{ContactEndpointType::UNKNOWN};
   uint16_t port{0};
   uint16_t rtp_port{0};
   bool sip_transport_tcp{false};
@@ -80,8 +80,8 @@ class Phonebook {
   static bool parse_entry(const std::string &entry, ContactEntry *out) {
     return parse_entry_(entry, out);
   }
-  static bool parse_endpoint_kind(const std::string &s, ContactEndpointKind *out) {
-    return parse_endpoint_kind_(s, out);
+  static bool parse_endpoint_type(const std::string &s, ContactEndpointType *out) {
+    return parse_endpoint_type_(s, out);
   }
   static bool parse_u16(const std::string &s, uint16_t *out) {
     return parse_u16_(s, out);
@@ -243,9 +243,9 @@ class Phonebook {
     const auto *c = this->current();
     return c ? c->port : 0;
   }
-  ContactEndpointKind current_endpoint_kind() const {
+  ContactEndpointType current_endpoint_type() const {
     const auto *c = this->current();
-    return c ? c->endpoint_kind : ContactEndpointKind::UNKNOWN;
+    return c ? c->endpoint_type : ContactEndpointType::UNKNOWN;
   }
 
   /// Comma-separated list of names (no endpoints) for diagnostic publishing.
@@ -274,14 +274,14 @@ class Phonebook {
       }
       if (existing.ip == incoming.ip && existing.port == incoming.port &&
           existing.rtp_port == incoming.rtp_port &&
-          existing.endpoint_kind == incoming.endpoint_kind &&
+          existing.endpoint_type == incoming.endpoint_type &&
           existing.audio_capability == incoming.audio_capability) {
         return AddResult::Noop;
       }
       const bool was_unset = existing.ip.empty() && existing.port == 0 &&
                              existing.rtp_port == 0;
       existing.ip = incoming.ip;
-      existing.endpoint_kind = incoming.endpoint_kind;
+      existing.endpoint_type = incoming.endpoint_type;
       existing.port = incoming.port;
       existing.rtp_port = incoming.rtp_port;
       existing.sip_transport_tcp = incoming.sip_transport_tcp;
@@ -294,7 +294,7 @@ class Phonebook {
   }
 
   static bool same_entry_(const ContactEntry &a, const ContactEntry &b) {
-    return a.name == b.name && a.ip == b.ip && a.endpoint_kind == b.endpoint_kind &&
+    return a.name == b.name && a.ip == b.ip && a.endpoint_type == b.endpoint_type &&
            a.port == b.port && a.rtp_port == b.rtp_port &&
            a.sip_transport_tcp == b.sip_transport_tcp &&
            a.audio_capability == b.audio_capability;
@@ -329,7 +329,7 @@ class Phonebook {
   static bool parse_short_entry_(const std::vector<std::string> &parts, ContactEntry *out) {
     if (parts.size() == 1) return true;
     if (parts.size() != 5 && parts.size() != 8) return false;
-    out->endpoint_kind = ContactEndpointKind::SIP;
+    out->endpoint_type = ContactEndpointType::SIP;
     out->ip = trim_(parts[1]);
     if (out->ip.empty()) return false;
     if (!parse_u16_(trim_(parts[2]), &out->port) ||
@@ -350,9 +350,9 @@ class Phonebook {
     return false;
   }
 
-  static bool parse_endpoint_kind_(const std::string &s, ContactEndpointKind *out) {
+  static bool parse_endpoint_type_(const std::string &s, ContactEndpointType *out) {
     if (s == "sip" || s == "SIP") {
-      *out = ContactEndpointKind::SIP;
+      *out = ContactEndpointType::SIP;
       return true;
     }
     return false;

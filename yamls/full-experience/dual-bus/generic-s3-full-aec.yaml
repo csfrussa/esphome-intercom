@@ -49,8 +49,8 @@ substitutions:
   name: generic-s3-dual-aec
   friendly_name: Generic S3 Dual AEC
 
-  ext_components_source: "../../../esphome/components"
-  assets_base: "../../../"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
   mic_id: mic_main
   runtime_controller_led_preset: rgb_single
 
@@ -60,26 +60,26 @@ substitutions:
   status_led_rgb_order: GRB
 
 packages:
-  core: !include ../../../packages/va_voip_cpp.yaml
-  runtime_controller: !include ../../../packages/runtime_controller/full_controller.yaml
-  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
-  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  speaker_mute: !include ../../../packages/voip/speaker_mute_cpp.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_single.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
-  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute_cpp.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
 
 esphome:
   name: ${name}
@@ -160,12 +160,14 @@ output:
     id: speaker_enable
     pin: ${speaker_enable_pin}
 
+# AEC: removes local speaker reference from the captured mic stream
 esp_aec:
   id: aec_processor
   sample_rate: 16000
   filter_length: 4
   mode: sr_low_cost
 
+# Bus I2S: enables separate hardware backends for mic RX and speaker TX
 esp_audio_stack:
   id: audio_stack
   rx_bus:
@@ -192,11 +194,13 @@ esp_audio_stack:
   aec_ref_ring_in_psram: true
   audio_task_stack_in_psram: true
 
+# Microphone: publishes AEC-clean PCM frames to VA, wake word and VoIP
 microphone:
   - platform: esp_audio_stack
     id: mic_main
     esp_audio_stack_id: audio_stack
 
+# Speaker pipeline: sends mixed media, TTS and VoIP RX to the TX I2S bus
 speaker:
   - platform: esp_audio_stack
     id: hw_speaker
@@ -204,11 +208,13 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
 
+# Micro Wake Word: listens on the AEC-clean microphone stream
 micro_wake_word:
   microphone: mic_main
   models:
     - model: alexa
 
+# Voice Assistant: uses the same mic/speaker path as VoIP and media
 voice_assistant:
   microphone: mic_main
   media_player: speaker_media_player
@@ -217,6 +223,7 @@ voice_assistant:
   auto_gain: 31dBFS
   volume_multiplier: 2.0
 
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
 voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true

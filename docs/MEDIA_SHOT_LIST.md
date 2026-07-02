@@ -7,8 +7,11 @@ This is the working list for refreshing README and documentation media for the
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/dashboard.png` | Screenshot | First visual impression of the HA dashboard | Captured: top cards only, no HA sidebar/header |
-| `docs/images/dashboard.gif` | GIF | Show the dashboard reacting to a real call | Captured: card scrolls contacts, calls Casa, then hangs up |
+| `docs/images/dashboard.gif` | GIF | First visual impression and dashboard call flow | Captured: card scrolls contacts, calls Casa, then hangs up |
+| `docs/images/esp-mirror-card.png` | Screenshot | ESP mirror Lovelace mode | Captured: card bound to an ESP endpoint |
+| `docs/images/ha-softphone-card.png` | Screenshot | HA softphone Lovelace mode | Captured: HA card with destination selector |
+| `docs/images/ha-softphone-options.jpg` | Screenshot | HA softphone options panel | Captured: Auto Answer, DND and ringtone controls |
+| `docs/images/ha-softphone-keypad.jpg` | Screenshot | HA softphone keypad/manual dial view | Captured: direct name/extension/number entry |
 | `docs/images/assistant-animated.gif` | GIF | Device assistant animation | Captured from Spotpear Ball v2, converted from MP4 and stripped |
 | `docs/images/assistant-speaking.jpg` | Photo | TTS answer on device | Captured from Spotpear Ball v2 |
 | `docs/images/lvgl-audio-volume.jpg` | Photo | Device audio controls | Captured from LVGL audio page |
@@ -36,7 +39,11 @@ options or old component names.
 |---|---|---|---|
 | `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
 | `docs/images/hacs-download-voip-stack.png` | Screenshot | HACS download step | Captured: VoIP Stack HACS entry and download menu |
+| `docs/images/voip-stack-add-integration.png` | Screenshot | HA Add Integration search | Captured: VoIP Stack entry in Settings -> Integrations |
 | `docs/images/voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
+| `docs/images/create-account-service.png` | Screenshot | SIP account service form | Captured: Developer Tools -> Actions account creation |
+| `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local softphone account |
+| `docs/images/create-account-notification.png` | Screenshot | Generated account notification | Captured: one-time generated password notification |
 | `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Recapture if entity names, device names or ESPHome onboarding UI changed. |
 | `docs/images/card-selection.png` | Screenshot | Card picker | Must show `VoIP Stack Card`, not old Intercom card names. |
 | `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Must show current `voip-stack-card` modes and options. |

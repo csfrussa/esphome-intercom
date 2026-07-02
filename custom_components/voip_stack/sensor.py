@@ -137,9 +137,11 @@ class VoipPhonebookSensor(SensorEntity):
             RosterEntry(
                 id=p.name,
                 name=p.name,
-                kind="ha" if p.is_ha else "esp",
                 address=p.host,
+                extension=p.extension,
+                port=int(p.sip_port or 0),
                 metadata={
+                    "local_ha": bool(p.is_ha),
                     "sip_transport": (
                         str((p.device or {}).get("sip_transport") or "tcp").lower()
                         if p.is_ha or p.device is not None

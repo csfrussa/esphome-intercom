@@ -46,6 +46,13 @@ def _port_selector():
     return NumberSelector(NumberSelectorConfig(min=1, max=65535, step=1, mode="box"))
 
 
+def _dtmf_timeout_seconds(value: object) -> int:
+    raw = 3000 if value in (None, "") else int(value)
+    if 0 <= raw <= 10:
+        return raw
+    return max(0, min(10, round(raw / 1000)))
+
+
 def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
     """Return entry data with trunk explicitly disabled."""
     data.update(
@@ -62,7 +69,7 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
             CONF_TRUNK_OUTBOUND_PROXY: existing.get(CONF_TRUNK_OUTBOUND_PROXY, ""),
             CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"),
             CONF_TRUNK_DTMF_ENABLED: existing.get(CONF_TRUNK_DTMF_ENABLED, False),
-            CONF_TRUNK_DTMF_TIMEOUT_MS: existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000),
+            CONF_TRUNK_DTMF_TIMEOUT_MS: int(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)),
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
             CONF_TRUNK_DTMF_ROUTES: existing.get(CONF_TRUNK_DTMF_ROUTES, ""),
             "sip_accounts": existing.get("sip_accounts", []),
@@ -169,7 +176,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_TRUNK_OUTBOUND_PROXY: existing.get(CONF_TRUNK_OUTBOUND_PROXY, ""),
             CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"),
             CONF_TRUNK_DTMF_ENABLED: existing.get(CONF_TRUNK_DTMF_ENABLED, True),
-            CONF_TRUNK_DTMF_TIMEOUT_MS: existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000),
+            CONF_TRUNK_DTMF_TIMEOUT_MS: _dtmf_timeout_seconds(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)),
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
             CONF_TRUNK_DTMF_ROUTES: existing.get(CONF_TRUNK_DTMF_ROUTES, ""),
         }
@@ -194,7 +201,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 ): TextSelector(),
                 vol.Required(CONF_TRUNK_DTMF_ENABLED, default=defaults[CONF_TRUNK_DTMF_ENABLED]): BooleanSelector(),
                 vol.Required(CONF_TRUNK_DTMF_TIMEOUT_MS, default=defaults[CONF_TRUNK_DTMF_TIMEOUT_MS]): NumberSelector(
-                    NumberSelectorConfig(min=100, max=3000, step=100, mode="box")
+                    NumberSelectorConfig(min=0, max=10, step=1, mode="box")
                 ),
                 vol.Optional(CONF_TRUNK_DTMF_TERMINATOR, default=defaults[CONF_TRUNK_DTMF_TERMINATOR]): TextSelector(),
                 vol.Optional(CONF_TRUNK_DTMF_ROUTES, default=defaults[CONF_TRUNK_DTMF_ROUTES]): TextSelector(),
@@ -204,6 +211,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             for k in (CONF_TRUNK_PORT, CONF_TRUNK_EXPIRES, CONF_TRUNK_DTMF_TIMEOUT_MS):
                 user_input[k] = int(user_input[k])
+            user_input[CONF_TRUNK_DTMF_TIMEOUT_MS] = max(0, min(10, user_input[CONF_TRUNK_DTMF_TIMEOUT_MS])) * 1000
             for k in (
                 CONF_TRUNK_SERVER,
                 CONF_TRUNK_DOMAIN,

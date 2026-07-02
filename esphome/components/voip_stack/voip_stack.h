@@ -105,6 +105,7 @@ class VoipStack : public Component {
   void set_task_stacks_in_psram(bool enabled) { this->task_stacks_in_psram_ = enabled; }
   void set_buffers_in_psram(bool enabled) { this->buffers_in_psram_ = enabled; }
   void set_device_name(const std::string &name) { this->device_name_ = name; }
+  void set_extension(const std::string &extension) { this->extension_ = extension; }
   // Stable routing key (yaml `name:` slug, e.g. "spotpear-ball-v2").
   // Matches the slug HA uses for the esphome.{slug}_start_call action.
   void set_device_route_id(const std::string &id) { this->device_route_id_ = id; }
@@ -249,8 +250,8 @@ class VoipStack : public Component {
   void set_contacts(const std::string &contacts_csv);  // batch wrapper, same merge rules per entry
   void flush_contacts();
   // Open a phonebook update cycle: commit any previously-open cycle (counter
-  // advance + prune), then read the HA sensor (if configured + non-empty)
-  // and fire the on_update_contacts trigger for any HA-driven refresh work.
+  // advance + prune), then read the HA sensor (if configured + non-empty).
+  // on_phonebook_update fires only after a real phonebook mutation.
   // The cycle remains open until the next update_contacts() call or
   // CYCLE_TIMEOUT_MS elapses (loop() safety net).
   void update_contacts();
@@ -286,9 +287,9 @@ class VoipStack : public Component {
   Trigger<std::string> *get_hangup_trigger() { return &this->hangup_trigger_; }
   Trigger<std::string> *get_call_failed_trigger() { return &this->call_failed_trigger_; }
   Trigger<> *get_destination_changed_trigger() { return &this->destination_changed_trigger_; }
-  // Fires once per update_contacts() call after the HA-side merge completes
-  // (or immediately if HA sensor is empty/absent).
-  Trigger<> *get_update_contacts_trigger() { return &this->update_contacts_trigger_; }
+  // Fires after every real phonebook mutation: HA roster push, manual
+  // add/remove/set/flush, or stale-contact pruning.
+  Trigger<> *get_phonebook_update_trigger() { return &this->phonebook_update_trigger_; }
 
   // Call state getter
   CallState get_call_state() const { return this->call_state_.load(std::memory_order_acquire); }
@@ -301,6 +302,7 @@ class VoipStack : public Component {
   std::string normalize_phonebook_for_transport_(const std::string &contacts_csv);
   bool apply_roster_json_contacts_(const std::string &roster_json);
   bool maybe_auto_select_ha_first_();
+  void publish_phonebook_changed_();
 
   bool has_microphone_() const {
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
@@ -467,7 +469,7 @@ class VoipStack : public Component {
   number::Number *volume_number_{nullptr};
   number::Number *mic_gain_number_{nullptr};
   // Contacts management. Empty at boot; fed by the optional HA text_sensor
-  // subscription plus any YAML sources wired on the on_update_contacts trigger.
+  // subscription plus any YAML sources wired on the on_phonebook_update trigger.
   // Slot order is stable:
   // re-add keeps the slot, only the endpoint may upgrade or replace. The
   // cycle counter on each ContactEntry advances/resets in commit_cycle()
@@ -489,6 +491,7 @@ class VoipStack : public Component {
   bool use_ha_as_first_contact_{false};
   bool first_contacts_batch_committed_{false};
   std::string device_name_;  // This device's friendly name (to exclude from contacts)
+  std::string extension_;  // Optional internal dial-plan alias published to HA.
   std::string last_published_destination_;
   std::string device_route_id_;  // routing key (yaml node name slug)
 
@@ -671,7 +674,7 @@ class VoipStack : public Component {
   Trigger<std::string> hangup_trigger_;
   Trigger<std::string> call_failed_trigger_;
   Trigger<> destination_changed_trigger_;
-  Trigger<> update_contacts_trigger_;
+  Trigger<> phonebook_update_trigger_;
   CallbackManager<void(CallState)> state_callback_{};
 };
 

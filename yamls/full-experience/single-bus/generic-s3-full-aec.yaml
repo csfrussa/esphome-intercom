@@ -34,36 +34,36 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
   runtime_controller_led_preset: rgb_single
 
 # =============================================================================
-# Package: shared VA + VoIP state machine
+# Package: runtime_controller VA + VoIP arbitration
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_voip_cpp.yaml
-  runtime_controller: !include ../../../packages/runtime_controller/full_controller.yaml
-  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
-  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  speaker_mute: !include ../../../packages/voip/speaker_mute_cpp.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_single.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
-  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute_cpp.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
 
 esphome:
   name: ${name}
@@ -146,7 +146,7 @@ external_components:
     components: [voip_stack, esp_audio_stack, esp_aec, audio_processor, runtime_controller, speaker, voice_assistant]
 
 # =============================================================================
-# ESP AEC
+# AEC: removes local speaker reference from the captured mic stream
 # =============================================================================
 esp_aec:
   id: aec_processor
@@ -155,7 +155,7 @@ esp_aec:
   mode: sr_low_cost
 
 # =============================================================================
-# ESP Audio Stack
+# Bus I2S: enables the shared hardware backend for speaker and mic
 # =============================================================================
 esp_audio_stack:
   id: audio_stack
@@ -175,7 +175,7 @@ esp_audio_stack:
   buffers_in_psram: true
 
 # =============================================================================
-# Microphone
+# Microphone: publishes AEC-clean PCM frames to VA, wake word and VoIP
 # =============================================================================
 microphone:
   - platform: esp_audio_stack
@@ -183,7 +183,7 @@ microphone:
     esp_audio_stack_id: audio_stack
 
 # =============================================================================
-# Speaker Pipeline
+# Speaker pipeline: mixes media, TTS and VoIP RX into the hardware speaker
 # =============================================================================
 speaker:
   - platform: esp_audio_stack
@@ -212,14 +212,11 @@ voice_assistant:
   volume_multiplier: 2.0
 
 # =============================================================================
-# VoIP Stack: Device part
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
 # =============================================================================
 voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
-  # SIP signaling transport only. Use `tcp` when this endpoint must signal over
-  # SIP TCP; audio remains RTP/UDP after SDP negotiation.
-  transport: udp
   audio:
     # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
     # matching 10 ms TX reframe of the 16 kHz AEC mic for peers that negotiate
@@ -263,7 +260,7 @@ voip_stack:
 switch:
 
 # =============================================================================
-# AEC Mode Select
+# AEC mode select: runtime tuning for echo-cancellation profiles
 # =============================================================================
 select:
   - platform: template

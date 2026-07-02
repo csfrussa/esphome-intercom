@@ -8,17 +8,14 @@
         "contacts": [
           {
             "id": "Casa",
-            "kind": "ha",
             "address": "192.168.1.10"
           },
           {
             "id": "Waveshare S3 Audio",
-            "kind": "esp",
             "address": "192.168.1.47"
           },
           {
             "id": "Spotpear Ball v2",
-            "kind": "esp",
             "address": "192.168.1.31"
           }
         ]

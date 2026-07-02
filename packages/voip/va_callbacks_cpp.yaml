@@ -1,5 +1,5 @@
 # =============================================================================
-# VoIP Stack callbacks for VA-enabled devices.
+# VoIP callbacks for VA-enabled devices.
 # Like voip/callbacks.yaml but UI-only for full-experience devices.
 # Runtime state, LEDs, ducking and ringtone playback are owned by runtime_controller.
 #

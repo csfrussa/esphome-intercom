@@ -9,7 +9,7 @@
 #
 # Prerequisites in the device YAML:
 #   - id `mic_main`   : microphone (for microphone.mute action)
-#   - script id `update_status` (provided by voip/state_machine.yaml)
+#   - script id `update_status` from the voip-only YAML LED reducer
 # =============================================================================
 
 packages:

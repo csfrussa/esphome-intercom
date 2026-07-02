@@ -10,11 +10,12 @@ from typing import Any, Literal
 class Peer:
     """One routable voip endpoint known to Home Assistant."""
 
-    kind: Literal["esp", "ha"]
     name: str
     host: str
+    local_ha: bool = False
     sip_port: int | None = None
     rtp_port: int | None = None
+    extension: str = ""
     audio_mode: Literal["full_duplex", "mic_only", "speaker_only", "control_only"] = "full_duplex"
     tx_formats: list[str] | None = None
     rx_formats: list[str] | None = None
@@ -22,7 +23,7 @@ class Peer:
 
     @property
     def is_ha(self) -> bool:
-        return self.kind == "ha"
+        return self.local_ha
 
     @property
     def device_id(self) -> str | None:

@@ -17,10 +17,6 @@ or a trunk when you want the system to grow.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
-![Dashboard Preview](docs/images/dashboard.png)
-
-_Home Assistant dashboard view: devices, call controls, phonebook state and diagnostics in one place._
-
 ![Dashboard Demo](docs/images/dashboard.gif)
 
 _Runtime demo: browser softphone, ESP call state and audio controls moving together._
@@ -171,18 +167,18 @@ The phonebook merges:
 - trunk-routed phone targets and group entries when configured.
 
 A contact has one required field: `name`. Everything else is optional and
-describes how that contact can be reached: `number`, `address`, `sip_port`,
-`rtp_port` and `sip_transport`.
+describes how that contact can be reached: `extension`, `number`, `address`,
+`port`, `rtp_port` and `transport`.
 
-A number is an attribute of the contact, not a second contact. For example,
-`Office Phone` can have `number: "210"`, and both `Office Phone` and `210`
-resolve to that same contact. If a numeric target is not present in the
-phonebook, HA treats it as an external number and uses the configured trunk.
+An extension is an internal alias, not a second contact. For example,
+`Spotpear` can have `extension: "101"`, and both `Spotpear` and `101` resolve
+to that same local target. A `number` is an external/public number used through
+the optional trunk.
 
 Routing follows the data available for the selected contact:
 
 - complete direct SIP endpoint: compatible ESPs can call it directly;
-- name or number without direct endpoint: the ESP sends the call to HA;
+- name or extension without direct endpoint: the ESP sends the call to HA;
 - registered softphone: HA routes to the active SIP registration;
 - external number: HA uses the configured trunk;
 - no valid route: HA rejects the call with a clear terminal reason.
@@ -302,11 +298,11 @@ voip_stack:
     - name: "Home"
       ip: "192.168.1.10"
       port: 5060
-      sip_transport: tcp
+      transport: tcp
     - name: "Kitchen Phone"
       ip: "192.168.1.21"
       port: 5060
-      sip_transport: udp
+      transport: udp
     - name: "Gate"
 ```
 
@@ -316,7 +312,7 @@ Contact fields:
 - `ip`: optional host/IP for direct SIP endpoints.
 - `port`: optional SIP signaling port, default `5060`.
 - `rtp_port`: optional RTP media port, default `40000`.
-- `sip_transport`: `tcp` or `udp` when direct SIP is allowed.
+- `transport`: `tcp` or `udp` when direct SIP is allowed.
 
 Runtime ESP automations can still mutate the local dial plan when needed:
 
@@ -326,7 +322,7 @@ on_press:
       id: phone
       name: "Temporary Desk"
       ip: "192.168.1.55"
-      sip_transport: udp
+      transport: udp
 ```
 
 Home Assistant is the central roster authority when it is present. Add or remove
@@ -353,7 +349,7 @@ ESP static contacts remain local offline/custom additions. See
 
 - **Full-duplex audio** - Talk and listen simultaneously.
 - **SIP/VoIP phone model** with phonebook, contacts, destination, caller and terminal reason exposed.
-- **Deterministic routing**: direct only with complete SIP endpoint data; unresolved names and numbers go to HA.
+- **Deterministic routing**: direct when a contact has reachable SIP endpoint data; unresolved names and numeric targets go to HA.
 - **SIP TCP + SIP UDP signaling** with RTP media and HA bridge/resampling when needed.
 - **Negotiated PCM audio** - peers advertise per-direction `tx_formats`/`rx_formats` up to 48 kHz where the actual microphone/speaker path supports them.
 - **Dedicated browser audio socket** - The Lovelace softphone uses authenticated binary WebSocket audio on `/api/voip_stack/ws`; it no longer pushes base64 audio over HA's shared frontend WebSocket.
@@ -403,7 +399,11 @@ _Add the repository as a HACS integration repository._
 
 ![HACS download VoIP Stack](docs/images/hacs-download-voip-stack.png)
 
-_After the repository is added, open VoIP Stack in HACS and download it._
+_After HACS downloads VoIP Stack, restart Home Assistant, then add the VoIP Stack integration from Settings -> Integrations._
+
+![Add VoIP Stack integration](docs/images/voip-stack-add-integration.png)
+
+_After restart, add the VoIP Stack integration from Home Assistant Settings._
 
 ![VoIP Stack config flow](docs/images/voip-stack-config-flow.png)
 
@@ -757,6 +757,10 @@ The default card mode is `esp_mirror`: the card mirrors one ESP endpoint and
 presses that ESP's own contact, call, answer, decline and hangup controls. To
 use Home Assistant as one independent softphone endpoint, add a separate card:
 
+![ESP mirror card](docs/images/esp-mirror-card.png)
+
+_ESP mirror mode: the card controls the selected ESP phone and follows its local phonebook and call state._
+
 ```yaml
 type: custom:voip-stack-card
 mode: ha_softphone
@@ -781,7 +785,15 @@ formats returned by the server before microphone or playback worklets start.
 _Independent Home Assistant softphone mode: one card represents HA itself and
 calls any ESP endpoint from the in-card selector._
 
-The card automatically discovers ESPHome devices with the `voip_stack` component through their `voip_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the card shows extended routing details: the header appends `- SIP TCP` / `- SIP UDP`; the mode line shows `HA - ESP`, `Home Assistant - ESP`, `ESP - ESP`, or `SIP TCP - SIP UDP bridge` / `SIP UDP - SIP TCP bridge`.
+![Home Assistant softphone options](docs/images/ha-softphone-options.jpg)
+
+_The HA softphone card owns HA-only controls such as Auto Answer, DND and browser ringtone._
+
+![Home Assistant softphone keypad](docs/images/ha-softphone-keypad.jpg)
+
+_The keypad view lets the HA softphone call a phonebook name, extension, SIP URI or external number without editing the roster first._
+
+The card automatically discovers ESPHome devices with the `voip_stack` component through their `voip_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the header appends the local SIP signaling transport and audio mode.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.voip_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
 
@@ -939,9 +951,22 @@ data:
   display_name: "Mobile Office"
 ```
 
+![Create softphone account service](docs/images/create-account-service.png)
+
+_Create a local SIP account from Developer Tools -> Actions._
+
+![Create softphone account filled](docs/images/create-account-service-filled.png)
+
+_You can provide a password or let Home Assistant generate one._
+
 If `password` is omitted, HA generates one and shows it once in a Home
 VoIP Stack persistent notification and in the
 `voip_stack.call_event` stream.
+
+![Generated softphone account notification](docs/images/create-account-notification.png)
+
+_Generated credentials are shown once in a persistent notification._
+
 Then configure Zoiper, Linphone, baresip or pjsua with:
 
 ```text
@@ -1012,7 +1037,7 @@ flowchart TD
     Press["📞 Call pressed"] --> Resolve["📒 resolve selected<br/>phonebook entry"]
     Resolve --> Policy{"🧭 route decision"}
     Policy -->|"complete direct SIP endpoint"| Direct["📟 dial peer directly"]
-    Policy -->|"number / unresolved / bridge required"| ViaHA["🏠 dial HA"]
+    Policy -->|"extension / number / unresolved / bridge required"| ViaHA["🏠 dial HA"]
     ViaHA --> Bridge["🔀 HA bridges<br/>to destination"]
     Direct --> Stream["🎙️ full-duplex audio"]
     Bridge --> Stream

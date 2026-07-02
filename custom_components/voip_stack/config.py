@@ -40,6 +40,9 @@ def entry_transport_config(entry: ConfigEntry | None = None) -> dict:
 
 def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
     data = entry.data if entry is not None else {}
+    raw_dtmf_value = data.get(CONF_TRUNK_DTMF_TIMEOUT_MS)
+    raw_dtmf_timeout = 3000 if raw_dtmf_value in (None, "") else int(raw_dtmf_value)
+    dtmf_timeout_ms = raw_dtmf_timeout * 1000 if 0 <= raw_dtmf_timeout <= 10 else raw_dtmf_timeout
     return {
         CONF_TRUNK_ENABLED: bool(data.get(CONF_TRUNK_ENABLED, False)),
         CONF_TRUNK_TRANSPORT: str(data.get(CONF_TRUNK_TRANSPORT) or "udp").strip().lower(),
@@ -53,7 +56,7 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
         CONF_TRUNK_OUTBOUND_PROXY: str(data.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip(),
         CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA",
         CONF_TRUNK_DTMF_ENABLED: bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)),
-        CONF_TRUNK_DTMF_TIMEOUT_MS: max(100, min(3000, int(data.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 3000))),
+        CONF_TRUNK_DTMF_TIMEOUT_MS: max(0, min(10000, dtmf_timeout_ms)),
         CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
         CONF_TRUNK_DTMF_ROUTES: str(data.get(CONF_TRUNK_DTMF_ROUTES) or "").strip(),
     }

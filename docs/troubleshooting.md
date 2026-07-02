@@ -58,8 +58,9 @@ leg to a compatible PCM format.
 - For external numbers, confirm the optional trunk is configured and registered.
 - Check whether the entry is disabled. Disabled entries reject instead of
   routing through HA.
-- Check `number` aliases. Numeric targets from ESP always go to HA; HA then
-  resolves the number as a local extension or external trunk target.
+- Check `extension` aliases for local/internal targets. Numeric targets from
+  ESP always go to HA; HA resolves `extension` as an internal target and
+  `number` as an external trunk target.
 
 ## Registered Softphone Cannot Register To HA
 
@@ -112,7 +113,7 @@ final response.
 - If the SDP has no `telephone-event` and the provider does not send SIP INFO,
   HA cannot read post-answer digits from that provider leg.
 - Check `trunk_dtmf_routes` entries use `digits=target`, one route per line.
-- Keep `trunk_dtmf_timeout_ms` short, normally 3000 ms.
+- Keep the inbound DTMF timeout short, normally 3 seconds. Set it to `0` when you do not want trunk pre-answer/DTMF and want inbound calls to follow the normal dialplan immediately.
 - If no digits arrive, HA uses `trunk_inbound_default_target`.
 - If digits arrive but do not resolve, HA logs them and terminates the answered
   trunk leg as `route_not_found`.

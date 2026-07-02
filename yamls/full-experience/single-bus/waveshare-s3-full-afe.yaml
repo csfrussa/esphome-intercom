@@ -44,9 +44,9 @@ substitutions:
   name: waveshare-s3
   friendly_name: Waveshare S3 Audio
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
@@ -54,28 +54,28 @@ substitutions:
   runtime_controller_led_preset: ws2812_ring
 
 # =============================================================================
-# Package: shared VA + VoIP state machine, callbacks, switches, buttons
+# Package: runtime_controller VA + VoIP arbitration, callbacks, switches, buttons
 # =============================================================================
 packages:
-  core: !include ../../../packages/va_voip_cpp.yaml
-  runtime_controller: !include ../../../packages/runtime_controller/full_controller.yaml
-  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
-  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_ring.yaml
-  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_switch.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
-  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@dev
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
 
 # =============================================================================
 # ESPHome Base
@@ -263,7 +263,7 @@ esp_audio_stack:
   tdm_ref_slot: 1        # Verified playback reference for AEC
 
 # =============================================================================
-# Microphone (ES7210 ADC, 16kHz output after Espressif rate conversion + AEC)
+# Microphone: publishes AFE-clean PCM frames to VA, wake word and VoIP
 # =============================================================================
 microphone:
   - platform: esp_audio_stack
@@ -271,7 +271,7 @@ microphone:
     esp_audio_stack_id: audio_stack
 
 # =============================================================================
-# Speaker Pipeline: esp_audio_stack -> resampler -> mixer (all at 48kHz)
+# Speaker pipeline: mixes media, TTS and VoIP RX into the ES8311 speaker path
 # =============================================================================
 speaker:
   - platform: esp_audio_stack
@@ -286,7 +286,7 @@ speaker:
 
 
 # =============================================================================
-# Micro Wake Word: Hardware config (callbacks from package)
+# Micro Wake Word: listens on the AFE-clean microphone stream
 # =============================================================================
 micro_wake_word:
   microphone: mic_main
@@ -295,7 +295,7 @@ micro_wake_word:
     - model: alexa
 
 # =============================================================================
-# Voice Assistant: Hardware config (callbacks from package)
+# Voice Assistant: uses the same mic/speaker path as VoIP and media
 # =============================================================================
 voice_assistant:
   microphone: mic_main
@@ -306,7 +306,7 @@ voice_assistant:
   volume_multiplier: 2.0
 
 # =============================================================================
-# VoIP Stack: Hardware config (callbacks from package)
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
 # =============================================================================
 voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM

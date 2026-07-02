@@ -28,9 +28,9 @@ substitutions:
   name: spotpear-ball-v2
   friendly_name: Spotpear Ball v2
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Call layout proportions (relative to display_height)
   call_btn_size: "25%"
@@ -63,26 +63,26 @@ substitutions:
 # Packages
 # =============================================================================
 packages:
-  core: !include ../../../packages/voip_only.yaml
-  buttons_switches: !include ../../../packages/voip/buttons_switches.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  speaker_mute: !include ../../../packages/voip/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/voip_only.yaml@dev
+  buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/buttons_switches.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
   # LVGL settings carousel: globals, navigation scripts, and the individual
   # settings pages this device exposes (swipe-left order is the include order).
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  spotpear_voip_nav: !include ../../../packages/lvgl/spotpear_voip/nav_voip_only.yaml
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
+  spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_voip_only.yaml@dev
 
 # =============================================================================
 # Core
@@ -217,7 +217,7 @@ esp_aec:
   mode: voip_high_perf
 
 # =============================================================================
-# ESP Audio Stack (bus 48kHz ES8311 native, Espressif rate conversion to 16kHz)
+# Bus I2S: ES8311 shared backend for speaker, mic and AEC reference
 # =============================================================================
 esp_audio_stack:
   id: audio_stack
@@ -320,14 +320,17 @@ media_player:
         file: ${assets_base}assets/sounds/ringtone.flac
 
 # =============================================================================
-# VoIP Stack. RX flows through voip_speaker_input (resampler) into
-# audio_mixer for ringtone/VoIP co-existence. Transport selection lives in
-# packages/voip/transport_*.yaml.
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror.
+# RX uses the mixer path so ringtone and call audio share the same speaker.
 # =============================================================================
 voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
   id: phone
+  # Optional local dial-plan alias published to HA. Keep it unique across your
+  # devices; calls to the same extension become ambiguous and HA will use the
+  # first matching phonebook entry.
+  extension: "101"
   audio:
     # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
     # matching 10 ms TX reframe of the 16 kHz mic for peers that negotiate
@@ -364,7 +367,7 @@ voip_stack:
   ringing_timeout: 30s
   delete_contact_missing_from:
     updates_number: 1
-  on_update_contacts:
+  on_phonebook_update:
     - lambda: 'id(peer_name) = id(phone).get_current_destination();'
     - script.execute: update_call_idle_labels
   on_destination_changed:

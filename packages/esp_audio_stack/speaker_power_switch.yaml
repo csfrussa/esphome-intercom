@@ -1,5 +1,5 @@
 # =============================================================================
-# ESP Audio Stack speaker power gating (switch enable)
+# Speaker power gating for audio-stack devices (switch enable)
 # =============================================================================
 # Expects:
 #   - esp_audio_stack id: audio_stack

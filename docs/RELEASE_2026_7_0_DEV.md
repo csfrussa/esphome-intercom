@@ -138,6 +138,11 @@ VoIP call-control path is not a compatibility layer.
 - 🔔 HA softphone has an idle-only Options panel for Auto Answer, DND and
   browser ringtone. Ringtone is a per-browser preference; HA softphone DND is
   stored in HA state.
+- ⌨️ HA softphone also has a keypad/manual target view for calling a phonebook
+  name, extension, SIP URI or external number directly from the card.
+
+![HA softphone keypad](images/ha-softphone-keypad.jpg)
+
 - 🪞 Hybrid cards keep the original mirror semantics: the card represents the
   selected ESP, mirrors ESP ringing/in_call state, and becomes the HA
   softphone leg only when that ESP is calling Home Assistant. A separate

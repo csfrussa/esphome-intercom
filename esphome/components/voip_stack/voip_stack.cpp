@@ -389,7 +389,7 @@ void VoipStack::loop() {
     this->publish_endpoint_();
   }
 
-  // Phonebook cycle timeout safeguard: a stuck on_update_contacts chain (e.g.
+  // Phonebook cycle timeout safeguard: a stuck on_phonebook_update chain (e.g.
   // an external update source never completes) would otherwise leave the cycle open forever
   // and block subsequent counter advances. CYCLE_TIMEOUT_MS commits forcibly.
   if (this->cycle_active_ &&
@@ -546,10 +546,11 @@ std::string VoipStack::build_endpoint_string_() const {
   const std::string tx = format_list_token(this->tx_audio_formats_);
   const std::string rx = format_list_token(this->rx_audio_formats_);
   char buf[768];
-  snprintf(buf, sizeof(buf), "%s|%s|%u|%u|%s|%s|%s|%s", name.c_str(), ip.c_str(),
+  snprintf(buf, sizeof(buf), "%s|%s|%u|%u|%s|%s|%s|%s|%s", name.c_str(), ip.c_str(),
            (unsigned) this->sip_port_, (unsigned) this->rtp_port_,
            this->audio_capability_(), tx.c_str(), rx.c_str(),
-           this->protocol_ == TransportType::TCP ? "sip_tcp" : "sip_udp");
+           this->protocol_ == TransportType::TCP ? "sip_tcp" : "sip_udp",
+           this->extension_.c_str());
   return buf;
 }
 

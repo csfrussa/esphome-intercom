@@ -2,8 +2,8 @@
 
 The phonebook is the SIP dial plan shared by ESP devices, Home Assistant,
 registered local softphones and the optional trunk. SIP is implicit everywhere:
-fields named `transport` or `sip_transport` only choose SIP/TCP or SIP/UDP
-signaling, never a second call-control protocol.
+`transport` only chooses SIP/TCP or SIP/UDP signaling, never a second
+call-control protocol.
 
 ## ESP Static Contacts
 
@@ -17,7 +17,7 @@ voip_stack:
   static_contacts:
     - name: Kitchen
       ip: 192.168.1.42
-      sip_transport: udp
+      transport: udp
       port: 5060
       rtp_port: 40000
     - name: Gate
@@ -30,17 +30,19 @@ on_press:
   - voip_stack.add_contacts:
       name: Kitchen
       ip: 192.168.1.42
-      sip_transport: udp
+      transport: udp
 ```
 
 Rules:
 
 - `name` is required.
-- `ip`, `port`, `rtp_port`, and `sip_transport` are optional.
-- If `sip_transport` is omitted, the contact uses the ESP phone signaling transport.
+- `address`, `sip_uri`, `extension`, `number`, `port`, `rtp_port`, and
+  `transport` are optional.
+- If `transport` is omitted for a direct address, SIP uses its default
+  transport behavior for that context.
 - Name-only entries are logical targets and can be resolved or bridged by HA.
-- A numeric name/number from an ESP is routed to HA. HA decides whether it is a
-  local extension or an external trunk number.
+- A numeric target from an ESP is routed to HA. HA resolves `extension` as an
+  internal target and `number` as an external trunk target.
 - HA-managed sync through `sensor.voip_phonebook` is the recommended path.
   Static contacts are local additions for offline/custom installs, not a second
   central roster.
@@ -57,17 +59,19 @@ Roster entries use JSON fields:
 - `name`
 - `address`
 - `sip_uri`
+- `extension`
 - `number`
+- `port`
 - `ha_bridge`
-- `metadata`, including `sip_transport`, `sip_port`, `rtp_port`, and audio
+- `metadata`, including `transport`, `sip_transport`, `sip_port`, `rtp_port`, and audio
   format metadata
 
-The roster may expose an internal `kind` field for HA, ESP and card consumers,
-but users do not need to set it. HA derives it from the contact data:
+Routing is data-driven:
 
-- `number` without a direct endpoint becomes a trunk/phone target;
-- `address` or `sip_uri` becomes a direct SIP endpoint;
-- registered SIP accounts become softphone contacts;
+- `address` or `sip_uri` describes a direct SIP endpoint;
+- `extension` is a local/internal alias used by HA routing and inbound DTMF;
+- `number` is an external/public number used through the optional trunk;
+- registered SIP accounts become callable contacts while registered;
 - HA and discovered ESP entries are generated automatically.
 
 Manual contacts and service calls use the same minimum contract:
@@ -76,11 +80,12 @@ Manual contacts and service calls use the same minimum contract:
 service: voip_stack.add_contact
 data:
   name: MobileOffice
-  number: "210"
+  extension: "210"
 ```
 
-`name` is the only required field. `number` is an optional extension/alias.
-`address`, `sip_uri`, `sip_transport`, `sip_port`, and `rtp_port` are optional
+`name` is the only required field. `extension` is an optional internal alias.
+`number` is an optional external/public number.
+`address`, `sip_uri`, `transport`, `port`, and `rtp_port` are optional
 and are filled by ESP endpoint publication, manual entries or SIP account
 registration when available.
 
@@ -126,7 +131,7 @@ Contact into the roster so ESP devices can call them by name.
 ESP-origin calls:
 
 - explicit `sip:user@host` or `user@host` route direct;
-- known ESP contact with direct URI/host/transport routes direct unless
+- known ESP contact with direct URI or address routes direct unless
   `ha_bridge` is set;
 - known contact without direct route data routes through HA;
 - unknown names route through HA;

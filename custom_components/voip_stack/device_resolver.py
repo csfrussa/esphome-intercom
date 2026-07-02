@@ -69,7 +69,7 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_voip_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP voip_stack.
 
-    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp
+    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp[|extension]
     """
     if not value:
         return None
@@ -77,7 +77,7 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
     if not text or text.lower() in ("unknown", "unavailable"):
         return None
     parts = [part.strip() for part in text.split("|")]
-    if len(parts) not in (5, 8):
+    if len(parts) not in (5, 8, 9):
         return None
 
     name, host = parts[0], parts[1]
@@ -101,14 +101,14 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
     secondary_port = _valid_port(parts[3])
     if primary_port is None or secondary_port is None:
         return None
-    if len(parts) != 8:
+    if len(parts) not in (8, 9):
         _LOGGER.warning("Ignoring voip endpoint using obsolete no-format shape: %r", text)
         return None
     parsed_tail = parse_formats(4)
     if parsed_tail is None:
         return None
     mode, tx_formats, rx_formats = parsed_tail
-    transport_token = parts[7].lower() if len(parts) == 8 else parts[4].lower()
+    transport_token = parts[7].lower()
     if transport_token not in ("sip_tcp", "sip_udp"):
         return None
     sip_transport = "tcp" if transport_token == "sip_tcp" else "udp"
@@ -121,6 +121,7 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
         "audio_mode": mode,
         "tx_formats": tx_formats,
         "rx_formats": rx_formats,
+        "extension": parts[8] if len(parts) == 9 else "",
     }
 
 
@@ -242,6 +243,7 @@ class VoipDeviceResolver:
                 "sip_port": endpoint.get("sip_port"),
                 "rtp_port": endpoint.get("rtp_port"),
                 "sip_transport": endpoint.get("sip_transport") or "",
+                "extension": endpoint.get("extension") or "",
                 "audio_mode": endpoint["audio_mode"],
                 "tx_formats": _format_tokens(endpoint["tx_formats"]),
                 "rx_formats": _format_tokens(endpoint["rx_formats"]),

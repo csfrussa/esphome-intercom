@@ -64,10 +64,11 @@ def store_manual_roster_entries(hass: HomeAssistant, entries) -> None:
         {
             "id": item.id,
             "name": item.name,
-            "kind": item.kind,
             "address": item.address,
             "sip_uri": item.sip_uri,
+            "extension": item.extension,
             "number": item.number,
+            "port": item.port,
             "ha_bridge": item.ha_bridge,
             "enabled": item.enabled,
             "metadata": item.metadata,

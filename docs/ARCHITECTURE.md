@@ -199,15 +199,16 @@ routing as DTMF.
 The central phonebook is a SIP dial plan. `name` is the only mandatory contact
 field. Optional fields include:
 
-- `number`: local extension/alias;
+- `extension`: local/internal alias;
+- `number`: external/public number used through the optional trunk;
 - `address`, `sip_uri`, `sip_port`, `rtp_port`;
 - `sip_transport`: `udp` or `tcp`;
 - `ha_bridge`: force HA bridge routing.
 
-The merged roster may expose an internal `kind` value, but user-facing contacts
-are data-driven. Name-only contacts route through HA, number-only targets use
-HA's dial plan/trunk, endpoint contacts expose `address` or `sip_uri`, and
-local SIP accounts are published by the registrar.
+User-facing contacts are data-driven. Name-only contacts route through HA,
+`extension` resolves local/internal targets, `number` resolves external trunk
+targets, endpoint contacts expose `address` or `sip_uri`, and local SIP
+accounts are published by the registrar.
 
 ESP phonebook storage is bounded. The runtime accepts up to 64 normalized
 contacts per ESP phonebook and replaces existing names in place. Larger rosters

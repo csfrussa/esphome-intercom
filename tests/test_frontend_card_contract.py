@@ -46,7 +46,6 @@ class FrontendCardContractTest(unittest.TestCase):
         body = _method_body(self.source, "async _startCall")
         esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
         esp_branch = esp_branch.split("catch (err)", 1)[0]
-        self.assertIn('this._callMode = "mirror"', esp_branch)
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
         self.assertNotIn("_startP2P", esp_branch)
         self.assertNotIn("destination === this._getHaName()", esp_branch)
@@ -54,8 +53,7 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_esp_answer_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _answer")
         esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
-        esp_branch = 'this._callMode = "mirror"' + esp_branch.split('this._callMode = "mirror"', 1)[1].split("catch (err)", 1)[0]
-        self.assertIn('this._callMode = "mirror"', esp_branch)
+        esp_branch = esp_branch.split("catch (err)", 1)[0]
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
         self.assertNotIn("answer_esp_call", esp_branch)
         self.assertNotIn("voip_stack/answer", esp_branch)
@@ -65,7 +63,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._isHaSoftphoneMode()", body)
         self.assertNotIn("this._isConfiguredSoftphone()", body)
         self.assertNotIn("this._isHaName(this._getDestination())", body)
-        self.assertNotIn('this._callMode === "mirror"', body)
+        self.assertNotIn("_callMode", self.source)
 
     def test_card_default_mode_is_esp_mirror_not_hybrid(self) -> None:
         body = _method_body(self.source, "_isHaSoftphoneMode")

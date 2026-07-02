@@ -40,7 +40,7 @@ CONF_AEC_REF_DELAY_MS = "aec_reference_delay_ms"
 CONF_RINGING_TIMEOUT = "ringing_timeout"
 CONF_CALLING_TIMEOUT = "calling_timeout"
 CONF_ON_DESTINATION_CHANGED = "on_destination_changed"
-CONF_ON_UPDATE_CONTACTS = "on_update_contacts"
+CONF_ON_PHONEBOOK_UPDATE = "on_phonebook_update"
 CONF_DELETE_CONTACT_MISSING_FROM = "delete_contact_missing_from"
 CONF_UPDATES_NUMBER = "updates_number"
 CONF_HA_PHONEBOOK_TEXT_SENSOR_ID = "ha_phonebook_text_sensor_id"
@@ -83,6 +83,7 @@ CONF_AUTO = "auto"
 CONF_STATIC_CONTACTS = "static_contacts"
 CONF_ENTRY = "entry"
 CONF_CONTACT = "contact"
+CONF_EXTENSION = "extension"
 CONF_IP = "ip"
 CONF_PORT = "port"
 CONF_RTP_PORT_ACTION = "rtp_port"
@@ -405,6 +406,7 @@ PHONEBOOK_CONTACT_SCHEMA = cv.Schema(
         cv.Optional(CONF_IP): cv.string,
         cv.Optional(CONF_PORT, default=5060): cv.port,
         cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.port,
+        cv.Optional(CONF_TRANSPORT): cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True),
         cv.Optional(CONF_SIP_TRANSPORT): cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True),
     }
 )
@@ -426,7 +428,7 @@ def _static_contact_entry(contact, default_transport: str) -> str:
     ip = contact.get(CONF_IP, "")
     if not ip:
         return name
-    transport = contact.get(CONF_SIP_TRANSPORT) or default_transport
+    transport = contact.get(CONF_TRANSPORT) or contact.get(CONF_SIP_TRANSPORT) or default_transport
     transport = "sip_tcp" if transport == TRANSPORT_TCP else "sip_udp"
     return f"{name}|{ip}|{contact[CONF_PORT]}|{contact[CONF_RTP_PORT_ACTION]}|{transport}"
 
@@ -446,6 +448,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_STATIC_CONTACTS, default=[]): cv.ensure_list(
             _validate_static_contact
         ),
+        cv.Optional(CONF_EXTENSION, default=""): cv.string,
         # On the first post-boot phonebook population, select the HA peer row
         # as the current destination so a freshly booted ESP is tuned to HA
         # instead of whichever contact happens to be first in the roster order.
@@ -528,8 +531,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_ON_HANGUP): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_CALL_FAILED): automation.validate_automation(single=True),
         cv.Optional(CONF_ON_DESTINATION_CHANGED): automation.validate_automation(single=True),
-        # Phonebook update cycle hook (fires on update_contacts() action).
-        cv.Optional(CONF_ON_UPDATE_CONTACTS): automation.validate_automation(single=True),
+        # Fires after every real phonebook mutation: HA roster push, manual
+        # add/remove/set/flush, or stale-contact pruning.
+        cv.Optional(CONF_ON_PHONEBOOK_UPDATE): automation.validate_automation(single=True),
         # Bind a YAML-declared `homeassistant` text_sensor (typically via
         # packages/voip/phonebook_subscribe.yaml) as the authoritative
         # HA-side source. Optional: when absent the HA path is skipped.
@@ -689,6 +693,7 @@ async def _add_core_settings(var, config):
     cg.add(var.set_dc_offset_removal(config[CONF_DC_OFFSET_REMOVAL]))
     cg.add(var.set_task_stacks_in_psram(config[CONF_TASK_STACKS_IN_PSRAM]))
     cg.add(var.set_buffers_in_psram(config[CONF_BUFFERS_IN_PSRAM]))
+    cg.add(var.set_extension(config[CONF_EXTENSION]))
     cg.add(var.set_use_ha_as_first_contact(config[CONF_USE_HA_AS_FIRST_CONTACT]))
     cg.add(var.set_audio_debug(config[CONF_AUDIO_DEBUG]))
     if config[CONF_AUDIO_DEBUG]:
@@ -830,9 +835,9 @@ async def _build_voip_automations(var, config):
             var.get_destination_changed_trigger(), [], config[CONF_ON_DESTINATION_CHANGED]
         )
 
-    if CONF_ON_UPDATE_CONTACTS in config:
+    if CONF_ON_PHONEBOOK_UPDATE in config:
         await automation.build_automation(
-            var.get_update_contacts_trigger(), [], config[CONF_ON_UPDATE_CONTACTS]
+            var.get_phonebook_update_trigger(), [], config[CONF_ON_PHONEBOOK_UPDATE]
         )
 
 
@@ -1164,6 +1169,7 @@ ADD_CONTACT_SCHEMA = cv.Schema(
         cv.Optional(CONF_IP): cv.templatable(cv.string),
         cv.Optional(CONF_PORT, default=5060): cv.templatable(cv.port),
         cv.Optional(CONF_RTP_PORT_ACTION, default=40000): cv.templatable(cv.port),
+        cv.Optional(CONF_TRANSPORT): cv.templatable(cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True)),
         cv.Optional(CONF_SIP_TRANSPORT): cv.templatable(cv.one_of(TRANSPORT_UDP, TRANSPORT_TCP, lower=True)),
     }
 )
@@ -1192,8 +1198,8 @@ async def _add_contact_action_to_code(config, action_id, template_arg, args):
     cg.add(var.set_port(templ_port))
     templ_rtp_port = await cg.templatable(config[CONF_RTP_PORT_ACTION], args, cg.uint16)
     cg.add(var.set_rtp_port(templ_rtp_port))
-    if CONF_SIP_TRANSPORT in config:
-        templ_transport = await cg.templatable(config[CONF_SIP_TRANSPORT], args, cg.std_string)
+    if CONF_TRANSPORT in config or CONF_SIP_TRANSPORT in config:
+        templ_transport = await cg.templatable(config.get(CONF_TRANSPORT, config.get(CONF_SIP_TRANSPORT)), args, cg.std_string)
         cg.add(var.set_sip_transport(templ_transport))
     return var
 

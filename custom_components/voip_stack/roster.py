@@ -5,10 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from urllib.parse import unquote
-from typing import Any, Literal
-
-
-RosterKind = Literal["ha", "esp", "phone", "softphone", "group"]
+from typing import Any
 
 
 class RosterError(ValueError):
@@ -19,10 +16,11 @@ class RosterError(ValueError):
 class RosterEntry:
     id: str
     name: str = ""
-    kind: RosterKind = "esp"
     address: str = ""
     sip_uri: str = ""
+    extension: str = ""
     number: str = ""
+    port: int = 0
     ha_bridge: bool = False
     enabled: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -36,25 +34,32 @@ def _entry_from_mapping(raw: dict[str, Any]) -> RosterEntry:
     entry_id = str(raw.get("id") or raw.get("name") or "").strip()
     if not entry_id:
         raise RosterError("roster entry missing id")
-    kind = str(raw.get("kind") or "").strip().lower()
     address = str(raw.get("address") or raw.get("host") or "").strip()
     sip_uri = str(raw.get("sip_uri") or "").strip()
+    extension = str(raw.get("extension") or "").strip()
     number = str(raw.get("number") or "").strip()
-    if not kind:
-        kind = "phone" if number and not address and not sip_uri else "esp"
-    if kind not in {"ha", "esp", "phone", "softphone", "group"}:
-        raise RosterError(f"unsupported roster kind {kind!r}")
+    metadata = dict(raw.get("metadata") or {})
+    port = _parse_port(raw.get("port") or raw.get("sip_port") or metadata.get("port") or metadata.get("sip_port"))
     return RosterEntry(
         id=entry_id,
         name=str(raw.get("name") or entry_id).strip(),
-        kind=kind,  # type: ignore[arg-type]
         address=address,
         sip_uri=sip_uri,
+        extension=extension,
         number=number,
+        port=port,
         ha_bridge=bool(raw.get("ha_bridge", False)),
         enabled=bool(raw.get("enabled", True)),
-        metadata=dict(raw.get("metadata") or {}),
+        metadata=metadata,
     )
+
+
+def _parse_port(value: Any) -> int:
+    try:
+        port = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return port if 1 <= port <= 65535 else 0
 
 
 def parse_roster_json(value: str | bytes | dict[str, Any] | list[dict[str, Any]]) -> list[RosterEntry]:
@@ -84,10 +89,11 @@ def dump_roster_json(entries: list[RosterEntry]) -> str:
             {
                 "id": entry.id,
                 "name": entry.name,
-                "kind": entry.kind,
                 "address": entry.address,
                 "sip_uri": entry.sip_uri,
+                "extension": entry.extension,
                 "number": entry.number,
+                "port": entry.port,
                 "ha_bridge": entry.ha_bridge,
                 "enabled": entry.enabled,
                 "metadata": entry.metadata,
@@ -98,14 +104,33 @@ def dump_roster_json(entries: list[RosterEntry]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def find_entry(entries: list[RosterEntry], target: str) -> RosterEntry | None:
-    def norm(value: str) -> str:
-        return "".join(ch for ch in unquote(value).strip().lower() if ch.isalnum())
+def normalize_roster_key(value: str) -> str:
+    return "".join(ch for ch in unquote(value).strip().lower() if ch.isalnum())
 
-    wanted = norm(target)
+
+def entry_matches_extension(entry: RosterEntry, target: str) -> bool:
+    return bool(entry.extension) and normalize_roster_key(entry.extension) == normalize_roster_key(target)
+
+
+def find_entry(
+    entries: list[RosterEntry],
+    target: str,
+    *,
+    include_extension: bool = True,
+    include_number: bool = True,
+) -> RosterEntry | None:
+    wanted = normalize_roster_key(target)
     for entry in entries:
-        if norm(entry.id) == wanted or norm(entry.name) == wanted or norm(entry.number) == wanted:
+        keys = {normalize_roster_key(entry.id), normalize_roster_key(entry.name)}
+        if include_extension:
+            keys.add(normalize_roster_key(entry.extension))
+        keys.discard("")
+        if wanted in keys:
             return entry
+    if include_number:
+        for entry in entries:
+            if wanted and wanted == normalize_roster_key(entry.number):
+                return entry
     return None
 
 
@@ -135,10 +160,11 @@ def merge_roster_overrides(entries: list[RosterEntry], overrides: list[RosterEnt
         merged[index] = RosterEntry(
             id=override.id or current.id,
             name=override.name or current.name,
-            kind=override.kind or current.kind,
             address=override.address or current.address,
             sip_uri=override.sip_uri or current.sip_uri,
+            extension=override.extension or current.extension,
             number=override.number or current.number,
+            port=override.port or current.port,
             ha_bridge=bool(override.ha_bridge or current.ha_bridge),
             enabled=bool(override.enabled and current.enabled),
             metadata=metadata,

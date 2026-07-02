@@ -31,9 +31,9 @@ substitutions:
   mic_id: mic_afe
   afe_vad_restore_mode: ALWAYS_ON
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
-  assets_base: "../../../"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -79,33 +79,33 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: !include ../../../packages/va_voip_cpp.yaml
-  runtime_controller: !include ../../../packages/runtime_controller/full_controller.yaml
-  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
-  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
-  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
-  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
-  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
-  sendspin_artwork: !include ../../../packages/media_player/sendspin_artwork.yaml
-  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
-  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
-  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
-  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
-  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
-  spotpear_voip_nav: !include ../../../packages/lvgl/spotpear_voip/nav_full.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
+  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@dev
+  spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_full.yaml@dev
 
 # =============================================================================
-# ESP32 BASE CONFIGURATION
+# Device identity, boot UI and safe wake-word startup
 # =============================================================================
 esphome:
   name: ${name}
@@ -161,7 +161,7 @@ psram:
   speed: 80MHz
 
 # =============================================================================
-# EXTERNAL COMPONENTS
+# External components: local VoIP, audio stack, AFE, runtime and UI backends
 # =============================================================================
 # Remote:
 external_components:
@@ -169,7 +169,7 @@ external_components:
     components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_controller, speaker, voice_assistant]
 
 # =============================================================================
-# CONNECTIVITY
+# Connectivity: ESPHome API, OTA and network link
 # =============================================================================
 api:
   on_client_connected:
@@ -237,9 +237,8 @@ i2c:
     scan: false
 
 # =============================================================================
-# ESP AFE
-# Official Espressif AFE path for one microphone plus one playback reference.
-# Spotpear supplies that reference as the ES8311 stereo right channel.
+# AFE: Espressif front-end for mic cleanup, VAD, AEC, NS and AGC
+# Spotpear supplies the playback reference as the ES8311 stereo right channel.
 # =============================================================================
 esp_afe:
   id: afe_processor
@@ -269,12 +268,8 @@ esp_afe:
   fetch_ring_in_psram: false
 
 # =============================================================================
-# ESP AUDIO STACK (single bus for ES8311)
-# Full-duplex I2S: mic + speaker on same bus, managed by one FreeRTOS task.
-# Audio task defaults come from the component; this preset keeps the
-# single-bus ES8311 path simple and relies on stereo loopback reference.
-# Bus runs at 48kHz (ES8311 native rate, better DAC quality).
-# Espressif rate conversion x3 produces 16kHz for mic/AFE/MWW/VA/VoIP.
+# Bus I2S: ES8311 shared backend for speaker, mic and AEC reference
+# The bus runs at 48 kHz; Espressif rate conversion feeds 16 kHz to AFE/VA/VoIP.
 # =============================================================================
 esp_audio_stack:
   id: audio_stack
@@ -312,9 +307,7 @@ esp_audio_stack:
   audio_task_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
 
 # =============================================================================
-# MICROPHONE
-# Single mic_afe: processed AEC output for all consumers (VA STT, VoIP TX, MWW).
-# No separate unprocessed microphone path is exposed.
+# Microphone: publishes AFE-clean PCM frames to VA, wake word and VoIP
 # =============================================================================
 microphone:
   - platform: esp_audio_stack
@@ -323,8 +316,7 @@ microphone:
 
 
 # =============================================================================
-# SPEAKERS (mixer topology: sources -> resampler -> mixer 48kHz -> hw_speaker)
-# hw_speaker runs at 48kHz (bus rate). ResamplerSpeaker upsamples any input.
+# Speaker pipeline: mixes media, TTS and VoIP RX into the ES8311 speaker path
 # =============================================================================
 speaker:
   - platform: esp_audio_stack
@@ -446,12 +438,16 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# VOIP STACK
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
 # =============================================================================
 voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
   id: phone
+  # Optional local dial-plan alias published to HA. Keep it unique across your
+  # devices; calls to the same extension become ambiguous and HA will use the
+  # first matching phonebook entry.
+  extension: "101"
   audio:
     # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
     # with a 10 ms reframe available for peers that can drive the speaker at
@@ -499,7 +495,7 @@ voip_stack:
     updates_number: 1
   # Idle screen refresh hook: each merge cycle ends with publish_destination_,
   # so re-render so peer name + contact count reflect the new roster.
-  on_update_contacts:
+  on_phonebook_update:
     - lambda: id(peer_name) = id(phone).get_current_destination();
     - script.execute: update_call_idle_labels
   on_destination_changed:
@@ -1641,9 +1637,9 @@ switch:
       - runtime_controller.event:
           id: runtime
           event: speaker_unmuted
-  # VoIP switches
+  # VoIP controls
 
-  # AEC runtime toggles
+  # AEC runtime controls
 # =============================================================================
 # Select Entities
 # =============================================================================

@@ -2,10 +2,9 @@
 # VoIP phone SIP/RTP transport
 # =============================================================================
 #
-# Configures voip_stack as a standard SIP phone. `transport` selects only the
-# SIP signaling transport: UDP is the default LAN mode; TCP is useful when the
-# network/proxy handles stream signaling better. Audio remains RTP/UDP in the
-# current profile and negotiates PCM through SDP.
+# `transport` is SIP signaling only; audio remains RTP/UDP.
+# Direct ESP-to-ESP calls need matching SIP transport. Mixed TCP/UDP phones can
+# still call by name when HA is present because HA bridges the SIP legs.
 # =============================================================================
 
 substitutions:
@@ -15,8 +14,7 @@ substitutions:
 
 voip_stack:
   id: phone
-  # SIP signaling transport: `udp` by default; set `voip_transport: tcp`
-  # in the device YAML when this phone must use SIP over TCP.
+  # SIP signaling: udp by default; set voip_transport: tcp for SIP/TCP.
   transport: ${voip_transport}
   sip_port: ${voip_sip_port}
   rtp_port: ${voip_rtp_port}

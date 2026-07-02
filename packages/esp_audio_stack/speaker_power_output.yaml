@@ -1,5 +1,5 @@
 # =============================================================================
-# ESP Audio Stack speaker power gating (GPIO output enable)
+# Speaker power gating for audio-stack devices (GPIO output enable)
 # =============================================================================
 # Expects:
 #   - esp_audio_stack id: audio_stack

@@ -49,8 +49,8 @@ substitutions:
 
   # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # release mode.
-  ext_components_source: "../../../esphome/components"
-  assets_base: "../../../"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
   # Display dimensions (portrait)
   display_width: "800"
@@ -93,28 +93,28 @@ substitutions:
   afe_aec_restore_mode: ALWAYS_ON
 
 packages:
-  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
-  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
-  p4_diagnostics: !include ../../../packages/diagnostics/native_no_wifi_signal.yaml
-  core: !include ../../../packages/va_voip_cpp.yaml
-  runtime_controller: !include ../../../packages/runtime_controller/full_controller_no_led.yaml
-  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
-  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
-  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
-  sendspin_artwork: !include ../../../packages/media_player/sendspin_artwork.yaml
-  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
-  p4_va_cleanup: !include ../../../packages/lvgl/p4_va_cleanup.yaml
+  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
+  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
+  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller_no_led.yaml@dev
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
+  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
+  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
+  p4_va_cleanup: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_va_cleanup.yaml@dev
   # No carousel (lvgl_settings_navigation) on P4: portrait 800x1280 holds all
   # settings in a single scrollable page. See packages/lvgl/lvgl_settings_p4_unified.yaml.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
+  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@dev
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION
@@ -327,14 +327,14 @@ esp_audio_stack:
   # internal in the component; this moves only component-owned frame buffers.
   buffers_in_psram: true
 
-# mic_afe: post-AFE (Speech Enhancement + AEC + VAD) for VA STT, VoIP TX, AND MWW.
+# Microphone: publishes AFE-clean PCM frames to VA, wake word and VoIP
 # Same beamformed/cleaned stream feeds every consumer.
 microphone:
   - platform: esp_audio_stack
     id: mic_afe
     esp_audio_stack_id: audio_stack
 
-# Speaker pipeline: esp_audio_stack → resampler → mixer (all at 48kHz)
+# Speaker pipeline: mixes media, TTS and VoIP RX into the hardware speaker
 speaker:
   # Hardware output: writes 48kHz PCM to I2S bus
   - platform: esp_audio_stack
@@ -500,7 +500,7 @@ voice_assistant:
     - script.execute: draw_display
 
 # =============================================================================
-# VoIP Stack
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
 # =============================================================================
 voip_stack:
   id: phone
@@ -547,7 +547,7 @@ voip_stack:
   # via the "SIP bridge" switch in the SWITCHES block below.
   delete_contact_missing_from:
     updates_number: 1
-  on_update_contacts:
+  on_phonebook_update:
     - lambda: 'id(peer_name) = id(phone).get_current_destination();'
     - script.execute: draw_display
     - delay: 2s
@@ -2437,7 +2437,7 @@ script:
 
   # Call ended (hangup, decline, error, timeout). Show call_ended_group
   # with peer + reason for ~4 s, then auto-route back to whatever the
-  # FSM is in now (typically Idle).
+  # runtime display state is in now (typically Idle).
   - id: !extend ui_call_ended
     mode: restart
     then:
@@ -2587,7 +2587,7 @@ script:
 
           if (id(call_ended_active)) {
             // ui_call_ended owns the tile for ~4 s after a terminated
-            // call so the user reads the reason regardless of the FSM
+            // call so the user reads the reason regardless of the runtime state
             // state already returning to IDLE.
             set_hidden(id(call_ended_group), false);
             lv_obj_set_tile_id(id(top_tileview), 1, 0, LV_ANIM_OFF);

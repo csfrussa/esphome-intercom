@@ -1,18 +1,13 @@
 # =============================================================================
 # VoIP-only meta-package.
-# Bundles the core sub-packages that make up a VoIP-only device:
-#   - voip/state_machine.yaml      LED reducer + g_applied_led
-#   - voip/callbacks.yaml          voip_stack on_* + ui_call_* hooks
+# Simple phones use voip_stack callbacks directly, without runtime_controller.
+# Full profiles use runtime_controller because VA/media/LVGL need arbitration.
 #
 # Maintained presets include optional feature packages explicitly next to this
 # core package, so users can comment out one line to remove a feature:
 #   - voip/buttons_switches.yaml   call/next/prev/decline buttons + mute
 #   - voip/call_settings.yaml      auto-answer + DND switches
 #   - voip/ha_api.yaml             HA-callable call-control services
-#
-# For LVGL devices that want a settings carousel, ALSO include:
-#   `lvgl/settings_navigation.yaml`   carousel state + navigation scripts
-#   `lvgl/lvgl_settings_*.yaml`       individual settings pages
 #
 # Required IDs (defined by device):
 #   mic_main                - Microphone
@@ -27,9 +22,7 @@
 # =============================================================================
 
 packages:
-  state_machine: !include voip/state_machine.yaml
+  callback_reducer: !include voip/callback_reducer.yaml
   callbacks: !include voip/callbacks.yaml
 
-# No CONFIG_LWIP_MAX_SOCKETS override: voip_stack reserves its socket
-# quota through socket.consume_sockets() in its Python validation path,
-# so ESPHome sizes the setting automatically.
+# voip_stack reserves socket headroom in validation; no lwIP override here.

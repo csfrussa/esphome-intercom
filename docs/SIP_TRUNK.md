@@ -36,7 +36,9 @@ Local targets still resolve through the phonebook first.
 - `sip:name@host:port` routes direct.
 - A known phonebook name routes direct or via HA according to the roster.
 - A logical name can be bridged by HA.
-- A number or unresolved target can route through the registered trunk.
+- A contact `number` or unresolved external-looking number can route through
+  the registered trunk. Local/internal digits should be modeled as
+  `extension`.
 
 If the trunk is configured but not registered, outbound unresolved targets fail
 as routing errors. There is no proprietary intercom compatibility route.

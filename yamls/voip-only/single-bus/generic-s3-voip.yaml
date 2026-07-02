@@ -29,24 +29,24 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
 # =============================================================================
-# Package: shared VoIP state machine
+# Package: VoIP-only callback reducer and SIP phone controls
 # =============================================================================
 packages:
-  core: !include ../../../packages/voip_only.yaml
-  buttons_switches: !include ../../../packages/voip/buttons_switches.yaml
-  call_settings: !include ../../../packages/voip/call_settings.yaml
-  ha_api: !include ../../../packages/voip/ha_api.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  speaker_mute: !include ../../../packages/voip/speaker_mute.yaml
-  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
-  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  status_led: !include ../../../packages/led/status_ws2812_single.yaml
-  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
-  audio_stack_aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
+  core: github://n-IA-hane/esphome-intercom/packages/voip_only.yaml@dev
+  buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/buttons_switches.yaml@dev
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute.yaml@dev
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
+  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
 
 esphome:
   name: ${name}
@@ -113,16 +113,12 @@ external_components:
     components: [voip_stack, esp_audio_stack, esp_aec, audio_processor]
 
 # =============================================================================
-# SIP signaling is owned by voip_stack. `transport: udp` selects SIP/UDP;
-# audio remains RTP/UDP in the current profile. C++ side:
-#  - voip_stack.start() sends SIP INVITE
-#  - peer receives INVITE and enters ringing/in_call from SIP status
-#  - voip_stack.stop() sends CANCEL or BYE depending on dialog state
-# No YAML signaling lambdas and no external helper component.
+# VoIP signaling: voip_stack owns SIP INVITE/answer/hangup.
+# The YAML below only wires audio devices, LED feedback and local buttons.
 # =============================================================================
 
 # =============================================================================
-# AEC
+# AEC: removes local speaker reference from the captured mic stream
 # =============================================================================
 esp_aec:
   id: aec_processor
@@ -131,7 +127,7 @@ esp_aec:
   mode: voip_high_perf
 
 # =============================================================================
-# ESP Audio Stack
+# Bus I2S: enables the shared hardware backend for speaker and mic
 # =============================================================================
 esp_audio_stack:
   id: audio_stack
@@ -151,7 +147,7 @@ esp_audio_stack:
   buffers_in_psram: true
 
 # =============================================================================
-# Microphone
+# Microphone: publishes captured PCM frames to voip_stack
 # =============================================================================
 microphone:
   - platform: esp_audio_stack
@@ -159,7 +155,7 @@ microphone:
     esp_audio_stack_id: audio_stack
 
 # =============================================================================
-# Speaker
+# Speaker: consumes VoIP RX through the hardware speaker backend
 # =============================================================================
 speaker:
   - platform: esp_audio_stack
@@ -174,7 +170,7 @@ speaker:
     bits_per_sample: 16
 
 # =============================================================================
-# VoIP Stack: Device part (merged with package callbacks)
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
 # =============================================================================
 # SIP: the HA phonebook subscription provides SIP contacts in the unified
 # roster. voip_stack.start auto-binds signaling and RTP to the selected
@@ -182,9 +178,6 @@ speaker:
 voip_stack:
   id: phone
   buffers_in_psram: true
-  # SIP signaling transport only. Use `tcp` when this endpoint must signal over
-  # SIP TCP; audio remains RTP/UDP after SDP negotiation.
-  transport: udp
   audio:
     # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
     # matching 10 ms TX reframe of the 16 kHz mic for peers that negotiate

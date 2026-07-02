@@ -151,25 +151,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         bucket.setdefault("trunk_closed_calls", set()).discard(invite.call_id)
         trunk_cfg = _get_trunk_config(hass)
         routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
+        dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
         dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
         dtmf_format = dtmf_formats[0] if dtmf_formats else None
         destination = ""
         digits = ""
-        if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_format is not None:
+        if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_timeout_ms > 0 and dtmf_format is not None:
             try:
                 collector = DtmfCollector(
                     host="0.0.0.0",
                     port=source_relay_port,
                     payload_type=dtmf_format.payload_type,
                     routes=routes,
-                    timeout=float(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 3000) / 1000.0,
+                    timeout=float(dtmf_timeout_ms) / 1000.0,
                     terminator=str(trunk_cfg.get(CONF_TRUNK_DTMF_TERMINATOR) or ""),
                 )
                 digits, destination = await collector.collect()
             except Exception as err:
                 _LOGGER.info("SIP trunk DTMF collection unavailable: %s", err)
-        elif trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes:
-            timeout = float(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 3000) / 1000.0
+        elif trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_timeout_ms > 0:
+            timeout = float(dtmf_timeout_ms) / 1000.0
             _LOGGER.info(
                 "SIP trunk inbound call has no telephone-event SDP offer; ringing default destination after %.1fs",
                 timeout,
@@ -297,8 +298,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
             elif decision.entry is not None and decision.entry.sip_uri:
                 bridge_uri = parse_sip_uri(decision.entry.sip_uri)
-            elif decision.entry is not None and decision.entry.kind != "ha" and decision.entry.address:
-                bridge_port = int((decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
+            elif decision.entry is not None and not decision.entry.metadata.get("local_ha") and decision.entry.address:
+                bridge_port = int(decision.entry.port or (decision.entry.metadata or {}).get("port") or (decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
                 bridge_uri = parse_sip_uri(f"sip:{decision.entry.id}@{decision.entry.address}:{bridge_port}")
             elif decision.sip_uri:
                 bridge_uri = parse_sip_uri(decision.sip_uri)
@@ -524,42 +525,70 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             dest_relay_port = next_port + 2
             bucket["sip_rtp_next_port"] = next_port + 4
             trunk_cfg = _get_trunk_config(hass)
-            dtmf_format = None
-            if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED):
+            routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
+            dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
+            dtmf_preanswer = bool(trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_timeout_ms > 0)
+            if not dtmf_preanswer:
+                _LOGGER.info(
+                    "SIP trunk inbound skips DTMF pre-answer call_id=%s caller=%s",
+                    invite.call_id,
+                    invite.caller or invite.source_host,
+                )
+                invite = replace(invite, target=_ha_peer_name(hass))
+                decision = route_inbound_trunk(
+                    CallContext(
+                        call_id=invite.call_id,
+                        direction="inbound",
+                        origin="trunk",
+                        caller=invite.caller,
+                        called_did=str(invite.request_uri.user or ""),
+                        requested_target=_ha_peer_name(hass),
+                        source_host=invite.source_host,
+                    ),
+                    roster_entries,
+                    trunk_ready=False,
+                )
+                # Continue into the normal route_requested path so HA
+                # automations can still forward/bridge/decline the call
+                # before the default HA softphone ringing response.
+                source_relay_port = 0
+                dest_relay_port = 0
+            else:
+                dtmf_format = None
                 dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
                 dtmf_format = dtmf_formats[0] if dtmf_formats else None
-            answer = build_answer_directional(
-                local_ip,
-                local_ip,
-                source_relay_port,
-                invite.send_format,
-                invite.recv_format,
-                dtmf=dtmf_format,
-            )
-            _set_sip_bridge_call_state(
-                hass,
-                CallState.CONNECTING.value,
-                caller=invite.caller,
-                callee=str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"),
-                peer_name=invite.caller,
-                call_id=invite.call_id,
-                selected_tx_format=invite.send_format.audio_format.wire_token(),
-                selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                selected_tx_rtp_format=invite.send_format.wire_token(),
-                selected_rx_rtp_format=invite.recv_format.wire_token(),
-                audio_mode="full_duplex",
-                route_kind="trunk",
-                sip_status_code=200,
-                last_sip_event="INVITE",
-            )
-            hass.async_create_task(
-                _run_trunk_inbound_route(
-                    invite,
-                    source_relay_port=source_relay_port,
-                    dest_relay_port=dest_relay_port,
+                answer = build_answer_directional(
+                    local_ip,
+                    local_ip,
+                    source_relay_port,
+                    invite.send_format,
+                    invite.recv_format,
+                    dtmf=dtmf_format,
                 )
-            )
-            return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
+                _set_sip_bridge_call_state(
+                    hass,
+                    CallState.CONNECTING.value,
+                    caller=invite.caller,
+                    callee=str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"),
+                    peer_name=invite.caller,
+                    call_id=invite.call_id,
+                    selected_tx_format=invite.send_format.audio_format.wire_token(),
+                    selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                    selected_tx_rtp_format=invite.send_format.wire_token(),
+                    selected_rx_rtp_format=invite.recv_format.wire_token(),
+                    audio_mode="full_duplex",
+                    route_kind="trunk",
+                    sip_status_code=200,
+                    last_sip_event="INVITE",
+                )
+                hass.async_create_task(
+                    _run_trunk_inbound_route(
+                        invite,
+                        source_relay_port=source_relay_port,
+                        dest_relay_port=dest_relay_port,
+                    )
+                )
+                return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT
@@ -696,7 +725,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 sip_reason = "Forbidden"
             elif decision.reason in {
                 RouteReason.TRUNK_UNAVAILABLE,
-                RouteReason.NO_DIRECT_TRANSPORT,
                 RouteReason.TARGET_UNREACHABLE,
             }:
                 status = 480
@@ -743,8 +771,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
             elif decision.entry.sip_uri:
                 bridge_uri = parse_sip_uri(decision.entry.sip_uri)
-            elif decision.entry.kind != "ha" and decision.entry.address:
-                bridge_port = int((decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
+            elif not decision.entry.metadata.get("local_ha") and decision.entry.address:
+                bridge_port = int(decision.entry.port or (decision.entry.metadata or {}).get("port") or (decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
                 bridge_uri = parse_sip_uri(f"sip:{decision.entry.id}@{decision.entry.address}:{bridge_port}")
             decision_uri = bridge_uri or (parse_sip_uri(decision.sip_uri) if decision.sip_uri else None)
             if decision_uri is not None and decision_uri.host != local_ip:
@@ -761,7 +789,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     remote_rx_formats=remote_rx_formats,
                     target=decision.target or invite.target,
                 )
-                bridge_to_softphone = bool(decision.entry is not None and decision.entry.kind == "softphone")
+                bridge_to_softphone = bool(
+                    decision.entry is not None and decision.entry.sip_uri and decision.entry.metadata.get("registered")
+                )
                 if bridge_to_trunk or bridge_to_softphone:
                     sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)

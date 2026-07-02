@@ -65,7 +65,6 @@ class VoipStackCard extends HTMLElement {
     this._availableDevicesLoading = false;
     this._availableDevicesRetryTimer = null;
     this._rosterEntries = [];
-    this._callMode = null;  // 'softphone' in HA mode only; ESP cards are pure mirrors.
 
     // Entity IDs (discovered once)
     this._voipStateEntityId = null;
@@ -740,10 +739,11 @@ class VoipStackCard extends HTMLElement {
       .map(entry => ({
         id: String(entry.id || entry.name || "").trim(),
         name: String(entry.name || entry.id || "").trim(),
-        kind: this._rosterEntryKind(entry),
         address: String(entry.address || entry.host || "").trim(),
         sip_uri: String(entry.sip_uri || "").trim(),
+        extension: String(entry.extension || "").trim(),
         number: String(entry.number || "").trim(),
+        port: Number(entry.port || 0),
         ha_bridge: !!entry.ha_bridge,
         enabled: entry.enabled !== false,
         metadata: entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {},
@@ -757,18 +757,8 @@ class VoipStackCard extends HTMLElement {
   _isCallableRosterEntry(entry) {
     if (!entry || entry.enabled === false) return false;
     const name = entry.name || entry.id;
-    if (!name || this._isHaName(name)) return false;
-    if (entry.kind === "ha") return false;
-    return ["esp", "softphone", "phone", "group"].includes(entry.kind);
-  }
-
-  _rosterEntryKind(entry) {
-    const explicit = String(entry?.kind || "").trim().toLowerCase();
-    if (explicit) return explicit;
-    const address = String(entry?.address || entry?.host || "").trim();
-    const sipUri = String(entry?.sip_uri || "").trim();
-    const number = String(entry?.number || "").trim();
-    return number && !address && !sipUri ? "phone" : "esp";
+    if (!name) return false;
+    return !!(entry.address || entry.sip_uri || entry.extension || entry.number);
   }
 
   _formatListFromMetadata(value) {
@@ -790,13 +780,13 @@ class VoipStackCard extends HTMLElement {
       host: entry.address || "",
       sip_transport: signaling,
       sip_uri: entry.sip_uri || "",
+      extension: entry.extension || "",
       number: entry.number || "",
-      kind: entry.kind || "esp",
       ha_bridge: !!entry.ha_bridge,
       audio_mode: metadata.audio_mode || "full_duplex",
       tx_formats: this._formatListFromMetadata(metadata.tx_formats),
       rx_formats: this._formatListFromMetadata(metadata.rx_formats),
-      sip_port: metadata.sip_port,
+      sip_port: entry.port || metadata.port || metadata.sip_port,
       rtp_port: metadata.rtp_port,
       max_payload_bytes: metadata.max_payload_bytes,
       roster: true,
@@ -855,22 +845,6 @@ class VoipStackCard extends HTMLElement {
     const transport = this._getOwnTransport();
     const mode = this._audioModeLabel(this._getOwnAudioMode());
     return transport ? `${name} - ${transport}/${mode}` : `${name} - ${mode}`;
-  }
-
-  _formatModeLabel(destination) {
-    if (this._isHaSoftphoneMode()) {
-      if (!this.config?.show_extended_info) return "HA - ESP";
-      const target = this._getSoftphoneTargetDevice();
-      const destTransport = this._transportFromEntity(target?.entities?.voip_transport) ||
-                            this._normaliseTransport(target?.sip_transport);
-      const destMode = this._audioModeLabel(this._normaliseAudioMode(target?.audio_mode));
-      return destTransport ? `HA - ESP ${destTransport} ${destMode}` : `HA - ESP ${destMode}`;
-    }
-    if (!this.config?.show_extended_info) return "ESP - ESP";
-
-    const sourceTransport = this._getOwnTransport();
-    const sourceMode = this._audioModeLabel(this._getOwnAudioMode());
-    return sourceTransport ? `ESP mirror ${sourceTransport} ${sourceMode}` : "ESP mirror";
   }
 
   _isHaName(name) {
@@ -1185,7 +1159,7 @@ class VoipStackCard extends HTMLElement {
     if (this._isHaSoftphoneMode() && this._hasBrowserAudioPath()) {
       els.stats.textContent = voipStackEngine.statsText();
     } else {
-      els.stats.textContent = this._formatModeLabel(destination);
+      els.stats.textContent = "";
     }
 
     // Error
@@ -1750,7 +1724,6 @@ class VoipStackCard extends HTMLElement {
     this._render();
 
     try {
-      this._callMode = "mirror";
       await this._pressEspButton(this._callButtonEntityId, "Call");
     } catch (err) {
       this._showError(err.message || String(err));
@@ -1787,7 +1760,6 @@ class VoipStackCard extends HTMLElement {
     };
     this._activeDeviceInfo = sessionInfo;
     this._starting = true;
-    this._callMode = "softphone";
     this._errorMsg = "";
     this._render();
 
@@ -1829,7 +1801,6 @@ class VoipStackCard extends HTMLElement {
           device_id: HA_SOFTPHONE_DEVICE_ID,
           softphone: true,
         };
-        this._callMode = "softphone";
         this._markSoftphoneMediaOwner(callId);
         await this._hass.callService("voip_stack", "answer", {
           call_id: this._sessionCallId(),
@@ -1837,7 +1808,6 @@ class VoipStackCard extends HTMLElement {
         return;
       }
 
-      this._callMode = "mirror";
       await this._pressEspButton(this._callButtonEntityId, "Call");
     } catch (err) {
       this._showError(err.message || String(err));
@@ -1922,7 +1892,6 @@ class VoipStackCard extends HTMLElement {
     const wasSoftphone = this._isSoftphoneContext();
     await voipStackEngine.close("card_cleanup");
     this._activeDeviceInfo = null;
-    this._callMode = null;
     if (wasSoftphone) {
       this._softphoneSnapshot = null;
       this._activeSessionDeviceId = null;

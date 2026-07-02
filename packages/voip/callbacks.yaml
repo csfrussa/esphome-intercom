@@ -1,12 +1,12 @@
 # =============================================================================
-# VoIP Stack callbacks + UI hook placeholders.
+# VoIP callbacks and UI hook placeholders.
 # Drop-in for voip-only devices. Wires voip_stack state transitions to
-# the central reducer (update_status) and to ui_call_* hooks that devices with
-# a display can !extend to update their LVGL widgets.
+# the lightweight YAML LED reducer (update_status) and to ui_call_* hooks that
+# devices with a display can !extend to update their LVGL widgets.
 #
 # Prerequisites in the device YAML:
 #   - voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
-#   - script id `update_status` (provided by voip/state_machine.yaml)
+#   - script id `update_status` from the voip-only YAML reducer
 #
 voip_stack:
   id: phone

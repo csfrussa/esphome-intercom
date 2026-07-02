@@ -15,14 +15,14 @@
 substitutions:
   name: ha-voice-pe-voip
   friendly_name: Home Assistant Voice PE VoIP
-  ext_components_source: "../../../esphome/components"
+  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
 
 packages:
-  voice_pe_base: !include ../../../home-assistant-voice.yaml
-  voip_transport: !include ../../../packages/voip/transport.yaml
-  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
-  voip_settings: !include ../../../packages/voip/call_settings.yaml
-  voip_ha_api: !include ../../../packages/voip/ha_api.yaml
+  voice_pe_base: github://n-IA-hane/esphome-intercom/home-assistant-voice.yaml@dev
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
+  voip_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
+  voip_ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
 
 esphome:
   name: ${name}

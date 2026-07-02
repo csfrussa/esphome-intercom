@@ -135,3 +135,17 @@ def test_ha_routed_contacts_use_local_esp_signaling_transport() -> None:
     assert "const bool local_sip_transport_tcp = this->protocol_ == TransportType::TCP;" in settings
     assert "entry.sip_transport_tcp = local_sip_transport_tcp;" in settings
     assert "entry.sip_transport_tcp = ha_slot.sip_transport == \"tcp\";" not in settings
+
+
+def test_roster_json_uses_address_direct_or_ha_route_without_kind_semantics() -> None:
+    settings = read("voip_settings.cpp")
+
+    assert 'json_metadata_bool(obj, "local_ha")' in settings
+    assert 'slot->local_ha = json_metadata_bool(obj, "local_ha");' in settings
+    assert 'std::string kind' not in settings
+    assert 'softphone' not in settings
+    assert 'registered' not in settings
+    assert 'slot.address.empty()' in settings
+    assert 'const bool direct_candidate = !slot.address.empty() && !slot.local_ha && !slot.ha_bridge' in settings
+    assert 'contact_transport_tcp == local_sip_transport_tcp' in settings
+    assert '} else if (has_ha) {' in settings

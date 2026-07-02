@@ -3,9 +3,7 @@
 # Drop-in for devices that integrate with the Home Assistant `voip_stack`
 # integration. Exposes only the call-control actions.
 #
-# Phonebook sync is pushed as the canonical JSON roster through the native API.
-# The ESP consumes that JSON directly; it is not projected through CSV/text
-# sensors.
+# Phonebook sync uses native API JSON (`set_roster_json`), not text_sensor CSV.
 #
 # Prerequisites in the device YAML:
 #   - id `phone` : voip_stack component (voip/callbacks.yaml provides this)

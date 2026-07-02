@@ -87,7 +87,6 @@ from .phonebook_runtime import (
     available_esphome_services as _available_esphome_services,
     format_entry_unified as _format_entry_unified,
     push_roster_json_to_esps as _push_roster_json_to_esps,
-    registered_roster_entries as _registered_roster_entries,
 )
 from .router import (
     CallContext,
@@ -475,11 +474,7 @@ def _device_transport(hass: HomeAssistant, d: dict, udp_manager=None) -> str:
 
 
 async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
-    """Snapshot of every online peer (ESPs + HA itself).
-
-    HA is appended last as kind="ha". Consumers format this into the
-    HA phonebook sensor used by ESP SIP dial plans.
-    """
+    """Snapshot of every online peer (ESPs + HA itself)."""
     devices = await _get_voip_devices(hass)
     cfg = _get_transport_config(hass)
     out: list[Peer] = []
@@ -496,12 +491,12 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             _LOGGER.warning("Skipping SIP peer %s from phonebook: endpoint did not publish sip_transport", name or host)
             continue
         out.append(Peer(
-            kind="esp",
             device=d,
             name=name,
             host=host,
             sip_port=int(d.get("sip_port") or cfg["sip_port"]),
             rtp_port=int(d.get("rtp_port") or cfg["rtp_port"]),
+            extension=str(d.get("extension") or ""),
             audio_mode=d.get("audio_mode", "full_duplex"),
             tx_formats=list(d.get("tx_formats") or []),
             rx_formats=list(d.get("rx_formats") or []),
@@ -510,10 +505,10 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
     ha_host = await _ha_advertise_host(hass)
     if ha_host:
         out.append(Peer(
-            kind="ha",
             device=None,
             name=_ha_peer_name(hass),
             host=ha_host,
+            local_ha=True,
             sip_port=cfg["sip_port"],
             rtp_port=cfg["rtp_port"],
             audio_mode="full_duplex",
@@ -1216,6 +1211,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
     contacts = parse_roster_json(roster_json) if roster_json else []
     route = resolve_ha_router(target, contacts, trunk_ready=trunk_ready)
+    display_target = route.entry.display_name if route.entry is not None else target
     if (force_ha_bridge or bool(call.data.get("ha_bridge", False))) and route.action not in {
         RouteAction.ANSWER_HA,
         RouteAction.TRUNK,
@@ -1223,7 +1219,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     }:
         route = replace(route, action=RouteAction.BRIDGE, sip_uri=ha_uri_for(route.target or target, contacts))
     use_trunk = route.action is RouteAction.TRUNK and trunk_ready
-    use_softphone_codecs = bool(route.entry is not None and route.entry.kind == "softphone")
+    use_registered_contact_codecs = bool(
+        route.entry is not None and route.entry.sip_uri and route.entry.metadata.get("registered")
+    )
     if route.action is RouteAction.TRUNK and not use_trunk:
         raise ServiceValidationError(f"{target} requires a registered SIP trunk")
     route_uri = route.sip_uri
@@ -1252,7 +1250,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         remote_rx_formats=remote_rx_formats,
         target=target,
     )
-    if use_trunk or use_softphone_codecs:
+    if use_trunk or use_registered_contact_codecs:
         sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
         sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
     local_rtp_port = _allocate_sip_rtp_port(hass)
@@ -1268,7 +1266,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or ""),
         password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if use_trunk else "",
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
-        include_common_codecs=use_trunk or use_softphone_codecs,
+        include_common_codecs=use_trunk or use_registered_contact_codecs,
     )
     if not use_trunk:
         _enable_reused_sip_tcp_connection(
@@ -1283,8 +1281,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         CallState.CALLING.value,
         session_device_id=HA_SOFTPHONE_DEVICE_ID,
         caller=_ha_peer_name(hass),
-        callee=target,
-        peer_name=target,
+        callee=display_target,
+        peer_name=display_target,
         direction="outgoing",
         call_id=client.dialog_ids.call_id,
         sip_transport=_sip_uri_transport(uri).lower(),
@@ -1297,7 +1295,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         remote_sip_port=uri.port or int(cfg["sip_port"]),
         timeout=SIP_TIMER_B if use_trunk else 8.0,
     )
-    if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.kind == "softphone":
+    if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.metadata.get("registered"):
         await _mark_sip_account_unreachable(hass, route.entry.id)
     public_result = _sip_public_state(result)
     _track_outbound_sip_client(
@@ -1313,8 +1311,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             CallState.REMOTE_RINGING.value,
             session_device_id=HA_SOFTPHONE_DEVICE_ID,
             caller=_ha_peer_name(hass),
-            callee=target,
-            peer_name=target,
+            callee=display_target,
+            peer_name=display_target,
             direction="outgoing",
             call_id=client.dialog_ids.call_id,
             sip_status_code=180,
@@ -1327,8 +1325,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             CallState.IN_CALL.value,
             session_device_id=HA_SOFTPHONE_DEVICE_ID,
             caller=_ha_peer_name(hass),
-            callee=target,
-            peer_name=target,
+            callee=display_target,
+            peer_name=display_target,
             direction="outgoing",
             call_id=client.dialog_ids.call_id,
             selected_tx_format=client.dialog.send_format.audio_format.wire_token(),
@@ -1346,8 +1344,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             public_result,
             session_device_id=HA_SOFTPHONE_DEVICE_ID,
             caller=_ha_peer_name(hass),
-            callee=target,
-            peer_name=target,
+            callee=display_target,
+            peer_name=display_target,
             direction="outgoing",
             call_id=client.dialog_ids.call_id,
             reason=terminal_reason,
