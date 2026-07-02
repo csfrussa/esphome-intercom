@@ -34,6 +34,17 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)', answer_ha_branch)
         self.assertNotIn('return SipInviteResult(200, "OK"', answer_ha_branch)
 
+    def test_retransmitted_invite_is_not_rejected_as_busy(self) -> None:
+        start = self.source.index("async def _on_invite(invite:")
+        source = self.source[start:]
+        busy_guard = source.split('if invite.call_id in route_bucket:', 1)[1].split('if _is_trunk_invite(invite):', 1)[0]
+        self.assertIn('return SipInviteResult(100, "Trying"', busy_guard)
+        self.assertIn('if invite.call_id in pending:', busy_guard)
+        self.assertIn('return SipInviteResult(180, "Ringing"', busy_guard)
+        self.assertIn("other_routes", busy_guard)
+        self.assertIn("other_pending", busy_guard)
+        self.assertNotIn("if route_bucket or pending", busy_guard)
+
     def test_softphone_account_list_service_is_registered_and_documented(self) -> None:
         services = SERVICES.read_text()
         account_services = ACCOUNT_SERVICES.read_text()

@@ -117,6 +117,12 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._applySoftphoneSnapshot(data)", body)
         self.assertIn("this._ensureHaSoftphoneAudioPath(data)", body)
 
+    def test_terminal_ha_softphone_event_always_closes_engine(self) -> None:
+        cleanup = _method_body(self.source, "_cleanupAfterTerminalSession")
+        self.assertIn("voipStackEngine.active", cleanup)
+        self.assertIn('voipStackEngine.close("terminal")', cleanup)
+        self.assertNotIn("this._hasBrowserAudioPath()", cleanup)
+
     def test_deep_link_answer_handles_ha_softphone_session_ringing(self) -> None:
         apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
         self.assertIn("this._maybeAnswerFromUrl()", apply_snapshot)

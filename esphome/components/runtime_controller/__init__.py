@@ -112,7 +112,7 @@ LED_PRESETS = {
         "voip_calling": {"color": "orange", "effect": "Calling", "brightness": 1.0},
         "voip_in_call": {"color": [0.3, 0.69, 0.31], "effect": "None", "brightness": 1.0},
         "error": {"color": "red", "effect": "None", "brightness": 0.7},
-        "media": {"color": "green", "effect": "Spin", "brightness": 1.0},
+        "media": {"color": "blue", "effect": "None", "brightness": 1.0},
         "boot": {"color": "red", "effect": "None", "brightness": 0.6},
         "no_wifi": {"color": "orange", "effect": "Blink", "brightness": 0.7},
         "no_ha": {"color": "blue", "effect": "Blink", "brightness": 0.6},
@@ -132,7 +132,7 @@ LED_PRESETS = {
         "voip_calling": {"color": "orange", "effect": "Calling", "brightness": 1.0},
         "voip_in_call": {"color": "green", "effect": "None", "brightness": 1.0},
         "error": {"color": "red", "effect": "None", "brightness": 0.7},
-        "media": {"color": "green", "effect": "None", "brightness": 1.0},
+        "media": {"color": "blue", "effect": "None", "brightness": 1.0},
         "boot": {"color": "red", "effect": "None", "brightness": 0.6},
         "no_wifi": {"color": "orange", "effect": "Blink", "brightness": 0.7},
         "no_ha": {"color": "blue", "effect": "Blink", "brightness": 0.6},
@@ -147,7 +147,7 @@ LED_PRESETS["spotpear_rgb"] = {
     "listening": {"color": "red", "effect": "Slow Pulse", "brightness": 0.7},
     "thinking": {"color": "yellow", "effect": "Fast Pulse", "brightness": 0.7},
     "responding": {"color": "blue", "effect": "None", "brightness": 1.0},
-    "media": {"color": "green", "effect": "Slow Pulse", "brightness": 0.8},
+    "media": {"color": "blue", "effect": "None", "brightness": 1.0},
 }
 
 FULL_VOICE_VOIP_GROUPS = {

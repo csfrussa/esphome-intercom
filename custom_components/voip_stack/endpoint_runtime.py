@@ -491,15 +491,23 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         registry = _call_registry(hass)
         route_bucket = _pending_routes(hass)
         pending = registry.pending_invites
-        active_media = len(registry.softphone_media)
+        if invite.call_id in route_bucket:
+            _LOGGER.debug("SIP INVITE retransmit while route is pending call_id=%s", invite.call_id)
+            return SipInviteResult(100, "Trying", to_tag="")
+        if invite.call_id in pending:
+            _LOGGER.debug("SIP INVITE retransmit while HA softphone is ringing call_id=%s", invite.call_id)
+            return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        active_media = len([call_id for call_id in registry.softphone_media if call_id != invite.call_id])
         ha_softphone_active = _ha_softphone_has_active_call(hass)
-        if route_bucket or pending or active_media or ha_softphone_active:
+        other_routes = len([call_id for call_id in route_bucket if call_id != invite.call_id])
+        other_pending = len([call_id for call_id in pending if call_id != invite.call_id])
+        if other_routes or other_pending or active_media or ha_softphone_active:
             _LOGGER.info(
                 "SIP INVITE from %s rejected: HA SIP endpoint is busy "
                 "(routes=%d pending=%d media=%d ha_softphone=%s)",
                 invite.caller or invite.source_host,
-                len(route_bucket),
-                len(pending),
+                other_routes,
+                other_pending,
                 active_media,
                 ha_softphone_active,
             )

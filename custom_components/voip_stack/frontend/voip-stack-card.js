@@ -205,7 +205,8 @@ class VoipStackCard extends HTMLElement {
     this._autoAnswering = false;
     this._starting = false;
     this._stopping = false;
-    if (!this._hasBrowserAudioPath() || this._cleanupTask) return;
+    this._markSoftphoneMediaOwner("");
+    if (!voipStackEngine.active || this._cleanupTask) return;
     this._cleanupTask = voipStackEngine.close("terminal")
       .catch((err) => console.warn("voip-stack-card: softphone cleanup failed", err))
       .finally(() => {
@@ -246,7 +247,6 @@ class VoipStackCard extends HTMLElement {
     if (activePhoneState) {
       this._clearEndReason(false);
     } else {
-      this._markSoftphoneMediaOwner("");
       this._cleanupAfterTerminalSession();
     }
     if (
