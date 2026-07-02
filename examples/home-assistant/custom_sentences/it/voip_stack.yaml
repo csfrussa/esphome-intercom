@@ -5,6 +5,7 @@ intents:
     data:
       - sentences:
           - "chiama {target}"
+          - "chiama{target}"
   VoipHangup:
     data:
       - sentences:

@@ -316,7 +316,7 @@ class VoipCallIntentHandler(_VoipIntentHandler):
                     DOMAIN,
                     "call",
                     {
-                        "name": resolved.canonical,
+                        "target": resolved.canonical,
                         "source": origin["device_id"],
                     },
                     blocking=True,
