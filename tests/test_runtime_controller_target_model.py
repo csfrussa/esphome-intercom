@@ -95,15 +95,6 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
             "stop",
             False,
         )
-    if facts.call_state == CallState.IN_CALL:
-        return RuntimeSnapshot(
-            "voip_in_call",
-            LedSnapshot("voip_in_call", (111, 255, 115), None, "voip"),
-            "duck",
-            "stop",
-            False,
-        )
-
     voip_media_residue = (
         facts.media_owner == MediaOwner.VOIP_RINGTONE
         or (
@@ -117,6 +108,14 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
         return RuntimeSnapshot("va_thinking", LedSnapshot("va_thinking", (255, 180, 0), "Spin", "va"), "duck", "stop", False)
     if facts.va_state == VaState.LISTENING:
         return RuntimeSnapshot("va_listening", LedSnapshot("va_listening", (0, 0, 255), "Slow Pulse", "va"), "duck", "stop", False)
+    if facts.call_state == CallState.IN_CALL:
+        return RuntimeSnapshot(
+            "voip_in_call",
+            LedSnapshot("voip_in_call", (111, 255, 115), None, "voip"),
+            "duck",
+            "stop",
+            True,
+        )
     if facts.media_playing and not voip_media_residue:
         return RuntimeSnapshot("media", LedSnapshot("media", (0, 255, 0), "Spin", "media"), "normal", "stop", False)
     if facts.mic_muted and facts.speaker_muted:
@@ -166,6 +165,20 @@ class RuntimeControllerTargetModelTest(unittest.TestCase):
         self.assertIsNone(snap.led.effect)
         self.assertNoMediaSpin(snap)
 
+    def test_va_visuals_overlay_established_call(self) -> None:
+        snap = reduce_runtime(
+            RuntimeFacts(
+                call_state=CallState.IN_CALL,
+                va_state=VaState.LISTENING,
+                media_playing=True,
+                media_owner=MediaOwner.USER,
+            )
+        )
+        self.assertEqual(snap.public_state, "va_listening")
+        self.assertEqual(snap.led.owner, "va")
+        self.assertEqual(snap.led.effect, "Slow Pulse")
+        self.assertFalse(snap.mww_allowed)
+
     def test_voip_ringtone_residue_does_not_become_media_after_hangup(self) -> None:
         snap = reduce_runtime(
             RuntimeFacts(
@@ -197,10 +210,10 @@ class RuntimeControllerTargetModelTest(unittest.TestCase):
         self.assertEqual(snap.led.effect, "Ringing")
         self.assertEqual(snap.led.owner, "voip")
 
-    def test_mww_is_disabled_during_call_and_reenabled_when_idle(self) -> None:
+    def test_mww_is_disabled_during_setup_but_allowed_in_established_call(self) -> None:
         self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.CALLING)).mww_allowed)
         self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.RINGING)).mww_allowed)
-        self.assertFalse(reduce_runtime(RuntimeFacts(call_state=CallState.IN_CALL)).mww_allowed)
+        self.assertTrue(reduce_runtime(RuntimeFacts(call_state=CallState.IN_CALL)).mww_allowed)
         self.assertTrue(reduce_runtime(RuntimeFacts()).mww_allowed)
 
 

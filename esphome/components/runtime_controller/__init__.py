@@ -175,7 +175,10 @@ FULL_VOICE_VOIP_VOIP_STATES = {
         },
     },
     "in_call": {
-        CONF_PRIORITY: 973,
+        # Established calls are a persistent base state. They must dominate
+        # media, but transient voice-assistant activity still needs to be
+        # visible so wake/listening/thinking is not hidden by the call LED.
+        CONF_PRIORITY: 700,
         CONF_POLICIES: {
             "led_status": "voip_in_call",
             "display_status": "voip_in_call",

@@ -72,9 +72,9 @@ static void esp_like_combinations() {
       {"media", activity(1u << 4, 100, {policy("led_status", "media"), policy("display_status", "media"), policy("audio_policy", "normal")})},
       {"announcement", activity(1u << 5, 200, {policy("led_status", "announcement"), policy("display_status", "announcement"), policy("audio_policy", "duck")})},
       {"voip_ringing", activity(1u << 6, 975, {policy("led_status", "ringing"), policy("display_status", "voip_ringing"), policy("audio_policy", "duck")})},
-      {"voip_in_call", activity(1u << 7, 973, {policy("led_status", "voip"), policy("display_status", "voip_in_call"), policy("audio_policy", "duck")})},
-      {"assistant_thinking", activity(1u << 8, 600, {policy("led_status", "thinking"), policy("display_status", "thinking"), policy("audio_policy", "duck")})},
-      {"assistant_response", activity(1u << 9, 800, {policy("led_status", "responding"), policy("display_status", "responding"), policy("audio_policy", "duck")})},
+      {"voip_in_call", activity(1u << 7, 700, {policy("led_status", "voip"), policy("display_status", "voip_in_call"), policy("audio_policy", "duck")})},
+      {"assistant_thinking", activity(1u << 8, 830, {policy("led_status", "thinking"), policy("display_status", "thinking"), policy("audio_policy", "duck")})},
+      {"assistant_response", activity(1u << 9, 840, {policy("led_status", "responding"), policy("display_status", "responding"), policy("audio_policy", "duck")})},
       {"screen_dim", activity(1u << 10, 50, {policy("screen_policy", "dim")})},
       {"timer_ringing", activity(1u << 11, 500, {policy("audio_policy", "duck"), policy("timer_alarm", "play")})},
       {"voip_ringtone", activity(1u << 12, 700, {policy("audio_policy", "duck"), policy("ringtone", "play")})},
@@ -108,13 +108,14 @@ static void esp_like_combinations() {
   set(activities, "assistant_response", true);
   out = eval(activities);
   expect_mask("media+voip+response", out, (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
-  expect_policy("voip overrides response led", out, "led_status", "voip");
-  expect_policy("voip overrides response display", out, "display_status", "voip_in_call");
+  expect_policy("assistant response overlays in-call led", out, "led_status", "responding");
+  expect_policy("assistant response overlays in-call display", out, "display_status", "responding");
   expect_policy("media+voip+response", out, "audio_policy", "duck");
 
+  set(activities, "assistant_response", false);
   set(activities, "muted", true);
   out = eval(activities);
-  expect_mask("voip overrides muted visual", out, (1u << 3) | (1u << 4) | (1u << 7) | (1u << 9) | (1u << 10));
+  expect_mask("voip overrides muted visual", out, (1u << 3) | (1u << 4) | (1u << 7) | (1u << 10));
   expect_policy("voip muted led", out, "led_status", "voip");
   expect_policy("voip muted display", out, "display_status", "voip_in_call");
   expect_policy("muted keeps audio policy", out, "audio_policy", "duck");
