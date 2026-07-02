@@ -10,7 +10,7 @@ import time
 
 from homeassistant.core import HomeAssistant
 
-from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS
+from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS, HA_TRUNK_AUDIO_FORMATS
 from .const import (
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -37,6 +37,7 @@ from .endpoint_routing import (
     same_route_name as _same_route_name,
     sip_target_audio_profile as _sip_target_audio_profile,
 )
+from .dtmf import parse_dtmf_route_map
 from .fsm import (
     CallState,
     TerminalReason,
