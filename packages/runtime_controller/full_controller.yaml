@@ -21,9 +21,6 @@ runtime_controller:
     led:
       id: ${runtime_controller_led_id}
       preset: ${runtime_controller_led_preset}
-  state_outputs:
-    activity_mask: g_activity_mask
-    sequence: g_runtime_seq
   actions:
     voice_start:
       - voice_assistant.start:

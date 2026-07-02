@@ -37,14 +37,6 @@ globals:
     type: int
     restore_value: false
     initial_value: "0"
-  - id: g_activity_mask
-    type: uint32_t
-    restore_value: false
-    initial_value: "0"
-  - id: g_runtime_seq
-    type: uint32_t
-    restore_value: false
-    initial_value: "0"
   - id: g_va_epoch
     type: uint32_t
     restore_value: false

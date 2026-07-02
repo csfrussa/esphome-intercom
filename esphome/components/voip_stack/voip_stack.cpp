@@ -407,7 +407,8 @@ void VoipStack::loop() {
 
   this->handle_call_timeouts_(now, calling_to);
   const CallState state = this->call_state_.load(std::memory_order_acquire);
-  if (state != CallState::IDLE && now - this->last_sip_snapshot_refresh_ms_ >= 500) {
+  const uint32_t snapshot_refresh_ms = this->audio_debug_ ? 500 : 2000;
+  if (state != CallState::IDLE && now - this->last_sip_snapshot_refresh_ms_ >= snapshot_refresh_ms) {
     this->last_sip_snapshot_refresh_ms_ = now;
     this->publish_sip_snapshot_();
   }

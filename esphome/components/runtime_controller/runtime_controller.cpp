@@ -16,6 +16,14 @@ namespace esphome::runtime_controller {
 
 static const char *const TAG = "runtime_controller";
 
+static bool str_eq(const char *left, const char *right) {
+  return left == right || (left != nullptr && right != nullptr && strcmp(left, right) == 0);
+}
+
+static uint8_t activity_index_or_invalid(int index) {
+  return index >= 0 ? static_cast<uint8_t>(index) : RuntimeController::INVALID_ACTIVITY;
+}
+
 void RuntimeController::setup() {
   if (this->config_error_) {
     ESP_LOGE(TAG, "Runtime Controller configuration overflow; refusing to run with a truncated reducer table");
@@ -125,7 +133,8 @@ void RuntimeController::add_event_activity(const char *event, const char *activi
     this->mark_config_error_();
     return;
   }
-  this->event_updates_[this->event_update_count_++] = EventActivity{event, activity, active};
+  this->event_updates_[this->event_update_count_++] = EventActivity{
+      event, activity, active, activity_index_or_invalid(this->find_activity_(activity))};
 }
 
 void RuntimeController::add_event_rule(const char *event, const char *action) {
@@ -148,7 +157,8 @@ void RuntimeController::add_event_rule_update(const char *activity, bool active)
     this->mark_config_error_();
     return;
   }
-  rule.updates[rule.update_count++] = ActivityUpdate{activity, active};
+  ActivityUpdate update{activity, active, activity_index_or_invalid(this->find_activity_(activity))};
+  rule.updates[rule.update_count++] = update;
 }
 
 void RuntimeController::add_event_rule_any_active(const char *activity) {
@@ -160,7 +170,9 @@ void RuntimeController::add_event_rule_any_active(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  rule.any_active[rule.any_count++] = activity;
+  const size_t index = rule.any_count++;
+  rule.any_active[index] = activity;
+  rule.any_active_index[index] = activity_index_or_invalid(this->find_activity_(activity));
 }
 
 void RuntimeController::add_event_rule_all_active(const char *activity) {
@@ -172,7 +184,9 @@ void RuntimeController::add_event_rule_all_active(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  rule.all_active[rule.all_count++] = activity;
+  const size_t index = rule.all_count++;
+  rule.all_active[index] = activity;
+  rule.all_active_index[index] = activity_index_or_invalid(this->find_activity_(activity));
 }
 
 void RuntimeController::add_event_rule_none_active(const char *activity) {
@@ -184,7 +198,9 @@ void RuntimeController::add_event_rule_none_active(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  rule.none_active[rule.none_count++] = activity;
+  const size_t index = rule.none_count++;
+  rule.none_active[index] = activity;
+  rule.none_active_index[index] = activity_index_or_invalid(this->find_activity_(activity));
 }
 
 void RuntimeController::add_derived_activity(const char *activity) {
@@ -195,7 +211,10 @@ void RuntimeController::add_derived_activity(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  this->derived_activities_[this->derived_activity_count_++] = DerivedActivity{activity};
+  DerivedActivity derived;
+  derived.activity = activity;
+  derived.activity_index = activity_index_or_invalid(this->find_activity_(activity));
+  this->derived_activities_[this->derived_activity_count_++] = derived;
 }
 
 void RuntimeController::add_derived_any_active(const char *activity) {
@@ -207,7 +226,9 @@ void RuntimeController::add_derived_any_active(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  derived.any_active[derived.any_count++] = activity;
+  const size_t index = derived.any_count++;
+  derived.any_active[index] = activity;
+  derived.any_active_index[index] = activity_index_or_invalid(this->find_activity_(activity));
 }
 
 void RuntimeController::add_derived_all_active(const char *activity) {
@@ -219,7 +240,9 @@ void RuntimeController::add_derived_all_active(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  derived.all_active[derived.all_count++] = activity;
+  const size_t index = derived.all_count++;
+  derived.all_active[index] = activity;
+  derived.all_active_index[index] = activity_index_or_invalid(this->find_activity_(activity));
 }
 
 void RuntimeController::add_derived_none_active(const char *activity) {
@@ -231,7 +254,9 @@ void RuntimeController::add_derived_none_active(const char *activity) {
     this->mark_config_error_();
     return;
   }
-  derived.none_active[derived.none_count++] = activity;
+  const size_t index = derived.none_count++;
+  derived.none_active[index] = activity;
+  derived.none_active_index[index] = activity_index_or_invalid(this->find_activity_(activity));
 }
 
 void RuntimeController::add_action_trigger(const char *name, Trigger<> *trigger) {
@@ -316,13 +341,13 @@ void RuntimeController::event(const char *name) {
 
   for (size_t i = 0; i < this->event_rule_count_; i++) {
     auto &rule = this->event_rules_[i];
-    if (rule.event == nullptr || name == nullptr || strcmp(rule.event, name) != 0)
+    if (!str_eq(rule.event, name))
       continue;
     event_known = true;
     if (!this->rule_matches_(rule))
       continue;
     for (size_t j = 0; j < rule.update_count; j++)
-      changed |= this->apply_activity_update_(rule.updates[j].name, rule.updates[j].active);
+      changed |= this->apply_activity_update_(rule.updates[j]);
     changed |= this->apply_derived_activities_();
     if (changed) {
       this->apply_generic_outputs_();
@@ -334,9 +359,11 @@ void RuntimeController::event(const char *name) {
 
   for (size_t i = 0; i < this->event_update_count_; i++) {
     const auto &update = this->event_updates_[i];
-    if (update.event != nullptr && name != nullptr && strcmp(update.event, name) == 0) {
+    if (str_eq(update.event, name)) {
       event_known = true;
-      changed |= this->apply_activity_update_(update.activity, update.active);
+      changed |= update.activity_index != INVALID_ACTIVITY
+                     ? this->apply_activity_update_by_index_(update.activity_index, update.active)
+                     : this->apply_activity_update_(update.activity, update.active);
     }
   }
   if (changed) {
@@ -431,20 +458,26 @@ bool RuntimeController::is_activity_active(const char *name) const {
   return this->activities_[index].active;
 }
 
+bool RuntimeController::is_activity_active_(const char *name, uint8_t index) const {
+  if (index != INVALID_ACTIVITY && static_cast<size_t>(index) < this->activity_count_)
+    return this->activities_[index].active;
+  return this->is_activity_active(name);
+}
+
 bool RuntimeController::rule_matches_(const RuntimeController::EventRule &rule) const {
   if (rule.any_count > 0) {
     bool any = false;
     for (size_t i = 0; i < rule.any_count; i++)
-      any |= this->is_activity_active(rule.any_active[i]);
+      any |= this->is_activity_active_(rule.any_active[i], rule.any_active_index[i]);
     if (!any)
       return false;
   }
   for (size_t i = 0; i < rule.all_count; i++) {
-    if (!this->is_activity_active(rule.all_active[i]))
+    if (!this->is_activity_active_(rule.all_active[i], rule.all_active_index[i]))
       return false;
   }
   for (size_t i = 0; i < rule.none_count; i++) {
-    if (this->is_activity_active(rule.none_active[i]))
+    if (this->is_activity_active_(rule.none_active[i], rule.none_active_index[i]))
       return false;
   }
   return true;
@@ -454,16 +487,16 @@ bool RuntimeController::derived_matches_(const RuntimeController::DerivedActivit
   if (derived.any_count > 0) {
     bool any = false;
     for (size_t i = 0; i < derived.any_count; i++)
-      any |= this->is_activity_active(derived.any_active[i]);
+      any |= this->is_activity_active_(derived.any_active[i], derived.any_active_index[i]);
     if (!any)
       return false;
   }
   for (size_t i = 0; i < derived.all_count; i++) {
-    if (!this->is_activity_active(derived.all_active[i]))
+    if (!this->is_activity_active_(derived.all_active[i], derived.all_active_index[i]))
       return false;
   }
   for (size_t i = 0; i < derived.none_count; i++) {
-    if (this->is_activity_active(derived.none_active[i]))
+    if (this->is_activity_active_(derived.none_active[i], derived.none_active_index[i]))
       return false;
   }
   return true;
@@ -473,7 +506,9 @@ bool RuntimeController::apply_derived_activities_() {
   bool changed = false;
   for (size_t i = 0; i < this->derived_activity_count_; i++) {
     const auto &derived = this->derived_activities_[i];
-    changed |= this->set_activity_value_(derived.activity, this->derived_matches_(derived));
+    changed |= derived.activity_index != INVALID_ACTIVITY
+                   ? this->set_activity_value_by_index_(derived.activity_index, this->derived_matches_(derived))
+                   : this->set_activity_value_(derived.activity, this->derived_matches_(derived));
   }
   return changed;
 }
@@ -492,18 +527,55 @@ void RuntimeController::publish_state_outputs_() {
 }
 
 void RuntimeController::apply_generic_outputs_() {
-  std::array<GenericActivity, MAX_ACTIVITIES> generic{};
+  struct PolicyWinner {
+    const char *policy{nullptr};
+    const char *value{nullptr};
+    int16_t priority{-32768};
+  };
+
+  ResolvedPolicies output;
+  PolicyWinner winners[MAX_POLICIES]{};
+  size_t winner_count = 0;
+
   for (size_t i = 0; i < this->activity_count_; i++) {
-    generic[i].bit = this->activities_[i].bit;
-    generic[i].priority = this->activities_[i].priority;
-    generic[i].active = this->activities_[i].active;
-    generic[i].policy_count = this->activities_[i].policy_count;
-    for (size_t j = 0; j < this->activities_[i].policy_count; j++)
-      generic[i].policies[j] = this->activities_[i].policies[j];
+    const auto &activity = this->activities_[i];
+    if (!activity.active)
+      continue;
+    output.mask |= activity.bit;
+
+    for (size_t j = 0; j < activity.policy_count; j++) {
+      const auto &candidate = activity.policies[j];
+      if (candidate.policy == nullptr || candidate.policy[0] == '\0' || candidate.value == nullptr)
+        continue;
+
+      PolicyWinner *winner = nullptr;
+      for (size_t k = 0; k < winner_count; k++) {
+        if (str_eq(winners[k].policy, candidate.policy)) {
+          winner = &winners[k];
+          break;
+        }
+      }
+      if (winner == nullptr) {
+        if (winner_count >= MAX_POLICIES)
+          continue;
+        winner = &winners[winner_count++];
+        winner->policy = candidate.policy;
+      }
+      if (activity.priority >= winner->priority) {
+        winner->priority = activity.priority;
+        winner->value = candidate.value;
+      }
+    }
   }
-  auto policies = reduce_generic_activities(generic.data(), this->activity_count_);
-  this->generic_activity_mask_ = policies.mask;
-  this->resolved_policies_ = policies;
+
+  output.value_count = winner_count;
+  for (size_t i = 0; i < winner_count; i++) {
+    output.values[i].policy = winners[i].policy;
+    output.values[i].value = winners[i].value;
+  }
+
+  this->generic_activity_mask_ = output.mask;
+  this->resolved_policies_ = output;
 }
 
 bool RuntimeController::set_activity_value_(const char *name, bool active) {
@@ -513,6 +585,12 @@ bool RuntimeController::set_activity_value_(const char *name, bool active) {
     return false;
   }
 
+  return this->set_activity_value_by_index_(index, active);
+}
+
+bool RuntimeController::set_activity_value_by_index_(int index, bool active) {
+  if (index < 0 || static_cast<size_t>(index) >= this->activity_count_)
+    return false;
   ActivityConfig &activity = this->activities_[index];
   if (activity.active == active)
     return false;
@@ -527,6 +605,19 @@ bool RuntimeController::apply_activity_update_(const char *name, bool active) {
     return false;
   }
 
+  return this->apply_activity_update_by_index_(index, active);
+}
+
+bool RuntimeController::apply_activity_update_(const ActivityUpdate &update) {
+  if (update.index != INVALID_ACTIVITY)
+    return this->apply_activity_update_by_index_(update.index, update.active);
+  return this->apply_activity_update_(update.name, update.active);
+}
+
+bool RuntimeController::apply_activity_update_by_index_(int index, bool active) {
+  if (index < 0 || static_cast<size_t>(index) >= this->activity_count_)
+    return false;
+
   bool changed = false;
   ActivityConfig &activity = this->activities_[index];
   if (active && activity.group != nullptr && activity.group[0] != '\0') {
@@ -534,13 +625,13 @@ bool RuntimeController::apply_activity_update_(const char *name, bool active) {
       if (i == static_cast<size_t>(index))
         continue;
       ActivityConfig &peer = this->activities_[i];
-      if (peer.group != nullptr && strcmp(peer.group, activity.group) == 0 && peer.active) {
+      if (str_eq(peer.group, activity.group) && peer.active) {
         peer.active = false;
         changed = true;
       }
     }
   }
-  changed |= this->set_activity_value_(name, active);
+  changed |= this->set_activity_value_by_index_(index, active);
   return changed;
 }
 
@@ -555,7 +646,7 @@ void RuntimeController::commit_outputs_(const char *reason, uint32_t old_mask, c
       const char *policy = this->resolved_policies_.values[i].policy;
       const char *old_value = find_policy_value(old_policies, policy, nullptr);
       const char *new_value = this->resolved_policies_.values[i].value;
-      policy_changed = old_value == nullptr || new_value == nullptr || strcmp(old_value, new_value) != 0;
+      policy_changed = old_value == nullptr || new_value == nullptr || !str_eq(old_value, new_value);
     }
     if (!policy_changed)
       return;
@@ -594,7 +685,7 @@ bool RuntimeController::sync_voip_activity_() {
     return false;
 
   this->build_voip_activity_name_(this->voip_->get_call_state_str());
-  if (std::strcmp(this->voip_activity_, this->last_voip_activity_) == 0)
+  if (str_eq(this->voip_activity_, this->last_voip_activity_))
     return false;
 
   bool changed = false;
@@ -615,14 +706,13 @@ void RuntimeController::run_policy_actions_(const ResolvedPolicies &old_policies
     const char *policy = new_policies.values[i].policy;
     const char *value = new_policies.values[i].value;
     const char *old_value = find_policy_value(old_policies, policy, nullptr);
-    if (old_value != nullptr && value != nullptr && strcmp(old_value, value) == 0)
+    if (str_eq(old_value, value))
       continue;
-    if (policy != nullptr && value != nullptr && strcmp(policy, "led_status") == 0)
+    if (value != nullptr && str_eq(policy, "led_status"))
       this->apply_led_state_(value);
     for (size_t j = 0; j < this->policy_value_action_count_; j++) {
       const auto &action = this->policy_value_actions_[j];
-      if (action.policy != nullptr && action.value != nullptr && strcmp(action.policy, policy) == 0 &&
-          strcmp(action.value, value) == 0) {
+      if (str_eq(action.policy, policy) && str_eq(action.value, value)) {
         if (this->debug_)
           ESP_LOGI(TAG, "POLICY seq=%" PRIu32 " %s=%s", this->sequence_, policy, value);
         action.trigger->trigger();
@@ -631,13 +721,13 @@ void RuntimeController::run_policy_actions_(const ResolvedPolicies &old_policies
     const int32_t output = this->resolve_policy_output_(policy, value);
     for (size_t j = 0; j < this->policy_global_output_count_; j++) {
       const auto &target = this->policy_global_outputs_[j];
-      if (target.policy != nullptr && target.set != nullptr && strcmp(target.policy, policy) == 0) {
+      if (target.set != nullptr && str_eq(target.policy, policy)) {
         target.set(target.target, output);
       }
     }
     for (size_t j = 0; j < this->policy_change_trigger_count_; j++) {
       const auto &trigger = this->policy_change_triggers_[j];
-      if (trigger.policy != nullptr && strcmp(trigger.policy, policy) == 0) {
+      if (str_eq(trigger.policy, policy)) {
         if (this->debug_) {
           ESP_LOGI(TAG, "POLICY_CHANGE seq=%" PRIu32 " %s=%s output=%" PRId32, this->sequence_, policy, value,
                    output);
@@ -653,7 +743,7 @@ void RuntimeController::apply_led_state_(const char *state) {
     return;
   const LedState *match = nullptr;
   for (size_t i = 0; i < this->led_state_count_; i++) {
-    if (this->led_states_[i].state != nullptr && strcmp(this->led_states_[i].state, state) == 0) {
+    if (str_eq(this->led_states_[i].state, state)) {
       match = &this->led_states_[i];
       break;
     }
@@ -681,8 +771,7 @@ int32_t RuntimeController::resolve_policy_output_(const char *policy, const char
     return 0;
   for (size_t i = 0; i < this->policy_output_count_; i++) {
     const auto &entry = this->policy_outputs_[i];
-    if (entry.policy != nullptr && entry.value != nullptr && strcmp(entry.policy, policy) == 0 &&
-        strcmp(entry.value, value) == 0)
+    if (str_eq(entry.policy, policy) && str_eq(entry.value, value))
       return entry.output;
   }
   return 0;
@@ -692,7 +781,7 @@ int RuntimeController::find_activity_(const char *name) const {
   if (name == nullptr)
     return -1;
   for (size_t i = 0; i < this->activity_count_; i++) {
-    if (strcmp(this->activities_[i].name, name) == 0)
+    if (str_eq(this->activities_[i].name, name))
       return static_cast<int>(i);
   }
   return -1;
@@ -702,7 +791,7 @@ int RuntimeController::find_action_(const char *name) const {
   if (name == nullptr)
     return -1;
   for (size_t i = 0; i < this->action_count_; i++) {
-    if (strcmp(this->actions_[i].name, name) == 0)
+    if (str_eq(this->actions_[i].name, name))
       return static_cast<int>(i);
   }
   return -1;
@@ -716,7 +805,8 @@ bool RuntimeController::enqueue_event_(const char *name) {
     return false;
   }
   auto &event = this->pending_events_[this->pending_event_count_++];
-  event = PendingEvent{};
+  event.name[0] = '\0';
+  event.update_count = 0;
   event.kind = PendingEventKind::EVENT;
   std::snprintf(event.name, sizeof(event.name), "%s", name);
   if (this->debug_)
@@ -738,7 +828,8 @@ bool RuntimeController::enqueue_activity_updates_(const ActivityUpdate *updates,
     return false;
   }
   auto &event = this->pending_events_[this->pending_event_count_++];
-  event = PendingEvent{};
+  event.name[0] = '\0';
+  event.update_count = 0;
   event.kind = PendingEventKind::SET_ACTIVITIES;
   event.update_count = count > std::size(event.updates) ? std::size(event.updates) : count;
   for (size_t i = 0; i < event.update_count; i++)
@@ -754,7 +845,10 @@ void RuntimeController::drain_pending_events_() {
     PendingEvent event = this->pending_events_[0];
     for (size_t i = 1; i < this->pending_event_count_; i++)
       this->pending_events_[i - 1] = this->pending_events_[i];
-    this->pending_events_[--this->pending_event_count_] = PendingEvent{};
+    auto &last = this->pending_events_[--this->pending_event_count_];
+    last.kind = PendingEventKind::EVENT;
+    last.name[0] = '\0';
+    last.update_count = 0;
 
     if (event.kind == PendingEventKind::EVENT) {
       this->event(event.name);
@@ -772,7 +866,7 @@ void RuntimeController::run_named_action_(const char *name) {
     return;
   }
   for (size_t i = 0; i < this->pending_action_count_; i++) {
-    if (this->pending_actions_[i] != nullptr && strcmp(this->pending_actions_[i], name) == 0) {
+    if (str_eq(this->pending_actions_[i], name)) {
       if (this->debug_)
         ESP_LOGI(TAG, "ACTION_SKIP_DUP seq=%" PRIu32 " name=%s", this->sequence_, name);
       return;

@@ -15,9 +15,6 @@ runtime_controller:
     micro_wake_word: mww
     media_player: speaker_media_player
     voip_stack: phone
-  state_outputs:
-    activity_mask: g_activity_mask
-    sequence: g_runtime_seq
   actions:
     voice_start:
       - voice_assistant.start:

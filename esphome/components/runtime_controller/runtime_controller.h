@@ -21,9 +21,12 @@ namespace runtime_controller {
 
 class RuntimeController : public Component {
  public:
+  static constexpr uint8_t INVALID_ACTIVITY = 0xFF;
+
   struct ActivityUpdate {
     const char *name{nullptr};
     bool active{false};
+    uint8_t index{INVALID_ACTIVITY};
   };
 
   void setup() override;
@@ -117,7 +120,10 @@ class RuntimeController : public Component {
   void publish_state_outputs_();
   void apply_generic_outputs_();
   bool set_activity_value_(const char *name, bool active);
+  bool set_activity_value_by_index_(int index, bool active);
   bool apply_activity_update_(const char *name, bool active);
+  bool apply_activity_update_(const ActivityUpdate &update);
+  bool apply_activity_update_by_index_(int index, bool active);
   bool set_activity_value_if_known_(const char *name, bool active);
   void commit_outputs_(const char *reason, uint32_t old_mask, const ResolvedPolicies &old_policies);
   bool sync_voip_activity_();
@@ -126,6 +132,7 @@ class RuntimeController : public Component {
   int find_action_(const char *name) const;
   bool rule_matches_(const EventRule &rule) const;
   bool derived_matches_(const DerivedActivity &derived) const;
+  bool is_activity_active_(const char *name, uint8_t index) const;
   bool apply_derived_activities_();
   bool enqueue_event_(const char *name);
   bool enqueue_activity_update_(const char *name, bool active);
@@ -169,6 +176,7 @@ class RuntimeController : public Component {
     const char *event{nullptr};
     const char *activity{nullptr};
     bool active{false};
+    uint8_t activity_index{INVALID_ACTIVITY};
   };
   struct EventRule {
     const char *event{nullptr};
@@ -177,6 +185,12 @@ class RuntimeController : public Component {
     const char *any_active[8]{};
     const char *all_active[8]{};
     const char *none_active[8]{};
+    uint8_t any_active_index[8]{INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY,
+                                INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY};
+    uint8_t all_active_index[8]{INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY,
+                                INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY};
+    uint8_t none_active_index[8]{INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY,
+                                 INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY};
     size_t update_count{0};
     size_t any_count{0};
     size_t all_count{0};
@@ -184,9 +198,16 @@ class RuntimeController : public Component {
   };
   struct DerivedActivity {
     const char *activity{nullptr};
+    uint8_t activity_index{INVALID_ACTIVITY};
     const char *any_active[8]{};
     const char *all_active[8]{};
     const char *none_active[8]{};
+    uint8_t any_active_index[8]{INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY,
+                                INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY};
+    uint8_t all_active_index[8]{INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY,
+                                INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY};
+    uint8_t none_active_index[8]{INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY,
+                                 INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY, INVALID_ACTIVITY};
     size_t any_count{0};
     size_t all_count{0};
     size_t none_count{0};
