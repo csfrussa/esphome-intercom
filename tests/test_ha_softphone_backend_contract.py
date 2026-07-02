@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
+ENDPOINT_RUNTIME = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 
@@ -50,7 +51,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("_set_ha_softphone_call_state(", bridge_branch)
 
     def test_inbound_bridge_completion_does_not_mutate_ha_softphone(self) -> None:
-        body = _function_body(self.source, "_async_start_sip_endpoint")
+        endpoint_runtime = ENDPOINT_RUNTIME.read_text()
+        body = _function_body(endpoint_runtime, "async_start_sip_endpoint")
         bridge_path = body.split("routeable_sip_target =", 1)[1]
         bridge_path = bridge_path.split("ha_softphone_active = _ha_softphone_has_active_call", 1)[0]
         self.assertIn("_set_sip_bridge_call_state(", bridge_path)

@@ -8,7 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BACKEND = ROOT / "custom_components" / "voip_stack" / "__init__.py"
+BACKEND = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
