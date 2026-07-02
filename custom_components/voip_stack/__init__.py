@@ -3400,6 +3400,7 @@ async def _async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 finish_task = hass.async_create_task(_finish_bridge(result))
                 registry.client_watchers[client.dialog_ids.call_id] = finish_task
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        if not force_ha_softphone and decision.action is RouteAction.ANSWER_HA:
             ha_softphone_active = _ha_softphone_has_active_call(hass, ignore_call_id=invite.call_id)
             active_media = len(registry.softphone_media)
             if pending or active_media or ha_softphone_active:

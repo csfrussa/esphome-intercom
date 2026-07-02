@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace esphome::runtime_fsm {
+namespace esphome::runtime_controller {
 
 static constexpr size_t MAX_POLICIES = 8;
 static constexpr size_t MAX_ACTIVITY_POLICIES = 8;
@@ -30,4 +30,4 @@ struct ResolvedPolicies {
 ResolvedPolicies reduce_generic_activities(const GenericActivity *activities, size_t count);
 const char *find_policy_value(const ResolvedPolicies &output, const char *policy, const char *fallback = nullptr);
 
-}  // namespace esphome::runtime_fsm
+}  // namespace esphome::runtime_controller

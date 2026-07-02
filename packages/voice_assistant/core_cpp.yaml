@@ -1,5 +1,5 @@
 # =============================================================================
-# Voice Assistant + Micro Wake Word forwarding-only core for runtime_fsm.
+# Voice Assistant + Micro Wake Word forwarding-only core for runtime_controller.
 # =============================================================================
 
 voice_assistant:
@@ -7,16 +7,16 @@ voice_assistant:
   media_player: speaker_media_player
   tts_playback_start_timeout: 10s
   on_start:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_start
   on_listening:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_listening
   on_stt_vad_end:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_thinking
   on_stt_end:
     - script.execute:
@@ -27,27 +27,27 @@ voice_assistant:
         condition:
           lambda: 'return !x.empty();'
         then:
-          - runtime_fsm.event:
-              id: runtime_controller
+          - runtime_controller.event:
+              id: runtime
               event: va_responding
   on_tts_start:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_responding
     - script.execute:
         id: ui_tts_started
         text: !lambda 'return x;'
   on_end:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_end
   on_idle:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_idle
   on_error:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_error
   on_client_connected:
     - logger.log:
@@ -56,16 +56,16 @@ voice_assistant:
     - globals.set:
         id: init_in_progress
         value: "false"
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_client_connected
     - script.execute: start_mww_when_ready
   on_client_disconnected:
     - logger.log:
         tag: va
         format: "VA: client disconnected"
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: va_client_disconnected
 
 micro_wake_word:
@@ -75,6 +75,6 @@ micro_wake_word:
     - globals.set:
         id: g_last_wake_word
         value: !lambda 'return wake_word;'
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: wake_word

@@ -1,6 +1,6 @@
-# runtime_fsm
+# runtime_controller
 
-`runtime_fsm` is a generic ESPHome reducer for devices where many independent
+`runtime_controller` is a generic ESPHome reducer for devices where many independent
 runtime facts must drive the same outputs.
 
 It is not a Voice Assistant component, not a LED component and not an intercom
@@ -33,7 +33,7 @@ mute callback changes the same LED
 That design breaks because every callback has to know what every other callback
 is doing.
 
-With `runtime_fsm`, callbacks stop rendering outputs. They only say what
+With `runtime_controller`, callbacks stop rendering outputs. They only say what
 happened:
 
 ```text
@@ -74,7 +74,7 @@ last callback wins even when it is not the most important one. This creates
 short flashes, stuck LEDs, released ducking during TTS, wrong ringtone state,
 or UI that says "media" while an intercom call is active.
 
-`runtime_fsm` fixes the ownership model:
+`runtime_controller` fixes the ownership model:
 
 - callbacks report facts;
 - the reducer owns the combined state;
@@ -87,7 +87,7 @@ decisions are made from events and current activities.
 
 ## When To Use It
 
-Use `runtime_fsm` when several independent features must control the same
+Use `runtime_controller` when several independent features must control the same
 outputs:
 
 - media playback and Voice Assistant both drive the same LED;
@@ -151,7 +151,7 @@ The problem is ownership. If media is playing, then TTS starts, then TTS ends,
 in_call and a media callback fires, media can steal the LED from the call.
 Every callback has to remember every other feature.
 
-### With `runtime_fsm`
+### With `runtime_controller`
 
 With the reducer, callbacks report facts only:
 
@@ -159,31 +159,31 @@ With the reducer, callbacks report facts only:
 media_player:
   - id: speaker_media_player
     on_play:
-      - runtime_fsm.event:
+      - runtime_controller.event:
           id: runtime
           event: media_started
     on_idle:
-      - runtime_fsm.event:
+      - runtime_controller.event:
           id: runtime
           event: media_stopped
 
 voice_assistant:
   on_tts_start:
-    - runtime_fsm.event:
+    - runtime_controller.event:
         id: runtime
         event: assistant_started
   on_end:
-    - runtime_fsm.event:
+    - runtime_controller.event:
         id: runtime
         event: assistant_finished
 
 voip_stack:
   on_in_call:
-    - runtime_fsm.event:
+    - runtime_controller.event:
         id: runtime
         event: call_started
   on_hangup:
-    - runtime_fsm.event:
+    - runtime_controller.event:
         id: runtime
         event: call_ended
 ```
@@ -191,7 +191,7 @@ voip_stack:
 The state and output policy live in one place:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   id: runtime
 
   activities:
@@ -269,7 +269,7 @@ Callbacks invoke events:
 
 ```yaml
 on_play:
-  - runtime_fsm.event:
+  - runtime_controller.event:
       id: runtime
       event: media_playing
 ```
@@ -336,7 +336,7 @@ publishing half-updated state.
 
 ## Runtime Order
 
-When `runtime_fsm.event` is called, the component does this:
+When `runtime_controller.event` is called, the component does this:
 
 1. Finds the configured event.
 2. Tests event `cases` against the current activity snapshot.
@@ -356,7 +356,7 @@ another event, but that event is queued until the current commit is finished.
 
 The component is useful when two or more callbacks want to control the same
 thing. Instead of every callback writing the LED, display or audio mixer
-directly, callbacks only report facts. `runtime_fsm` decides the final output.
+directly, callbacks only report facts. `runtime_controller` decides the final output.
 
 Each step below is complete enough to compile once the referenced ESPHome
 components exist in your YAML. The names are deliberately ordinary YAML names:
@@ -387,7 +387,7 @@ script:
 Then define facts, events and the policy that maps facts to that output:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   id: runtime
 
   activities:
@@ -427,11 +427,11 @@ media_player:
   - platform: speaker_source
     # ...
     on_play:
-      - runtime_fsm.event:
+      - runtime_controller.event:
           id: runtime
           event: media_started
     on_idle:
-      - runtime_fsm.event:
+      - runtime_controller.event:
           id: runtime
           event: media_stopped
 ```
@@ -439,7 +439,7 @@ media_player:
 ### 2. Add A Second Output: Audio Policy
 
 Add another global and script. This is where you define what "duck" means for
-your hardware. `runtime_fsm` does not know about mixers or ducking.
+your hardware. `runtime_controller` does not know about mixers or ducking.
 
 ```yaml
 globals:
@@ -471,7 +471,7 @@ script:
 Then add the policy to the same reducer:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   # ...
   activities:
     idle:
@@ -532,7 +532,7 @@ script:
                 decibel_reduction: 0
                 duration: 500ms
 
-runtime_fsm:
+runtime_controller:
   id: runtime
 
   activities:
@@ -591,7 +591,7 @@ display idle, ringtone stop, timer alarm stop, audio normal.
 Now add activities that can overlap with media:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   # ...
   activities:
     media:
@@ -652,7 +652,7 @@ Use `set_activities` when a callback must change several facts atomically:
 
 ```yaml
 on_idle:
-  - runtime_fsm.set_activities:
+  - runtime_controller.set_activities:
       id: runtime
       set:
         media: false
@@ -668,7 +668,7 @@ Actions are named ESPHome automations the reducer may request. The action body
 is still normal YAML:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   actions:
     voice_start:
       - voice_assistant.start:
@@ -754,7 +754,7 @@ Some facts should not overlap. For example, a Voice Assistant cannot be
 listening and thinking at the same time. Put those activities in a group:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   groups:
     va: [va_starting, va_listening, va_thinking, va_responding]
 ```
@@ -810,11 +810,11 @@ media_player:
   - platform: speaker_source
     id: speaker_media_player
     on_play:
-      - runtime_fsm.event:
+      - runtime_controller.event:
           id: runtime
           event: media_playing
     on_idle:
-      - runtime_fsm.event:
+      - runtime_controller.event:
           id: runtime
           event: media_idle
 ```
@@ -867,10 +867,10 @@ action: action_name
 ## Grouped Updates
 
 When one callback needs to change several activities, use
-`runtime_fsm.set_activities` so they are committed as one reducer snapshot:
+`runtime_controller.set_activities` so they are committed as one reducer snapshot:
 
 ```yaml
-- runtime_fsm.set_activities:
+- runtime_controller.set_activities:
     id: runtime
     set:
       media: false
@@ -881,10 +881,10 @@ When one callback needs to change several activities, use
 This avoids visible intermediate states such as "media" for one loop before
 "idle".
 
-For one fact, use `runtime_fsm.set_activity`:
+For one fact, use `runtime_controller.set_activity`:
 
 ```yaml
-- runtime_fsm.set_activity:
+- runtime_controller.set_activity:
     id: runtime
     activity: no_ha
     active: true
@@ -901,7 +901,7 @@ activities:
     priority: 980
 
 # This exists automatically:
-- runtime_fsm.event:
+- runtime_controller.event:
     id: runtime
     event: no_ha
 ```
@@ -911,7 +911,7 @@ each callback means. Disable auto events if you want every accepted event name
 to be declared manually:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   auto_events: false
 ```
 
@@ -921,7 +921,7 @@ Derived activities are computed from other activities. They are useful when a
 combined state should override both inputs.
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   derived_activities:
     - name: both_muted
       when:
@@ -944,7 +944,7 @@ The component is generic, but this project also provides an optional
 native component.
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   id: runtime
   voip:
     id: phone
@@ -970,17 +970,17 @@ This automatically creates activities named `voip:ringing`,
 `voip:calling`, `voip:in_call`, etc. If `voip:` is omitted, no
 VoIP observer code is compiled.
 
-Intercom signaling and transport still belong to `voip_stack`; `runtime_fsm`
+Intercom signaling and transport still belong to `voip_stack`; `runtime_controller`
 only observes state and resolves outputs.
 
 ## Actions Reference
 
-### `runtime_fsm.event`
+### `runtime_controller.event`
 
 Runs a configured event:
 
 ```yaml
-- runtime_fsm.event:
+- runtime_controller.event:
     id: runtime
     event: media_playing
 ```
@@ -988,7 +988,7 @@ Runs a configured event:
 `event` is templatable:
 
 ```yaml
-- runtime_fsm.event:
+- runtime_controller.event:
     id: runtime
     event: !lambda 'return id(my_sensor).state ? "active" : "idle";'
 ```
@@ -1000,12 +1000,12 @@ dump: true       # dump reducer state after the event
 reason: "debug" # text included in debug dump
 ```
 
-### `runtime_fsm.set_activity`
+### `runtime_controller.set_activity`
 
 Sets one activity directly:
 
 ```yaml
-- runtime_fsm.set_activity:
+- runtime_controller.set_activity:
     id: runtime
     activity: no_wifi
     active: true
@@ -1013,12 +1013,12 @@ Sets one activity directly:
 
 `activity` and `active` are templatable.
 
-### `runtime_fsm.set_activities`
+### `runtime_controller.set_activities`
 
 Sets several activities atomically:
 
 ```yaml
-- runtime_fsm.set_activities:
+- runtime_controller.set_activities:
     id: runtime
     set:
       media: false
@@ -1026,34 +1026,34 @@ Sets several activities atomically:
       va_responding: false
 ```
 
-### `runtime_fsm.request_action`
+### `runtime_controller.request_action`
 
 Runs a named action without changing activities:
 
 ```yaml
-- runtime_fsm.request_action:
+- runtime_controller.request_action:
     id: runtime
     action: voice_stop
 ```
 
-### `runtime_fsm.dump`
+### `runtime_controller.dump`
 
 Logs the current reducer snapshot:
 
 ```yaml
-- runtime_fsm.dump:
+- runtime_controller.dump:
     id: runtime
     reason: "button pressed"
 ```
 
-### `runtime_fsm.is_active`
+### `runtime_controller.is_active`
 
 Condition for automations:
 
 ```yaml
 if:
   condition:
-    runtime_fsm.is_active:
+    runtime_controller.is_active:
       id: runtime
       activity: voip:in_call
   then:
@@ -1110,7 +1110,7 @@ script:
           format: "LED status %d"
           args: [value]
 
-runtime_fsm:
+runtime_controller:
   policies:
     led_status:
       output: g_led_state
@@ -1151,7 +1151,7 @@ be simplified by using groups, derived activities, or fewer output policies.
 Set `debug: true` during profile development:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   id: runtime
   debug: true
 ```
@@ -1169,7 +1169,7 @@ Debug mode compiles extra reducer logs:
 You can dump state manually:
 
 ```yaml
-- runtime_fsm.dump:
+- runtime_controller.dump:
     id: runtime
     reason: "after wake word"
 ```
@@ -1182,10 +1182,10 @@ The pure reducer logic can be tested without flashing an ESP:
 
 ```bash
 g++ -std=c++17 -Wall -Wextra -I. \
-  tests/runtime_fsm_state_test.cpp \
-  esphome/components/runtime_fsm/runtime_fsm_state.cpp \
-  -o /tmp/runtime_fsm_state_test
-/tmp/runtime_fsm_state_test
+  tests/runtime_controller_state_test.cpp \
+  esphome/components/runtime_controller/runtime_controller_state.cpp \
+  -o /tmp/runtime_controller_state_test
+/tmp/runtime_controller_state_test
 ```
 
 The maintained test covers:
@@ -1222,7 +1222,7 @@ Avoid these:
 # Bad: callback writes LED directly and also tells the reducer.
 on_play:
   - light.turn_on: status_led
-  - runtime_fsm.event:
+  - runtime_controller.event:
       id: runtime
       event: media_playing
 ```
@@ -1250,7 +1250,7 @@ activities:
 # Bad: delay guesses lifecycle instead of using component events.
 on_tts_start:
   - delay: 2s
-  - runtime_fsm.event:
+  - runtime_controller.event:
       id: runtime
       event: tts_finished
 ```
@@ -1259,11 +1259,11 @@ Prefer event-driven terminal states:
 
 ```yaml
 on_announcement:
-  - runtime_fsm.event:
+  - runtime_controller.event:
       id: runtime
       event: announcement_started
 on_idle:
-  - runtime_fsm.event:
+  - runtime_controller.event:
       id: runtime
       event: media_idle
 ```
@@ -1274,7 +1274,7 @@ The maintained full-experience profiles keep the reusable reducer configuration
 in:
 
 ```text
-packages/runtime_fsm/full_controller.yaml
+packages/runtime_controller/full_controller.yaml
 ```
 
 Voice Assistant, media player, timer, mute, connectivity and intercom packages

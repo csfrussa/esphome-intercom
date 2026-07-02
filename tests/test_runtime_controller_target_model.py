@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable target model for the next runtime FSM refactor.
+"""Executable target model for the next runtime controller refactor.
 
 These tests do not mirror today's YAML implementation line-by-line. They define
 the behavioral contract the refactor must satisfy before it replaces the
@@ -128,7 +128,7 @@ def reduce_runtime(facts: RuntimeFacts) -> RuntimeSnapshot:
     return RuntimeSnapshot("idle", LedSnapshot("idle", (0, 0, 0), None, "idle"), "normal", "stop", True)
 
 
-class RuntimeFsmTargetModelTest(unittest.TestCase):
+class RuntimeControllerTargetModelTest(unittest.TestCase):
     def assertNoMediaSpin(self, snapshot: RuntimeSnapshot) -> None:
         self.assertFalse(
             snapshot.led.owner == "media" and snapshot.led.effect == "Spin",

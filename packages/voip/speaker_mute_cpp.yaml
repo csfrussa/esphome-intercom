@@ -1,12 +1,12 @@
 # =============================================================================
-# Common speaker mute switch for runtime_fsm full profiles.
+# Common speaker mute switch for runtime_controller full profiles.
 #
 # Provides:
 #   switch: speaker_mute
 #
 # Prerequisites:
 #   - id `hw_speaker`         : speaker
-#   - id `runtime_controller` : runtime_fsm
+#   - id `runtime_controller` : runtime_controller
 # =============================================================================
 
 switch:
@@ -23,8 +23,8 @@ switch:
           tag: mute
           format: "Speaker mute ON"
       - speaker.mute_on: hw_speaker
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: speaker_muted
     on_turn_off:
       - logger.log:
@@ -32,6 +32,6 @@ switch:
           tag: mute
           format: "Speaker mute OFF"
       - speaker.mute_off: hw_speaker
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: speaker_unmuted

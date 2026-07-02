@@ -592,6 +592,7 @@ class VoipStack : public Component {
   // First peer audio frame closes the 200 OK echo loop.
   std::atomic<bool> first_audio_received_{false};
   std::atomic<uint32_t> last_peer_audio_ms_{0};
+  std::atomic<uint32_t> media_timeout_rtp_rx_packets_{0};
 
   bool auto_answer_{true};
   bool do_not_disturb_{false};

@@ -1,48 +1,62 @@
-#include "runtime_fsm.h"
+#include "runtime_controller.h"
 
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
+#include "esphome/components/light/light_state.h"
 
 #include <cstdio>
 #include <cstring>
 #include <iterator>
 
-#ifdef USE_RUNTIME_FSM_VOIP
+#ifdef USE_RUNTIME_CONTROLLER_VOIP
 #include "esphome/components/voip_stack/voip_stack.h"
 #endif
 
-namespace esphome::runtime_fsm {
+namespace esphome::runtime_controller {
 
-static const char *const TAG = "runtime_fsm";
+static const char *const TAG = "runtime_controller";
 
-void RuntimeFsm::setup() {
+void RuntimeController::setup() {
   if (this->config_error_) {
-    ESP_LOGE(TAG, "Runtime FSM configuration overflow; refusing to run with a truncated reducer table");
+    ESP_LOGE(TAG, "Runtime Controller configuration overflow; refusing to run with a truncated reducer table");
     this->mark_failed();
     return;
   }
   const ResolvedPolicies old_policies = this->resolved_policies_;
   const uint32_t old_mask = this->generic_activity_mask_;
+#ifdef USE_RUNTIME_CONTROLLER_VOIP
+  if (this->voip_ != nullptr && !this->voip_callback_registered_) {
+    this->voip_callback_registered_ = true;
+    this->voip_->add_on_state_callback([this](voip_stack::CallState) { this->on_voip_event(); });
+  }
+#endif
   (void) this->sync_voip_activity_();
   (void) this->apply_derived_activities_();
   this->apply_generic_outputs_();
   this->commit_outputs_("setup", old_mask, old_policies);
+  if (this->pending_action_count_ == 0 && this->pending_event_count_ == 0)
+    this->disable_loop();
 }
 
-void RuntimeFsm::loop() {
+void RuntimeController::loop() {
   this->drain_pending_actions_();
 
   const uint32_t old_mask = this->generic_activity_mask_;
   const ResolvedPolicies old_policies = this->resolved_policies_;
-  if (!this->sync_voip_activity_())
+  if (!this->sync_voip_activity_()) {
+    if (this->pending_action_count_ == 0 && this->pending_event_count_ == 0)
+      this->disable_loop();
     return;
+  }
   (void) this->apply_derived_activities_();
   this->apply_generic_outputs_();
   this->commit_outputs_("observer", old_mask, old_policies);
+  if (this->pending_action_count_ == 0 && this->pending_event_count_ == 0)
+    this->disable_loop();
 }
 
-void RuntimeFsm::dump_config() {
-  ESP_LOGCONFIG(TAG, "Runtime FSM:");
+void RuntimeController::dump_config() {
+  ESP_LOGCONFIG(TAG, "Runtime Controller:");
   ESP_LOGCONFIG(TAG, "  Activities: %u/%u", static_cast<unsigned>(this->activity_count_),
                 static_cast<unsigned>(MAX_ACTIVITIES));
   ESP_LOGCONFIG(TAG, "  Actions: %u/%u", static_cast<unsigned>(this->action_count_),
@@ -55,14 +69,14 @@ void RuntimeFsm::dump_config() {
                 static_cast<unsigned>(this->derived_activities_.size()));
   ESP_LOGCONFIG(TAG, "  Debug: %s", YESNO(this->debug_));
   ESP_LOGCONFIG(TAG, "  Config valid: %s", YESNO(!this->config_error_));
-#ifdef USE_RUNTIME_FSM_VOIP
+#ifdef USE_RUNTIME_CONTROLLER_VOIP
   ESP_LOGCONFIG(TAG, "  VoIP observer: %s", this->voip_ != nullptr ? "configured" : "missing");
 #endif
 }
 
-void RuntimeFsm::mark_config_error_() { this->config_error_ = true; }
+void RuntimeController::mark_config_error_() { this->config_error_ = true; }
 
-void RuntimeFsm::add_activity(const char *name, int16_t priority, bool initial) {
+void RuntimeController::add_activity(const char *name, int16_t priority, bool initial) {
   if (name == nullptr || name[0] == '\0')
     return;
   if (this->activity_count_ >= MAX_ACTIVITIES) {
@@ -79,14 +93,14 @@ void RuntimeFsm::add_activity(const char *name, int16_t priority, bool initial) 
   this->activities_[this->activity_count_++] = activity;
 }
 
-void RuntimeFsm::set_activity_group(const char *activity_name, const char *group) {
+void RuntimeController::set_activity_group(const char *activity_name, const char *group) {
   int index = this->find_activity_(activity_name);
   if (index < 0 || group == nullptr || group[0] == '\0')
     return;
   this->activities_[index].group = group;
 }
 
-void RuntimeFsm::add_activity_policy(const char *activity_name, const char *policy, const char *value) {
+void RuntimeController::add_activity_policy(const char *activity_name, const char *policy, const char *value) {
   int index = this->find_activity_(activity_name);
   if (index < 0) {
     ESP_LOGE(TAG, "Cannot add policy '%s': unknown activity '%s'", policy != nullptr ? policy : "-",
@@ -103,7 +117,7 @@ void RuntimeFsm::add_activity_policy(const char *activity_name, const char *poli
   activity.policies[activity.policy_count++] = PolicyValue{policy, value};
 }
 
-void RuntimeFsm::add_event_activity(const char *event, const char *activity, bool active) {
+void RuntimeController::add_event_activity(const char *event, const char *activity, bool active) {
   if (event == nullptr || event[0] == '\0' || activity == nullptr || activity[0] == '\0')
     return;
   if (this->event_update_count_ >= this->event_updates_.size()) {
@@ -114,7 +128,7 @@ void RuntimeFsm::add_event_activity(const char *event, const char *activity, boo
   this->event_updates_[this->event_update_count_++] = EventActivity{event, activity, active};
 }
 
-void RuntimeFsm::add_event_rule(const char *event, const char *action) {
+void RuntimeController::add_event_rule(const char *event, const char *action) {
   if (event == nullptr || event[0] == '\0')
     return;
   if (this->event_rule_count_ >= this->event_rules_.size()) {
@@ -125,7 +139,7 @@ void RuntimeFsm::add_event_rule(const char *event, const char *action) {
   this->event_rules_[this->event_rule_count_++] = EventRule{event, action};
 }
 
-void RuntimeFsm::add_event_rule_update(const char *activity, bool active) {
+void RuntimeController::add_event_rule_update(const char *activity, bool active) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
@@ -137,7 +151,7 @@ void RuntimeFsm::add_event_rule_update(const char *activity, bool active) {
   rule.updates[rule.update_count++] = ActivityUpdate{activity, active};
 }
 
-void RuntimeFsm::add_event_rule_any_active(const char *activity) {
+void RuntimeController::add_event_rule_any_active(const char *activity) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
@@ -149,7 +163,7 @@ void RuntimeFsm::add_event_rule_any_active(const char *activity) {
   rule.any_active[rule.any_count++] = activity;
 }
 
-void RuntimeFsm::add_event_rule_all_active(const char *activity) {
+void RuntimeController::add_event_rule_all_active(const char *activity) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
@@ -161,7 +175,7 @@ void RuntimeFsm::add_event_rule_all_active(const char *activity) {
   rule.all_active[rule.all_count++] = activity;
 }
 
-void RuntimeFsm::add_event_rule_none_active(const char *activity) {
+void RuntimeController::add_event_rule_none_active(const char *activity) {
   if (this->event_rule_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &rule = this->event_rules_[this->event_rule_count_ - 1];
@@ -173,7 +187,7 @@ void RuntimeFsm::add_event_rule_none_active(const char *activity) {
   rule.none_active[rule.none_count++] = activity;
 }
 
-void RuntimeFsm::add_derived_activity(const char *activity) {
+void RuntimeController::add_derived_activity(const char *activity) {
   if (activity == nullptr || activity[0] == '\0')
     return;
   if (this->derived_activity_count_ >= this->derived_activities_.size()) {
@@ -184,7 +198,7 @@ void RuntimeFsm::add_derived_activity(const char *activity) {
   this->derived_activities_[this->derived_activity_count_++] = DerivedActivity{activity};
 }
 
-void RuntimeFsm::add_derived_any_active(const char *activity) {
+void RuntimeController::add_derived_any_active(const char *activity) {
   if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
@@ -196,7 +210,7 @@ void RuntimeFsm::add_derived_any_active(const char *activity) {
   derived.any_active[derived.any_count++] = activity;
 }
 
-void RuntimeFsm::add_derived_all_active(const char *activity) {
+void RuntimeController::add_derived_all_active(const char *activity) {
   if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
@@ -208,7 +222,7 @@ void RuntimeFsm::add_derived_all_active(const char *activity) {
   derived.all_active[derived.all_count++] = activity;
 }
 
-void RuntimeFsm::add_derived_none_active(const char *activity) {
+void RuntimeController::add_derived_none_active(const char *activity) {
   if (this->derived_activity_count_ == 0 || activity == nullptr || activity[0] == '\0')
     return;
   auto &derived = this->derived_activities_[this->derived_activity_count_ - 1];
@@ -220,7 +234,7 @@ void RuntimeFsm::add_derived_none_active(const char *activity) {
   derived.none_active[derived.none_count++] = activity;
 }
 
-void RuntimeFsm::add_action_trigger(const char *name, Trigger<> *trigger) {
+void RuntimeController::add_action_trigger(const char *name, Trigger<> *trigger) {
   if (name == nullptr || name[0] == '\0' || trigger == nullptr)
     return;
   if (this->action_count_ >= MAX_ACTIONS) {
@@ -231,7 +245,7 @@ void RuntimeFsm::add_action_trigger(const char *name, Trigger<> *trigger) {
   this->actions_[this->action_count_++] = NamedAction{name, trigger};
 }
 
-void RuntimeFsm::add_policy_value_trigger(const char *policy, const char *value, Trigger<> *trigger) {
+void RuntimeController::add_policy_value_trigger(const char *policy, const char *value, Trigger<> *trigger) {
   if (policy == nullptr || policy[0] == '\0' || value == nullptr || trigger == nullptr)
     return;
   if (this->policy_value_action_count_ >= this->policy_value_actions_.size()) {
@@ -242,7 +256,7 @@ void RuntimeFsm::add_policy_value_trigger(const char *policy, const char *value,
   this->policy_value_actions_[this->policy_value_action_count_++] = PolicyValueAction{policy, value, trigger};
 }
 
-void RuntimeFsm::add_policy_output(const char *policy, const char *value, int32_t output) {
+void RuntimeController::add_policy_output(const char *policy, const char *value, int32_t output) {
   if (policy == nullptr || policy[0] == '\0' || value == nullptr)
     return;
   if (this->policy_output_count_ >= this->policy_outputs_.size()) {
@@ -253,7 +267,7 @@ void RuntimeFsm::add_policy_output(const char *policy, const char *value, int32_
   this->policy_outputs_[this->policy_output_count_++] = PolicyOutput{policy, value, output};
 }
 
-void RuntimeFsm::set_policy_change_trigger(const char *policy, Trigger<int32_t> *trigger) {
+void RuntimeController::set_policy_change_trigger(const char *policy, Trigger<int32_t> *trigger) {
   if (policy == nullptr || policy[0] == '\0' || trigger == nullptr)
     return;
   if (this->policy_change_trigger_count_ >= this->policy_change_triggers_.size()) {
@@ -264,7 +278,19 @@ void RuntimeFsm::set_policy_change_trigger(const char *policy, Trigger<int32_t> 
   this->policy_change_triggers_[this->policy_change_trigger_count_++] = PolicyChangeTrigger{policy, trigger};
 }
 
-void RuntimeFsm::on_voip_event() {
+void RuntimeController::add_led_state(const char *state, float red, float green, float blue, float brightness,
+                                      const char *effect) {
+  if (state == nullptr || state[0] == '\0')
+    return;
+  if (this->led_state_count_ >= this->led_states_.size()) {
+    ESP_LOGE(TAG, "Cannot add LED state '%s': maximum reached", state);
+    this->mark_config_error_();
+    return;
+  }
+  this->led_states_[this->led_state_count_++] = LedState{state, red, green, blue, brightness, effect};
+}
+
+void RuntimeController::on_voip_event() {
   const uint32_t old_mask = this->generic_activity_mask_;
   const ResolvedPolicies old_policies = this->resolved_policies_;
   if (!this->sync_voip_activity_())
@@ -274,7 +300,7 @@ void RuntimeFsm::on_voip_event() {
   this->commit_outputs_("voip_event", old_mask, old_policies);
 }
 
-void RuntimeFsm::event(const char *name) {
+void RuntimeController::event(const char *name) {
   if (this->dispatching_) {
     (void) this->enqueue_event_(name);
     return;
@@ -326,7 +352,7 @@ void RuntimeFsm::event(const char *name) {
   }
 }
 
-void RuntimeFsm::set_activity(const char *name, bool active) {
+void RuntimeController::set_activity(const char *name, bool active) {
   if (this->dispatching_) {
     (void) this->enqueue_activity_update_(name, active);
     return;
@@ -342,7 +368,7 @@ void RuntimeFsm::set_activity(const char *name, bool active) {
   this->commit_outputs_(name != nullptr ? name : "set_activity", old_mask, old_policies);
 }
 
-void RuntimeFsm::set_activities(const ActivityUpdate *updates, size_t count) {
+void RuntimeController::set_activities(const ActivityUpdate *updates, size_t count) {
   if (updates == nullptr || count == 0)
     return;
   if (this->dispatching_) {
@@ -363,12 +389,12 @@ void RuntimeFsm::set_activities(const ActivityUpdate *updates, size_t count) {
   this->commit_outputs_("set_activities", old_mask, old_policies);
 }
 
-void RuntimeFsm::request_action(const char *name) {
+void RuntimeController::request_action(const char *name) {
   this->run_named_action_(name);
 }
 
-void RuntimeFsm::dump_state(const char *reason) {
-#ifdef USE_RUNTIME_FSM_DEBUG
+void RuntimeController::dump_state(const char *reason) {
+#ifdef USE_RUNTIME_CONTROLLER_DEBUG
   ESP_LOGI(TAG, "SNAPSHOT reason=%s seq=%" PRIu32 " mask=0x%08" PRIx32,
            reason != nullptr ? reason : "-", this->sequence_, this->generic_activity_mask_);
   for (size_t i = 0; i < this->activity_count_; i++) {
@@ -383,7 +409,7 @@ void RuntimeFsm::dump_state(const char *reason) {
     ESP_LOGI(TAG, "  policy %s=%s output=%" PRId32, policy.policy != nullptr ? policy.policy : "-",
              policy.value != nullptr ? policy.value : "-", this->resolve_policy_output_(policy.policy, policy.value));
   }
-#ifdef USE_RUNTIME_FSM_VOIP
+#ifdef USE_RUNTIME_CONTROLLER_VOIP
   if (this->voip_ != nullptr) {
     ESP_LOGI(TAG, "  observed voip=%s activity=%s", this->voip_->get_call_state_str(),
              this->last_voip_activity_[0] != '\0' ? this->last_voip_activity_ : "-");
@@ -398,14 +424,14 @@ void RuntimeFsm::dump_state(const char *reason) {
 }
 #endif
 
-bool RuntimeFsm::is_activity_active(const char *name) const {
+bool RuntimeController::is_activity_active(const char *name) const {
   const int index = this->find_activity_(name);
   if (index < 0)
     return false;
   return this->activities_[index].active;
 }
 
-bool RuntimeFsm::rule_matches_(const RuntimeFsm::EventRule &rule) const {
+bool RuntimeController::rule_matches_(const RuntimeController::EventRule &rule) const {
   if (rule.any_count > 0) {
     bool any = false;
     for (size_t i = 0; i < rule.any_count; i++)
@@ -424,7 +450,7 @@ bool RuntimeFsm::rule_matches_(const RuntimeFsm::EventRule &rule) const {
   return true;
 }
 
-bool RuntimeFsm::derived_matches_(const RuntimeFsm::DerivedActivity &derived) const {
+bool RuntimeController::derived_matches_(const RuntimeController::DerivedActivity &derived) const {
   if (derived.any_count > 0) {
     bool any = false;
     for (size_t i = 0; i < derived.any_count; i++)
@@ -443,7 +469,7 @@ bool RuntimeFsm::derived_matches_(const RuntimeFsm::DerivedActivity &derived) co
   return true;
 }
 
-bool RuntimeFsm::apply_derived_activities_() {
+bool RuntimeController::apply_derived_activities_() {
   bool changed = false;
   for (size_t i = 0; i < this->derived_activity_count_; i++) {
     const auto &derived = this->derived_activities_[i];
@@ -452,20 +478,20 @@ bool RuntimeFsm::apply_derived_activities_() {
   return changed;
 }
 
-void RuntimeFsm::publish_outputs_() {
+void RuntimeController::publish_outputs_() {
   this->publish_state_outputs_();
   if (this->output_script_ != nullptr)
     this->output_script_->execute();
 }
 
-void RuntimeFsm::publish_state_outputs_() {
+void RuntimeController::publish_state_outputs_() {
   if (this->activity_mask_output_.target != nullptr && this->activity_mask_output_.set != nullptr)
     this->activity_mask_output_.set(this->activity_mask_output_.target, this->generic_activity_mask_);
   if (this->sequence_output_.target != nullptr && this->sequence_output_.set != nullptr)
     this->sequence_output_.set(this->sequence_output_.target, this->sequence_);
 }
 
-void RuntimeFsm::apply_generic_outputs_() {
+void RuntimeController::apply_generic_outputs_() {
   std::array<GenericActivity, MAX_ACTIVITIES> generic{};
   for (size_t i = 0; i < this->activity_count_; i++) {
     generic[i].bit = this->activities_[i].bit;
@@ -480,7 +506,7 @@ void RuntimeFsm::apply_generic_outputs_() {
   this->resolved_policies_ = policies;
 }
 
-bool RuntimeFsm::set_activity_value_(const char *name, bool active) {
+bool RuntimeController::set_activity_value_(const char *name, bool active) {
   int index = this->find_activity_(name);
   if (index < 0) {
     ESP_LOGW(TAG, "Ignoring unknown activity '%s'", name != nullptr ? name : "-");
@@ -494,7 +520,7 @@ bool RuntimeFsm::set_activity_value_(const char *name, bool active) {
   return true;
 }
 
-bool RuntimeFsm::apply_activity_update_(const char *name, bool active) {
+bool RuntimeController::apply_activity_update_(const char *name, bool active) {
   int index = this->find_activity_(name);
   if (index < 0) {
     ESP_LOGW(TAG, "Ignoring unknown activity '%s'", name != nullptr ? name : "-");
@@ -518,11 +544,11 @@ bool RuntimeFsm::apply_activity_update_(const char *name, bool active) {
   return changed;
 }
 
-bool RuntimeFsm::set_activity_value_if_known_(const char *name, bool active) {
+bool RuntimeController::set_activity_value_if_known_(const char *name, bool active) {
   return this->find_activity_(name) >= 0 && this->apply_activity_update_(name, active);
 }
 
-void RuntimeFsm::commit_outputs_(const char *reason, uint32_t old_mask, const ResolvedPolicies &old_policies) {
+void RuntimeController::commit_outputs_(const char *reason, uint32_t old_mask, const ResolvedPolicies &old_policies) {
   if (old_mask == this->generic_activity_mask_) {
     bool policy_changed = old_policies.value_count != this->resolved_policies_.value_count;
     for (size_t i = 0; !policy_changed && i < this->resolved_policies_.value_count; i++) {
@@ -549,9 +575,9 @@ void RuntimeFsm::commit_outputs_(const char *reason, uint32_t old_mask, const Re
     this->drain_pending_events_();
 }
 
-void RuntimeFsm::build_voip_activity_name_(const char *state) {
+void RuntimeController::build_voip_activity_name_(const char *state) {
   this->voip_activity_[0] = '\0';
-#ifdef USE_RUNTIME_FSM_VOIP
+#ifdef USE_RUNTIME_CONTROLLER_VOIP
   if (this->voip_activity_prefix_ == nullptr || this->voip_activity_prefix_[0] == '\0' || state == nullptr ||
       state[0] == '\0')
     return;
@@ -562,8 +588,8 @@ void RuntimeFsm::build_voip_activity_name_(const char *state) {
 #endif
 }
 
-bool RuntimeFsm::sync_voip_activity_() {
-#ifdef USE_RUNTIME_FSM_VOIP
+bool RuntimeController::sync_voip_activity_() {
+#ifdef USE_RUNTIME_CONTROLLER_VOIP
   if (this->voip_ == nullptr || this->voip_activity_prefix_ == nullptr)
     return false;
 
@@ -584,13 +610,15 @@ bool RuntimeFsm::sync_voip_activity_() {
 #endif
 }
 
-void RuntimeFsm::run_policy_actions_(const ResolvedPolicies &old_policies, const ResolvedPolicies &new_policies) {
+void RuntimeController::run_policy_actions_(const ResolvedPolicies &old_policies, const ResolvedPolicies &new_policies) {
   for (size_t i = 0; i < new_policies.value_count; i++) {
     const char *policy = new_policies.values[i].policy;
     const char *value = new_policies.values[i].value;
     const char *old_value = find_policy_value(old_policies, policy, nullptr);
     if (old_value != nullptr && value != nullptr && strcmp(old_value, value) == 0)
       continue;
+    if (policy != nullptr && value != nullptr && strcmp(policy, "led_status") == 0)
+      this->apply_led_state_(value);
     for (size_t j = 0; j < this->policy_value_action_count_; j++) {
       const auto &action = this->policy_value_actions_[j];
       if (action.policy != nullptr && action.value != nullptr && strcmp(action.policy, policy) == 0 &&
@@ -620,7 +648,35 @@ void RuntimeFsm::run_policy_actions_(const ResolvedPolicies &old_policies, const
   }
 }
 
-int32_t RuntimeFsm::resolve_policy_output_(const char *policy, const char *value) const {
+void RuntimeController::apply_led_state_(const char *state) {
+  if (this->led_light_ == nullptr || state == nullptr)
+    return;
+  const LedState *match = nullptr;
+  for (size_t i = 0; i < this->led_state_count_; i++) {
+    if (this->led_states_[i].state != nullptr && strcmp(this->led_states_[i].state, state) == 0) {
+      match = &this->led_states_[i];
+      break;
+    }
+  }
+  if (match == nullptr) {
+    ESP_LOGW(TAG, "No LED mapping for led_status '%s'", state);
+    return;
+  }
+  if (match->brightness <= 0.0f) {
+    auto call = this->led_light_->turn_off();
+    call.set_save(false);
+    call.perform();
+    return;
+  }
+  auto call = this->led_light_->turn_on();
+  call.set_rgb(match->red, match->green, match->blue);
+  call.set_brightness(match->brightness);
+  call.set_effect(match->effect != nullptr ? match->effect : "None");
+  call.set_save(false);
+  call.perform();
+}
+
+int32_t RuntimeController::resolve_policy_output_(const char *policy, const char *value) const {
   if (policy == nullptr || value == nullptr)
     return 0;
   for (size_t i = 0; i < this->policy_output_count_; i++) {
@@ -632,7 +688,7 @@ int32_t RuntimeFsm::resolve_policy_output_(const char *policy, const char *value
   return 0;
 }
 
-int RuntimeFsm::find_activity_(const char *name) const {
+int RuntimeController::find_activity_(const char *name) const {
   if (name == nullptr)
     return -1;
   for (size_t i = 0; i < this->activity_count_; i++) {
@@ -642,7 +698,7 @@ int RuntimeFsm::find_activity_(const char *name) const {
   return -1;
 }
 
-int RuntimeFsm::find_action_(const char *name) const {
+int RuntimeController::find_action_(const char *name) const {
   if (name == nullptr)
     return -1;
   for (size_t i = 0; i < this->action_count_; i++) {
@@ -652,7 +708,7 @@ int RuntimeFsm::find_action_(const char *name) const {
   return -1;
 }
 
-bool RuntimeFsm::enqueue_event_(const char *name) {
+bool RuntimeController::enqueue_event_(const char *name) {
   if (name == nullptr || name[0] == '\0')
     return false;
   if (this->pending_event_count_ >= this->pending_events_.size()) {
@@ -665,15 +721,16 @@ bool RuntimeFsm::enqueue_event_(const char *name) {
   std::snprintf(event.name, sizeof(event.name), "%s", name);
   if (this->debug_)
     ESP_LOGI(TAG, "EVENT_QUEUE seq=%" PRIu32 " name=%s", this->sequence_, event.name);
+  this->enable_loop_soon_any_context();
   return true;
 }
 
-bool RuntimeFsm::enqueue_activity_update_(const char *name, bool active) {
+bool RuntimeController::enqueue_activity_update_(const char *name, bool active) {
   ActivityUpdate update{name, active};
   return this->enqueue_activity_updates_(&update, 1);
 }
 
-bool RuntimeFsm::enqueue_activity_updates_(const ActivityUpdate *updates, size_t count) {
+bool RuntimeController::enqueue_activity_updates_(const ActivityUpdate *updates, size_t count) {
   if (updates == nullptr || count == 0)
     return false;
   if (this->pending_event_count_ >= this->pending_events_.size()) {
@@ -688,10 +745,11 @@ bool RuntimeFsm::enqueue_activity_updates_(const ActivityUpdate *updates, size_t
     event.updates[i] = updates[i];
   if (this->debug_)
     ESP_LOGI(TAG, "SET_QUEUE seq=%" PRIu32 " count=%u", this->sequence_, static_cast<unsigned>(event.update_count));
+  this->enable_loop_soon_any_context();
   return true;
 }
 
-void RuntimeFsm::drain_pending_events_() {
+void RuntimeController::drain_pending_events_() {
   while (!this->dispatching_ && this->pending_event_count_ > 0) {
     PendingEvent event = this->pending_events_[0];
     for (size_t i = 1; i < this->pending_event_count_; i++)
@@ -706,7 +764,7 @@ void RuntimeFsm::drain_pending_events_() {
   }
 }
 
-void RuntimeFsm::run_named_action_(const char *name) {
+void RuntimeController::run_named_action_(const char *name) {
   if (name == nullptr || name[0] == '\0')
     return;
   if (this->find_action_(name) < 0) {
@@ -727,9 +785,10 @@ void RuntimeFsm::run_named_action_(const char *name) {
   if (this->debug_)
     ESP_LOGI(TAG, "ACTION_QUEUE seq=%" PRIu32 " name=%s", this->sequence_, name);
   this->pending_actions_[this->pending_action_count_++] = name;
+  this->enable_loop_soon_any_context();
 }
 
-void RuntimeFsm::execute_named_action_(const char *name) {
+void RuntimeController::execute_named_action_(const char *name) {
   int index = this->find_action_(name);
   if (index < 0) {
     ESP_LOGW(TAG, "Ignoring unknown queued action '%s'", name != nullptr ? name : "-");
@@ -740,7 +799,7 @@ void RuntimeFsm::execute_named_action_(const char *name) {
   this->actions_[index].trigger->trigger();
 }
 
-void RuntimeFsm::drain_pending_actions_() {
+void RuntimeController::drain_pending_actions_() {
   while (this->pending_action_count_ > 0) {
     const char *name = this->pending_actions_[0];
     for (size_t i = 1; i < this->pending_action_count_; i++)
@@ -750,4 +809,4 @@ void RuntimeFsm::drain_pending_actions_() {
   }
 }
 
-}  // namespace esphome::runtime_fsm
+}  // namespace esphome::runtime_controller

@@ -41,7 +41,7 @@ generic_image:
               return id(current_mode) == 0 &&
                      id(voice_assistant_phase) == ${voice_assist_replying_phase_id} &&
                      id(speaker_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING &&
-                     !id(runtime_controller).is_activity_active("announcement");
+                     !id(runtime).is_activity_active("announcement");
           then:
             - script.execute: apply_media_artwork
     on_image_error:
@@ -51,7 +51,7 @@ generic_image:
               return id(current_mode) == 0 &&
                      id(voice_assistant_phase) == ${voice_assist_replying_phase_id} &&
                      id(speaker_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING &&
-                     !id(runtime_controller).is_activity_active("announcement");
+                     !id(runtime).is_activity_active("announcement");
           then:
             - script.execute: apply_media_artwork
 

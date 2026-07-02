@@ -13,7 +13,8 @@
 #
 # HARDWARE (adapt GPIOs to YOUR board):
 #   - Board: Any ESP32-S3 with PSRAM
-#   - Flash: lighter than full AFE and intended for 4 MB S3 OTA layouts
+#   - Flash: 8 MB or larger. Full AEC + VA + VoIP + runtime controller no
+#     longer fits the default 4 MB OTA app partition.
 #   - Microphone: Any I2S MEMS mic on DIN pin
 #   - Speaker: Any I2S class-D amp on DOUT pin
 #   - Mic and speaker SHARE BCLK + LRCLK (same I2S bus, full-duplex)
@@ -33,35 +34,36 @@ substitutions:
   name: generic-s3
   friendly_name: Generic S3
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # Microphone ID for package mute switch
   mic_id: mic_main
+  runtime_controller_led_preset: rgb_single
 
 # =============================================================================
 # Package: shared VA + VoIP state machine
 # =============================================================================
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute_cpp.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_single.yaml@dev
-  led_state_full: github://n-IA-hane/esphome-intercom/packages/led/state_full_single.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
-  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@dev
-  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@dev
+  core: !include ../../../packages/va_voip_cpp.yaml
+  runtime_controller: !include ../../../packages/runtime_controller/full_controller.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_maintenance.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  speaker_mute: !include ../../../packages/voip/speaker_mute_cpp.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
+  speaker_media_player: !include ../../../packages/media_player/full_mono_48k_cpp.yaml
+  va_timers: !include ../../../packages/voice_assistant/timers_cpp.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  aec_controls: !include ../../../packages/esp_audio_stack/aec_controls.yaml
 
 esphome:
   name: ${name}
@@ -72,6 +74,7 @@ esphome:
 esp32:
   board: esp32-s3-devkitc-1
   variant: esp32s3
+  flash_size: 8MB
   framework:
     type: esp-idf
     advanced:
@@ -131,7 +134,6 @@ logger:
     mixer_speaker: INFO
     wifi: INFO
     json: INFO
-    voip_stack: INFO
     audio_processor: INFO
 
 wifi:
@@ -141,7 +143,7 @@ wifi:
 
 external_components:
   - source: ${ext_components_source}
-    components: [voip_stack, esp_audio_stack, esp_aec, audio_processor, runtime_fsm, speaker, voice_assistant]
+    components: [voip_stack, esp_audio_stack, esp_aec, audio_processor, runtime_controller, speaker, voice_assistant]
 
 # =============================================================================
 # ESP AEC
@@ -341,8 +343,8 @@ binary_sensor:
               then:
                 - voip_stack.call_toggle:
               else:
-                - runtime_fsm.event:
-                    id: runtime_controller
+                - runtime_controller.event:
+                    id: runtime
                     event: wake_word
       # Double click: next contact
       - timing:

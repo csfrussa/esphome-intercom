@@ -372,6 +372,7 @@ void VoipStack::set_active_(bool on) {
   if (on) {
     this->first_audio_received_.store(false, std::memory_order_release);  // re-arm 200 OK echo for new call
     this->last_peer_audio_ms_.store(0, std::memory_order_release);
+    this->media_timeout_rtp_rx_packets_.store(0, std::memory_order_release);
 
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
     if (this->microphone_) {
@@ -390,6 +391,7 @@ void VoipStack::set_active_(bool on) {
   } else {
     this->first_audio_received_.store(false, std::memory_order_release);
     this->last_peer_audio_ms_.store(0, std::memory_order_release);
+    this->media_timeout_rtp_rx_packets_.store(0, std::memory_order_release);
 
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
     if (this->speaker_) {
@@ -429,6 +431,7 @@ void VoipStack::set_in_call_(bool on) {
     // from the previous dialog, or the media watchdog can fire early.
     this->first_audio_received_.store(false, std::memory_order_release);
     this->last_peer_audio_ms_.store(0, std::memory_order_release);
+    this->media_timeout_rtp_rx_packets_.store(0, std::memory_order_release);
 
     if (this->transport_) this->transport_->start_audio_path();
 

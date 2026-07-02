@@ -1,0 +1,168 @@
+# Runtime-controller semantic snapshot for live hardware validation.
+#
+# Include this package only in debug/validation builds. It exposes:
+#   - switch `Runtime Trace`: 100 ms semantic trace while enabled;
+#   - button `Runtime Snapshot`: one immediate dump;
+#   - script `runtime_debug_snapshot`: callable from local automations.
+#   - diagnostic text sensors with the latest policy summary, so HA/API tests
+#     can validate runtime state without reading ESP logs.
+#
+# Requires the full runtime-controller profile ids:
+#   runtime, phone, va, mww, speaker_media_player, mute, speaker_mute
+# and globals from packages/voip/state_machine_full_cpp.yaml.
+
+voip_stack:
+  audio_debug: true
+
+globals:
+  - id: g_runtime_debug_trace_enabled
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+text_sensor:
+  - platform: template
+    id: runtime_debug_summary
+    name: Runtime Debug Summary
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: runtime_policy_led
+    name: Runtime Policy LED
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: runtime_policy_display
+    name: Runtime Policy Display
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: runtime_policy_audio
+    name: Runtime Policy Audio
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: runtime_policy_ringtone
+    name: Runtime Policy Ringtone
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: runtime_policy_timer
+    name: Runtime Policy Timer
+    entity_category: diagnostic
+    update_interval: never
+
+script:
+  - id: runtime_debug_snapshot
+    mode: queued
+    max_runs: 4
+    parameters:
+      reason: string
+    then:
+      - runtime_controller.dump:
+          id: runtime
+          reason: !lambda 'return reason;'
+      - lambda: |-
+          const char *media_state = media_player::media_player_state_to_string(id(speaker_media_player).state);
+          const char *policy_led = id(runtime).get_policy("led_status", "-");
+          const char *policy_display = id(runtime).get_policy("display_status", "-");
+          const char *policy_audio = id(runtime).get_policy("audio_policy", "-");
+          const char *policy_ringtone = id(runtime).get_policy("ringtone", "-");
+          const char *policy_timer = id(runtime).get_policy("timer_alarm", "-");
+          id(runtime_policy_led).publish_state(policy_led);
+          id(runtime_policy_display).publish_state(policy_display);
+          id(runtime_policy_audio).publish_state(policy_audio);
+          id(runtime_policy_ringtone).publish_state(policy_ringtone);
+          id(runtime_policy_timer).publish_state(policy_timer);
+          char summary[360];
+          snprintf(summary, sizeof(summary),
+                   "seq=%" PRIu32 " mask=0x%08" PRIx32
+                   " ui=%d led=%d duck=%d va=%d voip=%s media=%s mic=%d spk=%d sup=%d"
+                   " pled=%s pdisp=%s paud=%s pring=%s ptimer=%s",
+                   id(runtime).get_sequence(),
+                   id(runtime).get_activity_mask(),
+                   id(ui_state),
+                   id(g_applied_led),
+                   id(g_ducking_active),
+                   id(g_va_state),
+                   id(phone).get_call_state_str(),
+                   media_state,
+                   id(mute).state,
+                   id(speaker_mute).state,
+                   id(g_voip_ringtone_media_suppressed),
+                   policy_led,
+                   policy_display,
+                   policy_audio,
+                   policy_ringtone,
+                   policy_timer);
+          id(runtime_debug_summary).publish_state(summary);
+          ESP_LOGI("runtime_debug",
+                   "SNAPSHOT reason=%s seq=%" PRIu32
+                   " mask=0x%08" PRIx32
+                   " ui=%d led=%d duck=%d va_state=%d"
+                   " policies{led=%s display=%s audio=%s ringtone=%s timer=%s va=%s response=%s}"
+                   " facts{voip=%s va_running=%d mww_running=%d media=%s mic_muted=%d speaker_muted=%d ringtone_suppressed=%d}",
+                   reason.c_str(),
+                   id(runtime).get_sequence(),
+                   id(runtime).get_activity_mask(),
+                   id(ui_state),
+                   id(g_applied_led),
+                   id(g_ducking_active),
+                   id(g_va_state),
+                   id(runtime).get_policy("led_status", "-"),
+                   id(runtime).get_policy("display_status", "-"),
+                   id(runtime).get_policy("audio_policy", "-"),
+                   id(runtime).get_policy("ringtone", "-"),
+                   id(runtime).get_policy("timer_alarm", "-"),
+                   id(runtime).get_policy("va_state", "-"),
+                   id(runtime).get_policy("va_response", "-"),
+                   id(phone).get_call_state_str(),
+                   id(va).is_running(),
+                   id(mww).is_running(),
+                   media_state,
+                   id(mute).state,
+                   id(speaker_mute).state,
+                   id(g_voip_ringtone_media_suppressed));
+
+interval:
+  - interval: 100ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_runtime_debug_trace_enabled);'
+          then:
+            - script.execute:
+                id: runtime_debug_snapshot
+                reason: trace
+
+switch:
+  - platform: template
+    id: runtime_trace_switch
+    name: Runtime Trace
+    entity_category: diagnostic
+    restore_mode: ALWAYS_OFF
+    optimistic: true
+    turn_on_action:
+      - globals.set:
+          id: g_runtime_debug_trace_enabled
+          value: "true"
+      - script.execute:
+          id: runtime_debug_snapshot
+          reason: trace_on
+    turn_off_action:
+      - globals.set:
+          id: g_runtime_debug_trace_enabled
+          value: "false"
+      - script.execute:
+          id: runtime_debug_snapshot
+          reason: trace_off
+
+button:
+  - platform: template
+    id: runtime_snapshot_button
+    name: Runtime Snapshot
+    entity_category: diagnostic
+    on_press:
+      - script.execute:
+          id: runtime_debug_snapshot
+          reason: button

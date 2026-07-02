@@ -1,11 +1,11 @@
-#include "../esphome/components/runtime_fsm/runtime_fsm_state.h"
+#include "../esphome/components/runtime_controller/runtime_controller_state.h"
 
 #include <array>
 #include <cstdlib>
 #include <iostream>
 #include <string>
 
-using namespace esphome::runtime_fsm;
+using namespace esphome::runtime_controller;
 
 struct NamedActivity {
   const char *name;
@@ -189,5 +189,5 @@ static void explicit_stop_policies() {
 int main() {
   esp_like_combinations();
   explicit_stop_policies();
-  std::cout << "runtime_fsm generic policy reducer tests passed\n";
+  std::cout << "runtime_controller generic policy reducer tests passed\n";
 }

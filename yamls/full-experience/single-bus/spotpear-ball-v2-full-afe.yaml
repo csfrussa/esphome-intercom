@@ -31,9 +31,9 @@ substitutions:
   mic_id: mic_afe
   afe_vad_restore_mode: ALWAYS_ON
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  ext_components_source: "../../../esphome/components"
 
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  assets_base: "../../../"
 
   # AI avatar folder (${assets_base}assets/images/assistant/<ai_avatar>/)
   ai_avatar: default
@@ -68,6 +68,7 @@ substitutions:
   voice_assist_not_ready_phase_id: "10"
   voice_assist_error_phase_id: "11"
   voice_assist_muted_phase_id: "12"
+  runtime_controller_led_preset: spotpear_rgb
 
   # Font configuration
   font_glyphsets: "GF_Latin_Core"
@@ -78,29 +79,30 @@ substitutions:
   display_height: "240"
 
 packages:
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
-  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/single_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
-  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@dev
-  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@dev
-  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@dev
-  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@dev
-  lvgl_settings_sync_va: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_va.yaml@dev
-  spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_full.yaml@dev
+  core: !include ../../../packages/va_voip_cpp.yaml
+  runtime_controller: !include ../../../packages/runtime_controller/full_controller.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_spotpear_ball_v2.yaml
+  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  speaker_mixer: !include ../../../packages/audio/full_mono_mixer_48k_cpp.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  sendspin_artwork: !include ../../../packages/media_player/sendspin_artwork.yaml
+  lvgl_settings_nav: !include ../../../packages/lvgl/lvgl_settings_navigation.yaml
+  lvgl_settings_sync_volumes: !include ../../../packages/lvgl/lvgl_settings_sync_volumes.yaml
+  lvgl_settings_sync_mute: !include ../../../packages/lvgl/lvgl_settings_sync_mute.yaml
+  lvgl_settings_sync_aec: !include ../../../packages/lvgl/lvgl_settings_sync_aec.yaml
+  lvgl_settings_sync_va: !include ../../../packages/lvgl/lvgl_settings_sync_va.yaml
+  spotpear_voip_nav: !include ../../../packages/lvgl/spotpear_voip/nav_full.yaml
 
 # =============================================================================
 # ESP32 BASE CONFIGURATION
@@ -164,7 +166,7 @@ psram:
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant]
+    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_controller, speaker, voice_assistant]
 
 # =============================================================================
 # CONNECTIVITY
@@ -387,22 +389,22 @@ media_player:
         - announcement_http_source
         - announcement_file_source
     on_announcement:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: announcement_started
     on_play:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_playing
       - script.execute: backlight_timer
     on_pause:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_paused
       - script.execute: backlight_timer
     on_idle:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_idle
       - delay: 200ms
       - script.execute: backlight_timer
@@ -412,7 +414,7 @@ media_player:
 #
 # MWW always-on (stop_after_detection: false) on mic_afe.
 # SR linear AEC preserves spectral features for neural detection (10/10).
-# Ducking is derived by runtime_fsm from the active VA/media/VoIP policies.
+# Ducking is derived by runtime_controller from the active VA/media/VoIP policies.
 # =============================================================================
 micro_wake_word:
   id: mww
@@ -438,8 +440,8 @@ voice_assistant:
   on_timer_tick:
     - script.execute: update_timer_state
   on_timer_finished:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_finished
     - script.execute: draw_display
 
@@ -449,6 +451,8 @@ voice_assistant:
 voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  tx_task_priority: 10
+  rx_task_priority: 10
   id: phone
   audio:
     # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
@@ -626,59 +630,6 @@ script:
           state: ""
       - script.execute: clear_replying_text
       - script.execute: update_replying_text
-
-  # Spotpear Ball v2 LED patterns (extends empty package placeholder)
-  - id: !extend update_led
-    then:
-      - lambda: |-
-          static int last = -2;
-          int t = id(g_applied_led);
-          if (t == last) return;
-          last = t;
-          auto *led = id(status_led);
-          switch (t) {
-            case 1:  // Both muted: red slow pulse
-              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.4f).set_effect("Slow Pulse").perform();
-              break;
-            case 2:  // Mic muted: red dim
-              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.3f).set_effect("None").perform();
-              break;
-            case 3:  // Speaker muted: orange dim
-              led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(0.3f).set_effect("None").perform();
-              break;
-            case 4:  // MWW recent / barge-in: red slow pulse
-            case 5:  // VA Listening: red slow pulse
-              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.7f).set_effect("Slow Pulse").perform();
-              break;
-            case 6:  // VA Thinking: orange fast pulse
-              led->turn_on().set_rgb(1.0f, 1.0f, 0.0f).set_brightness(0.7f).set_effect("Fast Pulse").perform();
-              break;
-            case 7:  // VA Speaking: blue solid
-              led->turn_on().set_rgb(0.0f, 0.0f, 1.0f).set_brightness(1.0f).set_effect("None").perform();
-              break;
-            case 8:  // Call ringing: red strobe
-              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
-              break;
-            case 9:  // Call outgoing: orange strobe
-              led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
-              break;
-            case 10: // Call in progress: green solid
-              led->turn_on().set_rgb(0.0f, 1.0f, 0.0f).set_brightness(1.0f).set_effect("None").perform();
-              break;
-            case 11: // VA Error: red solid
-              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.7f).set_effect("None").perform();
-              break;
-            case 12: // Media playing: blue solid
-              if (id(g_voip_ringtone_media_suppressed)) {
-                led->turn_off().perform();
-                break;
-              }
-              led->turn_on().set_rgb(0.0f, 0.0f, 1.0f).set_brightness(1.0f).set_effect("None").perform();
-              break;
-            default: // Off
-              led->turn_off().perform();
-              break;
-          }
 
   # Display state routing (extends package placeholder)
   # Maps canonical ui_state to the device-local VA phase and calls draw_display.
@@ -1004,9 +955,9 @@ script:
             id(settings_active) = false;  // call interrupts settings view
           }
           // Timer ringing owns the UI while the alarm is active. This must use
-          // the runtime_fsm timer activity, not voice_assistant_phase, because media_player
+          // the runtime_controller timer activity, not voice_assistant_phase, because media_player
           // callbacks can legitimately update the phase while playing the alarm.
-          if (id(runtime_controller).is_activity_active("timer_ringing")) {
+          if (id(runtime).is_activity_active("timer_ringing")) {
             target = id(timer_finished_page)->obj;
           } else if (id(call_ended_active)) {
             target = id(call_ended_page)->obj;
@@ -1389,14 +1340,14 @@ script:
             - script.execute: update_replying_text
             - script.execute: reply_pagination_timer
 
-  # Timer alarm: play sound in a loop while runtime_fsm timer_ringing is active
+  # Timer alarm: play sound in a loop while runtime_controller timer_ringing is active
   - id: timer_alarm_loop
     mode: single
     then:
       - while:
           condition:
-            runtime_fsm.is_active:
-              id: runtime_controller
+            runtime_controller.is_active:
+              id: runtime
               activity: timer_ringing
           then:
             - media_player.play_media:
@@ -1409,8 +1360,8 @@ script:
     mode: restart
     then:
       - delay: 15min
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: timer_stopped
 
   # Backlight timer
@@ -1523,12 +1474,12 @@ binary_sensor:
         then:
           - if:
               condition:
-                runtime_fsm.is_active:
-                  id: runtime_controller
+                runtime_controller.is_active:
+                  id: runtime
                   activity: timer_ringing
               then:
-                - runtime_fsm.event:
-                    id: runtime_controller
+                - runtime_controller.event:
+                    id: runtime
                     event: timer_stopped
               else:
                 - if:
@@ -1546,8 +1497,8 @@ binary_sensor:
                           then:
                             - voip_stack.call_toggle:
                           else:
-                            - runtime_fsm.event:
-                                id: runtime_controller
+                            - runtime_controller.event:
+                                id: runtime
                                 event: manual_voice_toggle
       # Double click: decline incoming or next contact
       - timing:
@@ -1637,8 +1588,8 @@ switch:
       - voice_assistant.stop:
       - micro_wake_word.stop:
       - microphone.mute: mic_afe
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: mic_muted
     on_turn_off:
       - logger.log:
@@ -1646,8 +1597,8 @@ switch:
           tag: mute
           format: "Mic mute OFF: microphone active, MWW started"
       - microphone.unmute: mic_afe
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: mic_unmuted
       - if:
           condition:
@@ -1671,8 +1622,8 @@ switch:
           tag: mute
           format: "Speaker mute ON: DAC muted, amplifier off"
       - speaker.mute_on: hw_speaker
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: speaker_muted
       - delay: 50ms
       - output.turn_off: speaker_enable
@@ -1688,8 +1639,8 @@ switch:
             - output.turn_on: speaker_enable
             - delay: 50ms
       - speaker.mute_off: hw_speaker
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: speaker_unmuted
   # VoIP switches
 
@@ -2166,12 +2117,12 @@ touchscreen:
       - script.execute: backlight_timer
       - if:
           condition:
-            runtime_fsm.is_active:
-              id: runtime_controller
+            runtime_controller.is_active:
+              id: runtime
               activity: timer_ringing
           then:
-            - runtime_fsm.event:
-                id: runtime_controller
+            - runtime_controller.event:
+                id: runtime
                 event: timer_stopped
     # Gestures handled natively by LVGL on each page (on_swipe_up/down/left/right);
     # no manual dx/dy lambda needed. on_touch above is kept for backlight refresh.

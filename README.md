@@ -99,7 +99,7 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
 | Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and VoIP while media/TTS keeps playing. |
-| Runtime state arbitration for full profiles | [`runtime_fsm`](esphome/components/runtime_fsm/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
+| Runtime state arbitration for full profiles | [`runtime_controller`](esphome/components/runtime_controller/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
 
 For the normal intercom use case, do not start by designing a phone system.
 Pick the closest YAML, adapt the board pins and audio hardware, add the ESP
@@ -1318,7 +1318,7 @@ hardware speaker. Older custom YAMLs that still use ESPHome's
 [`speaker`](esphome/components/speaker/README.md) fork for its pause-release
 compatibility mode.
 
-Full-experience profiles also use [`runtime_fsm`](esphome/components/runtime_fsm/README.md)
+Full-experience profiles also use [`runtime_controller`](esphome/components/runtime_controller/README.md)
 as the control-plane reducer. It does not touch PCM audio. YAML callbacks send
 events such as `media_playing`, `wake_word`, `timer_finished` or
 `ha_disconnected`; the reducer keeps composable activities and resolves named
@@ -1330,7 +1330,7 @@ and prevents timer/ringtone/mute callbacks from racing display and ducking.
 The maintained reducer package is deliberately readable YAML:
 
 ```yaml
-runtime_fsm:
+runtime_controller:
   id: runtime_controller
   activities:
     media:

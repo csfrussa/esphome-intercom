@@ -359,8 +359,16 @@ void VoipStack::handle_call_timeouts_(uint32_t now_ms, uint32_t calling_timeout_
     return;
   }
 
-  if (state == CallState::IN_CALL &&
-      this->first_audio_received_.load(std::memory_order_acquire)) {
+  if (state == CallState::IN_CALL && this->transport_ != nullptr) {
+    const uint32_t rx_packets = this->transport_->snapshot().rtp_rx_packets;
+    const uint32_t last_seen = this->media_timeout_rtp_rx_packets_.load(std::memory_order_acquire);
+    if (rx_packets != last_seen) {
+      this->media_timeout_rtp_rx_packets_.store(rx_packets, std::memory_order_release);
+      this->last_peer_audio_ms_.store(now_ms, std::memory_order_release);
+      if (rx_packets != 0) {
+        this->first_audio_received_.store(true, std::memory_order_release);
+      }
+    }
     const uint32_t last_audio = this->last_peer_audio_ms_.load(std::memory_order_acquire);
     if (last_audio != 0 && now_ms - last_audio >= MEDIA_TIMEOUT_MS) {
       const std::string cid = this->get_current_call_id_();

@@ -1,8 +1,8 @@
-#include "runtime_fsm_state.h"
+#include "runtime_controller_state.h"
 
 #include <cstring>
 
-namespace esphome::runtime_fsm {
+namespace esphome::runtime_controller {
 
 struct PolicyWinner {
   const char *policy{nullptr};
@@ -64,4 +64,4 @@ const char *find_policy_value(const ResolvedPolicies &output, const char *policy
   return fallback;
 }
 
-}  // namespace esphome::runtime_fsm
+}  // namespace esphome::runtime_controller

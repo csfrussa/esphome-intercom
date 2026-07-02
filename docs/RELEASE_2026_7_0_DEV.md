@@ -199,7 +199,7 @@ VoIP call-control path is not a compatibility layer.
 
 - 🔊 Maintained full-experience presets now use the ESPHome `speaker_source`
   media path as the default media architecture.
-- 🧠 Maintained full-experience presets now use the generic `runtime_fsm`
+- 🧠 Maintained full-experience presets now use the generic `runtime_controller`
   reducer for LED/display/ducking/ringtone/timer arbitration. YAML callbacks
   report events; one reducer snapshot decides the visible state and audio
   policy, so media, TTS, timers, mute, connectivity and VoIP no longer
@@ -273,7 +273,7 @@ VoIP call-control path is not a compatibility layer.
 
 ## 📦 YAML Presets
 
-- 🧩 All maintained non-native full-experience presets now use the `runtime_fsm`
+- 🧩 All maintained non-native full-experience presets now use the `runtime_controller`
   package path. Native ESPHome full presets remain on their native component
   path.
 - 🧪 Native ESPHome voip-only presets now advertise 48 kHz PCM where the
@@ -306,7 +306,7 @@ VoIP call-control path is not a compatibility layer.
 
 ## 📚 Documentation
 
-- 📘 Added a dedicated `runtime_fsm` component README with the reducer model,
+- 📘 Added a dedicated `runtime_controller` component README with the reducer model,
   YAML syntax, policy/action examples, debug mode and host-test command.
 - 📖 README was reworked around the 2026.7.0-dev SIP/VoIP migration first, then
   the new audio/media direction.

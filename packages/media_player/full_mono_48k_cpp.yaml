@@ -1,9 +1,9 @@
 # =============================================================================
-# Full-experience media graph for runtime_fsm.
+# Full-experience media graph for runtime_controller.
 #
 # HA/Sendspin media, generic announcements and VA TTS remain on the standard
-# speaker_source media player. runtime_fsm policy lives in
-# packages/runtime_fsm/full_controller.yaml.
+# speaker_source media player. runtime_controller policy lives in
+# packages/runtime_controller/full_controller.yaml.
 # =============================================================================
 
 sendspin:
@@ -57,18 +57,18 @@ media_player:
         - announcement_http_source
         - announcement_file_source
     on_announcement:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: announcement_started
     on_play:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_playing
     on_pause:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_paused
     on_idle:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_idle

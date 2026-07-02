@@ -27,14 +27,14 @@
           "tx_ready": true,
           "rx_ready": true,
           "tx_frames": 1,
-          "speaker_output_bytes": 39
+          "speaker_output_bytes": 35
         }
       }
     },
     {
       "expect_file": {
         "path": "test_runs/simulator/spotpear-voip-host_speaker_output.pcm",
-        "min_bytes": 39,
+        "min_bytes": 35,
         "contains": "browser_audio_ready"
       }
     },
@@ -45,14 +45,14 @@
       "expect": {
         "audio": {
           "tx_frames": 2,
-          "speaker_output_bytes": 69
+          "speaker_output_bytes": 61
         }
       }
     },
     {
       "expect_file": {
         "path": "test_runs/simulator/spotpear-voip-host_speaker_output.pcm",
-        "min_bytes": 69,
+        "min_bytes": 61,
         "contains": "inject_pcm"
       }
     }

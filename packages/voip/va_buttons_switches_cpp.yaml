@@ -35,8 +35,8 @@ switch:
       - micro_wake_word.stop:
       - voice_assistant.stop:
       - microphone.mute: ${mic_id}
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: mic_muted
     on_turn_off:
       - logger.log:
@@ -44,8 +44,8 @@ switch:
           tag: mute
           format: "Mic mute OFF"
       - microphone.unmute: ${mic_id}
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: mic_unmuted
       - script.execute: start_mww_when_ready
 

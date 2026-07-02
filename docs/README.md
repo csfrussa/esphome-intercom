@@ -63,7 +63,7 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   media player before the mixer arbitrates with VoIP and Voice Assistant.
   The local [`speaker`](../esphome/components/speaker/README.md) fork remains
   documented for custom YAMLs that still use `platform: speaker`.
-- [`runtime_fsm`](../esphome/components/runtime_fsm/README.md), a generic
+- [`runtime_controller`](../esphome/components/runtime_controller/README.md), a generic
   YAML-programmed reducer used by maintained full-experience profiles to derive
   LED, LVGL/display, audio ducking, ringtone and timer policies from one state
   snapshot. It is control-plane only and does not process audio samples.

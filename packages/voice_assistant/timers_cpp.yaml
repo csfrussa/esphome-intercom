@@ -1,5 +1,5 @@
 # =============================================================================
-# Optional Voice Assistant timers package for runtime_fsm profiles.
+# Optional Voice Assistant timers package for runtime_controller profiles.
 # =============================================================================
 
 audio_file:
@@ -9,24 +9,24 @@ audio_file:
 voice_assistant:
   id: va
   on_timer_started:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_started
   on_timer_cancelled:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_stopped
   on_timer_updated:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_updated
   on_timer_tick:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_tick
   on_timer_finished:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_finished
 
 script:
@@ -35,8 +35,8 @@ script:
     then:
       - while:
           condition:
-            runtime_fsm.is_active:
-              id: runtime_controller
+            runtime_controller.is_active:
+              id: runtime
               activity: timer_ringing
           then:
             - media_player.play_media:
@@ -48,6 +48,6 @@ script:
     mode: restart
     then:
       - delay: 15min
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: timer_stopped

@@ -1,7 +1,7 @@
 # =============================================================================
-# Runtime FSM bridge for full-experience VA + VoIP devices.
+# Runtime Controller bridge for full-experience VA + VoIP devices.
 #
-# State ownership lives in esphome/components/runtime_fsm. This package keeps
+# State ownership lives in esphome/components/runtime_controller. This package keeps
 # only renderer-compatible globals and UI hook placeholders.
 # =============================================================================
 
@@ -41,7 +41,7 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
-  - id: g_fsm_seq
+  - id: g_runtime_seq
     type: uint32_t
     restore_value: false
     initial_value: "0"
@@ -86,12 +86,12 @@ esphome:
   on_boot:
     priority: 700
     then:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: boot_start
       - delay: 1s
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: boot_ready
 
 script:
@@ -198,6 +198,6 @@ script:
       - globals.set:
           id: g_voip_ringtone_media_suppressed
           value: "false"
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_idle

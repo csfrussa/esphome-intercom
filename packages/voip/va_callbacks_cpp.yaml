@@ -1,12 +1,12 @@
 # =============================================================================
 # VoIP Stack callbacks for VA-enabled devices.
 # Like voip/callbacks.yaml but UI-only for full-experience devices.
-# Runtime state, LEDs, ducking and ringtone playback are owned by runtime_fsm.
+# Runtime state, LEDs, ducking and ringtone playback are owned by runtime_controller.
 #
 # Prerequisites in the device YAML:
 #   - voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
 #   - script ids `ui_call_started`, `ui_call_dest_ringing`, `ui_call_ended`
-#     (provided as placeholders by runtime_fsm bridge package; device
+#     (provided as placeholders by runtime_controller bridge package; device
 #      !extends them to drive LVGL)
 #
 # Required substitutions:

@@ -49,8 +49,8 @@ substitutions:
 
   # Toggled by scripts/yaml_paths.sh between local (../../../...) and remote
   # release mode.
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
+  ext_components_source: "../../../esphome/components"
+  assets_base: "../../../"
 
   # Logical LVGL dimensions after software rotation. Runtime layout still reads
   # the active LVGL resolution so the main dashboard can be reused on nearby
@@ -97,28 +97,29 @@ substitutions:
   afe_aec_restore_mode: ALWAYS_ON
 
 packages:
-  p4_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32p4_base.yaml@dev
-  p4_c6_sdio: github://n-IA-hane/esphome-intercom/packages/board/esp32p4_c6_sdio.yaml@dev
-  p4_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native_no_wifi_signal.yaml@dev
-  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
-  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_lvgl_maintenance.yaml@dev
-  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@dev
-  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@dev
-  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@dev
-  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
-  sendspin_artwork: github://n-IA-hane/esphome-intercom/packages/media_player/sendspin_artwork.yaml@dev
-  lvgl_p4_ppa: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_ppa.yaml@dev
-  p4_va_cleanup: github://n-IA-hane/esphome-intercom/packages/lvgl/p4_va_cleanup.yaml@dev
+  p4_base: !include ../../../packages/platform/esp32p4_base.yaml
+  p4_c6_sdio: !include ../../../packages/board/esp32p4_c6_sdio.yaml
+  p4_diagnostics: !include ../../../packages/diagnostics/native_no_wifi_signal.yaml
+  core: !include ../../../packages/va_voip_cpp.yaml
+  runtime_controller: !include ../../../packages/runtime_controller/full_controller_no_led.yaml
+  va_buttons_switches: !include ../../../packages/voip/va_buttons_switches_cpp.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  ha_api: !include ../../../packages/voip/ha_api_cpp.yaml
+  voice_assistant_local_commands: !include ../../../packages/voice_assistant/local_commands_cpp.yaml
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  ota_maintenance: !include ../../../packages/ota/full_audio_lvgl_maintenance.yaml
+  afe_entities: !include ../../../packages/esp_afe/dual_mic_entities.yaml
+  audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
+  speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
+  flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
+  sendspin_artwork: !include ../../../packages/media_player/sendspin_artwork.yaml
+  lvgl_p4_ppa: !include ../../../packages/lvgl/p4_ppa.yaml
+  p4_va_cleanup: !include ../../../packages/lvgl/p4_va_cleanup.yaml
   # No carousel (lvgl_settings_navigation) on P4: the landscape display holds
   # all settings in one scrollable dashboard page.
   # _boot package provides the settings_p4_sync_widgets script invoked from on_boot.
-  lvgl_settings_p4_boot: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_p4_unified_boot.yaml@dev
+  lvgl_settings_p4_boot: !include ../../../packages/lvgl/lvgl_settings_p4_unified_boot.yaml
 
 # =============================================================================
 # ESP32-P4 BASE CONFIGURATION
@@ -232,7 +233,7 @@ time:
 # =============================================================================
 external_components:
   - source: ${ext_components_source}
-    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_fsm, speaker, voice_assistant, mipi_dsi]
+    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_controller, speaker, voice_assistant, mipi_dsi]
 
 # =============================================================================
 # I2C Bus (shared: ES8311, ES7210, GT9271)
@@ -436,8 +437,8 @@ media_player:
         - announcement_http_source
         - announcement_file_source
     on_announcement:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: announcement_started
       - if:
           condition:
@@ -445,18 +446,18 @@ media_player:
           then:
             - script.execute: backlight_timer
     on_play:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_playing
       - script.execute: backlight_timer
     on_pause:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_paused
       - script.execute: backlight_timer
     on_idle:
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: media_idle
       - delay: 200ms
       - script.execute: backlight_timer
@@ -493,8 +494,8 @@ voice_assistant:
   on_timer_tick:
     - script.execute: update_timer_state
   on_timer_finished:
-    - runtime_fsm.event:
-        id: runtime_controller
+    - runtime_controller.event:
+        id: runtime
         event: timer_finished
     - script.execute: draw_display
 
@@ -1004,8 +1005,8 @@ lvgl:
             bg_color: 0xE74C3C
             radius: 10
             on_click:
-              - runtime_fsm.event:
-                  id: runtime_controller
+              - runtime_controller.event:
+                  id: runtime
                   event: timer_stopped
             widgets:
               - label:
@@ -1826,8 +1827,8 @@ lvgl:
                         scrollable: false
                         scrollbar_mode: "off"
                         on_click:
-                          - runtime_fsm.event:
-                              id: runtime_controller
+                          - runtime_controller.event:
+                              id: runtime
                               event: wake_word
                         widgets:
                           - animimg:
@@ -1898,8 +1899,8 @@ lvgl:
                   scrollable: false
                   hidden: true
                   on_click:
-                    - runtime_fsm.event:
-                        id: runtime_controller
+                    - runtime_controller.event:
+                        id: runtime
                         event: wake_word
                   widgets:
                     - label:
@@ -1924,8 +1925,8 @@ lvgl:
                   scrollable: false
                   hidden: true
                   on_click:
-                    - runtime_fsm.event:
-                        id: runtime_controller
+                    - runtime_controller.event:
+                        id: runtime
                         event: wake_word
                   widgets:
                     - label:
@@ -1961,8 +1962,8 @@ lvgl:
                   scrollbar_mode: "off"
                   hidden: true
                   on_click:
-                    - runtime_fsm.event:
-                        id: runtime_controller
+                    - runtime_controller.event:
+                        id: runtime
                         event: wake_word
                   widgets:
                     - label:
@@ -1992,8 +1993,8 @@ lvgl:
                   scrollable: false
                   hidden: true
                   on_click:
-                    - runtime_fsm.event:
-                        id: runtime_controller
+                    - runtime_controller.event:
+                        id: runtime
                         event: wake_word
                   widgets:
                     - label:
@@ -3098,9 +3099,9 @@ script:
             return;
           }
           // Timer ringing owns the full-screen overlay while the alarm is active.
-          // Use the runtime_fsm timer activity instead of voice_assistant_phase because the
+          // Use the runtime_controller timer activity instead of voice_assistant_phase because the
           // alarm sound is played through media_player and may update the phase.
-          if (id(runtime_controller).is_activity_active("timer_ringing")) {
+          if (id(runtime).is_activity_active("timer_ringing")) {
             if (active_scr != id(timer_finished_page)->obj)
               lv_disp_load_scr(id(timer_finished_page)->obj);
             return;
@@ -3465,14 +3466,14 @@ script:
                       id: voice_assistant_phase
                       value: '${voice_assist_idle_phase_id}'
 
-  # Timer alarm: play sound in a loop while runtime_fsm timer_ringing is active
+  # Timer alarm: play sound in a loop while runtime_controller timer_ringing is active
   - id: timer_alarm_loop
     mode: single
     then:
       - while:
           condition:
-            runtime_fsm.is_active:
-              id: runtime_controller
+            runtime_controller.is_active:
+              id: runtime
               activity: timer_ringing
           then:
             - media_player.play_media:
@@ -3485,8 +3486,8 @@ script:
     mode: restart
     then:
       - delay: 15min
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: timer_stopped
 
   # Backlight auto-off timer
@@ -3526,16 +3527,16 @@ binary_sensor:
         then:
           - if:
               condition:
-                runtime_fsm.is_active:
-                  id: runtime_controller
+                runtime_controller.is_active:
+                  id: runtime
                   activity: timer_ringing
               then:
-                - runtime_fsm.event:
-                    id: runtime_controller
+                - runtime_controller.event:
+                    id: runtime
                     event: timer_stopped
               else:
-                - runtime_fsm.event:
-                    id: runtime_controller
+                - runtime_controller.event:
+                    id: runtime
                     event: wake_word
       # Long press: toggle mute
       - timing:
@@ -3567,8 +3568,8 @@ switch:
       - voice_assistant.stop:
       - micro_wake_word.stop:
       - microphone.mute: mic_afe
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: mic_muted
     on_turn_off:
       - logger.log:
@@ -3576,8 +3577,8 @@ switch:
           tag: mute
           format: "Mic mute OFF: microphone active, MWW started"
       - microphone.unmute: mic_afe
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: mic_unmuted
       - if:
           condition:
@@ -3601,8 +3602,8 @@ switch:
           tag: mute
           format: "Speaker mute ON: DAC muted, amplifier off"
       - speaker.mute_on: hw_speaker
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: speaker_muted
       - delay: 50ms
       - output.turn_off: speaker_enable
@@ -3618,8 +3619,8 @@ switch:
             - output.turn_on: speaker_enable
             - delay: 50ms
       - speaker.mute_off: hw_speaker
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: speaker_unmuted
 
 # Select Entities

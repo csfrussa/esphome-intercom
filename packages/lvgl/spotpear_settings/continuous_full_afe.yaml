@@ -231,8 +231,10 @@ widgets:
       y: 480
       width: ${settings_mid_width}
       options:
-        - SR low cost
-        - SR high perf
+        - sr_low_cost
+        - sr_high_perf
+        - fd_low_cost
+        - fd_high_perf
       on_value:
         - select.set_index:
             id: aec_mode_select

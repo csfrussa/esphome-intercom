@@ -25,8 +25,8 @@ ota:
           value: "true"
       - script.stop: ai_animation_loop
       - script.stop: timer_alarm_loop
-      - runtime_fsm.event:
-          id: runtime_controller
+      - runtime_controller.event:
+          id: runtime
           event: timer_stopped
       - media_player.stop:
           id: speaker_media_player

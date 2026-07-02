@@ -1,6 +1,6 @@
 #pragma once
 
-#include "runtime_fsm_state.h"
+#include "runtime_controller_state.h"
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
@@ -11,12 +11,15 @@
 #include <string>
 
 namespace esphome {
+namespace light {
+class LightState;
+}
 namespace voip_stack {
 class VoipStack;
 }
-namespace runtime_fsm {
+namespace runtime_controller {
 
-class RuntimeFsm : public Component {
+class RuntimeController : public Component {
  public:
   struct ActivityUpdate {
     const char *name{nullptr};
@@ -49,6 +52,8 @@ class RuntimeFsm : public Component {
   void add_policy_value_trigger(const char *policy, const char *value, Trigger<> *trigger);
   void add_policy_output(const char *policy, const char *value, int32_t output);
   void set_policy_change_trigger(const char *policy, Trigger<int32_t> *trigger);
+  void set_led_light(light::LightState *light) { this->led_light_ = light; }
+  void add_led_state(const char *state, float red, float green, float blue, float brightness, const char *effect);
   template<typename C> void add_policy_global_output(const char *policy, C *target) {
     if (policy == nullptr || policy[0] == '\0' || target == nullptr)
       return;
@@ -130,15 +135,18 @@ class RuntimeFsm : public Component {
   void execute_named_action_(const char *name);
   void drain_pending_actions_();
   void run_policy_actions_(const ResolvedPolicies &old_policies, const ResolvedPolicies &new_policies);
+  void apply_led_state_(const char *state);
   int32_t resolve_policy_output_(const char *policy, const char *value) const;
   void mark_config_error_();
 
   script::Script<> *output_script_{nullptr};
+  light::LightState *led_light_{nullptr};
   voip_stack::VoipStack *voip_{nullptr};
   const char *voip_activity_prefix_{nullptr};
 
   bool debug_{false};
   bool config_error_{false};
+  bool voip_callback_registered_{false};
   uint32_t sequence_{0};
   ResolvedPolicies resolved_policies_{};
   char voip_activity_[64]{};
@@ -206,6 +214,14 @@ class RuntimeFsm : public Component {
     void *target{nullptr};
     void (*set)(void *, uint32_t){nullptr};
   };
+  struct LedState {
+    const char *state{nullptr};
+    float red{0.0f};
+    float green{0.0f};
+    float blue{0.0f};
+    float brightness{0.0f};
+    const char *effect{"None"};
+  };
   enum class PendingEventKind : uint8_t {
     EVENT,
     SET_ACTIVITIES,
@@ -226,6 +242,7 @@ class RuntimeFsm : public Component {
   std::array<PolicyOutput, 64> policy_outputs_{};
   std::array<PolicyChangeTrigger, MAX_POLICIES> policy_change_triggers_{};
   std::array<PolicyGlobalOutput, MAX_POLICIES> policy_global_outputs_{};
+  std::array<LedState, 32> led_states_{};
   std::array<const char *, 16> pending_actions_{};
   std::array<PendingEvent, 16> pending_events_{};
   StateOutput activity_mask_output_{};
@@ -239,13 +256,14 @@ class RuntimeFsm : public Component {
   size_t policy_output_count_{0};
   size_t policy_change_trigger_count_{0};
   size_t policy_global_output_count_{0};
+  size_t led_state_count_{0};
   size_t pending_action_count_{0};
   size_t pending_event_count_{0};
   bool dispatching_{false};
   uint32_t generic_activity_mask_{0};
 };
 
-template<typename... Ts> class EventAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+template<typename... Ts> class EventAction : public Action<Ts...>, public Parented<RuntimeController> {
  public:
   TEMPLATABLE_VALUE(std::string, event)
   TEMPLATABLE_VALUE(std::string, reason)
@@ -265,7 +283,7 @@ template<typename... Ts> class EventAction : public Action<Ts...>, public Parent
   bool dump_{false};
 };
 
-template<typename... Ts> class SetActivityAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+template<typename... Ts> class SetActivityAction : public Action<Ts...>, public Parented<RuntimeController> {
  public:
   TEMPLATABLE_VALUE(std::string, activity)
   TEMPLATABLE_VALUE(bool, active)
@@ -276,12 +294,12 @@ template<typename... Ts> class SetActivityAction : public Action<Ts...>, public 
   }
 };
 
-template<typename... Ts> class SetActivitiesAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+template<typename... Ts> class SetActivitiesAction : public Action<Ts...>, public Parented<RuntimeController> {
  public:
   void add_activity_state(const char *name, bool active) {
     if (name == nullptr || name[0] == '\0' || this->update_count_ >= this->updates_.size())
       return;
-    this->updates_[this->update_count_++] = RuntimeFsm::ActivityUpdate{name, active};
+    this->updates_[this->update_count_++] = RuntimeController::ActivityUpdate{name, active};
   }
 
   void play(const Ts &...x) override {
@@ -290,11 +308,11 @@ template<typename... Ts> class SetActivitiesAction : public Action<Ts...>, publi
   }
 
  protected:
-  std::array<RuntimeFsm::ActivityUpdate, 16> updates_{};
+  std::array<RuntimeController::ActivityUpdate, 16> updates_{};
   size_t update_count_{0};
 };
 
-template<typename... Ts> class RequestActionAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+template<typename... Ts> class RequestActionAction : public Action<Ts...>, public Parented<RuntimeController> {
  public:
   TEMPLATABLE_VALUE(std::string, action)
 
@@ -304,7 +322,7 @@ template<typename... Ts> class RequestActionAction : public Action<Ts...>, publi
   }
 };
 
-template<typename... Ts> class DumpAction : public Action<Ts...>, public Parented<RuntimeFsm> {
+template<typename... Ts> class DumpAction : public Action<Ts...>, public Parented<RuntimeController> {
  public:
   TEMPLATABLE_VALUE(std::string, reason)
 
@@ -314,7 +332,7 @@ template<typename... Ts> class DumpAction : public Action<Ts...>, public Parente
   }
 };
 
-template<typename... Ts> class IsActiveCondition : public Condition<Ts...>, public Parented<RuntimeFsm> {
+template<typename... Ts> class IsActiveCondition : public Condition<Ts...>, public Parented<RuntimeController> {
  public:
   TEMPLATABLE_VALUE(std::string, activity)
 
@@ -324,5 +342,5 @@ template<typename... Ts> class IsActiveCondition : public Condition<Ts...>, publ
   }
 };
 
-}  // namespace runtime_fsm
+}  // namespace runtime_controller
 }  // namespace esphome

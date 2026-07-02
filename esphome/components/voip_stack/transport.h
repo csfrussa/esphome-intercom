@@ -11,7 +11,15 @@
 namespace esphome {
 namespace voip_stack {
 
-using TransportAudioCallback = void (*)(void *ctx, const uint8_t *pcm, size_t bytes);
+struct TransportAudioFrame {
+  const uint8_t *pcm{nullptr};
+  size_t bytes{0};
+  uint16_t sequence{0};
+  uint32_t timestamp{0};
+  bool has_rtp_metadata{false};
+};
+
+using TransportAudioCallback = void (*)(void *ctx, const TransportAudioFrame &frame);
 using TransportSipSignalCallback = void (*)(void *ctx, const SipSignal &signal);
 using TransportConnectionCallback = void (*)(void *ctx, bool connected);
 using TransportAcceptCallback = bool (*)(void *ctx);
@@ -131,7 +139,20 @@ class SipPhoneTransport {
  protected:
   /// Buffer lifetime = callback duration only.
   void emit_audio_frame_(const uint8_t *pcm, size_t bytes) {
-    if (this->on_audio_frame_ != nullptr) this->on_audio_frame_(this->on_audio_frame_ctx_, pcm, bytes);
+    TransportAudioFrame frame;
+    frame.pcm = pcm;
+    frame.bytes = bytes;
+    if (this->on_audio_frame_ != nullptr) this->on_audio_frame_(this->on_audio_frame_ctx_, frame);
+  }
+
+  void emit_audio_frame_(const uint8_t *pcm, size_t bytes, uint16_t sequence, uint32_t timestamp) {
+    TransportAudioFrame frame;
+    frame.pcm = pcm;
+    frame.bytes = bytes;
+    frame.sequence = sequence;
+    frame.timestamp = timestamp;
+    frame.has_rtp_metadata = true;
+    if (this->on_audio_frame_ != nullptr) this->on_audio_frame_(this->on_audio_frame_ctx_, frame);
   }
 
   void emit_sip_signal_(const SipSignal &signal) {

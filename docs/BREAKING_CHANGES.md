@@ -77,16 +77,16 @@ should migrate away from `platform: speaker` media-player blocks and local
 `files:` entries toward `media_source` plus `media_player.play_media` with
 `audio-file://...` URLs.
 
-Maintained non-native full-experience YAMLs now use the generic `runtime_fsm`
+Maintained non-native full-experience YAMLs now use the generic `runtime_controller`
 component for runtime state arbitration. Custom full-experience YAMLs copied
 from older releases should migrate away from `update_status`,
 `timer_ringing`, local VA pending flags and callback-local LED/display/ducking
-decisions. The new pattern is: callbacks send `runtime_fsm.event`, the reducer
+decisions. The new pattern is: callbacks send `runtime_controller.event`, the reducer
 sets activities, and policies drive LED/display/audio/timer outputs from one
 committed snapshot.
 
 Voice Assistant response state is now tied to TTS/media-player announcement
-lifecycle callbacks through `runtime_fsm`. Slow local TTS backends can exceed
+lifecycle callbacks through `runtime_controller`. Slow local TTS backends can exceed
 ESPHome's historical 2-second playback-start watchdog, especially XTTS running
 locally. This prerelease temporarily ships a project-local `voice_assistant`
 fork that exposes `tts_playback_start_timeout`; maintained full profiles set
