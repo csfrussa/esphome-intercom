@@ -65,6 +65,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _sip_send_bye,
         _sip_send_final_response,
         _sip_uri_transport,
+        _sip_accounts,
         _enable_reused_sip_tcp_connection,
         _async_build_peer_snapshot,
         _pending_routes,
