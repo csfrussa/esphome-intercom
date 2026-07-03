@@ -17,6 +17,24 @@ or a trunk when you want the system to grow.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
+## Architecture / Related Repositories
+
+This repository is the product layer: SIP/SDP/RTP on ESPHome devices, the Home
+Assistant integration, PBX-style routing, the Lovelace softphone card, ready
+device YAMLs and end-to-end documentation.
+
+Two lower-level engines are maintained as reusable ESPHome component repos:
+
+| Repository | Role |
+|---|---|
+| [`esphome-intercom`](https://github.com/n-IA-hane/esphome-intercom) | VoIP Stack platform: ESP SIP endpoints, Home Assistant B2BUA/router/registrar/trunk integration, Lovelace card, phonebook, ready product YAMLs. |
+| [`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack) | Audio engine: full-duplex I2S/codec/TDM ownership, software AEC, Espressif AFE, clean microphone and speaker surfaces for ESPHome consumers. |
+| [`esphome-runtime-controller`](https://github.com/n-IA-hane/esphome-runtime-controller) | State reducer: deterministic LED/display/audio-policy arbitration when Voice Assistant, media, announcements, timers, mute and VoIP overlap. |
+
+The split is intentional. `voip_stack` can run standalone on native ESPHome
+microphone/speaker components; full voice products add `esp_audio_stack` for
+audio hardware/AEC/AFE and `runtime_controller` for UI and policy arbitration.
+
 ![Dashboard Demo](docs/images/dashboard.gif)
 
 _Runtime demo: browser softphone, ESP call state and audio controls moving together._
@@ -57,23 +75,24 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 | Incoming external calls | Register a provider/PBX trunk. | External calls can ring HA, follow DTMF routing, or be forwarded to ESPs/local contacts. |
 | Voice Assistant calling | Enable the optional VoIP Stack Assist intents. | Satellites can call contacts, answer, decline or hang up by voice. |
 
-### One-Way Audio Endpoints
+## Endpoint Capabilities
 
-VoIP Stack also supports intentionally one-way audio devices:
+VoIP Stack endpoints advertise what media path they actually have. That lets a
+single dial plan cover normal phones, paging speakers, monitor microphones and
+control panels without pretending every device is full-duplex.
 
-- **mic-only** endpoints send microphone audio but do not play remote audio;
-- **speaker-only** endpoints play incoming audio but do not transmit a
-  microphone stream;
-- **control-only** endpoints keep SIP signaling, call state and phonebook
-  behavior without media.
-
-This is useful for boards with only one audio direction populated, external
-amplifiers, paging speakers, monitor microphones or custom installations where
-full-duplex hardware is not available.
+| Capability | Media path | Use case |
+|---|---|---|
+| `full_duplex` | Microphone TX + speaker RX | Room phones, door intercoms, wall panels and normal two-way calls. |
+| `mic_only` | Microphone TX only | Monitor microphones, outdoor call stations, capture-only endpoints. |
+| `speaker_only` | Speaker RX only | Paging speakers, announcement targets, remote audio outputs. |
+| `control_only` | SIP signaling, state and phonebook only | LVGL/control panels, automation endpoints, call-state devices without local media. |
 
 ## Table of Contents
 
 - [What Can You Build With It?](#what-can-you-build-with-it)
+- [Architecture / Related Repositories](#architecture--related-repositories)
+- [Endpoint Capabilities](#endpoint-capabilities)
 - [Fastest Start](#fastest-start)
 - [What's New](#whats-new)
 - [Breaking Changes](#breaking-changes)
@@ -900,6 +919,19 @@ flowchart TD
 This is the whole product in one picture: HA is the SIP routing and phonebook
 hub; each ESP owns its SIP phone state, audio path and local dial plan mirror.
 
+### Why Not Raw Duplex UDP?
+
+A raw ESP-to-HA audio stream is enough for a single fixed intercom demo. It is
+not enough for a local phone system.
+
+VoIP Stack uses SIP/SDP/RTP because Home Assistant needs to act as a real call
+hub: it can route across subnets, bridge ESPs, browser softphones, registered
+SIP clients and trunks, negotiate media formats per leg, publish one shared
+phonebook, expose deterministic call reasons, and keep softphone/trunk behavior
+out of the ESP firmware. ESP-to-ESP direct calls still work when both endpoints
+share a compatible transport and media format, but HA remains the place where
+roster, trunking, DTMF routing and format conversion belong.
+
 ## Technical Details
 
 ### Audio Format
@@ -1212,22 +1244,22 @@ sequenceDiagram
 
 ### Tested Configurations
 
-| Device | YAML | Microphone | Speaker | I2S Mode | Audio pipeline | Features |
-|--------|------|------------|---------|----------|----------------|----------|
-| **Spotpear Ball v2 (AFE)** | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + VoIP + LVGL |
-| **Spotpear Ball v2 (VoIP)** | [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | VoIP only |
-| **Waveshare S3-Audio (AFE)** | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LED + AFE switches/sensors |
-| **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LVGL touch |
-| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
-| **Generic S3 (full AEC light)** | [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP, lighter 4 MB-oriented preset |
-| **Generic S3 (full AEC light, dual bus)** | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP on separated I2S buses |
-| **Generic S3 (full AFE, untested)** | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + VoIP, requires >4 MB app slot |
-| **Generic S3 (full native)** | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends, separated I2S mic/speaker paths, or native audio testing |
-| **Generic S3 (native VoIP full-duplex)** | [`generic-s3-voip-esphome-native-full-duplex.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-full-duplex.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Separated native ESPHome audio paths | None in firmware; use hardware/DSP AEC if needed | VoIP-only native ESPHome audio for two independent I2S paths, not a shared single-bus AEC backend |
-| **Generic S3 (native VoIP mic-only)** | [`generic-s3-voip-esphome-native-mic-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-mic-only.yaml) | Native ESPHome mic or processed front-end | None | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | One-way microphone endpoint |
-| **Generic S3 (native VoIP speaker-only)** | [`generic-s3-voip-esphome-native-speaker-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-speaker-only.yaml) | None | Native ESPHome speaker | Native ESPHome audio | Not applicable | One-way speaker endpoint |
-| **Generic S3 single bus (VoIP)** | [`generic-s3-voip.yaml`](yamls/voip-only/single-bus/generic-s3-voip.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | VoIP only |
-| **Generic S3 dual bus (VoIP)** | [`generic-s3-voip.yaml`](yamls/voip-only/dual-bus/generic-s3-voip.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | VoIP only |
+| Device | Status | YAML | Microphone | Speaker | I2S Mode | Audio pipeline | Features |
+|--------|--------|------|------------|---------|----------|----------------|----------|
+| **Spotpear Ball v2 (AFE)** | Tested | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + VoIP + LVGL |
+| **Spotpear Ball v2 (VoIP)** | Tested | [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | VoIP only |
+| **Waveshare S3-Audio (AFE)** | Tested | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LED + AFE switches/sensors |
+| **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | Hardware-test target | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LVGL touch |
+| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | Hardware-test target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
+| **Generic S3 (full AEC light)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP, lighter 4 MB-oriented preset |
+| **Generic S3 (full AEC light, dual bus)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP on separated I2S buses |
+| **Generic S3 (full AFE, untested)** | Expected-working | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + VoIP, requires >4 MB app slot |
+| **Generic S3 (full native)** | Reference YAML | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Native ESPHome audio | Native ESPHome `microphone`/`speaker`, no software AEC | Full experience for XMOS/hardware-AEC front-ends, separated I2S mic/speaker paths, or native audio testing |
+| **Generic S3 (native VoIP full-duplex)** | Reference YAML | [`generic-s3-voip-esphome-native-full-duplex.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-full-duplex.yaml) | Native ESPHome mic or processed front-end | Native ESPHome speaker | Separated native ESPHome audio paths | None in firmware; use hardware/DSP AEC if needed | VoIP-only native ESPHome audio for two independent I2S paths, not a shared single-bus AEC backend |
+| **Generic S3 (native VoIP mic-only)** | Reference YAML | [`generic-s3-voip-esphome-native-mic-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-mic-only.yaml) | Native ESPHome mic or processed front-end | None | Native ESPHome audio | None in firmware; use hardware/DSP AEC if needed | One-way microphone endpoint |
+| **Generic S3 (native VoIP speaker-only)** | Reference YAML | [`generic-s3-voip-esphome-native-speaker-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-speaker-only.yaml) | None | Native ESPHome speaker | Native ESPHome audio | Not applicable | One-way speaker endpoint |
+| **Generic S3 single bus (VoIP)** | Reference YAML | [`generic-s3-voip.yaml`](yamls/voip-only/single-bus/generic-s3-voip.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` + `previous_frame` ref | VoIP only |
+| **Generic S3 dual bus (VoIP)** | Reference YAML | [`generic-s3-voip.yaml`](yamls/voip-only/dual-bus/generic-s3-voip.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` + `previous_frame` ref | VoIP only |
 
 > **Want to help expand this list?** Send me a device to test or consider a [donation](https://github.com/sponsors/n-IA-hane), every bit helps!
 
