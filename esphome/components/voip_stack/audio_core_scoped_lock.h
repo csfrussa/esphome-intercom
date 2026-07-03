@@ -6,7 +6,7 @@
 #include <freertos/semphr.h>
 
 namespace esphome {
-namespace audio_processor {
+namespace audio_core {
 
 /// RAII guard around a FreeRTOS mutex / counting semaphore handle, with an
 /// optional acquire timeout.
@@ -23,7 +23,7 @@ namespace audio_processor {
 ///
 /// Usage:
 /// \code
-///   audio_processor::ScopedLock lock(this->spk_ref_mutex_, pdMS_TO_TICKS(2));
+///   audio_core::ScopedLock lock(this->spk_ref_mutex_, pdMS_TO_TICKS(2));
 ///   if (lock) {
 ///     // protected section, auto-released on scope exit
 ///   }
@@ -59,7 +59,7 @@ class ScopedLock {
   bool locked_;
 };
 
-}  // namespace audio_processor
+}  // namespace audio_core
 }  // namespace esphome
 
 #endif  // USE_ESP32

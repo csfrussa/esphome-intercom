@@ -12,39 +12,65 @@
 # This is an experimental bring-up target, not a validated release preset.
 # =============================================================================
 
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
 substitutions:
   name: ha-voice-pe-voip
   friendly_name: Home Assistant Voice PE VoIP
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
 
 # Start from the official Voice PE YAML, then add only VoIP transport,
 # phonebook sync and HA call-control actions.
+
 packages:
-  voice_pe_base: github://n-IA-hane/esphome-intercom/home-assistant-voice.yaml@dev
+  voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
   voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
   phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
   voip_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
   voip_ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
 
+# =============================================================================
+# BOARD AND MEMORY
+# =============================================================================
+
 # Device identity. The MAC suffix keeps this experimental profile from
 # colliding with a normal Voice PE already adopted in HA.
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   name_add_mac_suffix: true
 
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+
 # Only project components that are missing from the official Voice PE base.
+
 external_components:
   - source: ${ext_components_source}
-    components: [audio_processor, voip_stack]
+    components: [voip_stack]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
 
 # Standard Wi-Fi credentials; the base package owns the rest of the Voice PE
 # platform configuration.
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
 
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+
 # Extend the official Voice PE mixer with a dedicated VoIP input.
+
 speaker:
   # The official Voice PE mixer already combines media and announcements.
   # Add one more input for VoIP audio instead of replacing the hardware
@@ -60,10 +86,21 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
 
+# =============================================================================
+# MEDIA, ASSIST AND VOIP
+# =============================================================================
+
 # Local SIP phone using the Voice PE processed XMOS microphone and the extra
 # mixer input above for RTP receive audio.
+
 voip_stack:
   id: phone
+  audio:
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
   microphone_source:
     microphone: i2s_mics
     channels: 0
@@ -97,7 +134,12 @@ voip_stack:
         decibel_reduction: 0
         duration: 1.0s
 
+# =============================================================================
+# RUNTIME LOGIC AND ENTITIES
+# =============================================================================
+
 # Optional HA buttons for manual call control from the ESPHome integration.
+
 button:
   - platform: voip_stack
     voip_stack_id: phone

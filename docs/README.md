@@ -34,7 +34,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - 🧱 **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) describes component
   decomposition, threading/core affinity, per-frame data flow, the
-  `audio_processor` contract, and the drain protocol for glitch-free config
+  internal audio core contract, and the drain protocol for glitch-free config
   changes.
 
 - 🧯 **Troubleshooting**: [troubleshooting.md](troubleshooting.md) lists common
@@ -51,7 +51,7 @@ Each ESPHome component ships its own README with the full option list, YAML snip
 
 - [`voip_stack`](../esphome/components/voip_stack/README.md), the ESP SIP
   phone component and Home Assistant bridge integration surface.
-- [`esp_audio_stack`](../esphome/components/esp_audio_stack/README.md), the
+- [`esp_audio_stack`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_audio_stack), the
   coordinated full-duplex audio backend for shared codec buses, dual I2S
   MEMS/amp boards that need software reference handling, Espressif
   rate/layout conversion, AEC reference capture, PSRAM placement and
@@ -67,6 +67,6 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   YAML-programmed reducer used by maintained full-experience profiles to derive
   LED, LVGL/display, audio ducking, ringtone and timer policies from one state
   snapshot. It is control-plane only and does not process audio samples.
-- [`esp_aec`](../esphome/components/esp_aec/README.md), standalone ESP-SR echo cancellation.
-- [`esp_afe`](../esphome/components/esp_afe/README.md), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
-- [`audio_processor`](../esphome/components/audio_processor/README.md), the abstract processor interface that `esp_aec` and `esp_afe` implement.
+- [`esp_aec`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_aec), standalone ESP-SR echo cancellation.
+- [`esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
+- internal shared audio primitives used privately by `voip_stack` and by the split audio-stack repository.

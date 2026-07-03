@@ -10,8 +10,8 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
-#include "../audio_processor/ring_buffer_caps.h"
-#include "../audio_processor/task_utils.h"
+#include "audio_core_ring_buffer_caps.h"
+#include "audio_core_task_utils.h"
 #ifdef USE_ESPHOME_VOIP_SIP_TRANSPORT
 #include "sip_transport.h"
 #endif
@@ -70,7 +70,7 @@ void VoipStack::cleanup_partial_setup_() {
   // Transactional setup cleanup. force_delete is safe here only because tasks
   // were just spawned and have not entered a blocking upstream call yet.
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
-  audio_processor::force_delete_pinned_task(&this->tx_task_handle_, &this->tx_task_stack_,
+  audio_core::force_delete_pinned_task(&this->tx_task_handle_, &this->tx_task_stack_,
                                              VoipStack::kTxTaskStackBytes);
 
   RAMAllocator<int16_t> i16_alloc;
@@ -88,7 +88,7 @@ void VoipStack::cleanup_partial_setup_() {
   this->mic_buffer_.reset();
 #endif
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
-  audio_processor::force_delete_pinned_task(&this->rx_task_handle_, &this->rx_task_stack_,
+  audio_core::force_delete_pinned_task(&this->rx_task_handle_, &this->rx_task_stack_,
                                              VoipStack::kRxTaskStackBytes);
   this->rx_jitter_buffer_.reset();
   RAMAllocator<uint8_t> rx_u8_alloc;
@@ -116,8 +116,8 @@ bool VoipStack::allocate_setup_buffers_() {
     const size_t tx_frame_bytes = this->tx_audio_chunk_bytes_();
     const size_t tx_buffer_bytes = std::max<size_t>(tx_frame_bytes * 16, tx_frame_bytes + 4096);
     this->mic_buffer_ = this->buffers_in_psram_
-        ? audio_processor::create_prefer_psram(tx_buffer_bytes, "voip.mic")
-        : audio_processor::create_internal(tx_buffer_bytes, "voip.mic");
+        ? audio_core::create_prefer_psram(tx_buffer_bytes, "voip.mic")
+        : audio_core::create_internal(tx_buffer_bytes, "voip.mic");
     if (!this->mic_buffer_) {
       ESP_LOGE(TAG, "Failed to allocate mic ring buffer");
       return false;
@@ -178,7 +178,7 @@ bool VoipStack::allocate_setup_buffers_() {
   return true;
 }
 
-bool VoipStack::setup_audio_processor_() {
+bool VoipStack::setup_audio_helpers_() {
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
   if (this->microphone_ != nullptr) {
     this->microphone_->add_data_callback([this](const std::vector<uint8_t> &data) {
@@ -245,7 +245,7 @@ bool VoipStack::start_runtime_tasks_() {
   // TX task exists only when a microphone is configured. Speaker-only peers
   // still accept calls and play incoming audio through the transport recv task.
   if (this->has_microphone_()) {
-    if (!audio_processor::start_pinned_task(VoipStack::tx_task, "voip_tx",
+    if (!audio_core::start_pinned_task(VoipStack::tx_task, "voip_tx",
                                              VoipStack::kTxTaskStackBytes, this, VoipStack::kMediaTaskPriority, 0,
                                              this->task_stacks_in_psram_, TAG,
                                              &this->tx_task_handle_, &this->tx_task_tcb_,
@@ -256,7 +256,7 @@ bool VoipStack::start_runtime_tasks_() {
 #endif
 #ifdef USE_ESPHOME_VOIP_STACK_SPEAKER
   if (this->has_speaker_()) {
-    if (!audio_processor::start_pinned_task(VoipStack::rx_task, "voip_rx",
+    if (!audio_core::start_pinned_task(VoipStack::rx_task, "voip_rx",
                                              VoipStack::kRxTaskStackBytes, this, VoipStack::kMediaTaskPriority, 0,
                                              this->task_stacks_in_psram_, TAG,
                                              &this->rx_task_handle_, &this->rx_task_tcb_,
@@ -296,7 +296,7 @@ void VoipStack::setup() {
     this->fail_setup_();
     return;
   }
-  if (!this->setup_audio_processor_()) {
+  if (!this->setup_audio_helpers_()) {
     this->fail_setup_();
     return;
   }

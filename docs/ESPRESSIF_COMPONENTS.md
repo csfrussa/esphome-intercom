@@ -42,13 +42,13 @@ The public composition stays modular:
 
 | ESPHome component | Espressif backend it owns | Required project components | Optional peers |
 |---|---|---|---|
-| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `voip_stack`, MWW and VA as consumers |
-| `esp_aec` | `esp-sr` low-level `afe_aec` API | `audio_processor` | `esp_audio_stack` or standalone `voip_stack` as the caller |
-| `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | `audio_processor` | `esp_audio_stack` as the required steady-frame caller |
+| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | internal audio core shared primitives and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `voip_stack`, MWW and VA as consumers |
+| `esp_aec` | `esp-sr` low-level `afe_aec` API | internal audio core | `esp_audio_stack` or standalone `voip_stack` as the caller |
+| `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | internal audio core | `esp_audio_stack` as the required steady-frame caller |
 | `voip_stack` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `esp_audio_stack` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
 
 `esp_audio_stack` does not depend on `voip_stack`. A user can install only
-`audio_processor`, `esp_audio_stack` and optionally `esp_aec` or `esp_afe` for
+`esp_audio_stack` and optionally `esp_aec` or `esp_afe` for
 a Voice Assistant, media-player, microphone/speaker, or custom callback build.
 The cross-component validation only runs when both `esp_audio_stack` and
 `voip_stack` appear in the same YAML, to prevent double ownership of AEC or

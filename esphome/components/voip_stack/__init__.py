@@ -22,9 +22,7 @@ DEPENDENCIES = ["esp32"]
 
 
 def AUTO_LOAD(config):
-    # audio_processor is still an internal helper provider for task/ring-buffer
-    # utilities used by the transport. It is not an VoIP DSP mode.
-    return ["audio_processor", "button", "switch", "number", "text_sensor"]
+    return ["button", "switch", "number", "text_sensor"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -744,7 +742,7 @@ def _add_static_contacts(var, config):
         cg.add(var.add_contact(_static_contact_entry(contact, default_transport)))
 
 
-async def _add_device_and_audio_processor_settings(var, config):
+async def _add_device_and_audio_settings(var, config):
     # Set device name (used to exclude self from the contacts list)
     from esphome.core import CORE
     cg.add(var.set_device_name(CORE.friendly_name or CORE.name))
@@ -985,7 +983,7 @@ async def to_code(config):
 
     await _add_core_settings(var, config)
     _add_transport_settings(var, config)
-    await _add_device_and_audio_processor_settings(var, config)
+    await _add_device_and_audio_settings(var, config)
     _add_static_contacts(var, config)
     await _build_voip_automations(var, config)
     await _build_voip_text_sensors(var, config)

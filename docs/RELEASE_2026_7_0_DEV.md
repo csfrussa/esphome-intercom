@@ -1,4 +1,4 @@
-# 2026.7.0-dev — from PBX-lite to real PBX, SIP/VoIP phones and high-rate media
+# 2026.7.0-dev - from PBX-lite to real PBX, SIP/VoIP phones and high-rate media
 
 This is a **development prerelease** for field testing the next VoIP generation
 before it becomes a stable release. It contains the largest call-control change

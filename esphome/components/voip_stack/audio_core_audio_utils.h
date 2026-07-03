@@ -142,6 +142,8 @@ static inline float compute_rms_dbfs_i32_top16(const int32_t *data, size_t sampl
 }
 #endif
 
+#ifndef ESPHOME_DC_BLOCKER_STATE_DEFINED
+#define ESPHOME_DC_BLOCKER_STATE_DEFINED
 struct DcBlockerState {
   int32_t prev_input_q16{0};
   int32_t prev_output_q16{0};
@@ -156,5 +158,6 @@ struct DcBlockerState {
     return static_cast<int16_t>(output >> 16);
   }
 };
+#endif
 
 }  // namespace esphome

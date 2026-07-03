@@ -10,8 +10,8 @@
 # ESPHome i2s_audio microphone/speaker components instead of esp_audio_stack.
 #
 # Intended use:
-#   - hardware that already provides processed/AEC audio before ESPHome, for
-#     example XMOS front-ends that output echo-cancelled PCM;
+#   - hardware codecs/front-ends that already provide processed/AEC audio
+#     before ESPHome, for example XMOS-based boards;
 #   - regression testing voip_stack standalone against standard ESPHome audio;
 #   - simple dual-I2S MEMS + amplifier builds where echo cancellation is not
 #     needed.
@@ -53,15 +53,38 @@
 #     GND      -> GND
 # =============================================================================
 
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
 substitutions:
   name: generic-s3-full-native
   friendly_name: Generic S3 Full Native
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+  runtime_controller_components_source: "github://n-IA-hane/esphome-runtime-controller@main"
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
   mic_id: native_mic_raw
   runtime_controller_led_preset: rgb_single
 
+  # ---------------------------------------------------------------------------
+  # Pinout: native microphone I2S bus
+  # ---------------------------------------------------------------------------
+  rx_i2s_bclk_pin: GPIO9
+  rx_i2s_lrclk_pin: GPIO10
+  rx_i2s_din_pin: GPIO11
+
+  # ---------------------------------------------------------------------------
+  # Pinout: native speaker I2S bus
+  # ---------------------------------------------------------------------------
+  tx_i2s_bclk_pin: GPIO12
+  tx_i2s_lrclk_pin: GPIO13
+  tx_i2s_dout_pin: GPIO14
+
+  # ---------------------------------------------------------------------------
+  # Pinout: speaker amplifier and optional status LED
+  # ---------------------------------------------------------------------------
   speaker_enable_pin: GPIO18
   status_led_pin: GPIO48
   status_led_chipset: WS2812
@@ -69,9 +92,10 @@ substitutions:
 
 # Shared packages: full VA/VoIP runtime, runtime controller, phonebook sync,
 # native diagnostics and the 48 kHz mixer/media-player path.
+
 packages:
   core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-runtime-controller/packages/runtime_controller/full_controller.yaml@main
   va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
   call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
   ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
@@ -88,13 +112,19 @@ packages:
   va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@dev
   flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@dev
 
+# =============================================================================
+# BOARD AND MEMORY
+# =============================================================================
+
 # Device identity exposed to ESPHome, Home Assistant and OTA.
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
 
 # ESP32-S3 target and ESP-IDF tuning. External mbedTLS allocation allows TLS
 # clients and media buffers to use PSRAM where supported.
+
 esp32:
   board: freenove_esp32_s3_wroom
   variant: esp32s3
@@ -110,16 +140,45 @@ esp32:
 
 # OPI PSRAM is required by the full native profile for media buffers, codecs and
 # larger task stacks.
+
 psram:
   mode: octal
   speed: 80MHz
 
 # Keep restored settings durable without writing flash on every slider change.
+
 preferences:
   flash_write_interval: 5min
 
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+
+# Project components pulled from the selected source. This native profile avoids
+# esp_audio_stack on purpose, but still uses voip_stack/runtime_controller and
+# the shared speaker/voice_assistant component patches.
+
+external_components:
+  - source: ${ext_components_source}
+    components: [voip_stack, speaker, voice_assistant]
+  - source: ${runtime_controller_components_source}
+    components: [runtime_controller]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+# Normal Wi-Fi client mode. Power save is disabled because VoIP media and HA
+# API updates are latency-sensitive.
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: NONE
+
 # Home Assistant native API. The included VoIP packages add service actions for
 # call control, phonebook sync and runtime diagnostics.
+
 api:
 
 # OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
@@ -129,6 +188,7 @@ ota:
 
 # USB Serial/JTAG logger. Keep core VoIP logs at INFO for field diagnostics;
 # noisy ESPHome component domains stay WARN unless this YAML is being debugged.
+
 logger:
   hardware_uart: USB_SERIAL_JTAG
   level: INFO
@@ -163,50 +223,51 @@ logger:
     wifi: INFO
     json: INFO
 
-# Normal Wi-Fi client mode. Power save is disabled because VoIP media and HA
-# API updates are latency-sensitive.
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  power_save_mode: NONE
+# =============================================================================
+# BUSES
+# =============================================================================
 
-# Project components pulled from the selected source. This native profile avoids
-# esp_audio_stack on purpose, but still uses voip_stack/runtime_controller and
-# the shared speaker/voice_assistant component patches.
-external_components:
-  - source: ${ext_components_source}
-    components: [voip_stack, audio_processor, runtime_controller, speaker, voice_assistant]
+# Two independent native ESPHome I2S buses: one for the microphone and one for
+# the amplifier. This is the reference path for testing VoIP without
+# esp_audio_stack.
+
+i2s_audio:
+  - id: rx_i2s
+    i2s_bclk_pin: ${rx_i2s_bclk_pin}
+    i2s_lrclk_pin: ${rx_i2s_lrclk_pin}
+
+  - id: tx_i2s
+    i2s_bclk_pin: ${tx_i2s_bclk_pin}
+    i2s_lrclk_pin: ${tx_i2s_lrclk_pin}
+
+# =============================================================================
+# OUTPUTS AND LIGHTS
+# =============================================================================
 
 # Speaker amplifier enable pin. If your MAX98357A board has SD/EN tied high,
 # this output can remain unused or be removed in a custom YAML.
+
 output:
   - platform: gpio
     id: speaker_enable
     pin: ${speaker_enable_pin}
 
-# Two independent native ESPHome I2S buses: one for the microphone and one for
-# the amplifier. This is the reference path for testing VoIP without
-# esp_audio_stack.
-i2s_audio:
-  - id: rx_i2s
-    i2s_bclk_pin: GPIO9
-    i2s_lrclk_pin: GPIO10
-
-  - id: tx_i2s
-    i2s_bclk_pin: GPIO12
-    i2s_lrclk_pin: GPIO13
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
 
 # Native ESPHome microphone. It feeds three consumers through MicrophoneSource:
 # Voice Assistant, Micro Wake Word and VoIP TX.
 # INMP441 is strapped to the right slot. Keep the wire in stereo and let each
 # MicrophoneSource select channel 1; this matches the stable full-duplex path
 # and avoids mono-slot silence on some IDF/board combinations.
+
 microphone:
   - platform: i2s_audio
     id: native_mic_raw
     adc_type: external
     i2s_audio_id: rx_i2s
-    i2s_din_pin: GPIO11
+    i2s_din_pin: ${rx_i2s_din_pin}
     channel: stereo
     sample_rate: 16000
     bits_per_sample: 32bit
@@ -214,19 +275,25 @@ microphone:
 
 # Native ESPHome speaker sink. The mixer/resampler package above provides the
 # shared 48 kHz software input used by media playback, TTS, ringtone and VoIP RX.
+
 speaker:
   - platform: i2s_audio
     id: hw_speaker
     dac_type: external
     i2s_audio_id: tx_i2s
-    i2s_dout_pin: GPIO14
+    i2s_dout_pin: ${tx_i2s_dout_pin}
     channel: mono
     sample_rate: 48000
     bits_per_sample: 16bit
     buffer_duration: 100ms
     timeout: 500ms
 
+# =============================================================================
+# MEDIA, ASSIST AND VOIP
+# =============================================================================
+
 # Micro Wake Word listens to the same native microphone on channel 1.
+
 micro_wake_word:
   microphone:
     id: mww_mic_source
@@ -239,6 +306,7 @@ micro_wake_word:
 
 # Voice Assistant uses the native mic and the shared media_player output. This
 # profile has no software AEC, so plain speakers may echo into VA.
+
 voice_assistant:
   microphone:
     - id: va_mic_source
@@ -255,6 +323,7 @@ voice_assistant:
 # Local SIP phone. TX comes from the native microphone source; RX goes through
 # the shared speaker mixer at 48 kHz. HA owns the normal central phonebook and
 # pushes updates through the included API package.
+
 voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
@@ -275,8 +344,72 @@ voip_stack:
   delete_contact_missing_from:
     updates_number: 1
 
+# =============================================================================
+# RUNTIME LOGIC AND ENTITIES
+# =============================================================================
+
+# Local BOOT button: short press controls VA/call toggle, double press changes
+# contact, long press toggles microphone mute.
+
+binary_sensor:
+  # BOOT button (GPIO0), multi-click.
+  - platform: gpio
+    name: Boot Button
+    id: boot_button
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+      # Single click: call toggle if VoIP call active, otherwise VA start/stop.
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                not:
+                  - voip_stack.is_idle:
+              then:
+                - voip_stack.call_toggle:
+              else:
+                - if:
+                    condition:
+                      voice_assistant.is_running:
+                    then:
+                      - voice_assistant.stop:
+                    else:
+                      - voice_assistant.start:
+      # Double click: next contact.
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for at most 300ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - voip_stack.next_contact:
+      # Long press (1-3s): toggle mute.
+      - timing:
+          - ON for 1s to 3s
+          - OFF for at least 300ms
+        then:
+          - switch.toggle: mute
+
+# Hardware speaker power switch. It controls the amplifier enable pin only; the
+# mixer/media/VoIP software paths remain configured while the amp is off.
+
+switch:
+  - platform: output
+    id: speaker_power
+    name: Speaker Power
+    output: speaker_enable
+    restore_mode: RESTORE_DEFAULT_ON
+
 # User-facing master volume. The mixer ducking value is derived here so media,
 # TTS, ringtone and VoIP share one perceived output level.
+
 number:
   - platform: template
     id: master_volume
@@ -344,60 +477,3 @@ number:
           id(mww_mic_source).set_gain_factor(factor);
           id(voip_mic_source).set_gain_factor(factor);
           ESP_LOGI("audio", "Native mic boost %.0fdB -> MicrophoneSource gain_factor=%d", clamped, factor);
-
-# Hardware speaker power switch. It controls the amplifier enable pin only; the
-# mixer/media/VoIP software paths remain configured while the amp is off.
-switch:
-  - platform: output
-    id: speaker_power
-    name: Speaker Power
-    output: speaker_enable
-    restore_mode: RESTORE_DEFAULT_ON
-
-# Local BOOT button: short press controls VA/call toggle, double press changes
-# contact, long press toggles microphone mute.
-binary_sensor:
-  # BOOT button (GPIO0), multi-click.
-  - platform: gpio
-    name: Boot Button
-    id: boot_button
-    pin:
-      number: GPIO0
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    on_multi_click:
-      # Single click: call toggle if VoIP call active, otherwise VA start/stop.
-      - timing:
-          - ON for at most 500ms
-          - OFF for at least 400ms
-        then:
-          - if:
-              condition:
-                not:
-                  - voip_stack.is_idle:
-              then:
-                - voip_stack.call_toggle:
-              else:
-                - if:
-                    condition:
-                      voice_assistant.is_running:
-                    then:
-                      - voice_assistant.stop:
-                    else:
-                      - voice_assistant.start:
-      # Double click: next contact.
-      - timing:
-          - ON for 50ms to 500ms
-          - OFF for at most 300ms
-          - ON for 50ms to 500ms
-          - OFF for at least 400ms
-        then:
-          - voip_stack.next_contact:
-      # Long press (1-3s): toggle mute.
-      - timing:
-          - ON for 1s to 3s
-          - OFF for at least 300ms
-        then:
-          - switch.toggle: mute

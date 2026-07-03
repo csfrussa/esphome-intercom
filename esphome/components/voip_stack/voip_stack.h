@@ -7,8 +7,8 @@
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 #include "esphome/core/preferences.h"
-#include "../audio_processor/audio_utils.h"
-#include "../audio_processor/ring_buffer_caps.h"
+#include "audio_core_audio_utils.h"
+#include "audio_core_ring_buffer_caps.h"
 
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
 #include "esphome/components/microphone/microphone.h"
@@ -331,7 +331,7 @@ class VoipStack : public Component {
   // failure cleanup stays in one place.
   void cleanup_partial_setup_();
   bool allocate_setup_buffers_();
-  bool setup_audio_processor_();
+  bool setup_audio_helpers_();
   bool setup_transport_();
   bool start_runtime_tasks_();
   void append_audio_format_(AudioFormatList *list, const AudioFormat &format);
@@ -498,7 +498,7 @@ class VoipStack : public Component {
 
 #ifdef USE_ESPHOME_VOIP_STACK_MIC
   // Audio buffers
-  audio_processor::RingBufferPtr mic_buffer_;
+  audio_core::RingBufferPtr mic_buffer_;
 
   // Per-iteration drain buffers, heap-allocated at setup() so the audio
   // tasks don't carry 4 KB VLAs on top of an 8 KB stack.

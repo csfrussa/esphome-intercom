@@ -9,7 +9,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
-#include "../audio_processor/audio_utils.h"
+#include "audio_core_audio_utils.h"
 
 namespace esphome {
 namespace voip_stack {

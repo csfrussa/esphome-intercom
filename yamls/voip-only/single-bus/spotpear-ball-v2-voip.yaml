@@ -21,6 +21,10 @@
 #   horizontal swipe in call idle : prev/next contact (right=prev, left=next)
 # =============================================================================
 
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
 substitutions:
   # Hardware identity is shared by the SIP transport setting. The selected
   # SIP transport setting is exposed by the SIP transport sensor and the unified
@@ -29,6 +33,7 @@ substitutions:
   friendly_name: Spotpear Ball v2
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
 
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
@@ -59,9 +64,37 @@ substitutions:
   display_width: "240"
   display_height: "240"
 
-# =============================================================================
-# Packages
-# =============================================================================
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 codec control bus
+  # ---------------------------------------------------------------------------
+  codec_i2c_sda_pin: GPIO15
+  codec_i2c_scl_pin: GPIO14
+
+  # ---------------------------------------------------------------------------
+  # Pinout: CST816 touch controller bus
+  # ---------------------------------------------------------------------------
+  touch_i2c_sda_pin: GPIO11
+  touch_i2c_scl_pin: GPIO7
+
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 audio bus
+  # ---------------------------------------------------------------------------
+  i2s_mclk_pin: GPIO16
+  i2s_bclk_pin: GPIO9
+  i2s_lrclk_pin: GPIO45
+  i2s_din_pin: GPIO10
+  i2s_dout_pin: GPIO8
+
+  # ---------------------------------------------------------------------------
+  # Pinout: board controls and display
+  # ---------------------------------------------------------------------------
+  battery_adc_pin: GPIO1
+  main_button_pin: GPIO0
+  speaker_enable_pin: GPIO46
+  display_backlight_pin: GPIO42
+  touch_interrupt_pin: GPIO12
+  touch_reset_pin: GPIO6
+
 # Shared packages: voip-only call controls, phonebook sync, Spotpear LED/LVGL
 # navigation, esp_audio_stack codec controls and AEC controls.
 packages:
@@ -87,8 +120,9 @@ packages:
   spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_voip_only.yaml@dev
 
 # =============================================================================
-# Core
+# BOARD AND MEMORY
 # =============================================================================
+
 # Device identity and boot choreography for the round LVGL call UI.
 esphome:
   name: ${name}
@@ -115,6 +149,7 @@ esphome:
       - script.execute: draw_display
 
 # ESP32-S3 target used by Spotpear Ball v2.
+
 esp32:
   board: esp32-s3-devkitc-1
   flash_size: 16MB
@@ -124,13 +159,48 @@ esp32:
       compiler_optimization: PERF
 
 # OPI PSRAM is required by LVGL assets, codec buffers and VoIP/audio tasks.
+
 psram:
   mode: octal
   speed: 80MHz
 
 # =============================================================================
-# Connectivity
+# EXTERNAL COMPONENTS
 # =============================================================================
+
+external_components:
+  - source: ${ext_components_source}
+    components: [voip_stack]
+  - source: ${audio_stack_components_source}
+    components: [esp_audio_stack, esp_aec]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+# Conservative high-performance network profile for VoIP and LVGL media.
+
+network:
+  enable_high_performance: true
+
+# Normal Wi-Fi client mode. Power save is disabled for low-latency SIP/RTP and
+# reliable HA API updates.
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Keep voip endpoints reachable; ESP32 LIGHT power save hurts API/ARP
+  # reliability during HA disconnect/reconnect cycles.
+  power_save_mode: NONE
+  on_connect:
+    - globals.set:
+        id: draw_display_pending
+        value: "true"
+  on_disconnect:
+    - globals.set:
+        id: draw_display_pending
+        value: "true"
+
 api:
   on_client_connected:
     - globals.set:
@@ -146,6 +216,7 @@ ota:
 
 # USB Serial/JTAG logger. VoIP/audio domains stay visible at INFO; noisy entity
 # domains stay WARN for normal field use.
+
 logger:
   hardware_uart: USB_SERIAL_JTAG
   # DEBUG keeps SIP signaling + AEC/AFE/i2s lifecycle visible.
@@ -168,28 +239,8 @@ logger:
     api.connection: WARN
     component: WARN
 
-# Conservative high-performance network profile for VoIP and LVGL media.
-network:
-  enable_high_performance: true
-
-# Normal Wi-Fi client mode. Power save is disabled for low-latency SIP/RTP and
-# reliable HA API updates.
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  # Keep voip endpoints reachable; ESP32 LIGHT power save hurts API/ARP
-  # reliability during HA disconnect/reconnect cycles.
-  power_save_mode: NONE
-  on_connect:
-    - globals.set:
-        id: draw_display_pending
-        value: "true"
-  on_disconnect:
-    - globals.set:
-        id: draw_display_pending
-        value: "true"
-
 # SNTP clock used by status pages and timestamped diagnostics.
+
 time:
   - platform: sntp
     id: my_time
@@ -200,44 +251,69 @@ time:
       - 2.pool.ntp.org
 
 # =============================================================================
-# External components
+# BUSES
 # =============================================================================
-external_components:
-  - source: ${ext_components_source}
-    components: [voip_stack, esp_audio_stack, esp_aec, audio_processor]
 
-# =============================================================================
-# I2C buses (separate buses for codec and touchscreen)
-# =============================================================================
 i2c:
   - id: i2c_bus
-    sda: GPIO15
-    scl: GPIO14
+    sda: ${codec_i2c_sda_pin}
+    scl: ${codec_i2c_scl_pin}
     scan: false
   - id: touchscreen_i2c_bus
-    sda: GPIO11
-    scl: GPIO7
+    sda: ${touch_i2c_sda_pin}
+    scl: ${touch_i2c_scl_pin}
     scan: false
 
-# =============================================================================
-# Echo cancellation (esp_aec, voip_high_perf)
-# =============================================================================
-esp_aec:
-  id: aec_processor
-  sample_rate: 16000
-  filter_length: 4
-  mode: voip_high_perf
+# SPI display bus for the round GC9A01A panel.
+spi:
+  - id: spi_bus
+    clk_pin: 4
+    mosi_pin: 2
 
 # =============================================================================
-# Bus I2S: ES8311 shared backend for speaker, mic and AEC reference
+# OUTPUTS AND LIGHTS
 # =============================================================================
+
+output:
+  - platform: gpio
+    id: speaker_enable
+    pin: ${speaker_enable_pin}
+    inverted: false
+  - platform: ledc
+    id: backlight_output
+    pin: ${display_backlight_pin}
+    inverted: true
+
+# Round display backlight entity backed by GPIO42 PWM.
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Display Backlight"
+    icon: "mdi:brightness-6"
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+
+# =============================================================================
+# AEC mode select (VOIP-only, voip-only)
+# Stay inside the dios_ssp_aec engine. Both VOIP modes share the same engine,
+# so a runtime switch never triggers an esp_aec3 FFT alloc and avoids the
+# silent calloc-fail bug observed at filter_length>4 on cross-engine
+# transitions. SR modes are not offered here because no MWW is present.
+# =============================================================================
+
 esp_audio_stack:
   id: audio_stack
-  i2s_lrclk_pin: GPIO45
-  i2s_bclk_pin: GPIO9
-  i2s_mclk_pin: GPIO16
-  i2s_din_pin: GPIO10
-  i2s_dout_pin: GPIO8
+  i2s_lrclk_pin: ${i2s_lrclk_pin}
+  i2s_bclk_pin: ${i2s_bclk_pin}
+  i2s_mclk_pin: ${i2s_mclk_pin}
+  i2s_din_pin: ${i2s_din_pin}
+  i2s_dout_pin: ${i2s_dout_pin}
   sample_rate: 48000             # I2S bus rate (ES8311 native)
   output_sample_rate: 16000      # Mic/AEC/VoIP output rate
   processor_id: aec_processor
@@ -263,9 +339,12 @@ esp_audio_stack:
   use_stereo_aec_reference: true
   reference_channel: right
 
-# =============================================================================
-# Microphone (post-AEC, mic_main is required by the voip_only package)
-# =============================================================================
+esp_aec:
+  id: aec_processor
+  sample_rate: 16000
+  filter_length: 4
+  mode: voip_high_perf
+
 microphone:
   - platform: esp_audio_stack
     id: mic_main
@@ -277,6 +356,7 @@ microphone:
 # ringtone announcement go through a buffered mixer instead of competing
 # directly on hw_speaker.
 # =============================================================================
+
 speaker:
   - platform: esp_audio_stack
     id: hw_speaker
@@ -306,8 +386,9 @@ speaker:
     output_speaker: ringtone_speaker_mix
 
 # =============================================================================
-# Media player (ringtone only - no music, no TTS)
+# MEDIA, ASSIST AND VOIP
 # =============================================================================
+
 media_player:
   - platform: speaker
     id: speaker_media_player
@@ -335,6 +416,7 @@ media_player:
 # VoIP phone: SIP endpoint, RTP media and local phonebook mirror.
 # RX uses the mixer path so ringtone and call audio share the same speaker.
 # =============================================================================
+
 voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
@@ -388,497 +470,11 @@ voip_stack:
     - script.execute: draw_display
 
 # =============================================================================
-# Globals (peer_name only - no VA state needed)
+# DISPLAY AND UI
 # =============================================================================
-globals:
-  - id: peer_name
-    type: std::string
-    restore_value: no
-    initial_value: '""'
-
-  - id: y_metrics
-    type: std::vector<int>
-    restore_value: false
-
-  # call_ended_page is shown briefly after a call terminates (hangup,
-  # decline, error, timeout). The flag is set by ui_call_ended and
-  # cleared either by the auto-return delay or by an early state
-  # change (next call, manual swipe). draw_display checks it so the
-  # page is not overwritten while the user reads the reason.
-  - id: call_ended_active
-    type: bool
-    restore_value: false
-    initial_value: "false"
-
-  # settings_active, g_settings_pages, g_settings_index are defined in
-  # packages/voip_only.yaml; populated at on_boot below.
-
-  # API/Wi-Fi callbacks may run while the native API stack is tearing down.
-  # Keep LVGL page routing on the main loop by marking a redraw pending and
-  # draining it from the interval below.
-  - id: draw_display_pending
-    type: bool
-    restore_value: false
-    initial_value: "false"
-
-# Main-loop redraw gate. API/Wi-Fi callbacks only mark LVGL dirty; this interval
-# performs the actual draw outside teardown/reconnect callbacks.
-interval:
-  - interval: 250ms
-    then:
-      - if:
-          condition:
-            lambda: 'return id(draw_display_pending);'
-          then:
-            - globals.set:
-                id: draw_display_pending
-                value: "false"
-            - script.execute: draw_display
-
-# =============================================================================
-# Scripts
-# =============================================================================
-script:
-  # Extend the package's update_status to drive page transitions and the
-  # ringtone loop while the device is in Ringing (incoming) state.
-  - id: !extend update_status
-    then:
-      - script.execute: draw_display
-      - if:
-          condition:
-            voip_stack.is_ringing:
-          then:
-            - script.execute: voip_ringing_loop
-          else:
-            - script.stop: voip_ringing_loop
-            - media_player.stop:
-                announcement: true
-
-  # Extend the package's ui_call_started hook to update the per-page peer label
-  # and refresh the display.
-  - id: !extend ui_call_started
-    then:
-      - lambda: |-
-          id(peer_name) = peer;
-      - script.execute: backlight_timer
-      - lvgl.label.update:
-          id: call_ringing_out_peer_label
-          text: !lambda 'return id(peer_name);'
-      - lvgl.label.update:
-          id: call_ringing_in_peer_label
-          text: !lambda 'return id(peer_name);'
-      - lvgl.label.update:
-          id: call_in_call_peer_label
-          text: !lambda 'return id(peer_name);'
-      - script.execute: draw_display
-
-  - id: !extend ui_call_ended
-    mode: restart
-    then:
-      - globals.set:
-          id: call_ended_active
-          value: "true"
-      - lvgl.label.update:
-          id: call_ended_peer_label
-          text: !lambda 'return peer.empty() ? std::string("-") : peer;'
-      - lvgl.label.update:
-          id: call_ended_reason_label
-          text: !lambda |-
-            std::string r = reason;
-            if      (r == "local_hangup")    return std::string("Local hangup");
-            else if (r == "remote_hangup")   return std::string("Remote hangup");
-            else if (r == "declined")        return std::string("Declined");
-            else if (r == "timeout")         return std::string("Timeout");
-            else if (r == "busy")            return std::string("Busy");
-            else if (r == "unreachable")     return std::string("Unreachable");
-            else if (r == "protocol_error")  return std::string("Protocol error");
-            else if (r == "bridge_error")    return std::string("Bridge error");
-            return r.empty() ? std::string("Ended") : ("Declined: " + r);
-      - lvgl.page.show: call_ended_page
-      - script.execute: backlight_timer
-      - delay: 4s
-      - if:
-          condition:
-            lambda: 'return id(call_ended_active);'
-          then:
-            - globals.set:
-                id: call_ended_active
-                value: "false"
-            - script.execute: draw_display
-
-  # Ringtone loop while ringing (incoming).
-  - id: voip_ringing_loop
-    mode: restart
-    then:
-      - while:
-          condition:
-            voip_stack.is_ringing:
-          then:
-            - media_player.speaker.play_on_device_media_file:
-                media_file: voip_ringing_sound
-                announcement: true
-            - wait_until:
-                condition:
-                  media_player.is_announcing:
-                timeout: 2s
-            - wait_until:
-                condition:
-                  not:
-                    media_player.is_announcing:
-                timeout: 5s
-            - delay: 1s
-
-  # Page routing: pick the right LVGL screen for current VoIP state.
-  - id: draw_display
-    mode: restart
-    then:
-      - lambda: |-
-          lv_obj_t* target = nullptr;
-          // Active call always wins so we don't hide an incoming/calling screen.
-          auto s = id(phone).get_state_str();
-          bool in_call = (s == "ringing" || s == "calling" ||
-                          s == "remote_ringing" || s == "connecting" ||
-                          s == "in_call");
-          if (in_call) {
-            id(settings_active) = false;  // call interrupts settings view
-          }
-          // ui_call_ended owns the screen for ~4 s after a terminated
-          // call. Any redraw triggered in that window keeps the ended
-          // page so the user actually reads the reason.
-          if (id(call_ended_active)) {
-            target = id(call_ended_page)->obj;
-          } else if (id(settings_active) && !id(g_settings_pages).empty()) {
-            int idx = id(g_settings_index);
-            int n = (int) id(g_settings_pages).size();
-            if (idx < 0 || idx >= n) idx = 0;
-            target = id(g_settings_pages)[idx];
-          } else if (!wifi::global_wifi_component->is_connected()) {
-            target = id(no_wifi_page)->obj;
-          } else if (!api::global_api_server->is_connected()) {
-            target = id(no_ha_page)->obj;
-          } else {
-            auto s = id(phone).get_state_str();
-            if (s == "ringing") {
-              target = id(call_ringing_in_page)->obj;
-            } else if (s == "calling" || s == "remote_ringing") {
-              target = id(call_ringing_out_page)->obj;
-            } else if (s == "in_call" || s == "connecting") {
-              target = id(call_in_call_page)->obj;
-            } else {
-              target = id(call_idle_page)->obj;
-            }
-          }
-          if (target == nullptr) return;
-          if (target != lv_disp_get_scr_act(nullptr)) {
-            lv_disp_load_scr(target);
-            lv_obj_invalidate(lv_disp_get_scr_act(nullptr));
-          }
-      - if:
-          condition:
-            lambda: 'return id(phone).get_state_str() == "idle";'
-          then:
-            - script.execute: update_call_idle_labels
-            - script.execute: update_idle_labels
-
-  # Update VoIP-idle dynamic labels (peer + state + contact count + arrows).
-  - id: update_call_idle_labels
-    then:
-      - lambda: id(peer_name) = id(phone).get_current_destination();
-      - lvgl.label.update:
-          id: call_idle_peer_label
-          text: !lambda 'return id(peer_name);'
-      - lvgl.label.update:
-          id: call_idle_contacts_label
-          text: !lambda |-
-            auto csv = id(phone).get_contacts_csv();
-            int count = csv.empty() ? 0 : std::count(csv.begin(), csv.end(), ',') + 1;
-            char buf[16];
-            snprintf(buf, sizeof(buf), "\U000F06CB %d", count);
-            return std::string(buf);
-  # Top-layer clock + battery/wifi/HA status bar refresh.
-  - id: update_idle_labels
-    then:
-      - lvgl.label.update:
-          id: top_clock_label
-          text:
-            format: "%02d:%02d"
-            args: ['id(my_time).now().hour', 'id(my_time).now().minute']
-      - if:
-          condition:
-            - lambda: return id(battery_percentage).has_state() && !std::isnan(id(battery_percentage).state);
-          then:
-            - lvgl.label.update:
-                id: top_battery_label
-                text: !lambda |-
-                  bool charging = id(usb_connected).state;
-                  float bat = id(battery_percentage).state;
-                  float wifi = id(wifi_pct).state;
-                  std::string ret;
-                  if (bat < 10) ret = charging ? "\U000F089F" : "\U000F008E";
-                  else if (bat < 20) ret = charging ? "\U000F089C" : "\U000F007A";
-                  else if (bat < 30) ret = charging ? "\U000F0086" : "\U000F007B";
-                  else if (bat < 40) ret = charging ? "\U000F0087" : "\U000F007C";
-                  else if (bat < 50) ret = charging ? "\U000F0088" : "\U000F007D";
-                  else if (bat < 60) ret = charging ? "\U000F089D" : "\U000F007E";
-                  else if (bat < 70) ret = charging ? "\U000F0089" : "\U000F007F";
-                  else if (bat < 80) ret = charging ? "\U000F089E" : "\U000F0080";
-                  else if (bat < 90) ret = charging ? "\U000F008A" : "\U000F0081";
-                  else if (bat < 100) ret = charging ? "\U000F008B" : "\U000F0082";
-                  else ret = "\U000F0079";
-                  if (wifi < 20) ret += "\U000F08BF";
-                  else if (wifi < 55) ret += "\U000F08BC";
-                  else if (wifi < 80) ret += "\U000F08BD";
-                  else ret += "\U000F08BE";
-                  ret += api::global_api_server->is_connected() ? "\U000F07D0" : "\U000F15D0";
-                  return ret;
-          else:
-            - lvgl.label.update:
-                id: top_battery_label
-                text: ""
-
-  # Backlight timer: full -> dim -> off (or low if charging).
-  - id: backlight_timer
-    mode: restart
-    then:
-      - light.turn_on:
-          id: backlight
-          brightness: 100%
-      - delay: 30s
-      - light.turn_on:
-          id: backlight
-          brightness: 60%
-      - delay: 120s
-      - if:
-          condition:
-            binary_sensor.is_on: usb_connected
-          then:
-            - light.turn_on:
-                id: backlight
-                brightness: 20%
-          else:
-            - light.turn_off: backlight
-
-  # Periodic clock/status refresh on the idle page.
-  - id: idle_refresh_loop
-    mode: single
-    then:
-      - while:
-          condition:
-            voip_stack.is_idle:
-          then:
-            - script.execute: update_idle_labels
-            - delay: 30s
-
-# =============================================================================
-# Buttons (package buttons extended here for Spotpear Ball v2 display sync)
-# =============================================================================
-button:
-  - platform: factory_reset
-    id: factory_reset_btn
-    internal: true
-
-# =============================================================================
-# Sensors
-# =============================================================================
-sensor:
-  - platform: adc
-    pin: GPIO1
-    name: "Battery Voltage"
-    id: battery_voltage
-    attenuation: 12db
-    accuracy_decimals: 2
-    update_interval: 10s
-    unit_of_measurement: "V"
-    icon: mdi:battery
-    filters:
-      - multiply: 2.0
-      - median:
-          window_size: 7
-          send_every: 7
-          send_first_at: 1
-      - throttle: 1min
-
-  - platform: template
-    id: battery_percentage
-    name: "Battery Percentage"
-    lambda: |-
-      if (!id(battery_voltage).has_state() || std::isnan(id(battery_voltage).state))
-        return NAN;
-      return id(battery_voltage).state;
-    accuracy_decimals: 0
-    unit_of_measurement: "%"
-    icon: mdi:battery-medium
-    filters:
-      - calibrate_linear:
-          method: exact
-          datapoints:
-            - 2.80 -> 0.0
-            - 3.10 -> 10.0
-            - 3.30 -> 20.0
-            - 3.45 -> 30.0
-            - 3.60 -> 40.0
-            - 3.70 -> 50.0
-            - 3.75 -> 60.0
-            - 3.80 -> 70.0
-            - 3.90 -> 80.0
-            - 4.00 -> 90.0
-            - 4.20 -> 100.0
-      - lambda: |-
-          if (x > 100) return 100;
-          if (x < 0) return 0;
-          return x;
-
-# =============================================================================
-# Binary sensors (status, USB, GPIO0 button page-aware)
-# =============================================================================
-binary_sensor:
-  - platform: template
-    name: "USB Connected"
-    id: usb_connected
-    device_class: plug
-    lambda: return id(battery_voltage).state > 3.9;
-    on_press:
-      - script.execute: backlight_timer
-    on_release:
-      - script.execute: backlight_timer
-
-  # Physical GPIO0 button (voip-only, no VA mode):
-  #   short  : call/answer/hangup
-  #   double : decline (incoming) / next contact (idle)
-  #   long   : mute toggle
-  - platform: gpio
-    pin:
-      number: GPIO0
-      mode: INPUT_PULLUP
-      inverted: true
-    id: main_button
-    name: "Main Button"
-    icon: "mdi:gesture-tap-button"
-    filters:
-      - delayed_on: 20ms
-      - delayed_off: 20ms
-    on_multi_click:
-      # Single click: smart call (idle->call, ringing->answer, in-call->hangup)
-      - timing:
-          - ON for 10ms to 500ms
-          - OFF for at least 400ms
-        then:
-          - voip_stack.call_toggle:
-      # Double click: decline incoming, else next contact when idle
-      - timing:
-          - ON for 50ms to 500ms
-          - OFF for 50ms to 400ms
-          - ON for 50ms to 500ms
-          - OFF for at least 400ms
-        then:
-          - if:
-              condition:
-                voip_stack.is_ringing:
-              then:
-                - voip_stack.decline_call:
-              else:
-                - if:
-                    condition:
-                      voip_stack.is_idle:
-                    then:
-                      - voip_stack.next_contact:
-      # Long press (1-3s): toggle mic mute
-      - timing:
-          - ON for 1s to 3s
-        then:
-          - switch.toggle: mute
-
-# =============================================================================
-# Outputs and lights
-# =============================================================================
-output:
-  - platform: gpio
-    id: speaker_enable
-    pin: GPIO46
-    inverted: false
-  - platform: ledc
-    id: backlight_output
-    pin: GPIO42
-    inverted: true
-
-# Round display backlight entity backed by GPIO42 PWM.
-light:
-  - platform: monochromatic
-    id: backlight
-    name: "Display Backlight"
-    icon: "mdi:brightness-6"
-    output: backlight_output
-    restore_mode: ALWAYS_ON
-    default_transition_length: 250ms
-
-# =============================================================================
-# AEC mode select (VOIP-only, voip-only)
-# Stay inside the dios_ssp_aec engine. Both VOIP modes share the same engine,
-# so a runtime switch never triggers an esp_aec3 FFT alloc and avoids the
-# silent calloc-fail bug observed at filter_length>4 on cross-engine
-# transitions. SR modes are not offered here because no MWW is present.
-# =============================================================================
-select:
-  - platform: template
-    name: AEC Mode
-    id: aec_mode_select
-    icon: mdi:tune-vertical
-    options:
-      - "voip_low_cost"
-      - "voip_high_perf"
-    initial_option: "voip_high_perf"
-    # Non-optimistic: HA reflects the live component mode, not the value the
-    # user clicked. If the switch is rejected (e.g. internal RAM fragmented)
-    # or the component falls back to the previous mode, the select shows the
-    # actual mode rather than a fictitious one.
-    optimistic: false
-    restore_value: true
-    set_action:
-      - if:
-          condition:
-            not:
-              voip_stack.is_idle:
-          then:
-            - logger.log:
-                level: WARN
-                format: "Cannot switch AEC mode during active VoIP call"
-          else:
-            - logger.log:
-                format: "Switching AEC mode to %s"
-                args: ['x.c_str()']
-            - esp_audio_stack.stop: audio_stack
-            - esp_aec.set_mode:
-                id: aec_processor
-                mode: !lambda 'return x;'
-            - esp_audio_stack.start: audio_stack
-      - lambda: |-
-          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
-
-# =============================================================================
-# Touchscreen (CST816 on dedicated I2C bus). Contact swipe is handled natively
-# via on_swipe_left / on_swipe_right on call_idle_page; on_touch only refreshes
-# the backlight timer.
-# =============================================================================
-touchscreen:
-  - platform: cst816
-    id: touch
-    display: s3_box_lcd
-    i2c_id: touchscreen_i2c_bus
-    interrupt_pin: GPIO12
-    reset_pin: GPIO6
-    on_touch:
-      - script.execute: backlight_timer
-
-# =============================================================================
-# Display + LVGL (mipi_spi, GC9A01A 240x240 round)
-# =============================================================================
-# SPI display bus for the round GC9A01A panel.
-spi:
-  - id: spi_bus
-    clk_pin: 4
-    mosi_pin: 2
 
 # Round GC9A01A display used by the voip-only call UI.
+
 display:
   - platform: mipi_spi
     id: s3_box_lcd
@@ -894,9 +490,16 @@ display:
       height: 240
       width: 240
 
-# =============================================================================
-# Fonts (gfonts + MaterialDesign glyphs for clock, call icons, status bar)
-# =============================================================================
+touchscreen:
+  - platform: cst816
+    id: touch
+    display: s3_box_lcd
+    i2c_id: touchscreen_i2c_bus
+    interrupt_pin: ${touch_interrupt_pin}
+    reset_pin: ${touch_reset_pin}
+    on_touch:
+      - script.execute: backlight_timer
+
 font:
   - file:
       type: gfonts
@@ -979,9 +582,6 @@ font:
     glyphsets:
       - GF_Latin_Core
 
-# =============================================================================
-# LVGL display engine (voip-only: 4 call pages + no_wifi/no_ha + top status)
-# =============================================================================
 lvgl:
   displays:
     - s3_box_lcd
@@ -1590,3 +1190,436 @@ lvgl:
               - select.set_index:
                   id: aec_mode_select
                   index: !lambda 'return x;'
+
+# =============================================================================
+# RUNTIME LOGIC AND ENTITIES
+# =============================================================================
+
+globals:
+  - id: peer_name
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  - id: y_metrics
+    type: std::vector<int>
+    restore_value: false
+
+  # call_ended_page is shown briefly after a call terminates (hangup,
+  # decline, error, timeout). The flag is set by ui_call_ended and
+  # cleared either by the auto-return delay or by an early state
+  # change (next call, manual swipe). draw_display checks it so the
+  # page is not overwritten while the user reads the reason.
+  - id: call_ended_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  # settings_active, g_settings_pages, g_settings_index are defined in
+  # packages/voip_only.yaml; populated at on_boot below.
+
+  # API/Wi-Fi callbacks may run while the native API stack is tearing down.
+  # Keep LVGL page routing on the main loop by marking a redraw pending and
+  # draining it from the interval below.
+  - id: draw_display_pending
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+script:
+  # Extend the package's update_status to drive page transitions and the
+  # ringtone loop while the device is in Ringing (incoming) state.
+  - id: !extend update_status
+    then:
+      - script.execute: draw_display
+      - if:
+          condition:
+            voip_stack.is_ringing:
+          then:
+            - script.execute: voip_ringing_loop
+          else:
+            - script.stop: voip_ringing_loop
+            - media_player.stop:
+                announcement: true
+
+  # Extend the package's ui_call_started hook to update the per-page peer label
+  # and refresh the display.
+  - id: !extend ui_call_started
+    then:
+      - lambda: |-
+          id(peer_name) = peer;
+      - script.execute: backlight_timer
+      - lvgl.label.update:
+          id: call_ringing_out_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_ringing_in_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_in_call_peer_label
+          text: !lambda 'return id(peer_name);'
+      - script.execute: draw_display
+
+  - id: !extend ui_call_ended
+    mode: restart
+    then:
+      - globals.set:
+          id: call_ended_active
+          value: "true"
+      - lvgl.label.update:
+          id: call_ended_peer_label
+          text: !lambda 'return peer.empty() ? std::string("-") : peer;'
+      - lvgl.label.update:
+          id: call_ended_reason_label
+          text: !lambda |-
+            std::string r = reason;
+            if      (r == "local_hangup")    return std::string("Local hangup");
+            else if (r == "remote_hangup")   return std::string("Remote hangup");
+            else if (r == "declined")        return std::string("Declined");
+            else if (r == "timeout")         return std::string("Timeout");
+            else if (r == "busy")            return std::string("Busy");
+            else if (r == "unreachable")     return std::string("Unreachable");
+            else if (r == "protocol_error")  return std::string("Protocol error");
+            else if (r == "bridge_error")    return std::string("Bridge error");
+            return r.empty() ? std::string("Ended") : ("Declined: " + r);
+      - lvgl.page.show: call_ended_page
+      - script.execute: backlight_timer
+      - delay: 4s
+      - if:
+          condition:
+            lambda: 'return id(call_ended_active);'
+          then:
+            - globals.set:
+                id: call_ended_active
+                value: "false"
+            - script.execute: draw_display
+
+  # Ringtone loop while ringing (incoming).
+  - id: voip_ringing_loop
+    mode: restart
+    then:
+      - while:
+          condition:
+            voip_stack.is_ringing:
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                media_file: voip_ringing_sound
+                announcement: true
+            - wait_until:
+                condition:
+                  media_player.is_announcing:
+                timeout: 2s
+            - wait_until:
+                condition:
+                  not:
+                    media_player.is_announcing:
+                timeout: 5s
+            - delay: 1s
+
+  # Page routing: pick the right LVGL screen for current VoIP state.
+  - id: draw_display
+    mode: restart
+    then:
+      - lambda: |-
+          lv_obj_t* target = nullptr;
+          // Active call always wins so we don't hide an incoming/calling screen.
+          auto s = id(phone).get_state_str();
+          bool in_call = (s == "ringing" || s == "calling" ||
+                          s == "remote_ringing" || s == "connecting" ||
+                          s == "in_call");
+          if (in_call) {
+            id(settings_active) = false;  // call interrupts settings view
+          }
+          // ui_call_ended owns the screen for ~4 s after a terminated
+          // call. Any redraw triggered in that window keeps the ended
+          // page so the user actually reads the reason.
+          if (id(call_ended_active)) {
+            target = id(call_ended_page)->obj;
+          } else if (id(settings_active) && !id(g_settings_pages).empty()) {
+            int idx = id(g_settings_index);
+            int n = (int) id(g_settings_pages).size();
+            if (idx < 0 || idx >= n) idx = 0;
+            target = id(g_settings_pages)[idx];
+          } else if (!wifi::global_wifi_component->is_connected()) {
+            target = id(no_wifi_page)->obj;
+          } else if (!api::global_api_server->is_connected()) {
+            target = id(no_ha_page)->obj;
+          } else {
+            auto s = id(phone).get_state_str();
+            if (s == "ringing") {
+              target = id(call_ringing_in_page)->obj;
+            } else if (s == "calling" || s == "remote_ringing") {
+              target = id(call_ringing_out_page)->obj;
+            } else if (s == "in_call" || s == "connecting") {
+              target = id(call_in_call_page)->obj;
+            } else {
+              target = id(call_idle_page)->obj;
+            }
+          }
+          if (target == nullptr) return;
+          if (target != lv_disp_get_scr_act(nullptr)) {
+            lv_disp_load_scr(target);
+            lv_obj_invalidate(lv_disp_get_scr_act(nullptr));
+          }
+      - if:
+          condition:
+            lambda: 'return id(phone).get_state_str() == "idle";'
+          then:
+            - script.execute: update_call_idle_labels
+            - script.execute: update_idle_labels
+
+  # Update VoIP-idle dynamic labels (peer + state + contact count + arrows).
+  - id: update_call_idle_labels
+    then:
+      - lambda: id(peer_name) = id(phone).get_current_destination();
+      - lvgl.label.update:
+          id: call_idle_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_idle_contacts_label
+          text: !lambda |-
+            auto csv = id(phone).get_contacts_csv();
+            int count = csv.empty() ? 0 : std::count(csv.begin(), csv.end(), ',') + 1;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "\U000F06CB %d", count);
+            return std::string(buf);
+  # Top-layer clock + battery/wifi/HA status bar refresh.
+  - id: update_idle_labels
+    then:
+      - lvgl.label.update:
+          id: top_clock_label
+          text:
+            format: "%02d:%02d"
+            args: ['id(my_time).now().hour', 'id(my_time).now().minute']
+      - if:
+          condition:
+            - lambda: return id(battery_percentage).has_state() && !std::isnan(id(battery_percentage).state);
+          then:
+            - lvgl.label.update:
+                id: top_battery_label
+                text: !lambda |-
+                  bool charging = id(usb_connected).state;
+                  float bat = id(battery_percentage).state;
+                  float wifi = id(wifi_pct).state;
+                  std::string ret;
+                  if (bat < 10) ret = charging ? "\U000F089F" : "\U000F008E";
+                  else if (bat < 20) ret = charging ? "\U000F089C" : "\U000F007A";
+                  else if (bat < 30) ret = charging ? "\U000F0086" : "\U000F007B";
+                  else if (bat < 40) ret = charging ? "\U000F0087" : "\U000F007C";
+                  else if (bat < 50) ret = charging ? "\U000F0088" : "\U000F007D";
+                  else if (bat < 60) ret = charging ? "\U000F089D" : "\U000F007E";
+                  else if (bat < 70) ret = charging ? "\U000F0089" : "\U000F007F";
+                  else if (bat < 80) ret = charging ? "\U000F089E" : "\U000F0080";
+                  else if (bat < 90) ret = charging ? "\U000F008A" : "\U000F0081";
+                  else if (bat < 100) ret = charging ? "\U000F008B" : "\U000F0082";
+                  else ret = "\U000F0079";
+                  if (wifi < 20) ret += "\U000F08BF";
+                  else if (wifi < 55) ret += "\U000F08BC";
+                  else if (wifi < 80) ret += "\U000F08BD";
+                  else ret += "\U000F08BE";
+                  ret += api::global_api_server->is_connected() ? "\U000F07D0" : "\U000F15D0";
+                  return ret;
+          else:
+            - lvgl.label.update:
+                id: top_battery_label
+                text: ""
+
+  # Backlight timer: full -> dim -> off (or low if charging).
+  - id: backlight_timer
+    mode: restart
+    then:
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+      - delay: 30s
+      - light.turn_on:
+          id: backlight
+          brightness: 60%
+      - delay: 120s
+      - if:
+          condition:
+            binary_sensor.is_on: usb_connected
+          then:
+            - light.turn_on:
+                id: backlight
+                brightness: 20%
+          else:
+            - light.turn_off: backlight
+
+  # Periodic clock/status refresh on the idle page.
+  - id: idle_refresh_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            voip_stack.is_idle:
+          then:
+            - script.execute: update_idle_labels
+            - delay: 30s
+
+button:
+  - platform: factory_reset
+    id: factory_reset_btn
+    internal: true
+
+binary_sensor:
+  - platform: template
+    name: "USB Connected"
+    id: usb_connected
+    device_class: plug
+    lambda: return id(battery_voltage).state > 3.9;
+    on_press:
+      - script.execute: backlight_timer
+    on_release:
+      - script.execute: backlight_timer
+
+  # Physical GPIO0 button (voip-only, no VA mode):
+  #   short  : call/answer/hangup
+  #   double : decline (incoming) / next contact (idle)
+  #   long   : mute toggle
+  - platform: gpio
+    pin:
+      number: ${main_button_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    id: main_button
+    name: "Main Button"
+    icon: "mdi:gesture-tap-button"
+    filters:
+      - delayed_on: 20ms
+      - delayed_off: 20ms
+    on_multi_click:
+      # Single click: smart call (idle->call, ringing->answer, in-call->hangup)
+      - timing:
+          - ON for 10ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - voip_stack.call_toggle:
+      # Double click: decline incoming, else next contact when idle
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for 50ms to 400ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                voip_stack.is_ringing:
+              then:
+                - voip_stack.decline_call:
+              else:
+                - if:
+                    condition:
+                      voip_stack.is_idle:
+                    then:
+                      - voip_stack.next_contact:
+      # Long press (1-3s): toggle mic mute
+      - timing:
+          - ON for 1s to 3s
+        then:
+          - switch.toggle: mute
+
+sensor:
+  - platform: adc
+    pin: ${battery_adc_pin}
+    name: "Battery Voltage"
+    id: battery_voltage
+    attenuation: 12db
+    accuracy_decimals: 2
+    update_interval: 10s
+    unit_of_measurement: "V"
+    icon: mdi:battery
+    filters:
+      - multiply: 2.0
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 1
+      - throttle: 1min
+
+  - platform: template
+    id: battery_percentage
+    name: "Battery Percentage"
+    lambda: |-
+      if (!id(battery_voltage).has_state() || std::isnan(id(battery_voltage).state))
+        return NAN;
+      return id(battery_voltage).state;
+    accuracy_decimals: 0
+    unit_of_measurement: "%"
+    icon: mdi:battery-medium
+    filters:
+      - calibrate_linear:
+          method: exact
+          datapoints:
+            - 2.80 -> 0.0
+            - 3.10 -> 10.0
+            - 3.30 -> 20.0
+            - 3.45 -> 30.0
+            - 3.60 -> 40.0
+            - 3.70 -> 50.0
+            - 3.75 -> 60.0
+            - 3.80 -> 70.0
+            - 3.90 -> 80.0
+            - 4.00 -> 90.0
+            - 4.20 -> 100.0
+      - lambda: |-
+          if (x > 100) return 100;
+          if (x < 0) return 0;
+          return x;
+
+select:
+  - platform: template
+    name: AEC Mode
+    id: aec_mode_select
+    icon: mdi:tune-vertical
+    options:
+      - "voip_low_cost"
+      - "voip_high_perf"
+    initial_option: "voip_high_perf"
+    # Non-optimistic: HA reflects the live component mode, not the value the
+    # user clicked. If the switch is rejected (e.g. internal RAM fragmented)
+    # or the component falls back to the previous mode, the select shows the
+    # actual mode rather than a fictitious one.
+    optimistic: false
+    restore_value: true
+    set_action:
+      - if:
+          condition:
+            not:
+              voip_stack.is_idle:
+          then:
+            - logger.log:
+                level: WARN
+                format: "Cannot switch AEC mode during active VoIP call"
+          else:
+            - logger.log:
+                format: "Switching AEC mode to %s"
+                args: ['x.c_str()']
+            - esp_audio_stack.stop: audio_stack
+            - esp_aec.set_mode:
+                id: aec_processor
+                mode: !lambda 'return x;'
+            - esp_audio_stack.start: audio_stack
+      - lambda: |-
+          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
+
+# =============================================================================
+# Touchscreen (CST816 on dedicated I2C bus). Contact swipe is handled natively
+# via on_swipe_left / on_swipe_right on call_idle_page; on_touch only refreshes
+# the backlight timer.
+# =============================================================================
+
+# Main-loop redraw gate. API/Wi-Fi callbacks only mark LVGL dirty; this interval
+# performs the actual draw outside teardown/reconnect callbacks.
+
+interval:
+  - interval: 250ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(draw_display_pending);'
+          then:
+            - globals.set:
+                id: draw_display_pending
+                value: "false"
+            - script.execute: draw_display

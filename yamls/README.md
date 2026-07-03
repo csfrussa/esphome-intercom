@@ -59,7 +59,7 @@ reusable opt-in debug packages can live under `packages/debug/`.
   dual-mic Speech Enhancement). Higher flash/RAM cost, but adds the full
   frontend and runtime diagnostics. Generic full AFE is intended for app slots
   larger than the default 4 MB OTA layout, so 8 MB or 16 MB flash is the
-  practical target. See the [esp_afe component README](../esphome/components/esp_afe/README.md) for details.
+  practical target. See the [esp_afe component README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe) for details.
 
 ## Product mode
 

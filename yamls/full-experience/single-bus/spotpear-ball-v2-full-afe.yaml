@@ -22,6 +22,10 @@
 #   Timer ringing     : click=stop timer (any page)
 # =============================================================================
 
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
 substitutions:
   # Hardware-shared identity: all Spotpear Ball v2 firmware variants (voip / full-afe
   # / full-afe) share `spotpear-ball-v2` so a flash swap reuses the same HA device entity
@@ -32,6 +36,8 @@ substitutions:
   afe_vad_restore_mode: ALWAYS_ON
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+  runtime_controller_components_source: "github://n-IA-hane/esphome-runtime-controller@main"
 
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
 
@@ -78,11 +84,43 @@ substitutions:
   display_width: "240"
   display_height: "240"
 
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 codec control bus
+  # ---------------------------------------------------------------------------
+  codec_i2c_sda_pin: GPIO15
+  codec_i2c_scl_pin: GPIO14
+
+  # ---------------------------------------------------------------------------
+  # Pinout: CST816 touch controller bus
+  # ---------------------------------------------------------------------------
+  touch_i2c_sda_pin: GPIO11
+  touch_i2c_scl_pin: GPIO7
+
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 audio bus
+  # ---------------------------------------------------------------------------
+  i2s_mclk_pin: GPIO16
+  i2s_bclk_pin: GPIO9
+  i2s_lrclk_pin: GPIO45
+  i2s_din_pin: GPIO10
+  i2s_dout_pin: GPIO8
+
+  # ---------------------------------------------------------------------------
+  # Pinout: board controls and display
+  # ---------------------------------------------------------------------------
+  battery_adc_pin: GPIO1
+  main_button_pin: GPIO0
+  speaker_enable_pin: GPIO46
+  display_backlight_pin: GPIO42
+  touch_interrupt_pin: GPIO12
+  touch_reset_pin: GPIO6
+
 # Shared packages: full VA/VoIP runtime, runtime controller, Spotpear LVGL
 # navigation, ESP AFE controls, mixer/media player and assets.
+
 packages:
   core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@dev
-  runtime_controller: github://n-IA-hane/esphome-intercom/packages/runtime_controller/full_controller.yaml@dev
+  runtime_controller: github://n-IA-hane/esphome-runtime-controller/packages/runtime_controller/full_controller.yaml@main
   va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@dev
   call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@dev
   ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@dev
@@ -107,8 +145,9 @@ packages:
   spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_full.yaml@dev
 
 # =============================================================================
-# Device identity, boot UI and safe wake-word startup
+# BOARD AND MEMORY
 # =============================================================================
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
@@ -142,6 +181,7 @@ esphome:
             - script.execute: start_mww_when_ready
 
 # ESP32-S3 target used by Spotpear Ball v2.
+
 esp32:
   board: esp32-s3-devkitc-1
   flash_size: 16MB
@@ -160,32 +200,60 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: "y"
 
 # OPI PSRAM is required by LVGL assets, codec buffers and full audio tasks.
+
 psram:
   mode: octal
   speed: 80MHz
 
 # =============================================================================
-# External components: local VoIP, audio stack, AFE, runtime and UI backends
+# EXTERNAL COMPONENTS
 # =============================================================================
+
 # Remote:
 external_components:
   - source: ${ext_components_source}
-    components: [voip_stack, esp_audio_stack, esp_afe, audio_processor, runtime_controller, speaker, voice_assistant]
+    components: [voip_stack, speaker, voice_assistant]
+  - source: ${runtime_controller_components_source}
+    components: [runtime_controller]
+  - source: ${audio_stack_components_source}
+    components: [esp_audio_stack, esp_afe]
 
 # =============================================================================
-# Connectivity: ESPHome API, OTA and network link
+# CONNECTIVITY
 # =============================================================================
+
+# High-performance network profile for Spotpear media + VoIP workloads.
+
+network:
+  enable_high_performance: true
+
+# Normal Wi-Fi client mode. Power save is disabled for full audio stability and
+# reliable HA API reconnects.
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # ESP32 defaults to LIGHT power save; on full audio builds that can leave
+  # the STA associated while ARP/API traffic stops. Keep realtime devices awake.
+  power_save_mode: NONE
+  on_connect:
+    - script.execute: draw_display
+  on_disconnect:
+    - script.execute: draw_display
+
 api:
   on_client_connected:
     - script.execute: draw_display
 
 # OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
+
 ota:
   - platform: esphome
     id: ota_esphome
 
 # USB Serial/JTAG logger. VoIP/audio domains stay visible at INFO; noisy entity
 # domains stay WARN for normal field use.
+
 logger:
   hardware_uart: USB_SERIAL_JTAG
   # DEBUG keeps SIP signaling + AEC/i2s lifecycle visible.
@@ -208,24 +276,8 @@ logger:
     api.connection: WARN
     component: WARN
 
-# High-performance network profile for Spotpear media + VoIP workloads.
-network:
-  enable_high_performance: true
-
-# Normal Wi-Fi client mode. Power save is disabled for full audio stability and
-# reliable HA API reconnects.
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  # ESP32 defaults to LIGHT power save; on full audio builds that can leave
-  # the STA associated while ARP/API traffic stops. Keep realtime devices awake.
-  power_save_mode: NONE
-  on_connect:
-    - script.execute: draw_display
-  on_disconnect:
-    - script.execute: draw_display
-
 # SNTP clock used by LVGL status pages and diagnostics.
+
 time:
   - platform: sntp
     id: my_time
@@ -236,22 +288,90 @@ time:
       - 2.pool.ntp.org
 
 # =============================================================================
-# I2C BUS (ES8311 codec control)
+# BUSES
 # =============================================================================
+
 i2c:
   - id: i2c_bus
-    sda: GPIO15
-    scl: GPIO14
+    sda: ${codec_i2c_sda_pin}
+    scl: ${codec_i2c_scl_pin}
     scan: false
   - id: touchscreen_i2c_bus
-    sda: GPIO11
-    scl: GPIO7
+    sda: ${touch_i2c_sda_pin}
+    scl: ${touch_i2c_scl_pin}
     scan: false
 
+spi:
+  - id: spi_bus
+    clk_pin: 4
+    mosi_pin: 2
+
 # =============================================================================
-# AFE: Espressif front-end for mic cleanup, VAD, AEC, NS and AGC
+# OUTPUTS AND LIGHTS
+# =============================================================================
+
+output:
+  - platform: gpio
+    id: speaker_enable
+    pin: ${speaker_enable_pin}
+  - platform: ledc
+    id: backlight_output
+    pin: ${display_backlight_pin}
+    inverted: true
+
+# Round display backlight entity backed by GPIO42 PWM.
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Display Backlight"
+    icon: "mdi:brightness-6"
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+
+# AFE: Espressif front-end for mic cleanup, VAD, AEC, NS and AGC.
 # Spotpear supplies the playback reference as the ES8311 stereo right channel.
-# =============================================================================
+
+esp_audio_stack:
+  id: audio_stack
+  i2s_lrclk_pin: ${i2s_lrclk_pin}
+  i2s_bclk_pin: ${i2s_bclk_pin}
+  i2s_mclk_pin: ${i2s_mclk_pin}
+  i2s_din_pin: ${i2s_din_pin}
+  i2s_dout_pin: ${i2s_dout_pin}
+  sample_rate: 48000             # I2S bus rate (ES8311 native)
+  output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
+  processor_id: afe_processor
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
+  num_channels: 2               # Drive DACL speaker and DACR AEC reference
+  codec:
+    i2c_id: i2c_bus
+    input:
+      type: es8311
+      address: 0x18
+      gain_db: 24.0
+      use_mclk: true
+      no_dac_ref: false
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: false
+  # ES8311 digital feedback through the official codec driver: RX left is
+  # ADC mic and RX right is DACR reference when no_dac_ref is false.
+  # Sample-accurate reference alignment, no ring buffer delay needed.
+  use_stereo_aec_reference: true
+  reference_channel: right
+  buffers_in_psram: true       # All audio buffers in PSRAM; required for 512-sample AEC frames
+  audio_task_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
+
 esp_afe:
   id: afe_processor
   type: fd
@@ -283,53 +403,12 @@ esp_afe:
 # Bus I2S: ES8311 shared backend for speaker, mic and AEC reference
 # The bus runs at 48 kHz; Espressif rate conversion feeds 16 kHz to AFE/VA/VoIP.
 # =============================================================================
-esp_audio_stack:
-  id: audio_stack
-  i2s_lrclk_pin: GPIO45
-  i2s_bclk_pin: GPIO9
-  i2s_mclk_pin: GPIO16
-  i2s_din_pin: GPIO10
-  i2s_dout_pin: GPIO8
-  sample_rate: 48000             # I2S bus rate (ES8311 native)
-  output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
-  processor_id: afe_processor
-  audio_effects:
-    rate_cvt_complexity: 3
-    rate_cvt_perf_type: speed
-  num_channels: 2               # Drive DACL speaker and DACR AEC reference
-  codec:
-    i2c_id: i2c_bus
-    input:
-      type: es8311
-      address: 0x18
-      gain_db: 24.0
-      use_mclk: true
-      no_dac_ref: false
-    output:
-      type: es8311
-      address: 0x18
-      use_mclk: true
-      no_dac_ref: false
-  # ES8311 digital feedback through the official codec driver: RX left is
-  # ADC mic and RX right is DACR reference when no_dac_ref is false.
-  # Sample-accurate reference alignment, no ring buffer delay needed.
-  use_stereo_aec_reference: true
-  reference_channel: right
-  buffers_in_psram: true       # All audio buffers in PSRAM; required for 512-sample AEC frames
-  audio_task_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
 
-# =============================================================================
-# Microphone: publishes AFE-clean PCM frames to VA, wake word and VoIP
-# =============================================================================
 microphone:
   - platform: esp_audio_stack
     id: mic_afe
     esp_audio_stack_id: audio_stack
 
-
-# =============================================================================
-# Speaker pipeline: mixes media, TTS and VoIP RX into the ES8311 speaker path
-# =============================================================================
 speaker:
   - platform: esp_audio_stack
     id: hw_speaker
@@ -338,14 +417,16 @@ speaker:
     bits_per_sample: 16
 
 # =============================================================================
-# MEDIA PLAYER (single source-orchestrating player: media vs TTS announcement)
+# MEDIA, ASSIST AND VOIP
 # =============================================================================
+
 # Sendspin media hub used by the full dashboard media experience.
 sendspin:
   id: sendspin_hub
   task_stack_in_psram: true
 
 # Local FLAC assets for timer completion and VoIP ringing.
+
 audio_file:
   - id: timer_finished_sound
     file: ${assets_base}assets/sounds/timer_finished.flac
@@ -353,6 +434,7 @@ audio_file:
     file: ${assets_base}assets/sounds/ringtone.flac
 
 # Media sources for music, announcements, bundled sounds and Sendspin artwork.
+
 media_source:
   - platform: audio_http
     id: media_http_source
@@ -373,6 +455,7 @@ media_source:
     decode_memory: psram
 
 # Speaker media player with separate media and announcement pipelines.
+
 media_player:
   - platform: speaker_source
     name: None
@@ -424,6 +507,7 @@ media_player:
 # SR linear AEC preserves spectral features for neural detection (10/10).
 # Ducking is derived by runtime_controller from the active VA/media/VoIP policies.
 # =============================================================================
+
 micro_wake_word:
   id: mww
   microphone: mic_afe    # Post-AEC: SR linear AEC preserves spectral features
@@ -432,6 +516,7 @@ micro_wake_word:
     - model: alexa
 
 # Voice Assistant uses post-AFE audio and the shared media player output.
+
 voice_assistant:
   id: va
   microphone: mic_afe
@@ -454,9 +539,6 @@ voice_assistant:
         event: timer_finished
     - script.execute: draw_display
 
-# =============================================================================
-# VoIP phone: SIP endpoint, RTP media and local phonebook mirror
-# =============================================================================
 voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
@@ -521,1339 +603,152 @@ voip_stack:
     - script.execute: draw_display
 
 # =============================================================================
-# GLOBALS
+# DISPLAY AND UI
 # =============================================================================
-globals:
-  - id: voice_assistant_phase
-    type: int
-    restore_value: false
-    initial_value: ${voice_assist_not_ready_phase_id}
 
-  # Mode: 0=VA, 1=VoIP
-  - id: current_mode
-    type: int
-    restore_value: no
-    initial_value: "0"
-
-  # Animation hint for the next draw_display call. 0 = LV_SCR_LOAD_ANIM_NONE
-  # (instant lv_disp_load_scr). Non-zero = LVGL anim type (e.g. MOVE_TOP),
-  # consumed and reset back to 0 on use. Set by swipe_to_voip/swipe_to_va
-  # so a swipe-driven page change is animated, while every other caller
-  # (long-press toggle, VoIP state callbacks, etc.) stays instant.
-  - id: nav_anim
-    type: int
-    restore_value: no
-    initial_value: "0"
-  - id: nav_anim_ms
-    type: int
-    restore_value: no
-    initial_value: "0"
-
-  # Previous mode (for restoring after incoming call)
-  - id: previous_mode
-    type: int
-    restore_value: no
-    initial_value: "0"
-
-  # VoIP peer name for display
-  - id: peer_name
-    type: std::string
-    restore_value: no
-    initial_value: '""'
-
-  # Replying page pagination
-  - id: reply_page_index
-    type: int
-    restore_value: false
-    initial_value: "0"
-  - id: reply_total_pages
-    type: int
-    restore_value: false
-    initial_value: "1"
-  - id: wrapped_lines_reply
-    type: std::vector<std::string>
-    restore_value: false
-
-  # call_ended_page is shown briefly after a call terminates (hangup,
-  # decline, error, timeout). Set by ui_call_ended, cleared by the
-  # auto-return delay or by the next state change.
-  - id: call_ended_active
-    type: bool
-    restore_value: false
-    initial_value: "false"
-
-  # Chord widths for circular text wrapping (computed at boot)
-  - id: chord_widths_cache
-    type: std::vector<int>
-    restore_value: false
-  # Text row y-positions for circular display (computed at boot)
-  - id: text_row_y
-    type: std::vector<int>
-    restore_value: false
-  # UI grid y-positions (proportional, computed at boot from display height)
-  # [0]=top, [1]=center, [2]=height, [3]=title, [4]=subtitle, [5]=state,
-  # [6]=label, [7]=info, [8]=contacts, [9]=action_hint, [10]=bottom_info,
-  # [11]=bottom_status, [12]=page_counter, [13]=timer_box_height
-  - id: y_metrics
-    type: std::vector<int>
-    restore_value: false
+display:
+  - platform: mipi_spi
+    id: s3_box_lcd
+    model: GC9A01A
+    invert_colors: true
+    data_rate: 40MHz
+    cs_pin: 5
+    dc_pin: 47
+    reset_pin:
+      number: 38
+    auto_clear_enabled: false
+    dimensions:
+      height: 240
+      width: 240
 
 # =============================================================================
-# SCRIPTS
+# LVGL DISPLAY ENGINE
+#
+# Declarative widgets for VA + VoIP pages. Static idle image,
+# mood-based replying backgrounds, timer overlay on top_layer.
 # =============================================================================
-script:
-  - id: apply_media_artwork
-    then:
-      - lambda: |-
-          lv_img_set_src(id(mood_bg), id(mood_neutral));
-          lv_obj_invalidate(id(mood_bg));
 
-  - id: clear_replying_text
-    then:
-      - lambda: |-
-          id(wrapped_lines_reply).clear();
-          id(reply_total_pages) = 1;
-          id(reply_page_index) = 0;
-          lv_obj_t* lines[] = {
-            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
-            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
-          };
-          for (auto *line : lines) {
-            lv_label_set_text(line, "");
-          }
-          lv_label_set_text(id(reply_page_counter), "");
-
-  - id: !extend ui_va_barge_start
-    then:
-      - script.stop: reply_pagination_timer
-      - script.execute: clear_replying_text
-
-  # Display cleanup after VA ends
-  - id: !extend ui_va_end
-    then:
-      - script.stop: reply_pagination_timer
+touchscreen:
+  - platform: cst816
+    id: touch
+    display: s3_box_lcd
+    i2c_id: touchscreen_i2c_bus
+    interrupt_pin: ${touch_interrupt_pin}
+    reset_pin: ${touch_reset_pin}
+    on_touch:
       - script.execute: backlight_timer
-      - text_sensor.template.publish:
-          id: text_request
-          state: ""
-      - text_sensor.template.publish:
-          id: text_response
-          state: ""
-      - script.execute: clear_replying_text
-      - script.execute: update_replying_text
-
-  # Display state routing (extends package placeholder)
-  # Maps canonical ui_state to the device-local VA phase and calls draw_display.
-  # Device-local overlays (timer, settings, call-ended) are resolved inside draw_display.
-  - id: !extend render_ui_state
-    then:
-      - lambda: |-
-          int state = id(ui_state);
-          // VoIP idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
-            id(peer_name) = id(phone).get_current_destination();
-            if (id(previous_mode) == 0) {
-              id(current_mode) = 0;
-            }
-          }
-
-          switch (state) {
-            case ${ui_state_init}:
-            case ${ui_state_no_wifi}:
-            case ${ui_state_no_ha}:
-              id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
-              break;
-            case ${ui_state_both_muted}:
-            case ${ui_state_mic_muted}:
-              id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
-              break;
-            case ${ui_state_mww_recent}:
-            case ${ui_state_va_listening}:
-              id(current_mode) = 0;
-              id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
-              break;
-            case ${ui_state_va_thinking}:
-              id(voice_assistant_phase) = ${voice_assist_thinking_phase_id};
-              break;
-            case ${ui_state_va_replying}:
-              id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
-              break;
-            case ${ui_state_va_error}:
-              id(voice_assistant_phase) = ${voice_assist_error_phase_id};
-              break;
-            case ${ui_state_media}:
-              if (id(mute).state) {
-                id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
-              } else {
-                id(apply_media_artwork).execute();
-                id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
-              }
-              break;
-            case ${ui_state_idle}:
-              if (id(mute).state) {
-                id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
-              } else {
-                id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
-              }
-              break;
-            default:
-              break;
-          }
-      - script.execute: backlight_timer
-      # Reset text on listening start.
       - if:
-          condition:
-            lambda: 'return id(ui_state) == ${ui_state_va_listening};'
-          then:
-            - text_sensor.template.publish:
-                id: text_request
-                state: "..."
-            - text_sensor.template.publish:
-                id: text_response
-                state: "..."
-            - script.stop: reply_pagination_timer
-      # VoIP idle: update labels if staying in call mode.
-      - if:
-          condition:
-            lambda: |-
-              return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(phone).get_state_str() == "idle";
-          then:
-            - script.execute: update_call_idle_labels
-      - script.execute: draw_display
-
-  # TTS text display (extends package placeholder)
-  - id: !extend ui_tts_started
-    then:
-      # Parse emoticon prefix, set mood background, strip from displayed text.
-      - lambda: |-
-          std::string t = text;
-          esphome::image::Image *mood = id(mood_neutral);
-          if (t.size() >= 3) {
-            std::string prefix = t.substr(0, 3);
-            if (prefix == ":-)") {
-              mood = id(mood_happy);
-            } else if (prefix == ":-(") {
-              mood = id(mood_angry);
-            } else if (prefix == ":-|") {
-              // neutral (default)
-            }
-            if (prefix == ":-)" || prefix == ":-(" || prefix == ":-|") {
-              t = t.substr(3);
-              if (!t.empty() && t[0] == ' ') t = t.substr(1);
-            }
-          }
-          lv_img_set_src(id(mood_bg), mood);
-          id(text_response).publish_state(t);
-      - globals.set:
-          id: voice_assistant_phase
-          value: '${voice_assist_replying_phase_id}'
-      - globals.set:
-          id: reply_page_index
-          value: '0'
-      - script.stop: reply_pagination_timer
-      - script.stop: backlight_timer
-      - light.turn_on:
-          id: backlight
-          brightness: 100%
-      - if:
-          condition:
-            lambda: |-
-              return id(current_mode) == 0;
-          then:
-            - script.execute: update_replying_text
-            - if:
-                condition:
-                  lambda: |-
-                    return id(reply_total_pages) > 1;
-                then:
-                  - script.execute: reply_pagination_timer
-            - script.execute: draw_display
-
-  # STT text display (extends package placeholder)
-  - id: !extend ui_stt_ended
-    then:
-      - text_sensor.template.publish:
-          id: text_request
-          state: !lambda 'return text;'
-      - script.execute: draw_display
-
-  # VoIP call display (extends package placeholder)
-  - id: !extend ui_call_started
-    then:
-      - script.stop: reply_pagination_timer
-      - lambda: |-
-          id(peer_name) = peer;
-          id(previous_mode) = id(current_mode);
-          id(current_mode) = 1;
-      - script.execute: backlight_timer
-      # Update the relevant peer label for whichever call page will show
-      - lvgl.label.update:
-          id: call_ringing_out_peer_label
-          text: !lambda 'return id(peer_name);'
-      - lvgl.label.update:
-          id: call_ringing_in_peer_label
-          text: !lambda 'return id(peer_name);'
-      - lvgl.label.update:
-          id: call_in_call_peer_label
-          text: !lambda 'return id(peer_name);'
-      - script.execute: draw_display
-
-  # Call terminated screen: render peer + reason on call_ended_page,
-  # gate draw_display via call_ended_active for the auto-return window.
-  - id: !extend ui_call_ended
-    mode: restart
-    then:
-      - globals.set:
-          id: call_ended_active
-          value: "true"
-      - lvgl.label.update:
-          id: call_ended_peer_label
-          text: !lambda 'return peer.empty() ? std::string("-") : peer;'
-      - lvgl.label.update:
-          id: call_ended_reason_label
-          text: !lambda |-
-            std::string r = reason;
-            if      (r == "local_hangup")    return std::string("Local hangup");
-            else if (r == "remote_hangup")   return std::string("Remote hangup");
-            else if (r == "declined")        return std::string("Declined");
-            else if (r == "timeout")         return std::string("Timeout");
-            else if (r == "busy")            return std::string("Busy");
-            else if (r == "unreachable")     return std::string("Unreachable");
-            else if (r == "protocol_error")  return std::string("Protocol error");
-            else if (r == "bridge_error")    return std::string("Bridge error");
-            return r.empty() ? std::string("Ended") : ("Declined: " + r);
-      - script.execute: backlight_timer
-      - script.execute: draw_display
-      - delay: 4s
-      - if:
-          condition:
-            lambda: 'return id(call_ended_active);'
-          then:
-            - globals.set:
-                id: call_ended_active
-                value: "false"
-            - script.execute: draw_display
-
-  # Idle animation: 38 frames at 120ms = 4.56s, then 25s pause. Repeat while idle.
-  - id: ai_animation_loop
-    mode: single
-    then:
-      - lambda: |-
-          lv_animimg_set_repeat_count(id(idle_anim), 0);
-          lv_animimg_start(id(idle_anim));
-          lv_anim_del(id(idle_anim), nullptr);
-      - while:
-          condition:
-            lambda: |-
-              return id(current_mode) == 0 &&
-                     id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
-                     !id(init_in_progress);
-          then:
-            - lambda: lv_animimg_start(id(idle_anim));
-            - delay: 25s
-
-  # Compute chord widths and text row positions from display dimensions (once at boot)
-  - id: compute_layout_metrics
-    then:
-      - lambda: |-
-          const int w = ${display_width};
-          const int h = ${display_height};
-          const int r = w / 2;
-          const int cy = h / 2;
-          const int side_margin = w / 40;
-          const int line_h = h / 13;
-          const int line_spacing = h / 60;
-          const int top_pad = h / 24;
-          const int bottom_pad = h / 24;
-
-          // y_metrics: proportional UI grid (same formula as original)
-          id(y_metrics).clear();
-          id(y_metrics).reserve(14);
-          id(y_metrics).push_back(0);            // [0] top
-          id(y_metrics).push_back(h / 2);        // [1] center
-          id(y_metrics).push_back(h);             // [2] height
-          id(y_metrics).push_back(h / 8);         // [3] title
-          id(y_metrics).push_back(h * 7 / 24);    // [4] subtitle
-          id(y_metrics).push_back(h * 5 / 12);    // [5] state
-          id(y_metrics).push_back(h * 13 / 24);   // [6] label
-          id(y_metrics).push_back(h * 5 / 8);     // [7] info
-          id(y_metrics).push_back(h * 37 / 48);   // [8] contacts
-          id(y_metrics).push_back(h * 5 / 6);     // [9] action hint
-          id(y_metrics).push_back(h * 41 / 48);   // [10] bottom info
-          id(y_metrics).push_back(h - h / 16);    // [11] bottom status
-          id(y_metrics).push_back(h - 2);          // [12] page counter
-          id(y_metrics).push_back(h * 3 / 20);    // [13] timer box height
-
-          // text_row_y + chord_widths_cache: VA text rows for circular wrapping
-          id(text_row_y).clear();
-          id(chord_widths_cache).clear();
-          int y = top_pad;
-          while (y + line_h <= h - bottom_pad) {
-            id(text_row_y).push_back(y);
-            int mid_y = y + line_h / 2;
-            int dy = abs(mid_y - cy);
-            int chord_w = 0;
-            if (dy < r) {
-              chord_w = (int)(2.0f * sqrtf((float)(r * r - dy * dy))) - side_margin * 2;
-              if (chord_w < 0) chord_w = 0;
-            }
-            id(chord_widths_cache).push_back(chord_w);
-            y += (line_h + line_spacing);
-          }
-
-  # Reposition all widgets using computed y_metrics, text_row_y, chord_widths_cache
-  # Called once at boot after compute_layout_metrics. All YAML y/width are placeholders.
-  - id: reposition_widgets
-    then:
-      - lambda: |-
-          const auto &ym = id(y_metrics);
-          const auto &row_y = id(text_row_y);
-          const auto &cw = id(chord_widths_cache);
-          if (ym.size() < 14 || row_y.empty()) return;
-
-          // Helper: position label at y_center (original uses TextAlign::CENTER)
-          // LVGL TOP_MID: y_top = y_center - font_line_height / 2
-          auto set_center_y = [](lv_obj_t* obj, int y_center) {
-            const lv_font_t* f = lv_obj_get_style_text_font(obj, LV_PART_MAIN);
-            int fh = lv_font_get_line_height(f);
-            lv_obj_set_y(obj, y_center - fh / 2);
-          };
-
-          // --- call pages: percentages + align handle positioning, no reposition needed ---
-
-          // --- Thinking page: chord-width labels (10 children after image) ---
-          lv_obj_t* think[] = {
-            id(think_line_0), id(think_line_1), id(think_line_2), id(think_line_3), id(think_line_4),
-            id(think_line_5), id(think_line_6), id(think_line_7), id(think_line_8), id(think_line_9)
-          };
-          for (size_t i = 0; i < row_y.size() && i < 10; i++) {
-            lv_obj_set_y(think[i], row_y[i]);
-            lv_obj_set_width(think[i], cw[i]);
-          }
-
-          // --- Replying page: chord-width labels ---
-          lv_obj_t* reply[] = {
-            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
-            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
-          };
-          for (size_t i = 0; i < row_y.size() && i < 10; i++) {
-            lv_obj_set_y(reply[i], row_y[i]);
-            lv_obj_set_width(reply[i], cw[i]);
-          }
-
-          // Page counter at bottom
-          lv_obj_set_y(id(reply_page_counter), ym[12]);
-
-          // Timer overlay: dynamic height from y_metrics[13]
-          lv_obj_set_height(id(timer_overlay), ym[13]);
-          lv_obj_set_width(id(timer_overlay), ym[2]);  // full width = h (square display)
-          lv_obj_set_height(id(timer_bar), ym[13] - 4);
-          lv_obj_set_width(id(timer_bar), ym[2] - 4);
-
-
-  # Main display rendering: single lambda for page routing + animation control
-  - id: draw_display
-    mode: restart
-    then:
-      - lambda: |-
-          // Determine target page
-          lv_obj_t* target = nullptr;
-          auto s = id(phone).get_state_str();
-          bool in_call = (s == "ringing" || s == "calling" ||
-                          s == "remote_ringing" || s == "connecting" ||
-                          s == "in_call");
-          if (in_call) {
-            id(settings_active) = false;  // call interrupts settings view
-          }
-          // Timer ringing owns the UI while the alarm is active. This must use
-          // the runtime_controller timer activity, not voice_assistant_phase, because media_player
-          // callbacks can legitimately update the phase while playing the alarm.
-          if (id(runtime).is_activity_active("timer_ringing")) {
-            target = id(timer_finished_page)->obj;
-          } else if (id(call_ended_active)) {
-            target = id(call_ended_page)->obj;
-          } else if (id(settings_active) && !id(g_settings_pages).empty()) {
-            int idx = id(g_settings_index);
-            int n = (int) id(g_settings_pages).size();
-            if (idx < 0 || idx >= n) idx = 0;
-            target = id(g_settings_pages)[idx];
-          } else if (id(init_in_progress)) {
-            target = id(initializing_page)->obj;
-          } else if (!wifi::global_wifi_component->is_connected()) {
-            target = id(no_wifi_page)->obj;
-          } else if (!api::global_api_server->is_connected()) {
-            target = id(no_ha_page)->obj;
-          } else if (id(current_mode) == 1) {
-            // VoIP mode
-            auto s = id(phone).get_state_str();
-            if (s == "ringing") {
-              target = id(call_ringing_in_page)->obj;
-            } else if (s == "calling" || s == "remote_ringing") {
-              target = id(call_ringing_out_page)->obj;
-            } else if (s == "in_call" || s == "connecting") {
-              target = id(call_in_call_page)->obj;
-            } else {
-              target = id(call_idle_page)->obj;
-            }
-          } else {
-            // VA mode
-            int phase = id(voice_assistant_phase);
-            if (phase == ${voice_assist_listening_phase_id}) {
-              target = id(listening_page)->obj;
-            } else if (phase == ${voice_assist_thinking_phase_id}) {
-              target = id(thinking_page)->obj;
-            } else if (phase == ${voice_assist_replying_phase_id}) {
-              target = id(replying_page)->obj;
-            } else if (phase == ${voice_assist_error_phase_id}) {
-              target = id(error_page)->obj;
-            } else if (phase == ${voice_assist_muted_phase_id}) {
-              target = id(muted_page)->obj;
-            } else if (phase == ${voice_assist_not_ready_phase_id}) {
-              target = id(no_ha_page)->obj;
-            } else {
-              target = id(idle_page)->obj;
-            }
-          }
-
-          if (target == nullptr) return;
-
-          const char* page_name = "unknown";
-          if (target == id(idle_page)->obj) page_name = "idle";
-          else if (target == id(listening_page)->obj) page_name = "listening";
-          else if (target == id(thinking_page)->obj) page_name = "thinking";
-          else if (target == id(replying_page)->obj) page_name = "replying";
-          else if (target == id(error_page)->obj) page_name = "error";
-          else if (target == id(muted_page)->obj) page_name = "muted";
-          else if (target == id(call_idle_page)->obj) page_name = "call_idle";
-          else if (target == id(call_ringing_in_page)->obj) page_name = "call_ringing_in";
-          else if (target == id(call_ringing_out_page)->obj) page_name = "call_ringing_out";
-          else if (target == id(call_in_call_page)->obj) page_name = "call_in_call";
-          else if (target == id(call_ended_page)->obj) page_name = "call_ended";
-          else if (target == id(timer_finished_page)->obj) page_name = "timer_finished";
-
-          // Skip page load if already showing (avoids redundant SPI transfer)
-          bool page_changed = (target != lv_disp_get_scr_act(nullptr));
-          if (page_changed) {
-            // Stop animation before page switch to prevent split-screen glitch
-            lv_anim_del(id(idle_anim), nullptr);
-            // Honour swipe-driven animation hint, otherwise instant load.
-            if (id(nav_anim) != 0) {
-              lv_scr_load_anim(target,
-                               (lv_scr_load_anim_t) id(nav_anim),
-                               (uint32_t) id(nav_anim_ms),
-                               0, false);
-            } else {
-              lv_disp_load_scr(target);
-            }
-          }
-          // The VA idle animation is stopped before page switches. Start the
-          // idle animation loop immediately when VA idle becomes the visible
-          // page, instead of waiting for the template binary_sensor refresh.
-          if (target == id(idle_page)->obj) {
-            if (!id(ai_animation_loop).is_running()) id(ai_animation_loop).execute();
-          } else if (id(ai_animation_loop).is_running()) {
-            id(ai_animation_loop).stop();
-          }
-          // Always consume the hint, even if no page change happened.
-          id(nav_anim) = 0;
-          id(nav_anim_ms) = 0;
-
-          // Hide top layer status bar on replying/thinking pages (text overlap)
-          bool show_status = (target != id(replying_page)->obj && target != id(thinking_page)->obj);
-          if (show_status) {
-            lv_obj_clear_flag(id(top_clock_label), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(id(top_battery_label), LV_OBJ_FLAG_HIDDEN);
-          } else {
-            lv_obj_add_flag(id(top_clock_label), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(id(top_battery_label), LV_OBJ_FLAG_HIDDEN);
-          }
-
-      # Update dynamic labels when on idle page
-      - if:
-          condition:
-            binary_sensor.is_on: is_idle_screen
-          then:
-            - script.execute: update_idle_labels
-      # Self-heal: ensure MWW is active when in VA idle (catches any missed restarts)
-      - if:
-          condition:
-            and:
-              - lambda: |-
-                  return id(current_mode) == 0 &&
-                         id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
-                         !id(init_in_progress);
-              - switch.is_off: mute
-              - not:
-                  media_player.is_announcing:
-                    id: speaker_media_player
-          then:
-            - if:
-                condition:
-                  not:
-                    micro_wake_word.is_running:
-                then:
-                  - script.execute: start_mww_when_ready
-      - if:
-          condition:
-            lambda: |-
-              return id(current_mode) == 1 && id(phone).get_state_str() == "idle"
-                     && !id(init_in_progress);
-          then:
-            - script.execute: update_call_idle_labels
-      # Always sync timer overlay on redraw (on_timer_tick stops when timers expire)
-      - script.execute: update_timer_state
-
-  # Timer state update + overlay UI
-  - id: update_timer_state
-    then:
-      - lambda: |-
-          const auto &timers = id(va).get_timers();
-          voice_assistant::Timer first_timer{};
-          voice_assistant::Timer first_active{};
-          bool any_active = false;
-          for (const auto &t : timers) {
-            if (first_timer.total_seconds == 0 || t.seconds_left < first_timer.seconds_left) first_timer = t;
-            if (t.is_active && (!any_active || t.seconds_left < first_active.seconds_left)) {
-              first_active = t;
-              any_active = true;
-            }
-          }
-
-          // Timer overlay: show only on VA pages that support it
-          int phase = id(voice_assistant_phase);
-          bool on_timer_page = id(current_mode) == 0 && (
-            phase == ${voice_assist_idle_phase_id} ||
-            phase == ${voice_assist_listening_phase_id} ||
-            phase == ${voice_assist_thinking_phase_id} ||
-            phase == ${voice_assist_muted_phase_id}
-          );
-
-          // Hide if: not on a supported page, no timers, or timer finished (<=1s, not active)
-          bool timer_finished = !any_active && (timers.empty() || first_timer.seconds_left <= 1);
-          if (!on_timer_page || timer_finished) {
-            lv_obj_add_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
-            return;
-          }
-
-          // Pick timer to display (active first, then paused)
-          const auto &t = any_active ? first_active : first_timer;
-          uint32_t sec = t.seconds_left;
-          uint32_t total = t.total_seconds;
-
-          // Bar as simple background, fixed at 100%
-          lv_bar_set_value(id(timer_bar), 100, LV_ANIM_OFF);
-
-          // Bar color: green active, grey paused
-          static lv_style_t style_active, style_paused;
-          static bool styles_init = false;
-          if (!styles_init) {
-            lv_style_init(&style_active);
-            lv_style_set_bg_color(&style_active, lv_color_hex(0x26ED3A));
-            lv_style_init(&style_paused);
-            lv_style_set_bg_color(&style_paused, lv_color_hex(0x888888));
-            styles_init = true;
-          }
-          lv_obj_remove_style(id(timer_bar), nullptr, LV_PART_INDICATOR);
-          lv_obj_add_style(id(timer_bar), any_active ? &style_active : &style_paused, LV_PART_INDICATOR);
-
-          // Format time text
-          char buf[8];
-          int h = sec / 3600;
-          int m = (sec / 60) % 60;
-          int s = sec % 60;
-          if (h > 0) snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
-          else       snprintf(buf, sizeof(buf), "%02d:%02d", m, s);
-          lv_label_set_text(id(timer_label), buf);
-
-          lv_obj_clear_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
-
-  - id: set_idle_or_mute_phase
-    then:
-      - if:
-          condition:
-            switch.is_on: mute
-          then:
-            - globals.set:
-                id: voice_assistant_phase
-                value: '${voice_assist_muted_phase_id}'
-          else:
-            - if:
-                condition:
-                  media_player.is_playing:
-                    id: speaker_media_player
-                then:
-                  # Music playing: show neutral mood screen instead of idle animation
-                  - script.execute: apply_media_artwork
-                  - globals.set:
-                      id: voice_assistant_phase
-                      value: '${voice_assist_replying_phase_id}'
-                else:
-                  - globals.set:
-                      id: voice_assistant_phase
-                      value: '${voice_assist_idle_phase_id}'
-
-  # Swipe-driven mode switch: set the nav_anim hint, then delegate to the
-  # existing switch_to_voip / switch_to_va scripts. They funnel into
-  # draw_display, which honours nav_anim (animated transition) and resets
-  # it. Non-swipe callers (long-press GPIO0) leave nav_anim=0 and stay
-  # instant. Single source of truth for routing + state transitions.
-  - id: swipe_to_voip
-    then:
-      - lambda: |-
-          id(nav_anim) = LV_SCR_LOAD_ANIM_MOVE_TOP;
-          id(nav_anim_ms) = 300;
-      - script.execute: switch_to_voip
-
-  - id: swipe_to_va
-    then:
-      - lambda: |-
-          id(nav_anim) = LV_SCR_LOAD_ANIM_MOVE_BOTTOM;
-          id(nav_anim_ms) = 300;
-      - script.execute: switch_to_va
-
-  # Mode switching scripts
-  - id: switch_to_va
-    then:
-      - globals.set:
-          id: current_mode
-          value: '0'
-      - script.execute: set_idle_or_mute_phase
-      - if:
-          condition:
-            lambda: |-
-              return id(voice_assistant_phase) == ${voice_assist_replying_phase_id};
-          then:
-            - script.execute: update_replying_text
-            - if:
-                condition:
-                  lambda: |-
-                    return id(reply_total_pages) > 1;
-                then:
-                  - script.execute: reply_pagination_timer
-      - script.execute: draw_display
-
-  - id: switch_to_voip
-    then:
-      - script.stop: reply_pagination_timer
-      - globals.set:
-          id: current_mode
-          value: '1'
-      - script.execute: update_call_idle_labels
-      - script.execute: draw_display
-
-  # Update all dynamic labels on the VoIP idle page
-  - id: update_call_idle_labels
-    then:
-      - lambda: id(peer_name) = id(phone).get_current_destination();
-      - lvgl.label.update:
-          id: call_idle_peer_label
-          text: !lambda 'return id(peer_name);'
-      - lvgl.label.update:
-          id: call_idle_contacts_label
-          text: !lambda |-
-            auto csv = id(phone).get_contacts_csv();
-            int count = csv.empty() ? 0 : std::count(csv.begin(), csv.end(), ',') + 1;
-            char buf[16];
-            snprintf(buf, sizeof(buf), "\U000F06CB %d", count);
-            return std::string(buf);
-
-  # Update clock and battery labels on idle page
-  - id: update_idle_labels
-    then:
-      - lvgl.label.update:
-          id: top_clock_label
-          text:
-            format: "%02d:%02d"
-            args: ['id(my_time).now().hour', 'id(my_time).now().minute']
-      - if:
-          condition:
-            - lambda: return id(battery_percentage).has_state() && !std::isnan(id(battery_percentage).state);
-          then:
-            - lvgl.label.update:
-                id: top_battery_label
-                text: !lambda |-
-                  bool charging = id(usb_connected).state;
-                  float bat = id(battery_percentage).state;
-                  float wifi = id(wifi_pct).state;
-                  std::string ret;
-                  if (bat < 10) ret = charging ? "\U000F089F" : "\U000F008E";
-                  else if (bat < 20) ret = charging ? "\U000F089C" : "\U000F007A";
-                  else if (bat < 30) ret = charging ? "\U000F0086" : "\U000F007B";
-                  else if (bat < 40) ret = charging ? "\U000F0087" : "\U000F007C";
-                  else if (bat < 50) ret = charging ? "\U000F0088" : "\U000F007D";
-                  else if (bat < 60) ret = charging ? "\U000F089D" : "\U000F007E";
-                  else if (bat < 70) ret = charging ? "\U000F0089" : "\U000F007F";
-                  else if (bat < 80) ret = charging ? "\U000F089E" : "\U000F0080";
-                  else if (bat < 90) ret = charging ? "\U000F008A" : "\U000F0081";
-                  else if (bat < 100) ret = charging ? "\U000F008B" : "\U000F0082";
-                  else ret = "\U000F0079";
-                  if (wifi < 20) ret += "\U000F08BF";
-                  else if (wifi < 55) ret += "\U000F08BC";
-                  else if (wifi < 80) ret += "\U000F08BD";
-                  else ret += "\U000F08BE";
-                  ret += api::global_api_server->is_connected() ? "\U000F07D0" : "\U000F15D0";
-                  return ret;
-          else:
-            - lvgl.label.update:
-                id: top_battery_label
-                text: ""
-
-  # Update replying page labels with current page of wrapped text
-  - id: update_replying_text
-    then:
-      - lambda: |-
-          if (id(current_mode) != 0 ||
-              id(voice_assistant_phase) != ${voice_assist_replying_phase_id}) {
-            return;
-          }
-          static std::vector<std::string> visible_lines(10);
-          static std::string page_counter_text;
-          lv_obj_t* lines[] = {
-            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
-            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
-          };
-          const size_t total_rows = 10;
-          const auto &wrapped = id(wrapped_lines_reply);
-          const size_t total_pages = std::max(1, id(reply_total_pages));
-          const size_t cur_page = id(reply_page_index) % total_pages;
-          const size_t start_line = cur_page * total_rows;
-          for (size_t i = 0; i < total_rows; i++) {
-            size_t line_idx = start_line + i;
-            visible_lines[i] = line_idx < wrapped.size() ? wrapped[line_idx] : "";
-            lv_label_set_text_static(lines[i], visible_lines[i].c_str());
-          }
-          // Update page counter
-          if (total_pages > 1) {
-            page_counter_text = str_sprintf("%d/%d", (int) (cur_page + 1), (int) total_pages);
-            lv_label_set_text_static(id(reply_page_counter), page_counter_text.c_str());
-          } else {
-            page_counter_text.clear();
-            lv_label_set_text_static(id(reply_page_counter), page_counter_text.c_str());
-          }
-
-  # Auto-advance replying text pages every 14 seconds
-  - id: reply_pagination_timer
-    mode: restart
-    then:
-      - delay: 14s
-      - if:
-          condition:
-            lambda: |-
-              return id(current_mode) == 0 &&
-                     id(voice_assistant_phase) == ${voice_assist_replying_phase_id} &&
-                     id(reply_total_pages) > 1;
-          then:
-            - globals.set:
-                id: reply_page_index
-                value: !lambda 'return id(reply_page_index) + 1;'
-            - script.execute: update_replying_text
-            - script.execute: reply_pagination_timer
-
-  # Timer alarm: play sound in a loop while runtime_controller timer_ringing is active
-  - id: timer_alarm_loop
-    mode: single
-    then:
-      - while:
           condition:
             runtime_controller.is_active:
               id: runtime
               activity: timer_ringing
           then:
-            - media_player.play_media:
-                id: speaker_media_player
-                media_url: "audio-file://timer_finished_sound"
-                announcement: true
-            - delay: 6s
+            - runtime_controller.event:
+                id: runtime
+                event: timer_stopped
+    # Gestures handled natively by LVGL on each page (on_swipe_up/down/left/right);
+    # no manual dx/dy lambda needed. on_touch above is kept for backlight refresh.
 
-  - id: timer_alarm_auto_stop
-    mode: restart
-    then:
-      - delay: 15min
-      - runtime_controller.event:
-          id: runtime
-          event: timer_stopped
+font:
+  - file:
+      type: gfonts
+      family: ${font_family}
+      weight: 300
+    id: font_response
+    size: 15
+    glyphsets:
+      - ${font_glyphsets}
+  - file:
+      type: gfonts
+      family: ${font_family}
+      weight: 300
+    id: font_timer
+    size: 30
+    glyphs: "0123456789:"
+  - file:
+      type: gfonts
+      family: ${font_family}
+      weight: 600
+    id: font_clock
+    size: 20
+    glyphs: "0123456789:%"
+    extras:
+      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F0079" # battery-100
+          - "\U000F008E" # battery-alert (0%)
+          - "\U000F007A" # battery-10
+          - "\U000F007B" # battery-20
+          - "\U000F007C" # battery-30
+          - "\U000F007D" # battery-40
+          - "\U000F007E" # battery-50
+          - "\U000F007F" # battery-60
+          - "\U000F0080" # battery-70
+          - "\U000F0081" # battery-80
+          - "\U000F0082" # battery-90
+          - "\U000F0553" # battery-charging-100
+          - "\U000F089F" # battery-charging-outline (0%)
+          - "\U000F089C" # battery-charging-10
+          - "\U000F0086" # battery-charging-20
+          - "\U000F0087" # battery-charging-30
+          - "\U000F0088" # battery-charging-40
+          - "\U000F089D" # battery-charging-50
+          - "\U000F0089" # battery-charging-60
+          - "\U000F089E" # battery-charging-70
+          - "\U000F008A" # battery-charging-80
+          - "\U000F008B" # battery-charging-90
+          - "\U000F08BF" # wifi-strength-outline (<20%)
+          - "\U000F08BC" # wifi-strength-1 (<55%)
+          - "\U000F08BD" # wifi-strength-2 (<80%)
+          - "\U000F08BE" # wifi-strength-3 (>=80%)
+          - "\U000F07D0" # home-assistant (HA connected)
+          - "\U000F15D0" # home-alert (HA disconnected)
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: call_icons
+    size: 42
+    glyphs:
+      - "\U000F03F2" # phone
+      - "\U000F03F5" # phone-hangup
+      - "\U000F0731" # arrow left bold
+      - "\U000F0734" # arrow right bold
+  # VoIP fonts
+  - file:
+      type: gfonts
+      family: ${font_family}
+      weight: 700
+    id: font_title
+    size: 24
+    glyphsets:
+      - GF_Latin_Core
+    extras:
+      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F06CB" # contacts (address book)
+  - file:
+      type: gfonts
+      family: ${font_family}
+      weight: 500
+    id: font_state
+    size: 28
+    # Static call labels only: IDLE, RINGING, CALLING, IN CALL.
+    # Explicit glyphs save ~150 KB flash vs GF_Latin_Core (319 glyphs).
+    glyphs: " ACDEGILNR"
+  - file:
+      type: gfonts
+      family: ${font_family}
+      weight: 400
+    id: font_info
+    size: 20
+    glyphsets:
+      - GF_Latin_Core
+  - file:
+      type: gfonts
+      family: Roboto Mono
+      weight: 400
+    id: font_page_counter
+    size: 14
+    glyphs: "0123456789/"
 
-  # Backlight timer
-  - id: backlight_timer
-    mode: restart
-    then:
-      - light.turn_on:
-          id: backlight
-          brightness: 100%
-      - delay: 30s
-      - light.turn_on:
-          id: backlight
-          brightness: 60%
-      - delay: 120s
-      - if:
-          condition:
-            binary_sensor.is_on: usb_connected
-          then:
-            - light.turn_on:
-                id: backlight
-                brightness: 20%
-          else:
-            - light.turn_off: backlight
-
-# =============================================================================
-# BUTTONS
-# =============================================================================
-button:
-  - platform: factory_reset
-    id: factory_reset_btn
-    internal: true
-
-# =============================================================================
-# SENSORS
-# =============================================================================
-sensor:
-  - platform: adc
-    pin: GPIO1
-    name: "Battery Voltage"
-    id: battery_voltage
-    attenuation: 12db
-    accuracy_decimals: 2
-    update_interval: 10s
-    unit_of_measurement: "V"
-    icon: mdi:battery
-    filters:
-      - multiply: 2.0
-      - median:
-          window_size: 7
-          send_every: 7
-          send_first_at: 1
-      - throttle: 1min
-
-  - platform: template
-    id: battery_percentage
-    name: "Battery Percentage"
-    lambda: |-
-      if (!id(battery_voltage).has_state() || std::isnan(id(battery_voltage).state))
-        return NAN;
-      return id(battery_voltage).state;
-    accuracy_decimals: 0
-    unit_of_measurement: "%"
-    icon: mdi:battery-medium
-    filters:
-      - calibrate_linear:
-         method: exact
-         datapoints:
-          - 2.80 -> 0.0
-          - 3.10 -> 10.0
-          - 3.30 -> 20.0
-          - 3.45 -> 30.0
-          - 3.60 -> 40.0
-          - 3.70 -> 50.0
-          - 3.75 -> 60.0
-          - 3.80 -> 70.0
-          - 3.90 -> 80.0
-          - 4.00 -> 90.0
-          - 4.20 -> 100.0
-      - lambda: |-
-          if (x > 100) return 100;
-          if (x < 0) return 0;
-          return x;
-
-# =============================================================================
-# BINARY SENSORS
-# =============================================================================
-binary_sensor:
-  # True when the VA idle page is the active screen
-  - platform: template
-    id: is_idle_screen
-    lambda: |-
-      return id(current_mode) == 0 &&
-             id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
-             !id(init_in_progress);
-
-  # Physical GPIO0 button - PAGE AWARE (uses mode/state checks instead of display.is_displaying_page)
-  - platform: gpio
-    pin:
-      number: GPIO0
-      mode: INPUT_PULLUP
-      inverted: true
-    id: main_button
-    name: "Main Button"
-    icon: "mdi:gesture-tap-button"
-    on_multi_click:
-      # Single click
-      - timing:
-          - ON for 10ms to 500ms
-          - OFF for at least 400ms
-        then:
-          - if:
-              condition:
-                runtime_controller.is_active:
-                  id: runtime
-                  activity: timer_ringing
-              then:
-                - runtime_controller.event:
-                    id: runtime
-                    event: timer_stopped
-              else:
-                - if:
-                    condition:
-                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
-                    then:
-                      - voip_stack.call_toggle:
-                    else:
-                      - if:
-                          condition:
-                            lambda: |-
-                              if (id(current_mode) != 1) return false;
-                              auto s = id(phone).get_state_str();
-                              return s != "idle";
-                          then:
-                            - voip_stack.call_toggle:
-                          else:
-                            - runtime_controller.event:
-                                id: runtime
-                                event: manual_voice_toggle
-      # Double click: decline incoming or next contact
-      - timing:
-          - ON for 50ms to 500ms
-          - OFF for 50ms to 400ms
-          - ON for 50ms to 500ms
-          - OFF for at least 400ms
-        then:
-          - if:
-              condition:
-                lambda: |-
-                  if (id(current_mode) != 1) return false;
-                  auto s = id(phone).get_state_str();
-                  return s == "ringing";
-              then:
-                - voip_stack.decline_call:
-              else:
-                - if:
-                    condition:
-                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
-                    then:
-                      - voip_stack.next_contact:
-      # Long press (3s): switch VA <-> VoIP
-      - timing:
-          - ON for 1s to 3s
-        then:
-          - if:
-              condition:
-                lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
-              then:
-                - script.execute: switch_to_va
-              else:
-                - script.execute: switch_to_voip
-
-  - platform: template
-    name: "USB Connected"
-    id: usb_connected
-    device_class: plug
-    lambda: return id(battery_voltage).state > 3.9;
-    on_press:
-      - script.execute: backlight_timer
-    on_release:
-      - script.execute: backlight_timer
-
-
-# =============================================================================
-# OUTPUTS AND LIGHTS
-# =============================================================================
-output:
-  - platform: gpio
-    id: speaker_enable
-    pin: GPIO46
-  - platform: ledc
-    id: backlight_output
-    pin: GPIO42
-    inverted: true
-
-# Round display backlight entity backed by GPIO42 PWM.
-light:
-  - platform: monochromatic
-    id: backlight
-    name: "Display Backlight"
-    icon: "mdi:brightness-6"
-    output: backlight_output
-    restore_mode: ALWAYS_ON
-    default_transition_length: 250ms
-
-# =============================================================================
-# SWITCHES AND SELECTS
-# =============================================================================
-switch:
-  # Replace package mic mute; speaker mute is device-specific.
-  - id: !remove mute
-
-  # Mic Mute: uses mic_afe + display updates
-  - platform: template
-    name: Mic Mute
-    id: mute
-    icon: "mdi:microphone-off"
-    optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF
-    entity_category: config
-    on_turn_on:
-      - logger.log:
-          level: INFO
-          tag: mute
-          format: "Mic mute ON: microphone silenced, MWW stopped"
-      - voice_assistant.stop:
-      - micro_wake_word.stop:
-      - microphone.mute: mic_afe
-      - runtime_controller.event:
-          id: runtime
-          event: mic_muted
-    on_turn_off:
-      - logger.log:
-          level: INFO
-          tag: mute
-          format: "Mic mute OFF: microphone active, MWW started"
-      - microphone.unmute: mic_afe
-      - runtime_controller.event:
-          id: runtime
-          event: mic_unmuted
-      - if:
-          condition:
-            not:
-              micro_wake_word.is_running:
-          then:
-            - script.execute: start_mww_when_ready
-      - script.execute: draw_display
-
-  # Speaker Mute (device override): adds amp enable/disable
-  - platform: template
-    name: Speaker Mute
-    id: speaker_mute
-    icon: mdi:volume-off
-    entity_category: config
-    optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF
-    on_turn_on:
-      - logger.log:
-          level: INFO
-          tag: mute
-          format: "Speaker mute ON: DAC muted, amplifier off"
-      - speaker.mute_on: hw_speaker
-      - runtime_controller.event:
-          id: runtime
-          event: speaker_muted
-      - delay: 50ms
-      - output.turn_off: speaker_enable
-    on_turn_off:
-      - logger.log:
-          level: INFO
-          tag: mute
-          format: "Speaker mute OFF: amplifier on, DAC unmuted"
-      - if:
-          condition:
-            speaker.is_playing: hw_speaker
-          then:
-            - output.turn_on: speaker_enable
-            - delay: 50ms
-      - speaker.mute_off: hw_speaker
-      - runtime_controller.event:
-          id: runtime
-          event: speaker_unmuted
-  # VoIP controls
-
-  # AEC runtime controls
-# =============================================================================
-# Select Entities
-# =============================================================================
-select:
-  - platform: template
-    name: AEC Mode
-    id: aec_mode_select
-    icon: mdi:tune-vertical
-    options:
-      - "sr_low_cost"
-      - "sr_high_perf"
-      - "fd_low_cost"
-      - "fd_high_perf"
-    initial_option: "fd_high_perf"
-    # Non-optimistic: this reflects hardware state owned by the audio graph.
-    optimistic: false
-    restore_value: false
-    set_action:
-      - if:
-          condition:
-            lambda: 'return id(init_in_progress);'
-          then:
-            - logger.log: "AEC mode select: skipping during boot"
-          else:
-            - if:
-                condition:
-                  or:
-                    - voice_assistant.is_running:
-                    - not:
-                        voip_stack.is_idle:
-                then:
-                  - logger.log:
-                      level: WARN
-                      format: "Cannot switch AEC mode during active VA/VoIP"
-                else:
-                  - logger.log:
-                      format: "Switching AEC mode to %s"
-                      args: ['x.c_str()']
-                  - micro_wake_word.stop:
-                  - esp_audio_stack.stop_and_wait: audio_stack
-                  - wait_until:
-                      condition:
-                        esp_audio_stack.is_idle: audio_stack
-                      timeout: 2s
-                  - esp_afe.set_mode:
-                      id: afe_processor
-                      mode: !lambda 'return x;'
-                  - wait_until:
-                      condition:
-                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
-                      timeout: 20s
-                  - if:
-                      condition:
-                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
-                      then:
-                        - esp_audio_stack.start: audio_stack
-                        - delay: 300ms
-                        - if:
-                            condition:
-                              switch.is_off: mute
-                            then:
-                              - script.execute: start_mww_when_ready
-                      else:
-                        - logger.log:
-                            level: ERROR
-                            tag: main
-                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
-      - lambda: |-
-          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
-
-# =============================================================================
-# TEXT SENSORS
-# =============================================================================
-text_sensor:
-  - id: text_request
-    platform: template
-    on_value:
-      then:
-        - lambda: |-
-            const std::string &text = x;
-            lv_obj_t* lines[] = {
-              id(think_line_0), id(think_line_1), id(think_line_2), id(think_line_3), id(think_line_4),
-              id(think_line_5), id(think_line_6), id(think_line_7), id(think_line_8), id(think_line_9)
-            };
-            for (size_t i = 0; i < 10; i++) lv_label_set_text(lines[i], "");
-            if (text == "...") return;
-            std::vector<std::string> words;
-            words.reserve(text.size()/5);
-            size_t start = 0;
-            for (size_t i = 0; i <= text.size(); ++i) {
-              if (i == text.size() || text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
-                if (i > start) words.push_back(text.substr(start, i - start));
-                start = i + 1;
-              }
-            }
-            if (words.empty() || id(chord_widths_cache).empty()) return;
-            const auto &chords = id(chord_widths_cache);
-            const size_t total_rows = chords.size();
-            const lv_font_t *font = lv_obj_get_style_text_font(id(think_line_0), LV_PART_MAIN);
-            // Start from middle of display (row total_rows/2 - 3)
-            size_t start_row = total_rows / 2 - 3;
-            if (start_row >= total_rows) start_row = 0;
-            // lines[] already cleared above
-            size_t row = start_row;
-            size_t word_idx = 0;
-            const int avg_char_w = lv_font_get_line_height(font) * 2 / 3;  // ~60% of line height
-            while (row < total_rows && row < 10 && word_idx < words.size()) {
-              const int chord_w = chords[row];
-              if (chord_w <= 0) { row++; continue; }
-              const size_t sw = word_idx;
-              std::string line;
-              line.reserve(chord_w / avg_char_w);
-              while (word_idx < words.size()) {
-                const auto &word = words[word_idx];
-                std::string candidate = line.empty() ? word : (line + ' ' + word);
-                if ((int)(candidate.length() * avg_char_w) > chord_w) {
-                  lv_point_t size;
-                  lv_text_get_size(&size, candidate.c_str(), font, 0, 0, INT32_MAX, LV_TEXT_FLAG_NONE);
-                  if (size.x > chord_w) {
-                    if (word_idx == sw) { line = word; word_idx++; }
-                    break;
-                  }
-                }
-                line = candidate;
-                word_idx++;
-              }
-              if (word_idx > sw) lv_label_set_text(lines[row], line.c_str());
-              row++;
-            }
-
-  - id: text_response
-    platform: template
-    on_value:
-      then:
-        - lambda: |-
-            // Skip redundant "..." during replying phase (label text set by update_replying_text)
-            if (x == "..." && id(voice_assistant_phase) == ${voice_assist_replying_phase_id}) {
-              return;
-            }
-            const std::string &text = x;
-            std::vector<std::string> words;
-            words.reserve(text.size()/5);
-            size_t start = 0;
-            for (size_t i = 0; i <= text.size(); ++i) {
-              if (i == text.size() || text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
-                if (i > start) {
-                  words.push_back(text.substr(start, i - start));
-                }
-                start = i + 1;
-              }
-            }
-            id(reply_page_index) = 0;
-            id(wrapped_lines_reply).clear();
-            id(reply_total_pages) = 1;
-            if (words.empty() || id(chord_widths_cache).empty()) return;
-            const auto &chords = id(chord_widths_cache);
-            const size_t total_rows = chords.size();
-            const lv_font_t *font = lv_obj_get_style_text_font(id(reply_line_0), LV_PART_MAIN);
-            const int avg_char_w = lv_font_get_line_height(font) * 2 / 3;
-            size_t word_idx = 0;
-            size_t safety = 0;
-            size_t line_count = 0;
-            while (word_idx < words.size() && safety++ < words.size() * 2) {
-              int row = line_count % total_rows;
-              const int chord_w = chords[row];
-              if (chord_w <= 0) { id(wrapped_lines_reply).push_back(""); line_count++; continue; }
-              const size_t start_word = word_idx;
-              std::string line;
-              line.reserve(chord_w / avg_char_w);
-              while (word_idx < words.size()) {
-                const auto &word = words[word_idx];
-                std::string candidate = line.empty() ? word : (line + ' ' + word);
-                if ((int)(candidate.length() * avg_char_w) > chord_w) {
-                  lv_point_t size;
-                  lv_text_get_size(&size, candidate.c_str(), font, 0, 0, INT32_MAX, LV_TEXT_FLAG_NONE);
-                  if (size.x > chord_w) {
-                    if (word_idx == start_word) { line = word; word_idx++; }
-                    break;
-                  }
-                }
-                line = candidate;
-                word_idx++;
-              }
-              if (word_idx > start_word) {
-                id(wrapped_lines_reply).push_back(line);
-                line_count++;
-              }
-            }
-            while (!id(wrapped_lines_reply).empty() && (id(wrapped_lines_reply).size() % 10) != 0) {
-              id(wrapped_lines_reply).push_back("");
-            }
-            line_count = id(wrapped_lines_reply).size();
-            id(reply_total_pages) = (line_count + 10 - 1) / 10;
-            if (id(reply_total_pages) < 1) id(reply_total_pages) = 1;
-
-# =============================================================================
-# GRAPHIC RESOURCES
-# =============================================================================
 image:
   # Static VA state images
   - file: ${assets_base}assets/images/assistant/${ai_avatar}/error.png
@@ -2011,165 +906,6 @@ image:
     type: RGB565
     transparency: opaque
 
-# =============================================================================
-# FONT
-# =============================================================================
-font:
-  - file:
-      type: gfonts
-      family: ${font_family}
-      weight: 300
-    id: font_response
-    size: 15
-    glyphsets:
-      - ${font_glyphsets}
-  - file:
-      type: gfonts
-      family: ${font_family}
-      weight: 300
-    id: font_timer
-    size: 30
-    glyphs: "0123456789:"
-  - file:
-      type: gfonts
-      family: ${font_family}
-      weight: 600
-    id: font_clock
-    size: 20
-    glyphs: "0123456789:%"
-    extras:
-      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
-        glyphs:
-          - "\U000F0079" # battery-100
-          - "\U000F008E" # battery-alert (0%)
-          - "\U000F007A" # battery-10
-          - "\U000F007B" # battery-20
-          - "\U000F007C" # battery-30
-          - "\U000F007D" # battery-40
-          - "\U000F007E" # battery-50
-          - "\U000F007F" # battery-60
-          - "\U000F0080" # battery-70
-          - "\U000F0081" # battery-80
-          - "\U000F0082" # battery-90
-          - "\U000F0553" # battery-charging-100
-          - "\U000F089F" # battery-charging-outline (0%)
-          - "\U000F089C" # battery-charging-10
-          - "\U000F0086" # battery-charging-20
-          - "\U000F0087" # battery-charging-30
-          - "\U000F0088" # battery-charging-40
-          - "\U000F089D" # battery-charging-50
-          - "\U000F0089" # battery-charging-60
-          - "\U000F089E" # battery-charging-70
-          - "\U000F008A" # battery-charging-80
-          - "\U000F008B" # battery-charging-90
-          - "\U000F08BF" # wifi-strength-outline (<20%)
-          - "\U000F08BC" # wifi-strength-1 (<55%)
-          - "\U000F08BD" # wifi-strength-2 (<80%)
-          - "\U000F08BE" # wifi-strength-3 (>=80%)
-          - "\U000F07D0" # home-assistant (HA connected)
-          - "\U000F15D0" # home-alert (HA disconnected)
-  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
-    id: call_icons
-    size: 42
-    glyphs:
-      - "\U000F03F2" # phone
-      - "\U000F03F5" # phone-hangup
-      - "\U000F0731" # arrow left bold
-      - "\U000F0734" # arrow right bold
-  # VoIP fonts
-  - file:
-      type: gfonts
-      family: ${font_family}
-      weight: 700
-    id: font_title
-    size: 24
-    glyphsets:
-      - GF_Latin_Core
-    extras:
-      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
-        glyphs:
-          - "\U000F06CB" # contacts (address book)
-  - file:
-      type: gfonts
-      family: ${font_family}
-      weight: 500
-    id: font_state
-    size: 28
-    # Static call labels only: IDLE, RINGING, CALLING, IN CALL.
-    # Explicit glyphs save ~150 KB flash vs GF_Latin_Core (319 glyphs).
-    glyphs: " ACDEGILNR"
-  - file:
-      type: gfonts
-      family: ${font_family}
-      weight: 400
-    id: font_info
-    size: 20
-    glyphsets:
-      - GF_Latin_Core
-  - file:
-      type: gfonts
-      family: Roboto Mono
-      weight: 400
-    id: font_page_counter
-    size: 14
-    glyphs: "0123456789/"
-
-# =============================================================================
-# TOUCHSCREEN (CST816)
-# =============================================================================
-touchscreen:
-  - platform: cst816
-    id: touch
-    display: s3_box_lcd
-    i2c_id: touchscreen_i2c_bus
-    interrupt_pin: GPIO12
-    reset_pin: GPIO6
-    on_touch:
-      - script.execute: backlight_timer
-      - if:
-          condition:
-            runtime_controller.is_active:
-              id: runtime
-              activity: timer_ringing
-          then:
-            - runtime_controller.event:
-                id: runtime
-                event: timer_stopped
-    # Gestures handled natively by LVGL on each page (on_swipe_up/down/left/right);
-    # no manual dx/dy lambda needed. on_touch above is kept for backlight refresh.
-
-# =============================================================================
-# SPI BUS (DISPLAY)
-# =============================================================================
-spi:
-  - id: spi_bus
-    clk_pin: 4
-    mosi_pin: 2
-
-# =============================================================================
-# DISPLAY (mipi_spi - LVGL handles rendering)
-# =============================================================================
-display:
-  - platform: mipi_spi
-    id: s3_box_lcd
-    model: GC9A01A
-    invert_colors: true
-    data_rate: 40MHz
-    cs_pin: 5
-    dc_pin: 47
-    reset_pin:
-      number: 38
-    auto_clear_enabled: false
-    dimensions:
-      height: 240
-      width: 240
-
-# =============================================================================
-# LVGL DISPLAY ENGINE
-#
-# Declarative widgets for VA + VoIP pages. Static idle image,
-# mood-based replying backgrounds, timer overlay on top_layer.
-# =============================================================================
 lvgl:
   displays:
     - s3_box_lcd
@@ -3226,14 +1962,1297 @@ lvgl:
             border_width: 0
 
 # =============================================================================
-# PERIODIC UPDATES
+# RUNTIME LOGIC AND ENTITIES
 # =============================================================================
+
+globals:
+  - id: voice_assistant_phase
+    type: int
+    restore_value: false
+    initial_value: ${voice_assist_not_ready_phase_id}
+
+  # Mode: 0=VA, 1=VoIP
+  - id: current_mode
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+  # Animation hint for the next draw_display call. 0 = LV_SCR_LOAD_ANIM_NONE
+  # (instant lv_disp_load_scr). Non-zero = LVGL anim type (e.g. MOVE_TOP),
+  # consumed and reset back to 0 on use. Set by swipe_to_voip/swipe_to_va
+  # so a swipe-driven page change is animated, while every other caller
+  # (long-press toggle, VoIP state callbacks, etc.) stays instant.
+  - id: nav_anim
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: nav_anim_ms
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+  # Previous mode (for restoring after incoming call)
+  - id: previous_mode
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+  # VoIP peer name for display
+  - id: peer_name
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  # Replying page pagination
+  - id: reply_page_index
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: reply_total_pages
+    type: int
+    restore_value: false
+    initial_value: "1"
+  - id: wrapped_lines_reply
+    type: std::vector<std::string>
+    restore_value: false
+
+  # call_ended_page is shown briefly after a call terminates (hangup,
+  # decline, error, timeout). Set by ui_call_ended, cleared by the
+  # auto-return delay or by the next state change.
+  - id: call_ended_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  # Chord widths for circular text wrapping (computed at boot)
+  - id: chord_widths_cache
+    type: std::vector<int>
+    restore_value: false
+  # Text row y-positions for circular display (computed at boot)
+  - id: text_row_y
+    type: std::vector<int>
+    restore_value: false
+  # UI grid y-positions (proportional, computed at boot from display height)
+  # [0]=top, [1]=center, [2]=height, [3]=title, [4]=subtitle, [5]=state,
+  # [6]=label, [7]=info, [8]=contacts, [9]=action_hint, [10]=bottom_info,
+  # [11]=bottom_status, [12]=page_counter, [13]=timer_box_height
+  - id: y_metrics
+    type: std::vector<int>
+    restore_value: false
+
+script:
+  - id: apply_media_artwork
+    then:
+      - lambda: |-
+          lv_img_set_src(id(mood_bg), id(mood_neutral));
+          lv_obj_invalidate(id(mood_bg));
+
+  - id: clear_replying_text
+    then:
+      - lambda: |-
+          id(wrapped_lines_reply).clear();
+          id(reply_total_pages) = 1;
+          id(reply_page_index) = 0;
+          lv_obj_t* lines[] = {
+            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
+            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
+          };
+          for (auto *line : lines) {
+            lv_label_set_text(line, "");
+          }
+          lv_label_set_text(id(reply_page_counter), "");
+
+  - id: !extend ui_va_barge_start
+    then:
+      - script.stop: reply_pagination_timer
+      - script.execute: clear_replying_text
+
+  # Display cleanup after VA ends
+  - id: !extend ui_va_end
+    then:
+      - script.stop: reply_pagination_timer
+      - script.execute: backlight_timer
+      - text_sensor.template.publish:
+          id: text_request
+          state: ""
+      - text_sensor.template.publish:
+          id: text_response
+          state: ""
+      - script.execute: clear_replying_text
+      - script.execute: update_replying_text
+
+  # Display state routing (extends package placeholder)
+  # Maps canonical ui_state to the device-local VA phase and calls draw_display.
+  # Device-local overlays (timer, settings, call-ended) are resolved inside draw_display.
+  - id: !extend render_ui_state
+    then:
+      - lambda: |-
+          int state = id(ui_state);
+          // VoIP idle: restore previous mode after call ends.
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+            id(peer_name) = id(phone).get_current_destination();
+            if (id(previous_mode) == 0) {
+              id(current_mode) = 0;
+            }
+          }
+
+          switch (state) {
+            case ${ui_state_init}:
+            case ${ui_state_no_wifi}:
+            case ${ui_state_no_ha}:
+              id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
+              break;
+            case ${ui_state_both_muted}:
+            case ${ui_state_mic_muted}:
+              id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+              break;
+            case ${ui_state_mww_recent}:
+            case ${ui_state_va_listening}:
+              id(current_mode) = 0;
+              id(voice_assistant_phase) = ${voice_assist_listening_phase_id};
+              break;
+            case ${ui_state_va_thinking}:
+              id(voice_assistant_phase) = ${voice_assist_thinking_phase_id};
+              break;
+            case ${ui_state_va_replying}:
+              id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+              break;
+            case ${ui_state_va_error}:
+              id(voice_assistant_phase) = ${voice_assist_error_phase_id};
+              break;
+            case ${ui_state_media}:
+              if (id(mute).state) {
+                id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+              } else {
+                id(apply_media_artwork).execute();
+                id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
+              }
+              break;
+            case ${ui_state_idle}:
+              if (id(mute).state) {
+                id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
+              } else {
+                id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
+              }
+              break;
+            default:
+              break;
+          }
+      - script.execute: backlight_timer
+      # Reset text on listening start.
+      - if:
+          condition:
+            lambda: 'return id(ui_state) == ${ui_state_va_listening};'
+          then:
+            - text_sensor.template.publish:
+                id: text_request
+                state: "..."
+            - text_sensor.template.publish:
+                id: text_response
+                state: "..."
+            - script.stop: reply_pagination_timer
+      # VoIP idle: update labels if staying in call mode.
+      - if:
+          condition:
+            lambda: |-
+              return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
+                     && id(phone).get_state_str() == "idle";
+          then:
+            - script.execute: update_call_idle_labels
+      - script.execute: draw_display
+
+  # TTS text display (extends package placeholder)
+  - id: !extend ui_tts_started
+    then:
+      # Parse emoticon prefix, set mood background, strip from displayed text.
+      - lambda: |-
+          std::string t = text;
+          esphome::image::Image *mood = id(mood_neutral);
+          if (t.size() >= 3) {
+            std::string prefix = t.substr(0, 3);
+            if (prefix == ":-)") {
+              mood = id(mood_happy);
+            } else if (prefix == ":-(") {
+              mood = id(mood_angry);
+            } else if (prefix == ":-|") {
+              // neutral (default)
+            }
+            if (prefix == ":-)" || prefix == ":-(" || prefix == ":-|") {
+              t = t.substr(3);
+              if (!t.empty() && t[0] == ' ') t = t.substr(1);
+            }
+          }
+          lv_img_set_src(id(mood_bg), mood);
+          id(text_response).publish_state(t);
+      - globals.set:
+          id: voice_assistant_phase
+          value: '${voice_assist_replying_phase_id}'
+      - globals.set:
+          id: reply_page_index
+          value: '0'
+      - script.stop: reply_pagination_timer
+      - script.stop: backlight_timer
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+      - if:
+          condition:
+            lambda: |-
+              return id(current_mode) == 0;
+          then:
+            - script.execute: update_replying_text
+            - if:
+                condition:
+                  lambda: |-
+                    return id(reply_total_pages) > 1;
+                then:
+                  - script.execute: reply_pagination_timer
+            - script.execute: draw_display
+
+  # STT text display (extends package placeholder)
+  - id: !extend ui_stt_ended
+    then:
+      - text_sensor.template.publish:
+          id: text_request
+          state: !lambda 'return text;'
+      - script.execute: draw_display
+
+  # VoIP call display (extends package placeholder)
+  - id: !extend ui_call_started
+    then:
+      - script.stop: reply_pagination_timer
+      - lambda: |-
+          id(peer_name) = peer;
+          id(previous_mode) = id(current_mode);
+          id(current_mode) = 1;
+      - script.execute: backlight_timer
+      # Update the relevant peer label for whichever call page will show
+      - lvgl.label.update:
+          id: call_ringing_out_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_ringing_in_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_in_call_peer_label
+          text: !lambda 'return id(peer_name);'
+      - script.execute: draw_display
+
+  # Call terminated screen: render peer + reason on call_ended_page,
+  # gate draw_display via call_ended_active for the auto-return window.
+  - id: !extend ui_call_ended
+    mode: restart
+    then:
+      - globals.set:
+          id: call_ended_active
+          value: "true"
+      - lvgl.label.update:
+          id: call_ended_peer_label
+          text: !lambda 'return peer.empty() ? std::string("-") : peer;'
+      - lvgl.label.update:
+          id: call_ended_reason_label
+          text: !lambda |-
+            std::string r = reason;
+            if      (r == "local_hangup")    return std::string("Local hangup");
+            else if (r == "remote_hangup")   return std::string("Remote hangup");
+            else if (r == "declined")        return std::string("Declined");
+            else if (r == "timeout")         return std::string("Timeout");
+            else if (r == "busy")            return std::string("Busy");
+            else if (r == "unreachable")     return std::string("Unreachable");
+            else if (r == "protocol_error")  return std::string("Protocol error");
+            else if (r == "bridge_error")    return std::string("Bridge error");
+            return r.empty() ? std::string("Ended") : ("Declined: " + r);
+      - script.execute: backlight_timer
+      - script.execute: draw_display
+      - delay: 4s
+      - if:
+          condition:
+            lambda: 'return id(call_ended_active);'
+          then:
+            - globals.set:
+                id: call_ended_active
+                value: "false"
+            - script.execute: draw_display
+
+  # Idle animation: 38 frames at 120ms = 4.56s, then 25s pause. Repeat while idle.
+  - id: ai_animation_loop
+    mode: single
+    then:
+      - lambda: |-
+          lv_animimg_set_repeat_count(id(idle_anim), 0);
+          lv_animimg_start(id(idle_anim));
+          lv_anim_del(id(idle_anim), nullptr);
+      - while:
+          condition:
+            lambda: |-
+              return id(current_mode) == 0 &&
+                     id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
+                     !id(init_in_progress);
+          then:
+            - lambda: lv_animimg_start(id(idle_anim));
+            - delay: 25s
+
+  # Compute chord widths and text row positions from display dimensions (once at boot)
+  - id: compute_layout_metrics
+    then:
+      - lambda: |-
+          const int w = ${display_width};
+          const int h = ${display_height};
+          const int r = w / 2;
+          const int cy = h / 2;
+          const int side_margin = w / 40;
+          const int line_h = h / 13;
+          const int line_spacing = h / 60;
+          const int top_pad = h / 24;
+          const int bottom_pad = h / 24;
+
+          // y_metrics: proportional UI grid (same formula as original)
+          id(y_metrics).clear();
+          id(y_metrics).reserve(14);
+          id(y_metrics).push_back(0);            // [0] top
+          id(y_metrics).push_back(h / 2);        // [1] center
+          id(y_metrics).push_back(h);             // [2] height
+          id(y_metrics).push_back(h / 8);         // [3] title
+          id(y_metrics).push_back(h * 7 / 24);    // [4] subtitle
+          id(y_metrics).push_back(h * 5 / 12);    // [5] state
+          id(y_metrics).push_back(h * 13 / 24);   // [6] label
+          id(y_metrics).push_back(h * 5 / 8);     // [7] info
+          id(y_metrics).push_back(h * 37 / 48);   // [8] contacts
+          id(y_metrics).push_back(h * 5 / 6);     // [9] action hint
+          id(y_metrics).push_back(h * 41 / 48);   // [10] bottom info
+          id(y_metrics).push_back(h - h / 16);    // [11] bottom status
+          id(y_metrics).push_back(h - 2);          // [12] page counter
+          id(y_metrics).push_back(h * 3 / 20);    // [13] timer box height
+
+          // text_row_y + chord_widths_cache: VA text rows for circular wrapping
+          id(text_row_y).clear();
+          id(chord_widths_cache).clear();
+          int y = top_pad;
+          while (y + line_h <= h - bottom_pad) {
+            id(text_row_y).push_back(y);
+            int mid_y = y + line_h / 2;
+            int dy = abs(mid_y - cy);
+            int chord_w = 0;
+            if (dy < r) {
+              chord_w = (int)(2.0f * sqrtf((float)(r * r - dy * dy))) - side_margin * 2;
+              if (chord_w < 0) chord_w = 0;
+            }
+            id(chord_widths_cache).push_back(chord_w);
+            y += (line_h + line_spacing);
+          }
+
+  # Reposition all widgets using computed y_metrics, text_row_y, chord_widths_cache
+  # Called once at boot after compute_layout_metrics. All YAML y/width are placeholders.
+  - id: reposition_widgets
+    then:
+      - lambda: |-
+          const auto &ym = id(y_metrics);
+          const auto &row_y = id(text_row_y);
+          const auto &cw = id(chord_widths_cache);
+          if (ym.size() < 14 || row_y.empty()) return;
+
+          // Helper: position label at y_center (original uses TextAlign::CENTER)
+          // LVGL TOP_MID: y_top = y_center - font_line_height / 2
+          auto set_center_y = [](lv_obj_t* obj, int y_center) {
+            const lv_font_t* f = lv_obj_get_style_text_font(obj, LV_PART_MAIN);
+            int fh = lv_font_get_line_height(f);
+            lv_obj_set_y(obj, y_center - fh / 2);
+          };
+
+          // --- call pages: percentages + align handle positioning, no reposition needed ---
+
+          // --- Thinking page: chord-width labels (10 children after image) ---
+          lv_obj_t* think[] = {
+            id(think_line_0), id(think_line_1), id(think_line_2), id(think_line_3), id(think_line_4),
+            id(think_line_5), id(think_line_6), id(think_line_7), id(think_line_8), id(think_line_9)
+          };
+          for (size_t i = 0; i < row_y.size() && i < 10; i++) {
+            lv_obj_set_y(think[i], row_y[i]);
+            lv_obj_set_width(think[i], cw[i]);
+          }
+
+          // --- Replying page: chord-width labels ---
+          lv_obj_t* reply[] = {
+            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
+            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
+          };
+          for (size_t i = 0; i < row_y.size() && i < 10; i++) {
+            lv_obj_set_y(reply[i], row_y[i]);
+            lv_obj_set_width(reply[i], cw[i]);
+          }
+
+          // Page counter at bottom
+          lv_obj_set_y(id(reply_page_counter), ym[12]);
+
+          // Timer overlay: dynamic height from y_metrics[13]
+          lv_obj_set_height(id(timer_overlay), ym[13]);
+          lv_obj_set_width(id(timer_overlay), ym[2]);  // full width = h (square display)
+          lv_obj_set_height(id(timer_bar), ym[13] - 4);
+          lv_obj_set_width(id(timer_bar), ym[2] - 4);
+
+
+  # Main display rendering: single lambda for page routing + animation control
+  - id: draw_display
+    mode: restart
+    then:
+      - lambda: |-
+          // Determine target page
+          lv_obj_t* target = nullptr;
+          auto s = id(phone).get_state_str();
+          bool in_call = (s == "ringing" || s == "calling" ||
+                          s == "remote_ringing" || s == "connecting" ||
+                          s == "in_call");
+          if (in_call) {
+            id(settings_active) = false;  // call interrupts settings view
+          }
+          // Timer ringing owns the UI while the alarm is active. This must use
+          // the runtime_controller timer activity, not voice_assistant_phase, because media_player
+          // callbacks can legitimately update the phase while playing the alarm.
+          if (id(runtime).is_activity_active("timer_ringing")) {
+            target = id(timer_finished_page)->obj;
+          } else if (id(call_ended_active)) {
+            target = id(call_ended_page)->obj;
+          } else if (id(settings_active) && !id(g_settings_pages).empty()) {
+            int idx = id(g_settings_index);
+            int n = (int) id(g_settings_pages).size();
+            if (idx < 0 || idx >= n) idx = 0;
+            target = id(g_settings_pages)[idx];
+          } else if (id(init_in_progress)) {
+            target = id(initializing_page)->obj;
+          } else if (!wifi::global_wifi_component->is_connected()) {
+            target = id(no_wifi_page)->obj;
+          } else if (!api::global_api_server->is_connected()) {
+            target = id(no_ha_page)->obj;
+          } else if (id(current_mode) == 1) {
+            // VoIP mode
+            auto s = id(phone).get_state_str();
+            if (s == "ringing") {
+              target = id(call_ringing_in_page)->obj;
+            } else if (s == "calling" || s == "remote_ringing") {
+              target = id(call_ringing_out_page)->obj;
+            } else if (s == "in_call" || s == "connecting") {
+              target = id(call_in_call_page)->obj;
+            } else {
+              target = id(call_idle_page)->obj;
+            }
+          } else {
+            // VA mode
+            int phase = id(voice_assistant_phase);
+            if (phase == ${voice_assist_listening_phase_id}) {
+              target = id(listening_page)->obj;
+            } else if (phase == ${voice_assist_thinking_phase_id}) {
+              target = id(thinking_page)->obj;
+            } else if (phase == ${voice_assist_replying_phase_id}) {
+              target = id(replying_page)->obj;
+            } else if (phase == ${voice_assist_error_phase_id}) {
+              target = id(error_page)->obj;
+            } else if (phase == ${voice_assist_muted_phase_id}) {
+              target = id(muted_page)->obj;
+            } else if (phase == ${voice_assist_not_ready_phase_id}) {
+              target = id(no_ha_page)->obj;
+            } else {
+              target = id(idle_page)->obj;
+            }
+          }
+
+          if (target == nullptr) return;
+
+          const char* page_name = "unknown";
+          if (target == id(idle_page)->obj) page_name = "idle";
+          else if (target == id(listening_page)->obj) page_name = "listening";
+          else if (target == id(thinking_page)->obj) page_name = "thinking";
+          else if (target == id(replying_page)->obj) page_name = "replying";
+          else if (target == id(error_page)->obj) page_name = "error";
+          else if (target == id(muted_page)->obj) page_name = "muted";
+          else if (target == id(call_idle_page)->obj) page_name = "call_idle";
+          else if (target == id(call_ringing_in_page)->obj) page_name = "call_ringing_in";
+          else if (target == id(call_ringing_out_page)->obj) page_name = "call_ringing_out";
+          else if (target == id(call_in_call_page)->obj) page_name = "call_in_call";
+          else if (target == id(call_ended_page)->obj) page_name = "call_ended";
+          else if (target == id(timer_finished_page)->obj) page_name = "timer_finished";
+
+          // Skip page load if already showing (avoids redundant SPI transfer)
+          bool page_changed = (target != lv_disp_get_scr_act(nullptr));
+          if (page_changed) {
+            // Stop animation before page switch to prevent split-screen glitch
+            lv_anim_del(id(idle_anim), nullptr);
+            // Honour swipe-driven animation hint, otherwise instant load.
+            if (id(nav_anim) != 0) {
+              lv_scr_load_anim(target,
+                               (lv_scr_load_anim_t) id(nav_anim),
+                               (uint32_t) id(nav_anim_ms),
+                               0, false);
+            } else {
+              lv_disp_load_scr(target);
+            }
+          }
+          // The VA idle animation is stopped before page switches. Start the
+          // idle animation loop immediately when VA idle becomes the visible
+          // page, instead of waiting for the template binary_sensor refresh.
+          if (target == id(idle_page)->obj) {
+            if (!id(ai_animation_loop).is_running()) id(ai_animation_loop).execute();
+          } else if (id(ai_animation_loop).is_running()) {
+            id(ai_animation_loop).stop();
+          }
+          // Always consume the hint, even if no page change happened.
+          id(nav_anim) = 0;
+          id(nav_anim_ms) = 0;
+
+          // Hide top layer status bar on replying/thinking pages (text overlap)
+          bool show_status = (target != id(replying_page)->obj && target != id(thinking_page)->obj);
+          if (show_status) {
+            lv_obj_clear_flag(id(top_clock_label), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(id(top_battery_label), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_add_flag(id(top_clock_label), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(top_battery_label), LV_OBJ_FLAG_HIDDEN);
+          }
+
+      # Update dynamic labels when on idle page
+      - if:
+          condition:
+            binary_sensor.is_on: is_idle_screen
+          then:
+            - script.execute: update_idle_labels
+      # Self-heal: ensure MWW is active when in VA idle (catches any missed restarts)
+      - if:
+          condition:
+            and:
+              - lambda: |-
+                  return id(current_mode) == 0 &&
+                         id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
+                         !id(init_in_progress);
+              - switch.is_off: mute
+              - not:
+                  media_player.is_announcing:
+                    id: speaker_media_player
+          then:
+            - if:
+                condition:
+                  not:
+                    micro_wake_word.is_running:
+                then:
+                  - script.execute: start_mww_when_ready
+      - if:
+          condition:
+            lambda: |-
+              return id(current_mode) == 1 && id(phone).get_state_str() == "idle"
+                     && !id(init_in_progress);
+          then:
+            - script.execute: update_call_idle_labels
+      # Always sync timer overlay on redraw (on_timer_tick stops when timers expire)
+      - script.execute: update_timer_state
+
+  # Timer state update + overlay UI
+  - id: update_timer_state
+    then:
+      - lambda: |-
+          const auto &timers = id(va).get_timers();
+          voice_assistant::Timer first_timer{};
+          voice_assistant::Timer first_active{};
+          bool any_active = false;
+          for (const auto &t : timers) {
+            if (first_timer.total_seconds == 0 || t.seconds_left < first_timer.seconds_left) first_timer = t;
+            if (t.is_active && (!any_active || t.seconds_left < first_active.seconds_left)) {
+              first_active = t;
+              any_active = true;
+            }
+          }
+
+          // Timer overlay: show only on VA pages that support it
+          int phase = id(voice_assistant_phase);
+          bool on_timer_page = id(current_mode) == 0 && (
+            phase == ${voice_assist_idle_phase_id} ||
+            phase == ${voice_assist_listening_phase_id} ||
+            phase == ${voice_assist_thinking_phase_id} ||
+            phase == ${voice_assist_muted_phase_id}
+          );
+
+          // Hide if: not on a supported page, no timers, or timer finished (<=1s, not active)
+          bool timer_finished = !any_active && (timers.empty() || first_timer.seconds_left <= 1);
+          if (!on_timer_page || timer_finished) {
+            lv_obj_add_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
+            return;
+          }
+
+          // Pick timer to display (active first, then paused)
+          const auto &t = any_active ? first_active : first_timer;
+          uint32_t sec = t.seconds_left;
+          uint32_t total = t.total_seconds;
+
+          // Bar as simple background, fixed at 100%
+          lv_bar_set_value(id(timer_bar), 100, LV_ANIM_OFF);
+
+          // Bar color: green active, grey paused
+          static lv_style_t style_active, style_paused;
+          static bool styles_init = false;
+          if (!styles_init) {
+            lv_style_init(&style_active);
+            lv_style_set_bg_color(&style_active, lv_color_hex(0x26ED3A));
+            lv_style_init(&style_paused);
+            lv_style_set_bg_color(&style_paused, lv_color_hex(0x888888));
+            styles_init = true;
+          }
+          lv_obj_remove_style(id(timer_bar), nullptr, LV_PART_INDICATOR);
+          lv_obj_add_style(id(timer_bar), any_active ? &style_active : &style_paused, LV_PART_INDICATOR);
+
+          // Format time text
+          char buf[8];
+          int h = sec / 3600;
+          int m = (sec / 60) % 60;
+          int s = sec % 60;
+          if (h > 0) snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+          else       snprintf(buf, sizeof(buf), "%02d:%02d", m, s);
+          lv_label_set_text(id(timer_label), buf);
+
+          lv_obj_clear_flag(id(timer_overlay), LV_OBJ_FLAG_HIDDEN);
+
+  - id: set_idle_or_mute_phase
+    then:
+      - if:
+          condition:
+            switch.is_on: mute
+          then:
+            - globals.set:
+                id: voice_assistant_phase
+                value: '${voice_assist_muted_phase_id}'
+          else:
+            - if:
+                condition:
+                  media_player.is_playing:
+                    id: speaker_media_player
+                then:
+                  # Music playing: show neutral mood screen instead of idle animation
+                  - script.execute: apply_media_artwork
+                  - globals.set:
+                      id: voice_assistant_phase
+                      value: '${voice_assist_replying_phase_id}'
+                else:
+                  - globals.set:
+                      id: voice_assistant_phase
+                      value: '${voice_assist_idle_phase_id}'
+
+  # Swipe-driven mode switch: set the nav_anim hint, then delegate to the
+  # existing switch_to_voip / switch_to_va scripts. They funnel into
+  # draw_display, which honours nav_anim (animated transition) and resets
+  # it. Non-swipe callers (long-press GPIO0) leave nav_anim=0 and stay
+  # instant. Single source of truth for routing + state transitions.
+  - id: swipe_to_voip
+    then:
+      - lambda: |-
+          id(nav_anim) = LV_SCR_LOAD_ANIM_MOVE_TOP;
+          id(nav_anim_ms) = 300;
+      - script.execute: switch_to_voip
+
+  - id: swipe_to_va
+    then:
+      - lambda: |-
+          id(nav_anim) = LV_SCR_LOAD_ANIM_MOVE_BOTTOM;
+          id(nav_anim_ms) = 300;
+      - script.execute: switch_to_va
+
+  # Mode switching scripts
+  - id: switch_to_va
+    then:
+      - globals.set:
+          id: current_mode
+          value: '0'
+      - script.execute: set_idle_or_mute_phase
+      - if:
+          condition:
+            lambda: |-
+              return id(voice_assistant_phase) == ${voice_assist_replying_phase_id};
+          then:
+            - script.execute: update_replying_text
+            - if:
+                condition:
+                  lambda: |-
+                    return id(reply_total_pages) > 1;
+                then:
+                  - script.execute: reply_pagination_timer
+      - script.execute: draw_display
+
+  - id: switch_to_voip
+    then:
+      - script.stop: reply_pagination_timer
+      - globals.set:
+          id: current_mode
+          value: '1'
+      - script.execute: update_call_idle_labels
+      - script.execute: draw_display
+
+  # Update all dynamic labels on the VoIP idle page
+  - id: update_call_idle_labels
+    then:
+      - lambda: id(peer_name) = id(phone).get_current_destination();
+      - lvgl.label.update:
+          id: call_idle_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_idle_contacts_label
+          text: !lambda |-
+            auto csv = id(phone).get_contacts_csv();
+            int count = csv.empty() ? 0 : std::count(csv.begin(), csv.end(), ',') + 1;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "\U000F06CB %d", count);
+            return std::string(buf);
+
+  # Update clock and battery labels on idle page
+  - id: update_idle_labels
+    then:
+      - lvgl.label.update:
+          id: top_clock_label
+          text:
+            format: "%02d:%02d"
+            args: ['id(my_time).now().hour', 'id(my_time).now().minute']
+      - if:
+          condition:
+            - lambda: return id(battery_percentage).has_state() && !std::isnan(id(battery_percentage).state);
+          then:
+            - lvgl.label.update:
+                id: top_battery_label
+                text: !lambda |-
+                  bool charging = id(usb_connected).state;
+                  float bat = id(battery_percentage).state;
+                  float wifi = id(wifi_pct).state;
+                  std::string ret;
+                  if (bat < 10) ret = charging ? "\U000F089F" : "\U000F008E";
+                  else if (bat < 20) ret = charging ? "\U000F089C" : "\U000F007A";
+                  else if (bat < 30) ret = charging ? "\U000F0086" : "\U000F007B";
+                  else if (bat < 40) ret = charging ? "\U000F0087" : "\U000F007C";
+                  else if (bat < 50) ret = charging ? "\U000F0088" : "\U000F007D";
+                  else if (bat < 60) ret = charging ? "\U000F089D" : "\U000F007E";
+                  else if (bat < 70) ret = charging ? "\U000F0089" : "\U000F007F";
+                  else if (bat < 80) ret = charging ? "\U000F089E" : "\U000F0080";
+                  else if (bat < 90) ret = charging ? "\U000F008A" : "\U000F0081";
+                  else if (bat < 100) ret = charging ? "\U000F008B" : "\U000F0082";
+                  else ret = "\U000F0079";
+                  if (wifi < 20) ret += "\U000F08BF";
+                  else if (wifi < 55) ret += "\U000F08BC";
+                  else if (wifi < 80) ret += "\U000F08BD";
+                  else ret += "\U000F08BE";
+                  ret += api::global_api_server->is_connected() ? "\U000F07D0" : "\U000F15D0";
+                  return ret;
+          else:
+            - lvgl.label.update:
+                id: top_battery_label
+                text: ""
+
+  # Update replying page labels with current page of wrapped text
+  - id: update_replying_text
+    then:
+      - lambda: |-
+          if (id(current_mode) != 0 ||
+              id(voice_assistant_phase) != ${voice_assist_replying_phase_id}) {
+            return;
+          }
+          static std::vector<std::string> visible_lines(10);
+          static std::string page_counter_text;
+          lv_obj_t* lines[] = {
+            id(reply_line_0), id(reply_line_1), id(reply_line_2), id(reply_line_3), id(reply_line_4),
+            id(reply_line_5), id(reply_line_6), id(reply_line_7), id(reply_line_8), id(reply_line_9)
+          };
+          const size_t total_rows = 10;
+          const auto &wrapped = id(wrapped_lines_reply);
+          const size_t total_pages = std::max(1, id(reply_total_pages));
+          const size_t cur_page = id(reply_page_index) % total_pages;
+          const size_t start_line = cur_page * total_rows;
+          for (size_t i = 0; i < total_rows; i++) {
+            size_t line_idx = start_line + i;
+            visible_lines[i] = line_idx < wrapped.size() ? wrapped[line_idx] : "";
+            lv_label_set_text_static(lines[i], visible_lines[i].c_str());
+          }
+          // Update page counter
+          if (total_pages > 1) {
+            page_counter_text = str_sprintf("%d/%d", (int) (cur_page + 1), (int) total_pages);
+            lv_label_set_text_static(id(reply_page_counter), page_counter_text.c_str());
+          } else {
+            page_counter_text.clear();
+            lv_label_set_text_static(id(reply_page_counter), page_counter_text.c_str());
+          }
+
+  # Auto-advance replying text pages every 14 seconds
+  - id: reply_pagination_timer
+    mode: restart
+    then:
+      - delay: 14s
+      - if:
+          condition:
+            lambda: |-
+              return id(current_mode) == 0 &&
+                     id(voice_assistant_phase) == ${voice_assist_replying_phase_id} &&
+                     id(reply_total_pages) > 1;
+          then:
+            - globals.set:
+                id: reply_page_index
+                value: !lambda 'return id(reply_page_index) + 1;'
+            - script.execute: update_replying_text
+            - script.execute: reply_pagination_timer
+
+  # Timer alarm: play sound in a loop while runtime_controller timer_ringing is active
+  - id: timer_alarm_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            runtime_controller.is_active:
+              id: runtime
+              activity: timer_ringing
+          then:
+            - media_player.play_media:
+                id: speaker_media_player
+                media_url: "audio-file://timer_finished_sound"
+                announcement: true
+            - delay: 6s
+
+  - id: timer_alarm_auto_stop
+    mode: restart
+    then:
+      - delay: 15min
+      - runtime_controller.event:
+          id: runtime
+          event: timer_stopped
+
+  # Backlight timer
+  - id: backlight_timer
+    mode: restart
+    then:
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+      - delay: 30s
+      - light.turn_on:
+          id: backlight
+          brightness: 60%
+      - delay: 120s
+      - if:
+          condition:
+            binary_sensor.is_on: usb_connected
+          then:
+            - light.turn_on:
+                id: backlight
+                brightness: 20%
+          else:
+            - light.turn_off: backlight
+
+button:
+  - platform: factory_reset
+    id: factory_reset_btn
+    internal: true
+
+binary_sensor:
+  # True when the VA idle page is the active screen
+  - platform: template
+    id: is_idle_screen
+    lambda: |-
+      return id(current_mode) == 0 &&
+             id(voice_assistant_phase) == ${voice_assist_idle_phase_id} &&
+             !id(init_in_progress);
+
+  # Physical GPIO0 button - PAGE AWARE (uses mode/state checks instead of display.is_displaying_page)
+  - platform: gpio
+    pin:
+      number: ${main_button_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    id: main_button
+    name: "Main Button"
+    icon: "mdi:gesture-tap-button"
+    on_multi_click:
+      # Single click
+      - timing:
+          - ON for 10ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                runtime_controller.is_active:
+                  id: runtime
+                  activity: timer_ringing
+              then:
+                - runtime_controller.event:
+                    id: runtime
+                    event: timer_stopped
+              else:
+                - if:
+                    condition:
+                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                    then:
+                      - voip_stack.call_toggle:
+                    else:
+                      - if:
+                          condition:
+                            lambda: |-
+                              if (id(current_mode) != 1) return false;
+                              auto s = id(phone).get_state_str();
+                              return s != "idle";
+                          then:
+                            - voip_stack.call_toggle:
+                          else:
+                            - runtime_controller.event:
+                                id: runtime
+                                event: manual_voice_toggle
+      # Double click: decline incoming or next contact
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for 50ms to 400ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                lambda: |-
+                  if (id(current_mode) != 1) return false;
+                  auto s = id(phone).get_state_str();
+                  return s == "ringing";
+              then:
+                - voip_stack.decline_call:
+              else:
+                - if:
+                    condition:
+                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                    then:
+                      - voip_stack.next_contact:
+      # Long press (3s): switch VA <-> VoIP
+      - timing:
+          - ON for 1s to 3s
+        then:
+          - if:
+              condition:
+                lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+              then:
+                - script.execute: switch_to_va
+              else:
+                - script.execute: switch_to_voip
+
+  - platform: template
+    name: "USB Connected"
+    id: usb_connected
+    device_class: plug
+    lambda: return id(battery_voltage).state > 3.9;
+    on_press:
+      - script.execute: backlight_timer
+    on_release:
+      - script.execute: backlight_timer
+
+sensor:
+  - platform: adc
+    pin: ${battery_adc_pin}
+    name: "Battery Voltage"
+    id: battery_voltage
+    attenuation: 12db
+    accuracy_decimals: 2
+    update_interval: 10s
+    unit_of_measurement: "V"
+    icon: mdi:battery
+    filters:
+      - multiply: 2.0
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 1
+      - throttle: 1min
+
+  - platform: template
+    id: battery_percentage
+    name: "Battery Percentage"
+    lambda: |-
+      if (!id(battery_voltage).has_state() || std::isnan(id(battery_voltage).state))
+        return NAN;
+      return id(battery_voltage).state;
+    accuracy_decimals: 0
+    unit_of_measurement: "%"
+    icon: mdi:battery-medium
+    filters:
+      - calibrate_linear:
+         method: exact
+         datapoints:
+          - 2.80 -> 0.0
+          - 3.10 -> 10.0
+          - 3.30 -> 20.0
+          - 3.45 -> 30.0
+          - 3.60 -> 40.0
+          - 3.70 -> 50.0
+          - 3.75 -> 60.0
+          - 3.80 -> 70.0
+          - 3.90 -> 80.0
+          - 4.00 -> 90.0
+          - 4.20 -> 100.0
+      - lambda: |-
+          if (x > 100) return 100;
+          if (x < 0) return 0;
+          return x;
+
+text_sensor:
+  - id: text_request
+    platform: template
+    on_value:
+      then:
+        - lambda: |-
+            const std::string &text = x;
+            lv_obj_t* lines[] = {
+              id(think_line_0), id(think_line_1), id(think_line_2), id(think_line_3), id(think_line_4),
+              id(think_line_5), id(think_line_6), id(think_line_7), id(think_line_8), id(think_line_9)
+            };
+            for (size_t i = 0; i < 10; i++) lv_label_set_text(lines[i], "");
+            if (text == "...") return;
+            std::vector<std::string> words;
+            words.reserve(text.size()/5);
+            size_t start = 0;
+            for (size_t i = 0; i <= text.size(); ++i) {
+              if (i == text.size() || text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
+                if (i > start) words.push_back(text.substr(start, i - start));
+                start = i + 1;
+              }
+            }
+            if (words.empty() || id(chord_widths_cache).empty()) return;
+            const auto &chords = id(chord_widths_cache);
+            const size_t total_rows = chords.size();
+            const lv_font_t *font = lv_obj_get_style_text_font(id(think_line_0), LV_PART_MAIN);
+            // Start from middle of display (row total_rows/2 - 3)
+            size_t start_row = total_rows / 2 - 3;
+            if (start_row >= total_rows) start_row = 0;
+            // lines[] already cleared above
+            size_t row = start_row;
+            size_t word_idx = 0;
+            const int avg_char_w = lv_font_get_line_height(font) * 2 / 3;  // ~60% of line height
+            while (row < total_rows && row < 10 && word_idx < words.size()) {
+              const int chord_w = chords[row];
+              if (chord_w <= 0) { row++; continue; }
+              const size_t sw = word_idx;
+              std::string line;
+              line.reserve(chord_w / avg_char_w);
+              while (word_idx < words.size()) {
+                const auto &word = words[word_idx];
+                std::string candidate = line.empty() ? word : (line + ' ' + word);
+                if ((int)(candidate.length() * avg_char_w) > chord_w) {
+                  lv_point_t size;
+                  lv_text_get_size(&size, candidate.c_str(), font, 0, 0, INT32_MAX, LV_TEXT_FLAG_NONE);
+                  if (size.x > chord_w) {
+                    if (word_idx == sw) { line = word; word_idx++; }
+                    break;
+                  }
+                }
+                line = candidate;
+                word_idx++;
+              }
+              if (word_idx > sw) lv_label_set_text(lines[row], line.c_str());
+              row++;
+            }
+
+  - id: text_response
+    platform: template
+    on_value:
+      then:
+        - lambda: |-
+            // Skip redundant "..." during replying phase (label text set by update_replying_text)
+            if (x == "..." && id(voice_assistant_phase) == ${voice_assist_replying_phase_id}) {
+              return;
+            }
+            const std::string &text = x;
+            std::vector<std::string> words;
+            words.reserve(text.size()/5);
+            size_t start = 0;
+            for (size_t i = 0; i <= text.size(); ++i) {
+              if (i == text.size() || text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
+                if (i > start) {
+                  words.push_back(text.substr(start, i - start));
+                }
+                start = i + 1;
+              }
+            }
+            id(reply_page_index) = 0;
+            id(wrapped_lines_reply).clear();
+            id(reply_total_pages) = 1;
+            if (words.empty() || id(chord_widths_cache).empty()) return;
+            const auto &chords = id(chord_widths_cache);
+            const size_t total_rows = chords.size();
+            const lv_font_t *font = lv_obj_get_style_text_font(id(reply_line_0), LV_PART_MAIN);
+            const int avg_char_w = lv_font_get_line_height(font) * 2 / 3;
+            size_t word_idx = 0;
+            size_t safety = 0;
+            size_t line_count = 0;
+            while (word_idx < words.size() && safety++ < words.size() * 2) {
+              int row = line_count % total_rows;
+              const int chord_w = chords[row];
+              if (chord_w <= 0) { id(wrapped_lines_reply).push_back(""); line_count++; continue; }
+              const size_t start_word = word_idx;
+              std::string line;
+              line.reserve(chord_w / avg_char_w);
+              while (word_idx < words.size()) {
+                const auto &word = words[word_idx];
+                std::string candidate = line.empty() ? word : (line + ' ' + word);
+                if ((int)(candidate.length() * avg_char_w) > chord_w) {
+                  lv_point_t size;
+                  lv_text_get_size(&size, candidate.c_str(), font, 0, 0, INT32_MAX, LV_TEXT_FLAG_NONE);
+                  if (size.x > chord_w) {
+                    if (word_idx == start_word) { line = word; word_idx++; }
+                    break;
+                  }
+                }
+                line = candidate;
+                word_idx++;
+              }
+              if (word_idx > start_word) {
+                id(wrapped_lines_reply).push_back(line);
+                line_count++;
+              }
+            }
+            while (!id(wrapped_lines_reply).empty() && (id(wrapped_lines_reply).size() % 10) != 0) {
+              id(wrapped_lines_reply).push_back("");
+            }
+            line_count = id(wrapped_lines_reply).size();
+            id(reply_total_pages) = (line_count + 10 - 1) / 10;
+            if (id(reply_total_pages) < 1) id(reply_total_pages) = 1;
+
+switch:
+  # Replace package mic mute; speaker mute is device-specific.
+  - id: !remove mute
+
+  # Mic Mute: uses mic_afe + display updates
+  - platform: template
+    name: Mic Mute
+    id: mute
+    icon: "mdi:microphone-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Mic mute ON: microphone silenced, MWW stopped"
+      - voice_assistant.stop:
+      - micro_wake_word.stop:
+      - microphone.mute: mic_afe
+      - runtime_controller.event:
+          id: runtime
+          event: mic_muted
+    on_turn_off:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Mic mute OFF: microphone active, MWW started"
+      - microphone.unmute: mic_afe
+      - runtime_controller.event:
+          id: runtime
+          event: mic_unmuted
+      - if:
+          condition:
+            not:
+              micro_wake_word.is_running:
+          then:
+            - script.execute: start_mww_when_ready
+      - script.execute: draw_display
+
+  # Speaker Mute (device override): adds amp enable/disable
+  - platform: template
+    name: Speaker Mute
+    id: speaker_mute
+    icon: mdi:volume-off
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Speaker mute ON: DAC muted, amplifier off"
+      - speaker.mute_on: hw_speaker
+      - runtime_controller.event:
+          id: runtime
+          event: speaker_muted
+      - delay: 50ms
+      - output.turn_off: speaker_enable
+    on_turn_off:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Speaker mute OFF: amplifier on, DAC unmuted"
+      - if:
+          condition:
+            speaker.is_playing: hw_speaker
+          then:
+            - output.turn_on: speaker_enable
+            - delay: 50ms
+      - speaker.mute_off: hw_speaker
+      - runtime_controller.event:
+          id: runtime
+          event: speaker_unmuted
+  # VoIP controls
+
+  # AEC runtime controls
+
+select:
+  - platform: template
+    name: AEC Mode
+    id: aec_mode_select
+    icon: mdi:tune-vertical
+    options:
+      - "sr_low_cost"
+      - "sr_high_perf"
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
+    # Non-optimistic: this reflects hardware state owned by the audio graph.
+    optimistic: false
+    restore_value: false
+    set_action:
+      - if:
+          condition:
+            lambda: 'return id(init_in_progress);'
+          then:
+            - logger.log: "AEC mode select: skipping during boot"
+          else:
+            - if:
+                condition:
+                  or:
+                    - voice_assistant.is_running:
+                    - not:
+                        voip_stack.is_idle:
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Cannot switch AEC mode during active VA/VoIP"
+                else:
+                  - logger.log:
+                      format: "Switching AEC mode to %s"
+                      args: ['x.c_str()']
+                  - micro_wake_word.stop:
+                  - esp_audio_stack.stop_and_wait: audio_stack
+                  - wait_until:
+                      condition:
+                        esp_audio_stack.is_idle: audio_stack
+                      timeout: 2s
+                  - esp_afe.set_mode:
+                      id: afe_processor
+                      mode: !lambda 'return x;'
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
+                      timeout: 20s
+                  - if:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
+                      then:
+                        - esp_audio_stack.start: audio_stack
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              switch.is_off: mute
+                            then:
+                              - script.execute: start_mww_when_ready
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            tag: main
+                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
+      - lambda: |-
+          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
+
 interval:
   - interval: 30s
     then:
       - script.execute: update_idle_labels
 
 
-# =============================================================================
-# END OF CONFIGURATION
-# =============================================================================

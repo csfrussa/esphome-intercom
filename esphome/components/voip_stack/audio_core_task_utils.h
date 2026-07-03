@@ -9,7 +9,7 @@
 #include <freertos/task.h>
 
 namespace esphome {
-namespace audio_processor {
+namespace audio_core {
 
 /// Pin a FreeRTOS task to a core, with optional static stack from PSRAM.
 ///
@@ -129,7 +129,7 @@ inline RAMAllocator<T> psram_allocator() {
   return RAMAllocator<T>(RAMAllocator<T>::ALLOC_EXTERNAL);
 }
 
-}  // namespace audio_processor
+}  // namespace audio_core
 }  // namespace esphome
 
 #endif  // USE_ESP32

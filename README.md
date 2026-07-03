@@ -108,7 +108,7 @@ full-duplex hardware is not available.
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and VoIP calls on the same ESP. |
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
 | Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. |
-| Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and VoIP while media/TTS keeps playing. |
+| Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_audio_stack) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and VoIP while media/TTS keeps playing. |
 | Runtime state arbitration for full profiles | [`runtime_controller`](esphome/components/runtime_controller/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
 
 For the normal intercom use case, do not start by designing a phone system.
@@ -536,17 +536,22 @@ by the maintained `esp_audio_stack` YAMLs.
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: dev
-    components: [audio_processor, voip_stack, esp_audio_stack, esp_aec]
+    components: [voip_stack]
+  - source: github://n-IA-hane/esphome-audio-stack
+    ref: main
+    components: [esp_audio_stack, esp_aec]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
   - source: github://n-IA-hane/esphome-intercom
     ref: dev
-    components: [audio_processor, voip_stack, esp_afe, esp_audio_stack]
+    components: [voip_stack]
+  - source: github://n-IA-hane/esphome-audio-stack
+    ref: main
+    components: [esp_audio_stack, esp_afe]
 ```
 
-> **Note**: `audio_processor` is still listed because it provides shared task
-> and buffer helpers used by the audio components. Use `esp_aec` for
+> **Note**: Use `esp_aec` for
 > lightweight single-mic processing and `esp_afe` for the full pipeline (see
 > [AFE section](#audio-front-end-afe) below). `voip_stack` no longer owns
 > software AEC; standalone VoIP binds to native ESPHome
@@ -1236,7 +1241,7 @@ sequenceDiagram
   instruction/rodata options to recover internal heap; P4 profiles keep a
   smaller validated baseline with L2 cache plus PSRAM XIP and avoid aggressive
   Wi-Fi/LWIP IRAM overrides. See the board packages and
-  [esp_afe README](esphome/components/esp_afe/README.md#iram-optimization-critical-for-esp32-s3)
+  [esp_afe README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe#iram-optimization-critical-for-esp32-s3)
   for details.
 
 Generic full-experience S3 now has two maintained presets. Use
@@ -1414,12 +1419,12 @@ runtime_controller:
 ```
 
 For a composite device, put the microphone and speaker on the same I2S bus and
-use [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md). The
+use [`esp_audio_stack`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_audio_stack). The
 audio stack driver hands a phase-coherent speaker reference to the AEC each frame;
 standalone `voip_stack` deliberately does not provide software AEC. If your
 hardware does not already process echo, use an `esp_audio_stack` profile.
 
-### [`esp_audio_stack`](esphome/components/esp_audio_stack/README.md)
+### [`esp_audio_stack`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_audio_stack)
 
 Full-duplex audio backend for shared codec buses and no-codec MEMS/amp boards.
 It owns I2S/codec IO, rate conversion, channel layout, software/hardware AEC
@@ -1438,11 +1443,11 @@ selection, ES8311 digital feedback, ES7210 TDM reference, stereo speaker output,
 direct `esp_codec_dev` codec IO. See the component README for the option table and
 topology examples.
 
-### [`esp_aec`](esphome/components/esp_aec/README.md)
+### [`esp_aec`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_aec)
 
 Standalone ESP-SR echo cancellation (~80 KB internal RAM). Four modes (`sr_low_cost` recommended for VA+MWW, `voip_*` for pure VoIP). See the mode table in [docs/reference.md](docs/reference.md#esp_aec-component) before changing defaults.
 
-### [`esp_afe`](esphome/components/esp_afe/README.md)
+### [`esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe)
 
 Full ESP-SR audio front-end. Chains AEC, optional spatial source separation, noise suppression, voice activity detection and automatic gain control behind `esp_audio_stack`. Runs on Core 0 (~22-23% load on S3 in `low_cost` mode) and the pipeline shape adapts at runtime to `mic_num` and the per-stage switches exposed in Home Assistant.
 
@@ -1456,7 +1461,7 @@ Full ESP-SR audio front-end. Chains AEC, optional spatial source separation, noi
 
 **Configuration shape**
 
-YAML keys cover type (`sr` for speech recognition or `vc` for voice communication), mode (`low_cost` or `high_perf`), per-stage enable switches, AEC filter length, AGC compression and target, plus diagnostic sensors (input volume dB, output RMS dB, voice presence) and runtime switches in Home Assistant for each stage. See the [AFE README](esphome/components/esp_afe/README.md) for the full option matrix and exact memory/CPU numbers per mode.
+YAML keys cover type (`sr` for speech recognition or `vc` for voice communication), mode (`low_cost` or `high_perf`), per-stage enable switches, AEC filter length, AGC compression and target, plus diagnostic sensors (input volume dB, output RMS dB, voice presence) and runtime switches in Home Assistant for each stage. See the [AFE README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe) for the full option matrix and exact memory/CPU numbers per mode.
 
 **When to use it**
 
@@ -1719,7 +1724,6 @@ logger:
     # audio_stack: INFO          # I2S audio stack driver
     # esp_aec: INFO             # lightweight AEC processor
     # esp_afe: INFO             # full audio front-end
-    # audio_processor: INFO     # shared task/buffer helpers
 ```
 
 **Stay on INFO for normal use**
