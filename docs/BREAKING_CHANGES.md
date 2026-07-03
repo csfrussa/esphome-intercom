@@ -1,6 +1,6 @@
 # Breaking changes
 
-## 2026.7.0-dev: from PBX-lite to real PBX
+## 2026.7.0-dev: ESPHome devices are SIP phones now
 
 This release is the SIP/VoIP migration. It is not a small protocol tweak and it
 is intentionally not backward compatible with the retired project-specific

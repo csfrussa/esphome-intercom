@@ -1,4 +1,4 @@
-# 2026.7.0-dev - from PBX-lite to real PBX, SIP/VoIP phones and high-rate media
+# 2026.7.0-dev: ESPHome devices are VoIP phones now
 
 This is a **development prerelease** for field testing the next VoIP generation
 before it becomes a stable release. It contains the largest call-control change
@@ -9,7 +9,7 @@ Use it if you want to help test. Stay on the latest stable release if the
 device is installed somewhere where temporary audio glitches or call-routing
 regressions would be a problem.
 
-## ☎️ From PBX-lite to real PBX
+## This release changes the project category
 
 Yes, you read that correctly. ESP devices are now SIP phones and Home Assistant
 is now a SIP softphone, router/B2BUA, RTP bridge/resampler and optional trunk

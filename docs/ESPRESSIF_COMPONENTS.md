@@ -1,11 +1,13 @@
 # Espressif Components And Licenses
 
-This project is MIT-licensed, but some ESP32 audio features use Espressif
-components that are resolved by ESPHome's IDF Component Manager when users build
-their own firmware.
+This project is MIT-licensed, but maintained VoIP YAMLs can also use audio
+components from the split
+[`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack)
+repository. Those audio features use Espressif components that are resolved by
+ESPHome's IDF Component Manager when users build their own firmware.
 
-The repository ships YAML, ESPHome components and source code. It does not ship
-prebuilt firmware binaries for these Espressif audio components.
+The repositories ship YAML, ESPHome components and source code. They do not
+ship prebuilt firmware binaries for these Espressif audio components.
 
 For repository-wide attribution, ESPHome-derived component notes and the
 Apache-2.0 license text used by local ESPHome compatibility forks, see
@@ -45,7 +47,7 @@ The public composition stays modular:
 | `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | internal audio core shared primitives and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `voip_stack`, MWW and VA as consumers |
 | `esp_aec` | `esp-sr` low-level `afe_aec` API | internal audio core | `esp_audio_stack` or standalone `voip_stack` as the caller |
 | `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | internal audio core | `esp_audio_stack` as the required steady-frame caller |
-| `voip_stack` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `esp_audio_stack` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
+| `voip_stack` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | native ESPHome audio, or `esp_audio_stack` as the recommended mic/speaker owner for AEC/AFE/full voice builds |
 
 `esp_audio_stack` does not depend on `voip_stack`. A user can install only
 `esp_audio_stack` and optionally `esp_aec` or `esp_afe` for

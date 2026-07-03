@@ -88,7 +88,7 @@ full-duplex hardware is not available.
 - [Architecture](#architecture)
 - [Technical Details](#technical-details)
 - [Call Routing](#call-routing)
-- [Reference](#reference): voip_stack, esp_aec, esp_afe, entities, HA services, automations ([docs/reference.md](docs/reference.md))
+- [Reference](#reference): voip_stack, entities, HA services, automations ([docs/reference.md](docs/reference.md))
 - [Call Flow Diagrams](#call-flow-diagrams)
 - [Hardware Support](#hardware-support)
 - [Audio Components](#audio-components): esp_audio_stack, esp_aec, esp_afe
@@ -109,7 +109,7 @@ full-duplex hardware is not available.
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
 | Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. |
 | Audio driver for your own ESPHome Voice Assistant | [`esp_audio_stack`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_audio_stack) | Shared mic/speaker I2S path, speaker reference handling and a clean post-AEC microphone facade for MWW, Voice Assistant and VoIP while media/TTS keeps playing. |
-| Runtime state arbitration for full profiles | [`runtime_controller`](esphome/components/runtime_controller/README.md) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
+| Runtime state arbitration for full profiles | [`runtime_controller`](https://github.com/n-IA-hane/esphome-runtime-controller) | A configurable reducer maps events and activities to LED/display/ducking/timer policies, reducing YAML callback races when media, TTS, VoIP and timers overlap. |
 
 For the normal intercom use case, do not start by designing a phone system.
 Pick the closest YAML, adapt the board pins and audio hardware, add the ESP
@@ -529,7 +529,7 @@ If `network.async_get_announce_addresses(hass)` returns empty, the integration l
 Add the external component to your ESPHome device configuration:
 
 Minimum ESPHome version: **2026.5.x**. Older ESPHome releases are not supported
-by the maintained `esp_audio_stack` YAMLs.
+by the maintained full voice YAMLs.
 
 ```yaml
 # Lightweight (single-mic, echo cancellation only):
@@ -553,7 +553,7 @@ external_components:
 
 > **Note**: Use `esp_aec` for
 > lightweight single-mic processing and `esp_afe` for the full pipeline (see
-> [AFE section](#audio-front-end-afe) below). `voip_stack` no longer owns
+> [Audio Components](#audio-components) below). `voip_stack` no longer owns
 > software AEC; standalone VoIP binds to native ESPHome
 > `microphone`/`speaker`, while software AEC/AFE belongs behind
 > `esp_audio_stack`. Maintained full voice YAMLs use the source-based
@@ -1123,7 +1123,7 @@ Quick links:
 - [`voip_stack` component options](docs/reference.md#voip_stack-component)
 - [Event callbacks](docs/reference.md#event-callbacks)
 - [Actions](docs/reference.md#actions) and [conditions](docs/reference.md#conditions)
-- [`esp_aec`](docs/reference.md#esp_aec-component) / [`esp_afe`](docs/reference.md#esp_afe-component) components
+- [`esp_audio_stack`, `esp_aec` and `esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack) component docs
 - [Home Assistant services](docs/reference.md#home-assistant-services)
 - [Automation examples](docs/reference.md#automation-examples) (doorbell routing, night mode, forward, bridge)
 
@@ -1386,7 +1386,7 @@ hardware speaker. Older custom YAMLs that still use ESPHome's
 [`speaker`](esphome/components/speaker/README.md) fork for its pause-release
 compatibility mode.
 
-Full-experience profiles also use [`runtime_controller`](esphome/components/runtime_controller/README.md)
+Full-experience profiles also use [`runtime_controller`](https://github.com/n-IA-hane/esphome-runtime-controller)
 as the control-plane reducer. It does not touch PCM audio. YAML callbacks send
 events such as `media_playing`, `wake_word`, `timer_finished` or
 `ha_disconnected`; the reducer keeps composable activities and resolves named
@@ -1445,7 +1445,7 @@ topology examples.
 
 ### [`esp_aec`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_aec)
 
-Standalone ESP-SR echo cancellation (~80 KB internal RAM). Four modes (`sr_low_cost` recommended for VA+MWW, `voip_*` for pure VoIP). See the mode table in [docs/reference.md](docs/reference.md#esp_aec-component) before changing defaults.
+Standalone ESP-SR echo cancellation (~80 KB internal RAM). Four modes (`sr_low_cost` recommended for VA+MWW, `voip_*` for pure VoIP). See the [`esp_aec` README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_aec) before changing defaults.
 
 ### [`esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe)
 
@@ -1660,21 +1660,6 @@ boards.
 Key benefits: lower CPU (dirty-region only), no `component.update` contention, native animation (`animimg`), mood-based backgrounds via `lv_img_set_src()`, and automatic text scrolling (`SCROLL_CIRCULAR`).
 
 Timer overlays use `top_layer` with `LV_OBJ_FLAG_HIDDEN`, visible on any page. Media files are auto-resampled by the `platform: resampler` speaker in the mixer pipeline.
-
-### Experiment and Tune
-
-Every setup is different: room acoustics, mic sensitivity, speaker placement, codec characteristics. We encourage you to:
-
-- **Try different `filter_length` values** (4 vs 8), longer isn't always better if your acoustic path is short
-- **Toggle AEC on/off during calls** to hear the difference; the `aec` switch is available in HA
-- **Adjust `mic_gain`**: most targets expose -20 to +30 dB; P4 AFE presets expose -20 to 0 dB because their control is post-AFE trim, with capture gain handled by ES7210 input gain plus AFE AGC
-- **Test MWW during TTS** with your specific wake word, some words are more robust than others
-- **Compare `voip_low_cost` vs `voip_high_perf`**: the difference may be subtle in your environment
-- **Monitor ESP logs**: shipped YAMLs default to `level: INFO`, which keeps
-  user-visible SIP call signaling and AEC/AFE/I2S lifecycle milestones visible
-  without flooding the console. See [Logging](#logging) before switching a
-  target to `DEBUG`; flip `telemetry: true` only when you need per-frame timing
-  diagnostics.
 
 ---
 

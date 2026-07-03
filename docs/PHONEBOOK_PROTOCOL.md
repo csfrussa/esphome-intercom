@@ -16,7 +16,7 @@ voip_stack:
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
     - name: Kitchen
-      ip: 192.168.1.42
+      address: 192.168.1.42
       transport: udp
       port: 5060
       rtp_port: 40000
@@ -29,7 +29,7 @@ Runtime actions use the same model:
 on_press:
   - voip_stack.add_contact:
       name: Kitchen
-      ip: 192.168.1.42
+      address: 192.168.1.42
       port: 5060
       transport: udp
 ```

@@ -120,8 +120,8 @@ checkout, run:
 When you are ready to switch them back to the published form:
 
 ```bash
-./scripts/yaml_paths.sh remote --branch dev    # development test train
-./scripts/yaml_paths.sh remote --branch main
+./scripts/yaml_paths.sh remote --intercom dev --audio main --runtime main
+./scripts/yaml_paths.sh remote --intercom main --audio main --runtime main
 ./scripts/yaml_paths.sh check
 ```
 

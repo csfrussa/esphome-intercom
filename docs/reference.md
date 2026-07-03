@@ -10,7 +10,7 @@ voip_stack:
   rtp_port: 40000
   static_contacts:
     - name: Kitchen
-      ip: 192.168.1.42
+      address: 192.168.1.42
       transport: udp
       port: 5060
       rtp_port: 40000
@@ -55,8 +55,11 @@ The contact actions mutate only that ESP's local mirror. Use HA
 `voip_stack.add_contact` / `remove_contact` / `set_contacts` for the central
 phonebook.
 
-Static and runtime contacts accept `transport: udp|tcp` when one contact
-must use a different signaling transport from the phone's own `transport`.
+Static and runtime contacts use the same phonebook contract as HA contacts:
+`name` is required; `address` + `port` or `sip_uri` describes a direct SIP
+endpoint; `extension` is an internal alias; `number` is an external/trunk
+number. Contacts accept `transport: udp|tcp` when one direct endpoint must use
+a different signaling transport from the phone's own `transport`.
 
 Conditions:
 
