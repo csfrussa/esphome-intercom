@@ -17,26 +17,6 @@ or a trunk when you want the system to grow.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
-## What This Repository Contains
-
-This project is a collection of ESPHome and Home Assistant components for
-building local voice and VoIP devices. You can start with a simple full-duplex
-door intercom, grow into room-to-room SIP phones on ESP32 devices, add Home
-Assistant as a browser/mobile softphone, register standard SIP clients, route
-external calls through a trunk, or build a full domestic voice satellite with
-Micro Wake Word, Voice Assistant, media player, announcements, LVGL controls
-and an integrated VoIP phone.
-
-The reusable engines are split into focused repos, while this repository keeps
-the complete product experience: HA integration, Lovelace card, ready YAMLs,
-call routing, phonebook, voice intents and full device examples.
-
-| Repository | Role |
-|---|---|
-| [`esphome-intercom`](https://github.com/n-IA-hane/esphome-intercom) | The complete VoIP Stack platform: ESP SIP endpoints, Home Assistant router/B2BUA/registrar/trunk support, Lovelace card, phonebook, Assist intents and ready-to-flash YAMLs. |
-| [`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack) | The audio engine used by the full profiles: full-duplex I2S/codec/TDM ownership, software AEC, Espressif AFE and clean microphone/speaker surfaces. |
-| [`esphome-runtime-controller`](https://github.com/n-IA-hane/esphome-runtime-controller) | The state reducer used by the full profiles: deterministic LED, display, ringtone and audio-policy arbitration when VA, media, announcements, timers, mute and VoIP overlap. |
-
 ![Dashboard Demo](docs/images/dashboard.gif)
 
 _Runtime demo: browser softphone, ESP call state and audio controls moving together._
@@ -93,7 +73,6 @@ control panels without pretending every device is full-duplex.
 ## Table of Contents
 
 - [What Can You Build With It?](#what-can-you-build-with-it)
-- [What This Repository Contains](#what-this-repository-contains)
 - [Endpoint Capabilities](#endpoint-capabilities)
 - [Fastest Start](#fastest-start)
 - [What's New](#whats-new)
