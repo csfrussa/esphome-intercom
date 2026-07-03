@@ -88,6 +88,25 @@ def test_sip_tcp_originate_is_async() -> None:
     assert "connect(" not in originate
 
 
+def test_voip_media_tasks_are_not_idle_polling() -> None:
+    audio = read("voip_audio.cpp")
+    sip_cpp = read("sip_transport.cpp")
+
+    tx_start = audio.index("void VoipStack::tx_task_()")
+    tx_end = audio.index("\n// === Microphone Callback ===", tx_start)
+    tx_task = audio[tx_start:tx_end]
+    assert "pdMS_TO_TICKS(20)" not in tx_task
+    assert "portMAX_DELAY" in tx_task
+    assert "xTaskNotifyGive(this->tx_task_handle_)" in audio
+
+    rtp_start = sip_cpp.index("void SipTransport::rtp_task_()")
+    rtp_task = sip_cpp[rtp_start:]
+    assert "select(socket + 1, &readfds" in rtp_task
+    assert "delay(" not in sip_cpp
+    assert "delay(5)" not in rtp_task
+    assert "} else {\n      delay" not in rtp_task
+
+
 def test_non_2xx_invite_final_response_sends_ack() -> None:
     sip_h = read("sip_transport.h")
     sip_cpp = read("sip_transport.cpp")

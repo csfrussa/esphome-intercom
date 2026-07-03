@@ -113,7 +113,7 @@ void VoipStack::tx_task_() {
     }
 
     if (this->mic_buffer_ == nullptr) {
-      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
       continue;
     }
 
@@ -129,7 +129,7 @@ void VoipStack::tx_task_() {
     this->media_tx_queue_depth_.store(
         static_cast<uint32_t>(this->mic_buffer_->available() / std::max<size_t>(1, frame_bytes)),
         std::memory_order_relaxed);
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
   }
 }
 

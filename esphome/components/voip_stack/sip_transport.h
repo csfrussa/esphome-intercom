@@ -11,6 +11,7 @@
 #include <lwip/sockets.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include <atomic>
@@ -108,6 +109,8 @@ class SipTransport : public SipPhoneTransport {
   void close_media_session_();
   void request_tcp_client_close_();
   void close_tcp_client_from_sip_task_();
+  void wake_sip_task_();
+  void wake_rtp_task_();
   void reset_dialog_();
   bool replay_stateless_invite_final_(const std::string &request, const sockaddr_in &src,
                                       const std::string &call_id);
@@ -197,6 +200,7 @@ class SipTransport : public SipPhoneTransport {
   TaskHandle_t rtp_task_handle_{nullptr};
   StaticTask_t rtp_task_tcb_{};
   StackType_t *rtp_task_stack_{nullptr};
+  SemaphoreHandle_t rtp_task_done_{nullptr};
   std::atomic<bool> running_{false};
   std::atomic<bool> rtp_running_{false};
   std::atomic<bool> media_active_{false};

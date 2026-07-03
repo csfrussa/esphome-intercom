@@ -589,6 +589,7 @@ void SipTransport::request_tcp_client_close_() {
   }
   this->sip_tcp_client_close_requested_.store(true, std::memory_order_release);
   if (socket >= 0) shutdown(socket, SHUT_RDWR);
+  this->wake_sip_task_();
 }
 
 void SipTransport::close_tcp_client_from_sip_task_() {
@@ -596,6 +597,32 @@ void SipTransport::close_tcp_client_from_sip_task_() {
   this->sip_tcp_client_close_requested_.store(false, std::memory_order_release);
   if (socket >= 0) close(socket);
   this->sip_tcp_rx_buffer_.clear();
+}
+
+void SipTransport::wake_sip_task_() {
+  if (this->sip_task_handle_ != nullptr) {
+    xTaskNotifyGive(this->sip_task_handle_);
+  }
+  const int socket = this->sip_socket_;
+  if (socket < 0) return;
+  struct sockaddr_in self{};
+  self.sin_family = AF_INET;
+  self.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  self.sin_port = htons(this->sip_port_);
+  sendto(socket, "", 0, 0, reinterpret_cast<struct sockaddr *>(&self), sizeof(self));
+}
+
+void SipTransport::wake_rtp_task_() {
+  if (this->rtp_task_handle_ != nullptr) {
+    xTaskNotifyGive(this->rtp_task_handle_);
+  }
+  const int socket = this->rtp_socket_;
+  if (socket < 0) return;
+  struct sockaddr_in self{};
+  self.sin_family = AF_INET;
+  self.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  self.sin_port = htons(this->rtp_port_);
+  sendto(socket, "", 0, 0, reinterpret_cast<struct sockaddr *>(&self), sizeof(self));
 }
 
 void SipTransport::stop() {
@@ -628,6 +655,15 @@ bool SipTransport::start_audio_path() {
   if (this->rtp_running_.load(std::memory_order_acquire)) return true;
   this->reset_rtp_latch_();
   if (!this->bind_udp_(&this->rtp_socket_, this->rtp_port_, "RTP")) return false;
+  if (this->rtp_task_done_ == nullptr) {
+    this->rtp_task_done_ = xSemaphoreCreateBinary();
+  }
+  if (this->rtp_task_done_ == nullptr) {
+    close(this->rtp_socket_);
+    this->rtp_socket_ = -1;
+    return false;
+  }
+  xSemaphoreTake(this->rtp_task_done_, 0);
   this->rtp_running_.store(true, std::memory_order_release);
   if (!audio_processor::start_pinned_task(SipTransport::rtp_task_trampoline_, "voip_rtp",
                                           kRtpTaskStackBytes, this, kRtpTaskPriority, 1,
@@ -645,11 +681,13 @@ bool SipTransport::start_audio_path() {
 void SipTransport::stop_audio_path() {
   this->close_media_session_();
   if (!this->rtp_running_.exchange(false, std::memory_order_acq_rel)) return;
-  if (this->rtp_socket_ >= 0) {
-    close(this->rtp_socket_);
-    this->rtp_socket_ = -1;
+  this->wake_rtp_task_();
+  if (this->rtp_task_done_ != nullptr && xSemaphoreTake(this->rtp_task_done_, pdMS_TO_TICKS(1000)) == pdTRUE) {
+    audio_processor::cleanup_pinned_task(&this->rtp_task_handle_, &this->rtp_task_stack_, kRtpTaskStackBytes);
+  } else {
+    ESP_LOGE(TAG, "RTP task did not stop cleanly; leaving task resources owned by FreeRTOS");
+    this->rtp_task_handle_ = nullptr;
   }
-  audio_processor::force_delete_pinned_task(&this->rtp_task_handle_, &this->rtp_task_stack_, kRtpTaskStackBytes);
 }
 
 bool SipTransport::originate(const std::string &host, uint16_t port) {
@@ -671,6 +709,7 @@ bool SipTransport::originate(const std::string &host, uint16_t port) {
   this->tcp_connect_ip_v4_.store(ip_v4, std::memory_order_release);
   this->tcp_connect_port_.store(sip_port, std::memory_order_release);
   this->tcp_connect_requested_.store(true, std::memory_order_release);
+  this->wake_sip_task_();
   return true;
 }
 
@@ -755,6 +794,7 @@ void SipTransport::remember_udp_transaction_(const std::string &method, const st
   txn->interval_ms = 500;
   txn->next_ms = now + txn->interval_ms;
   txn->retries = 0;
+  this->wake_sip_task_();
 }
 
 void SipTransport::pump_udp_retransmits_() {
@@ -1809,16 +1849,53 @@ void SipTransport::sip_task_() {
       FD_SET(connecting_fd, &writefds);
       max_fd = std::max(max_fd, connecting_fd);
     }
+    if (max_fd < 0) {
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      continue;
+    }
     struct timeval timeout{};
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 10000;
-    const int ready = max_fd >= 0 ? select(max_fd + 1, &readfds, &writefds, nullptr, &timeout) : 0;
+    struct timeval *timeout_ptr = nullptr;
+    uint32_t timeout_ms = 0;
+    if (connecting_fd >= 0) {
+      const uint32_t now = millis();
+      timeout_ms = now - connect_deadline_ms < 0x80000000UL && now < connect_deadline_ms
+                       ? connect_deadline_ms - now
+                       : 0;
+      timeout_ptr = &timeout;
+    }
+    const bool udp_timer_pending =
+        !this->remote_sip_tcp_.load(std::memory_order_acquire) &&
+        ((this->outgoing_invite_pending_.load(std::memory_order_acquire) && !this->pending_invite_.empty()) ||
+         !this->pending_bye_.empty());
+    if (udp_timer_pending) {
+      const uint32_t now = millis();
+      uint32_t next_ms = 0;
+      auto include_txn = [now, &next_ms](const UdpTransaction &txn) {
+        if (txn.empty()) return;
+        const uint32_t delta = txn.next_ms - now;
+        if (now - txn.next_ms < 0x80000000UL && now >= txn.next_ms) {
+          next_ms = 0;
+        } else if (next_ms == 0 || delta < next_ms) {
+          next_ms = delta;
+        }
+      };
+      if (this->outgoing_invite_pending_.load(std::memory_order_acquire)) include_txn(this->pending_invite_);
+      include_txn(this->pending_bye_);
+      if (timeout_ptr == nullptr || next_ms < timeout_ms) {
+        timeout_ms = next_ms;
+        timeout_ptr = &timeout;
+      }
+    }
+    if (timeout_ptr != nullptr) {
+      timeout.tv_sec = timeout_ms / 1000;
+      timeout.tv_usec = (timeout_ms % 1000) * 1000;
+    }
+    const int ready = select(max_fd + 1, &readfds, &writefds, nullptr, timeout_ptr);
     if (connecting_fd >= 0 && millis() - connect_deadline_ms < 0x80000000UL && millis() >= connect_deadline_ms) {
       fail_tcp_connect(ETIMEDOUT);
       continue;
     }
     if (ready <= 0) {
-      delay(1);
       continue;
     }
 
@@ -1884,9 +1961,21 @@ void SipTransport::rtp_task_() {
   uint8_t buf[1600];
   uint8_t pcm[1500];
   while (this->rtp_running_.load(std::memory_order_acquire)) {
+    const int socket = this->rtp_socket_;
+    if (socket < 0) {
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      continue;
+    }
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(socket, &readfds);
+    const int ready = select(socket + 1, &readfds, nullptr, nullptr, nullptr);
+    if (ready <= 0 || !FD_ISSET(socket, &readfds)) {
+      continue;
+    }
     struct sockaddr_in src{};
     socklen_t slen = sizeof(src);
-    int n = recvfrom(this->rtp_socket_, buf, sizeof(buf), 0,
+    int n = recvfrom(socket, buf, sizeof(buf), 0,
                      reinterpret_cast<struct sockaddr *>(&src), &slen);
     if (n > 12 && (buf[0] & 0xC0) == 0x80) {
       if (!this->media_active_.load(std::memory_order_acquire)) {
@@ -1917,7 +2006,6 @@ void SipTransport::rtp_task_() {
       const uint8_t csrc_count = buf[0] & 0x0F;
       size_t header = 12u + static_cast<size_t>(csrc_count) * 4u;
       if (static_cast<size_t>(n) <= header) {
-        delay(1);
         continue;
       }
       if ((buf[0] & 0x10) != 0) {
@@ -1947,9 +2035,15 @@ void SipTransport::rtp_task_() {
       this->rtp_rx_packets_.fetch_add(1, std::memory_order_acq_rel);
       this->rtp_rx_bytes_.fetch_add(static_cast<uint32_t>(n), std::memory_order_acq_rel);
       this->emit_audio_frame_(pcm, out_len, sequence, timestamp);
-    } else {
-      delay(5);
     }
+  }
+  const int socket = this->rtp_socket_;
+  if (socket >= 0) {
+    close(socket);
+    this->rtp_socket_ = -1;
+  }
+  if (this->rtp_task_done_ != nullptr) {
+    xSemaphoreGive(this->rtp_task_done_);
   }
   vTaskDelete(nullptr);
 }

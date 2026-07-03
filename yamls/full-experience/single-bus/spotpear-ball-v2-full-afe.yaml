@@ -1046,8 +1046,6 @@ script:
             } else {
               lv_disp_load_scr(target);
             }
-            // Invalidate screen to ensure full redraw on next LVGL tick
-            lv_obj_invalidate(lv_disp_get_scr_act(nullptr));
           }
           // The VA idle animation is stopped before page switches. Start the
           // idle animation loop immediately when VA idle becomes the visible
