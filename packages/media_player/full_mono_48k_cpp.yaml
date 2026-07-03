@@ -2,8 +2,8 @@
 # Full-experience media graph for runtime_controller.
 #
 # HA/Sendspin media, generic announcements and VA TTS remain on the standard
-# speaker_source media player. runtime_controller policy lives in
-# packages/runtime_controller/full_controller.yaml.
+# speaker_source media player. runtime_controller policy lives in the split
+# esphome-runtime-controller package included by the device YAML.
 # =============================================================================
 
 sendspin:

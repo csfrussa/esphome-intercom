@@ -1,7 +1,7 @@
 # =============================================================================
 # Runtime Controller bridge for full-experience VA + VoIP devices.
 #
-# State ownership lives in esphome/components/runtime_controller. This package keeps
+# State ownership lives in the split runtime_controller component. This package keeps
 # only renderer-compatible globals and UI hook placeholders.
 # =============================================================================
 

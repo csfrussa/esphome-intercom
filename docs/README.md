@@ -49,8 +49,8 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 Each ESPHome component ships its own README with the full option list, YAML snippets and component-specific notes:
 
-- [`voip_stack`](../esphome/components/voip_stack/README.md), the ESP SIP
-  phone component and Home Assistant bridge integration surface.
+- [`voip_stack`](https://github.com/n-IA-hane/esphome-voip-stack), the ESP SIP
+  phone component.
 - [`esp_audio_stack`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_audio_stack), the
   coordinated full-duplex audio backend for shared codec buses, dual I2S
   MEMS/amp boards that need software reference handling, Espressif
@@ -69,4 +69,5 @@ Each ESPHome component ships its own README with the full option list, YAML snip
   snapshot. It is control-plane only and does not process audio samples.
 - [`esp_aec`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_aec), standalone ESP-SR echo cancellation.
 - [`esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
-- internal shared audio primitives used privately by `voip_stack` and by the split audio-stack repository.
+- internal shared audio primitives used privately by the local media/voice
+  component forks and by the split audio-stack repository.

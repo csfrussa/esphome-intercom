@@ -39,6 +39,7 @@ substitutions:
   friendly_name: Generic S3
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
   audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
   runtime_controller_components_source: "github://n-IA-hane/esphome-runtime-controller@main"
 
@@ -142,8 +143,10 @@ preferences:
 # Project components for full VA/VoIP, runtime controller and experimental AFE.
 
 external_components:
+  - source: ${voip_stack_components_source}
+    components: [voip_stack]
   - source: ${ext_components_source}
-    components: [voip_stack, speaker, voice_assistant]
+    components: [speaker, voice_assistant]
   - source: ${runtime_controller_components_source}
     components: [runtime_controller]
   - source: ${audio_stack_components_source}

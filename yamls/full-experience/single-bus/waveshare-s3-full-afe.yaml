@@ -49,6 +49,7 @@ substitutions:
   friendly_name: Waveshare S3 Audio
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
   audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
   runtime_controller_components_source: "github://n-IA-hane/esphome-runtime-controller@main"
 
@@ -152,8 +153,10 @@ psram:
 # Project components for full VA/VoIP, runtime controller and ESP AFE.
 
 external_components:
+  - source: ${voip_stack_components_source}
+    components: [voip_stack]
   - source: ${ext_components_source}
-    components: [voip_stack, speaker, voice_assistant]
+    components: [speaker, voice_assistant]
   - source: ${runtime_controller_components_source}
     components: [runtime_controller]
   - source: ${audio_stack_components_source}

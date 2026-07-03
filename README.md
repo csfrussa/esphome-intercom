@@ -495,6 +495,21 @@ JavaScript module alive until the page/app is refreshed. Until the card gets its
 own version-mismatch warning, do this after every VoIP Stack upgrade,
 especially after major releases.
 
+#### Legacy HA Domain Migration
+
+HACS stays on this repository because this is the Home Assistant product repo:
+it contains `custom_components/voip_stack`, the Lovelace card, ready YAMLs and
+the end-to-end docs. The split ESP component repositories are consumed by
+ESPHome `external_components`; they are not HACS integration repositories.
+
+Development builds before the VoIP Stack rename used older Home Assistant
+domains such as `intercom_native` and `homeassistant_voip_stack`. Home Assistant
+stores config entries by domain, so those old entries cannot be silently
+converted by the current `voip_stack` integration. If a test install still has
+one of the old domains, remove that old integration entry and stale
+`custom_components/<old_domain>` folder, restart Home Assistant, then add
+**VoIP Stack** from Settings -> Integrations.
+
 #### Option B: Manual install
 
 ```bash
@@ -534,8 +549,8 @@ by the maintained full voice YAMLs.
 ```yaml
 # Lightweight (single-mic, echo cancellation only):
 external_components:
-  - source: github://n-IA-hane/esphome-intercom
-    ref: dev
+  - source: github://n-IA-hane/esphome-voip-stack
+    ref: main
     components: [voip_stack]
   - source: github://n-IA-hane/esphome-audio-stack
     ref: main
@@ -543,8 +558,8 @@ external_components:
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
-  - source: github://n-IA-hane/esphome-intercom
-    ref: dev
+  - source: github://n-IA-hane/esphome-voip-stack
+    ref: main
     components: [voip_stack]
   - source: github://n-IA-hane/esphome-audio-stack
     ref: main

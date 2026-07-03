@@ -31,7 +31,6 @@ def main() -> int:
          "custom_components/voip_stack/websocket_api.py",
          "tests/support/qualification_matrix.py"])
     run([py, "tests/test_voip_phase1.py"])
-    run([py, "-m", "pytest", "-q", "tests/test_esp_voip_cpp_contract.py"])
     run([py, "tests/test_device_resolver_sip.py"])
     run([py, "tests/test_frontend_card_contract.py"])
     run([py, "-m", "pytest", "-q", "tests/test_ha_softphone_backend_contract.py"])
@@ -39,18 +38,12 @@ def main() -> int:
     run([py, "tests/test_runtime_controller_target_model.py"])
     run([py, "tests/support/qualification_matrix.py", "--validate", "--summary"])
     run(["node", "--check", "custom_components/voip_stack/frontend/voip-stack-card.js"])
-    run([
-        "g++", "-std=c++17",
-        "tests/runtime_controller_state_test.cpp",
-        "esphome/components/runtime_controller/runtime_controller_state.cpp",
-        "-o", "/tmp/runtime_controller_state_test",
-    ])
-    run(["/tmp/runtime_controller_state_test"])
     run(["git", "diff", "--check"])
 
     if args.compile_profiles:
-        run(["esphome", "compile", "yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml"])
-        run(["esphome", "compile", "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml"])
+        esphome = str(ROOT / ".venv/bin/esphome")
+        run([esphome, "compile", "yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml"])
+        run([esphome, "compile", "yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml"])
     return 0
 
 

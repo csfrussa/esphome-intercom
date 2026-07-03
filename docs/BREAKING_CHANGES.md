@@ -13,6 +13,10 @@ The practical change:
   SIP router/B2BUA, RTP bridge/resampler and optional SIP trunk client.
 - The Home Assistant integration domain and services are `voip_stack.*`.
   Existing automations that used older development names must be updated.
+- Older development installs used the Home Assistant domains `intercom_native`
+  or `homeassistant_voip_stack`. The HACS repository now exposes only
+  `custom_components/voip_stack`; remove old test config entries and stale
+  old-domain folders before adding the current VoIP Stack integration.
 - Home Assistant no longer exposes local SIP transport toggles. Configure ports
   and optional features, not listener modes.
 - VoIP Stack supports Home Assistant's native Reconfigure action. You no longer

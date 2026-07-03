@@ -20,6 +20,7 @@ substitutions:
   name: ha-voice-pe-voip
   friendly_name: Home Assistant Voice PE VoIP
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
   audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
 
 # Start from the official Voice PE YAML, then add only VoIP transport,
@@ -51,7 +52,7 @@ esphome:
 # Only project components that are missing from the official Voice PE base.
 
 external_components:
-  - source: ${ext_components_source}
+  - source: ${voip_stack_components_source}
     components: [voip_stack]
 
 # =============================================================================

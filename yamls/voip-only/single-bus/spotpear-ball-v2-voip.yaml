@@ -33,6 +33,7 @@ substitutions:
   friendly_name: Spotpear Ball v2
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
   audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
 
   assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/dev/"
@@ -169,7 +170,7 @@ psram:
 # =============================================================================
 
 external_components:
-  - source: ${ext_components_source}
+  - source: ${voip_stack_components_source}
     components: [voip_stack]
   - source: ${audio_stack_components_source}
     components: [esp_audio_stack, esp_aec]

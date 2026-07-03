@@ -43,6 +43,7 @@ substitutions:
   friendly_name: Generic S3 Native VoIP Speaker Only
 
   ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
   audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
 
   # ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ preferences:
 # internal VoIP task/ring-buffer helpers, without esp_audio_stack.
 
 external_components:
-  - source: ${ext_components_source}
+  - source: ${voip_stack_components_source}
     components: [voip_stack]
 
 # =============================================================================
