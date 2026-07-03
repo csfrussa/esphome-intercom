@@ -57,6 +57,7 @@ class RtpJitterBuffer {
     return static_cast<int16_t>(sequence - reference);
   }
   void clear_slots_();
+  void keep_window_from_(uint16_t next_sequence);
 
   uint8_t *storage_{nullptr};
   size_t frame_capacity_{0};
@@ -88,6 +89,23 @@ inline void RtpJitterBuffer::clear_slots_() {
     this->slots_[i].valid = false;
     this->slots_[i].bytes = 0;
   }
+}
+
+inline void RtpJitterBuffer::keep_window_from_(uint16_t next_sequence) {
+  uint32_t count = 0;
+  for (uint8_t i = 0; i < this->slot_count_; i++) {
+    Slot &slot = this->slots_[i];
+    if (!slot.valid)
+      continue;
+    const int16_t delta = sequence_delta_(slot.sequence, next_sequence);
+    if (delta < 0 || delta >= static_cast<int16_t>(this->slot_count_)) {
+      slot.valid = false;
+      slot.bytes = 0;
+      continue;
+    }
+    count++;
+  }
+  this->valid_count_ = count;
 }
 
 inline void RtpJitterBuffer::reset() {
@@ -123,10 +141,10 @@ inline bool RtpJitterBuffer::push(const Frame &frame) {
       return false;
     }
     if (delta >= static_cast<int16_t>(this->slot_count_)) {
-      this->clear_slots_();
-      this->valid_count_ = 0;
-      this->buffering_ = true;
-      this->next_sequence_ = sequence;
+      const uint8_t keep_frames = this->slot_count_ > this->prebuffer_ ? this->slot_count_ - this->prebuffer_ : 1;
+      this->next_sequence_ = static_cast<uint16_t>(sequence - keep_frames + 1);
+      this->keep_window_from_(this->next_sequence_);
+      this->buffering_ = this->valid_count_ < this->prebuffer_;
       this->counters_.drops++;
     }
   }

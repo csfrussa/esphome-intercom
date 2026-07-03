@@ -26,6 +26,9 @@ class SipTransport : public SipPhoneTransport {
  public:
   static constexpr uint32_t kSipTaskStackBytes = 8192;
   static constexpr uint32_t kRtpTaskStackBytes = 8192;
+  static constexpr uint8_t kSipTaskPriority = 4;
+  static constexpr uint8_t kRtpTaskPriority = 9;
+  static constexpr int kRtpSocketRxBufferBytes = 65536;
 
   SipTransport(uint16_t sip_port, uint16_t rtp_port, size_t udp_max_payload, std::string remote_host,
                bool task_stacks_in_psram);

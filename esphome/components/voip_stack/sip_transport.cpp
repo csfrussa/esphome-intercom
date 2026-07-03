@@ -497,6 +497,12 @@ bool SipTransport::bind_udp_(int *fd, uint16_t port, const char *label) {
   }
   int flags = fcntl(*fd, F_GETFL, 0);
   fcntl(*fd, F_SETFL, flags | O_NONBLOCK);
+  if (strcmp(label, "RTP") == 0) {
+    const int rx_buffer = kRtpSocketRxBufferBytes;
+    setsockopt(*fd, SOL_SOCKET, SO_RCVBUF, &rx_buffer, sizeof(rx_buffer));
+    const int tos = 0xB8;
+    setsockopt(*fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
+  }
   struct sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
@@ -558,7 +564,7 @@ bool SipTransport::start() {
   }
   this->running_.store(true, std::memory_order_release);
   if (!audio_processor::start_pinned_task(SipTransport::sip_task_trampoline_, "voip_sip",
-                                          kSipTaskStackBytes, this, 4, 1,
+                                          kSipTaskStackBytes, this, kSipTaskPriority, 1,
                                           this->task_stacks_in_psram_, TAG,
                                           &this->sip_task_handle_, &this->sip_task_tcb_,
                                           &this->sip_task_stack_)) {
@@ -624,7 +630,7 @@ bool SipTransport::start_audio_path() {
   if (!this->bind_udp_(&this->rtp_socket_, this->rtp_port_, "RTP")) return false;
   this->rtp_running_.store(true, std::memory_order_release);
   if (!audio_processor::start_pinned_task(SipTransport::rtp_task_trampoline_, "voip_rtp",
-                                          kRtpTaskStackBytes, this, 5, 1,
+                                          kRtpTaskStackBytes, this, kRtpTaskPriority, 1,
                                           this->task_stacks_in_psram_, TAG,
                                           &this->rtp_task_handle_, &this->rtp_task_tcb_,
                                           &this->rtp_task_stack_)) {

@@ -73,8 +73,8 @@ class VoipStack : public Component {
   // stack size inside the transport class.
   static constexpr uint32_t kTxTaskStackBytes = 12288;
   static constexpr uint32_t kRxTaskStackBytes = 12288;
-  static constexpr size_t kRxQueuedFrames = 12;
-  static constexpr uint32_t kRxPrebufferFrames = 3;
+  static constexpr size_t kRxQueuedFrames = 16;
+  static constexpr uint32_t kRxPrebufferFrames = 4;
   static constexpr uint32_t kRxSilenceAfterMs = 60;
 
   enum SchedulerId : uint32_t {

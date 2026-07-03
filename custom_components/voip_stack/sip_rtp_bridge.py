@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 import secrets
+import socket
 from typing import Any
 import wave
 
@@ -19,6 +20,7 @@ from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 _LOGGER = logging.getLogger(__name__)
 _DEBUG_CAPTURE_DIR = Path("/tmp/voip_stack_debug")
 _DEBUG_CAPTURE_SECONDS = 8
+_RTP_IP_TOS = 0xB8
 
 
 @dataclass(slots=True)
@@ -164,13 +166,15 @@ class SipRtpRelay:
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
+        left_sock = self._rtp_socket(self.left_port)
+        right_sock = self._rtp_socket(self.right_port)
         self.left_transport, _ = await loop.create_datagram_endpoint(
             lambda: _RelayProtocol(self, "left"),
-            local_addr=("0.0.0.0", self.left_port),
+            sock=left_sock,
         )
         self.right_transport, _ = await loop.create_datagram_endpoint(
             lambda: _RelayProtocol(self, "right"),
-            local_addr=("0.0.0.0", self.right_port),
+            sock=right_sock,
         )
         _LOGGER.info(
             "SIP RTP relay listening left=%s right=%s left=%s->%s right=%s->%s",
@@ -181,6 +185,15 @@ class SipRtpRelay:
             self.right.audio_format.wire_token(),
             self.left.outbound_audio_format.wire_token(),
         )
+
+    @staticmethod
+    def _rtp_socket(port: int) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(False)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, _RTP_IP_TOS)
+        sock.bind(("0.0.0.0", int(port)))
+        return sock
 
     async def stop(self) -> None:
         _LOGGER.info(

@@ -1187,6 +1187,33 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if terminal_reason == TerminalReason.CANCELLED.value
             else CallState.IDLE.value
         )
+        if relay is not None or client is not None:
+            _set_sip_bridge_call_state(
+                hass,
+                terminal_state,
+                call_id=call_id,
+                dest_call_id=dest_call_id,
+                caller=(invite.caller if invite is not None else ""),
+                callee=(invite.target if invite is not None else ""),
+                peer_name=(invite.caller if invite is not None else ""),
+                reason=terminal_reason,
+                terminal_reason=terminal_reason,
+                origin="remote",
+                last_sip_event="BYE",
+            )
+            _fire_call_event(
+                hass,
+                {
+                    "state": terminal_state,
+                    "scope": "sip_bridge",
+                    "call_id": call_id,
+                    "dest_call_id": dest_call_id,
+                    "reason": terminal_reason,
+                    "terminal_reason": terminal_reason,
+                },
+                "sip",
+            )
+            registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
         if (
             relay is None
             and client is None
@@ -1217,31 +1244,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             await client.terminate()
             await client.close()
         if relay is not None or client is not None:
-            _set_sip_bridge_call_state(
-                hass,
-                CallState.IDLE.value,
-                call_id=call_id,
-                dest_call_id=dest_call_id,
-                caller=(invite.caller if invite is not None else ""),
-                callee=(invite.target if invite is not None else ""),
-                peer_name=(invite.caller if invite is not None else ""),
-                reason=terminal_reason,
-                terminal_reason=terminal_reason,
-                origin="remote",
-                last_sip_event="BYE",
-            )
-            _fire_call_event(
-                hass,
-                {
-                    "state": CallState.IDLE.value,
-                    "scope": "sip_bridge",
-                    "call_id": call_id,
-                    "dest_call_id": dest_call_id,
-                    "reason": terminal_reason,
-                    "terminal_reason": terminal_reason,
-                },
-                "sip",
-            )
             _LOGGER.info(
                 "SIP bridge terminated call_id=%s reason=%s relay=%s dest_client=%s",
                 call_id,
@@ -1249,7 +1251,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 relay is not None,
                 bool(dest_call_id),
             )
-            registry.finish_and_pop(call_id, reason=terminal_reason)
 
     supported_formats = list(HA_SIP_PCM_FORMATS)
     endpoint = SipEndpointManager(
