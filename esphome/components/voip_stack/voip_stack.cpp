@@ -538,7 +538,7 @@ std::string VoipStack::build_endpoint_string_() const {
   auto format_list_token = [&](const AudioFormatList &list) -> std::string {
     std::string out;
     for (uint8_t i = 0; i < list.count; i++) {
-      if (!out.empty()) out += ";";
+      if (!out.empty()) out += "; ";
       out += VoipStack::audio_format_token_(list.formats[i]);
     }
     return out;
@@ -546,7 +546,7 @@ std::string VoipStack::build_endpoint_string_() const {
   const std::string tx = format_list_token(this->tx_audio_formats_);
   const std::string rx = format_list_token(this->rx_audio_formats_);
   char buf[768];
-  snprintf(buf, sizeof(buf), "%s|%s|%u|%u|%s|%s|%s|%s|%s", name.c_str(), ip.c_str(),
+  snprintf(buf, sizeof(buf), "%s | %s | %u | %u | %s | %s | %s | %s | %s", name.c_str(), ip.c_str(),
            (unsigned) this->sip_port_, (unsigned) this->rtp_port_,
            this->audio_capability_(), tx.c_str(), rx.c_str(),
            this->protocol_ == TransportType::TCP ? "sip_tcp" : "sip_udp",
@@ -616,9 +616,9 @@ std::string VoipStack::build_sip_snapshot_string_() const {
   std::string contact = this->phonebook_.current_name();
   char out[512];
   snprintf(out, sizeof(out),
-           "st=%s;id=%s;dir=%s;from=%s;to=%s;ct=%s;tr=%s;sc=%u;"
-           "tx=%s;rx=%s;pt=%u;pr=%u;"
-           "tqd=%u;tqdrop=%u;rqd=%u;rqdrop=%u;rs=%s;ev=%s",
+           "st=%s; id=%s; dir=%s; from=%s; to=%s; ct=%s; tr=%s; sc=%u; "
+           "tx=%s; rx=%s; pt=%u; pr=%u; "
+           "tqd=%u; tqdrop=%u; rqd=%u; rqdrop=%u; rs=%s; ev=%s",
            field_escape(state, 18).c_str(),
            field_escape(call.call_id, 12).c_str(),
            field_escape(direction, 3).c_str(),
@@ -640,7 +640,7 @@ std::string VoipStack::build_sip_snapshot_string_() const {
 #ifdef USE_ESPHOME_VOIP_STACK_AUDIO_DEBUG
   if (this->audio_debug_) {
     char debug[160];
-    snprintf(debug, sizeof(debug), ";tqdb=%u;rlate=%u;rmiss=%u;rdup=%u;rsil=%u;spkshort=%u",
+    snprintf(debug, sizeof(debug), "; tqdb=%u; rlate=%u; rmiss=%u; rdup=%u; rsil=%u; spkshort=%u",
              (unsigned) this->media_tx_queue_drop_bytes_.load(std::memory_order_relaxed),
              (unsigned) this->audio_debug_rx_late_frames_.load(std::memory_order_relaxed),
              (unsigned) this->audio_debug_rx_missing_frames_.load(std::memory_order_relaxed),

@@ -300,7 +300,12 @@ bool EspAfe::build_instance_(AfeInstance *instance) {
     return false;
   }
 
-  cfg->aec_init = true;  // always init: AEC is LIVE_TOGGLE via vtable
+  // Single-mic ESP-SR direct AFE is not reliable after a live disable_aec():
+  // fetch can keep timing out and downstream consumers receive silence until
+  // reboot. Match Espressif's algorithm_stream contract instead: create the
+  // instance with AEC structurally on/off. Dual-mic GMF keeps AEC initialized
+  // so its manager can still apply feature toggles at runtime.
+  cfg->aec_init = afe_mic_channels >= 2 || this->aec_enabled_.load(std::memory_order_relaxed);
   cfg->aec_filter_length = this->aec_filter_length_;
   cfg->aec_mode = this->derive_aec_mode_();
   cfg->aec_nlp_level = static_cast<aec_nlp_level_t>(this->aec_nlp_level_);
@@ -711,9 +716,6 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
       }
     }
 
-    if (!this->aec_enabled_.load(std::memory_order_relaxed)) {
-      this->direct_iface_->disable_aec(this->direct_data_);
-    }
     if (this->afe_config_ != nullptr && this->afe_config_->vad_init &&
         !this->vad_enabled_.load(std::memory_order_relaxed)) {
       this->direct_iface_->disable_vad(this->direct_data_);
@@ -770,7 +772,8 @@ bool EspAfe::install_instance_(AfeInstance *instance) {
     ESP_LOGE(TAG, "GMF AFE pipeline loading_jobs failed (ret=%d)", static_cast<int>(load_ret));
     return cleanup_failed_install();
   }
-  // AEC is always initialized (LIVE_TOGGLE). Disable via vtable if config says off.
+  // GMF keeps AEC initialized for manager-level runtime toggles. Disable the
+  // feature through the manager if config says off.
   if (!this->aec_enabled_.load(std::memory_order_relaxed)) {
     esp_gmf_afe_manager_enable_features(this->afe_manager_, ESP_AFE_FEATURE_AEC, false);
   }
@@ -1072,6 +1075,25 @@ bool EspAfe::set_aec_enabled_runtime_(bool enabled) {
     return false;
   }
 
+#ifdef USE_ESP_AFE_DIRECT_PATH
+  if (this->direct_iface_ != nullptr && this->direct_data_ != nullptr) {
+    bool old_value = this->aec_enabled_.load(std::memory_order_relaxed);
+    this->aec_enabled_.store(enabled, std::memory_order_relaxed);
+    ESP_LOGI(TAG, "Applying aec_enabled=%s (single-mic AFE rebuild)",
+             enabled ? "true" : "false");
+    if (this->recreate_instance_(false)) {
+      return true;
+    }
+    ESP_LOGW(TAG, "Failed to apply aec_enabled=%s, rolling back",
+             enabled ? "true" : "false");
+    this->aec_enabled_.store(old_value, std::memory_order_relaxed);
+    if (!this->recreate_instance_(false)) {
+      ESP_LOGE(TAG, "Rollback also failed for aec_enabled, AFE is down");
+    }
+    return false;
+  }
+#endif
+
   // Hold the config mutex only across the enable/disable call. The
   // potential teardown via recreate_instance_ takes the same mutex
   // itself; calling it inside the lock would recurse on a non-recursive
@@ -1351,7 +1373,7 @@ FrameSpec EspAfe::frame_spec() const {
 FeatureControl EspAfe::feature_control(AudioFeature feature) const {
   switch (feature) {
     case AudioFeature::AEC:
-      return FeatureControl::LIVE_TOGGLE;
+      return this->mic_num_ <= 1 ? FeatureControl::RESTART_REQUIRED : FeatureControl::LIVE_TOGGLE;
     case AudioFeature::VAD:
       return FeatureControl::RESTART_REQUIRED;
     case AudioFeature::NS:
@@ -1907,6 +1929,7 @@ bool EspAfe::start_direct_fetch_task_() {
     }
   }
   this->direct_fetch_running_ = true;
+  memset(&this->direct_fetch_task_tcb_, 0, sizeof(this->direct_fetch_task_tcb_));
   const int core = (this->task_core_ <= 0) ? 1
                                            : (this->task_core_ >= 0 ? this->task_core_ : tskNO_AFFINITY);
   const int prio = this->task_priority_ > 1 ? this->task_priority_ - 1 : 1;
@@ -1937,6 +1960,10 @@ void EspAfe::stop_direct_fetch_task_() {
   if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250)) == 0) {
     ESP_LOGW(TAG, "Timed out waiting for single-mic AFE fetch task to exit");
   }
+  // The fetch task notifies just before vTaskDelete(nullptr). Give the idle
+  // task a short window to finish the deletion before this static TCB/stack is
+  // reused by a rebuild requested from the main/API task.
+  vTaskDelay(pdMS_TO_TICKS(10));
   this->direct_fetch_stop_waiter_.store(nullptr, std::memory_order_release);
   this->direct_fetch_task_handle_ = nullptr;
 }

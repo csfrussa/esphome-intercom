@@ -172,6 +172,17 @@ def test_sip_snapshot_refresh_is_throttled_unless_audio_debug_is_enabled() -> No
     assert "now - this->last_sip_snapshot_refresh_ms_ >= snapshot_refresh_ms" in stack
 
 
+def test_long_diagnostic_text_sensors_have_wrapping_separators() -> None:
+    stack = read("voip_stack.cpp")
+
+    assert 'out += "; ";' in stack
+    assert 'out += ";";' not in stack
+    assert '"%s | %s | %u | %u | %s | %s | %s | %s | %s"' in stack
+    assert '"st=%s; id=%s; dir=%s; from=%s; to=%s; ct=%s; tr=%s; sc=%u; "' in stack
+    assert '"tx=%s; rx=%s; pt=%u; pr=%u; "' in stack
+    assert '"tqd=%u; tqdrop=%u; rqd=%u; rqdrop=%u; rs=%s; ev=%s"' in stack
+
+
 def test_ha_routed_contacts_use_local_esp_signaling_transport() -> None:
     settings = read("voip_settings.cpp")
 

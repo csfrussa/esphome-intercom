@@ -53,8 +53,9 @@ using audio_processor::ProcessorTelemetry;
 ///
 /// Runtime reconfiguration that changes the AFE graph (NS/AGC or switching
 /// SR/VC/FD mode) must tear the esp-sr instance down and rebuild it. AEC is
-/// live-toggled through the GMF manager; VAD and SE/BSS are structural on
-/// current builds. Because
+/// rebuild-only on the ESP-SR single-mic direct path and live-toggled only
+/// through the GMF manager; VAD and SE/BSS are structural on current builds.
+/// Because
 /// process() is called from the consumer audio task (prio 19) while
 /// config mutations come from the main thread, the two ends coordinate
 /// through a lock-free drain handshake:
