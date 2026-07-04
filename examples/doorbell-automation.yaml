@@ -1,35 +1,39 @@
 # Doorbell Notification Automation
 #
-# When an ESP device calls your Home Assistant location name, it fires an
-# esphome.intercom_call event. This automation sends a push notification with
-# action buttons.
+# When an ESP device calls your Home Assistant location name, VoIP Stack emits
+# a voip_stack.incoming_call event. This automation treats calls from a specific
+# caller as the doorbell and sends a push notification with action buttons.
 #
 # Event data available:
-#   trigger.event.data.caller      - Device name (e.g., "Intercom Spotpear Ball v2")
-#   trigger.event.data.destination - Your HA location name
-#   trigger.event.data.type        - "doorbell"
+#   trigger.event.data.call_id - SIP Call-ID used by answer/decline services
+#   trigger.event.data.caller  - Device name (e.g., "Spotpear Ball v2")
+#   trigger.event.data.callee  - Your HA location name
+#   trigger.event.data.state   - SIP phone state, usually "ringing" here
 #
 # Replace notify.mobile_app_your_phone with your mobile app service.
-# Replace every /lovelace/intercom value with the dashboard view that contains
-# your intercom-card, for example /your-dashboard/your-view. If Home Assistant
-# generated a URL ending in /0, that simply means the first Lovelace view has no
-# custom path.
+# Replace every /lovelace/default_view value with the dashboard view that
+# contains your voip-stack-card configured in Home Assistant softphone mode.
+# The deep link is not handled by ESP mirror cards.
 
 alias: Doorbell Notification
-description: Send push notification when doorbell rings - tap to open intercom
+description: Send push notification when Spotpear calls Home Assistant
 triggers:
   - trigger: event
-    event_type: esphome.intercom_call
-conditions: []
+    event_type: voip_stack.incoming_call
+conditions:
+  - condition: template
+    value_template: "{{ trigger.event.data.state == 'ringing' }}"
+  - condition: template
+    value_template: "{{ 'spotpear' in (trigger.event.data.caller | default('') | lower) }}"
 actions:
   - action: notify.mobile_app_your_phone
     data:
       title: "Incoming Call"
       message: "{{ trigger.event.data.caller }} is calling..."
       data:
-        tag: intercom_call
-        url: /lovelace/intercom
-        clickAction: /lovelace/intercom
+        tag: voip_call
+        url: /lovelace/default_view
+        clickAction: /lovelace/default_view
         channel: doorbell
         importance: high
         ttl: 0
@@ -37,38 +41,37 @@ actions:
         actions:
           - action: URI
             title: "Answer"
-            uri: /lovelace/intercom?intercom_answer=1
-          - action: DECLINE_INTERCOM
+            uri: /lovelace/default_view?voip_answer=1
+          - action: VOIP_DECLINE
             title: "Decline"
   - action: persistent_notification.create
     data:
       title: "Incoming Call"
       message: "{{ trigger.event.data.caller }} is calling..."
-      notification_id: intercom_call
+      notification_id: voip_call
   - wait_for_trigger:
       - trigger: event
         event_type: mobile_app_notification_action
         event_data:
-          action: DECLINE_INTERCOM
+          action: VOIP_DECLINE
     timeout: "00:00:30"
   - if:
       - condition: template
         value_template: "{{ wait.trigger is not none }}"
     then:
-      - action: intercom_native.decline
-        target:
-          device_id: "{{ trigger.event.data.device_id }}"
+      - action: voip_stack.decline
         data:
+          call_id: "{{ trigger.event.data.call_id }}"
           reason: declined
       - action: notify.mobile_app_your_phone
         data:
           message: clear_notification
           data:
-            tag: intercom_call
+            tag: voip_call
     else:
       - action: notify.mobile_app_your_phone
         data:
           message: clear_notification
           data:
-            tag: intercom_call
+            tag: voip_call
 mode: single

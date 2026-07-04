@@ -1,0 +1,41 @@
+{
+  "name": "ha-to-esp-cancel",
+  "description": "HA calls ESP, ESP rings, HA cancels, ESP returns idle without LED spin.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "ha_call",
+        "target": "Virtual S3",
+        "caller": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "ringing",
+          "caller": "Casa"
+        },
+        "led": {
+          "effect": "Ringing",
+          "color": "red"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "ha_cancel",
+        "call_id": "Casa<->Virtual S3"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "idle"
+        },
+        "led": {
+          "forbidden_effect": "Spin"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "esp-to-ha-answer-waits-browser-audio",
+  "description": "HA softphone must not send SIP 200 OK until browser PCM TX is available.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Casa"
+      }
+    },
+    {
+      "press_button": "answer"
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "ringing"
+        },
+        "audio": {
+          "tx_ready": false
+        },
+        "sip": {
+          "last_status": 0
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "browser_audio_ready",
+        "call_id": "Virtual S3<->Casa"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "in_call"
+        },
+        "audio": {
+          "tx_ready": true,
+          "rx_ready": true,
+          "browser_tx_ready_latency_ms": 0
+        },
+        "sip": {
+          "last_status": 200
+        }
+      }
+    }
+  ]
+}

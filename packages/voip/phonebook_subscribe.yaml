@@ -1,0 +1,10 @@
+# =============================================================================
+# Phonebook HA roster push.
+#
+# HA owns `sensor.voip_phonebook` and pushes the JSON roster through the native
+# API action `set_roster_json`. Do not mirror it with a text_sensor: large JSON
+# attributes can be truncated before firmware receives them.
+# =============================================================================
+
+voip_stack:
+  use_ha_as_first_contact: true

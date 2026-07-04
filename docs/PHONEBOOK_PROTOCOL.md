@@ -1,225 +1,162 @@
-# Phonebook Protocol
+# SIP Phonebook Contract
 
-This document defines the phonebook contract for PBX-lite intercom firmware
-and the Home Assistant `intercom_native` integration.
+The phonebook is the SIP dial plan shared by ESP devices, Home Assistant,
+registered local softphones and the optional trunk. SIP is implicit everywhere:
+`transport` only chooses SIP/TCP or SIP/UDP signaling, never a second
+call-control protocol.
 
-The standard HA-managed firmware flow is endpoint-first:
+## ESP Static Contacts
 
-1. Each ESP publishes its local endpoint as one canonical row through the
-   `intercom_endpoint` text sensor.
-2. Home Assistant builds the central roster from those endpoint rows and its
-   own HA peer row.
-3. HA publishes a short `sensor.intercom_phonebook` state and puts the full CSV
-   roster in that sensor's `phonebook` attribute.
-4. ESP firmware subscribes to the `phonebook` attribute and shapes the rows for
-   its active transport.
+Declare static local entries directly in `voip_stack` only when an ESP must
+have contacts before HA sync, work offline, or keep a tiny fixed local roster:
 
-## Goals
+```yaml
+voip_stack:
+  id: phone
+  transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
+  static_contacts:
+    - name: Kitchen
+      address: 192.168.1.42
+      transport: udp
+      port: 5060
+      rtp_port: 40000
+    - name: Gate
+```
 
-- One logical phonebook model for TCP, UDP, HA, and cross-protocol routing.
-- Friendly name remains the public intercom identity.
-- Transport protocol is an explicit field of each endpoint.
-- HA may route cross-protocol calls, but must not hide the real destination or
-  rewrite user-facing call reasons.
-- ESP firmware, HA integration, and the card must agree on the same call/FSM
-  contract.
+Runtime actions use the same model:
 
-## Entry Model
-
-```text
-PhonebookEntry
-  name: string              # canonical friendly name
-  address: string           # IPv4/IPv6/hostname
-  protocol: tcp|udp|ha
-  audio_port: uint16        # TCP signaling port OR UDP audio port
-  control_port: uint16?     # UDP framed-control port, absent for TCP
-  route_id: string?         # optional technical route hint
-  role: esp|ha?             # optional metadata
+```yaml
+on_press:
+  - voip_stack.add_contact:
+      name: Kitchen
+      address: 192.168.1.42
+      port: 5060
+      transport: udp
 ```
 
 Rules:
 
-- `name` is the deduplication key and display identity.
-- Same `name` means the same intercom endpoint; endpoint changes replace the
-  previous endpoint.
-- `protocol` is mandatory in canonical rows.
-- For TCP, `audio_port` is the TCP framed signaling/audio port.
-- For UDP, `audio_port` is raw PCM audio and `control_port` is framed PBX-lite
-  signaling.
-- HA as a peer is represented as a first-class entry, not a special
-  `device is None` branch.
+- `name` is required.
+- `address`, `sip_uri`, `extension`, `number`, `port`, `rtp_port`, and
+  `transport` are optional.
+- If `transport` is omitted for a direct address, SIP uses its default
+  transport behavior for that context.
+- Name-only entries are logical targets and can be resolved or bridged by HA.
+- A numeric target from an ESP is routed to HA. HA resolves `extension` as an
+  internal target and `number` as an external trunk target.
+- HA-managed sync through `sensor.voip_phonebook` is the recommended path.
+  Static contacts are local additions for offline/custom installs, not a second
+  central roster.
 
-## Canonical CSV Rows
+## HA Roster
 
-The wire format is CSV. Each row is one endpoint:
+HA owns the central `sensor.voip_phonebook` roster. It contains ESP peers,
+HA itself, local softphones registered to HA, manual phone endpoints,
+trunk-routed external targets when configured, and groups.
 
-```text
-Name|tcp|ip|tcp_port
-Name|udp|ip|udp_audio_port|udp_control_port
-Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
+Roster entries use JSON fields:
+
+- `id`
+- `name`
+- `address`
+- `sip_uri`
+- `extension`
+- `number`
+- `port`
+- `ha_bridge`
+- `metadata`, including `transport`, `sip_transport`, `sip_port`, `rtp_port`, and audio
+  format metadata
+
+Routing is data-driven:
+
+- `address` or `sip_uri` describes a direct SIP endpoint;
+- `extension` is a local/internal alias used by HA routing and inbound DTMF;
+- `number` is an external/public number used through the optional trunk;
+- registered SIP accounts become callable contacts while registered;
+- HA and discovered ESP entries are generated automatically.
+
+Manual contacts and service calls use the same minimum contract:
+
+```yaml
+service: voip_stack.add_contact
+data:
+  name: MobileOffice
+  extension: "210"
 ```
 
-`ha` is a bridge/role marker. Its row carries both HA transport endpoints so TCP
-firmware can shape it to `Name|tcp|ip|tcp_port` and UDP firmware can shape it to
-`Name|udp|ip|udp_audio_port|udp_control_port` locally. Cross-protocol ESP rows
-are shaped the same way: the display/call destination name stays the real peer,
-but the dial endpoint points to HA.
+`name` is the only required field. `extension` is an optional internal alias.
+`number` is an optional external/public number.
+`address`, `sip_uri`, `transport`, `port`, and `rtp_port` are optional
+and are filled by ESP endpoint publication, manual entries or SIP account
+registration when available.
 
-## Short Manual Rows
+Central roster services:
 
-Firmware also accepts short rows for local YAML scripts:
+- `voip_stack.add_contact`: add or replace one manual central
+  contact. `name` is the only required field.
+- `voip_stack.remove_contact`: remove one manual central contact
+  by name.
+- `voip_stack.set_contacts`: replace manual contacts from a JSON
+  roster document.
+- `voip_stack.clear_contacts`: clear manual central contacts.
+- `voip_stack.push_phonebook`: push the current roster immediately to
+  online ESP devices.
+- `voip_stack.export_phonebook`: emit the current roster as an HA event for
+  diagnostics/backup.
 
-```text
-Name
-Name|ip
-Name|ip|port
-Name|ip|audio_port|control_port
-```
+ESPHome also exposes native API actions such as
+`esphome.<slug>_add_contact`, `esphome.<slug>_remove_contact`,
+`esphome.<slug>_set_contacts`, `esphome.<slug>_flush_contacts` and
+`esphome.<slug>_update_contacts`. These are local ESP actions: they change only
+that device's mirror/manual entries. In HA-managed installs, prefer the central
+`voip_stack.*` services above and let HA push `sensor.voip_phonebook` to the
+devices.
 
-Short rows are interpreted according to the receiving device transport. They
-are useful for fixed local ESP-only scripts, but public packages should publish
-canonical rows because canonical rows can represent TCP, UDP and HA in one
-roster.
+Local softphone accounts are created with `voip_stack.create_account`.
+The `username` becomes the SIP username and central roster ID. If `password` is
+omitted, HA generates one and shows it once in a persistent notification and in
+the `voip_stack.call_event` stream. Registered clients publish a dynamic
+Contact into the roster so ESP devices can call them by name.
 
-## HA Publisher Model
+## Routing
 
-- HA builds one logical roster of `PhonebookEntry` objects.
-- HA exposes that roster through one authoritative entity.
+- `sip:name@host[:port]` and `name@host[:port]` route direct.
+- `name` resolves through the phonebook.
+- Phone/number targets require HA routing.
+- `ha_bridge: true` forces HA to act as a SIP bridge.
+- If HA has a registered trunk, external numbers and unresolved number-like
+  targets can route through the trunk.
+- Inbound trunk DTMF routes map digit strings to the same local target namespace
+  as the phonebook. No DTMF route hint means "ring HA". A received explicit
+  route hint that cannot be resolved terminates as `route_not_found`; it does
+  not silently fall back to HA.
+- HA automations can override a pending route request by listening for
+  `voip_stack.route_request` and calling `voip_stack.route`.
+- Missing or incompatible media routes must fail explicitly with SIP terminal
+  reasons such as `media_incompatible` or `transport_unreachable`.
 
-```text
-sensor.intercom_phonebook                       # short state: "N entries"
-sensor.intercom_phonebook.attributes.phonebook  # protocol-aware CSV roster
-```
+## Default Routing Rules
 
-Firmware packages subscribe to the `phonebook` attribute, not to the short sensor
-state. `intercom_api` normalizes that roster locally:
+ESP-origin calls:
 
-- TCP firmware keeps TCP peers direct and shapes UDP peers to the HA TCP bridge.
-- UDP firmware keeps UDP peers direct and shapes TCP peers to the HA UDP bridge.
-- Cross-protocol entries point to HA, but preserve the real destination name in
-  the call payload so HA can bridge.
+- explicit `sip:user@host` or `user@host` route direct;
+- known ESP contact with direct URI or address routes direct unless
+  `ha_bridge` is set;
+- known contact without direct route data routes through HA;
+- unknown names route through HA;
+- numeric targets route through HA.
 
-## ESP Phonebook Model
+HA-router calls:
 
-`ContactEntry` contains at least:
+- local HA target rings the HA softphone;
+- ESP targets forward to their SIP URI/host;
+- local softphones forward to their registered Contact while registered;
+- phone/external numbers use the trunk only when the trunk is registered;
+- disabled entries reject with a SIP terminal reason.
 
-```cpp
-struct ContactEntry {
-  std::string name;
-  std::string ip;
-  ContactProtocol protocol;
-  uint16_t port;
-  uint16_t control_port;
-  uint8_t missing_count;
-};
-```
+Inbound trunk calls:
 
-Behavior:
-
-- Merge by `name`.
-- Keep slot order stable on updates.
-- Do not silently drop malformed endpoint data without diagnostic logging.
-- Batch replace/upsert should be explicit.
-- Pruning by missing-count is optional internal behavior, not the primary user
-  model.
-
-## Routing Semantics
-
-Same protocol:
-
-```text
-ESP A -> phonebook entry for ESP B -> direct ESP A <-> ESP B
-```
-
-Cross protocol:
-
-```text
-ESP A -> phonebook entry for ESP B via HA -> HA bridge -> ESP B
-```
-
-HA PBX override:
-
-```text
-ESP A -> HA entry for every destination -> HA bridge -> selected destination
-```
-
-HA softphone:
-
-```text
-Selected contact name == hass.config.location_name
-```
-
-In that case the card acts as a softphone extension. Otherwise the card mirrors
-the selected ESP and uses the ESP's real call/answer and decline/hangup
-controls.
-
-## Reason Contract
-
-Reasons are protocol payload.
-
-- `DECLINE(reason)` carries a UTF-8 reason string.
-- Empty decline during cancel/hangup is rendered as normal remote hangup by the
-  peer.
-- Non-empty reason is surfaced verbatim to the caller.
-- HA bridge must forward reasons, not replace them.
-- DND is implemented as `DECLINE("DND")`.
-- User automation reasons are allowed and must transit unchanged.
-
-Canonical reasons currently expected by UI/automation:
-
-```text
-local_hangup
-remote_hangup
-remote_device_lost
-declined
-timeout
-busy
-unreachable
-protocol_error
-bridge_error
-DND
-```
-
-Free-form text is also valid.
-
-## mDNS Mode
-
-Standard HA-managed firmware does not run ESP-side mDNS announce/discovery.
-The ESP publishes `intercom_endpoint` over the native ESPHome API and HA owns
-the central phonebook.
-
-Use this rule when choosing a discovery path:
-
-- With HA installed: use the `phonebook` attribute of
-  `sensor.intercom_phonebook`.
-- Without HA as phonebook authority: optionally use ESP-side mDNS discovery.
-
-Do not combine ESP-side mDNS discovery with the standard HA-managed packages as
-a way to solve routing. In VPN, VLAN or routed subnet deployments, the fix is
-correct address advertisement and bidirectional reachability for the endpoints
-inside `sensor.intercom_phonebook`'s `phonebook` attribute.
-
-For ESP-only deployments, include `packages/intercom/mdns_discovery.yaml`.
-That package enables both:
-
-- mDNS announce: publishes TXT `endpoint=<Name|protocol|ip|ports>`.
-- mDNS discovery: scans `_intercom-tcp._tcp` and `_intercom-udp._udp`, parses
-  the same endpoint rows, and merges matching peers into the normal phonebook.
-
-HA advertises its own peer row on both services when the corresponding
-transport is enabled:
-
-```text
-Name|ha|ip|tcp_port|udp_audio_port|udp_control_port
-```
-
-That HA mDNS advertisement is for compatibility with ESP-only discovery flows.
-It is not the source of truth for normal HA-managed firmware.
-
-## Non-Goals
-
-- Do not introduce SIP, SDP, WebRTC, MQTT, or protobuf just to solve local LAN
-  phonebook routing.
-- Do not replace friendly-name call IDs with opaque IDs in this phase.
-- Do not make the HA card infer private routing rules that belong in the
-  phonebook/protocol contract.
+- if no route hint arrives, HA softphone rings;
+- if a DTMF/SIP route hint resolves, HA bridges to that local target;
+- if a DTMF/SIP route hint is explicit but does not resolve, HA terminates the
+  answered trunk leg with `route_not_found`.

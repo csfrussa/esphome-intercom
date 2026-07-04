@@ -1,49 +1,158 @@
 # =============================================================================
-# Full-experience mono 48 kHz speaker media player.
+# Full-experience mono 48 kHz source media player.
 #
 # Requires speaker ids from packages/audio/full_mono_mixer_48k.yaml:
-#   - media_speaker
-#   - tts_speaker
+#   - media_speaker_input
+#   - tts_speaker_input
 #
-# Devices can extend `speaker_media_player` to override memory sizing or add
-# UI-specific callbacks. Display devices should keep their richer callback
-# handling device-local until the hook contract is explicit.
+# One media player owns normal HA media, announcements, local audio files and
+# Sendspin. The mixer remains responsible for arbitration with VoIP.
 # =============================================================================
 
+sendspin:
+  id: sendspin_hub
+  task_stack_in_psram: true
+
+audio_file:
+  - id: voip_ringing_sound
+    file: ${assets_base}assets/sounds/ringtone.flac
+
+media_source:
+  - platform: audio_http
+    id: media_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_http
+    id: announcement_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_file
+    id: announcement_file_source
+    task_stack_in_psram: true
+  - platform: sendspin
+    id: sendspin_media_source
+    sample_rate: 48000
+    buffer_size: 262144
+    task_stack_in_psram: true
+    decode_memory: psram
+
 media_player:
-  - platform: speaker
+  - platform: speaker_source
     id: speaker_media_player
     name: None
     internal: false
-    task_stack_in_psram: true
-    # ESPHome's native media_player volume is the source/speaker abstraction.
-    # When `packages/esp_audio_stack/controls.yaml` provides `master_volume`,
-    # esp_audio_stack cascades both in the final I2S TX path. Codec-specific
-    # boards may instead provide `master_volume` as hardware DAC volume.
     volume_initial: 100%
     volume_min: 0%
     volume_max: 100%
     volume_increment: 5%
-    # Keep HA pause/resume semantics, but park the media HTTP pipeline so
-    # announcements, VA and intercom can use the mixer/output graph cleanly.
-    pause_releases_pipeline: true
     media_pipeline:
-      speaker: media_speaker
+      speaker: media_speaker_input
       sample_rate: 48000
       format: FLAC
+      sources:
+        - media_http_source
+        - sendspin_media_source
     announcement_pipeline:
-      speaker: tts_speaker
+      speaker: tts_speaker_input
       sample_rate: 48000
       format: FLAC
-    files:
-      - id: intercom_ringing_sound
-        file: ${assets_base}assets/sounds/ringtone.flac
+      sources:
+        - announcement_http_source
+        - announcement_file_source
     on_announcement:
+      - logger.log:
+          level: INFO
+          tag: media
+          format: "media_player: on_announcement state=%d phase=%d va=%d epoch=%u tts_epoch=%u"
+          args:
+            - id(speaker_media_player).state
+            - id(g_va_phase)
+            - id(va).is_running()
+            - id(g_va_epoch)
+            - id(g_tts_owner_epoch)
+      - if:
+          condition:
+            lambda: 'return id(g_va_phase) == 5;'
+          then:
+            - logger.log:
+                level: WARN
+                tag: va
+                format: "VA: stopping announcement while barge cancel is pending"
+            - media_player.stop:
+                id: speaker_media_player
+                announcement: true
+            - script.execute: va_barge_start_when_ready
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(g_va_phase) == 3;'
+                then:
+                  - logger.log:
+                      level: INFO
+                      tag: va
+                      format: "VA: TTS announcement started"
+                  - globals.set:
+                      id: g_va_phase
+                      value: "4"
+                  - globals.set:
+                      id: g_va_state
+                      value: "3"
       - script.execute: update_status
     on_play:
+      - logger.log:
+          level: INFO
+          tag: media
+          format: "media_player: on_play state=%d phase=%d va=%d"
+          args:
+            - id(speaker_media_player).state
+            - id(g_va_phase)
+            - id(va).is_running()
+      - script.execute: va_barge_start_when_ready
       - script.execute: update_status
     on_pause:
+      - logger.log:
+          level: INFO
+          tag: media
+          format: "media_player: on_pause state=%d phase=%d va=%d"
+          args:
+            - id(speaker_media_player).state
+            - id(g_va_phase)
+            - id(va).is_running()
       - script.execute: update_status
     on_idle:
-      - delay: 200ms
+      - logger.log:
+          level: INFO
+          tag: media
+          format: "media_player: on_idle state=%d phase=%d va=%d"
+          args:
+            - id(speaker_media_player).state
+            - id(g_va_phase)
+            - id(va).is_running()
+      - if:
+          condition:
+            lambda: 'return id(g_va_phase) == 4;'
+          then:
+            - logger.log:
+                level: INFO
+                tag: va
+                format: "VA: TTS announcement completed, returning idle"
+            - if:
+                condition:
+                  lambda: 'return id(g_barge_in_pending) != 0;'
+                then:
+                  - globals.set:
+                      id: g_va_phase
+                      value: "5"
+                  - globals.set:
+                      id: g_va_state
+                      value: "0"
+                else:
+                  - globals.set:
+                      id: g_va_phase
+                      value: "0"
+                  - globals.set:
+                      id: g_va_state
+                      value: "0"
+                  - script.execute: va_end_cleanup
+      - script.execute: va_barge_start_when_ready
       - script.execute: update_status

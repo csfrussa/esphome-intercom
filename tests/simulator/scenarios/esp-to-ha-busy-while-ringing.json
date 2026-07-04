@@ -1,0 +1,43 @@
+{
+  "name": "esp-to-ha-busy-while-ringing",
+  "description": "Second ESP calling HA while HA softphone is ringing receives Busy.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual Spotpear",
+        "destination": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "second": {
+          "state": "idle",
+          "last_reason": "busy"
+        },
+        "sip": {
+          "last_status": 486
+        },
+        "softphone": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    }
+  ]
+}

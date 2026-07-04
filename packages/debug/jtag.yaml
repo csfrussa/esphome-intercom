@@ -13,7 +13,7 @@
 # Usage:
 #   packages:
 #     jtag:
-#       url: https://github.com/n-IA-hane/esphome-intercom
+#       url: https://github.com/n-IA-hane/esphome-VoIP
 #       file: packages/debug/jtag.yaml
 #       ref: main
 # =============================================================================

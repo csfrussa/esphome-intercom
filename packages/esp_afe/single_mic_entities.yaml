@@ -6,7 +6,7 @@
 # `Voice Detected` is a binary sensor emitted by AFE voice-activity analysis.
 # `Voice Activity Detector` is the runtime switch that enables/disables
 # that analysis. It is useful outside wake-word builds too, so it lives with
-# esp_afe rather than in intercom or voice_assistant YAMLs.
+# esp_afe rather than in VoIP or voice_assistant YAMLs.
 # =============================================================================
 
 substitutions:

@@ -1,0 +1,5 @@
+# Auto-create the standard voip_stack entities for minimal native-audio
+# profiles. The component only emits entities that match the configured audio
+# direction: mic_gain for mic paths, master_volume for speaker paths.
+voip_stack:
+  auto_entities: true

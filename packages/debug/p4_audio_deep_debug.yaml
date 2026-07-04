@@ -28,7 +28,7 @@ logger:
     audio_stack.spk: DEBUG
     esp_afe: DEBUG
     esp_aec: DEBUG
-    intercom_api: DEBUG
+    voip_stack: DEBUG
     sensor: WARN
     text_sensor: WARN
     binary_sensor: WARN

@@ -1,0 +1,47 @@
+{
+  "name": "esp-to-ha-busy-while-in_call",
+  "description": "Second ESP calling HA while HA softphone is in_call receives Busy.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Casa"
+      }
+    },
+    {
+      "inject_event": {
+        "type": "browser_audio_ready",
+        "call_id": "Virtual S3<->Casa"
+      }
+    },
+    {
+      "press_button": "answer"
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "in_call"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual Spotpear",
+        "destination": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "second": {
+          "state": "idle",
+          "last_reason": "busy"
+        },
+        "softphone": {
+          "state": "in_call"
+        }
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 # =============================================================================
-# ESP Audio Stack AEC user controls
+# AEC user controls for audio-stack devices
 # =============================================================================
 # Use on esp_aec / standalone AEC builds. Full esp_afe builds should include
 # packages/esp_afe/*_entities.yaml instead, because AEC is controlled by AFE.
@@ -13,4 +13,3 @@ switch:
       name: Echo Cancellation
       icon: mdi:ear-hearing
       restore_mode: RESTORE_DEFAULT_ON
-

@@ -1,0 +1,60 @@
+# =============================================================================
+# VoIP-only YAML LED reducer for mic-only devices.
+#
+# Keeps the same callback-driven model as the full voip-only reducer, but does
+# not require a speaker_mute switch or speaker component.
+#
+# g_applied_led values:
+#   0=off, 2=mic_muted, 8=call_ringing, 9=calling, 10=call_in_call
+#
+# Prerequisites:
+#   - id `phone`      : voip_stack component
+#   - id `mute`       : mic mute switch
+#   - id `status_led` : light entity for state feedback
+# =============================================================================
+
+globals:
+  - id: g_applied_led
+    type: int
+    restore_value: false
+    initial_value: "-1"
+
+script:
+  - id: update_status
+    mode: restart
+    then:
+      - lambda: |-
+          int target = 0;
+          if (id(mute).state) target = 2;
+          else if (id(phone).is_ringing()) target = 8;
+          else if (id(phone).is_calling()) target = 9;
+          else if (id(phone).is_in_call()) target = 10;
+          id(g_applied_led) = target;
+      - script.execute: update_led
+
+  - id: update_led
+    mode: restart
+    then:
+      - lambda: |-
+          static int last = -2;
+          int t = id(g_applied_led);
+          if (t == last) return;
+          last = t;
+          auto *led = id(status_led);
+          switch (t) {
+            case 2:
+              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(0.3f).set_effect("None").perform();
+              break;
+            case 8:
+              led->turn_on().set_rgb(1.0f, 0.0f, 0.0f).set_brightness(1.0f).set_effect("Ringing").perform();
+              break;
+            case 9:
+              led->turn_on().set_rgb(1.0f, 0.5f, 0.0f).set_brightness(1.0f).set_effect("Calling").perform();
+              break;
+            case 10:
+              led->turn_on().set_rgb(0.3f, 0.69f, 0.31f).set_brightness(1.0f).set_effect("None").perform();
+              break;
+            default:
+              led->turn_off().perform();
+              break;
+          }

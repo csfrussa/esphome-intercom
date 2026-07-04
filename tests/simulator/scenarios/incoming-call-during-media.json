@@ -1,0 +1,44 @@
+{
+  "name": "incoming-call-during-media",
+  "description": "Incoming voip call must preempt media without losing ownership state.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "media_start",
+        "source": "test"
+      }
+    },
+    {
+      "expect": {
+        "media": {
+          "state": "playing"
+        },
+        "voip": {
+          "state": "idle"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "sip_invite",
+        "caller": "Casa",
+        "callee": "Virtual S3",
+        "call_id": "sim-casa-virtual"
+      }
+    },
+    {
+      "expect": {
+        "voip": {
+          "state": "ringing",
+          "caller": "Casa"
+        },
+        "media": {
+          "state": "paused"
+        },
+        "audio": {
+          "owner": "voip"
+        }
+      }
+    }
+  ]
+}

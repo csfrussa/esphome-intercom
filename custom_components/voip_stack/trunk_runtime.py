@@ -1,0 +1,71 @@
+"""SIP trunk lifecycle for VoIP Stack."""
+
+from __future__ import annotations
+
+import logging
+
+from homeassistant.core import HomeAssistant
+
+from .config import transport_config, trunk_config, trunk_enabled
+from .const import (
+    CONF_TRUNK_AUTH_USERNAME,
+    CONF_TRUNK_DOMAIN,
+    CONF_TRUNK_EXPIRES,
+    CONF_TRUNK_OUTBOUND_PROXY,
+    CONF_TRUNK_PASSWORD,
+    CONF_TRUNK_PORT,
+    CONF_TRUNK_SERVER,
+    CONF_TRUNK_TRANSPORT,
+    CONF_TRUNK_USERNAME,
+    DOMAIN,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_start_sip_trunk(hass: HomeAssistant, *, local_ip: str) -> bool:
+    cfg = trunk_config(hass)
+    if not trunk_enabled(cfg):
+        hass.data.setdefault(DOMAIN, {}).pop("sip_trunk", None)
+        return True
+    if not local_ip:
+        _LOGGER.warning("SIP trunk disabled: HA advertise IP is unknown")
+        return False
+
+    from .sip_trunk import SipTrunkClient, SipTrunkConfig
+
+    trunk = SipTrunkClient(
+        config=SipTrunkConfig(
+            enabled=True,
+            transport=str(cfg[CONF_TRUNK_TRANSPORT]),
+            server=str(cfg[CONF_TRUNK_SERVER]),
+            port=int(cfg[CONF_TRUNK_PORT]),
+            domain=str(cfg[CONF_TRUNK_DOMAIN]),
+            username=str(cfg[CONF_TRUNK_USERNAME]),
+            auth_username=str(cfg[CONF_TRUNK_AUTH_USERNAME]),
+            password=str(cfg[CONF_TRUNK_PASSWORD]),
+            expires=int(cfg[CONF_TRUNK_EXPIRES]),
+            outbound_proxy=str(cfg[CONF_TRUNK_OUTBOUND_PROXY]),
+        ),
+        local_ip=local_ip,
+        local_sip_port=int(transport_config(hass)["sip_port"]),
+    )
+    endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
+    if endpoint is not None:
+        trunk.attach_endpoint_manager(endpoint)
+    hass.data.setdefault(DOMAIN, {})["sip_trunk"] = trunk
+    try:
+        await trunk.start()
+    except Exception as err:
+        _LOGGER.warning("SIP trunk registration failed: %s", err)
+    return True
+
+
+async def async_stop_sip_trunk(hass: HomeAssistant) -> None:
+    trunk = hass.data.get(DOMAIN, {}).pop("sip_trunk", None)
+    if trunk is None:
+        return
+    try:
+        await trunk.stop()
+    except Exception:
+        _LOGGER.debug("Ignoring SIP trunk stop error", exc_info=True)

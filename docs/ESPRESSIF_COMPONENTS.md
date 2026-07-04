@@ -1,11 +1,17 @@
 # Espressif Components And Licenses
 
-This project is MIT-licensed, but some ESP32 audio features use Espressif
-components that are resolved by ESPHome's IDF Component Manager when users build
-their own firmware.
+This project is MIT-licensed, but maintained VoIP YAMLs can also use audio
+components from the split
+[`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack)
+repository. Those audio features use Espressif components that are resolved by
+ESPHome's IDF Component Manager when users build their own firmware.
 
-The repository ships YAML, ESPHome components and source code. It does not ship
-prebuilt firmware binaries for these Espressif audio components.
+The repositories ship YAML, ESPHome components and source code. They do not
+ship prebuilt firmware binaries for these Espressif audio components.
+
+For repository-wide attribution, ESPHome-derived component notes and the
+Apache-2.0 license text used by local ESPHome compatibility forks, see
+[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ## Runtime Components
 
@@ -16,7 +22,6 @@ The current audio stack uses these Espressif components:
 | `espressif/esp-sr` | `esp_aec`, `esp_afe`, pulled directly or through GMF | Espressif MIT-style license, restricted to Espressif products | Provides AEC, AFE, SE/BSS, VAD, NS and AGC libraries. Some DSP implementation is shipped by Espressif as precompiled target libraries. |
 | `espressif/gmf_ai_audio` | `esp_afe` | Espressif Modified MIT, restricted to Espressif products | Provides the official `esp_gmf_afe` element plus `esp_gmf_afe_manager`; `esp_afe` runs that element in a GMF pipeline while ESPHome keeps the microphone consumer facade. |
 | `espressif/gmf_core` | Transitive dependency of GMF components | Espressif Modified MIT, restricted to Espressif products | Base GMF object and support layer required by GMF audio/AI/IO components. |
-| `espressif/gmf_io` | `esp_audio_stack` | Espressif Modified MIT, restricted to Espressif products | Provides `io_codec_dev`, now used as the RX/TX codec IO owner through `esp_gmf_io_acquire/release_*`. |
 | `espressif/esp_audio_effects` | `esp_audio_stack` | Espressif MIT-style license, restricted to Espressif products | Provides `esp_ae_rate_cvt`, `esp_ae_bit_cvt` and data weaver APIs used for RX/TX conversion and layout. |
 | `espressif/esp_codec_dev` | `esp_audio_stack` codec-backed builds | Apache-2.0 | Provides codec control plus I2S read/write. P4 and WS3 use ES7210/ES8311 through it; Spotpear single-mic uses ES8311 input/output through it. The generic codec wrapper also exposes ES8388, ES8374 and ES8389 where the board wiring matches those drivers. Generic no-codec builds use direct `esp_driver_i2s` read/write instead. |
 
@@ -39,23 +44,23 @@ The public composition stays modular:
 
 | ESPHome component | Espressif backend it owns | Required project components | Optional peers |
 |---|---|---|---|
-| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, `gmf_io/io_codec_dev` for RX/TX IO, `esp_audio_effects` for rate/layout conversion | `audio_processor` helper types and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `intercom_api`, MWW and VA as consumers |
-| `esp_aec` | `esp-sr` low-level `afe_aec` API | `audio_processor` | `esp_audio_stack` or standalone `intercom_api` as the caller |
-| `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | `audio_processor` | `esp_audio_stack` as the required steady-frame caller |
-| `intercom_api` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | `esp_audio_stack` as the recommended mic/speaker owner, or `esp_aec` only in standalone processor mode |
+| `esp_audio_stack` | IDF `esp_driver_i2s` for I2S ownership, `esp_codec_dev` for codec/data devices, direct codec/I2S RX/TX transfer, `esp_audio_effects` for rate/layout conversion | internal audio core shared primitives and ESPHome `microphone`/`speaker` surfaces | `esp_aec` or `esp_afe` through `processor_id`; `voip_stack`, MWW and VA as consumers |
+| `esp_aec` | `esp-sr` low-level `afe_aec` API | internal audio core | `esp_audio_stack` or standalone `voip_stack` as the caller |
+| `esp_afe` | `gmf_ai_audio` `esp_gmf_afe` element + `esp_gmf_afe_manager` plus `esp-sr` | internal audio core | `esp_audio_stack` as the required steady-frame caller |
+| `voip_stack` | none of the new Espressif audio libraries directly | ESPHome network/audio surfaces | native ESPHome audio, or `esp_audio_stack` as the recommended mic/speaker owner for AEC/AFE/full voice builds |
 
-`esp_audio_stack` does not depend on `intercom_api`. A user can install only
-`audio_processor`, `esp_audio_stack` and optionally `esp_aec` or `esp_afe` for
+`esp_audio_stack` does not depend on `voip_stack`. A user can install only
+`esp_audio_stack` and optionally `esp_aec` or `esp_afe` for
 a Voice Assistant, media-player, microphone/speaker, or custom callback build.
 The cross-component validation only runs when both `esp_audio_stack` and
-`intercom_api` appear in the same YAML, to prevent double ownership of AEC or
+`voip_stack` appear in the same YAML, to prevent double ownership of AEC or
 DC-offset correction.
 
 ## Naming And License Boundaries
 
 Most GMF/audio components used by the audio backend are not generic MIT
 libraries.
-`gmf_io`, `gmf_ai_audio` and `esp_audio_effects` use Espressif's
+`gmf_ai_audio` and `esp_audio_effects` use Espressif's
 modified MIT-style license: they may be used
 with Espressif products, their copyright/permission notice must stay with copies
 or substantial portions, and redistribution for non-Espressif products is
@@ -81,7 +86,7 @@ conformance, but are not currently a replacement for `esp_audio_stack`:
 | Component or BSP | Used for | License family | Notes |
 |---|---|---|---|
 | `espressif/esp_board_manager` / `periph_i2s` | Reference for Espressif board-level I2S ownership | Espressif Modified MIT, restricted to Espressif products | Audited but not used by the active backend. The adapter uses official `esp_driver_i2s` internally, but currently hides DMA channel config and enables channels during peripheral ref, which does not fit this ESPHome lifecycle. |
-| Waveshare `esp32_p4_wifi6_touch_lcd_x` BSP | Reference for Waveshare P4 pinout, ES8311/ES7210 setup and PA control | See upstream BSP package | The BSP uses `esp_codec_dev` and standard I2S examples. Our full-duplex TDM path still needs custom ESPHome integration for mic/ref staging, mixer, intercom and Home Assistant entities. |
+| Waveshare `esp32_p4_wifi6_touch_lcd_x` BSP | Reference for Waveshare P4 pinout, ES8311/ES7210 setup and PA control | See upstream BSP package | The BSP uses `esp_codec_dev` and standard I2S examples. Our full-duplex TDM path still needs custom ESPHome integration for mic/ref staging, mixer, VoIP calls and Home Assistant entities. |
 
 ## Generated-Code Coverage
 
@@ -100,10 +105,10 @@ The current generated-code snapshots confirm:
   contract.
 - Generic S3 AEC: remains no-codec and uses standalone `esp_aec` over the same
   `esp_audio_stack` bus facade, with `previous_frame` as the light reference
-  profile for intercom-only and full AEC presets.
+  profile for voip-only and full AEC presets.
 - Generic S3 AFE: remains no-codec but uses `esp_afe` over the same bus facade,
   with the TYPE2-style software reference path for larger flash layouts.
-- Generic S3 dual-bus intercom: remains no-codec and uses the same
+- Generic S3 dual-bus VoIP: remains no-codec and uses the same
   `esp_audio_stack` facade, but creates separate ESP-IDF I2S simplex channels
   for RX and TX. This path is only compiled when YAML uses `rx_bus` and `tx_bus`.
 
@@ -175,9 +180,9 @@ Do not treat all Espressif components the same:
 - The public dual-mic full-experience targets use a hybrid bridge-buffer
   placement: keep the per-frame AFE feed scratch and fetch output ring internal,
   move the larger AFE feed staging ring to PSRAM, and place ESPHome-owned audio
-  and intercom frame buffers in PSRAM. DMA descriptors and I2S driver buffers
+  and VoIP frame buffers in PSRAM. DMA descriptors and I2S driver buffers
   remain internal. This is the current WS3/P4 baseline for HTTPS media plus TTS
-  plus intercom stress.
+  plus VoIP stress.
 
 Runtime test interpretation: PSRAM use inside GMF/esp-sr is expected. If a test
 crashes or glitches, first capture the stack and memory snapshot; do not fork or
@@ -197,10 +202,10 @@ entities or device-specific data routing.
 | `afe_aec` from `esp-sr` | Low-level standalone AEC API | Integrated now | No-codec and Spotpear single-mic AEC devices keep a direct ESPHome-friendly processor while still using Espressif's current AEC implementation and official `MR` input format. |
 | `gmf_audio` / `aud_rate_cvt`, `aud_bit_cvt`, `aud_deintlv`, `aud_intlv` | GMF audio pipeline elements for conversion and layout | Deferred | Official examples run codec at 48 kHz and insert GMF conversion elements before AEC. `esp_audio_stack` currently uses the lower `esp_audio_effects` primitives in-place; full GMF task/port ownership remains a future step. |
 | `esp_audio_effects` / `esp_ae_rate_cvt`, `esp_ae_bit_cvt`, data weaver, channel convert | Standalone C API behind GMF conversion elements | Integrated now | RX bit/rate/layout conversion, mono-speaker duplication onto stereo STD TX, TDM TX layout, TX bit conversion and stereo-to-mono software AEC reference conversion use Espressif APIs. True `speaker_channels: 2` STD output is already ESPHome interleaved PCM and is written directly. `audio_effects.rate_cvt_complexity` and `audio_effects.rate_cvt_perf_type` expose the official rate-converter knobs in YAML. |
-| `gmf_io` / `io_codec_dev` | GMF IO wrapper around codec-device read/write | Integrated now | `esp_audio_stack` creates `audio_stack_rx` and `audio_stack_tx` IO instances and drives them through GMF acquire/release. Defaults stay synchronous; YAML can enable GMF data-bus/task buffering per direction. |
+| `gmf_io` / `io_codec_dev` | GMF IO wrapper around codec-device read/write | Not used in `esp_audio_stack` | Sendspin / `speaker_source` need playback timestamps tied to I2S DMA completion. `esp_audio_stack` therefore uses `esp_codec_dev_read/write` directly and registers the ESP-IDF I2S TX completion callback, mirroring ESPHome's native I2S speaker model. |
 | `esp_codec_dev` | Codec control plus I2S read/write abstraction | Integrated now | `esp_audio_stack` now creates one shared I2S data interface and separate IN/OUT codec devices, matching Espressif's test pattern. ES7210, ES8311, ES8388, ES8374 and ES8389 control/gain/volume/mute/data read/write go through the official component while ESPHome keeps mic/speaker callback routing. |
 | `esp_board_manager` / `periph_i2s` | Board/peripheral lifecycle manager for I2S TX/RX STD/TDM/PDM | Audited, not active | Official adapter, but it currently hides `i2s_chan_config_t` DMA/auto-clear policy and enables channels on ref. Active backend stays on official `esp_driver_i2s` direct ownership. |
-| `esp_capture` audio sources | High-level capture sources, including codec AEC capture | Do not integrate now | It owns a capture pipeline and source lifecycle intended for recording/streaming. It conflicts with ESPHome's microphone, speaker, mixer and intercom ownership. Useful as reference only. |
+| `esp_capture` audio sources | High-level capture sources, including codec AEC capture | Do not integrate now | It owns a capture pipeline and source lifecycle intended for recording/streaming. It conflicts with ESPHome's microphone, speaker, mixer and VoIP ownership. Useful as reference only. |
 | Waveshare BSP | Board pinout, codec, PA and display/touch setup | Copy patterns only | It validates hardware constants and codec setup style. Its audio examples are standard I2S/codec flows, not our 48 kHz full-duplex TDM with two mics plus reference. |
 
 ## Exposed Capability Checklist
@@ -211,15 +216,25 @@ audio boards while still keeping fake knobs out:
 1. **STD stereo speaker output** is exposed through `esp_audio_stack.speaker_channels: 2` plus `num_channels: 2` and the standard ESPHome speaker platform. `num_channels` alone stays a physical bus setting so codec-feedback boards can keep mono media playback on a stereo TX bus.
 2. **TDM layout** exposes `tdm_total_slots`, one or two mic slots, `tdm_ref_slot` and `tdm_tx_slot`. RX slot extraction and TDM TX layout use Espressif audio-effects primitives.
 3. **Codec selection** exposes ES7210 input plus ES8311/ES8388/ES8374/ES8389 generic input/output through `esp_codec_dev`.
-4. **GMF codec IO** exposes reader/writer `io_size`, `buffer_size`, task stack/priority/core, PSRAM stack, speed monitor and task timeout.
-5. **Rate and bit conversion** expose official `esp_ae_rate_cvt` complexity/performance and automatic bit-depth conversion for 24/32-bit bus formats.
-6. **Processor integration** stays behind the `AudioProcessor` facade so users can pick `esp_aec`, `esp_afe`, or no processor without depending on `intercom_api`.
-7. **Lifecycle/power hooks** expose audio, mic, speaker and amplifier-required edges for board-level PA and power policy.
+4. **Rate and bit conversion** expose official `esp_ae_rate_cvt` complexity/performance and automatic bit-depth conversion for 24/32-bit bus formats.
+5. **Processor integration** stays behind the `AudioProcessor` facade so users can pick `esp_aec`, `esp_afe`, or no processor without depending on `voip_stack`.
+6. **Lifecycle/power hooks** expose audio, mic, speaker and amplifier-required edges for board-level PA and power policy.
 
 Not exposed as YAML switches yet: PDM full-duplex, arbitrary GMF element graphs,
 codec-private analog register scripts, and raw multi-channel microphone output
 as a standard ESPHome microphone. Those require separate backend/component work;
 exposing them as inert options would make custom builds harder to debug.
+
+## Future Work
+
+- **Dual I2S microphones with software AEC reference**: Espressif AFE can
+  consume interleaved `MMR` frames (two microphone channels plus playback
+  reference). A future `esp_audio_stack` mode can build that frame explicitly
+  from a stereo INMP441-style microphone bus (`MM`) and the existing software
+  reference path (`R`, for example `aec_reference: previous_frame`). This is
+  separate from the current single-mic `MR` AEC path and should be implemented
+  only after release validation, because it changes the AFE feed layout and
+  needs hardware tests with a real two-mic board.
 
 ## Practical Rule
 

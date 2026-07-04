@@ -1,0 +1,55 @@
+# =============================================================================
+# Full-experience mono 48 kHz mixer for runtime_controller profiles.
+# =============================================================================
+
+speaker:
+  - platform: mixer
+    id: audio_mixer
+    output_speaker: hw_speaker
+    num_channels: 1
+    bits_per_sample: 16
+    task_stack_in_psram: true
+    source_speakers:
+      - id: media_mixer_input
+        timeout: 10s
+        buffer_duration: 100ms
+        sample_rate: 48000
+        bits_per_sample: 16
+        num_channels: 1
+      - id: tts_mixer_input
+        timeout: 10s
+        buffer_duration: 100ms
+        sample_rate: 48000
+        bits_per_sample: 16
+        num_channels: 1
+      - id: voip_mixer_input
+        timeout: 10s
+        buffer_duration: 128ms
+        sample_rate: 48000
+        bits_per_sample: 16
+        num_channels: 1
+
+  - platform: resampler
+    id: media_speaker_input
+    output_speaker: media_mixer_input
+    task_stack_in_psram: true
+    sample_rate: 48000
+    bits_per_sample: 16
+    num_channels: 1
+
+  - platform: resampler
+    id: tts_speaker_input
+    output_speaker: tts_mixer_input
+    task_stack_in_psram: true
+    sample_rate: 48000
+    bits_per_sample: 16
+    num_channels: 1
+
+  - platform: resampler
+    id: voip_speaker_input
+    output_speaker: voip_mixer_input
+    task_stack_in_psram: true
+    sample_rate: 48000
+    bits_per_sample: 16
+    num_channels: 1
+    buffer_duration: 128ms

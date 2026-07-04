@@ -1,0 +1,40 @@
+{
+  "name": "phonebook-json-shared",
+  "description": "HA and ESP consume the same JSON SIP roster contract without duplicate list drift.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "push_phonebook",
+        "contacts": [
+          {
+            "id": "Casa",
+            "address": "192.168.1.10"
+          },
+          {
+            "id": "Waveshare S3 Audio",
+            "address": "192.168.1.47"
+          },
+          {
+            "id": "Spotpear Ball v2",
+            "address": "192.168.1.31"
+          }
+        ]
+      }
+    },
+    {
+      "expect": {
+        "phonebook": {
+          "revision": 1,
+          "duplicate_ids": false
+        },
+        "ha": {
+          "visible_contacts": 2
+        },
+        "esp": {
+          "visible_contacts": 2,
+          "selected": "Casa"
+        }
+      }
+    }
+  ]
+}

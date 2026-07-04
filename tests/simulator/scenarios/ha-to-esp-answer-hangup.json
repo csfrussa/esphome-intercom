@@ -1,0 +1,55 @@
+{
+  "name": "ha-to-esp-answer-hangup",
+  "description": "HA calls ESP, ESP answers, RTP is bidirectional, HA hangs up.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "ha_call",
+        "target": "Virtual S3",
+        "caller": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "ringing",
+          "caller": "Casa"
+        }
+      }
+    },
+    {
+      "press_button": "answer"
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "in_call"
+        },
+        "audio": {
+          "tx_ready": true,
+          "rx_ready": true
+        },
+        "led": {
+          "color": "green",
+          "effect": null
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "ha_bye",
+        "call_id": "Casa<->Virtual S3"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "idle"
+        },
+        "led": {
+          "forbidden_effect": "Spin"
+        }
+      }
+    }
+  ]
+}

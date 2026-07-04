@@ -1,0 +1,26 @@
+language: en
+
+intents:
+  VoipCall:
+    data:
+      - sentences:
+          - "call {target}"
+  VoipHangup:
+    data:
+      - sentences:
+          - "hang up"
+          - "end the call"
+  VoipAnswer:
+    data:
+      - sentences:
+          - "answer"
+          - "answer the call"
+  VoipDecline:
+    data:
+      - sentences:
+          - "decline"
+          - "decline the call"
+
+lists:
+  target:
+    wildcard: true

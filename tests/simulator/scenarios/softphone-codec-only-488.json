@@ -1,0 +1,30 @@
+{
+  "name": "softphone-codec-only-488",
+  "description": "A SIP offer without L16/L24 is rejected with 488 instead of entering ringing.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "sip_offer",
+        "caller": "Zoiper",
+        "callee": "Virtual S3",
+        "codecs": ["PCMU", "PCMA", "OPUS"],
+        "call_id": "zoiper-codec-only"
+      }
+    },
+    {
+      "expect": {
+        "sip": {
+          "last_status": 488,
+          "decline_reason": "media_incompatible"
+        },
+        "softphone": {
+          "state": "idle",
+          "last_reason": "media_incompatible"
+        },
+        "led": {
+          "forbidden_effect": "Spin"
+        }
+      }
+    }
+  ]
+}

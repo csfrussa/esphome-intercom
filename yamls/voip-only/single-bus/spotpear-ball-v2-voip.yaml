@@ -1,0 +1,1626 @@
+# =============================================================================
+# SPOTPEAR BALL V2 - VOIP ONLY (LVGL, single-bus, esp_aec)
+# =============================================================================
+# VoIP-only LVGL variant of the Spotpear Ball v2. It keeps the same
+# VoIP UI, ES8311 codec path, and esp_aec processing model as the full
+# build, but with NO voice assistant, NO micro_wake_word, and NO VA pages.
+#
+# Audio pipeline (mixer topology shared with the Spotpear full builds):
+#
+#   I2S RX 48kHz stereo (L=DAC ref, R=ADC mic) ─esp_ae_rate_cvt x3─> esp_aec @16k ──> mic_main ──> VoIP TX
+#
+#   VoIP RX (16kHz) ──> voip_speaker_input  (resampler 16→48) ─┐
+#   Ringtone   (FLAC)   ──> ringtone_speaker  (resampler 16→48) ─┴─> audio_mixer (48k) ──> hw_speaker ──> ES8311 DAC
+#
+# Single GPIO0 button (voip-only, no VA mode):
+#   short  : call (idle) / answer (ringing in) / hangup (in call/calling)
+#   double : decline (ringing in) / next contact (idle)
+#   long   : mute toggle
+#
+# Touch (CST816, dedicated I2C bus):
+#   horizontal swipe in call idle : prev/next contact (right=prev, left=next)
+# =============================================================================
+
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
+substitutions:
+  # Hardware identity is shared by the SIP transport setting. The selected
+  # SIP transport setting is exposed by the SIP transport sensor and the unified
+  # phonebook row.
+  name: spotpear-ball-v2
+  friendly_name: Spotpear Ball v2
+
+  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+
+  # Call layout proportions (relative to display_height)
+  call_btn_size: "25%"
+  call_btn_offset: "2%"
+  call_btn_below_center: "19%"   # cornetta center between peer (50%) and battery overlay (82%)
+  call_contacts_y: "31%"         # idle phonebook icon: visual midway between IDLE label (~y=58) and peer (~y=120)
+  # Round 240x240 GC9A01: peer label widths derived from circle chord at the label's y.
+  call_peer_width: "224"               # chord at y=120 (centre) minus 12 px side margin: idle/ringing_out/in_call
+  call_ringing_in_peer_width: "139"    # call_ringing_in only: answer/decline buttons sit at LEFT_MID/RIGHT_MID at y=120
+  call_title_width: "116"              # device-name title at y≈19 (8%): chord minus 12 px margin
+  call_ended_text_width: "187"         # call_ended_page "Call ended" (y≈53) and "Reason:" (y≈139) labels: chord minus 12 px margin
+  call_ended_reason_text_width: "177"  # call_ended_page reason text (dynamic) at y≈168: chord minus 12 px margin (above top_battery_label at y=197)
+  # Settings page: inscribed-square width fits any y on the round 240x240 panel
+  settings_row_width: "170"       # rows fit safely inside the circle for any y
+  settings_wide_width: "190"
+  settings_mid_width: "170"
+  settings_narrow_width: "150"
+  settings_dropdown_width: "170"
+  settings_slider_height: "12"
+  settings_switch_width: "50"
+  settings_switch_height: "26"
+  settings_label_font: font_info
+  settings_pad_row: "6"
+
+  # Display constants
+  display_width: "240"
+  display_height: "240"
+
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 codec control bus
+  # ---------------------------------------------------------------------------
+  codec_i2c_sda_pin: GPIO15
+  codec_i2c_scl_pin: GPIO14
+
+  # ---------------------------------------------------------------------------
+  # Pinout: CST816 touch controller bus
+  # ---------------------------------------------------------------------------
+  touch_i2c_sda_pin: GPIO11
+  touch_i2c_scl_pin: GPIO7
+
+  # ---------------------------------------------------------------------------
+  # Pinout: ES8311 audio bus
+  # ---------------------------------------------------------------------------
+  i2s_mclk_pin: GPIO16
+  i2s_bclk_pin: GPIO9
+  i2s_lrclk_pin: GPIO45
+  i2s_din_pin: GPIO10
+  i2s_dout_pin: GPIO8
+
+  # ---------------------------------------------------------------------------
+  # Pinout: board controls and display
+  # ---------------------------------------------------------------------------
+  battery_adc_pin: GPIO1
+  main_button_pin: GPIO0
+  speaker_enable_pin: GPIO46
+  display_backlight_pin: GPIO42
+  touch_interrupt_pin: GPIO12
+  touch_reset_pin: GPIO6
+
+# Shared packages: voip-only call controls, phonebook sync, Spotpear LED/LVGL
+# navigation, esp_audio_stack codec controls and AEC controls.
+packages:
+  core: github://n-IA-hane/esphome-intercom/packages/voip_only.yaml@main
+  buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/buttons_switches.yaml@main
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@main
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@main
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@main
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@main
+  speaker_mute: github://n-IA-hane/esphome-intercom/packages/voip/speaker_mute.yaml@main
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_spotpear_ball_v2.yaml@main
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
+  audio_stack_aec_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@main
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_output.yaml@main
+  # LVGL settings carousel: globals, navigation scripts, and the individual
+  # settings pages this device exposes (swipe-left order is the include order).
+  lvgl_settings_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_navigation.yaml@main
+  lvgl_settings_sync_volumes: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_volumes.yaml@main
+  lvgl_settings_sync_mute: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_mute.yaml@main
+  lvgl_settings_sync_aec: github://n-IA-hane/esphome-intercom/packages/lvgl/lvgl_settings_sync_aec.yaml@main
+  spotpear_voip_nav: github://n-IA-hane/esphome-intercom/packages/lvgl/spotpear_voip/nav_voip_only.yaml@main
+
+# =============================================================================
+# BOARD AND MEMORY
+# =============================================================================
+
+# Device identity and boot choreography for the round LVGL call UI.
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  on_boot:
+    priority: 600
+    then:
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+      - light.turn_off: status_led
+      - script.execute: backlight_timer
+      - delay: 1s
+      - lambda: id(peer_name) = id(phone).get_current_destination();
+      - script.execute: update_call_idle_labels
+      # Settings carousel page list (swipe-left cycle order). Defined in
+      # packages/lvgl/* and included as LVGL pages above.
+      - lambda: |-
+          id(g_settings_pages).clear();
+          id(g_settings_pages).push_back(id(settings_volumes_page)->obj);
+          id(g_settings_pages).push_back(id(settings_mute_page)->obj);
+          id(g_settings_pages).push_back(id(settings_aec_page)->obj);
+      - script.execute: draw_display
+
+# ESP32-S3 target used by Spotpear Ball v2.
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      compiler_optimization: PERF
+
+# OPI PSRAM is required by LVGL assets, codec buffers and VoIP/audio tasks.
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+
+external_components:
+  - source: ${voip_stack_components_source}
+    components: [voip_stack]
+  - source: ${audio_stack_components_source}
+    components: [esp_audio_stack, esp_aec]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+# Conservative high-performance network profile for VoIP and LVGL media.
+
+network:
+  enable_high_performance: true
+
+# Normal Wi-Fi client mode. Power save is disabled for low-latency SIP/RTP and
+# reliable HA API updates.
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Keep voip endpoints reachable; ESP32 LIGHT power save hurts API/ARP
+  # reliability during HA disconnect/reconnect cycles.
+  power_save_mode: NONE
+  on_connect:
+    - globals.set:
+        id: draw_display_pending
+        value: "true"
+  on_disconnect:
+    - globals.set:
+        id: draw_display_pending
+        value: "true"
+
+api:
+  on_client_connected:
+    - globals.set:
+        id: draw_display_pending
+        value: "true"
+  # `start_call(dest)` / `decline_call(reason)` actions are provided by
+  # `packages/voip_only.yaml` (included via `packages.core` above). Contact
+  # mutation stays inside voip_stack actions and the phonebook batch packages.
+
+ota:
+  - platform: esphome
+    id: ota_esphome
+
+# USB Serial/JTAG logger. VoIP/audio domains stay visible at INFO; noisy entity
+# domains stay WARN for normal field use.
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  # DEBUG keeps SIP signaling + AEC/AFE/i2s lifecycle visible.
+  # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
+  level: INFO
+  logs:
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+    switch: WARN
+    number: WARN
+    button: WARN
+    api: WARN
+    api.connection: WARN
+    component: WARN
+
+# SNTP clock used by status pages and timestamped diagnostics.
+
+time:
+  - platform: sntp
+    id: my_time
+    timezone: Europe/Rome
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+
+# =============================================================================
+# BUSES
+# =============================================================================
+
+i2c:
+  - id: i2c_bus
+    sda: ${codec_i2c_sda_pin}
+    scl: ${codec_i2c_scl_pin}
+    scan: false
+  - id: touchscreen_i2c_bus
+    sda: ${touch_i2c_sda_pin}
+    scl: ${touch_i2c_scl_pin}
+    scan: false
+
+# SPI display bus for the round GC9A01A panel.
+spi:
+  - id: spi_bus
+    clk_pin: 4
+    mosi_pin: 2
+
+# =============================================================================
+# OUTPUTS AND LIGHTS
+# =============================================================================
+
+output:
+  - platform: gpio
+    id: speaker_enable
+    pin: ${speaker_enable_pin}
+    inverted: false
+  - platform: ledc
+    id: backlight_output
+    pin: ${display_backlight_pin}
+    inverted: true
+
+# Round display backlight entity backed by GPIO42 PWM.
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Display Backlight"
+    icon: "mdi:brightness-6"
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+
+# =============================================================================
+# AEC mode select (VOIP-only, voip-only)
+# Stay inside the dios_ssp_aec engine. Both VOIP modes share the same engine,
+# so a runtime switch never triggers an esp_aec3 FFT alloc and avoids the
+# silent calloc-fail bug observed at filter_length>4 on cross-engine
+# transitions. SR modes are not offered here because no MWW is present.
+# =============================================================================
+
+esp_audio_stack:
+  id: audio_stack
+  i2s_lrclk_pin: ${i2s_lrclk_pin}
+  i2s_bclk_pin: ${i2s_bclk_pin}
+  i2s_mclk_pin: ${i2s_mclk_pin}
+  i2s_din_pin: ${i2s_din_pin}
+  i2s_dout_pin: ${i2s_dout_pin}
+  sample_rate: 48000             # I2S bus rate (ES8311 native)
+  output_sample_rate: 16000      # Mic/AEC/VoIP output rate
+  processor_id: aec_processor
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
+  num_channels: 2               # Drive DACL speaker and DACR AEC reference
+  codec:
+    i2c_id: i2c_bus
+    input:
+      type: es8311
+      address: 0x18
+      gain_db: 24.0
+      use_mclk: true
+      no_dac_ref: false
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: false
+  # ES8311 digital feedback through the official codec driver: RX left is
+  # ADC mic and RX right is DACR reference when no_dac_ref is false.
+  use_stereo_aec_reference: true
+  reference_channel: right
+
+esp_aec:
+  id: aec_processor
+  sample_rate: 16000
+  filter_length: 4
+  mode: voip_high_perf
+
+microphone:
+  - platform: esp_audio_stack
+    id: mic_main
+    esp_audio_stack_id: audio_stack
+
+# =============================================================================
+# Speakers (mixer topology: sources -> resampler -> mixer 48kHz -> hw_speaker)
+# Mirrors the Spotpear full-build speaker stack so the VoIP RX push-stream and the
+# ringtone announcement go through a buffered mixer instead of competing
+# directly on hw_speaker.
+# =============================================================================
+
+speaker:
+  - platform: esp_audio_stack
+    id: hw_speaker
+    esp_audio_stack_id: audio_stack
+    sample_rate: 48000
+    bits_per_sample: 16
+
+  - platform: mixer
+    id: audio_mixer
+    output_speaker: hw_speaker
+    num_channels: 1
+    source_speakers:
+      - id: voip_mixer_input
+        timeout: 10s
+        buffer_duration: 128ms
+      - id: ringtone_speaker_mix
+        timeout: 10s
+        buffer_duration: 100ms
+
+  - platform: resampler
+    id: voip_speaker_input            # VoIP RX (16kHz) -> 48kHz
+    output_speaker: voip_mixer_input
+    buffer_duration: 128ms
+
+  - platform: resampler
+    id: ringtone_speaker             # Ringtone FLAC -> 48kHz
+    output_speaker: ringtone_speaker_mix
+
+# =============================================================================
+# MEDIA, ASSIST AND VOIP
+# =============================================================================
+
+media_player:
+  - platform: speaker
+    id: speaker_media_player
+    name: None
+    internal: true
+    # Pin the player chain at unity gain. Default volume_initial=0.5
+    # propagates to hw_speaker.set_volume(0.5) which esp_audio_stack
+    # interprets via the ESPHome Q31 dB curve as ~-25 dB software attenuation,
+    # silencing both ringtone AND VoIP RX. Clamping min=max=1.0
+    # makes set_volume_() a no-op and leaves the ES8311 slider as the
+    # only volume control.
+    volume_initial: 1.0
+    volume_min: 1.0
+    volume_max: 1.0
+    announcement_pipeline:
+      speaker: ringtone_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    files:
+      - id: voip_ringing_sound
+        file: ${assets_base}assets/sounds/ringtone.flac
+
+# =============================================================================
+# VoIP phone: SIP endpoint, RTP media and local phonebook mirror.
+# RX uses the mixer path so ringtone and call audio share the same speaker.
+# =============================================================================
+
+voip_stack:
+  task_stacks_in_psram: true
+  buffers_in_psram: true
+  id: phone
+  # Optional local dial-plan alias published to HA. Keep it unique across your
+  # devices; calls to the same extension become ambiguous and HA will use the
+  # first matching phonebook entry.
+  extension: "101"
+  audio:
+    # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
+    # matching 10 ms TX reframe of the 16 kHz mic for peers that negotiate
+    # ptime 10. 32 kHz/16 ms remains an alternate advertised format.
+    tx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
+    # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
+    # only because speaker: voip_speaker_input points at the resampler; do
+    # not advertise additional formats when wiring voip_stack directly to a
+    # fixed-rate mixer input.
+    rx_formats:
+      - sample_rate: 32000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
+  microphone: mic_main
+  speaker: voip_speaker_input
+  ringing_timeout: 30s
+  delete_contact_missing_from:
+    updates_number: 1
+  on_phonebook_update:
+    - lambda: 'id(peer_name) = id(phone).get_current_destination();'
+    - script.execute: update_call_idle_labels
+  on_destination_changed:
+    - lambda: 'id(peer_name) = id(phone).get_current_destination();'
+    - script.execute: update_call_idle_labels
+    - script.execute: draw_display
+
+# =============================================================================
+# DISPLAY AND UI
+# =============================================================================
+
+# Round GC9A01A display used by the voip-only call UI.
+
+display:
+  - platform: mipi_spi
+    id: s3_box_lcd
+    model: GC9A01A
+    invert_colors: true
+    data_rate: 40MHz
+    cs_pin: 5
+    dc_pin: 47
+    reset_pin:
+      number: 38
+    auto_clear_enabled: false
+    dimensions:
+      height: 240
+      width: 240
+
+touchscreen:
+  - platform: cst816
+    id: touch
+    display: s3_box_lcd
+    i2c_id: touchscreen_i2c_bus
+    interrupt_pin: ${touch_interrupt_pin}
+    reset_pin: ${touch_reset_pin}
+    on_touch:
+      - script.execute: backlight_timer
+
+font:
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 600
+    id: font_clock
+    size: 20
+    glyphs: "0123456789:%"
+    extras:
+      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F0079" # battery-100
+          - "\U000F008E" # battery-alert (0%)
+          - "\U000F007A" # battery-10
+          - "\U000F007B" # battery-20
+          - "\U000F007C" # battery-30
+          - "\U000F007D" # battery-40
+          - "\U000F007E" # battery-50
+          - "\U000F007F" # battery-60
+          - "\U000F0080" # battery-70
+          - "\U000F0081" # battery-80
+          - "\U000F0082" # battery-90
+          - "\U000F089F" # battery-charging-outline (0%)
+          - "\U000F089C" # battery-charging-10
+          - "\U000F0086" # battery-charging-20
+          - "\U000F0087" # battery-charging-30
+          - "\U000F0088" # battery-charging-40
+          - "\U000F089D" # battery-charging-50
+          - "\U000F0089" # battery-charging-60
+          - "\U000F089E" # battery-charging-70
+          - "\U000F008A" # battery-charging-80
+          - "\U000F008B" # battery-charging-90
+          - "\U000F08BF" # wifi-strength-outline (<20%)
+          - "\U000F08BC" # wifi-strength-1 (<55%)
+          - "\U000F08BD" # wifi-strength-2 (<80%)
+          - "\U000F08BE" # wifi-strength-3 (>=80%)
+          - "\U000F07D0" # home-assistant (HA connected)
+          - "\U000F15D0" # home-alert (HA disconnected)
+
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: call_icons
+    size: 42
+    glyphs:
+      - "\U000F03F2" # phone
+      - "\U000F03F5" # phone-hangup
+      - "\U000F0731" # arrow left bold
+      - "\U000F0734" # arrow right bold
+
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 700
+    id: font_title
+    size: 24
+    glyphsets:
+      - GF_Latin_Core
+    extras:
+      - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+        glyphs:
+          - "\U000F06CB" # contacts (address book)
+
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 500
+    id: font_state
+    size: 28
+    # Static labels only: IDLE, RINGING, CALLING, IN CALL, No WiFi, No HA.
+    # Explicit glyphs save ~150 KB flash vs GF_Latin_Core (319 glyphs).
+    glyphs: " ACDEFGHILNRWio"
+
+  - file:
+      type: gfonts
+      family: Figtree
+      weight: 400
+    id: font_info
+    size: 20
+    # call_ended_page "Reason:" label + reason text (may include free-form
+    # remote DECLINE payload), so full Latin set is required.
+    glyphsets:
+      - GF_Latin_Core
+
+lvgl:
+  displays:
+    - s3_box_lcd
+  buffer_size: 50%
+  color_depth: 16
+  log_level: WARN
+  top_layer:
+    widgets:
+      # Clock + battery/wifi/HA status bar (always visible).
+      - label:
+          id: top_clock_label
+          align: TOP_MID
+          y: 90%
+          text: ""
+          text_color: 0xFFFFFF
+          text_font: font_clock
+      - label:
+          id: top_battery_label
+          align: TOP_MID
+          y: 82%
+          text: ""
+          text_color: 0xFFFFFF
+          text_font: font_clock
+
+  pages:
+    # ========================================================================
+    # NO WIFI PAGE
+    # ========================================================================
+    - id: no_wifi_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: CENTER
+            text: "No WiFi"
+            text_color: 0xFF8080
+            text_font: font_state
+            text_align: CENTER
+
+    # ========================================================================
+    # NO HA PAGE
+    # ========================================================================
+    - id: no_ha_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            align: CENTER
+            text: "No HA"
+            text_color: 0xFFFF80
+            text_font: font_state
+            text_align: CENTER
+
+    # ========================================================================
+    # VOIP: IDLE PAGE
+    # ========================================================================
+    - id: call_idle_page
+      bg_color: 0x0000FF
+      # Horizontal swipe = prev/next contact. Vertical navigation is supplied by
+      # the including firmware variant: full-experience goes VA <-> VoIP <->
+      # settings, voip-only keeps the voip/settings stack.
+      on_swipe_left:
+        - voip_stack.next_contact:
+        - script.execute: update_call_idle_labels
+      on_swipe_right:
+        - voip_stack.prev_contact:
+        - script.execute: update_call_idle_labels
+      on_swipe_up:
+        - script.execute: call_to_settings
+      on_swipe_down:
+        - script.execute: call_to_va
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 8%
+            text: "${friendly_name}"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            width: ${call_title_width}
+            long_mode: SCROLL
+        # State (static) + contacts row (dynamic) on two lines, centered.
+        - label:
+            id: call_idle_status_label
+            align: TOP_MID
+            y: 17%
+            text: "IDLE"
+            text_color: 0x00FF00
+            text_font: font_state
+            text_align: CENTER
+        - label:
+            id: call_idle_contacts_label
+            align: TOP_MID
+            y: ${call_contacts_y}
+            text: "\U000F06CB 0"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+        # Peer name: single line; long names ping-pong scroll horizontally.
+        - label:
+            id: call_idle_peer_label
+            align: CENTER
+            text: "-"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            width: ${call_peer_width}
+            text_align: CENTER
+            long_mode: SCROLL
+        # Prev/next contact buttons: explicit chevron taps next to the peer
+        # name. Page on_swipe_left/right keeps the gesture path alive too.
+        - button:
+            id: call_idle_prev_contact_btn
+            align: CENTER
+            x: -60
+            y: -34
+            width: 60
+            height: 60
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F0731"
+                  align: CENTER
+                  text_color: 0xFFFFFF
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.prev_contact:
+              - script.execute: update_call_idle_labels
+        - button:
+            id: call_idle_next_contact_btn
+            align: CENTER
+            x: 60
+            y: -34
+            width: 60
+            height: 60
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F0734"
+                  align: CENTER
+                  text_color: 0xFFFFFF
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.next_contact:
+              - script.execute: update_call_idle_labels
+        # Green call button below the peer name (idle screen only calls).
+        - button:
+            floating: true
+            align: CENTER
+            y: ${call_btn_below_center}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F03F2"
+                  align: CENTER
+                  text_color: 0x00FF00
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.call_toggle:
+
+      # ========================================================================
+      # VOIP: RINGING IN PAGE
+      # ========================================================================
+    - id: call_ringing_in_page
+      bg_color: 0xFF0000
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 8%
+            text: "${friendly_name}"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            width: ${call_title_width}
+            long_mode: SCROLL
+        - label:
+            align: TOP_MID
+            y: 17%
+            text: "RINGING"
+            text_color: 0xFFFF00
+            text_font: font_state
+            text_align: CENTER
+        - label:
+            id: call_ringing_in_peer_label
+            align: CENTER
+            text: ""
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            long_mode: SCROLL
+            width: ${call_ringing_in_peer_width}
+        # Answer (green left) / Decline (red right)
+        - button:
+            floating: true
+            align: LEFT_MID
+            x: ${call_btn_offset}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F03F2"
+                  align: CENTER
+                  text_color: 0x00FF00
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.call_toggle:
+        - button:
+            floating: true
+            align: RIGHT_MID
+            x: -5
+            width: ${call_btn_size}
+            height: ${call_btn_size}
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F03F5"
+                  align: CENTER
+                  text_color: 0xFFFFFF
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.decline_call:
+
+      # ========================================================================
+      # VOIP: RINGING OUT PAGE
+      # ========================================================================
+    - id: call_ringing_out_page
+      bg_color: 0xFF9900
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 8%
+            text: "${friendly_name}"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            width: ${call_title_width}
+            long_mode: SCROLL
+        - label:
+            align: TOP_MID
+            y: 17%
+            text: "CALLING"
+            text_color: 0x000000
+            text_font: font_state
+            text_align: CENTER
+        - label:
+            id: call_ringing_out_peer_label
+            align: CENTER
+            text: ""
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            long_mode: SCROLL
+            width: ${call_peer_width}
+        # Hangup below center
+        - button:
+            floating: true
+            align: CENTER
+            y: ${call_btn_below_center}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F03F5"
+                  align: CENTER
+                  text_color: 0xFF0000
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.decline_call:
+
+      # ========================================================================
+      # VOIP: IN CALL PAGE
+      # ========================================================================
+    - id: call_in_call_page
+      bg_color: 0x008800
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 8%
+            text: "${friendly_name}"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            width: ${call_title_width}
+            long_mode: SCROLL
+        - label:
+            align: TOP_MID
+            y: 17%
+            text: "IN CALL"
+            text_color: 0x0000FF
+            text_font: font_state
+            text_align: CENTER
+        - label:
+            id: call_in_call_peer_label
+            align: CENTER
+            text: ""
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            long_mode: SCROLL
+            width: ${call_peer_width}
+        # Hangup below center
+        - button:
+            floating: true
+            align: CENTER
+            y: ${call_btn_below_center}
+            width: ${call_btn_size}
+            height: ${call_btn_size}
+            bg_opa: TRANSP
+            shadow_opa: TRANSP
+            widgets:
+              - label:
+                  text: "\U000F03F5"
+                  align: CENTER
+                  text_color: 0xFF0000
+                  text_font: call_icons
+            on_short_click:
+              - voip_stack.call_toggle:
+
+      # ========================================================================
+      # VOIP: CALL ENDED PAGE
+      # ========================================================================
+      # Shown for ~4 s after a call terminates. ui_call_ended writes the peer
+      # + reason labels and toggles call_ended_active so draw_display keeps
+      # this page on screen until the auto-return delay elapses.
+    - id: call_ended_page
+      bg_color: 0x202020
+      # Tap anywhere on the page = skip the 4 s auto-return countdown.
+      on_click:
+        - lambda: 'id(call_ended_active) = false;'
+        - script.execute: draw_display
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 8%
+            text: "${friendly_name}"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            width: ${call_title_width}
+            long_mode: SCROLL
+        - label:
+            align: CENTER
+            y: -22%
+            text: "Call ended"
+            text_color: 0xFFFFFF
+            text_font: font_title
+            text_align: CENTER
+            width: ${call_ended_text_width}
+        - label:
+            id: call_ended_peer_label
+            align: CENTER
+            text: ""
+            text_color: 0xFFFFFF
+            # font_title carries the full GF_Latin_Core glyph set so
+            # the free-form peer name renders correctly.
+            text_font: font_title
+            text_align: CENTER
+            long_mode: SCROLL
+            width: ${call_peer_width}
+        - label:
+            align: CENTER
+            y: 13%
+            text: "Reason:"
+            text_color: 0xFFFFFF
+            text_font: font_info
+            text_align: CENTER
+            width: ${call_ended_text_width}
+        - label:
+            id: call_ended_reason_label
+            align: CENTER
+            y: 25%
+            text: "-"
+            text_color: 0xFFCC66
+            text_font: font_info
+            text_align: CENTER
+            long_mode: SCROLL
+            width: ${call_ended_reason_text_width}
+    # ========================================================================
+    # SETTINGS PAGES (factored into packages/lvgl/*.yaml)
+    # The order here is the swipe-left navigation cycle. on_boot below
+    # populates g_settings_pages with the matching object pointers.
+    # ========================================================================
+    # =============================================================================
+    # Settings page: Master volume + Mic gain sliders.
+    # Widths are chosen by the including device. On round displays they should be
+    # chord-safe widths for the y positions below.
+    # =============================================================================
+    - id: settings_volumes_page
+      bg_color: 0x202020
+      on_swipe_left:
+        - script.execute:
+            id: settings_navigate
+            delta: 1
+      on_swipe_right:
+        - script.execute:
+            id: settings_navigate
+            delta: -1
+      on_swipe_down:
+        - script.execute: settings_close
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 50
+            width: ${settings_mid_width}
+            text: "Master volume"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - slider:
+            id: ui_speaker_vol_slider
+            align: TOP_MID
+            y: 78
+            width: ${settings_wide_width}
+            height: ${settings_slider_height}
+            adv_hittest: true
+            gesture_bubble: true
+            min_value: 0
+            max_value: 100
+            value: !lambda 'return id(master_volume).state;'
+            on_release:
+              - number.set:
+                  id: master_volume
+                  value: !lambda 'return x;'
+        - label:
+            align: TOP_MID
+            y: 112
+            width: ${settings_wide_width}
+            text: "Mic gain"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - slider:
+            id: ui_mic_vol_slider
+            align: TOP_MID
+            y: 140
+            width: ${settings_wide_width}
+            height: ${settings_slider_height}
+            adv_hittest: true
+            gesture_bubble: true
+            min_value: -20
+            max_value: 30
+            value: !lambda 'return id(mic_gain).state;'
+            on_release:
+              - number.set:
+                  id: mic_gain
+                  value: !lambda 'return x;'
+    # =============================================================================
+    # Settings page: Speaker mute, Mic mute, Auto answer toggles.
+    # =============================================================================
+    - id: settings_mute_page
+      bg_color: 0x202020
+      on_swipe_left:
+        - script.execute:
+            id: settings_navigate
+            delta: 1
+      on_swipe_right:
+        - script.execute:
+            id: settings_navigate
+            delta: -1
+      on_swipe_down:
+        - script.execute: settings_close
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 28
+            width: ${settings_mid_width}
+            text: "Speaker mute"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - switch:
+            id: ui_speaker_mute_sw
+            align: TOP_MID
+            y: 52
+            width: ${settings_switch_width}
+            height: ${settings_switch_height}
+            state:
+              checked: !lambda 'return id(speaker_mute).state;'
+            on_value:
+              - lambda: |-
+                  if (x) id(speaker_mute).turn_on();
+                  else id(speaker_mute).turn_off();
+        - label:
+            align: TOP_MID
+            y: 80
+            width: ${settings_wide_width}
+            text: "Mic mute"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - switch:
+            id: ui_mic_mute_sw
+            align: TOP_MID
+            y: 104
+            width: ${settings_switch_width}
+            height: ${settings_switch_height}
+            state:
+              checked: !lambda 'return id(mute).state;'
+            on_value:
+              - lambda: |-
+                  if (x) id(mute).turn_on();
+                  else id(mute).turn_off();
+        - label:
+            align: TOP_MID
+            y: 132
+            width: ${settings_wide_width}
+            text: "Auto answer"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - switch:
+            id: ui_auto_answer_sw
+            align: TOP_MID
+            y: 156
+            width: ${settings_switch_width}
+            height: ${settings_switch_height}
+            state:
+              checked: !lambda 'return id(auto_answer_switch).state;'
+            on_value:
+              - lambda: |-
+                  if (x) id(auto_answer_switch).turn_on();
+                  else id(auto_answer_switch).turn_off();
+        - label:
+            align: TOP_MID
+            y: 184
+            width: ${settings_wide_width}
+            text: "DND"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - switch:
+            id: ui_dnd_sw
+            align: TOP_MID
+            y: 208
+            width: ${settings_switch_width}
+            height: ${settings_switch_height}
+            state:
+              checked: !lambda 'return id(dnd_switch).state;'
+            on_value:
+              - lambda: |-
+                  if (x) id(dnd_switch).turn_on();
+                  else id(dnd_switch).turn_off();
+    # =============================================================================
+    # Settings page: AEC switch + AEC mode dropdown (VoIP variant).
+    # =============================================================================
+    - id: settings_aec_page
+      bg_color: 0x202020
+      on_swipe_left:
+        - script.execute:
+            id: settings_navigate
+            delta: 1
+      on_swipe_right:
+        - script.execute:
+            id: settings_navigate
+            delta: -1
+      on_swipe_down:
+        - script.execute: settings_close
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 48
+            width: ${settings_mid_width}
+            text: "AEC"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - switch:
+            id: ui_aec_sw
+            align: TOP_MID
+            y: 74
+            width: ${settings_switch_width}
+            height: ${settings_switch_height}
+            state:
+              checked: !lambda 'return id(aec_switch).state;'
+            on_value:
+              - lambda: |-
+                  if (x == id(aec_switch).state) return;
+                  if (x) id(aec_switch).turn_on();
+                  else id(aec_switch).turn_off();
+        - label:
+            align: TOP_MID
+            y: 112
+            width: ${settings_wide_width}
+            text: "AEC mode"
+            text_color: 0xFFFFFF
+            text_font: ${settings_label_font}
+            text_align: CENTER
+        - dropdown:
+            id: ui_aec_mode_dd
+            align: TOP_MID
+            y: 140
+            width: ${settings_dropdown_width}
+            height: 28
+            selected_text: !lambda 'return id(aec_mode_select).current_option();'
+            options:
+              - "voip_low_cost"
+              - "voip_high_perf"
+            on_value:
+              - select.set_index:
+                  id: aec_mode_select
+                  index: !lambda 'return x;'
+
+# =============================================================================
+# RUNTIME LOGIC AND ENTITIES
+# =============================================================================
+
+globals:
+  - id: peer_name
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  - id: y_metrics
+    type: std::vector<int>
+    restore_value: false
+
+  # call_ended_page is shown briefly after a call terminates (hangup,
+  # decline, error, timeout). The flag is set by ui_call_ended and
+  # cleared either by the auto-return delay or by an early state
+  # change (next call, manual swipe). draw_display checks it so the
+  # page is not overwritten while the user reads the reason.
+  - id: call_ended_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  # settings_active, g_settings_pages, g_settings_index are defined in
+  # packages/voip_only.yaml; populated at on_boot below.
+
+  # API/Wi-Fi callbacks may run while the native API stack is tearing down.
+  # Keep LVGL page routing on the main loop by marking a redraw pending and
+  # draining it from the interval below.
+  - id: draw_display_pending
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+script:
+  # Extend the package's update_status to drive page transitions and the
+  # ringtone loop while the device is in Ringing (incoming) state.
+  - id: !extend update_status
+    then:
+      - script.execute: draw_display
+      - if:
+          condition:
+            voip_stack.is_ringing:
+          then:
+            - script.execute: voip_ringing_loop
+          else:
+            - script.stop: voip_ringing_loop
+            - media_player.stop:
+                announcement: true
+
+  # Extend the package's ui_call_started hook to update the per-page peer label
+  # and refresh the display.
+  - id: !extend ui_call_started
+    then:
+      - lambda: |-
+          id(peer_name) = peer;
+      - script.execute: backlight_timer
+      - lvgl.label.update:
+          id: call_ringing_out_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_ringing_in_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_in_call_peer_label
+          text: !lambda 'return id(peer_name);'
+      - script.execute: draw_display
+
+  - id: !extend ui_call_ended
+    mode: restart
+    then:
+      - globals.set:
+          id: call_ended_active
+          value: "true"
+      - lvgl.label.update:
+          id: call_ended_peer_label
+          text: !lambda 'return peer.empty() ? std::string("-") : peer;'
+      - lvgl.label.update:
+          id: call_ended_reason_label
+          text: !lambda |-
+            std::string r = reason;
+            if      (r == "local_hangup")    return std::string("Local hangup");
+            else if (r == "remote_hangup")   return std::string("Remote hangup");
+            else if (r == "declined")        return std::string("Declined");
+            else if (r == "timeout")         return std::string("Timeout");
+            else if (r == "busy")            return std::string("Busy");
+            else if (r == "unreachable")     return std::string("Unreachable");
+            else if (r == "protocol_error")  return std::string("Protocol error");
+            else if (r == "bridge_error")    return std::string("Bridge error");
+            return r.empty() ? std::string("Ended") : ("Declined: " + r);
+      - lvgl.page.show: call_ended_page
+      - script.execute: backlight_timer
+      - delay: 4s
+      - if:
+          condition:
+            lambda: 'return id(call_ended_active);'
+          then:
+            - globals.set:
+                id: call_ended_active
+                value: "false"
+            - script.execute: draw_display
+
+  # Ringtone loop while ringing (incoming).
+  - id: voip_ringing_loop
+    mode: restart
+    then:
+      - while:
+          condition:
+            voip_stack.is_ringing:
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                media_file: voip_ringing_sound
+                announcement: true
+            - wait_until:
+                condition:
+                  media_player.is_announcing:
+                timeout: 2s
+            - wait_until:
+                condition:
+                  not:
+                    media_player.is_announcing:
+                timeout: 5s
+            - delay: 1s
+
+  # Page routing: pick the right LVGL screen for current VoIP state.
+  - id: draw_display
+    mode: restart
+    then:
+      - lambda: |-
+          lv_obj_t* target = nullptr;
+          // Active call always wins so we don't hide an incoming/calling screen.
+          auto s = id(phone).get_state_str();
+          bool in_call = (s == "ringing" || s == "calling" ||
+                          s == "remote_ringing" || s == "connecting" ||
+                          s == "in_call");
+          if (in_call) {
+            id(settings_active) = false;  // call interrupts settings view
+          }
+          // ui_call_ended owns the screen for ~4 s after a terminated
+          // call. Any redraw triggered in that window keeps the ended
+          // page so the user actually reads the reason.
+          if (id(call_ended_active)) {
+            target = id(call_ended_page)->obj;
+          } else if (id(settings_active) && !id(g_settings_pages).empty()) {
+            int idx = id(g_settings_index);
+            int n = (int) id(g_settings_pages).size();
+            if (idx < 0 || idx >= n) idx = 0;
+            target = id(g_settings_pages)[idx];
+          } else if (!wifi::global_wifi_component->is_connected()) {
+            target = id(no_wifi_page)->obj;
+          } else if (!api::global_api_server->is_connected()) {
+            target = id(no_ha_page)->obj;
+          } else {
+            auto s = id(phone).get_state_str();
+            if (s == "ringing") {
+              target = id(call_ringing_in_page)->obj;
+            } else if (s == "calling" || s == "remote_ringing") {
+              target = id(call_ringing_out_page)->obj;
+            } else if (s == "in_call" || s == "connecting") {
+              target = id(call_in_call_page)->obj;
+            } else {
+              target = id(call_idle_page)->obj;
+            }
+          }
+          if (target == nullptr) return;
+          if (target != lv_disp_get_scr_act(nullptr)) {
+            lv_disp_load_scr(target);
+            lv_obj_invalidate(lv_disp_get_scr_act(nullptr));
+          }
+      - if:
+          condition:
+            lambda: 'return id(phone).get_state_str() == "idle";'
+          then:
+            - script.execute: update_call_idle_labels
+            - script.execute: update_idle_labels
+
+  # Update VoIP-idle dynamic labels (peer + state + contact count + arrows).
+  - id: update_call_idle_labels
+    then:
+      - lambda: id(peer_name) = id(phone).get_current_destination();
+      - lvgl.label.update:
+          id: call_idle_peer_label
+          text: !lambda 'return id(peer_name);'
+      - lvgl.label.update:
+          id: call_idle_contacts_label
+          text: !lambda |-
+            auto csv = id(phone).get_contacts_csv();
+            int count = csv.empty() ? 0 : std::count(csv.begin(), csv.end(), ',') + 1;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "\U000F06CB %d", count);
+            return std::string(buf);
+  # Top-layer clock + battery/wifi/HA status bar refresh.
+  - id: update_idle_labels
+    then:
+      - lvgl.label.update:
+          id: top_clock_label
+          text:
+            format: "%02d:%02d"
+            args: ['id(my_time).now().hour', 'id(my_time).now().minute']
+      - if:
+          condition:
+            - lambda: return id(battery_percentage).has_state() && !std::isnan(id(battery_percentage).state);
+          then:
+            - lvgl.label.update:
+                id: top_battery_label
+                text: !lambda |-
+                  bool charging = id(usb_connected).state;
+                  float bat = id(battery_percentage).state;
+                  float wifi = id(wifi_pct).state;
+                  std::string ret;
+                  if (bat < 10) ret = charging ? "\U000F089F" : "\U000F008E";
+                  else if (bat < 20) ret = charging ? "\U000F089C" : "\U000F007A";
+                  else if (bat < 30) ret = charging ? "\U000F0086" : "\U000F007B";
+                  else if (bat < 40) ret = charging ? "\U000F0087" : "\U000F007C";
+                  else if (bat < 50) ret = charging ? "\U000F0088" : "\U000F007D";
+                  else if (bat < 60) ret = charging ? "\U000F089D" : "\U000F007E";
+                  else if (bat < 70) ret = charging ? "\U000F0089" : "\U000F007F";
+                  else if (bat < 80) ret = charging ? "\U000F089E" : "\U000F0080";
+                  else if (bat < 90) ret = charging ? "\U000F008A" : "\U000F0081";
+                  else if (bat < 100) ret = charging ? "\U000F008B" : "\U000F0082";
+                  else ret = "\U000F0079";
+                  if (wifi < 20) ret += "\U000F08BF";
+                  else if (wifi < 55) ret += "\U000F08BC";
+                  else if (wifi < 80) ret += "\U000F08BD";
+                  else ret += "\U000F08BE";
+                  ret += api::global_api_server->is_connected() ? "\U000F07D0" : "\U000F15D0";
+                  return ret;
+          else:
+            - lvgl.label.update:
+                id: top_battery_label
+                text: ""
+
+  # Backlight timer: full -> dim -> off (or low if charging).
+  - id: backlight_timer
+    mode: restart
+    then:
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+      - delay: 30s
+      - light.turn_on:
+          id: backlight
+          brightness: 60%
+      - delay: 120s
+      - if:
+          condition:
+            binary_sensor.is_on: usb_connected
+          then:
+            - light.turn_on:
+                id: backlight
+                brightness: 20%
+          else:
+            - light.turn_off: backlight
+
+  # Periodic clock/status refresh on the idle page.
+  - id: idle_refresh_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            voip_stack.is_idle:
+          then:
+            - script.execute: update_idle_labels
+            - delay: 30s
+
+button:
+  - platform: factory_reset
+    id: factory_reset_btn
+    internal: true
+
+binary_sensor:
+  - platform: template
+    name: "USB Connected"
+    id: usb_connected
+    device_class: plug
+    lambda: return id(battery_voltage).state > 3.9;
+    on_press:
+      - script.execute: backlight_timer
+    on_release:
+      - script.execute: backlight_timer
+
+  # Physical GPIO0 button (voip-only, no VA mode):
+  #   short  : call/answer/hangup
+  #   double : decline (incoming) / next contact (idle)
+  #   long   : mute toggle
+  - platform: gpio
+    pin:
+      number: ${main_button_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    id: main_button
+    name: "Main Button"
+    icon: "mdi:gesture-tap-button"
+    filters:
+      - delayed_on: 20ms
+      - delayed_off: 20ms
+    on_multi_click:
+      # Single click: smart call (idle->call, ringing->answer, in-call->hangup)
+      - timing:
+          - ON for 10ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - voip_stack.call_toggle:
+      # Double click: decline incoming, else next contact when idle
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for 50ms to 400ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                voip_stack.is_ringing:
+              then:
+                - voip_stack.decline_call:
+              else:
+                - if:
+                    condition:
+                      voip_stack.is_idle:
+                    then:
+                      - voip_stack.next_contact:
+      # Long press (1-3s): toggle mic mute
+      - timing:
+          - ON for 1s to 3s
+        then:
+          - switch.toggle: mute
+
+sensor:
+  - platform: adc
+    pin: ${battery_adc_pin}
+    name: "Battery Voltage"
+    id: battery_voltage
+    attenuation: 12db
+    accuracy_decimals: 2
+    update_interval: 10s
+    unit_of_measurement: "V"
+    icon: mdi:battery
+    filters:
+      - multiply: 2.0
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 1
+      - throttle: 1min
+
+  - platform: template
+    id: battery_percentage
+    name: "Battery Percentage"
+    lambda: |-
+      if (!id(battery_voltage).has_state() || std::isnan(id(battery_voltage).state))
+        return NAN;
+      return id(battery_voltage).state;
+    accuracy_decimals: 0
+    unit_of_measurement: "%"
+    icon: mdi:battery-medium
+    filters:
+      - calibrate_linear:
+          method: exact
+          datapoints:
+            - 2.80 -> 0.0
+            - 3.10 -> 10.0
+            - 3.30 -> 20.0
+            - 3.45 -> 30.0
+            - 3.60 -> 40.0
+            - 3.70 -> 50.0
+            - 3.75 -> 60.0
+            - 3.80 -> 70.0
+            - 3.90 -> 80.0
+            - 4.00 -> 90.0
+            - 4.20 -> 100.0
+      - lambda: |-
+          if (x > 100) return 100;
+          if (x < 0) return 0;
+          return x;
+
+select:
+  - platform: template
+    name: AEC Mode
+    id: aec_mode_select
+    icon: mdi:tune-vertical
+    options:
+      - "voip_low_cost"
+      - "voip_high_perf"
+    initial_option: "voip_high_perf"
+    # Non-optimistic: HA reflects the live component mode, not the value the
+    # user clicked. If the switch is rejected (e.g. internal RAM fragmented)
+    # or the component falls back to the previous mode, the select shows the
+    # actual mode rather than a fictitious one.
+    optimistic: false
+    restore_value: true
+    set_action:
+      - if:
+          condition:
+            not:
+              voip_stack.is_idle:
+          then:
+            - logger.log:
+                level: WARN
+                format: "Cannot switch AEC mode during active VoIP call"
+          else:
+            - logger.log:
+                format: "Switching AEC mode to %s"
+                args: ['x.c_str()']
+            - esp_audio_stack.stop: audio_stack
+            - esp_aec.set_mode:
+                id: aec_processor
+                mode: !lambda 'return x;'
+            - esp_audio_stack.start: audio_stack
+      - lambda: |-
+          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
+
+# =============================================================================
+# Touchscreen (CST816 on dedicated I2C bus). Contact swipe is handled natively
+# via on_swipe_left / on_swipe_right on call_idle_page; on_touch only refreshes
+# the backlight timer.
+# =============================================================================
+
+# Main-loop redraw gate. API/Wi-Fi callbacks only mark LVGL dirty; this interval
+# performs the actual draw outside teardown/reconnect callbacks.
+
+interval:
+  - interval: 250ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(draw_display_pending);'
+          then:
+            - globals.set:
+                id: draw_display_pending
+                value: "false"
+            - script.execute: draw_display

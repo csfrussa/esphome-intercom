@@ -1,0 +1,454 @@
+purge_devices:
+  name: Purge Stale Devices
+  description: >-
+    Remove VoIP devices that are no longer reachable from the device
+    registry. The HA phonebook sensor rebuilds from live voip_endpoint
+    entities, so purged devices disappear from ESP contact lists on the next
+    sensor update. Without a target, every VoIP device whose state is
+    'unavailable' for at least min_unavailable_hours is removed. With a target,
+    the selected device is removed unconditionally. Devices that come back
+    online will re-register themselves automatically.
+  fields:
+    device_id:
+      name: Device
+      description: Optional specific VoIP ESPHome device to purge immediately.
+      required: false
+      selector:
+        device:
+          integration: esphome
+    min_unavailable_hours:
+      name: Minimum Hours Unavailable
+      description: >-
+        Only purge devices that have been unavailable for at least this many
+        hours. Default 0 = purge immediately. Use a higher value (e.g. 1) to
+        avoid wiping devices that are only briefly offline (OTA updates,
+        reboots).
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 168
+          step: 0.5
+          unit_of_measurement: h
+          mode: box
+
+answer:
+  name: Answer SIP Call
+  description: Send 200 OK for a pending SIP call addressed to Home Assistant.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID. If omitted and only one call is pending, that call is answered.
+      required: false
+      selector:
+        text:
+
+decline:
+  name: Decline SIP Call
+  description: Send a final SIP rejection for a pending SIP call.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID. If omitted and only one call is pending, that call is declined.
+      required: false
+      selector:
+        text:
+    status:
+      name: SIP Status
+      description: Final SIP status code to send.
+      required: false
+      default: 603
+      selector:
+        number:
+          min: 400
+          max: 699
+          step: 1
+          mode: box
+    reason:
+      name: Reason
+      description: SIP reason phrase.
+      required: false
+      default: Decline
+      selector:
+        text:
+    decline_reason:
+      name: Decline reason
+      description: Application terminal reason propagated in SIP Reason and X-Voip-Stack-Decline-Reason headers.
+      required: false
+      default: declined
+      selector:
+        text:
+
+call:
+  name: SIP Call
+  description: Originate a standards-SIP call from Home Assistant to a roster target or SIP URI.
+  fields:
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    target:
+      name: Target
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for target, useful in scripts and automations.
+      required: false
+      selector:
+        text:
+    ha_bridge:
+      name: Bridge Via HA
+      description: Force HA as the SIP destination even if the contact has a direct endpoint.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+forward:
+  name: SIP Forward
+  description: Route a standards-SIP call through Home Assistant's SIP dial plan and bridge. With Call ID, forwards a pending inbound SIP route.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID from voip_stack.route_request. If omitted, Home Assistant originates a new bridged call.
+      required: false
+      selector:
+        text:
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    target:
+      name: Target
+      description: Contact ID/name, number, user@host, or sip:user@host URI.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for target, useful in scripts and automations.
+      required: false
+      selector:
+        text:
+
+route:
+  name: SIP Route Decision
+  description: Apply an automation dial-plan decision to a pending inbound SIP route.
+  fields:
+    call_id:
+      name: Call ID
+      description: Pending SIP Call-ID from voip_stack.route_request.
+      required: true
+      selector:
+        text:
+    action:
+      name: Action
+      required: false
+      default: default
+      selector:
+        select:
+          options:
+            - answer_ha
+            - decline
+            - busy
+            - forward
+            - bridge
+            - default
+            - cancel
+    destination:
+      name: Destination
+      description: Contact ID/name, number, user@host, or sip:user@host URI for forward/bridge.
+      required: false
+      selector:
+        text:
+    target:
+      name: Target
+      description: Alias for destination.
+      required: false
+      selector:
+        text:
+    call:
+      name: Call
+      description: Alias for destination.
+      required: false
+      selector:
+        text:
+    status:
+      name: SIP Status
+      description: Optional final SIP status for decline/cancel decisions.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 699
+          step: 1
+          mode: box
+    reason:
+      name: Reason
+      description: SIP reason phrase.
+      required: false
+      selector:
+        text:
+    decline_reason:
+      name: Decline reason
+      description: Application terminal reason propagated in SIP Reason and X-Voip-Stack-Decline-Reason headers.
+      required: false
+      selector:
+        text:
+
+hangup:
+  name: SIP Hang Up
+  description: Send BYE and stop any SIP RTP relay for an active SIP call.
+  fields:
+    call_id:
+      name: Call ID
+      description: Active SIP Call-ID. If omitted and only one call is active, that call is ended.
+      required: false
+      selector:
+        text:
+
+add_contact:
+  name: Add Phonebook Contact
+  description: Add or replace one manual contact in the central JSON phonebook.
+  fields:
+    name:
+      name: Name
+      description: Contact name. If ID is omitted, this is also used as the contact ID.
+      required: true
+      selector:
+        text:
+    id:
+      name: Optional ID
+      description: Optional stable ID. Defaults to Name.
+      required: false
+      selector:
+        text:
+    address:
+      name: Optional Address
+      description: Optional IP or host for a direct local SIP endpoint. Use with SIP Port and Transport when the contact is directly reachable.
+      required: false
+      selector:
+        text:
+    sip_uri:
+      name: Optional SIP URI
+      description: Optional complete SIP URI, for example sip:kitchen@192.168.1.50:5060;transport=udp. When omitted, HA resolves the contact by name, extension, registration or trunk number.
+      required: false
+      selector:
+        text:
+    extension:
+      name: Optional Extension
+      description: Optional local/internal dial-plan alias such as 101. Inbound DTMF and internal callers resolve this field before external numbers.
+      required: false
+      selector:
+        text:
+    number:
+      name: Optional Number
+      description: Optional external/public number used for trunk calls.
+      required: false
+      selector:
+        text:
+    ha_bridge:
+      name: Optional Bridge Via HA
+      description: Force HA routing even when the contact has a direct SIP endpoint.
+      required: false
+      default: false
+      selector:
+        boolean:
+    transport:
+      name: Optional SIP Transport
+      description: Optional signaling transport for a direct SIP endpoint. RTP remains UDP.
+      required: false
+      selector:
+        select:
+          options:
+            - tcp
+            - udp
+    port:
+      name: Optional SIP Port
+      description: Optional SIP signaling port for address-based contacts. Defaults to 5060.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    rtp_port:
+      name: Optional RTP Port
+      description: Optional RTP media port for direct local SIP endpoints. Defaults to 40000 when omitted.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+          step: 1
+          mode: box
+    tx_rate:
+      name: Optional TX Rate
+      description: Optional manual TX sample-rate metadata. Use auto when omitted.
+      required: false
+      selector:
+        text:
+    rx_rate:
+      name: Optional RX Rate
+      description: Optional manual RX sample-rate metadata. Use auto when omitted.
+      required: false
+      selector:
+        text:
+    tx_formats:
+      name: Optional TX Formats
+      description: Optional TX RTP PCM format tokens, for example 16000:s16le:1:20.
+      required: false
+      selector:
+        text:
+    rx_formats:
+      name: Optional RX Formats
+      description: Optional RX RTP PCM format tokens, for example 48000:s16le:1:10.
+      required: false
+      selector:
+        text:
+    max_payload_bytes:
+      name: Optional Max RTP Payload Bytes
+      description: Optional RTP PCM payload limit. Default is 1200 when omitted.
+      required: false
+      selector:
+        number:
+          min: 256
+          max: 1400
+          step: 1
+          mode: box
+
+remove_contact:
+  name: Remove Phonebook Contact
+  description: Remove one manual contact from the central JSON phonebook by name.
+  fields:
+    name:
+      name: Name
+      required: true
+      selector:
+        text:
+
+set_contacts:
+  name: Set Phonebook Contacts
+  description: Replace manual contacts with a JSON roster document.
+  fields:
+    roster_json:
+      name: Roster JSON
+      required: true
+      selector:
+        text:
+          multiline: true
+
+clear_contacts:
+  name: Clear Phonebook Contacts
+  description: Clear manual contacts from the central JSON phonebook.
+
+export_phonebook:
+  name: Export Phonebook
+  description: Emit the current central JSON phonebook as a VoIP Stack call event.
+
+push_phonebook:
+  name: Push Phonebook
+  description: Push the current central JSON phonebook to all online ESP endpoints.
+
+set_dnd:
+  name: Set SIP DND
+  description: Enable or disable Do Not Disturb on the Home Assistant softphone.
+  fields:
+    dnd:
+      name: DND
+      required: true
+      selector:
+        boolean:
+
+create_account:
+  name: Create SIP Softphone Account
+  description: Create or replace a local SIP account for a standard softphone registering to Home Assistant.
+  fields:
+    username:
+      name: Username
+      description: SIP username and central phonebook ID, for example MobileOffice.
+      required: true
+      selector:
+        text:
+    display_name:
+      name: Optional Display Name
+      description: Optional friendly name shown in the central phonebook.
+      required: false
+      selector:
+        text:
+    password:
+      name: Optional Password
+      description: Optional password. If omitted, Home Assistant generates one and shows it once in the call event stream and in a persistent notification.
+      required: false
+      selector:
+        text:
+    enabled:
+      name: Optional Enabled
+      required: false
+      default: true
+      selector:
+        boolean:
+    replace:
+      name: Optional Replace Existing
+      required: false
+      default: false
+      selector:
+        boolean:
+
+remove_account:
+  name: Remove SIP Softphone Account
+  description: Remove one local SIP account and its active registration.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+rotate_account_password:
+  name: Rotate SIP Softphone Password
+  description: Generate a new password for a local SIP account and clear its active registration.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+enable_account:
+  name: Enable SIP Softphone Account
+  description: Enable a local SIP account.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+disable_account:
+  name: Disable SIP Softphone Account
+  description: Disable a local SIP account and clear its active registration.
+  fields:
+    username:
+      name: Username
+      required: true
+      selector:
+        text:
+
+list_accounts:
+  name: List SIP Softphone Accounts
+  description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.
+
+export_accounts:
+  name: Export SIP Softphone Accounts
+  description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.

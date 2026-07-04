@@ -1,28 +1,41 @@
 #!/usr/bin/env bash
-# yaml_paths.sh - switch device YAML paths between local (dev) and remote (release).
+# yaml_paths.sh - switch device YAML paths between local checkout and remote release refs.
 #
 # ─── Convention ───
 # Each YAML carries ONE active value per resource: ext_components_source,
-# assets_base, and each `packages:` entry. No dual-mode commented shadow
+# voip_stack_components_source, audio_stack_components_source,
+# runtime_controller_components_source, assets_base, and each `packages:` entry.
+# No dual-mode commented shadow
 # lines. This script is the single source of truth for those values:
 # rewriting in place from local→remote (or vice versa) is mechanical, no
 # manual edit needed.
 #
 # Workflow:
-# - Dev: working tree in local mode. `esphome compile` picks up uncommitted
-#   changes to `esphome/components/` and `packages/` directly.
-# - Pre-release: `./yaml_paths.sh remote --branch <release>`, commit, push,
-#   tag. End users compile straight from github://, no clone needed.
+# - Local development: working tree in local mode. `esphome compile` picks up sibling
+#   checkouts directly.
+# - Publish: set each repo independently, for example
+#   `./yaml_paths.sh remote --intercom main --voip main --audio main --runtime main`.
 #
 # ─── How it works ───
-# Three rewrite targets per YAML:
-#   1. ext_components_source  → string substitution (single line)
-#   2. assets_base            → string substitution (single line, optional;
+# Rewrite targets per YAML:
+#   1. ext_components_source              → string substitution (single line)
+#   2. voip_stack_components_source      → string substitution (single line,
+#                                           optional; only YAMLs using the
+#                                           split ESP VoIP stack repo have it)
+#   3. audio_stack_components_source      → string substitution (single line,
+#                                           optional; only YAMLs using the
+#                                           split ESP audio stack repo have it)
+#   4. runtime_controller_components_source
+#                                         → string substitution (single line,
+#                                           optional; only full YAMLs using the
+#                                           split runtime controller repo have it)
+#   5. assets_base                        → string substitution (single line,
+#                                           optional;
 #                                some yamls don't use external assets)
-#   3. packages: <key>: VALUE → one line per package entry (N entries)
+#   6. packages: <key>: VALUE             → one line per package entry (N entries)
 #
-# For (1)+(2): straight `sed` of the active value.
-# For (3): per-line awk replacement, because the path conversion needs
+# For (1)+(2)+(3)+(4): straight `sed` of the active value.
+# For (5): per-line awk replacement, because the path conversion needs
 # `realpath --relative-to` per yaml (each yaml lives at a different depth).
 #
 # ─── ESPHome conventions we rely on ───
@@ -42,7 +55,7 @@
 #   `[a-zA-Z_][a-zA-Z0-9_]*` (identifier shape, not just letters).
 # - Yaml depth varies (3 or 4 levels deep under `yamls/`): all paths
 #   computed dynamically via `realpath --relative-to`. No hardcoded depth.
-# - Yamls without `assets_base` (e.g. minimal intercom-only): the sed
+# - Yamls without `assets_base` (e.g. minimal voip-only): the sed
 #   substitution is a no-op when the line is absent.
 # - Roundtrip local→remote→local is byte-identical (verified via md5sum).
 
@@ -50,6 +63,16 @@ set -euo pipefail
 
 # ────────── Defaults ──────────
 DEFAULT_URL="github://n-IA-hane/esphome-intercom"
+DEFAULT_INTERCOM_BRANCH="main"
+DEFAULT_VOIP_STACK_URL="github://n-IA-hane/esphome-voip-stack"
+DEFAULT_VOIP_STACK_BRANCH="main"
+VOIP_STACK_ROOT_DEFAULT="../esphome-voip-stack"
+DEFAULT_AUDIO_STACK_URL="github://n-IA-hane/esphome-audio-stack"
+DEFAULT_AUDIO_STACK_BRANCH="main"
+AUDIO_STACK_ROOT_DEFAULT="../esphome-audio-stack"
+DEFAULT_RUNTIME_CONTROLLER_URL="github://n-IA-hane/esphome-runtime-controller"
+DEFAULT_RUNTIME_CONTROLLER_BRANCH="main"
+RUNTIME_CONTROLLER_ROOT_DEFAULT="../esphome-runtime-controller"
 ASSETS_HOST="https://github.com"   # for assets_base remote URL composition
 
 # ────────── Helpers ──────────
@@ -68,6 +91,13 @@ current_branch() {
 # Strip "github://OWNER/REPO" → "OWNER/REPO"
 url_owner_repo() {
   echo "$1" | sed -E 's|^github://([^/]+/[^/@]+).*|\1|'
+}
+
+normalize_ref() {
+  case "$1" in
+    local|LOCAL) echo "local" ;;
+    *) echo "$1" ;;
+  esac
 }
 
 # Find production YAMLs that should be toggle-managed.
@@ -91,15 +121,23 @@ find_yamls() {
 # (yaml doesn't actually use the toggle pattern, e.g. a fragment).
 detect_mode() {
   local f="$1" has_local=0 has_remote=0
-  # Remote markers: ext_components_source pointing at github://, OR any
-  # packages: entry with github:// shorthand.
-  if grep -qE '^[[:space:]]*ext_components_source:[[:space:]]*"github://' "$f" \
-     || grep -qE '^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*github://' "$f"; then
+  # Remote markers: ext_components_source/packages pointing at this repo.
+  # Third-party github:// packages are allowed in local mode and must not make
+  # the YAML look mixed.
+  if grep -qF "ext_components_source: \"${DEFAULT_URL}" "$f" \
+     || grep -qF "voip_stack_components_source: \"${DEFAULT_VOIP_STACK_URL}" "$f" \
+     || grep -qF "audio_stack_components_source: \"${DEFAULT_AUDIO_STACK_URL}" "$f" \
+     || grep -qF "runtime_controller_components_source: \"${DEFAULT_RUNTIME_CONTROLLER_URL}" "$f" \
+     || grep -qF ": ${DEFAULT_RUNTIME_CONTROLLER_URL}/" "$f" \
+     || grep -qF ": ${DEFAULT_URL}/" "$f"; then
     has_remote=1
   fi
   # Local markers: ext_components_source with relative path (`"../`), OR any
   # packages: entry using !include yaml tag.
   if grep -qE '^[[:space:]]*ext_components_source:[[:space:]]*"\.\./' "$f" \
+     || grep -qE '^[[:space:]]*audio_stack_components_source:[[:space:]]*"\.\./' "$f" \
+     || grep -qE '^[[:space:]]*voip_stack_components_source:[[:space:]]*"\.\./' "$f" \
+     || grep -qE '^[[:space:]]*runtime_controller_components_source:[[:space:]]*"\.\./' "$f" \
      || grep -qE '^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*!include' "$f"; then
     has_local=1
   fi
@@ -115,14 +153,29 @@ detect_mode() {
 # handled automatically. With trailing slash unless yaml IS at repo root
 # (degenerate case, none of our yamls live there).
 to_local() {
-  local f="$1" root="$2" yaml_dir relroot
+  local f="$1" root="$2" voip_root="$3" audio_root="$4" runtime_root="$5" yaml_dir relroot voip_relroot audio_relroot runtime_relroot
   yaml_dir=$(dirname "$f")
   relroot=$(realpath --relative-to="$yaml_dir" "$root")
   [[ "$relroot" == "." ]] && relroot="" || relroot="$relroot/"
+  voip_relroot=$(realpath --relative-to="$yaml_dir" "$voip_root")
+  [[ "$voip_relroot" == "." ]] && voip_relroot="" || voip_relroot="$voip_relroot/"
+  audio_relroot=$(realpath --relative-to="$yaml_dir" "$audio_root")
+  [[ "$audio_relroot" == "." ]] && audio_relroot="" || audio_relroot="$audio_relroot/"
+  runtime_relroot=$(realpath --relative-to="$yaml_dir" "$runtime_root")
+  [[ "$runtime_relroot" == "." ]] && runtime_relroot="" || runtime_relroot="$runtime_relroot/"
 
   # 1) ext_components_source → "<relroot>esphome/components"
   #    e.g. yaml at depth 3 ⇒ relroot="../../../" ⇒ value "../../../esphome/components"
   sed -i -E "s|^([[:space:]]*ext_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${relroot}esphome/components\"|" "$f"
+
+  # 1b) voip_stack_components_source → sibling esp-voip-stack repo
+  sed -i -E "s|^([[:space:]]*voip_stack_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${voip_relroot}esphome/components\"|" "$f"
+
+  # 1c) audio_stack_components_source → sibling esp-audio-stack repo
+  sed -i -E "s|^([[:space:]]*audio_stack_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${audio_relroot}esphome/components\"|" "$f"
+
+  # 1d) runtime_controller_components_source → sibling esp-runtime-controller repo
+  sed -i -E "s|^([[:space:]]*runtime_controller_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${runtime_relroot}esphome/components\"|" "$f"
 
   # 2) assets_base → "<relroot>"
   #    Bare relroot (e.g. "../../../") points to the repo root, where assets/
@@ -153,8 +206,19 @@ to_local() {
       indent=$(echo "$orig" | sed -E 's|^( *).*|\1|')
       # INNER = path between repo + the @branch suffix:
       #   "github://owner/repo/packages/foo.yaml@branch" → "packages/foo.yaml"
-      inner=$(echo "$orig" | sed -E 's|^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*github://[^/]+/[^/]+/(.+)@[^[:space:]]*[[:space:]]*$|\1|')
-      target_abs="$root/$inner"
+      local value
+      value=$(echo "$orig" | sed -E 's|^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*([^[:space:]]+).*$|\1|')
+      if [[ "$value" == "$DEFAULT_URL/"*@* ]]; then
+        inner="${value#"$DEFAULT_URL/"}"
+        inner="${inner%@*}"
+        target_abs="$root/$inner"
+      elif [[ "$value" == "$DEFAULT_RUNTIME_CONTROLLER_URL/"*@* ]]; then
+        inner="${value#"$DEFAULT_RUNTIME_CONTROLLER_URL/"}"
+        inner="${inner%@*}"
+        target_abs="$runtime_root/$inner"
+      else
+        continue
+      fi
       target_rel=$(realpath --relative-to="$yaml_dir" "$target_abs")
       new="${indent}${key}: !include ${target_rel}"
       awk -v ln="$lineno" -v repl="$new" 'NR==ln{print repl; next}{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -167,7 +231,7 @@ to_local() {
 # each package, resolves it to an absolute path, then computes the path
 # relative to the repo root (= the INNER part of the github:// URL).
 to_remote() {
-  local f="$1" root="$2" url="$3" branch="$4"
+  local f="$1" root="$2" url="$3" branch="$4" voip_url="$5" voip_branch="$6" audio_url="$7" audio_branch="$8" runtime_url="$9" runtime_branch="${10}" runtime_root="${11}"
   local yaml_dir owner_repo assets_url
   yaml_dir=$(dirname "$f")
   owner_repo=$(url_owner_repo "$url")
@@ -179,6 +243,17 @@ to_remote() {
   # 1) ext_components_source → "github://OWNER/REPO@BRANCH"
   #    No subfolder needed: ESPHome defaults to <repo>/esphome/components/.
   sed -i -E "s|^([[:space:]]*ext_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${url}@${branch}\"|" "$f"
+
+  # 1b) voip_stack_components_source → split ESP VoIP stack repo.
+  sed -i -E "s|^([[:space:]]*voip_stack_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${voip_url}@${voip_branch}\"|" "$f"
+
+  # 1c) audio_stack_components_source → split ESP audio stack repo.
+  # This branch is intentionally independent from the intercom branch:
+  # release/dev intercom YAMLs can consume the stable audio-stack main branch.
+  sed -i -E "s|^([[:space:]]*audio_stack_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${audio_url}@${audio_branch}\"|" "$f"
+
+  # 1d) runtime_controller_components_source → split runtime controller repo.
+  sed -i -E "s|^([[:space:]]*runtime_controller_components_source:)[[:space:]]*\"[^\"]*\"|\1 \"${runtime_url}@${runtime_branch}\"|" "$f"
 
   # 2) assets_base → "https://github.com/OWNER/REPO/raw/BRANCH/"
   sed -i -E "s|^([[:space:]]*assets_base:)[[:space:]]*\"[^\"]*\"|\1 \"${assets_url}\"|" "$f"
@@ -205,6 +280,11 @@ to_remote() {
         inner="${inner%@*}"
         new="${prefix}${url}/${inner}@${branch}"
         awk -v ln="$lineno" -v repl="$new" 'NR==ln{print repl; next}{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+      elif [[ "$value" == "$runtime_url/"*@* ]]; then
+        inner="${value#"$runtime_url/"}"
+        inner="${inner%@*}"
+        new="${prefix}${runtime_url}/${inner}@${runtime_branch}"
+        awk -v ln="$lineno" -v repl="$new" 'NR==ln{print repl; next}{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
       fi
     done <<< "$remote_lines"
   fi
@@ -228,8 +308,13 @@ to_remote() {
       indent=$(echo "$orig" | sed -E 's|^( *).*|\1|')
       relpath=$(echo "$orig" | sed -E 's|^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*!include[[:space:]]+(.+)$|\1|')
       target_abs=$(realpath -m "$yaml_dir/$relpath")
-      inner=$(realpath --relative-to="$root" "$target_abs")
-      new="${indent}${key}: ${url}/${inner}@${branch}"
+      if [[ "$target_abs" == "$runtime_root"/packages/runtime_controller/* ]]; then
+        inner=$(realpath --relative-to="$runtime_root" "$target_abs")
+        new="${indent}${key}: ${runtime_url}/${inner}@${runtime_branch}"
+      else
+        inner=$(realpath --relative-to="$root" "$target_abs")
+        new="${indent}${key}: ${url}/${inner}@${branch}"
+      fi
       awk -v ln="$lineno" -v repl="$new" 'NR==ln{print repl; next}{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     done <<< "$lines"
   fi
@@ -255,33 +340,72 @@ cmd_status() {
 }
 
 cmd_local() {
-  local root
+  local root voip_root audio_root runtime_root
   root=$(repo_root)
+  voip_root="${VOIP_STACK_ROOT_ARG:-$root/$VOIP_STACK_ROOT_DEFAULT}"
+  voip_root=$(realpath -m "$voip_root")
+  audio_root="${AUDIO_STACK_ROOT_ARG:-$root/$AUDIO_STACK_ROOT_DEFAULT}"
+  audio_root=$(realpath -m "$audio_root")
+  runtime_root="${RUNTIME_CONTROLLER_ROOT_ARG:-$root/$RUNTIME_CONTROLLER_ROOT_DEFAULT}"
+  runtime_root=$(realpath -m "$runtime_root")
   log "Switching to LOCAL mode (relative paths)"
+  log "  VoIP stack root:  $voip_root"
+  log "  Audio stack root: $audio_root"
+  log "  Runtime controller root: $runtime_root"
   log ""
   while IFS= read -r f; do
     local rel
     rel=$(realpath --relative-to="$root" "$f")
     [[ -n "${ONLY_FILE:-}" && "$rel" != "$ONLY_FILE" && "$f" != "$ONLY_FILE" ]] && continue
-    to_local "$f" "$root"
+    to_local "$f" "$root" "$voip_root" "$audio_root" "$runtime_root"
+    # Local runtime-controller packages live in the sibling runtime repo, not in
+    # the intercom repo. Keep the full-profile package include colocated with
+    # the component source so local testing exercises the split repository.
+    yaml_dir=$(dirname "$f")
+    runtime_relroot=$(realpath --relative-to="$yaml_dir" "$runtime_root")
+    [[ "$runtime_relroot" == "." ]] && runtime_relroot="" || runtime_relroot="$runtime_relroot/"
+    if grep -qE '^[[:space:]]+runtime_controller:[[:space:]]*!include[[:space:]]+' "$f"; then
+      sed -i -E "s|^([[:space:]]+runtime_controller:)[[:space:]]*!include[[:space:]]+.*packages/runtime_controller/(full_controller(_no_led)?\\.yaml)|\\1 !include ${runtime_relroot}packages/runtime_controller/\\2|" "$f"
+    fi
     note "$rel"
   done < <(find_yamls "$root")
 }
 
 cmd_remote() {
-  local root url branch
+  local root url branch voip_url voip_branch audio_url audio_branch runtime_url runtime_branch runtime_root
   root=$(repo_root)
   url="${URL_ARG:-$DEFAULT_URL}"
-  branch="${BRANCH_ARG:-main}"
+  branch="${INTERCOM_REF_ARG:-${BRANCH_ARG:-$DEFAULT_INTERCOM_BRANCH}}"
+  voip_url="${VOIP_STACK_URL_ARG:-$DEFAULT_VOIP_STACK_URL}"
+  voip_branch="${VOIP_STACK_REF_ARG:-${VOIP_STACK_BRANCH_ARG:-$DEFAULT_VOIP_STACK_BRANCH}}"
+  audio_url="${AUDIO_STACK_URL_ARG:-$DEFAULT_AUDIO_STACK_URL}"
+  audio_branch="${AUDIO_STACK_REF_ARG:-${AUDIO_STACK_BRANCH_ARG:-$DEFAULT_AUDIO_STACK_BRANCH}}"
+  runtime_url="${RUNTIME_CONTROLLER_URL_ARG:-$DEFAULT_RUNTIME_CONTROLLER_URL}"
+  runtime_branch="${RUNTIME_CONTROLLER_REF_ARG:-${RUNTIME_CONTROLLER_BRANCH_ARG:-$DEFAULT_RUNTIME_CONTROLLER_BRANCH}}"
+  branch=$(normalize_ref "$branch")
+  voip_branch=$(normalize_ref "$voip_branch")
+  audio_branch=$(normalize_ref "$audio_branch")
+  runtime_branch=$(normalize_ref "$runtime_branch")
+  runtime_root="${RUNTIME_CONTROLLER_ROOT_ARG:-$root/$RUNTIME_CONTROLLER_ROOT_DEFAULT}"
+  runtime_root=$(realpath -m "$runtime_root")
+  if [[ "$branch" == "local" || "$voip_branch" == "local" || "$audio_branch" == "local" || "$runtime_branch" == "local" ]]; then
+    err "remote currently accepts branch/tag refs only; use 'local' command for all-local mode"
+  fi
   log "Switching to REMOTE mode"
-  log "  URL:    $url"
-  log "  Branch: $branch"
+  log "  URL:                $url"
+  log "  Intercom ref:       $branch"
+  log "  VoIP stack URL:     $voip_url"
+  log "  VoIP stack ref:     $voip_branch"
+  log "  Audio stack URL:    $audio_url"
+  log "  Audio stack ref:    $audio_branch"
+  log "  Runtime URL:        $runtime_url"
+  log "  Runtime ref:        $runtime_branch"
   log ""
   while IFS= read -r f; do
     local rel
     rel=$(realpath --relative-to="$root" "$f")
     [[ -n "${ONLY_FILE:-}" && "$rel" != "$ONLY_FILE" && "$f" != "$ONLY_FILE" ]] && continue
-    to_remote "$f" "$root" "$url" "$branch"
+    to_remote "$f" "$root" "$url" "$branch" "$voip_url" "$voip_branch" "$audio_url" "$audio_branch" "$runtime_url" "$runtime_branch" "$runtime_root"
     note "$rel"
   done < <(find_yamls "$root")
 }
@@ -308,28 +432,51 @@ cmd_check() {
 
 usage() {
   cat <<EOF
-yaml_paths.sh - switch device YAML paths between local (dev) and remote (release).
+yaml_paths.sh - switch device YAML paths between local checkout and remote release refs.
 
 Usage:
   $(basename "$0") <command> [options]
 
 Commands:
   status                          Print mode (local/remote/mixed) per YAML
-  local                           Rewrite all YAMLs to LOCAL mode (dev)
-  remote [--url U] [--branch B]   Rewrite all YAMLs to REMOTE mode (release)
+  local                           Rewrite all YAMLs to LOCAL mode
+  remote [options]                Rewrite all YAMLs to REMOTE mode
   check                           Lint: fail on mixed paths or nested list !include
 
 Options:
   --url URL       e.g. github://n-IA-hane/esphome-intercom (default)
-  --branch B      branch shorthand (default: main)
+  --branch B      legacy alias for --intercom B
+  --intercom REF  intercom/VoIP repo branch/tag (default: main)
+  --voip-stack-url URL
+                  e.g. github://n-IA-hane/esphome-voip-stack (default)
+  --voip-stack-branch B
+                  legacy alias for --voip B
+  --voip REF      esphome-voip-stack branch/tag (default: main)
+  --voip-stack-root PATH
+                  local esphome-voip-stack checkout (default: ../esphome-voip-stack)
+  --audio-stack-url URL
+                  e.g. github://n-IA-hane/esphome-audio-stack (default)
+  --audio-stack-branch B
+                  legacy alias for --audio B
+  --audio REF     esp-audio-stack branch/tag (default: main)
+  --audio-stack-root PATH
+                  local esp-audio-stack checkout (default: ../esphome-audio-stack)
+  --runtime-controller-url URL
+                  e.g. github://n-IA-hane/esphome-runtime-controller (default)
+  --runtime-controller-branch B
+                  legacy alias for --runtime B
+  --runtime REF   esphome-runtime-controller branch/tag (default: main)
+  --runtime-controller-root PATH
+                  local esphome-runtime-controller checkout (default: ../esphome-runtime-controller)
   --file PATH     limit operation to a single YAML (relative to repo root or absolute)
 
 Examples:
   $(basename "$0") status
   $(basename "$0") local
-  $(basename "$0") remote --branch dev
-  $(basename "$0") remote --url github://my-fork/esphome-intercom --branch dev
-  $(basename "$0") remote --file yamls/intercom-only/single-bus/xiaozhi-intercom.yaml --branch main
+  $(basename "$0") remote
+  $(basename "$0") remote --intercom main --voip main --audio main --runtime main
+  $(basename "$0") remote --url github://my-fork/esphome-intercom --branch main
+  $(basename "$0") remote --file yamls/voip-only/single-bus/xiaozhi-intercom.yaml --branch main
 EOF
 }
 
@@ -339,12 +486,38 @@ EOF
 cmd="$1"; shift
 URL_ARG=""
 BRANCH_ARG=""
+INTERCOM_REF_ARG=""
+VOIP_STACK_URL_ARG=""
+VOIP_STACK_BRANCH_ARG=""
+VOIP_STACK_REF_ARG=""
+VOIP_STACK_ROOT_ARG=""
+AUDIO_STACK_URL_ARG=""
+AUDIO_STACK_BRANCH_ARG=""
+AUDIO_STACK_REF_ARG=""
+AUDIO_STACK_ROOT_ARG=""
+RUNTIME_CONTROLLER_URL_ARG=""
+RUNTIME_CONTROLLER_BRANCH_ARG=""
+RUNTIME_CONTROLLER_REF_ARG=""
+RUNTIME_CONTROLLER_ROOT_ARG=""
 ONLY_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --url)    URL_ARG="$2"; shift 2 ;;
     --branch) BRANCH_ARG="$2"; shift 2 ;;
+    --intercom) INTERCOM_REF_ARG="$2"; shift 2 ;;
+    --voip-stack-url) VOIP_STACK_URL_ARG="$2"; shift 2 ;;
+    --voip-stack-branch) VOIP_STACK_BRANCH_ARG="$2"; shift 2 ;;
+    --voip|--esp-voip-stack|--voip-stack) VOIP_STACK_REF_ARG="$2"; shift 2 ;;
+    --voip-stack-root) VOIP_STACK_ROOT_ARG="$2"; shift 2 ;;
+    --audio-stack-url) AUDIO_STACK_URL_ARG="$2"; shift 2 ;;
+    --audio-stack-branch) AUDIO_STACK_BRANCH_ARG="$2"; shift 2 ;;
+    --audio|--esp-audio-stack) AUDIO_STACK_REF_ARG="$2"; shift 2 ;;
+    --audio-stack-root) AUDIO_STACK_ROOT_ARG="$2"; shift 2 ;;
+    --runtime-controller-url) RUNTIME_CONTROLLER_URL_ARG="$2"; shift 2 ;;
+    --runtime-controller-branch) RUNTIME_CONTROLLER_BRANCH_ARG="$2"; shift 2 ;;
+    --runtime|--fsm|--runtime-controller) RUNTIME_CONTROLLER_REF_ARG="$2"; shift 2 ;;
+    --runtime-controller-root) RUNTIME_CONTROLLER_ROOT_ARG="$2"; shift 2 ;;
     --file)   ONLY_FILE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) err "unknown option: $1 (run --help)" ;;

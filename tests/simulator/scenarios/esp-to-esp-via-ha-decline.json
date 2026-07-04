@@ -1,0 +1,51 @@
+{
+  "name": "esp-to-esp-via-ha-decline",
+  "description": "ESP calls ESP through HA SIP bridge bridge; decline propagates through both SIP legs.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "set_option",
+        "target": "caller",
+        "option": "sip_bridge",
+        "value": true
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Virtual Spotpear"
+      }
+    },
+    {
+      "expect": {
+        "bridge": {
+          "state": "ringing",
+          "left": "Virtual S3",
+          "right": "Virtual Spotpear"
+        },
+        "callee": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "callee_decline",
+        "reason": "Test Decline"
+      }
+    },
+    {
+      "expect": {
+        "bridge": {
+          "state": "idle"
+        },
+        "caller": {
+          "state": "idle",
+          "last_reason": "Test Decline"
+        }
+      }
+    }
+  ]
+}

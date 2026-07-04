@@ -1,0 +1,20 @@
+# =============================================================================
+# VA + VoIP meta-package using runtime_controller.
+# Core runtime only: VA, MWW, VoIP callbacks and runtime_controller arbitration.
+#
+# Maintained presets include optional feature packages explicitly next to this
+# core package, so users can comment out one line to remove a feature:
+#   - voip/va_buttons_switches_cpp.yaml
+#   - voip/call_settings.yaml
+#   - voip/ha_api_cpp.yaml
+#   - voice_assistant/local_commands_cpp.yaml
+# =============================================================================
+
+packages:
+  runtime_bridge: !include voip/runtime_bridge_full_cpp.yaml
+  voice_assistant_core: !include voice_assistant/core_cpp.yaml
+  va_callbacks: !include voip/va_callbacks_cpp.yaml
+
+voip_stack:
+  id: phone
+  network_socket_headroom: 8

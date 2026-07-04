@@ -1,0 +1,44 @@
+{
+  "name": "sip-auth-unsupported",
+  "description": "A remote 401/407 terminates with explicit unsupported-auth reason; ESP/HA do not retry with credentials.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "sip_auth_challenge",
+        "status": 401,
+        "call_id": "auth-required"
+      }
+    },
+    {
+      "expect": {
+        "sip": {
+          "last_status": 401,
+          "auth_reason": "auth_required_unsupported"
+        },
+        "caller": {
+          "state": "idle",
+          "last_reason": "auth_required_unsupported"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "sip_auth_challenge",
+        "status": 407,
+        "call_id": "proxy-auth-required"
+      }
+    },
+    {
+      "expect": {
+        "sip": {
+          "last_status": 407,
+          "auth_reason": "proxy_auth_required_unsupported"
+        },
+        "caller": {
+          "state": "idle",
+          "last_reason": "proxy_auth_required_unsupported"
+        }
+      }
+    }
+  ]
+}

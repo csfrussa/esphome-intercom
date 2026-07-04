@@ -1,0 +1,637 @@
+# =============================================================================
+# Waveshare ESP32-S3-AUDIO-Board: VA + VoIP + MWW (no display)
+# =============================================================================
+#
+# Hardware:
+#   - ESP32-S3R8 (16MB Flash, 8MB PSRAM octal)
+#   - ES8311 Audio DAC (speaker) + ES7210 Audio ADC (dual mic array)
+#   - NS4150 3W mono Class-D speaker amp (via TCA9555 EXIO pin 8)
+#   - 7x WS2812 addressable RGB LEDs (GPIO38)
+#   - 3 user buttons via TCA9555 (EXIO 9/10/11) + BOOT button (GPIO0)
+#   - Battery: MX1.25 3.7V Li-ion connector + charging IC
+#
+# Pin Map:
+#   I2S: MCLK=GPIO12 BCLK=GPIO13 LRCLK=GPIO14 DIN=GPIO15 DOUT=GPIO16
+#   I2C: SDA=GPIO11 SCL=GPIO10 (ES8311@0x18, ES7210@0x40, TCA9555@0x20)
+#   LEDs: GPIO38 (WS2812 x7)
+#   BOOT: GPIO0
+#
+# Audio pipeline (esp_audio_stack at 48kHz, TDM + Espressif rate conversion to 16kHz):
+#
+# Verified Waveshare ESP32-S3-AUDIO-Board slot map, board oriented with:
+#   - speaker at the bottom
+#   - GPIO/header connector at the top
+#
+# Empirical TDM mapping on this board:
+#   - slot 2 = left microphone  (left of the GPIO connector)
+#   - slot 0 = right microphone (right of the GPIO connector)
+#   - slot 1 = playback reference used by AEC
+#   - slot 3 = near-silent / unused on this board revision
+#
+# Dual-mic target:
+#   ES7210 TDM slots [0, 2]          → esp_ae_rate_cvt x3 ──┐
+#   ES7210 TDM slot 1 (DAC ref)      → esp_ae_rate_cvt x3 ──┴── esp_afe (AEC + Speech Enhancement + VAD) → mono mic_main → VA / VoIP TX / MWW
+#
+#   Music/radio → media_speaker_input (resampler) ───────────┐
+#   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311 DAC
+#   VoIP RX → voip_speaker_input (resampler) ────────┘
+#
+# =============================================================================
+
+# =============================================================================
+# PROJECT SETUP
+# =============================================================================
+
+substitutions:
+  # Hardware-shared identity: all Waveshare S3 firmware variants share the same
+  # name so HA reuses the device entity and ESPHome reuses the build cache.
+  name: waveshare-s3
+  friendly_name: Waveshare S3 Audio
+
+  ext_components_source: "github://n-IA-hane/esphome-intercom@main"
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+  runtime_controller_components_source: "github://n-IA-hane/esphome-runtime-controller@main"
+
+  assets_base: "https://github.com/n-IA-hane/esphome-intercom/raw/main/"
+
+  # Microphone ID for package mute switch
+  mic_id: mic_main
+  afe_aec_restore_mode: RESTORE_DEFAULT_ON
+  runtime_controller_led_preset: ws2812_ring
+
+  # ---------------------------------------------------------------------------
+  # Pinout: shared codec/control I2C bus
+  # ---------------------------------------------------------------------------
+  codec_i2c_sda_pin: GPIO11
+  codec_i2c_scl_pin: GPIO10
+
+  # ---------------------------------------------------------------------------
+  # Pinout: shared ES7210/ES8311 TDM audio bus
+  # ---------------------------------------------------------------------------
+  i2s_mclk_pin: GPIO12
+  i2s_bclk_pin: GPIO13
+  i2s_lrclk_pin: GPIO14
+  i2s_din_pin: GPIO15
+  i2s_dout_pin: GPIO16
+
+  # ---------------------------------------------------------------------------
+  # Pinout: board controls and status ring
+  # ---------------------------------------------------------------------------
+  boot_button_pin: GPIO0
+  status_led_pin: GPIO38
+
+packages:
+  core: github://n-IA-hane/esphome-intercom/packages/va_voip_cpp.yaml@main
+  runtime_controller: github://n-IA-hane/esphome-runtime-controller/packages/runtime_controller/full_controller.yaml@main
+  va_buttons_switches: github://n-IA-hane/esphome-intercom/packages/voip/va_buttons_switches_cpp.yaml@main
+  call_settings: github://n-IA-hane/esphome-intercom/packages/voip/call_settings.yaml@main
+  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api_cpp.yaml@main
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@main
+  ota_maintenance: github://n-IA-hane/esphome-intercom/packages/ota/full_audio_maintenance.yaml@main
+  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@main
+  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@main
+  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@main
+  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@main
+  status_led: github://n-IA-hane/esphome-intercom/packages/led/status_ws2812_ring.yaml@main
+  afe_entities: github://n-IA-hane/esphome-intercom/packages/esp_afe/dual_mic_entities.yaml@main
+  audio_stack_controls: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
+  speaker_power: github://n-IA-hane/esphome-intercom/packages/esp_audio_stack/speaker_power_switch.yaml@main
+  speaker_mixer: github://n-IA-hane/esphome-intercom/packages/audio/full_mono_mixer_48k_cpp.yaml@main
+  speaker_media_player: github://n-IA-hane/esphome-intercom/packages/media_player/full_mono_48k_cpp.yaml@main
+  va_timers: github://n-IA-hane/esphome-intercom/packages/voice_assistant/timers_cpp.yaml@main
+  flac_codecs_psram: github://n-IA-hane/esphome-intercom/packages/audio/flac_codecs_psram.yaml@main
+
+# =============================================================================
+# BOARD AND MEMORY
+# =============================================================================
+
+# Device identity exposed to ESPHome, HA and the shared VoIP phonebook.
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  platformio_options:
+    board_build.flash_mode: dio
+
+# ESP32-S3 target and ESP-IDF tuning for the Waveshare S3 full AFE profile.
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      compiler_optimization: PERF
+    sdkconfig_options:
+      # mbedtls extras (still inline pending benchmark vs tls_external_mem.yaml).
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+      CONFIG_MBEDTLS_DYNAMIC_BUFFER: "y"
+      CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN: "16384"
+      # Keep AES in hardware for HTTPS media/TTS worst-case testing. The AFE
+      # bridge buffers below live in PSRAM to preserve contiguous DMA heap.
+      CONFIG_MBEDTLS_HARDWARE_AES: "y"
+      # Keep Wi-Fi buffering below ESPHome's streaming high-performance preset
+      # (64 dynamic RX + 64 dynamic TX + BA windows 32). That preset is useful
+      # for throughput, but this profile needs bounded media/TTS ingress so the
+      # audio graph sees backpressure before the final I2S sink saturates.
+      CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM: "10"
+      CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "32"
+      CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM: "32"
+      CONFIG_ESP_WIFI_TX_BA_WIN: "16"
+      CONFIG_ESP_WIFI_RX_BA_WIN: "16"
+
+# OPI PSRAM is required by AFE, media buffers, assets and VoIP task stacks.
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+
+# Project components for full VA/VoIP, runtime controller and ESP AFE.
+
+external_components:
+  - source: ${voip_stack_components_source}
+    components: [voip_stack]
+  - source: ${ext_components_source}
+    components: [speaker, voice_assistant]
+  - source: ${runtime_controller_components_source}
+    components: [runtime_controller]
+  - source: ${audio_stack_components_source}
+    components: [esp_audio_stack, esp_afe]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+# Conservative network profile: bound ingress and memory use before audio sinks
+# saturate.
+
+network:
+  # The speaker media player requests high-performance networking by default,
+  # which expands lwIP to 65KB TCP windows and 64-entry mailboxes. On this
+  # full-duplex audio profile that creates bursty HTTP/TTS ingress and memory
+  # pressure in front of the mixer, while I2S can only drain 96 KB/s.
+  enable_high_performance: false
+
+# Normal Wi-Fi client mode. Power save is disabled for full audio stability and
+# reliable HA API reconnects.
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Full audio + API needs deterministic Wi-Fi latency; ESP32 LIGHT power save
+  # can make the device appear associated while HA can no longer ARP it.
+  power_save_mode: NONE
+
+# Home Assistant native API for entities, service actions and phonebook sync.
+
+api:
+  # `start_call(dest)` actions come from the runtime HA API package.
+
+# OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
+
+ota:
+  - platform: esphome
+
+# USB logger. VoIP/audio domains stay visible at INFO; noisy entity domains stay
+# WARN for normal field use.
+
+logger:
+  # DEBUG keeps SIP signaling + AEC/AFE/i2s lifecycle visible.
+  # Mute chatty ESPHome built-ins below; project components stay at DEBUG.
+  level: INFO
+  logs:
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+    switch: WARN
+    number: WARN
+    button: WARN
+    api: WARN
+    api.connection: WARN
+    component: WARN
+
+# =============================================================================
+# BUSES
+# =============================================================================
+
+i2c:
+  - id: internal_i2c
+    sda: ${codec_i2c_sda_pin}
+    scl: ${codec_i2c_scl_pin}
+    scan: false
+
+# TCA9555 IO Expander (speaker amp, buttons)
+
+tca9555:
+  - id: io_expander
+    address: 0x20
+    i2c_id: internal_i2c
+
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+
+# Hardware audio stack: ES7210/ES8311 codec control, 48 kHz TDM bus, AFE feed
+# and speaker output through the shared esp_audio_stack component.
+
+esp_audio_stack:
+  id: audio_stack
+  # WS3 full AFE profile:
+  # - audio_stack is the non-network realtime I2S bridge: Core 0 / prio 19 is
+  #   below Wi-Fi prio 23 and above lwIP prio 18, matching ESP-IDF guidance
+  #   for time-critical tasks that do not perform TCP/IP work.
+  # - audio_stack task stack in PSRAM saves ~8 KB internal heap.
+  # - component frame buffers in PSRAM preserve internal/DMA heap for Wi-Fi,
+  #   TLS, I2S DMA and esp-sr internals.
+  audio_task_stack_in_psram: true
+  buffers_in_psram: true
+  # WS3 ES8311/NS4150 path drops perceived loudness too aggressively with the
+  # codec-dev default ~-50 dB floor. Keep 0% as mute, but make 70% usable.
+  master_volume_min_db: -30.0
+  task_core: 0
+  task_priority: 19
+  task_stack_size: 8192
+  i2s_lrclk_pin: ${i2s_lrclk_pin}
+  i2s_bclk_pin: ${i2s_bclk_pin}
+  i2s_mclk_pin: ${i2s_mclk_pin}
+  i2s_din_pin: ${i2s_din_pin}
+  i2s_dout_pin: ${i2s_dout_pin}
+  sample_rate: 48000
+  output_sample_rate: 16000
+  processor_id: afe_processor
+  audio_effects:
+    rate_cvt_complexity: 3
+    rate_cvt_perf_type: speed
+  codec:
+    i2c_id: internal_i2c
+    input:
+      type: es7210
+      address: 0x40
+      mic_selected: 0x0F
+      gain_db: 24.0
+    output:
+      type: es8311
+      address: 0x18
+      use_mclk: true
+      no_dac_ref: true
+  use_tdm_reference: true
+  tdm_total_slots: 4
+  tdm_mic_slots: [0, 2]  # Verified right-side mic, left-side mic
+  tdm_ref_slot: 1        # Verified playback reference for AEC
+
+esp_afe:
+  id: afe_processor
+  type: fd
+  mode: high_perf
+  mic_num: 2
+  aec_filter_length: 4
+  aec_nlp_level: normal
+  memory_alloc_mode: more_psram
+  # Espressif layout:
+  # - SE/BSS worker preference stays on Core 1 at the official low priority.
+  # - GMF AFE manager feed/fetch tasks stay on different cores, as Espressif's
+  #   own GMF troubleshooting recommends for avoiding AFE task WDT.
+  task_core: 1
+  task_priority: 5
+  ringbuf_size: 8
+  feed_task_core: 0
+  feed_task_priority: 5
+  feed_task_stack_size: 3072
+  fetch_task_core: 1
+  fetch_task_priority: 5
+  fetch_task_stack_size: 3072
+  se_enabled: true
+  ns_enabled: true
+  vad_enabled: true
+  continuous_vad: true
+  # Dual-mic GMF follows Espressif's official element output path. Keep AEC on
+  # for normal audio quality; AEC-off on dual-mic BSS targets may sound metallic.
+  # WS3 keeps AGC out of the runtime profile. It can improve MWW sensitivity
+  # under playback, but on this target it causes TTS/media stutter and any
+  # runtime toggle requires a full AFE rebuild.
+  agc_enabled: false
+  # Worst-case HTTPS media/TTS + VoIP needs contiguous internal heap for
+  # ESPHome API frame reads, TLS and I2S. Keep AFE bridge buffers in PSRAM on
+  # this full profile; the small PSRAM latency cost is preferable to API
+  # bad_alloc crashes during Assist/TTS responses.
+  feed_buf_in_psram: true       # ~6 KB hot scratch on 2-mic + ref FD
+  feed_ring_in_psram: true      # ~24 KB staging ring on 2-mic + ref FD
+  fetch_ring_in_psram: true     # ~8 KB output ring
+
+microphone:
+  - platform: esp_audio_stack
+    id: mic_main
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: hw_speaker
+    esp_audio_stack_id: audio_stack
+    sample_rate: 48000
+    bits_per_sample: 16
+    # Full-duplex profiles must not let the upstream ESPHome mixer prefill the
+    # final hardware sink for 500 ms. Mixer transfers 50 ms chunks every 25 ms;
+    # keep the hardware backlog short so backpressure reaches media/TTS quickly.
+    buffer_duration: 128ms
+
+# =============================================================================
+# MEDIA, ASSIST AND VOIP
+# =============================================================================
+
+micro_wake_word:
+  microphone: mic_main
+  task_stack_in_psram: true
+  models:
+    - model: alexa
+
+voice_assistant:
+  microphone: mic_main
+  media_player: speaker_media_player
+  micro_wake_word: mww
+  noise_suppression_level: 0
+  auto_gain: 0dBFS
+  volume_multiplier: 2.0
+
+voip_stack:
+  task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
+  buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
+  audio:
+    # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
+    # with a 10 ms reframe available for peers that can drive the speaker at
+    # 48 kHz/10 ms. RX is speaker-side audio through the resampler.
+    tx:
+      sample_rate: 16000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 16
+    tx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
+    # Additional accepted RX formats for direct ESP-to-ESP calls. These are valid
+    # only because speaker: voip_speaker_input points at the resampler; do
+    # not advertise additional formats when wiring voip_stack directly to a
+    # fixed-rate mixer input.
+    rx_formats:
+      - sample_rate: 32000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
+  microphone: mic_main
+  speaker: voip_speaker_input
+  ringing_timeout: 30s
+  # routing_mode default = device_independent (P2P). Override at runtime
+  # via the "SIP bridge" switch in the device-specific switch block below.
+  delete_contact_missing_from:
+    updates_number: 1
+
+# =============================================================================
+# RUNTIME LOGIC AND ENTITIES
+# =============================================================================
+
+binary_sensor:
+  # BOOT button (GPIO0), multi-click
+  - platform: gpio
+    name: Boot Button
+    id: boot_button
+    pin:
+      number: ${boot_button_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_multi_click:
+      # Single click: call toggle if VoIP call active, otherwise VA start/stop
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 400ms
+        then:
+          - if:
+              condition:
+                runtime_controller.is_active:
+                  id: runtime
+                  activity: timer_ringing
+              then:
+                - runtime_controller.event:
+                    id: runtime
+                    event: timer_stopped
+              else:
+                - if:
+                    condition:
+                      not:
+                        - voip_stack.is_idle:
+                    then:
+                      - voip_stack.call_toggle:
+                    else:
+                      - runtime_controller.event:
+                          id: runtime
+                          event: wake_word
+      # Double click: next contact
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for at most 300ms
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - voip_stack.next_contact:
+      # Long press (1-3s): toggle mute
+      - timing:
+          - ON for 1s to 3s
+          - OFF for at least 300ms
+        then:
+          - switch.toggle: mute
+
+  # KEY1 (TCA9555 EXIO9): Call/Answer/Hangup
+  - platform: gpio
+    name: Key 1
+    id: key1
+    internal: true
+    pin:
+      tca9555: io_expander
+      number: 9
+      inverted: true
+      mode:
+        input: true
+    on_press:
+      - voip_stack.call_toggle:
+
+  # KEY2 (TCA9555 EXIO10): Next contact
+  - platform: gpio
+    name: Key 2
+    id: key2
+    internal: true
+    pin:
+      tca9555: io_expander
+      number: 10
+      inverted: true
+      mode:
+        input: true
+    on_press:
+      - voip_stack.next_contact:
+
+  # KEY3 (TCA9555 EXIO11): Decline / Previous contact
+  - platform: gpio
+    name: Key 3
+    id: key3
+    internal: true
+    pin:
+      tca9555: io_expander
+      number: 11
+      inverted: true
+      mode:
+        input: true
+    on_press:
+      - if:
+          condition:
+            voip_stack.is_ringing:
+          then:
+            - voip_stack.decline_call:
+          else:
+            - voip_stack.prev_contact:
+
+switch:
+  # Speaker amplifier enable (TCA9555 EXIO8)
+  - platform: gpio
+    id: speaker_enable
+    internal: true
+    restore_mode: ALWAYS_OFF
+    pin:
+      tca9555: io_expander
+      number: 8
+      mode:
+        output: true
+
+  - platform: template
+    name: Speaker Mute
+    id: speaker_mute
+    icon: mdi:volume-off
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Speaker mute ON"
+      - speaker.mute_on: hw_speaker
+      - delay: 50ms
+      - switch.turn_off: speaker_enable
+      - runtime_controller.event:
+          id: runtime
+          event: speaker_muted
+    on_turn_off:
+      - logger.log:
+          level: INFO
+          tag: mute
+          format: "Speaker mute OFF"
+      - if:
+          condition:
+            speaker.is_playing: hw_speaker
+          then:
+            - switch.turn_on: speaker_enable
+            - delay: 50ms
+      - speaker.mute_off: hw_speaker
+      - runtime_controller.event:
+          id: runtime
+          event: speaker_unmuted
+
+  # VoIP switches
+
+select:
+  - platform: template
+    name: AEC Mode
+    id: aec_mode_select
+    icon: mdi:tune-vertical
+    # FD* is the esp-sr 2.4 full-audio stack pipeline (NLP baked in for two-way speech).
+    # Default on this board because dual-mic ES7210 TDM input enables AFE_TYPE_FD,
+    # which is the recommended type for boards with mic+ref on the same bus.
+    options:
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
+    # Non-optimistic: template_select::control runs the set_action first
+    # and only auto-publishes `index` when optimistic=true, overwriting
+    # whatever we published. With optimistic=false, the final lambda
+    # publish_state drives HA state from the live esp_afe mode.
+    optimistic: false
+    restore_value: false
+    set_action:
+      - if:
+          condition:
+            lambda: 'return id(init_in_progress);'
+          then:
+            - logger.log: "AEC mode select: skipping during boot"
+          else:
+            - if:
+                condition:
+                  or:
+                    - voice_assistant.is_running:
+                    - not:
+                        voip_stack.is_idle:
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Cannot switch AEC mode during active VA/VoIP"
+                else:
+                  - logger.log:
+                      format: "Switching AEC mode to %s"
+                      args: ['x.c_str()']
+                  - micro_wake_word.stop:
+                  - esp_audio_stack.stop_and_wait: audio_stack
+                  - wait_until:
+                      condition:
+                        esp_audio_stack.is_idle: audio_stack
+                      timeout: 2s
+                  - esp_afe.set_mode:
+                      id: afe_processor
+                      mode: !lambda 'return x;'
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
+                      timeout: 20s
+                  - if:
+                      condition:
+                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
+                      then:
+                        - esp_audio_stack.start: audio_stack
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              switch.is_off: mute
+                            then:
+                              - script.execute: start_mww_when_ready
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            tag: main
+                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
+      - lambda: |-
+          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());

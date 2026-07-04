@@ -1,0 +1,80 @@
+# =============================================================================
+# Voice Assistant + Micro Wake Word forwarding-only core for runtime_controller.
+# =============================================================================
+
+voice_assistant:
+  id: va
+  media_player: speaker_media_player
+  tts_playback_start_timeout: 10s
+  on_start:
+    - runtime_controller.event:
+        id: runtime
+        event: va_start
+  on_listening:
+    - runtime_controller.event:
+        id: runtime
+        event: va_listening
+  on_stt_vad_end:
+    - runtime_controller.event:
+        id: runtime
+        event: va_thinking
+  on_stt_end:
+    - script.execute:
+        id: ui_stt_ended
+        text: !lambda 'return x;'
+  on_intent_progress:
+    - if:
+        condition:
+          lambda: 'return !x.empty();'
+        then:
+          - runtime_controller.event:
+              id: runtime
+              event: va_responding
+  on_tts_start:
+    - runtime_controller.event:
+        id: runtime
+        event: va_responding
+    - script.execute:
+        id: ui_tts_started
+        text: !lambda 'return x;'
+  on_end:
+    - runtime_controller.event:
+        id: runtime
+        event: va_end
+  on_idle:
+    - runtime_controller.event:
+        id: runtime
+        event: va_idle
+  on_error:
+    - runtime_controller.event:
+        id: runtime
+        event: va_error
+  on_client_connected:
+    - logger.log:
+        tag: va
+        format: "VA: client connected"
+    - globals.set:
+        id: init_in_progress
+        value: "false"
+    - runtime_controller.event:
+        id: runtime
+        event: va_client_connected
+    - script.execute: start_mww_when_ready
+  on_client_disconnected:
+    - logger.log:
+        tag: va
+        format: "VA: client disconnected"
+    - runtime_controller.event:
+        id: runtime
+        event: va_client_disconnected
+
+micro_wake_word:
+  id: mww
+  stop_after_detection: false
+  on_wake_word_detected:
+    - globals.set:
+        id: g_last_wake_word
+        value: !lambda 'return wake_word;'
+    - runtime_controller.event:
+        id: runtime
+        event: wake_word

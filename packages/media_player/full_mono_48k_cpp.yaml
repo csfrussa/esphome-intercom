@@ -1,0 +1,74 @@
+# =============================================================================
+# Full-experience media graph for runtime_controller.
+#
+# HA/Sendspin media, generic announcements and VA TTS remain on the standard
+# speaker_source media player. runtime_controller policy lives in the split
+# esphome-runtime-controller package included by the device YAML.
+# =============================================================================
+
+sendspin:
+  id: sendspin_hub
+  task_stack_in_psram: true
+
+audio_file:
+  - id: voip_ringing_sound
+    file: ${assets_base}assets/sounds/ringtone.flac
+
+media_source:
+  - platform: audio_http
+    id: media_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_http
+    id: announcement_http_source
+    buffer_size: 65536
+    task_stack_in_psram: true
+  - platform: audio_file
+    id: announcement_file_source
+    task_stack_in_psram: true
+  - platform: sendspin
+    id: sendspin_media_source
+    sample_rate: 48000
+    buffer_size: 262144
+    task_stack_in_psram: true
+    decode_memory: psram
+
+media_player:
+  - platform: speaker_source
+    id: speaker_media_player
+    name: None
+    internal: false
+    volume_initial: 100%
+    volume_min: 0%
+    volume_max: 100%
+    volume_increment: 5%
+    media_pipeline:
+      speaker: media_speaker_input
+      sample_rate: 48000
+      format: FLAC
+      sources:
+        - media_http_source
+        - sendspin_media_source
+    announcement_pipeline:
+      speaker: tts_speaker_input
+      sample_rate: 48000
+      format: FLAC
+      sources:
+        - announcement_http_source
+        - announcement_file_source
+    on_announcement:
+      - runtime_controller.event:
+          id: runtime
+          event: announcement_started
+    on_play:
+      - runtime_controller.event:
+          id: runtime
+          event: media_playing
+    on_pause:
+      - runtime_controller.event:
+          id: runtime
+          event: media_paused
+    on_idle:
+      - runtime_controller.event:
+          id: runtime
+          event: media_idle

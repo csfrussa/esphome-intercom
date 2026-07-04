@@ -1,0 +1,95 @@
+# =============================================================================
+# VoIP callbacks and UI hook placeholders.
+# Drop-in for voip-only devices. Wires voip_stack state transitions to
+# the lightweight YAML LED reducer (update_status) and to ui_call_* hooks that
+# devices with a display can !extend to update their LVGL widgets.
+#
+# Prerequisites in the device YAML:
+#   - voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
+#   - script id `update_status` from the voip-only YAML reducer
+#
+voip_stack:
+  id: phone
+
+  on_calling:
+    - script.execute: update_status
+    - script.execute:
+        id: ui_call_started
+        peer: !lambda 'return id(phone).get_current_destination();'
+
+  on_ringing:
+    - script.execute: update_status
+    - script.execute:
+        id: ui_call_started
+        peer: !lambda 'return id(phone).get_caller();'
+
+  # Caller path: dest acknowledged with RING. Same calling screen,
+  # device YAML flips the label from "Calling X..." to "X is ringing..."
+  # in `ui_call_dest_ringing` (defined per-device).
+  on_dest_ringing:
+    - script.execute:
+        id: ui_call_dest_ringing
+        peer: !lambda 'return id(phone).get_current_destination();'
+
+  on_in_call:
+    - script.execute: update_status
+    - script.execute:
+        id: ui_call_started
+        peer: !lambda |-
+          auto c = id(phone).get_caller();
+          return c.empty() ? id(phone).get_current_destination() : c;
+
+  on_idle:
+    - script.execute: update_status
+
+  on_hangup:
+    - script.execute: update_status
+    - logger.log:
+        format: "Hangup: %s"
+        args: ['reason.c_str()']
+    - script.execute:
+        id: ui_call_ended
+        peer: !lambda |-
+          auto c = id(phone).get_caller();
+          return c.empty() ? id(phone).get_current_destination() : c;
+        reason: !lambda 'return reason;'
+
+  on_call_failed:
+    - script.execute: update_status
+    - logger.log:
+        format: "Call failed: %s"
+        args: ['reason.c_str()']
+    - script.execute:
+        id: ui_call_ended
+        peer: !lambda 'return id(phone).get_current_destination();'
+        reason: !lambda 'return reason;'
+
+# =============================================================================
+# UI hook placeholders. Devices with a display !extend these to update
+# LVGL widgets (peer name, page transitions, post-call screen).
+# =============================================================================
+script:
+  - id: ui_call_started
+    parameters:
+      peer: string
+    then: []
+
+  # Caller's calling screen: dest acked with RING. Same screen, label
+  # flips from "Calling X..." to "X is ringing...".
+  - id: ui_call_dest_ringing
+    parameters:
+      peer: string
+    then: []
+
+  # Call terminated (hangup, decline, error, timeout, unreachable, busy).
+  # `reason` is whatever end_call_(...) emitted via on_hangup/on_call_failed:
+  # canonical strings (`local_hangup` / `remote_hangup` / `declined` /
+  # `timeout` / `busy` / `unreachable` / `protocol_error` / `bridge_error`)
+  # or a free-form SIP terminal reason from the peer. Devices !extend this
+  # script to render a brief
+  # "Call ended. Reason: ..." page and revert to idle on timeout.
+  - id: ui_call_ended
+    parameters:
+      peer: string
+      reason: string
+    then: []

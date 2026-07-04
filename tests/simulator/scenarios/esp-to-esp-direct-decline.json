@@ -1,0 +1,49 @@
+{
+  "name": "esp-to-esp-direct-decline",
+  "description": "ESP calls ESP directly through SIP, destination declines, caller receives terminal reason.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "set_option",
+        "target": "caller",
+        "option": "sip_bridge",
+        "value": false
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Virtual Spotpear"
+      }
+    },
+    {
+      "expect": {
+        "caller": {
+          "state": "calling"
+        },
+        "callee": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "callee_decline",
+        "reason": "Test Decline"
+      }
+    },
+    {
+      "expect": {
+        "caller": {
+          "state": "idle",
+          "last_reason": "Test Decline"
+        },
+        "callee": {
+          "state": "idle"
+        }
+      }
+    }
+  ]
+}

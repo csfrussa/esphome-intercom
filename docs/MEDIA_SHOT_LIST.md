@@ -1,14 +1,17 @@
 # Media shot list
 
 This is the working list for refreshing README and documentation media for the
-`2026.5.0` release.
+`2026.7.0` SIP/VoIP release.
 
 ## Primary README media
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/dashboard.png` | Screenshot | First visual impression of the HA dashboard | Captured: top cards only, no HA sidebar/header |
-| `docs/images/dashboard.gif` | GIF | Show the dashboard reacting to a real call | Captured: card scrolls contacts, calls Casa, then hangs up |
+| `docs/images/dashboard.gif` | GIF | First visual impression and dashboard call flow | Captured: card scrolls contacts, calls Home, then hangs up |
+| `docs/images/esp-mirror-card.png` | Screenshot | ESP mirror Lovelace mode | Captured: card bound to an ESP endpoint |
+| `docs/images/ha-softphone-card.png` | Screenshot | HA softphone Lovelace mode | Captured: HA card with destination selector |
+| `docs/images/ha-softphone-options.jpg` | Screenshot | HA softphone options panel | Captured: Auto Answer, DND and ringtone controls |
+| `docs/images/ha-softphone-keypad.jpg` | Screenshot | HA softphone keypad/manual dial view | Captured: direct name/extension/number entry |
 | `docs/images/assistant-animated.gif` | GIF | Device assistant animation | Captured from Spotpear Ball v2, converted from MP4 and stripped |
 | `docs/images/assistant-speaking.jpg` | Photo | TTS answer on device | Captured from Spotpear Ball v2 |
 | `docs/images/lvgl-audio-volume.jpg` | Photo | Device audio controls | Captured from LVGL audio page |
@@ -19,22 +22,31 @@ This is the working list for refreshing README and documentation media for the
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
 | `docs/images/call-from-home-assistant-to-esp.gif` | GIF | Browser card or HA calls an ESP | Captured: target ESP card only, ring, answer, hangup |
-| `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Casa, HA rings, answer or hangup sequence visible |
+| `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Home, HA rings, answer or hangup sequence visible |
 | `docs/images/mobile-notification-answer.gif` | GIF | Android notification answers an ESP call | Captured: notification actions, HA app opening, card in full-duplex call |
-| `docs/images/cross-protocol-bridge.gif` | GIF | HA PBX-lite bridge | Captured: WS3 UDP calls Spotpear TCP through HA, ringing, answer, hangup |
+| `docs/images/cross-transport-bridge.gif` | GIF | HA SIP bridge | Captured: WS3 SIP/UDP calls Spotpear SIP/TCP through HA, ringing, answer, hangup |
 | `docs/images/decline-reason.png` | Screenshot | Reason propagation | Decline with custom reason, DND or busy visible in card/sensor |
 | `docs/images/busy-reason.png` | Screenshot | Busy behavior | One call active, second caller rejected with `busy` |
 
 ## Installation and configuration media
 
+These screenshots must be recaptured before the stable release whenever the HA
+setup flow, card editor, card labels or entity names change. During release
+work, diagram/mock assets are acceptable only when they do not document removed
+options or old component names.
+
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
 | `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
-| `docs/images/hacs-download-intercom-native.png` | Screenshot | HACS download step | Captured: Intercom Native HACS entry and download menu |
-| `docs/images/intercom-native-config-flow.png` | Screenshot | HA integration setup | Captured: TCP and UDP options visible |
-| `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Replace old screenshot if entity names or UI changed |
-| `docs/images/card-selection.png` | Screenshot | Card picker | Updated custom card name and icon |
-| `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Captured: visual card editor and live preview |
+| `docs/images/hacs-download-voip-stack.png` | Screenshot | HACS download step | Captured: VoIP Stack HACS entry and download menu |
+| `docs/images/voip-stack-add-integration.png` | Screenshot | HA Add Integration search | Captured: VoIP Stack entry in Settings -> Integrations |
+| `docs/images/voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
+| `docs/images/create-account-service.png` | Screenshot | SIP account service form | Captured: Developer Tools -> Actions account creation |
+| `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local softphone account |
+| `docs/images/create-account-notification.png` | Screenshot | Generated account notification | Captured: one-time generated password notification |
+| `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Recapture if entity names, device names or ESPHome onboarding UI changed. |
+| `docs/images/card-selection.png` | Screenshot | Card picker | Must show `VoIP Stack Card`, not old Intercom card names. |
+| `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Must show current `voip-stack-card` modes and options. |
 
 ## Full voice device media
 
@@ -57,9 +69,9 @@ replace individual photos or GIFs if the UI changes before release.
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/pbx-lite-topology.png` | Diagram | Simple mental model | Created: ESP extensions, HA peer, browser card, direct and bridged calls |
-| `docs/images/phonebook-endpoint.png` | Diagram | Endpoint-first phonebook | Created: `Name|protocol|ip|ports`, HA row, subscribers |
-| `docs/images/tcp-udp-choice.png` | Diagram | Transport guidance | Created: TCP for routed/filtered networks, UDP for simple LAN latency |
+| `docs/images/sip-topology.png` / `.svg` | Diagram | SIP/VoIP topology | Created: ESP SIP phones, HA softphone/router/B2BUA, local registrar, registered softphones and optional provider trunk |
+| `docs/images/phonebook-endpoint.png` / `.svg` | Diagram | SIP phonebook and dial plan | Created: endpoint publication, manual/static contacts, SIP account registration, direct/bridge/trunk/reject routing |
+| `docs/images/tcp-udp-choice.png` / `.svg` | Diagram | ESP SIP transport guidance | Created: ESP SIP/TCP vs SIP/UDP signaling choice, RTP always UDP, HA bridge path when routing needs it |
 | `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |
 
 ## Capture order for live demo
@@ -76,13 +88,13 @@ replace individual photos or GIFs if the UI changes before release.
 
 ## Director checklist
 
-Use this section during capture when Codex is driving the demo from HA services,
+Use this section during capture when driving the demo from HA services,
 ESPHome actions or the Lovelace card.
 
 | Scene | Trigger | Expected visible state |
 |---|---|---|
 | P4 to Spotpear ringing | P4 selects Spotpear and calls | P4 shows outgoing, Spotpear shows incoming caller, HA card shows ringing |
-| Spotpear answers P4 | Spotpear answer button or HA card answer | Both ESPs show in-call, call duration advances, protocol label visible |
+| Spotpear answers P4 | Spotpear answer button or HA card answer | Both ESPs show in-call, call duration advances, SIP transport label visible |
 | Spotpear declines P4 | Spotpear decline button | P4 returns idle with decline reason, HA card reason updates |
 | P4 TCP to WS3 UDP | P4 calls WS3 through HA | HA bridge state visible, both endpoints show correct remote name |
 | DND rejection | Enable DND on target, then call it | Caller receives `dnd` or equivalent reason, target does not enter in-call |

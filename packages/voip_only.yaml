@@ -1,0 +1,28 @@
+# =============================================================================
+# VoIP-only meta-package.
+# Simple phones use voip_stack callbacks directly, without runtime_controller.
+# Full profiles use runtime_controller because VA/media/LVGL need arbitration.
+#
+# Maintained presets include optional feature packages explicitly next to this
+# core package, so users can comment out one line to remove a feature:
+#   - voip/buttons_switches.yaml   call/next/prev/decline buttons + mute
+#   - voip/call_settings.yaml      auto-answer + DND switches
+#   - voip/ha_api.yaml             HA-callable call-control services
+#
+# Required IDs (defined by device):
+#   mic_main                - Microphone
+#   hw_speaker              - Hardware speaker
+#   speaker_mute            - Speaker mute switch supplied by the device YAML
+#                             or packages/voip/speaker_mute.yaml
+#   status_led              - LED/light entity
+#   voip_ringing_sound  - Media file for ringtone (if device runs one)
+#
+# Required substitutions:
+#   ${friendly_name}        - used in homeassistant.event payload
+# =============================================================================
+
+packages:
+  callback_reducer: !include voip/callback_reducer.yaml
+  callbacks: !include voip/callbacks.yaml
+
+# voip_stack reserves socket headroom in validation; no lwIP override here.

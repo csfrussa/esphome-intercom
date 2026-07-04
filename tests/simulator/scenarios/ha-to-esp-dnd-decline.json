@@ -1,0 +1,36 @@
+{
+  "name": "ha-to-esp-dnd-decline",
+  "description": "ESP DND rejects HA call with SIP busy/DND and no ringing presentation.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "set_option",
+        "target": "esp",
+        "option": "dnd",
+        "value": true
+      }
+    },
+    {
+      "inject_event": {
+        "type": "ha_call",
+        "target": "Virtual S3",
+        "caller": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "esp": {
+          "state": "idle",
+          "last_reason": "DND"
+        },
+        "sip": {
+          "last_status": 486,
+          "decline_reason": "DND"
+        },
+        "led": {
+          "forbidden_effect": "Spin"
+        }
+      }
+    }
+  ]
+}

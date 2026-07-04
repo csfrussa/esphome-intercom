@@ -2,7 +2,7 @@
 # Single WS2812/SK6812 status LED.
 #
 # Hardware/effects package for generic devices with one addressable status LED.
-# State mapping stays in a separate package or the active intercom state machine.
+# State mapping stays in the VoIP callback reducer or runtime_controller.
 # =============================================================================
 
 substitutions:
@@ -27,25 +27,54 @@ light:
           max_brightness: 100%
           transition_length: 1s
           update_interval: 1s
-      - strobe:
+      - pulse:
+          name: "Fast Pulse"
+          min_brightness: 20%
+          max_brightness: 100%
+          transition_length: 300ms
+          update_interval: 300ms
+      - addressable_lambda:
           name: "Ringing"
-          colors:
-            - state: true
-              brightness: 100%
-              red: 100%
-              green: 0%
-              blue: 0%
-              duration: 250ms
-            - state: false
-              duration: 250ms
-      - strobe:
+          update_interval: 120ms
+          lambda: |-
+            static bool on = true;
+            static uint32_t last = 0;
+            if (initial_run) {
+              on = true;
+              last = millis();
+            }
+            if (millis() - last >= 250) {
+              last = millis();
+              on = !on;
+            }
+            it.all() = on ? current_color : Color(0, 0, 0);
+      - addressable_lambda:
           name: "Calling"
-          colors:
-            - state: true
-              brightness: 100%
-              red: 100%
-              green: 50%
-              blue: 0%
-              duration: 500ms
-            - state: false
-              duration: 500ms
+          update_interval: 120ms
+          lambda: |-
+            static bool on = true;
+            static uint32_t last = 0;
+            if (initial_run) {
+              on = true;
+              last = millis();
+            }
+            if (millis() - last >= 500) {
+              last = millis();
+              on = !on;
+            }
+            it.all() = on ? current_color : Color(0, 0, 0);
+      - addressable_lambda:
+          name: "Blink"
+          update_interval: 120ms
+          lambda: |-
+            static bool on = true;
+            static uint32_t last = 0;
+            if (initial_run) {
+              on = true;
+              last = millis();
+            }
+            if (millis() - last >= 420) {
+              last = millis();
+              on = !on;
+            }
+            it.all() = on ? current_color : Color(0, 0, 0);

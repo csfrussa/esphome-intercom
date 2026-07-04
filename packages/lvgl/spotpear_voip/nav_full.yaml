@@ -1,0 +1,29 @@
+# Spotpear full-experience VoIP navigation.
+#
+# Vertical stack:
+#   VA screen --swipe up--> VoIP --swipe up--> Settings
+#   Settings --swipe down--> VoIP --swipe down--> VA screen
+#
+# Requires the full-experience scripts/globals:
+#   swipe_to_va, settings_open, nav_anim, nav_anim_ms.
+
+script:
+  - id: !extend settings_open_transition
+    then:
+      - lambda: |-
+          id(nav_anim) = LV_SCR_LOAD_ANIM_MOVE_TOP;
+          id(nav_anim_ms) = 300;
+
+  - id: !extend settings_close_transition
+    then:
+      - lambda: |-
+          id(nav_anim) = LV_SCR_LOAD_ANIM_MOVE_BOTTOM;
+          id(nav_anim_ms) = 300;
+
+  - id: call_to_settings
+    then:
+      - script.execute: settings_open
+
+  - id: call_to_va
+    then:
+      - script.execute: swipe_to_va

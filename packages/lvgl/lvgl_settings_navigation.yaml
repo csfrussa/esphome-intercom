@@ -2,15 +2,15 @@
 # LVGL settings carousel: state + navigation scripts.
 # Drop-in for any device that includes one or more `lvgl/lvgl_settings_*.yaml`
 # pages. The device YAML must populate `g_settings_pages` at on_boot with the
-# page object pointers in swipe-left order, and trigger `ic_settings_open`
-# from a swipe (typically on the idle page) and `ic_settings_close` from
+# page object pointers in swipe-left order, and trigger `settings_open`
+# from a swipe (typically on the idle page) and `settings_close` from
 # the settings pages' on_swipe_down.
 #
 # Provides:
-#   globals: ic_settings_active (bool), g_settings_pages (vector<lv_obj_t*>),
+#   globals: settings_active (bool), g_settings_pages (vector<lv_obj_t*>),
 #            g_settings_index (int)
-#   scripts: ic_settings_navigate(delta), ic_settings_open, ic_settings_close,
-#            ic_settings_open_transition, ic_settings_close_transition
+#   scripts: settings_navigate(delta), settings_open, settings_close,
+#            settings_open_transition, settings_close_transition
 #
 # Prerequisites in the device YAML:
 #   - script id `draw_display` (provided by the device's draw_display lambda)
@@ -18,7 +18,7 @@
 # =============================================================================
 
 globals:
-  - id: ic_settings_active
+  - id: settings_active
     type: bool
     restore_value: false
     initial_value: "false"
@@ -32,16 +32,16 @@ globals:
 
 script:
   # Optional transition hooks. Full-experience devices !extend these to set
-  # page animation globals before draw_display; intercom-only devices can keep
+  # page animation globals before draw_display; voip-only devices can keep
   # the no-op defaults.
-  - id: ic_settings_open_transition
+  - id: settings_open_transition
     then: []
 
-  - id: ic_settings_close_transition
+  - id: settings_close_transition
     then: []
 
   # Cycle through g_settings_pages by `delta` (typically +1 / -1).
-  - id: ic_settings_navigate
+  - id: settings_navigate
     parameters:
       delta: int
     then:
@@ -55,17 +55,17 @@ script:
                            250, 0, false);
 
   # Enter settings: jump to the first page in the carousel.
-  - id: ic_settings_open
+  - id: settings_open
     then:
-      - script.execute: ic_settings_open_transition
+      - script.execute: settings_open_transition
       - lambda: |-
-          id(ic_settings_active) = true;
+          id(settings_active) = true;
           id(g_settings_index) = 0;
       - script.execute: draw_display
 
   # Exit settings: clear the flag, let draw_display pick the natural page.
-  - id: ic_settings_close
+  - id: settings_close
     then:
-      - script.execute: ic_settings_close_transition
-      - lambda: 'id(ic_settings_active) = false;'
+      - script.execute: settings_close_transition
+      - lambda: 'id(settings_active) = false;'
       - script.execute: draw_display

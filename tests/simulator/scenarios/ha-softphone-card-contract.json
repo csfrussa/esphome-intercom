@@ -1,0 +1,42 @@
+{
+  "name": "ha-softphone-card-contract",
+  "description": "HA softphone card controls only HA softphone and renders authoritative softphone state.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "sip_invite",
+        "caller": "Virtual S3",
+        "callee": "Casa",
+        "call_id": "Virtual S3<->Casa"
+      }
+    },
+    {
+      "expect": {
+        "card": {
+          "mode": "ha_softphone",
+          "rendered_state": "ringing",
+          "source": "ha_softphone_snapshot"
+        },
+        "softphone": {
+          "state": "ringing"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "remote_bye",
+        "call_id": "Virtual S3<->Casa"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "idle"
+        },
+        "card": {
+          "rendered_state": "idle"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "name": "ha-softphone-remote-cancel",
+  "description": "Remote CANCEL clears HA softphone/card with cancelled reason, not generic hangup.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "sip_invite",
+        "caller": "Virtual S3",
+        "callee": "Casa",
+        "call_id": "cancel-before-answer"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        },
+        "card": {
+          "rendered_state": "ringing"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "remote_cancel",
+        "call_id": "cancel-before-answer"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "idle",
+          "last_reason": "cancelled"
+        },
+        "card": {
+          "rendered_state": "idle"
+        }
+      }
+    }
+  ]
+}

@@ -19,19 +19,23 @@ Wi-Fi firmware.
 
 ```
 yamls/
-  intercom-only/         Intercom without Voice Assistant or Wake Word
+  voip-only/         VoIP without Voice Assistant or Wake Word
     single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)
     dual-bus/            Devices using esp_audio_stack rx_bus + tx_bus
+    esphome-native/      Native ESPHome mic/speaker examples
 
-  full-experience/       VA + MWW + Intercom (complete voice assistant hub)
+  full-experience/       VA + MWW + VoIP (complete voice assistant hub)
     single-bus/          esp_audio_stack full profiles
+    dual-bus/            esp_audio_stack full profiles with separate RX/TX buses
+    esphome-native/      Native ESPHome audio profiles for processed/separate paths
 
   experimental/          Untested topologies (compile-only, contributions welcome)
 ```
 
-Device-specific debug YAMLs live in local-only `yamls/debug/` and are not
-published. Reusable debug building blocks are public packages under
-`packages/debug/`.
+Debug should be enabled through component options such as `debug: true`,
+`audio_debug: true`, or component-specific telemetry flags, then disabled again
+for release builds. The repository does not publish separate debug device YAMLs;
+reusable opt-in debug packages can live under `packages/debug/`.
 
 ## Single-bus vs Dual-bus
 
@@ -41,39 +45,55 @@ published. Reusable debug building blocks are public packages under
   `rx_bus` and `tx_bus` with official ESP-IDF I2S simplex channels. Simpler setup
   for MEMS mic + class-D amp boards (SPH0645 + MAX98357A).
 
+- **Native ESPHome**: `voip_stack` binds directly to ESPHome `microphone`
+  and/or `speaker` components. Use it for mic-only/speaker-only endpoints,
+  hardware/DSP-processed audio, or independent mic/speaker paths that do not
+  need software AEC. Use `esp_audio_stack` instead for shared-bus or
+  software-reference builds.
+
 ## Audio processor: esp_aec vs esp_afe
 
-- **esp_aec**: Lightweight echo cancellation only. Recommended for intercom-only
+- **esp_aec**: Lightweight echo cancellation only. Recommended for voip-only
   and Generic full-experience 4 MB targets.
 - **esp_afe**: Full Espressif AFE pipeline (AEC + NS + VAD + AGC + optional
   dual-mic Speech Enhancement). Higher flash/RAM cost, but adds the full
   frontend and runtime diagnostics. Generic full AFE is intended for app slots
   larger than the default 4 MB OTA layout, so 8 MB or 16 MB flash is the
-  practical target. See the [esp_afe component README](../esphome/components/esp_afe/README.md) for details.
+  practical target. See the [esp_afe component README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe) for details.
 
 ## Product mode
 
-Each ESP flashed with these YAMLs is an independent extension on a peer-to-peer fabric. Same-transport devices can call each other directly from their local phonebook; in the current standard YAMLs HA is the stable phonebook authority. When HA is on the network it joins the fabric as one more extension and can also act as a PBX-style switchboard via `routing_mode: ha_pbx`.
+Each ESP flashed with these YAMLs is an independent SIP phone on the local
+fabric. Same-transport devices can call each other directly when the HA-managed
+roster provides complete direct SIP endpoint data. Names, numbers and
+cross-transport routes go to HA, which is the stable roster authority and SIP
+bridge/B2BUA.
 
-There is one product mode: PBX-lite (implicit default). Phonebook / contacts / destination / caller entities are always exposed. The `mode:` key on `intercom_api` is optional and only takes one value: `raw_udp` (audio-only UDP, no signaling, used for go2rtc / two-room direct links). Routing policy lives on the ESP as `routing_mode: device_independent` (default; ESP dials peers from its phonebook, true peer-to-peer) or `routing_mode: ha_pbx` (ESP dials the HA peer named by `hass.config.location_name`, HA bridges).
+There is one product mode: SIP-only phone mode. Phonebook, contacts,
+destination and caller entities are always exposed. `transport: udp` selects
+SIP/UDP signaling and `transport: tcp` selects SIP/TCP signaling; audio remains
+RTP/UDP in the current profile. Static contacts are optional local entries for
+offline/custom installs; normal shared routing comes from `sensor.voip_phonebook`.
 
 ## Optional packages
 
-`packages/voice_assistant/timers.yaml` adds headless Home Assistant timer alarm
-support on top of the full VA/intercom package. It is intentionally not part of
-`va_intercom.yaml`; include it only on devices that should expose timer behavior.
+`packages/voice_assistant/timers_cpp.yaml` adds Home Assistant timer alarm
+support on top of the runtime_controller full VA/VoIP package. Include it only
+on devices that should expose timer behavior.
 
 ## Production logging
 
-Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; the per-frame telemetry path is additionally gated behind `esp_audio_stack.telemetry: true`. Audio deep-debug lives in `packages/debug/p4_audio_deep_debug.yaml`.
+Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-lifecycle, mic-consumer attach/detach and AFE/AEC mode-switch milestones. Flip to `DEBUG` only while developing; deep audio paths stay behind component options such as `audio_debug: true` or `esp_audio_stack.telemetry: true`. Local debug packages and generated host YAMLs are intentionally ignored by git.
 
 ## P4 status
 
 Waveshare P4 Touch YAMLs build and boot with the maintained audio/LVGL state
-model, FD high-perf AFE defaults and the validated P4 SDK baseline. Treat them
-as hardware-specific targets: hosted Wi-Fi/SDIO firmware, LVGL/PPA, media/TTS
-transport behavior and task scheduling matter more on P4 than on compact S3
-boards.
+model, FD high-perf AFE defaults and the current ESPHome/ESP-Hosted baseline.
+The landscape full profile has been field-tested with hosted Wi-Fi, phonebook
+sync and VoIP calls, but audio playback still needs follow-up tuning for
+occasional glitches. Treat P4 as a hardware-specific target: hosted Wi-Fi/SDIO
+firmware, LVGL/PPA, media/TTS transport behavior and task scheduling matter
+more on P4 than on compact S3 boards.
 
 If a P4 target resets, hangs, or loses Wi-Fi under media/TTS streaming, update
 the on-board ESP32-C6 hosted Wi-Fi firmware before chasing audio bugs. The
@@ -87,10 +107,8 @@ modern firmware.
 ## Local development vs release mode
 
 The public YAMLs are stored in **remote mode** so they compile straight from
-GitHub. Stable release YAMLs must point at `main`. Development test YAMLs may
-intentionally point at `dev`; in that case users should download the YAML from
-the `dev` branch too, so packages, components, and assets all resolve from the
-same branch.
+GitHub. Release YAMLs must point at `main`, so downloaded YAMLs, packages,
+components and assets all resolve from the same public branch.
 
 If you are working inside a local clone and want them to point back at your
 checkout, run:
@@ -102,8 +120,7 @@ checkout, run:
 When you are ready to switch them back to the published form:
 
 ```bash
-./scripts/yaml_paths.sh remote --branch dev    # development test train
-./scripts/yaml_paths.sh remote --branch main
+./scripts/yaml_paths.sh remote --intercom main --audio main --runtime main
 ./scripts/yaml_paths.sh check
 ```
 

@@ -1,0 +1,58 @@
+{
+  "name": "esp-to-ha-answer-hangup",
+  "description": "ESP calls HA, browser audio is ready before 200 OK, remote hangup clears HA card.",
+  "steps": [
+    {
+      "inject_event": {
+        "type": "esp_call",
+        "source": "Virtual S3",
+        "destination": "Casa"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "ringing",
+          "caller": "Virtual S3"
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "browser_audio_ready",
+        "call_id": "Virtual S3<->Casa"
+      }
+    },
+    {
+      "press_button": "answer"
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "in_call"
+        },
+        "audio": {
+          "tx_ready": true,
+          "rx_ready": true
+        },
+        "sip": {
+          "last_status": 200
+        }
+      }
+    },
+    {
+      "inject_event": {
+        "type": "esp_bye",
+        "call_id": "Virtual S3<->Casa"
+      }
+    },
+    {
+      "expect": {
+        "softphone": {
+          "state": "idle",
+          "last_reason": "remote_hangup"
+        }
+      }
+    }
+  ]
+}

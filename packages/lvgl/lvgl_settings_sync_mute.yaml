@@ -28,6 +28,6 @@ interval:
     then:
       - if:
           condition:
-            lambda: 'return id(ic_settings_active);'
+            lambda: 'return id(settings_active);'
           then:
             - script.execute: settings_sync_mute_widgets
