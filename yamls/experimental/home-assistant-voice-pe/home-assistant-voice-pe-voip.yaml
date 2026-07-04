@@ -80,12 +80,17 @@ speaker:
     source_speakers:
       - id: voip_mixing_input
         timeout: never
+        buffer_duration: 100ms
+        sample_rate: 48000
+        bits_per_sample: 32
+        num_channels: 2
 
   - platform: resampler
     id: voip_resampling_speaker
     output_speaker: voip_mixing_input
     sample_rate: 48000
     bits_per_sample: 16
+    num_channels: 1
 
 # =============================================================================
 # MEDIA, ASSIST AND VOIP
