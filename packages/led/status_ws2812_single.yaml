@@ -27,6 +27,12 @@ light:
           max_brightness: 100%
           transition_length: 1s
           update_interval: 1s
+      - pulse:
+          name: "Fast Pulse"
+          min_brightness: 20%
+          max_brightness: 100%
+          transition_length: 300ms
+          update_interval: 300ms
       - addressable_lambda:
           name: "Ringing"
           update_interval: 120ms

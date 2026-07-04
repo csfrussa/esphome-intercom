@@ -184,11 +184,6 @@ wifi:
 
 api:
 
-# OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
-ota:
-  - platform: esphome
-    id: ota_esphome
-
 # USB Serial/JTAG logger. Keep core VoIP logs at INFO for field diagnostics;
 # noisy ESPHome component domains stay WARN unless this YAML is being debugged.
 

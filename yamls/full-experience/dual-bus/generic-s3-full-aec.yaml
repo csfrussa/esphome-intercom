@@ -178,11 +178,6 @@ wifi:
 
 api:
 
-# OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
-ota:
-  - platform: esphome
-    id: ota_esphome
-
 # USB Serial/JTAG logger. VoIP and audio domains stay visible at INFO; noisy
 # entity domains stay WARN for normal field use.
 

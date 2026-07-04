@@ -81,13 +81,16 @@ substitutions:
 # basic buttons and native diagnostics.
 
 packages:
+  core: !include ../../../packages/voip_only.yaml
   voip_transport: !include ../../../packages/voip/transport.yaml
   phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
   ha_api: !include ../../../packages/voip/ha_api.yaml
-  voip_auto_entities: !include ../../../packages/voip/auto_entities.yaml
-  voip_buttons: !include ../../../packages/voip/buttons_base.yaml
+  voip_buttons: !include ../../../packages/voip/buttons_switches.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
+  speaker_mute: !include ../../../packages/voip/speaker_mute.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
 
 # =============================================================================
 # BOARD AND MEMORY
@@ -217,7 +220,7 @@ output:
 
 microphone:
   - platform: i2s_audio
-    id: native_mic_raw
+    id: mic_main
     adc_type: external
     i2s_audio_id: rx_i2s
     i2s_din_pin: ${rx_i2s_din_pin}
@@ -231,7 +234,7 @@ microphone:
 
 speaker:
   - platform: i2s_audio
-    id: voip_speaker_input
+    id: hw_speaker
     dac_type: external
     i2s_audio_id: tx_i2s
     i2s_dout_pin: ${tx_i2s_dout_pin}
@@ -264,11 +267,11 @@ voip_stack:
       channels: 1
       frame_ms: 10
   microphone_source:
-    microphone: native_mic_raw
+    microphone: mic_main
     bits_per_sample: 16
     channels: [1]
     gain_factor: 1
-  speaker: voip_speaker_input
+  speaker: hw_speaker
   dc_offset_removal: false
   ringing_timeout: 30s
   delete_contact_missing_from:

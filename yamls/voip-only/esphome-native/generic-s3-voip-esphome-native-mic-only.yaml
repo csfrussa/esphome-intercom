@@ -66,13 +66,16 @@ substitutions:
 # basic buttons and native diagnostics.
 
 packages:
+  callback_reducer: !include ../../../packages/voip/callback_reducer_mic_only.yaml
+  callbacks: !include ../../../packages/voip/callbacks.yaml
   voip_transport: !include ../../../packages/voip/transport.yaml
   phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
   ha_api: !include ../../../packages/voip/ha_api.yaml
-  voip_auto_entities: !include ../../../packages/voip/auto_entities.yaml
-  voip_buttons: !include ../../../packages/voip/buttons_base.yaml
+  voip_buttons: !include ../../../packages/voip/buttons_switches.yaml
+  call_settings: !include ../../../packages/voip/call_settings.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
+  status_led: !include ../../../packages/led/status_ws2812_single.yaml
 
 # =============================================================================
 # BOARD AND MEMORY
@@ -186,7 +189,7 @@ i2s_audio:
 
 microphone:
   - platform: i2s_audio
-    id: native_mic_raw
+    id: mic_main
     adc_type: external
     i2s_audio_id: rx_i2s
     i2s_din_pin: ${rx_i2s_din_pin}
@@ -213,7 +216,7 @@ voip_stack:
       channels: 1
       frame_ms: 10
   microphone_source:
-    microphone: native_mic_raw
+    microphone: mic_main
     bits_per_sample: 16
     channels: [1]
     gain_factor: 1

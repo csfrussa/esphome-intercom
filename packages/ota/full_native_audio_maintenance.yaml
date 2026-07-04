@@ -15,6 +15,7 @@
 
 ota:
   - platform: esphome
+    id: ota_esphome
     on_begin:
       - logger.log:
           level: INFO
