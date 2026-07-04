@@ -119,7 +119,7 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-`2026.7.0-dev` is the SIP/VoIP migration release. It replaces the old
+`2026.7.0` is the SIP/VoIP migration release. It replaces the old
 project-specific call-control path with SIP/SDP/RTP call handling, ESP SIP
 endpoints, Home Assistant routing/bridging, local softphone accounts and
 optional trunk support.
@@ -127,12 +127,12 @@ optional trunk support.
 Read the release details:
 
 - [What's New](docs/WHATS_NEW.md)
-- [Full 2026.7.0-dev release notes](docs/RELEASE_2026_7_0_DEV.md)
+- [Full 2026.7.0 release notes](docs/RELEASE_2026_7_0.md)
 - [Breaking Changes](docs/BREAKING_CHANGES.md)
 
 ## Breaking Changes
 
-`2026.7.0-dev` is intentionally breaking. ESP devices are SIP phones, Home
+`2026.7.0` is intentionally breaking. ESP devices are SIP phones, Home
 Assistant is a SIP softphone/router/bridge/trunk endpoint, and the old
 project-specific call-control path is not a fallback.
 
@@ -1242,7 +1242,7 @@ sequenceDiagram
 | **Spotpear Ball v2 (VoIP)** | Tested | [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | VoIP only |
 | **Waveshare S3-Audio (AFE)** | Tested | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LED + AFE switches/sensors |
 | **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | Hardware-test target | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LVGL touch |
-| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | Field-tested prerelease target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
+| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | Field-tested target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
 | **Generic S3 (full AEC light)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP, lighter 4 MB-oriented preset |
 | **Generic S3 (full AEC light, dual bus)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP on separated I2S buses |
 | **Generic S3 (full AFE, untested)** | Expected-working | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + VoIP, requires >4 MB app slot |
@@ -1279,7 +1279,7 @@ slot, so 8 MB or 16 MB flash is recommended. The example GPIOs are placeholders:
 on ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so move
 BCLK/LRCLK/DIN/LED to board-safe pins before flashing.
 
-The P4 YAMLs are still prerelease hardware targets. The landscape profile has
+The P4 YAMLs are still hardware-specific targets. The landscape profile has
 been field-tested with ESPHome 2026.6.4, ESP-Hosted 2.12.9, phonebook sync and
 VoIP calls, but audio playback still needs follow-up tuning for occasional
 glitches. The stable release reference devices remain the ESP32-S3 targets
@@ -1591,7 +1591,7 @@ does not change the SIP protocol or make low-level phonebook matching
 fuzzy.
 
 If no phonebook contact matches the spoken target, the adapter also tries a
-Home Assistant area-name resolution. This prerelease supports only one VoIP
+Home Assistant area-name resolution. This release supports only one VoIP
 device per area for voice dialing: `call kitchen` can call the single VoIP
 device assigned to the `Kitchen` area, but if the area has zero or multiple
 VoIP devices the command fails instead of guessing. Group calls are planned
@@ -1610,7 +1610,7 @@ package as an explicit, optional package line:
 
 ```yaml
 packages:
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@dev
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@main
 ```
 
 Runtime-FSM profiles use `local_commands_cpp.yaml`; default/native profiles use
@@ -1892,7 +1892,7 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
 | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
 | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement |
-| [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(prerelease field-tested)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
+| [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(field-tested)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
 
 ### VoIP Only (no VA, no MWW)
 

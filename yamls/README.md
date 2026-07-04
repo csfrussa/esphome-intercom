@@ -107,10 +107,8 @@ modern firmware.
 ## Local development vs release mode
 
 The public YAMLs are stored in **remote mode** so they compile straight from
-GitHub. Stable release YAMLs must point at `main`. Development test YAMLs may
-intentionally point at `dev`; in that case users should download the YAML from
-the `dev` branch too, so packages, components, and assets all resolve from the
-same branch.
+GitHub. Release YAMLs must point at `main`, so downloaded YAMLs, packages,
+components and assets all resolve from the same public branch.
 
 If you are working inside a local clone and want them to point back at your
 checkout, run:
@@ -122,7 +120,6 @@ checkout, run:
 When you are ready to switch them back to the published form:
 
 ```bash
-./scripts/yaml_paths.sh remote --intercom dev --audio main --runtime main
 ./scripts/yaml_paths.sh remote --intercom main --audio main --runtime main
 ./scripts/yaml_paths.sh check
 ```

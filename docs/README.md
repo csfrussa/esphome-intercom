@@ -15,7 +15,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
   starts from the current SIP/VoIP breaking migration. The full incoming release
-  note is [RELEASE_2026_7_0_DEV.md](RELEASE_2026_7_0_DEV.md).
+  note is [RELEASE_2026_7_0.md](RELEASE_2026_7_0.md).
 
 - 📚 **Configuration reference**: [reference.md](reference.md) covers every
   `voip_stack`, `esp_aec` and `esp_afe` option, every action and condition,

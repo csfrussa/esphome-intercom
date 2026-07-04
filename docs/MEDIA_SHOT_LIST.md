@@ -1,7 +1,7 @@
 # Media shot list
 
 This is the working list for refreshing README and documentation media for the
-`2026.7.0-dev` SIP/VoIP release.
+`2026.7.0` SIP/VoIP release.
 
 ## Primary README media
 
@@ -31,7 +31,7 @@ This is the working list for refreshing README and documentation media for the
 ## Installation and configuration media
 
 These screenshots must be recaptured before the stable release whenever the HA
-setup flow, card editor, card labels or entity names change. During prerelease
+setup flow, card editor, card labels or entity names change. During release
 work, diagram/mock assets are acceptable only when they do not document removed
 options or old component names.
 

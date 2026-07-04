@@ -1,6 +1,6 @@
 # What's New
 
-## 2026.7.0-dev: ESPHome Devices Are VoIP Phones Now
+## 2026.7.0: ESPHome Devices Are VoIP Phones Now
 
 This is the release where the project changes category.
 
@@ -30,14 +30,14 @@ Flash a YAML, add the ESP to Home Assistant, install the card, and you already
 have a working full-duplex VoIP endpoint. Add the phonebook, local accounts or
 a trunk when you want the system to grow.
 
-This prerelease is still for field testing, but the direction is clear. The next
+This release is ready for field testing, and the direction is clear. The next
 rounds will focus on consolidating this VoIP foundation, improving routing and
 diagnostics, and building higher-level features such as group calls and richer
 dial-plan automation.
 
-Read the full prerelease notes here:
+Read the full release notes here:
 
-- [`docs/RELEASE_2026_7_0_DEV.md`](RELEASE_2026_7_0_DEV.md)
+- [`docs/RELEASE_2026_7_0.md`](RELEASE_2026_7_0.md)
 
 Component note: the reusable ESP audio backend has been split into
 [`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack).

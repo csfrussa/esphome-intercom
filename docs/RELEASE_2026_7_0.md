@@ -1,13 +1,12 @@
-# 2026.7.0-dev: ESPHome devices are VoIP phones now
+# 2026.7.0: ESPHome devices are VoIP phones now
 
-This is a **development prerelease** for field testing the next VoIP generation
-before it becomes a stable release. It contains the largest call-control change
+This release contains the largest call-control change
 in the project so far: ESP devices and Home Assistant have been migrated from
 the old project call model to SIP/SDP/RTP VoIP.
 
-Use it if you want to help test. Stay on the latest stable release if the
-device is installed somewhere where temporary audio glitches or call-routing
-regressions would be a problem.
+Use it when you are ready to move to the SIP/VoIP stack. If a device is
+installed somewhere where temporary audio glitches or call-routing regressions
+would be a problem, test the matching YAML on spare hardware first.
 
 ## This release changes the project category
 
@@ -64,7 +63,7 @@ VoIP call-control path is not a compatibility layer.
   VoIP contact matching. If no phonebook contact matches, the adapter can also call
   the single VoIP device assigned to a matching Home Assistant area name.
   Multiple VoIP devices per area are intentionally not voice-dialed in this
-  prerelease; group/area calls are left for a later release.
+  release; group/area calls are left for a later release.
 - 🧬 Added negotiated PCM audio formats to the HA SIP softphone/bridge stack.
 - 🔁 Audio formats are now **per direction**, not one global device format:
   `tx_format` describes device-to-wire audio and `rx_format` describes
@@ -154,8 +153,8 @@ VoIP call-control path is not a compatibility layer.
   the currently selected phonebook contact as the caller that just hung up.
 - 🧹 Ringtone and AudioWorklet cache keys are derived from the loaded card module
   URL/version. The frontend no longer needs a manually bumped audio asset
-  constant during prerelease testing.
-- 🧪 The card version exposed in Lovelace is `v2026.7.0-dev`.
+  constant during release testing.
+- 🧪 The card version exposed in Lovelace is `v2026.7.0`.
 
 ## 📞 SIP Phone Profile
 
@@ -316,13 +315,13 @@ VoIP call-control path is not a compatibility layer.
 - ☎️ P4 full-experience VoIP now advertises `16k/10 ms` AFE microphone TX,
   `48k/10 ms` preferred speaker RX and direct-ESP fallback RX formats, so HA
   bridge calls and ESP-to-ESP calls can negotiate the correct leg format.
-- 🎚️ P4 remains a prerelease target: hosted Wi-Fi, phonebook sync and VoIP call
+- 🎚️ P4 remains a hardware-specific target: hosted Wi-Fi, phonebook sync and VoIP call
   setup are validated, but playback glitches are still being tuned in follow-up
   field tests.
 - 🧱 The local P4 MIPI DSI wrapper accepts ESPHome's current multi-value display
   dimension API, keeping P4 builds compatible with ESPHome 2026.6.x.
 - ⚙️ Full profiles include the shared performance build option baseline.
-- 🧭 Release YAML references for this prerelease point to the `dev` branch.
+- 🧭 Release YAML references point to the `main` branch.
 
 ## 🚧 UDP Payload Policy
 
@@ -339,7 +338,7 @@ VoIP call-control path is not a compatibility layer.
 
 - 📘 Added a dedicated `runtime_controller` component README with the reducer model,
   YAML syntax, policy/action examples, debug mode and host-test command.
-- 📖 README was reworked around the 2026.7.0-dev SIP/VoIP migration first, then
+- 📖 README was reworked around the 2026.7.0 SIP/VoIP migration first, then
   the new audio/media direction.
 - 📘 `docs/reference.md`, architecture docs, protocol docs and troubleshooting
   docs were audited for stale 16 kHz-only assumptions and stale HA TCP/UDP setup
@@ -350,7 +349,7 @@ VoIP call-control path is not a compatibility layer.
   negotiated formats and the new media path.
 - 🛒 HACS guidance was refreshed now that the project is accepted in the HACS
   default repository flow. Custom repository instructions remain useful for
-  development/prerelease testing.
+  development and release testing.
 - 💚 Donation/support messaging was made more visible near the top of the README
   while keeping the existing footer banner.
 
@@ -372,7 +371,7 @@ VoIP call-control path is not a compatibility layer.
   ESPHome update entity and use `esp32_hosted.use_psram: true`.
 - The HA custom integration now requires NumPy. HA OS wheel availability was
   checked for modern Python/aarch64/x86_64 targets, but this remains one of the
-  areas to watch during prerelease testing.
+  areas to watch during release testing.
 - Mixed transport behavior is explicit: direct SIP calls require a compatible
   signaling transport, while HA bridging is the supported route for SIP/UDP to
   SIP/TCP calls. If the media format cannot be confirmed safely, the call is

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# yaml_paths.sh - switch device YAML paths between local (dev) and remote (release).
+# yaml_paths.sh - switch device YAML paths between local checkout and remote release refs.
 #
 # ─── Convention ───
 # Each YAML carries ONE active value per resource: ext_components_source,
@@ -11,10 +11,10 @@
 # manual edit needed.
 #
 # Workflow:
-# - Dev: working tree in local mode. `esphome compile` picks up sibling
+# - Local development: working tree in local mode. `esphome compile` picks up sibling
 #   checkouts directly.
 # - Publish: set each repo independently, for example
-#   `./yaml_paths.sh remote --intercom dev --voip main --audio main --runtime main`.
+#   `./yaml_paths.sh remote --intercom main --voip main --audio main --runtime main`.
 #
 # ─── How it works ───
 # Rewrite targets per YAML:
@@ -63,7 +63,7 @@ set -euo pipefail
 
 # ────────── Defaults ──────────
 DEFAULT_URL="github://n-IA-hane/esphome-intercom"
-DEFAULT_INTERCOM_BRANCH="dev"
+DEFAULT_INTERCOM_BRANCH="main"
 DEFAULT_VOIP_STACK_URL="github://n-IA-hane/esphome-voip-stack"
 DEFAULT_VOIP_STACK_BRANCH="main"
 VOIP_STACK_ROOT_DEFAULT="../esphome-voip-stack"
@@ -432,21 +432,21 @@ cmd_check() {
 
 usage() {
   cat <<EOF
-yaml_paths.sh - switch device YAML paths between local (dev) and remote (release).
+yaml_paths.sh - switch device YAML paths between local checkout and remote release refs.
 
 Usage:
   $(basename "$0") <command> [options]
 
 Commands:
   status                          Print mode (local/remote/mixed) per YAML
-  local                           Rewrite all YAMLs to LOCAL mode (dev)
+  local                           Rewrite all YAMLs to LOCAL mode
   remote [options]                Rewrite all YAMLs to REMOTE mode
   check                           Lint: fail on mixed paths or nested list !include
 
 Options:
   --url URL       e.g. github://n-IA-hane/esphome-intercom (default)
   --branch B      legacy alias for --intercom B
-  --intercom REF  intercom/VoIP repo branch/tag (default: dev)
+  --intercom REF  intercom/VoIP repo branch/tag (default: main)
   --voip-stack-url URL
                   e.g. github://n-IA-hane/esphome-voip-stack (default)
   --voip-stack-branch B
@@ -474,8 +474,8 @@ Examples:
   $(basename "$0") status
   $(basename "$0") local
   $(basename "$0") remote
-  $(basename "$0") remote --intercom dev --voip main --audio main --runtime main
-  $(basename "$0") remote --url github://my-fork/esphome-intercom --branch dev
+  $(basename "$0") remote --intercom main --voip main --audio main --runtime main
+  $(basename "$0") remote --url github://my-fork/esphome-intercom --branch main
   $(basename "$0") remote --file yamls/voip-only/single-bus/xiaozhi-intercom.yaml --branch main
 EOF
 }

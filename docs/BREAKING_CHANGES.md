@@ -1,6 +1,6 @@
 # Breaking changes
 
-## 2026.7.0-dev: ESPHome devices are SIP phones now
+## 2026.7.0: ESPHome devices are SIP phones now
 
 This release is the SIP/VoIP migration. It is not a small protocol tweak and it
 is intentionally not backward compatible with the retired project-specific
@@ -41,7 +41,7 @@ The practical change:
 
 Migration impact:
 
-- Rebuild ESP firmware from the maintained 2026.7.0-dev YAMLs or update custom
+- Rebuild ESP firmware from the maintained 2026.7.0 YAMLs or update custom
   YAMLs to the SIP `voip_stack` contract.
 - Update custom `external_components` entries that previously pointed at this
   repository for `esp_audio_stack`, `esp_aec` or `esp_afe`; those components now
@@ -74,11 +74,10 @@ The active branch is intentionally SIP-first and breaking:
 - Inbound trunk routing uses standard SIP plus RFC2833/telephone-event DTMF to
   select local phonebook targets.
 
-## 2026.7.0-dev: source-based full media path and native 48 kHz VoIP presets
+## 2026.7.0: source-based full media path and native 48 kHz VoIP presets
 
-`2026.7.0-dev` is a prerelease. It is intended for users who want to test the
-new full-experience audio/media path and Sendspin/Music Assistant integration
-before the next stable release.
+`2026.7.0` introduces the new full-experience audio/media path and
+Sendspin/Music Assistant integration.
 
 Maintained full-experience YAMLs now use ESPHome's `speaker_source` media
 player path. Media, announcements, timer sounds, local audio files and optional
@@ -100,7 +99,7 @@ committed snapshot.
 Voice Assistant response state is now tied to TTS/media-player announcement
 lifecycle callbacks through `runtime_controller`. Slow local TTS backends can exceed
 ESPHome's historical 2-second playback-start watchdog, especially XTTS running
-locally. This prerelease temporarily ships a project-local `voice_assistant`
+locally. This release temporarily ships a project-local `voice_assistant`
 fork that exposes `tts_playback_start_timeout`; maintained full profiles set
 it to `10s`. Custom full profiles using the maintained `core_cpp` package get
 that setting automatically.
@@ -170,4 +169,4 @@ frontend testing, clear the browser cache or change the card resource URL when
 serving files outside the packaged release flow.
 
 Older upgrade notes are kept in their original GitHub release pages. This file
-tracks only the current upgrade delta from `2026.6.3` to `2026.7.0-dev`.
+tracks only the current upgrade delta from `2026.6.3` to `2026.7.0`.

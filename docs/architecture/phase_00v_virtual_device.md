@@ -83,7 +83,7 @@ No local simulator proves physical audio quality. These stay in HIL tests:
 
 ## Completion Gate
 
-Before a release candidate:
+Before a release:
 
 - fast contract scenarios pass locally;
 - Python tests pass;
