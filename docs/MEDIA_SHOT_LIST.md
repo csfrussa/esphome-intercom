@@ -7,7 +7,7 @@ This is the working list for refreshing README and documentation media for the
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/dashboard.gif` | GIF | First visual impression and dashboard call flow | Captured: card scrolls contacts, calls Casa, then hangs up |
+| `docs/images/dashboard.gif` | GIF | First visual impression and dashboard call flow | Captured: card scrolls contacts, calls Home, then hangs up |
 | `docs/images/esp-mirror-card.png` | Screenshot | ESP mirror Lovelace mode | Captured: card bound to an ESP endpoint |
 | `docs/images/ha-softphone-card.png` | Screenshot | HA softphone Lovelace mode | Captured: HA card with destination selector |
 | `docs/images/ha-softphone-options.jpg` | Screenshot | HA softphone options panel | Captured: Auto Answer, DND and ringtone controls |
@@ -22,7 +22,7 @@ This is the working list for refreshing README and documentation media for the
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
 | `docs/images/call-from-home-assistant-to-esp.gif` | GIF | Browser card or HA calls an ESP | Captured: target ESP card only, ring, answer, hangup |
-| `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Casa, HA rings, answer or hangup sequence visible |
+| `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Home, HA rings, answer or hangup sequence visible |
 | `docs/images/mobile-notification-answer.gif` | GIF | Android notification answers an ESP call | Captured: notification actions, HA app opening, card in full-duplex call |
 | `docs/images/cross-transport-bridge.gif` | GIF | HA SIP bridge | Captured: WS3 SIP/UDP calls Spotpear SIP/TCP through HA, ringing, answer, hangup |
 | `docs/images/decline-reason.png` | Screenshot | Reason propagation | Decline with custom reason, DND or busy visible in card/sensor |

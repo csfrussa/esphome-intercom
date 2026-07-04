@@ -72,8 +72,8 @@ state.
 - `voip_stack.call` without source: HA originates to roster destination.
 - `voip_stack.call` with `source/source_device_id/source_name`: selected
   ESP originates the call through its own `start_call` action.
-- `voip_stack.call destination=Cucina`: resolves roster name.
-- `voip_stack.call destination=sip:Cucina@IP:5060;transport=tcp`: direct
+- `voip_stack.call destination=Kitchen`: resolves roster name.
+- `voip_stack.call destination=sip:Kitchen@IP:5060;transport=tcp`: direct
   SIP URI.
 - `voip_stack.call destination=0574...`: requires HA SIP bridge route, no direct
   ESP call.

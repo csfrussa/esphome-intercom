@@ -52,8 +52,8 @@ mobile dialers and SIP softphones.
 Example DTMF route map:
 
 ```text
-100=Cucina
-101=Camera
+100=Kitchen
+101=Bedroom
 9=HA
 ```
 

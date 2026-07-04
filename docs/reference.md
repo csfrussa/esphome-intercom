@@ -150,7 +150,7 @@ When `trunk_enabled` is true, the second step adds:
 | `trunk_dtmf_enabled` | Enable inbound RFC2833/telephone-event digit collection. |
 | `trunk_dtmf_timeout_ms` | Digit collection window. The setup UI shows seconds; internally this is stored in milliseconds. Default 3 s, maximum 10 s. `0` skips DTMF/pre-answer and uses the normal inbound dialplan. |
 | `trunk_dtmf_terminator` | Optional terminator digit such as `#`. Empty means timeout or exact route match decides. |
-| `trunk_dtmf_routes` | Newline-separated `digits=target` routes, for example `100=Cucina`. |
+| `trunk_dtmf_routes` | Newline-separated `digits=target` routes, for example `100=Kitchen`. |
 
 Ambiguous DTMF digit prefixes are not rejected at setup. HA collects within the
 timeout and tries the final buffer. If no digits arrive, HA uses
