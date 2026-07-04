@@ -1,86 +1,50 @@
 # Third-Party Notices
 
-This repository is primarily licensed under the MIT License in `LICENSE`.
-Some files, generated firmware builds, or runtime integrations also use
-third-party projects under their own licenses. Those licenses remain in force.
+Project code in this repository is MIT-licensed unless a file states otherwise.
 
-This file is a practical attribution and redistribution notice for this
-repository. It is not legal advice.
+This file only records the third-party code or build-time dependencies that
+matter for normal source and firmware redistribution.
 
-## Project Code
+## ESPHome-Derived Code
 
-| Area | License | Notes |
+ESPHome's license is included in `licenses/ESPHOME-LICENSE.txt`.
+
+| Local path | Upstream | Notes |
 |---|---|---|
-| Repository-native ESPHome components, Home Assistant integration, Lovelace card, YAML packages and documentation | MIT | Covered by `LICENSE` unless a file or directory states otherwise. |
+| `esphome/components/speaker/` | ESPHome `speaker` component | Fork with local pause/release and decoder-source scheduling patches. See `esphome/components/speaker/UPSTREAM.md`. |
+| `esphome/components/voice_assistant/` | ESPHome `voice_assistant` component | Fork with configurable TTS playback-start timeout. See `esphome/components/voice_assistant/UPSTREAM.md`. |
+| `esphome/components/audio/` | ESPHome audio component family | Local copy/adaptation used by maintained media profiles; resolves ESPHome audio codec libraries at build time. |
+| `esphome/components/ring_buffer/` | ESPHome ring buffer component | Local CAPS-aware copy used by audio/VoIP paths. |
+| `esphome/components/mipi_dsi/` | ESPHome community component lineage | Local P4 display support and panel models. |
 
-## ESPHome-Derived Components
+When rebasing a fork, update its `UPSTREAM.md` and keep the ESPHome license
+available.
 
-ESPHome is licensed under Apache-2.0. Some local components are forks,
-adaptations, or compatibility copies of ESPHome components and remain subject
-to Apache-2.0 requirements, including preservation of copyright, license and
-notice information.
+## Runtime Python Dependency
 
-The Apache-2.0 license text is included in `licenses/APACHE-2.0.txt`.
+| Dependency | Used by | License |
+|---|---|---|
+| `numpy>=2.0.0` | Home Assistant audio conversion paths | BSD-3-Clause |
 
-| Local path | Upstream | License | Notes |
-|---|---|---|---|
-| `esphome/components/speaker/` | ESPHome `esphome/components/speaker` baseline recorded in `esphome/components/speaker/UPSTREAM.md` | Apache-2.0 | Local fork for media-pipeline pause/release behavior. |
-| `esphome/components/audio/` | ESPHome audio component family | Apache-2.0 | Local compatibility/adaptation layer used by maintained audio profiles. |
-| `esphome/components/ring_buffer/` | ESPHome ring buffer component | Apache-2.0 | Local compatibility/adaptation layer used by audio paths. |
-| `esphome/components/voice_assistant/` | ESPHome voice assistant component | Apache-2.0 | Local compatibility/adaptation layer when selected by YAML packages. |
+`numpy` is installed by Home Assistant from the package index; it is not
+vendored in this repository.
 
-When rebasing these directories against ESPHome, update the relevant upstream
-record and keep the Apache-2.0 license text available in this repository.
+## IDF Component Manager Dependencies
 
-## Home Assistant And HACS Integration Surface
+ESP firmware builds may resolve these dependencies through ESPHome/ESP-IDF
+Component Manager. They are not vendored here; their upstream licenses apply.
 
-The custom integration under `custom_components/voip_stack/` uses Home
-Assistant integration APIs and is distributed as project code under MIT unless
-a file states otherwise. Home Assistant itself and HACS are not vendored in
-this repository.
+| Component | Used by |
+|---|---|
+| `esphome/esp-audio-libs`, `esphome/micro-decoder`, `esphome/micro-flac`, `esphome/micro-mp3`, `esphome/micro-opus`, `esphome/micro-wav` | ESPHome audio/media decoder paths. |
+| `espressif/esp_audio_effects` | ESP Audio Stack rate/format/channel conversion. |
+| `espressif/esp_codec_dev` | ESP Audio Stack codec-backed I2S paths. |
+| `espressif/esp-dsp`, `espressif/esp-sr`, `espressif/gmf_ai_audio` | ESP AEC/AFE profiles. |
 
-The integration currently declares this runtime Python requirement:
+Firmware using Espressif-restricted components is intended for Espressif
+products/SoCs.
 
-| Dependency | License | Used by | Notes |
-|---|---|---|---|
-| `numpy>=2.0.0` | BSD-3-Clause | Home Assistant VoIP/audio conversion paths | Installed by Home Assistant from the package index, not vendored here. |
+## Documentation Assets
 
-## Espressif IDF Component Manager Dependencies
-
-ESP firmware builds may resolve Espressif components through ESPHome/ESP-IDF
-Component Manager. This repository does not vendor Espressif source or binary
-libraries for these components.
-
-| Component | Used by | License family | Notes |
-|---|---|---|---|
-| `espressif/esp-sr` | `esp_aec`, `esp_afe`, Micro Wake Word adjacent audio profiles | Espressif MIT-style/custom license, restricted to Espressif products | Provides AEC/AFE/SE/VAD/NS/AGC functionality. Some implementation is shipped by Espressif as target libraries. |
-| `espressif/gmf_ai_audio` | `esp_afe` | Espressif modified MIT-style/custom license, restricted to Espressif products | Provides GMF AFE elements and manager APIs used by the AFE wrapper. |
-| `espressif/gmf_core` | Transitive GMF dependency | Espressif modified MIT-style/custom license, restricted to Espressif products | Base GMF runtime used by GMF audio components. |
-| `espressif/esp_audio_effects` | `esp_audio_stack` | Espressif MIT-style/custom license, restricted to Espressif products | Provides rate conversion, bit-depth conversion and layout conversion primitives. |
-| `espressif/esp_codec_dev` | Codec-backed `esp_audio_stack` profiles | Apache-2.0 | Provides codec control and codec-backed I2S read/write paths. |
-| `espressif/esp-dsp` | AEC/AFE support and selected media/artwork packages | Apache-2.0 | Pulled by ESP-IDF Component Manager when selected by the YAML profile. |
-
-Firmware built with Espressif-restricted components is intended for Espressif
-SoCs/products. If this project ever distributes prebuilt firmware images, the
-firmware distribution must include the applicable Espressif notices and license
-texts for the exact resolved component versions.
-
-See `docs/ESPRESSIF_COMPONENTS.md` for the detailed technical audit and
-component boundary notes.
-
-## ESPHome IDF Audio Codec Dependencies
-
-Some ESPHome audio/media paths may resolve small codec components such as
-`esphome/micro-wav`, `esphome/micro-mp3`, `esphome/micro-flac`,
-`esphome/micro-opus` and `esphome/micro-decoder` through ESPHome's normal build
-flow when the corresponding YAML feature is enabled. They are not vendored in
-this repository; their upstream licenses apply.
-
-## Trademark Notes
-
-ESPHome, Home Assistant, HACS, Espressif, ESP-IDF and related project names are
-used descriptively. This repository is not an official Espressif, ESPHome, Home
-Assistant or HACS product unless those upstream projects state otherwise.
-
-Do not use upstream logos or trade dress in this repository without following
-the relevant upstream trademark and brand guidelines.
+Images and videos under `docs/images/` are project documentation assets unless
+a file-specific notice says otherwise.
