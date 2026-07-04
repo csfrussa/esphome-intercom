@@ -141,9 +141,9 @@ Read the full migration list before upgrading custom YAMLs or automations:
 
 Minimum versions for this release:
 
-- **ESPHome**: `2026.5.x` or newer. The maintained YAMLs use ESPHome 2026.5
-  audio/media APIs and IDF component resolution behavior.
-- **Home Assistant Core**: `2026.5.0` or newer for the bundled
+- **ESPHome**: `2026.6.4` or newer within the current stable `2026.6.x` line.
+  The maintained YAMLs are validated on the latest published ESPHome package.
+- **Home Assistant Core**: `2026.7.x` or newer for the bundled
   `voip_stack` integration and Lovelace card.
 
 ## How It Works
@@ -531,8 +531,8 @@ The integration will:
 
 #### Network requirements
 
-- **Minimum Home Assistant Core**: 2026.5.0.
-- **Tested on**: Home Assistant OS 17.3 with Home Assistant Core 2026.5.1.
+- **Minimum Home Assistant Core**: 2026.7.x.
+- **Tested target**: Home Assistant Core 2026.7.x.
 - **HA OS / Supervised**: container is `--network=host` by default. Works.
 - **HA Container (Docker)**: must be started with `--network=host` (also recommended by official HA docs). Bridge mode would need manual port forwarding plus an mDNS reflector and a `network: announced_addresses` override (not recommended).
 - **HA Core in venv**: listens on host LAN, no extra config.
@@ -543,7 +543,7 @@ If `network.async_get_announce_addresses(hass)` returns empty, the integration l
 
 Add the external component to your ESPHome device configuration:
 
-Minimum ESPHome version: **2026.5.x**. Older ESPHome releases are not supported
+Minimum ESPHome version: **2026.6.4**. Older ESPHome releases are not supported
 by the maintained full voice YAMLs.
 
 ```yaml
