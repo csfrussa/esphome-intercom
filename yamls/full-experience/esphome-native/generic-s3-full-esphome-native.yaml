@@ -326,6 +326,11 @@ voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
   audio:
+    tx:
+      sample_rate: 16000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
     rx:
       sample_rate: 48000
       pcm_format: s16le
