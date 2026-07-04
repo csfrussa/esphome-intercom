@@ -215,6 +215,13 @@ voip_stack:
       pcm_format: s16le
       channels: 1
       frame_ms: 10
+    # SIP/SDP still needs a packet-time-compatible opposite direction even
+    # though endpoint mode remains mic_only and no speaker path is created.
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
   microphone_source:
     microphone: mic_main
     bits_per_sample: 16

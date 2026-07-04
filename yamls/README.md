@@ -88,10 +88,12 @@ Public YAMLs ship with `logger.level: INFO`. INFO covers all user-visible call-l
 ## P4 status
 
 Waveshare P4 Touch YAMLs build and boot with the maintained audio/LVGL state
-model, FD high-perf AFE defaults and the validated P4 SDK baseline. Treat them
-as hardware-specific targets: hosted Wi-Fi/SDIO firmware, LVGL/PPA, media/TTS
-transport behavior and task scheduling matter more on P4 than on compact S3
-boards.
+model, FD high-perf AFE defaults and the current ESPHome/ESP-Hosted baseline.
+The landscape full profile has been field-tested with hosted Wi-Fi, phonebook
+sync and VoIP calls, but audio playback still needs follow-up tuning for
+occasional glitches. Treat P4 as a hardware-specific target: hosted Wi-Fi/SDIO
+firmware, LVGL/PPA, media/TTS transport behavior and task scheduling matter
+more on P4 than on compact S3 boards.
 
 If a P4 target resets, hangs, or loses Wi-Fi under media/TTS streaming, update
 the on-board ESP32-C6 hosted Wi-Fi firmware before chasing audio bugs. The

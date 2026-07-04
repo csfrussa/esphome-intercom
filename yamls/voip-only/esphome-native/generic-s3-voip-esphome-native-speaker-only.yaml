@@ -220,6 +220,13 @@ voip_stack:
   task_stacks_in_psram: true
   buffers_in_psram: true
   audio:
+    # SIP/SDP still needs a packet-time-compatible opposite direction even
+    # though endpoint mode remains speaker_only and no microphone path is created.
+    tx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -230,6 +237,14 @@ voip_stack:
   ringing_timeout: 30s
   delete_contact_missing_from:
     updates_number: 1
+  on_in_call:
+    - output.turn_on: speaker_enable
+  on_idle:
+    - output.turn_off: speaker_enable
+  on_hangup:
+    - output.turn_off: speaker_enable
+  on_call_failed:
+    - output.turn_off: speaker_enable
 
 # =============================================================================
 # RUNTIME LOGIC AND ENTITIES

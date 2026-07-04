@@ -39,6 +39,11 @@ Read the full prerelease notes here:
 
 - [`docs/RELEASE_2026_7_0_DEV.md`](RELEASE_2026_7_0_DEV.md)
 
+Component note: the reusable ESP audio backend has been split into
+[`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack).
+This repository stays focused on the VoIP product layer, Home Assistant
+integration, card and ready YAMLs.
+
 Main highlights:
 
 - ESP devices speak SIP/SDP/RTP for call control and media.

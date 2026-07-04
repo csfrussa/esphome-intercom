@@ -1242,7 +1242,7 @@ sequenceDiagram
 | **Spotpear Ball v2 (VoIP)** | Tested | [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | VoIP only |
 | **Waveshare S3-Audio (AFE)** | Tested | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LED + AFE switches/sensors |
 | **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | Hardware-test target | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LVGL touch |
-| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | Hardware-test target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
+| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | Field-tested prerelease target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
 | **Generic S3 (full AEC light)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP, lighter 4 MB-oriented preset |
 | **Generic S3 (full AEC light, dual bus)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP on separated I2S buses |
 | **Generic S3 (full AFE, untested)** | Expected-working | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + VoIP, requires >4 MB app slot |
@@ -1279,9 +1279,11 @@ slot, so 8 MB or 16 MB flash is recommended. The example GPIOs are placeholders:
 on ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so move
 BCLK/LRCLK/DIN/LED to board-safe pins before flashing.
 
-The P4 YAMLs are experimental hardware targets. They are useful for ongoing
-ESP32-P4/LVGL/hosted-Wi-Fi work, but the stable release reference devices are
-the ESP32-S3 targets above.
+The P4 YAMLs are still prerelease hardware targets. The landscape profile has
+been field-tested with ESPHome 2026.6.4, ESP-Hosted 2.12.9, phonebook sync and
+VoIP calls, but audio playback still needs follow-up tuning for occasional
+glitches. The stable release reference devices remain the ESP32-S3 targets
+above.
 
 #### Waveshare P4 Touch C6 firmware requirement
 
@@ -1310,14 +1312,17 @@ The validated recovery path used on the 10.1" Waveshare P4 Touch was:
    data and app. Then release `IO9`.
 6. Reflash the normal ESPHome P4 firmware.
 
-After recovery, the tested board reported `ESP32-C6 Coprocessor Firmware`
-installed version `2.12.7`, and the P4 stopped crashing under hosted Wi-Fi.
+After recovery, the tested board booted cleanly and the P4 stopped crashing
+under hosted Wi-Fi. Keep the C6 firmware aligned with the host `esp_hosted`
+library through the update entity below; current ESPHome builds use
+ESP-Hosted `2.12.9`.
 
 The normal ESPHome P4 YAMLs enable hosted Wi-Fi with:
 
 ```yaml
 esp32_hosted:
   variant: ESP32C6
+  use_psram: true
   reset_pin: GPIO54
   cmd_pin: GPIO19
   clk_pin: GPIO18
@@ -1328,11 +1333,21 @@ esp32_hosted:
   active_high: true
 ```
 
+`use_psram: true` lets ESPHome place ESP-Hosted transport mempool buffers in
+DMA-capable PSRAM when supported. That is the official fix for memory-tight
+P4/LVGL/audio builds that otherwise fail during SDIO startup with
+`sdio_mempool_create`.
+
 The shared package [`packages/board/esp32p4_c6_sdio.yaml`](packages/board/esp32p4_c6_sdio.yaml)
-also forces the host to SDIO streaming mode to match the C6 slave:
+keeps the remaining board-level transport settings: SDIO streaming mode to
+match the C6 slave, hosted task stacks in PSRAM, and conservative SDIO queue
+sizes:
 
 ```yaml
 CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE: "y"
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM: "y"
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE: "10"
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE: "10"
 ```
 
 It exposes ESPHome's native coprocessor update entity:
@@ -1348,9 +1363,9 @@ update:
 ```
 
 Do not force-install an older advertised version. ESPHome only offers firmware
-versions compatible with the compiled host `esp_hosted` library; for example, a
-host pinned to `2.12.1` may show latest `2.12.1` while the C6 is already on
-`2.12.7`. In that case leave the C6 alone until the host library is updated.
+versions compatible with the compiled host `esp_hosted` library; if the update
+entity reports no compatible newer C6 image, leave the C6 alone until the host
+library is updated.
 
 ---
 
@@ -1877,7 +1892,7 @@ Working configs tested on real hardware, organized by use case. Not sure which o
 | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
 | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
 | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement |
-| [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
+| [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(prerelease field-tested)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
 
 ### VoIP Only (no VA, no MWW)
 

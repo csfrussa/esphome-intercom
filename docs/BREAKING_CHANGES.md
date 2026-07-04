@@ -33,11 +33,19 @@ The practical change:
 - SIP call reasons are surfaced to ESP displays, HA state and cards: busy, DND,
   declined, cancelled, timeout, media-incompatible, transport-unreachable and
   route errors are no longer hidden behind the old intercom FSM.
+- The reusable ESP audio backend has moved out of this repository. If you are
+  looking for `esp_audio_stack`, `esp_aec` or `esp_afe`, use the dedicated
+  [`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack)
+  repository. This repository now consumes it as the audio engine for full
+  voice/VoIP products.
 
 Migration impact:
 
 - Rebuild ESP firmware from the maintained 2026.7.0-dev YAMLs or update custom
   YAMLs to the SIP `voip_stack` contract.
+- Update custom `external_components` entries that previously pointed at this
+  repository for `esp_audio_stack`, `esp_aec` or `esp_afe`; those components now
+  resolve from `github://n-IA-hane/esphome-audio-stack@main`.
 - `transport: udp|tcp` still exists in ESP YAML, but it means SIP signaling
   transport only. RTP media is UDP.
 - ESP devices do not REGISTER to a provider/PBX and do not require SIP auth.

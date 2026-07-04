@@ -241,6 +241,7 @@ network:
 # Known stability issues: see https://github.com/esphome/esphome/issues/10956
 esp32_hosted:
   variant: ESP32C6
+  use_psram: true
   reset_pin: ${hosted_reset_pin}
   cmd_pin: ${hosted_cmd_pin}
   clk_pin: ${hosted_clk_pin}
@@ -614,14 +615,19 @@ voip_stack:
   # buffers sit on the mic TX path during calls.
   buffers_in_psram: false
   audio:
-    # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
-    # matching 10 ms TX reframe of the 16 kHz AFE mic for peers that negotiate
-    # ptime 10. 32 kHz/16 ms remains an alternate advertised format.
+    # Primary/preferred RTP profile: 16 kHz/10 ms from the AFE mic toward HA
+    # and 48 kHz/10 ms toward the speaker. The 16 ms TX reframe remains for
+    # direct ESP peers that prefer that packet time.
+    tx:
+      sample_rate: 16000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
     tx_formats:
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1
-        frame_ms: 10
+        frame_ms: 16
     rx:
       sample_rate: 48000
       pcm_format: s16le
@@ -632,6 +638,10 @@ voip_stack:
     # not advertise additional formats when wiring voip_stack directly to a
     # fixed-rate mixer input.
     rx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
       - sample_rate: 32000
         pcm_format: s16le
         channels: 1

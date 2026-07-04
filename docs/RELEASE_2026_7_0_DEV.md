@@ -178,6 +178,18 @@ VoIP call-control path is not a compatibility layer.
 - 📚 `docs/INTERCOM_PROTOCOL.md` and `docs/PHONEBOOK_PROTOCOL.md` were updated
   for the format-aware endpoint rows and negotiated call setup.
 
+## 🧱 Component Split
+
+- 🧩 The reusable ESP audio backend now lives in
+  [`esphome-audio-stack`](https://github.com/n-IA-hane/esphome-audio-stack).
+  Full voice products still use it, but `esp_audio_stack`, `esp_aec` and
+  `esp_afe` are no longer maintained inside this product repository.
+- 🧭 This repository remains the product layer: Home Assistant integration,
+  SIP routing/B2BUA, Lovelace card, ready YAMLs and full-experience docs.
+- 🔌 Custom YAMLs that include audio-stack components should point their
+  `external_components` entry at
+  `github://n-IA-hane/esphome-audio-stack@main`.
+
 ## 🔊 ESP Audio Runtime
 
 - 🧱 Runtime audio now works in explicit **audio frames/chunks** derived from the
@@ -297,6 +309,16 @@ VoIP call-control path is not a compatibility layer.
 - 🔁 Spotpear UDP mirrors the TCP display cleanup on HA API disconnect. P4 UDP
   landscape uses the same high-performance AFE mode as the TCP landscape
   profile.
+- 📟 Waveshare P4 Touch profiles were refreshed for ESPHome 2026.6.4 and
+  ESP-Hosted 2.12.9. The maintained YAMLs enable `esp32_hosted.use_psram` so
+  SDIO transport mempools can use DMA-capable PSRAM on memory-tight P4/LVGL/AFE
+  builds.
+- ☎️ P4 full-experience VoIP now advertises `16k/10 ms` AFE microphone TX,
+  `48k/10 ms` preferred speaker RX and direct-ESP fallback RX formats, so HA
+  bridge calls and ESP-to-ESP calls can negotiate the correct leg format.
+- 🎚️ P4 remains a prerelease target: hosted Wi-Fi, phonebook sync and VoIP call
+  setup are validated, but playback glitches are still being tuned in follow-up
+  field tests.
 - 🧱 The local P4 MIPI DSI wrapper accepts ESPHome's current multi-value display
   dimension API, keeping P4 builds compatible with ESPHome 2026.6.x.
 - ⚙️ Full profiles include the shared performance build option baseline.
@@ -345,6 +367,9 @@ VoIP call-control path is not a compatibility layer.
 - Sendspin/Music Assistant grouped playback was validated on WS3, Spotpear and
   P4. Keep testing other boards before treating every custom hardware profile
   as covered.
+- Waveshare P4 Touch users should keep the ESP32-C6 coprocessor firmware aligned
+  with the ESP-Hosted version bundled by ESPHome. Current P4 YAMLs expose the
+  ESPHome update entity and use `esp32_hosted.use_psram: true`.
 - The HA custom integration now requires NumPy. HA OS wheel availability was
   checked for modern Python/aarch64/x86_64 targets, but this remains one of the
   areas to watch during prerelease testing.
