@@ -549,20 +549,16 @@ by the maintained full voice YAMLs.
 ```yaml
 # Lightweight (single-mic, echo cancellation only):
 external_components:
-  - source: github://n-IA-hane/esphome-voip-stack
-    ref: main
+  - source: github://n-IA-hane/esphome-voip-stack@main
     components: [voip_stack]
-  - source: github://n-IA-hane/esphome-audio-stack
-    ref: main
+  - source: github://n-IA-hane/esphome-audio-stack@main
     components: [esp_audio_stack, esp_aec]
 
 # Full AFE pipeline (single-mic NS/AGC/VAD or dual-mic Speech Enhancement/VAD):
 external_components:
-  - source: github://n-IA-hane/esphome-voip-stack
-    ref: main
+  - source: github://n-IA-hane/esphome-voip-stack@main
     components: [voip_stack]
-  - source: github://n-IA-hane/esphome-audio-stack
-    ref: main
+  - source: github://n-IA-hane/esphome-audio-stack@main
     components: [esp_audio_stack, esp_afe]
 ```
 

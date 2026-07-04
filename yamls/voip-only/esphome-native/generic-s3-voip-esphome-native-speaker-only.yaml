@@ -42,9 +42,9 @@ substitutions:
   name: generic-native-int-spk
   friendly_name: Generic S3 Native VoIP Speaker Only
 
-  ext_components_source: "github://n-IA-hane/esphome-intercom@dev"
-  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
-  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+  ext_components_source: "../../../esphome/components"
+  voip_stack_components_source: "../../../../esphome-voip-stack/esphome/components"
+  audio_stack_components_source: "../../../../esphome-audio-stack/esphome/components"
 
   # ---------------------------------------------------------------------------
   # Pinout: native speaker I2S bus
@@ -65,13 +65,13 @@ substitutions:
 # basic buttons and native diagnostics.
 
 packages:
-  voip_transport: github://n-IA-hane/esphome-intercom/packages/voip/transport.yaml@dev
-  phonebook_subscribe: github://n-IA-hane/esphome-intercom/packages/voip/phonebook_subscribe.yaml@dev
-  ha_api: github://n-IA-hane/esphome-intercom/packages/voip/ha_api.yaml@dev
-  voip_auto_entities: github://n-IA-hane/esphome-intercom/packages/voip/auto_entities.yaml@dev
-  voip_buttons: github://n-IA-hane/esphome-intercom/packages/voip/buttons_base.yaml@dev
-  s3_base: github://n-IA-hane/esphome-intercom/packages/platform/esp32s3_base.yaml@dev
-  native_diagnostics: github://n-IA-hane/esphome-intercom/packages/diagnostics/native.yaml@dev
+  voip_transport: !include ../../../packages/voip/transport.yaml
+  phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
+  ha_api: !include ../../../packages/voip/ha_api.yaml
+  voip_auto_entities: !include ../../../packages/voip/auto_entities.yaml
+  voip_buttons: !include ../../../packages/voip/buttons_base.yaml
+  s3_base: !include ../../../packages/platform/esp32s3_base.yaml
+  native_diagnostics: !include ../../../packages/diagnostics/native.yaml
 
 # =============================================================================
 # BOARD AND MEMORY

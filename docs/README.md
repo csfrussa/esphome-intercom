@@ -71,3 +71,5 @@ Each ESPHome component ships its own README with the full option list, YAML snip
 - [`esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe), the full Espressif AFE pipeline (AEC + NS + VAD + AGC, optional dual-mic Speech Enhancement).
 - internal shared audio primitives used privately by the local media/voice
   component forks and by the split audio-stack repository.
+- `voip_simulator`, an internal test/simulation component used by the virtual
+  device harness. It is not a production YAML component.
