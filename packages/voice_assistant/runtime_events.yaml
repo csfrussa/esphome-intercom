@@ -33,21 +33,42 @@ voice_assistant:
               id: runtime
               event: va_responding
   on_tts_start:
+    - logger.log:
+        level: INFO
+        tag: va
+        format: "VA: tts_start"
     - runtime_controller.event:
         id: runtime
         event: va_responding
     - script.execute:
         id: ui_tts_started
         text: !lambda 'return x;'
+  on_tts_end:
+    - logger.log:
+        level: INFO
+        tag: va
+        format: "VA: tts_end"
   on_end:
+    - logger.log:
+        level: INFO
+        tag: va
+        format: "VA: end"
     - runtime_controller.event:
         id: runtime
         event: va_end
   on_idle:
+    - logger.log:
+        level: INFO
+        tag: va
+        format: "VA: idle"
     - runtime_controller.event:
         id: runtime
         event: va_idle
   on_error:
+    - logger.log:
+        level: INFO
+        tag: va
+        format: "VA: error"
     - runtime_controller.event:
         id: runtime
         event: va_error
