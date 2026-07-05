@@ -28,6 +28,8 @@ sensor:
     unit_of_measurement: "%"
     update_interval: ${diagnostics_wifi_update_interval}
     entity_category: diagnostic
+    # ESPHome's wifi_signal sensor reports dBm. This compact conversion keeps a
+    # familiar 0-100% diagnostic entity without adding a custom component.
     lambda: |-
       if (!id(wifi_signal_db).has_state()) return 0.0f;
       float dbm = id(wifi_signal_db).state;

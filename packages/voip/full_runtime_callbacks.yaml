@@ -1,14 +1,8 @@
-# =============================================================================
-# VoIP callbacks for VA-enabled devices.
-# Like voip/callbacks.yaml but UI-only for full-experience devices.
-# Runtime state, LEDs, ducking and ringtone playback are owned by runtime_controller.
+# VoIP callbacks for full runtime_controller devices.
 #
-# Prerequisites in the device YAML:
-#   - voip_stack hardware config (microphone, speaker, ringing_timeout, ...)
-#   - script ids `ui_call_started`, `ui_call_dest_ringing`, `ui_call_ended`
-#     (provided as placeholders by runtime_controller bridge package; device
-#      !extends them to drive LVGL)
-#
+# This package only connects voip_stack lifecycle callbacks to full-runtime UI
+# hook scripts and ringtone stop logic. It does not define VA/MWW controls.
+
 voip_stack:
   id: phone
   on_calling:
@@ -20,8 +14,6 @@ voip_stack:
         id: ui_call_started
         peer: !lambda 'return id(phone).get_caller();'
   on_dest_ringing:
-    # Caller path: dest acked with RING. Same calling screen, the
-    # device YAML flips its label inside ui_call_dest_ringing.
     - script.execute:
         id: ui_call_dest_ringing
         peer: !lambda 'return id(phone).get_current_destination();'

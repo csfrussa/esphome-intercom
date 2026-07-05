@@ -35,6 +35,9 @@ generic_image:
     resize: ${sendspin_artwork_resize}
     source: ALBUM
     on_image_display:
+      # The guard mixes LVGL mode, VA state, media_player state and
+      # runtime_controller activity. There is no single native ESPHome condition
+      # for this combined UI predicate.
       - if:
           condition:
             lambda: |-
@@ -45,6 +48,8 @@ generic_image:
           then:
             - script.execute: apply_media_artwork
     on_image_error:
+      # Same guard as successful image display: repaint only when the media page
+      # is allowed to own the artwork.
       - if:
           condition:
             lambda: |-
@@ -58,6 +63,7 @@ generic_image:
 script:
   - id: !extend apply_media_artwork
     then:
+      # generic_image exposes the loaded LVGL image source through C++.
       - lambda: |-
           if (id(sendspin_cover_art).is_loaded()) {
             lv_img_set_src(id(mood_bg), id(sendspin_cover_art));

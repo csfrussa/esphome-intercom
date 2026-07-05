@@ -1,0 +1,13 @@
+# Boot lifecycle events for full runtime_controller devices.
+
+esphome:
+  on_boot:
+    priority: 700
+    then:
+      - runtime_controller.event:
+          id: runtime
+          event: boot_start
+      - delay: 1s
+      - runtime_controller.event:
+          id: runtime
+          event: boot_ready

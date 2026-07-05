@@ -13,7 +13,7 @@
 # =============================================================================
 
 packages:
-  voip_buttons_base: !include buttons_base.yaml
+  voip_call_buttons: !include call_buttons.yaml
 
 switch:
   - platform: template

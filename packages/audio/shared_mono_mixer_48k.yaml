@@ -1,16 +1,21 @@
 # =============================================================================
-# Full-experience mono 48 kHz speaker mixer.
+# Shared full-experience mono 48 kHz speaker mixer.
 #
-# Device YAML must provide:
-#   - speaker id `hw_speaker`
+# Include this when media, TTS/announcements and VoIP must share one physical
+# speaker. The package creates three logical source speakers and resamples each
+# source to a common 48 kHz mono stream before the final hardware speaker.
 #
 # Provides:
-#   - `audio_mixer`
-#   - `media_mixer_input`, `tts_mixer_input`, `voip_mixer_input`
-#   - `media_speaker_input`, `tts_speaker_input`, `voip_speaker_input`
+#   - speaker id `audio_mixer`
+#   - source speakers: `media_mixer_input`, `tts_mixer_input`, `voip_mixer_input`
+#   - public speaker inputs: `media_speaker_input`, `tts_speaker_input`,
+#     `voip_speaker_input`
 #
-# The hardware speaker stays device-local because codec/no-codec and power
-# handling differ by board.
+# Prerequisites:
+#   - speaker id `hw_speaker` from the board/audio-backend YAML
+#
+# This package does not know about runtime_controller, Voice Assistant or media
+# policy. State ownership belongs in the media_player and runtime packages.
 # =============================================================================
 
 speaker:
@@ -35,7 +40,7 @@ speaker:
         num_channels: 1
       - id: voip_mixer_input
         timeout: 10s
-        # Local mixer staging; RTP packet time is negotiated by SIP/SDP.
+        # Local mixer staging only. SIP/SDP packet time is owned by voip_stack.
         buffer_duration: 128ms
         sample_rate: 48000
         bits_per_sample: 16
@@ -64,5 +69,6 @@ speaker:
     sample_rate: 48000
     bits_per_sample: 16
     num_channels: 1
-    # Keep the VoIP RX resampler buffer frame-aligned with the wire chunk.
+    # Keep the VoIP playout staging close to the mixer source buffer. This is
+    # not the RTP packet time and should not be tuned as a SIP workaround.
     buffer_duration: 128ms

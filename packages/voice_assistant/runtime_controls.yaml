@@ -1,23 +1,13 @@
-# =============================================================================
-# VoIP buttons + mute/wake-word switches.
-# VA-aware variant of voip/buttons_switches.yaml: the mic mute switch also
-# stops/starts the wake word + voice assistant pipeline, and adds an extra
-# Wake Word toggle.
+# User-facing Voice Assistant/Micro Wake Word controls for full runtime devices.
 #
 # Provides:
-#   buttons: call_button, next_contact_button, prev_contact_button,
-#            decline_button, restart
 #   switches: mute, wake_word_switch
 #
-# Prerequisites in the device YAML:
-#   - id `mww`        : micro_wake_word component (runtime voice_assistant package)
-#
-# Required substitutions:
-#   ${mic_id} - ID of the microphone bound to the mute action (default: mic_main)
-# =============================================================================
+# Also includes the base VoIP buttons because maintained full devices expose
+# call controls next to the VA/MWW switches.
 
 packages:
-  voip_buttons_base: !include buttons_base.yaml
+  voip_call_buttons: !include ../voip/call_buttons.yaml
 
 switch:
   - platform: template

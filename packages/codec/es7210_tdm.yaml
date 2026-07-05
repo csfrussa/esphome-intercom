@@ -27,6 +27,8 @@ script:
   - id: es7210_tdm_init
     mode: single
     then:
+      # Direct register writes are intentional here: these knobs are not exposed
+      # by the stock ESPHome ES7210 setup path.
       - lambda: |-
           // 1. Enable ALL ADC clocks (default driver only enables ADC1+2).
           uint8_t reg01;

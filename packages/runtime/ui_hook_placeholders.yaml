@@ -1,0 +1,37 @@
+# Empty UI hook scripts for full runtime devices.
+#
+# Device-specific display packages may !extend these scripts to draw LVGL pages
+# or update hardware-specific UI. Headless devices can include them unchanged.
+
+script:
+  - id: update_led
+    mode: restart
+    then: []
+  - id: render_ui_state
+    mode: restart
+    then: []
+  - id: ui_tts_started
+    parameters:
+      text: string
+    then: []
+  - id: ui_stt_ended
+    parameters:
+      text: string
+    then: []
+  - id: ui_va_end
+    then: []
+  - id: ui_va_barge_start
+    then: []
+  - id: ui_call_started
+    parameters:
+      peer: string
+    then: []
+  - id: ui_call_dest_ringing
+    parameters:
+      peer: string
+    then: []
+  - id: ui_call_ended
+    parameters:
+      peer: string
+      reason: string
+    then: []

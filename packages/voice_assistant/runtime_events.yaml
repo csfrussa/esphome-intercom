@@ -1,6 +1,8 @@
-# =============================================================================
-# Voice Assistant + Micro Wake Word forwarding-only core for runtime_controller.
-# =============================================================================
+# Voice Assistant + Micro Wake Word runtime_controller event forwarding.
+#
+# Include this when VA/MWW state is rendered by runtime_controller. This package
+# defines the VA and MWW components and forwards their lifecycle events; it does
+# not create user-facing switches or buttons.
 
 voice_assistant:
   id: va

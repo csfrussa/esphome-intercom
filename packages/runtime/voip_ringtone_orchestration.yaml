@@ -1,0 +1,69 @@
+# VoIP ringtone orchestration for full runtime devices using speaker_media_player.
+#
+# This package intentionally owns media suppression while ringtone announcements
+# are active. Devices without local ringtone playback should not include it.
+
+script:
+  - id: voip_ringing_loop
+    mode: restart
+    then:
+      - globals.set:
+          id: g_voip_ringtone_media_suppressed
+          value: "true"
+      - globals.set:
+          id: g_voip_ringtone_active
+          value: "true"
+      - while:
+          condition:
+            voip_stack.is_ringing:
+          then:
+            - media_player.play_media:
+                id: speaker_media_player
+                media_url: "audio-file://voip_ringing_sound"
+                announcement: true
+            - wait_until:
+                condition:
+                  media_player.is_announcing:
+                    id: speaker_media_player
+                timeout: 2s
+            - wait_until:
+                condition:
+                  not:
+                    media_player.is_announcing:
+                      id: speaker_media_player
+                timeout: 5s
+      - globals.set:
+          id: g_voip_ringtone_active
+          value: "false"
+      - globals.set:
+          id: g_voip_ringtone_media_suppressed
+          value: "false"
+
+  - id: voip_stop_ringtone
+    mode: restart
+    then:
+      - script.stop: voip_ringing_loop
+      # Stop the media player only if this package started the ringtone. Without
+      # this guard, ending a call could stop an unrelated announcement.
+      - if:
+          condition:
+            lambda: 'return id(g_voip_ringtone_active);'
+          then:
+            - globals.set:
+                id: g_voip_ringtone_media_suppressed
+                value: "true"
+            - media_player.stop:
+                id: speaker_media_player
+                announcement: true
+            - wait_until:
+                condition:
+                  not:
+                    media_player.is_announcing:
+                      id: speaker_media_player
+                timeout: 1500ms
+      - globals.set:
+          id: g_voip_ringtone_media_suppressed
+          value: "false"
+      - globals.set:
+          id: g_voip_ringtone_active
+          value: "false"

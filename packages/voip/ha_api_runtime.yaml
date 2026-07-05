@@ -23,6 +23,8 @@ wifi:
 
 api:
   on_client_connected:
+    # ESPHome exposes client_info only to automations as a string. Keep this as a
+    # lambda so log/dashboard/web clients do not incorrectly mark HA as present.
     - if:
         condition:
           lambda: |-
@@ -39,6 +41,8 @@ api:
     - delay: 1s
     - voip_stack.publish_entity_states:
   on_client_disconnected:
+    # Mirror the same client_info filter on disconnect and drop HA only when the
+    # last real API client is gone.
     - if:
         condition:
           lambda: |-

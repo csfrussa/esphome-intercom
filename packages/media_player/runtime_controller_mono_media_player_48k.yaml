@@ -1,9 +1,22 @@
 # =============================================================================
-# Full-experience media graph for runtime_controller.
+# Runtime-controller full-experience mono 48 kHz media player.
 #
-# HA/Sendspin media, generic announcements and VA TTS remain on the standard
-# speaker_source media player. runtime_controller policy lives in the split
-# esphome-runtime-controller package included by the device YAML.
+# Include this with audio/shared_mono_mixer_48k.yaml when a full device uses
+# runtime_controller for media/announcement/VA/VoIP arbitration.
+#
+# Provides:
+#   - sendspin hub and media source
+#   - local ringtone audio_file `voip_ringing_sound`
+#   - HTTP/file/sendspin media sources
+#   - media_player id `speaker_media_player`
+#
+# Prerequisites:
+#   - speaker ids `media_speaker_input` and `tts_speaker_input`
+#   - runtime_controller id `runtime`
+#
+# Normal media, Sendspin, local announcements and VA TTS all go through the same
+# speaker_source media player. The only state emitted here is factual media
+# lifecycle events; rendering remains centralized in runtime_controller.
 # =============================================================================
 
 sendspin:

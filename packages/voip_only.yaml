@@ -1,11 +1,11 @@
 # =============================================================================
-# VoIP-only meta-package.
+# VoIP-only preset.
 # Simple phones use voip_stack callbacks directly, without runtime_controller.
 # Full profiles use runtime_controller because VA/media/LVGL need arbitration.
 #
 # Maintained presets include optional feature packages explicitly next to this
-# core package, so users can comment out one line to remove a feature:
-#   - voip/buttons_switches.yaml   call/next/prev/decline buttons + mute
+# preset, so users can comment out one line to remove a feature:
+#   - voip/entities_full_duplex.yaml   call/next/prev/decline buttons + mic mute
 #   - voip/call_settings.yaml      auto-answer + DND switches
 #   - voip/ha_api.yaml             HA-callable call-control services
 #
@@ -22,7 +22,7 @@
 # =============================================================================
 
 packages:
-  callback_reducer: !include voip/callback_reducer.yaml
+  simple_led_status_full_duplex: !include voip/simple_led_status_full_duplex.yaml
   callbacks: !include voip/callbacks.yaml
 
 # voip_stack reserves socket headroom in validation; no lwIP override here.

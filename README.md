@@ -1610,13 +1610,12 @@ package as an explicit, optional package line:
 
 ```yaml
 packages:
-  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands_cpp.yaml@main
+  voice_assistant_local_commands: github://n-IA-hane/esphome-intercom/packages/voice_assistant/local_commands.yaml@main
 ```
 
-Runtime-FSM profiles use `local_commands_cpp.yaml`; default/native profiles use
-`local_commands.yaml`. Both expose a `voice_quiet` ESPHome API action. It stops
-only the current media-player announcement and the active Voice Assistant
-session, so a Sendspin or normal media stream underneath is not stopped.
+`local_commands.yaml` exposes a `voice_quiet` ESPHome API action. It stops only
+the current media-player announcement and the active Voice Assistant session, so
+a Sendspin or normal media stream underneath is not stopped.
 
 Home Assistant Assist sentence triggers can call the satellite-local quiet
 service. The example automation covers:

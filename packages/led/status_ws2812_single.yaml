@@ -2,7 +2,7 @@
 # Single WS2812/SK6812 status LED.
 #
 # Hardware/effects package for generic devices with one addressable status LED.
-# State mapping stays in the VoIP callback reducer or runtime_controller.
+# State mapping stays in the VoIP simple LED status package or runtime_controller.
 # =============================================================================
 
 substitutions:

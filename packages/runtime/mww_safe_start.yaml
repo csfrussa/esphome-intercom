@@ -1,0 +1,34 @@
+# Safe Micro Wake Word start helper for full runtime devices.
+#
+# This package owns the guarded start policy only. The optional task-priority
+# adjustment lives in runtime/mww_task_priority.yaml and extends
+# boost_mww_priority.
+
+script:
+  - id: start_mww_when_ready
+    mode: restart
+    then:
+      - wait_until:
+          condition:
+            lambda: 'return millis() >= 10000;'
+          timeout: 10s
+      - delay: 2s
+      - if:
+          condition:
+            and:
+              - lambda: 'return !id(init_in_progress);'
+              - lambda: 'return !id(g_ota_in_progress);'
+              - lambda: 'return id(g_wake_word_enabled);'
+              - switch.is_off: mute
+              - not:
+                  micro_wake_word.is_running:
+          then:
+            - logger.log:
+                tag: mww
+                format: "MWW: safe start"
+            - micro_wake_word.start:
+            - script.execute: boost_mww_priority
+
+  - id: boost_mww_priority
+    mode: restart
+    then: []

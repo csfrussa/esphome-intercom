@@ -1,0 +1,17 @@
+# Optional FreeRTOS priority boost for Micro Wake Word.
+#
+# Include this only when the device runs a busy full runtime graph and MWW must
+# keep scheduling precedence over low-priority UI/media work.
+
+script:
+  - id: !extend boost_mww_priority
+    then:
+      - wait_until:
+          condition:
+            lambda: 'return xTaskGetHandle("mww") != nullptr;'
+          timeout: 2s
+      - lambda: |-
+          TaskHandle_t mww_task = xTaskGetHandle("mww");
+          if (mww_task) {
+            vTaskPrioritySet(mww_task, 8);
+          }

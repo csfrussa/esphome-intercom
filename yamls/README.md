@@ -77,9 +77,40 @@ offline/custom installs; normal shared routing comes from `sensor.voip_phonebook
 
 ## Optional packages
 
-`packages/voice_assistant/timers_cpp.yaml` adds Home Assistant timer alarm
+`packages/voice_assistant/timers_runtime.yaml` adds Home Assistant timer alarm
 support on top of the runtime_controller full VA/VoIP package. Include it only
 on devices that should expose timer behavior.
+
+## Package map
+
+Package names are meant to describe ownership, not implementation history:
+
+- `packages/presets/full_voice_voip_runtime.yaml`: high-level preset for full
+  VA + MWW + media + VoIP devices using runtime_controller. It wires runtime
+  facts and callbacks; board audio, display and codec choices stay outside.
+- `packages/voip_only.yaml`: high-level preset for simple VoIP endpoints. It
+  uses voip_stack callbacks directly and does not include runtime_controller.
+- `packages/audio/shared_mono_mixer_48k.yaml`: shared speaker mixer/resampler
+  graph for full devices. It only creates audio plumbing and does not own UI or
+  policy state.
+- `packages/media_player/runtime_controller_mono_media_player_48k.yaml`: media,
+  announcement, Sendspin and ringtone sources for runtime_controller devices.
+  It emits media lifecycle facts instead of rendering state directly.
+- `packages/voice_assistant/runtime_events.yaml`: Voice Assistant and Micro Wake
+  Word components plus runtime_controller event forwarding.
+- `packages/voice_assistant/runtime_controls.yaml`: user-facing VA/MWW controls
+  such as mic mute and Wake Word.
+- `packages/voip/simple_led_status_*.yaml`: direct LED mappings for VoIP-only
+  devices with no runtime_controller.
+- `packages/voip/*_runtime.yaml`: VoIP helper packages that additionally emit
+  runtime_controller connectivity or mute events.
+- `packages/debug/*.yaml`: opt-in diagnostic overlays. Do not include them in
+  release YAMLs unless you are actively collecting logs or traces.
+
+Prefer native ESPHome actions, conditions and scripts in packages. Use lambdas
+only where ESPHome has no native primitive: dynamic trigger/API values, LVGL
+widget synchronization, direct hardware register access, or FreeRTOS/task
+operations.
 
 ## Production logging
 

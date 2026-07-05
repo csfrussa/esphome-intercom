@@ -1,0 +1,20 @@
+# Full Voice Assistant + VoIP runtime preset.
+#
+# This preset is intentionally broad: it wires runtime_controller state globals,
+# boot events, UI hook placeholders, safe MWW lifecycle, optional MWW task
+# priority boost, local ringtone orchestration, Voice Assistant/MWW runtime
+# events, VoIP UI callbacks and the VoIP stack base id.
+
+packages:
+  runtime_full_ui_state_globals: !include ../runtime/full_ui_state_globals.yaml
+  runtime_boot_events: !include ../runtime/boot_events.yaml
+  runtime_ui_hook_placeholders: !include ../runtime/ui_hook_placeholders.yaml
+  runtime_mww_safe_start: !include ../runtime/mww_safe_start.yaml
+  runtime_mww_task_priority: !include ../runtime/mww_task_priority.yaml
+  runtime_voip_ringtone_orchestration: !include ../runtime/voip_ringtone_orchestration.yaml
+  voice_assistant_runtime_events: !include ../voice_assistant/runtime_events.yaml
+  voip_full_runtime_callbacks: !include ../voip/full_runtime_callbacks.yaml
+
+voip_stack:
+  id: phone
+  network_socket_headroom: 8
