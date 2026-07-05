@@ -11,6 +11,9 @@ script:
           id: g_voip_ringtone_media_suppressed
           value: "true"
       - globals.set:
+          id: g_voip_ringtone_restore_media
+          value: !lambda 'return id(runtime).is_activity_active("media");'
+      - globals.set:
           id: g_voip_ringtone_active
           value: "true"
       - while:
@@ -37,6 +40,9 @@ script:
           value: "false"
       - globals.set:
           id: g_voip_ringtone_media_suppressed
+          value: "false"
+      - globals.set:
+          id: g_voip_ringtone_restore_media
           value: "false"
 
   - id: voip_stop_ringtone
@@ -66,4 +72,7 @@ script:
           value: "false"
       - globals.set:
           id: g_voip_ringtone_active
+          value: "false"
+      - globals.set:
+          id: g_voip_ringtone_restore_media
           value: "false"

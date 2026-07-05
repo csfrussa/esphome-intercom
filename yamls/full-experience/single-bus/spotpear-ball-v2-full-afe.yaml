@@ -497,9 +497,17 @@ media_player:
           event: media_paused
       - script.execute: backlight_timer
     on_idle:
-      - runtime_controller.event:
-          id: runtime
-          event: media_idle
+      - if:
+          condition:
+            lambda: 'return id(g_voip_ringtone_media_suppressed) && id(g_voip_ringtone_restore_media);'
+          then:
+            - runtime_controller.event:
+                id: runtime
+                event: announcement_idle
+          else:
+            - runtime_controller.event:
+                id: runtime
+                event: media_idle
       - delay: 200ms
       - script.execute: backlight_timer
 
