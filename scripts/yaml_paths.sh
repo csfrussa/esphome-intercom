@@ -476,7 +476,7 @@ Examples:
   $(basename "$0") remote
   $(basename "$0") remote --intercom main --voip main --audio main --runtime main
   $(basename "$0") remote --url github://my-fork/esphome-intercom --branch main
-  $(basename "$0") remote --file yamls/voip-only/single-bus/xiaozhi-intercom.yaml --branch main
+  $(basename "$0") remote --file yamls/voip-only/single-bus/generic-s3-voip.yaml --branch main
 EOF
 }
 
