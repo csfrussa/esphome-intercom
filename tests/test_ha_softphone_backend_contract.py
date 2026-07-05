@@ -13,6 +13,7 @@ INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 ENDPOINT_RUNTIME = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
+SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -79,6 +80,12 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("async def _handle(call: ServiceCall) -> None:", services)
         self.assertNotIn("lambda call:", services)
         self.assertNotIn("call_handler(", services)
+
+    def test_phonebook_sensor_treats_unknown_as_unavailable(self) -> None:
+        sensor = SENSOR.read_text()
+        self.assertIn('UNAVAILABLE_STATES = {"", "unknown", "unavailable"}', sensor)
+        self.assertIn("_state_is_available(old_state)", sensor)
+        self.assertIn("_state_is_available(new_state)", sensor)
 
 
 if __name__ == "__main__":

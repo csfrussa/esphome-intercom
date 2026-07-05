@@ -23,6 +23,11 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
+UNAVAILABLE_STATES = {"", "unknown", "unavailable"}
+
+
+def _state_is_available(state) -> bool:
+    return state is not None and str(state.state or "").strip().lower() not in UNAVAILABLE_STATES
 
 
 async def async_setup_entry(
@@ -107,8 +112,8 @@ class VoipPhonebookSensor(SensorEntity):
                 if old_value != new_value:
                     self.hass.async_create_task(self._recompute())
                 return
-            old_avail = old_state is not None and old_state.state != "unavailable"
-            new_avail = new_state is not None and new_state.state != "unavailable"
+            old_avail = _state_is_available(old_state)
+            new_avail = _state_is_available(new_state)
             if old_avail == new_avail:
                 return
             self.hass.async_create_task(self._recompute())
