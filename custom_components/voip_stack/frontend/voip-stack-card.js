@@ -756,6 +756,7 @@ class VoipStackCard extends HTMLElement {
 
   _isCallableRosterEntry(entry) {
     if (!entry || entry.enabled === false) return false;
+    if (entry.metadata?.local_ha) return false;
     const name = entry.name || entry.id;
     if (!name) return false;
     return !!(entry.address || entry.sip_uri || entry.extension || entry.number);

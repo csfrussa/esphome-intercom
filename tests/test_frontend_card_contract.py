@@ -82,6 +82,10 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("_isCallableRosterEntry", body)
         self.assertNotIn("_availableDevices", body)
 
+    def test_ha_softphone_filters_own_ha_roster_entry(self) -> None:
+        body = _method_body(self.source, "_isCallableRosterEntry")
+        self.assertIn("entry.metadata?.local_ha", body)
+
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")
         ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]

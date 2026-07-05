@@ -1163,8 +1163,10 @@ async def _refresh_and_push_phonebook(hass: HomeAssistant) -> None:
 
 async def _deferred_phonebook_sync(hass: HomeAssistant) -> None:
     """Push the canonical phonebook after entry setup/reload settles."""
-    await asyncio.sleep(0)
-    await _refresh_and_push_phonebook(hass)
+    for delay in (0.0, 2.0, 10.0):
+        if delay:
+            await asyncio.sleep(delay)
+        await _refresh_and_push_phonebook(hass)
 
 
 async def _handle_set_dnd_service(call: ServiceCall) -> None:
