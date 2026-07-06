@@ -19,17 +19,13 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
+from .audio_format import HA_SIP_PCM_FORMATS
 from .const import DOMAIN, HA_SOFTPHONE_ENDPOINT_ENTITY_ID
 
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 UNAVAILABLE_STATES = {"", "unknown", "unavailable"}
-HA_ENDPOINT_FORMATS = (
-    "48000:s16le:1:10",
-    "16000:s16le:1:16",
-    "16000:s16le:1:10",
-)
 
 
 def _state_is_available(state) -> bool:
@@ -78,7 +74,7 @@ class HaSoftphoneEndpointSensor(SensorEntity):
 
         cfg = _get_transport_config(self.hass)
         groups = _ha_softphone_groups(self.hass)
-        tx = ";".join(HA_ENDPOINT_FORMATS)
+        tx = ";".join(fmt.wire_token() for fmt in HA_SIP_PCM_FORMATS)
         rx = tx
         endpoint = (
             f"{_ha_peer_name(self.hass)}|{host}|{int(cfg['sip_port'])}|{int(cfg['rtp_port'])}|"

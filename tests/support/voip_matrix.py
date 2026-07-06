@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass, field
+import importlib.util
 import json
+from pathlib import Path
 import sys
 
 
@@ -24,6 +26,21 @@ CANCELLED = "cancelled"
 ENDED = "ended"
 BUSY = "busy"
 UNAVAILABLE = "unavailable"
+
+
+def _ha_audio_formats() -> tuple[str, ...]:
+    """Load HA SIP audio formats without importing the Home Assistant package."""
+    module_path = Path(__file__).resolve().parents[2] / "custom_components" / "voip_stack" / "audio_format.py"
+    spec = importlib.util.spec_from_file_location("_voip_stack_audio_format", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return tuple(fmt.wire_token() for fmt in module.HA_SIP_PCM_FORMATS)
+
+
+HA_AUDIO_FORMATS = _ha_audio_formats()
 
 
 def _frame_ms(fmt: str) -> int:
@@ -543,7 +560,14 @@ class MiniPbx:
 def build_default_pbx() -> MiniPbx:
     pbx = MiniPbx(
         [
-            Endpoint("Casa", ring_group="RG Casa", conference_group="CG Casa", conference_ring=True),
+            Endpoint(
+                "Casa",
+                ring_group="RG Casa",
+                conference_group="CG Casa",
+                conference_ring=True,
+                tx_formats=HA_AUDIO_FORMATS,
+                rx_formats=HA_AUDIO_FORMATS,
+            ),
             Endpoint(
                 "Spotpear",
                 ring_group="RG Casa",

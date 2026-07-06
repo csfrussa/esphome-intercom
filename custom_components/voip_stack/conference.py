@@ -33,6 +33,7 @@ CONFERENCE_FRAME_BYTES = CONFERENCE_FORMAT.nominal_frame_bytes
 CONFERENCE_TICK_S = CONFERENCE_FORMAT.frame_ms / 1000.0
 CONFERENCE_INACTIVITY_S = 10.0
 MAX_CONFERENCE_LEGS = 8
+CONFERENCE_RTP_FORMAT = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
 
 
 def _silence() -> bytes:
@@ -92,9 +93,6 @@ class _ConferenceLeg:
     rx_packets: int = 0
     tx_packets: int = 0
     dropped_frames: int = 0
-
-
-CONFERENCE_RTP_FORMAT = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
 
 
 class _ConferenceRtpProtocol(asyncio.DatagramProtocol):

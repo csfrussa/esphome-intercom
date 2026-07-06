@@ -18,6 +18,7 @@ from tests.support.voip_matrix import (
     RINGING,
     UNAVAILABLE,
     Endpoint,
+    HA_AUDIO_FORMATS,
     MiniPbx,
     SCENARIO_NAMES,
     run_matrix,
@@ -90,6 +91,7 @@ endpoint_routing = _load_module("endpoint_routing")
 websocket_api = _load_module("websocket_api")
 fsm = _load_module("fsm")
 const = _load_module("const")
+conference = _load_module("conference")
 
 
 class _FakeConfig:
@@ -116,6 +118,10 @@ class GroupCallMatrixTest(unittest.TestCase):
         results, errors = run_matrix()
         self.assertEqual(errors, [])
         self.assertEqual([item["scenario"] for item in results], list(SCENARIO_NAMES))
+
+    def test_conference_websocket_audio_uses_canonical_room_format(self) -> None:
+        self.assertEqual(conference.CONFERENCE_FORMAT.wire_token(), "16000:s16le:1:20")
+        self.assertEqual(conference.CONFERENCE_RTP_FORMAT.audio_format.wire_token(), "16000:s16le:1:20")
 
     def _peers(self, *, ha_ring_group: str = "RG Casa", ha_conference_ring: bool = True):
         return [
@@ -189,6 +195,8 @@ class GroupCallMatrixTest(unittest.TestCase):
                     conference_group="CG Casa",
                     conference_ring=ha_ring,
                     auto_answer=False,
+                    tx_formats=HA_AUDIO_FORMATS,
+                    rx_formats=HA_AUDIO_FORMATS,
                 ),
                 Endpoint(
                     "Spotpear",
