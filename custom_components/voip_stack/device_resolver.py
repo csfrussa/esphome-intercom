@@ -1,5 +1,9 @@
-"""Cached SIP phone device resolver; one registry pass per HA instance, cache
-invalidated on registry change."""
+"""SIP phone device resolver.
+
+Registry structure is stable enough to cache, but endpoint availability is not:
+phonebook rebuilds must parse the current HA states every time so reconnects
+cannot keep an ESP out of the roster with a stale cached device list.
+"""
 
 from __future__ import annotations
 
@@ -140,43 +144,12 @@ class VoipDeviceResolver:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._devices: Optional[list[dict]] = None
-        self._unsubs: list = []
 
     def install_listeners(self) -> None:
-        """Idempotent."""
-        if self._unsubs:
-            return
-
-        @callback
-        def _invalidate(_event) -> None:
-            self._devices = None
-
-        self._unsubs.append(
-            self.hass.bus.async_listen("entity_registry_updated", _invalidate)
-        )
-        self._unsubs.append(
-            self.hass.bus.async_listen("device_registry_updated", _invalidate)
-        )
-
-        @callback
-        def _invalidate_endpoint(event) -> None:
-            entity_id = event.data.get("entity_id") or ""
-            if "voip_endpoint" in entity_id:
-                self._devices = None
-
-        self._unsubs.append(
-            self.hass.bus.async_listen("state_changed", _invalidate_endpoint)
-        )
+        """Compatibility hook; device resolution reads live state on demand."""
 
     def shutdown(self) -> None:
-        for unsub in self._unsubs:
-            try:
-                unsub()
-            except Exception:
-                pass
-        self._unsubs.clear()
-        self._devices = None
+        """Compatibility hook."""
 
     def route_id_for_host(self, host: str) -> str:
         """ESPHome node_name slug for `host`, used as ESPHome service prefix."""
@@ -206,10 +179,7 @@ class VoipDeviceResolver:
         return None
 
     async def list_devices(self) -> list[dict]:
-        """Cached VoIP device list (registry events invalidate)."""
-        if self._devices is not None:
-            return self._devices
-
+        """Return current VoIP devices by parsing live endpoint states."""
         entity_registry = er.async_get(self.hass)
         device_registry = dr.async_get(self.hass)
 
@@ -264,7 +234,6 @@ class VoipDeviceResolver:
                 "entities": entities,
             })
 
-        self._devices = out
         return out
 
     async def resolve_target(self, call: ServiceCall) -> Optional[dict]:

@@ -130,6 +130,79 @@ class SipEndpointParseTest(unittest.TestCase):
         self.assertIn('"conference_ring": bool(endpoint.get("conference_ring", False))', list_devices)
         self.assertIn('"ring_group": endpoint.get("ring_group") or ""', list_devices)
 
+    def test_list_devices_re_reads_live_endpoint_state(self) -> None:
+        class FakeEntity:
+            entity_id = "sensor.ws3_voip_endpoint"
+            device_id = "dev-ws3"
+
+        class FakeEntityRegistry:
+            entities = {"sensor.ws3_voip_endpoint": FakeEntity()}
+
+        class FakeDevice:
+            name = "WS3"
+            identifiers = {("esphome", "waveshare-s3")}
+            connections = set()
+            config_entries = {"entry-ws3"}
+
+        class FakeDeviceRegistry:
+            devices = {"dev-ws3": FakeDevice()}
+
+            def async_get(self, device_id):
+                return self.devices.get(device_id)
+
+        class FakeState:
+            def __init__(self, state: str) -> None:
+                self.state = state
+
+        class FakeStates:
+            def __init__(self) -> None:
+                self.value = "unknown"
+
+            def get(self, _entity_id):
+                return FakeState(self.value)
+
+        class FakeConfigEntry:
+            domain = "esphome"
+            title = "waveshare-s3"
+            data = {"device_name": "waveshare-s3"}
+
+        class FakeConfigEntries:
+            def async_entries(self, _domain):
+                return []
+
+            def async_get_entry(self, _entry_id):
+                return FakeConfigEntry()
+
+        class FakeHass:
+            def __init__(self) -> None:
+                self.states = FakeStates()
+                self.config_entries = FakeConfigEntries()
+
+        old_er_async_get = device_resolver.er.async_get
+        old_dr_async_get = device_resolver.dr.async_get
+        try:
+            device_resolver.er.async_get = lambda _hass: FakeEntityRegistry()
+            device_resolver.dr.async_get = lambda _hass: FakeDeviceRegistry()
+            hass = FakeHass()
+            resolver = device_resolver.VoipDeviceResolver(hass)
+
+            import asyncio
+
+            self.assertEqual(asyncio.run(resolver.list_devices()), [])
+            hass.states.value = (
+                "Waveshare S3 Audio | 192.168.1.47 | 5060 | 40000 | "
+                "full_duplex | 16000:s16le:1:10 | 48000:s16le:1:10 | sip_udp |  | CG Casa | RG Casa | 1"
+            )
+            devices = asyncio.run(resolver.list_devices())
+        finally:
+            device_resolver.er.async_get = old_er_async_get
+            device_resolver.dr.async_get = old_dr_async_get
+
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]["name"], "Waveshare S3 Audio")
+        self.assertEqual(devices[0]["conference_group"], "CG Casa")
+        self.assertEqual(devices[0]["ring_group"], "RG Casa")
+
     def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
         parsed = device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")
         self.assertIsNone(parsed)
