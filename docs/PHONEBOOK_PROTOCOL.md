@@ -95,18 +95,30 @@ registration when available.
 Group membership uses the same roster metadata for every endpoint type:
 
 - ESP peers publish `conference_group` and `ring_group` in their endpoint
-  identity.
+  identity. They may also publish `conference_ring` to request an invitation
+  when the conference room starts.
 - Manual contacts and registered SIP softphones can declare
-  `conference_group` and `ring_group` through `voip_stack.add_contact`.
+  `conference_group`, `conference_ring` and `ring_group` through
+  `voip_stack.add_contact` or account services.
+- The HA softphone publishes a virtual endpoint using the same identity
+  contract. Its entity state stays short (`online` / `unavailable`) and the
+  full endpoint string is stored in the sensor `endpoint` attribute.
 - HA creates one name-only `ha_bridge` roster entry per group with
   `metadata.group_type` set to `conference` or `ring` and
-  `metadata.members` containing the member names.
+  `metadata.members` containing the member names. Conference entries may also
+  carry `metadata.ring_members`.
 - A conference group is an HA-mixed SIP conference focus. Calling the group
-  joins immediately.
-- A ring group forks the call to all members except the caller. The first
-  answer wins and the other legs are cancelled.
+  joins immediately. Other members can join manually by calling the same group.
+  Members listed in `ring_members` are invited when the room starts; answered
+  invitations join the room rather than winning a bridge.
+- A ring group forks the call to all callable members except the caller. The
+  first answer wins, the caller is bridged to that member, and the other early
+  dialogs are cancelled.
 - Group names must not collide with device or contact names. If the same name
   is declared as both ring and conference, conference wins.
+- The Lovelace card consumes the same roster-derived softphone targets as ESP
+  devices. It must not implement independent routing filters or group policy.
+  The active browser owns HA softphone media; other cards mirror state only.
 
 Central roster services:
 

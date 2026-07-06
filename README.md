@@ -778,39 +778,67 @@ See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contra
 #### Groups
 
 VoIP Stack can publish HA-managed group contacts into the same central
-phonebook. ESP devices still dial by normal contact name; HA owns the group
-routing and media.
+phonebook. ESP devices, registered softphones and the HA softphone still dial
+by normal contact name; HA owns the group routing and media. Groups are
+ordinary phonebook entries from the endpoint point of view, not special
+firmware modes.
 
 ESP devices can declare membership in their `voip_stack` component:
 
 ```yaml
 voip_stack:
   id: phone
-  conference_group: Conference
+  conference_group: "CG Home"
   conference_ring: true
-  ring_group: Casa
+  ring_group: "RG Home"
 ```
 
 Manual contacts and registered SIP softphones can join the same groups through
-the `voip_stack.add_contact` service fields `conference_group` and
-`conference_ring`, and `ring_group`. HA aggregates every declaration into one
-phonebook entry per group. Group names must not collide with existing
-device/contact names; if the same name is declared as both a conference and a
-ring group, conference wins.
+the `voip_stack.add_contact` and `voip_stack.create_account` service fields:
 
-Conference groups behave like a SIP conference focus: calling `Conference`
-joins the caller immediately and HA mixes the audio. Members with
-`conference_ring: true` ring so they can answer into the conference; members
-without it can still call the conference contact manually. The Lovelace card
-remains only the softphone UI and audio surface: it mirrors the normal
-`ringing` / `in_call` state and uses the same bidirectional audio WebSocket as
-every other HA softphone call. ESP firmware does not need a special conference
-mode.
+```yaml
+service: voip_stack.add_contact
+data:
+  name: Desk Phone
+  sip_uri: sip:desk@192.168.1.60:5060
+  ring_group: "RG Home"
+  conference_group: "CG Home"
+  conference_ring: true
+```
 
-Ring groups behave like SIP forking: calling `Casa` rings all members in
-parallel, excluding the caller when it is also a member. The first member to
-answer wins, HA bridges audio to that leg, and the other ringing legs receive
-CANCEL.
+HA aggregates every declaration into one phonebook entry per group. Group names
+must not collide with existing device/contact names; if the same name is
+declared as both a conference and a ring group, conference wins.
+
+**Ring groups** behave like PBX/SIP forking. Calling `RG Home` rings every
+callable member in parallel, excluding the caller when it is also a member. The
+first member to answer wins, HA bridges audio to that leg, and every other
+still-ringing leg receives CANCEL. If a losing leg was already confirmed, HA
+tears it down with BYE. This is the right primitive for "call the house" or
+"call the first available intercom".
+
+**Conference groups** behave like a SIP conference focus. Calling `CG Home`
+joins the caller into the HA-mixed room immediately. Other members can join at
+any time by calling the same group contact. Members with `conference_ring:
+true` are invited when another participant starts the room; members without it
+stay silent but can still join manually. Answered conference invitations join
+the same room, not a winner-takes-all bridge. When the final participant leaves,
+HA closes the room and releases the media resources.
+
+The HA softphone can also subscribe to a ring group and/or conference group.
+The Lovelace card exposes those settings dynamically from the central roster.
+Changing them updates the HA softphone endpoint sensor, which triggers the same
+phonebook rebuild and push path used by ESP endpoints. The card remains only
+the softphone UI and browser audio surface: the browser that starts or answers
+the call owns the WebSocket media stream, while other open cards mirror state
+without attaching their microphone/speaker.
+
+Because the HA backend speaks SIP, Asterisk is optional rather than required.
+HA can register to a SIP trunk itself, can host local SIP accounts for
+softphones such as Zoiper, and can act as a small PBX for ESP devices,
+softphones, ring groups and conference groups. Advanced dial-plan overrides are
+intended to be handled through HA services/events and automations on top of the
+central roster contract.
 
 #### Apartment VoIP panel
 
