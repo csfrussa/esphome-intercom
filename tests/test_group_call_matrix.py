@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+"""Fast SIP/PBX behavior matrix for group calls and HA softphone state."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+import types
+import unittest
+from pathlib import Path
+
+from tests.support.voip_matrix import (
+    BUSY,
+    CANCELLED,
+    ENDED,
+    IDLE,
+    IN_CALL,
+    RINGING,
+    UNAVAILABLE,
+    Endpoint,
+    MiniPbx,
+    SCENARIO_NAMES,
+    run_matrix,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PKG_NAME = "custom_components.voip_stack"
+PKG_DIR = ROOT / "custom_components" / "voip_stack"
+
+
+def _install_ha_fakes() -> None:
+    if "homeassistant" not in sys.modules:
+        ha_pkg = types.ModuleType("homeassistant")
+        ha_pkg.__path__ = []
+        sys.modules["homeassistant"] = ha_pkg
+    if "homeassistant.core" not in sys.modules:
+        core = types.ModuleType("homeassistant.core")
+        core.HomeAssistant = object
+        core.callback = lambda fn: fn
+        sys.modules["homeassistant.core"] = core
+    if "homeassistant.config_entries" not in sys.modules:
+        config_entries = types.ModuleType("homeassistant.config_entries")
+        config_entries.ConfigEntry = object
+        sys.modules["homeassistant.config_entries"] = config_entries
+    if "homeassistant.exceptions" not in sys.modules:
+        exceptions = types.ModuleType("homeassistant.exceptions")
+        exceptions.ConfigEntryError = RuntimeError
+        sys.modules["homeassistant.exceptions"] = exceptions
+    if "homeassistant.components" not in sys.modules:
+        components = types.ModuleType("homeassistant.components")
+        components.__path__ = []
+        sys.modules["homeassistant.components"] = components
+    if "homeassistant.components.websocket_api" not in sys.modules:
+        websocket_api = types.ModuleType("homeassistant.components.websocket_api")
+        websocket_api.ActiveConnection = object
+        websocket_api.async_register_command = lambda *_args, **_kwargs: None
+        websocket_api.websocket_command = lambda _schema: (lambda fn: fn)
+        websocket_api.async_response = lambda fn: fn
+        sys.modules["homeassistant.components.websocket_api"] = websocket_api
+
+
+def _load_module(name: str):
+    _install_ha_fakes()
+    if "custom_components" not in sys.modules:
+        root_pkg = types.ModuleType("custom_components")
+        root_pkg.__path__ = [str(ROOT / "custom_components")]
+        sys.modules["custom_components"] = root_pkg
+    if PKG_NAME not in sys.modules:
+        pkg = types.ModuleType(PKG_NAME)
+        pkg.__path__ = [str(PKG_DIR)]
+        sys.modules[PKG_NAME] = pkg
+    full_name = f"{PKG_NAME}.{name}"
+    if full_name in sys.modules:
+        return sys.modules[full_name]
+    spec = importlib.util.spec_from_file_location(full_name, PKG_DIR / f"{name}.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {full_name}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[full_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+roster = _load_module("roster")
+peer = _load_module("peer")
+groups = _load_module("groups")
+router = _load_module("router")
+endpoint_routing = _load_module("endpoint_routing")
+websocket_api = _load_module("websocket_api")
+fsm = _load_module("fsm")
+const = _load_module("const")
+
+
+class _FakeConfig:
+    location_name = "Casa"
+
+
+class _FakeBus:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type: str, event: dict) -> None:
+        self.events.append((event_type, dict(event)))
+
+
+class _FakeHass:
+    def __init__(self) -> None:
+        self.config = _FakeConfig()
+        self.bus = _FakeBus()
+        self.data: dict = {const.DOMAIN: {}}
+
+
+class GroupCallMatrixTest(unittest.TestCase):
+    def test_voip_matrix_runner_all_scenarios_validate(self) -> None:
+        results, errors = run_matrix()
+        self.assertEqual(errors, [])
+        self.assertEqual([item["scenario"] for item in results], list(SCENARIO_NAMES))
+
+    def _peers(self, *, ha_ring_group: str = "RG Casa", ha_conference_ring: bool = True):
+        return [
+            peer.Peer(
+                name="Spotpear",
+                host="192.168.1.31",
+                sip_port=5060,
+                rtp_port=40000,
+                conference_group="CG Casa",
+                conference_ring=False,
+                ring_group="RG Casa",
+                tx_formats=["16000:s16le:1:20"],
+                rx_formats=["16000:s16le:1:20"],
+            ),
+            peer.Peer(
+                name="WS3",
+                host="192.168.1.47",
+                sip_port=5060,
+                rtp_port=40000,
+                conference_group="CG Casa",
+                conference_ring=False,
+                ring_group="RG Casa",
+                tx_formats=["48000:s16le:1:10", "16000:s16le:1:20"],
+                rx_formats=["48000:s16le:1:10", "16000:s16le:1:20"],
+            ),
+            peer.Peer(
+                name="Casa",
+                host="192.168.1.10",
+                local_ha=True,
+                sip_port=5060,
+                rtp_port=40000,
+                conference_group="CG Casa",
+                conference_ring=ha_conference_ring,
+                ring_group=ha_ring_group,
+                tx_formats=["48000:s16le:1:10", "16000:s16le:1:20"],
+                rx_formats=["48000:s16le:1:10", "16000:s16le:1:20"],
+            ),
+        ]
+
+    def _registered(self):
+        return [
+            roster.RosterEntry(
+                id="Zoiper",
+                name="Zoiper",
+                sip_uri="sip:Zoiper@192.168.1.20:5062;transport=tcp",
+                metadata={
+                    "conference_group": "CG Casa",
+                    "conference_ring": True,
+                    "ring_group": "RG Casa",
+                    "tx_formats": ["48000:s16le:1:10", "16000:s16le:1:20"],
+                    "rx_formats": ["48000:s16le:1:10", "16000:s16le:1:20"],
+                },
+            )
+        ]
+
+    def _roster(self, peers=None, registered=None):
+        hass = _FakeHass()
+        old_manual = endpoint_routing.manual_roster_entries
+        endpoint_routing.manual_roster_entries = lambda _hass: []
+        try:
+            return endpoint_routing.roster_from_peers(hass, list(peers if peers is not None else self._peers()), list(registered if registered is not None else self._registered()))
+        finally:
+            endpoint_routing.manual_roster_entries = old_manual
+
+    def _mini_pbx(self, *, spotpear_auto: bool = False, ws3_auto: bool = False, ha_ring: bool = True) -> MiniPbx:
+        pbx = MiniPbx(
+            [
+                Endpoint(
+                    "Casa",
+                    ring_group="RG Casa",
+                    conference_group="CG Casa",
+                    conference_ring=ha_ring,
+                    auto_answer=False,
+                ),
+                Endpoint(
+                    "Spotpear",
+                    ring_group="RG Casa",
+                    conference_group="CG Casa",
+                    conference_ring=False,
+                    auto_answer=spotpear_auto,
+                ),
+                Endpoint(
+                    "WS3",
+                    ring_group="RG Casa",
+                    conference_group="CG Casa",
+                    conference_ring=False,
+                    auto_answer=ws3_auto,
+                ),
+                Endpoint(
+                    "Zoiper",
+                    ring_group="RG Casa",
+                    conference_group="CG Casa",
+                    conference_ring=True,
+                    auto_answer=False,
+                ),
+            ]
+        )
+        pbx.rebuild_phonebook()
+        return pbx
+
+    def test_group_roster_matrix_is_dynamic_and_visible_to_softphone_targets(self) -> None:
+        entries = self._roster()
+        by_id = {entry.id: entry for entry in entries}
+
+        self.assertIn("RG Casa", by_id)
+        self.assertIn("CG Casa", by_id)
+        self.assertEqual(by_id["RG Casa"].metadata["group_type"], groups.GROUP_TYPE_RING)
+        self.assertEqual(by_id["RG Casa"].metadata["members"], ["Spotpear", "WS3", "Zoiper", "Casa"])
+        self.assertEqual(by_id["CG Casa"].metadata["group_type"], groups.GROUP_TYPE_CONFERENCE)
+        self.assertEqual(by_id["CG Casa"].metadata["members"], ["Spotpear", "WS3", "Zoiper", "Casa"])
+        self.assertEqual(by_id["CG Casa"].metadata["ring_members"], ["Zoiper", "Casa"])
+
+        targets = {item["name"]: item for item in endpoint_routing.softphone_targets_from_roster(entries)}
+        self.assertIn("RG Casa", targets)
+        self.assertIn("CG Casa", targets)
+        self.assertIn("Spotpear", targets)
+        self.assertIn("WS3", targets)
+        self.assertNotIn("Casa", targets)
+
+        stale_entries = self._roster(peers=[self._peers()[2]], registered=[])
+        self.assertNotIn("RG Casa", {entry.id for entry in stale_entries})
+        self.assertNotIn("CG Casa", {entry.id for entry in stale_entries})
+
+    def test_group_routing_matrix_preserves_sip_pbx_roles(self) -> None:
+        entries = self._roster()
+        ha_uri = "sip:Casa@192.168.1.10:5060;transport=tcp"
+        cases = [
+            ("HA calls RG", router.resolve_ha_router("RG Casa", entries, trunk_ready=False), router.RouteAction.GROUP, "RG Casa", ""),
+            ("HA calls CG", router.resolve_ha_router("CG Casa", entries, trunk_ready=False), router.RouteAction.GROUP, "CG Casa", ""),
+            ("HA calls endpoint", router.resolve_ha_router("Spotpear", entries, trunk_ready=False), router.RouteAction.FORWARD, "Spotpear", "sip:Spotpear@192.168.1.31"),
+            ("ESP calls RG", router.resolve_esp_origin("RG Casa", entries, ha_uri), router.RouteAction.BRIDGE, "RG Casa", "sip:RG_Casa@192.168.1.10;transport=tcp"),
+            ("ESP calls CG", router.resolve_esp_origin("CG Casa", entries, ha_uri), router.RouteAction.BRIDGE, "CG Casa", "sip:CG_Casa@192.168.1.10;transport=tcp"),
+            ("ESP calls endpoint", router.resolve_esp_origin("WS3", entries, ha_uri), router.RouteAction.DIRECT, "WS3", "sip:WS3@192.168.1.47"),
+        ]
+        for label, decision, action, target, sip_uri in cases:
+            with self.subTest(label):
+                self.assertEqual(decision.action, action)
+                self.assertEqual(decision.target, target)
+                if sip_uri:
+                    self.assertEqual(decision.sip_uri, sip_uri)
+
+    def test_ha_softphone_state_can_show_ring_group_winner_without_losing_dialed_target(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            session_device_id=const.HA_SOFTPHONE_DEVICE_ID,
+            caller="Casa",
+            callee="RG Casa",
+            peer_name="Spotpear",
+            direction="outgoing",
+            call_id="ha-rg-1",
+            dialed_target="RG Casa",
+            connected_party="Spotpear",
+            answered_by="Spotpear",
+            route_kind=groups.GROUP_TYPE_RING,
+            last_sip_event="SIP_RESPONSE",
+            sip_status_code=200,
+        )
+        state = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(state["callee"], "RG Casa")
+        self.assertEqual(state["peer_name"], "Spotpear")
+        self.assertEqual(state["dialed_target"], "RG Casa")
+        self.assertEqual(state["connected_party"], "Spotpear")
+        self.assertEqual(state["answered_by"], "Spotpear")
+        self.assertEqual(state["contact"], "Spotpear")
+
+        websocket_api._set_ha_softphone_call_state(hass, fsm.CallState.IDLE.value, reason="local_hangup")
+        idle = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(idle["state"], fsm.CallState.IDLE.value)
+        self.assertEqual(idle["dialed_target"], "")
+        self.assertEqual(idle["connected_party"], "")
+        self.assertEqual(idle["answered_by"], "")
+
+    def test_virtual_endpoint_phonebook_push_matrix(self) -> None:
+        pbx = self._mini_pbx()
+        first = pbx.phonebook
+        self.assertEqual(first["RG Casa"]["members"], ["Casa", "Spotpear", "WS3", "Zoiper"])
+        self.assertEqual(first["CG Casa"]["members"], ["Casa", "Spotpear", "WS3", "Zoiper"])
+        self.assertEqual(first["CG Casa"]["ring_members"], ["Casa", "Zoiper"])
+        self.assertEqual(len(pbx.pushes), 1)
+
+        pbx.set_group_membership("Casa", ring_group="", conference_group="", conference_ring=False)
+        self.assertEqual(pbx.phonebook["RG Casa"]["members"], ["Spotpear", "WS3", "Zoiper"])
+        self.assertEqual(pbx.phonebook["CG Casa"]["ring_members"], ["Zoiper"])
+
+        pbx.set_online("Spotpear", False)
+        pbx.set_online("WS3", False)
+        pbx.set_online("Zoiper", False)
+        self.assertNotIn("RG Casa", pbx.phonebook)
+        self.assertNotIn("CG Casa", pbx.phonebook)
+        self.assertGreaterEqual(len(pbx.pushes), 4)
+
+    def test_virtual_services_contacts_accounts_trunk_and_push_matrix(self) -> None:
+        pbx = self._mini_pbx()
+        initial_pushes = len(pbx.pushes)
+
+        pbx.add_contact("Desk SIP", sip_uri="sip:desk@192.168.1.60:5060", ring_group="RG Casa")
+        self.assertIn("Desk SIP", pbx.phonebook)
+        self.assertIn("Desk SIP", pbx.phonebook["RG Casa"]["members"])
+        self.assertEqual(len(pbx.pushes), initial_pushes + 1)
+
+        pbx.create_sip_account(
+            "MobileOffice",
+            sip_uri="sip:MobileOffice@192.168.1.70:5062;transport=tcp",
+            conference_group="CG Casa",
+            conference_ring=True,
+        )
+        self.assertIn("MobileOffice", pbx.phonebook["CG Casa"]["members"])
+        self.assertIn("MobileOffice", pbx.phonebook["CG Casa"]["ring_members"])
+
+        pbx.remove_contact("Desk SIP")
+        self.assertNotIn("Desk SIP", pbx.phonebook)
+        self.assertNotIn("Desk SIP", pbx.phonebook["RG Casa"]["members"])
+
+        pbx.remove_sip_account("MobileOffice")
+        self.assertNotIn("MobileOffice", pbx.phonebook)
+        self.assertNotIn("MobileOffice", pbx.phonebook["CG Casa"]["members"])
+
+        no_trunk = pbx.call_trunk("Casa", "+390551234567")
+        self.assertEqual(no_trunk.state, UNAVAILABLE)
+        pbx.add_trunk("Wildix", "+")
+        via_trunk = pbx.call_trunk("Casa", "+390551234567")
+        self.assertEqual(via_trunk.state, IN_CALL)
+        self.assertEqual(via_trunk.winner, "trunk")
+        self.assertIn("INVITE_TRUNK", via_trunk.events)
+
+    def test_contact_scrolling_and_selected_destination_matrix(self) -> None:
+        pbx = self._mini_pbx()
+        contacts = pbx.visible_contacts("WS3")
+        self.assertIn("Spotpear", contacts)
+        self.assertIn("RG Casa", contacts)
+        self.assertIn("CG Casa", contacts)
+        self.assertNotIn("WS3", contacts)
+
+        for _ in range(len(contacts)):
+            selected = pbx.current_contact("WS3")
+            if selected == "Spotpear":
+                break
+            pbx.select_contact("WS3")
+        self.assertEqual(pbx.current_contact("WS3"), "Spotpear")
+        call = pbx.call_selected("WS3")
+        self.assertEqual(call.kind, "direct")
+        self.assertEqual(call.target, "Spotpear")
+        self.assertEqual(call.state, RINGING)
+        call = pbx.cancel_endpoint("WS3", "Spotpear")
+        self.assertEqual(call.state, CANCELLED)
+
+    def test_ring_group_manual_answer_cancel_and_bye_matrix(self) -> None:
+        pbx = self._mini_pbx()
+        call = pbx.call_ring_group("Casa", "RG Casa")
+        self.assertEqual(call.state, RINGING)
+        self.assertEqual(call.ringing, ["Spotpear", "WS3", "Zoiper"])
+        self.assertEqual(pbx.endpoint("Casa").state, RINGING)
+
+        call = pbx.caller_cancels_ring_group()
+        self.assertEqual(call.state, CANCELLED)
+        self.assertEqual(call.cancelled, ["Spotpear", "WS3", "Zoiper"])
+        self.assertTrue(all(pbx.endpoint(name).state == IDLE for name in ("Casa", "Spotpear", "WS3", "Zoiper")))
+
+        call = pbx.call_ring_group("Casa", "RG Casa")
+        call = pbx.answer_ring_group("Spotpear")
+        self.assertEqual(call.state, IN_CALL)
+        self.assertEqual(call.winner, "Spotpear")
+        self.assertEqual(call.cancelled, ["WS3", "Zoiper"])
+        self.assertEqual(pbx.endpoint("Casa").peer, "Spotpear")
+        self.assertEqual(pbx.endpoint("Spotpear").peer, "Casa")
+        self.assertEqual(pbx.endpoint("WS3").state, IDLE)
+
+        call = pbx.hangup_ring_group("Spotpear")
+        self.assertEqual(call.state, ENDED)
+        self.assertIn("BYE:Spotpear", call.events)
+        self.assertIn("BYE:Casa", call.events)
+        self.assertEqual(pbx.endpoint("Casa").state, IDLE)
+        self.assertEqual(pbx.endpoint("Spotpear").state, IDLE)
+
+    def test_ring_group_auto_answer_and_busy_matrix(self) -> None:
+        pbx = self._mini_pbx(spotpear_auto=True)
+        call = pbx.call_ring_group("Casa", "RG Casa")
+        self.assertEqual(call.state, IN_CALL)
+        self.assertEqual(call.winner, "Spotpear")
+        self.assertEqual(call.cancelled, ["WS3", "Zoiper"])
+        self.assertIn("200:Spotpear", call.events)
+
+        busy = pbx.call_ring_group("Casa", "RG Casa")
+        self.assertEqual(busy.state, BUSY)
+
+    def test_direct_endpoint_auto_answer_dnd_cancel_bye_and_disconnect_matrix(self) -> None:
+        pbx = self._mini_pbx(spotpear_auto=True)
+        call = pbx.call_endpoint("WS3", "Spotpear")
+        self.assertEqual(call.state, IN_CALL)
+        self.assertEqual(call.winner, "Spotpear")
+        self.assertEqual(pbx.endpoint("WS3").peer, "Spotpear")
+        ended = pbx.hangup_endpoint("WS3")
+        self.assertEqual(ended.state, ENDED)
+        self.assertIn("BYE:WS3", ended.events)
+        self.assertIn("BYE:Spotpear", ended.events)
+
+        pbx.endpoint("Spotpear").auto_answer = False
+        pbx.set_dnd("Spotpear", True)
+        busy = pbx.call_endpoint("WS3", "Spotpear")
+        self.assertEqual(busy.state, BUSY)
+        self.assertIn("486", busy.events)
+        pbx.set_dnd("Spotpear", False)
+
+        ringing = pbx.call_endpoint("WS3", "Spotpear")
+        self.assertEqual(ringing.state, RINGING)
+        cancelled = pbx.cancel_endpoint("WS3", "Spotpear")
+        self.assertEqual(cancelled.state, CANCELLED)
+        self.assertEqual(pbx.endpoint("WS3").state, IDLE)
+        self.assertEqual(pbx.endpoint("Spotpear").state, IDLE)
+
+        in_call = pbx.call_endpoint("WS3", "Spotpear")
+        self.assertEqual(pbx.answer_endpoint("Spotpear", "WS3").state, IN_CALL)
+        self.assertEqual(in_call.target, "Spotpear")
+        affected = pbx.disconnect("Spotpear")
+        self.assertTrue(any("DISCONNECT:Spotpear" in result.events for result in affected))
+        self.assertEqual(pbx.endpoint("WS3").state, IDLE)
+        self.assertNotIn("Spotpear", pbx.phonebook)
+
+    def test_error_matrix_unknown_dnd_offline_and_missing_trunk(self) -> None:
+        pbx = self._mini_pbx()
+        unknown = pbx.call("Casa", "Missing")
+        self.assertEqual(unknown.state, UNAVAILABLE)
+        self.assertIn("not_found", unknown.events)
+
+        pbx.set_dnd("Spotpear", True)
+        dnd = pbx.call_endpoint("WS3", "Spotpear")
+        self.assertEqual(dnd.state, BUSY)
+        self.assertIn("486", dnd.events)
+
+        pbx.set_dnd("Spotpear", False)
+        pbx.set_online("Spotpear", False)
+        offline = pbx.call_endpoint("WS3", "Spotpear")
+        self.assertEqual(offline.state, UNAVAILABLE)
+        self.assertIn("callee_offline", offline.events)
+
+        no_trunk = pbx.call_trunk("Casa", "+390551234567")
+        self.assertEqual(no_trunk.state, UNAVAILABLE)
+        self.assertIn("trunk_unavailable", no_trunk.events)
+
+    def test_conference_group_join_ring_auto_answer_and_leave_matrix(self) -> None:
+        pbx = self._mini_pbx()
+        room = pbx.call_conference_group("Spotpear", "CG Casa")
+        self.assertEqual(room.state, IN_CALL)
+        self.assertEqual(room.participants, ["Spotpear"])
+        self.assertEqual(room.ringing, ["Casa", "Zoiper"])
+        self.assertEqual(pbx.endpoint("Spotpear").peer, "CG Casa")
+        self.assertEqual(pbx.endpoint("Casa").state, RINGING)
+
+        room = pbx.answer_conference_invite("Casa", "CG Casa")
+        self.assertEqual(room.participants, ["Spotpear", "Casa"])
+        self.assertEqual(pbx.endpoint("Casa").state, IN_CALL)
+
+        room = pbx.call_conference_group("WS3", "CG Casa")
+        self.assertEqual(room.participants, ["Spotpear", "Casa", "WS3"])
+        self.assertNotIn("WS3", room.ringing)
+        self.assertEqual(pbx.endpoint("WS3").state, IN_CALL)
+
+        room = pbx.leave_conference("Casa", "CG Casa")
+        self.assertEqual(room.state, IN_CALL)
+        self.assertEqual(room.participants, ["Spotpear", "WS3"])
+        self.assertEqual(pbx.endpoint("Casa").state, IDLE)
+
+        room = pbx.leave_conference("Spotpear", "CG Casa")
+        self.assertEqual(room.state, IN_CALL)
+        room = pbx.leave_conference("WS3", "CG Casa")
+        self.assertEqual(room.state, ENDED)
+        self.assertIn("room_ended", room.events)
+
+    def test_conference_group_no_ring_members_still_allows_manual_join(self) -> None:
+        pbx = self._mini_pbx(ha_ring=False)
+        pbx.set_group_membership("Zoiper", conference_ring=False)
+        room = pbx.call_conference_group("Spotpear", "CG Casa")
+        self.assertEqual(room.participants, ["Spotpear"])
+        self.assertEqual(room.ringing, [])
+
+        room = pbx.call_conference_group("WS3", "CG Casa")
+        self.assertEqual(room.participants, ["Spotpear", "WS3"])
+        self.assertEqual(pbx.endpoint("WS3").state, IN_CALL)
+
+
+if __name__ == "__main__":
+    unittest.main()

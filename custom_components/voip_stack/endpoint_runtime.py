@@ -849,11 +849,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 _release_sip_rtp_port_pair(hass, winner["ports"])
                 return
             registry.relays[invite.call_id] = relay
+            dialed_target = entry.display_name or invite.target
+            connected_party = str(winner["member"] or "").strip() or invite.target
             registry.upsert(
                 invite.call_id,
                 state=CallState.IN_CALL.value,
                 caller=invite.caller,
-                callee=invite.target,
+                callee=dialed_target,
                 route_kind=GROUP_TYPE_RING,
             )
             answer = build_answer_directional(
@@ -868,10 +870,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 hass,
                 CallState.IN_CALL.value,
                 caller=invite.caller,
-                callee=invite.target,
-                peer_name=winner["member"],
+                callee=dialed_target,
+                peer_name=connected_party,
                 call_id=invite.call_id,
                 dest_call_id=client.dialog_ids.call_id,
+                dialed_target=dialed_target,
+                connected_party=connected_party,
+                answered_by=connected_party,
                 selected_tx_format=invite.send_format.audio_format.wire_token(),
                 selected_rx_format=invite.recv_format.audio_format.wire_token(),
                 selected_tx_rtp_format=invite.send_format.wire_token(),
@@ -881,6 +886,30 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 route_kind=GROUP_TYPE_RING,
                 sip_uri=str(winner["uri"]),
             )
+            if _is_ha_target(invite.caller):
+                _set_ha_softphone_call_state(
+                    hass,
+                    CallState.IN_CALL.value,
+                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    caller=invite.caller,
+                    callee=dialed_target,
+                    peer_name=connected_party,
+                    direction="outgoing",
+                    call_id=invite.call_id,
+                    dest_call_id=client.dialog_ids.call_id,
+                    dialed_target=dialed_target,
+                    connected_party=connected_party,
+                    answered_by=connected_party,
+                    selected_tx_format=invite.send_format.audio_format.wire_token(),
+                    selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                    selected_tx_rtp_format=invite.send_format.wire_token(),
+                    selected_rx_rtp_format=invite.recv_format.wire_token(),
+                    audio_mode="full_duplex",
+                    route_kind=GROUP_TYPE_RING,
+                    sip_status_code=200,
+                    last_sip_event="SIP_RESPONSE",
+                    sip_uri=str(winner["uri"]),
+                )
             terminal = await client.wait_for_dialog_termination()
             terminal_reason = (
                 TerminalReason.REMOTE_HANGUP.value

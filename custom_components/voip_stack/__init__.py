@@ -1231,8 +1231,6 @@ async def _handle_set_dnd_service(call: ServiceCall) -> None:
     store = _ha_softphone_store(hass)
     store["dnd"] = enabled
     await _async_save_ha_softphone_store(hass)
-    state = _ha_softphone_state(hass)
-    _fire_call_event(hass, state, "session")
     _LOGGER.info("HA softphone DND set to %s via service", enabled)
 
 

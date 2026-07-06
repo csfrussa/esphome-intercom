@@ -15,6 +15,7 @@ CARD_JS = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-c
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
+WEBSOCKET_API = ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
 ACCOUNT_SERVICES = ROOT / "custom_components" / "voip_stack" / "account_services.py"
 SERVICES_YAML = ROOT / "custom_components" / "voip_stack" / "services.yaml"
 ICONS_JSON = ROOT / "custom_components" / "voip_stack" / "icons.json"
@@ -241,6 +242,44 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("future = _pending_routes(hass)[call_id].get(\"future\")", hangup)
         self.assertIn("if future is not None and future.done():", hangup)
         self.assertIn("_pending_routes(hass).pop(call_id, None)", hangup)
+
+    def test_ring_group_external_winner_publishes_connected_party(self) -> None:
+        ring_group = self.source[self.source.index("async def _run_ring_group_call(") : self.source.index("async def _ring_conference_members(")]
+        external_winner = ring_group[ring_group.index('client = winner["client"]') : ring_group.index('terminal = await client.wait_for_dialog_termination()')]
+
+        self.assertIn("dialed_target = entry.display_name or invite.target", external_winner)
+        self.assertIn('connected_party = str(winner["member"] or "").strip() or invite.target', external_winner)
+        self.assertIn("callee=dialed_target", external_winner)
+        self.assertIn("peer_name=connected_party", external_winner)
+        self.assertIn("dialed_target=dialed_target", external_winner)
+        self.assertIn("connected_party=connected_party", external_winner)
+        self.assertIn("answered_by=connected_party", external_winner)
+        self.assertIn("if _is_ha_target(invite.caller):", external_winner)
+        self.assertIn("_set_ha_softphone_call_state(", external_winner)
+
+        websocket = WEBSOCKET_API.read_text()
+        state = websocket[websocket.index("def _ha_softphone_state(") : websocket.index("def _set_ha_softphone_call_state(")]
+        terminal = websocket[websocket.index("def _set_ha_softphone_call_state(") : websocket.index("def _set_sip_bridge_call_state(")]
+        for field in ("dialed_target", "connected_party", "answered_by"):
+            self.assertIn(f'"{field}": store.get("{field}", "")', state)
+            self.assertIn(f'"{field}",', terminal)
+
+    def test_softphone_settings_changes_do_not_emit_call_lifecycle_events(self) -> None:
+        websocket = WEBSOCKET_API.read_text()
+        group_update = websocket[
+            websocket.index("async def async_set_ha_softphone_groups(") : websocket.index("def _sip_runtime_snapshot(")
+        ]
+        dnd_ws = websocket[
+            websocket.index("async def websocket_set_ha_softphone_dnd(") : websocket.index("async def websocket_set_ha_softphone_groups(")
+        ]
+        init_py = INIT.read_text()
+        dnd_service = init_py[
+            init_py.index("async def _handle_set_dnd_service(") : init_py.index("async def _handle_set_ha_softphone_groups_service(")
+        ]
+
+        self.assertNotIn("_fire_call_event", group_update)
+        self.assertNotIn("_fire_call_event", dnd_ws)
+        self.assertNotIn("_fire_call_event", dnd_service)
 
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated("):]

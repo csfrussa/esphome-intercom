@@ -189,7 +189,6 @@ async def async_set_ha_softphone_groups(
     if endpoint_sensor is not None:
         await endpoint_sensor.async_update()
     state = _ha_softphone_state(hass)
-    _fire_call_event(hass, state, "session")
     return state
 
 
@@ -479,6 +478,9 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "callee": callee,
         "local_name": store.get("local_name", _ha_peer_name(hass)),
         "peer_name": peer_name,
+        "dialed_target": store.get("dialed_target", ""),
+        "connected_party": store.get("connected_party", ""),
+        "answered_by": store.get("answered_by", ""),
         "direction": direction,
         "role": store.get("role", ""),
         "call_id": call_id,
@@ -566,6 +568,9 @@ def _set_ha_softphone_call_state(
             "callee",
             "local_name",
             "peer_name",
+            "dialed_target",
+            "connected_party",
+            "answered_by",
             "direction",
             "role",
             "call_id",
@@ -773,7 +778,6 @@ async def websocket_set_ha_softphone_dnd(
     _ha_softphone_store(hass)["dnd"] = bool(msg["dnd"])
     await _async_save_ha_softphone_store(hass)
     state = _ha_softphone_state(hass)
-    _fire_call_event(hass, state, "session")
     connection.send_result(msg["id"], state)
 
 
