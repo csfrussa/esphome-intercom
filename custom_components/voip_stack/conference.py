@@ -350,6 +350,7 @@ class ConferenceRoom:
         existing = self.legs.get(call_id)
         if existing is not None and existing.local_out is not None:
             return existing.local_out
+        was_empty = not self.legs
         queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
         self.legs[call_id] = _ConferenceLeg(
             call_id=call_id,
@@ -363,6 +364,8 @@ class ConferenceRoom:
         )
         if self._task is None or self._task.done():
             self._task = self.hass.async_create_task(self._mix_loop())
+        if was_empty:
+            self._fire("conference_started", call_id, count=1)
         self._fire("conference_participant_joined", call_id, caller="HA", count=len(self.legs))
         self._ha_softphone_announced = True
         return queue
@@ -476,6 +479,14 @@ class ConferenceManager:
         room = self.rooms.get(str(room_name or "").strip())
         if room is None or room._closed:
             return None
+        return room.add_ha_softphone_leg()
+
+    def start_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes]:
+        room_key = str(room_name or "").strip()
+        room = self.rooms.get(room_key)
+        if room is None or room._closed:
+            room = ConferenceRoom(self.hass, name=room_key, local_ip=self.local_ip)
+            self.rooms[room_key] = room
         return room.add_ha_softphone_leg()
 
     def push_ha_audio(self, room_name: str, pcm: bytes) -> None:

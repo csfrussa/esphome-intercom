@@ -134,10 +134,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
 
         self.assertIn('call_id.startswith("conference:")', init_py)
         self.assertIn("manager.join_ha_softphone(room_name)", init_py)
+        self.assertIn("manager.start_ha_softphone(room_name)", init_py)
         self.assertIn('"conference_queue": queue', init_py)
+        self.assertIn('last_sip_event="LOCAL_CONFERENCE_JOIN"', init_py)
         self.assertIn("conference_queue = item.get(\"conference_queue\")", audio_ws)
         self.assertIn("_run_conference_audio_session", audio_ws)
         self.assertIn("manager.push_ha_audio(session.conference_room, pcm)", audio_ws)
+        self.assertIn("await manager.leave_ha_softphone(conference_room)", init_py)
         self.assertNotIn("conference", CARD_JS.read_text().lower())
 
     def test_conference_tracks_leg_roles_and_owner_cleanup(self) -> None:

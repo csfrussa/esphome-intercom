@@ -1098,8 +1098,12 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         return
     client, watcher = registry.detach_client(call_id) if call_id else (None, None)
     relay = relays.pop(call_id, None) if call_id else None
-    if call_id:
-        media_sessions.pop(call_id, None)
+    media_session = media_sessions.pop(call_id, None) if call_id else None
+    conference_room = str((media_session or {}).get("conference_room") or "")
+    if conference_room:
+        manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
+        if manager is not None:
+            await manager.leave_ha_softphone(conference_room)
     pending_ids = [call_id] if call_id and call_id in pending else ([] if call_id else list(pending))
     server_bye = False
     pending_closed = 0
@@ -1275,6 +1279,58 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     )
     if route.action is RouteAction.TRUNK and not use_trunk:
         raise ServiceValidationError(f"{target} requires a registered SIP trunk")
+    if route.action is RouteAction.GROUP and route.entry is not None:
+        group_type = str((route.entry.metadata or {}).get("group_type") or "")
+        if group_type == "conference":
+            room_name = route.entry.name or route.entry.id or target
+            from .conference import conference_manager
+
+            manager = conference_manager(hass, local_ip=local_ip)
+            queue = manager.start_ha_softphone(room_name)
+            call_id = f"conference:{room_name}"
+            registry = _call_registry(hass)
+            registry.softphone_media[call_id] = {
+                "conference_room": room_name,
+                "conference_queue": queue,
+            }
+            registry.upsert(
+                call_id,
+                state=CallState.IN_CALL.value,
+                caller=_ha_peer_name(hass),
+                callee=room_name,
+                route_kind="conference",
+            )
+            registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.IN_CALL.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=_ha_peer_name(hass),
+                callee=room_name,
+                peer_name=room_name,
+                direction="outgoing",
+                call_id=call_id,
+                route_kind="conference",
+                sip_status_code=200,
+                last_sip_event="LOCAL_CONFERENCE_JOIN",
+                selected_tx_format="16000:s16le:1:20",
+                selected_rx_format="16000:s16le:1:20",
+                selected_tx_rtp_format="pt=96:L16/16000/1/20ms",
+                selected_rx_rtp_format="pt=96:L16/16000/1/20ms",
+            )
+            _fire_call_event(
+                hass,
+                {
+                    "state": CallState.IN_CALL.value,
+                    "scope": "conference",
+                    "call_id": call_id,
+                    "room": room_name,
+                    "target": target,
+                },
+                "sip",
+            )
+            _LOGGER.info("HA softphone joined conference room=%s", room_name)
+            return
     route_uri = route.sip_uri
     if route.action is RouteAction.GROUP:
         route_uri = ha_uri_for(route.target or target, contacts)

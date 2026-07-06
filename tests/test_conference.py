@@ -206,6 +206,42 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ha_softphone", hass.data[const.DOMAIN])
         await manager.leave_call("call-2", reason="remote_hangup")
 
+    async def test_ha_softphone_can_start_empty_conference_and_leave_without_closing_peers(self) -> None:
+        hass = _FakeHass()
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        queue = manager.start_ha_softphone("Conference")
+        self.assertIsNotNone(queue)
+        room = manager.rooms["Conference"]
+        self.assertIn("conference:Conference", room.legs)
+        self.assertEqual(room.legs["conference:Conference"].role, "ha")
+
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        invite = sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri("sip:Conference@127.0.0.1"),
+            caller_uri=voip_sip.parse_sip_uri("sip:Kitchen@127.0.0.1"),
+            target="Conference",
+            caller="Kitchen",
+            call_id="call-3",
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45680,
+        )
+        result = await manager.join(invite, types.SimpleNamespace(name="Conference", id="Conference"))
+        self.assertEqual(result.status, 200)
+        self.assertIn("call-3", room.legs)
+
+        await manager.leave_ha_softphone("Conference")
+        self.assertNotIn("conference:Conference", room.legs)
+        self.assertIn("call-3", room.legs)
+
+        await manager.leave_call("call-3", reason="remote_hangup")
+        self.assertNotIn("Conference", manager.rooms)
+
 
 if __name__ == "__main__":
     unittest.main()
