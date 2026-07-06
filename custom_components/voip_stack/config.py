@@ -6,6 +6,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_HA_CONFERENCE_GROUP,
+    CONF_HA_CONFERENCE_RING,
+    CONF_HA_RING_GROUP,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -35,6 +38,9 @@ def entry_transport_config(entry: ConfigEntry | None = None) -> dict:
         "sip_port": int(data.get("sip_port", VOIP_STACK_SIP_PORT)),
         "rtp_port": int(data.get("rtp_port", VOIP_STACK_RTP_PORT)),
         "advertise_host": (data.get("advertise_host") or "").strip(),
+        CONF_HA_RING_GROUP: str(data.get(CONF_HA_RING_GROUP) or "").strip(),
+        CONF_HA_CONFERENCE_GROUP: str(data.get(CONF_HA_CONFERENCE_GROUP) or "").strip(),
+        CONF_HA_CONFERENCE_RING: bool(data.get(CONF_HA_CONFERENCE_RING, False)),
     }
 
 
@@ -69,6 +75,9 @@ def transport_config(hass: HomeAssistant) -> dict:
             "sip_port": VOIP_STACK_SIP_PORT,
             "rtp_port": VOIP_STACK_RTP_PORT,
             "advertise_host": "",
+            CONF_HA_RING_GROUP: "",
+            CONF_HA_CONFERENCE_GROUP: "",
+            CONF_HA_CONFERENCE_RING: False,
         },
     )
 

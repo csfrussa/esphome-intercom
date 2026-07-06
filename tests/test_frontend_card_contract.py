@@ -78,13 +78,16 @@ class FrontendCardContractTest(unittest.TestCase):
 
     def test_ha_softphone_targets_come_from_shared_roster(self) -> None:
         body = _method_body(self.source, "_softphoneTargets")
-        self.assertIn("this._rosterEntries", body)
-        self.assertIn("_isCallableRosterEntry", body)
+        self.assertIn("this._softphoneTargetsFromBackend", body)
+        self.assertNotIn("filter", body)
         self.assertNotIn("_availableDevices", body)
 
-    def test_ha_softphone_filters_own_ha_roster_entry(self) -> None:
-        body = _method_body(self.source, "_isCallableRosterEntry")
-        self.assertIn("entry.metadata?.local_ha", body)
+    def test_ha_softphone_targets_are_backend_prepared_not_frontend_filtered(self) -> None:
+        load = _method_body(self.source, "_loadSharedRoster")
+        self.assertIn("softphone_targets_json", load)
+        self.assertNotIn("entry.metadata?.local_ha", self.source)
+        self.assertNotIn("entry.address || entry.sip_uri", self.source)
+        self.assertNotIn("_isCallableRosterEntry", self.source)
 
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")

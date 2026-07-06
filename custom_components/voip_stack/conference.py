@@ -73,6 +73,7 @@ def mix_frames(frames: list[bytes]) -> list[bytes]:
 class _ConferenceLeg:
     call_id: str
     caller: str
+    role: str
     remote_host: str
     remote_port: int
     in_converter: PcmFrameConverter
@@ -122,6 +123,10 @@ class ConferenceRoom:
         self._task: asyncio.Task | None = None
         self._closed = False
         self._ha_softphone_announced = False
+        self._owner_call_id = ""
+
+    def _has_explicit_participant(self) -> bool:
+        return any(leg.role in {"owner", "manual", "ha"} for leg in self.legs.values())
 
     async def join(self, invite: SipInvite, *, ring_ha: bool = False) -> SipInviteResult:
         if len(self.legs) >= MAX_CONFERENCE_LEGS:
@@ -129,6 +134,7 @@ class ConferenceRoom:
         local_ports = allocate_sip_rtp_port_pair(self.hass)
         transport: asyncio.DatagramTransport | None = None
         try:
+            was_empty = not self.legs
             loop = asyncio.get_running_loop()
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: _ConferenceRtpProtocol(self, invite.call_id),
@@ -137,6 +143,7 @@ class ConferenceRoom:
             leg = _ConferenceLeg(
                 call_id=invite.call_id,
                 caller=invite.caller,
+                role="owner" if was_empty else "manual",
                 remote_host=invite.remote_rtp_host,
                 remote_port=int(invite.remote_rtp_port),
                 local_ports=local_ports,
@@ -146,8 +153,9 @@ class ConferenceRoom:
                 in_converter=PcmFrameConverter(invite.recv_format.audio_format, CONFERENCE_FORMAT),
                 out_converter=PcmFrameConverter(CONFERENCE_FORMAT, invite.send_format.audio_format),
             )
-            was_empty = not self.legs
             self.legs[invite.call_id] = leg
+            if was_empty:
+                self._owner_call_id = invite.call_id
             if self._task is None or self._task.done():
                 self._task = self.hass.async_create_task(self._mix_loop())
             if was_empty and ring_ha:
@@ -169,7 +177,10 @@ class ConferenceRoom:
             release_sip_rtp_port_pair(self.hass, local_ports)
             raise
 
-    async def add_client_leg(self, *, call_id: str, caller: str, client: Any, local_ports: tuple[int, int]) -> bool:
+    async def add_client_leg(self, *, call_id: str, caller: str, client: Any, local_ports: tuple[int, int], role: str = "manual") -> bool:
+        if self._closed:
+            release_sip_rtp_port_pair(self.hass, local_ports)
+            return False
         dialog = getattr(client, "dialog", None)
         if dialog is None:
             release_sip_rtp_port_pair(self.hass, local_ports)
@@ -185,6 +196,7 @@ class ConferenceRoom:
             self.legs[call_id] = _ConferenceLeg(
                 call_id=call_id,
                 caller=caller,
+                role=role,
                 remote_host=dialog.remote_rtp_host,
                 remote_port=int(dialog.remote_rtp_port),
                 local_ports=local_ports,
@@ -238,6 +250,8 @@ class ConferenceRoom:
         self._fire("conference_participant_left", call_id, caller=leg.caller, count=len(self.legs), reason=reason)
         if not self.legs:
             await self.close(reason=reason)
+        elif call_id == self._owner_call_id and not self._has_explicit_participant():
+            await self.close(reason="owner_left")
         return True
 
     async def close(self, reason: str = "idle") -> None:
@@ -322,6 +336,7 @@ class ConferenceRoom:
             "leg_stats": {
                 call_id: {
                     "caller": leg.caller,
+                    "role": leg.role,
                     "rx_packets": leg.rx_packets,
                     "tx_packets": leg.tx_packets,
                     "dropped_frames": leg.dropped_frames,
@@ -339,6 +354,7 @@ class ConferenceRoom:
         self.legs[call_id] = _ConferenceLeg(
             call_id=call_id,
             caller="HA",
+            role="ha",
             remote_host="",
             remote_port=0,
             in_converter=PcmFrameConverter(CONFERENCE_FORMAT, CONFERENCE_FORMAT),
@@ -428,13 +444,25 @@ class ConferenceManager:
             self.rooms[room_name] = room
         return await room.join(invite, ring_ha=ring_ha)
 
-    async def add_client_leg(self, room_name: str, *, call_id: str, caller: str, client: Any, local_ports: tuple[int, int]) -> bool:
+    async def add_client_leg(
+        self,
+        room_name: str,
+        *,
+        call_id: str,
+        caller: str,
+        client: Any,
+        local_ports: tuple[int, int],
+        role: str = "manual",
+    ) -> bool:
         room_key = str(room_name or "").strip()
         room = self.rooms.get(room_key)
         if room is None or room._closed:
+            if role == "auto_invited":
+                release_sip_rtp_port_pair(self.hass, local_ports)
+                return False
             room = ConferenceRoom(self.hass, name=room_key, local_ip=self.local_ip)
             self.rooms[room_key] = room
-        return await room.add_client_leg(call_id=call_id, caller=caller, client=client, local_ports=local_ports)
+        return await room.add_client_leg(call_id=call_id, caller=caller, client=client, local_ports=local_ports, role=role)
 
     async def leave_call(self, call_id: str, reason: str = "remote_hangup") -> bool:
         for name, room in list(self.rooms.items()):

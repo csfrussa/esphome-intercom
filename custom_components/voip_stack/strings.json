@@ -12,6 +12,9 @@
           "debug_mode": "Enable SIP/RTP debug mode",
           "sip_registrar_enabled": "Enable local SIP softphone accounts",
           "ring_group_fallback": "Ring group fallback",
+          "ha_ring_group": "HA softphone ring group",
+          "ha_conference_group": "HA softphone conference group",
+          "ha_conference_ring": "Ring HA for conference group",
           "trunk_enabled": "Enable optional SIP trunk"
         },
         "data_description": {
@@ -22,6 +25,9 @@
           "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
           "sip_registrar_enabled": "Accept REGISTER from local softphones such as Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
           "ring_group_fallback": "What HA does when no member answers a ring group before timeout. Reject returns 480; answer_ha rings the HA softphone.",
+          "ha_ring_group": "Optional ring group membership for the Home Assistant softphone only.",
+          "ha_conference_group": "Optional conference group membership for the Home Assistant softphone only.",
+          "ha_conference_ring": "When enabled, HA rings when another participant starts the configured conference group.",
           "trunk_enabled": "Show provider/PBX trunk settings. When disabled, no trunk registration, external route or DTMF collector starts."
         }
       },

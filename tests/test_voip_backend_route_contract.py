@@ -12,6 +12,8 @@ BACKEND = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 AUDIO_WS = ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
 CARD_JS = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
+ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
+SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ACCOUNT_SERVICES = ROOT / "custom_components" / "voip_stack" / "account_services.py"
 SERVICES_YAML = ROOT / "custom_components" / "voip_stack" / "services.yaml"
@@ -80,6 +82,52 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_run_ring_group_call(invite, decision.entry, peers, roster_entries)", on_invite)
         self.assertIn('return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)', on_invite)
 
+    def test_ha_softphone_group_membership_is_configured_in_backend(self) -> None:
+        config_flow = CONFIG_FLOW.read_text()
+        strings = STRINGS_JSON.read_text()
+        init_py = INIT.read_text()
+
+        for token in ("CONF_HA_RING_GROUP", "CONF_HA_CONFERENCE_GROUP", "CONF_HA_CONFERENCE_RING"):
+            self.assertIn(token, config_flow)
+            self.assertIn(token, init_py)
+        self.assertIn('"ha_ring_group"', strings)
+        self.assertIn('"ha_conference_group"', strings)
+        self.assertIn('"ha_conference_ring"', strings)
+
+    def test_ha_softphone_can_originate_to_group_via_backend_self_invite(self) -> None:
+        init_py = INIT.read_text()
+        call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
+        self.assertIn("if route.action is RouteAction.GROUP:", call_service)
+        self.assertIn("route_uri = ha_uri_for(route.target or target, contacts)", call_service)
+        self.assertIn("RouteAction.GROUP", call_service[call_service.index("if not use_trunk and"):])
+
+    def test_ha_direct_esp_calls_prefer_roster_audio_profile_over_device_registry(self) -> None:
+        init_py = INIT.read_text()
+        call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
+        self.assertIn(
+            'remote_tx_formats = _roster_entry_formats(route.entry, "tx_formats") or _device_formats(dest_device, "tx_formats")',
+            call_service,
+        )
+        self.assertIn(
+            'remote_rx_formats = _roster_entry_formats(route.entry, "rx_formats") or _device_formats(dest_device, "rx_formats")',
+            call_service,
+        )
+        self.assertNotIn('if dest_device is not None\n        else _roster_entry_formats', call_service)
+
+    def test_backend_prepares_softphone_targets_for_card(self) -> None:
+        routing = ENDPOINT_ROUTING.read_text()
+        sensor = SENSOR.read_text()
+        card = CARD_JS.read_text()
+
+        self.assertIn("def softphone_targets_from_roster", routing)
+        self.assertIn('"tx_formats": list(peer.tx_formats or [])', routing)
+        self.assertIn('"rx_formats": list(peer.rx_formats or [])', routing)
+        self.assertIn('metadata.get("local_ha")', routing)
+        self.assertIn('metadata.get("group_type")', routing)
+        self.assertIn("getattr(entry, \"ha_bridge\", False) and group_type", routing)
+        self.assertIn("softphone_targets_json", sensor)
+        self.assertIn("softphone_targets_json", card)
+
     def test_ha_softphone_media_path_can_join_conference_without_card_logic(self) -> None:
         init_py = INIT.read_text()
         audio_ws = AUDIO_WS.read_text()
@@ -91,6 +139,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_run_conference_audio_session", audio_ws)
         self.assertIn("manager.push_ha_audio(session.conference_room, pcm)", audio_ws)
         self.assertNotIn("conference", CARD_JS.read_text().lower())
+
+    def test_conference_tracks_leg_roles_and_owner_cleanup(self) -> None:
+        conference = (ROOT / "custom_components" / "voip_stack" / "conference.py").read_text()
+        self.assertIn('role: str', conference)
+        self.assertIn('role="owner" if was_empty else "manual"', conference)
+        self.assertIn('role="auto_invited"', self.source)
+        self.assertIn('await self.close(reason="owner_left")', conference)
+        self.assertIn('not self._has_explicit_participant()', conference)
 
     def test_softphone_account_list_service_is_registered_and_documented(self) -> None:
         services = SERVICES.read_text()
@@ -139,6 +195,26 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"ring_group_fallback"', strings)
         self.assertIn("CONF_RING_GROUP_FALLBACK", self.source)
         self.assertIn("_defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING", self.source)
+
+    def test_ring_group_treats_ha_member_as_parallel_contender(self) -> None:
+        ring_group = self.source[self.source.index("async def _run_ring_group_call(") : self.source.index("async def _ring_conference_members(")]
+        self.assertIn("ha_member = False", ring_group)
+        self.assertIn("if _is_ha_target(member):", ring_group)
+        self.assertIn("_set_ha_softphone_call_state(", ring_group)
+        self.assertIn("async def _wait_ha()", ring_group)
+        self.assertIn('if result == "in_call_ha"', ring_group)
+        self.assertIn("registry.softphone_media[invite.call_id]", ring_group)
+
+    def test_ring_group_winner_clears_pending_route_before_active_hangup(self) -> None:
+        ring_group = self.source[self.source.index("async def _run_ring_group_call(") : self.source.index("async def _ring_conference_members(")]
+        external_winner = ring_group[ring_group.index('if ha_winner:') : ring_group.index('registry.register_bridge(')]
+        self.assertIn("_pending_routes(hass).pop(invite.call_id, None)", external_winner)
+
+        init_py = INIT.read_text()
+        hangup = init_py[init_py.index("async def _handle_sip_hangup_service") : init_py.index("async def _refresh_phonebook_sensor")]
+        self.assertIn("future = _pending_routes(hass)[call_id].get(\"future\")", hangup)
+        self.assertIn("if future is not None and future.done():", hangup)
+        self.assertIn("_pending_routes(hass).pop(call_id, None)", hangup)
 
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated("):]

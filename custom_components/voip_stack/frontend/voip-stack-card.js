@@ -710,9 +710,7 @@ class VoipStackCard extends HTMLElement {
   }
 
   _softphoneTargets() {
-    return this._rosterEntries
-      .filter(entry => this._isCallableRosterEntry(entry))
-      .map(entry => this._targetFromRosterEntry(entry));
+    return this._softphoneTargetsFromBackend || [];
   }
 
   _getSoftphoneTargetDevice() {
@@ -725,7 +723,9 @@ class VoipStackCard extends HTMLElement {
   _loadSharedRoster() {
     const attr = this._hass?.states?.["sensor.voip_phonebook"]?.attributes || {};
     const raw = attr.roster_json || "";
+    const rawTargets = attr.softphone_targets_json || "[]";
     let contacts = [];
+    let targets = [];
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
@@ -733,6 +733,12 @@ class VoipStackCard extends HTMLElement {
       } catch (err) {
         console.error("Invalid voip roster_json:", err);
       }
+    }
+    try {
+      const parsedTargets = JSON.parse(rawTargets);
+      targets = Array.isArray(parsedTargets) ? parsedTargets : [];
+    } catch (err) {
+      console.error("Invalid voip softphone_targets_json:", err);
     }
     this._rosterEntries = contacts
       .filter(entry => entry && typeof entry === "object")
@@ -749,17 +755,19 @@ class VoipStackCard extends HTMLElement {
         metadata: entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {},
       }))
       .filter(entry => entry.id);
+    this._softphoneTargetsFromBackend = targets
+      .filter(target => target && typeof target === "object")
+      .map(target => ({
+        device_id: String(target.device_id || target.route_id || target.name || "").trim(),
+        name: String(target.name || target.device_id || target.route_id || "").trim(),
+        route_id: String(target.route_id || target.device_id || target.name || "").trim(),
+        ha_bridge: !!target.ha_bridge,
+        group_type: String(target.group_type || "").trim(),
+      }))
+      .filter(target => target.device_id && target.name);
     if (this._isHaSoftphoneMode() && !this._getSoftphoneTargetDevice()) {
       this._softphoneTargetDeviceId = this._softphoneTargets()[0]?.device_id || null;
     }
-  }
-
-  _isCallableRosterEntry(entry) {
-    if (!entry || entry.enabled === false) return false;
-    if (entry.metadata?.local_ha) return false;
-    const name = entry.name || entry.id;
-    if (!name) return false;
-    return !!(entry.address || entry.sip_uri || entry.extension || entry.number);
   }
 
   _formatListFromMetadata(value) {

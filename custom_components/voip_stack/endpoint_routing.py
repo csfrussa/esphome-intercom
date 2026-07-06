@@ -166,6 +166,8 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
                     "sip_port": peer.sip_port,
                     "rtp_port": peer.rtp_port,
                     "audio_mode": peer.audio_mode,
+                    "tx_formats": list(peer.tx_formats or []),
+                    "rx_formats": list(peer.rx_formats or []),
                     "conference_group": peer.conference_group,
                     "conference_ring": bool(peer.conference_ring),
                     "ring_group": peer.ring_group,
@@ -192,3 +194,37 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
             )
         )
     return entries
+
+
+def softphone_targets_from_roster(entries: list) -> list[dict]:
+    """Return HA-softphone dial targets prepared by the backend phonebook."""
+    targets: list[dict] = []
+    for entry in entries:
+        metadata = getattr(entry, "metadata", {}) or {}
+        if not getattr(entry, "enabled", True):
+            continue
+        if metadata.get("local_ha"):
+            continue
+        name = getattr(entry, "name", "") or getattr(entry, "id", "")
+        if not name:
+            continue
+        group_type = str(metadata.get("group_type") or "")
+        has_route = bool(
+            getattr(entry, "address", "")
+            or getattr(entry, "sip_uri", "")
+            or getattr(entry, "extension", "")
+            or getattr(entry, "number", "")
+            or (getattr(entry, "ha_bridge", False) and group_type)
+        )
+        if not has_route:
+            continue
+        targets.append(
+            {
+                "device_id": getattr(entry, "id", "") or name,
+                "name": name,
+                "route_id": getattr(entry, "id", "") or name,
+                "ha_bridge": bool(getattr(entry, "ha_bridge", False)),
+                "group_type": group_type,
+            }
+        )
+    return targets

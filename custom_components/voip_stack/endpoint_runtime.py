@@ -556,8 +556,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         registry = _call_registry(hass)
         members = [str(member).strip() for member in (entry.metadata.get("members") or []) if str(member).strip()]
         attempts: list[dict] = []
+        ha_member = False
         for member in members:
-            if _caller_matches_member(invite, member, peers) or _is_ha_target(member):
+            if _caller_matches_member(invite, member, peers):
+                continue
+            if _is_ha_target(member):
+                ha_member = True
                 continue
             decision_uri, peer_target, member_entry = _sip_uri_for_member(member, peers, roster_entries)
             if decision_uri is None or decision_uri.host == local_ip:
@@ -603,7 +607,30 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "ports": (source_relay_port, dest_relay_port),
                 }
             )
-        if not attempts:
+        route_future: asyncio.Future = asyncio.get_running_loop().create_future()
+        _pending_routes(hass)[invite.call_id] = {"invite": invite, "future": route_future}
+        if ha_member:
+            registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.RINGING.value)
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.RINGING.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=entry.display_name,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                selected_tx_format=invite.send_format.audio_format.wire_token(),
+                selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
+                audio_mode="full_duplex",
+                route_kind=GROUP_TYPE_RING,
+                sip_status_code=180,
+                last_sip_event="INVITE",
+            )
+        if not attempts and not ha_member:
+            _pending_routes(hass).pop(invite.call_id, None)
             _sip_send_final_response(
                 hass,
                 invite.call_id,
@@ -626,8 +653,35 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 result = await client.wait_for_final(timeout=RING_GROUP_TIMEOUT_S)
             return result, attempt
 
+        async def _wait_ha() -> tuple[str, dict]:
+            try:
+                decision = await asyncio.wait_for(route_future, timeout=RING_GROUP_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                return "timeout", {"member": _ha_peer_name(hass), "ha": True}
+            action = str((decision or {}).get("action") or "").strip().lower()
+            if action in {"answer_ha", "default"}:
+                return "in_call_ha", {"member": _ha_peer_name(hass), "ha": True}
+            if action == "busy":
+                return "busy", {"member": _ha_peer_name(hass), "ha": True}
+            if action == "cancel":
+                return "cancelled", {"member": _ha_peer_name(hass), "ha": True}
+            return "declined", {"member": _ha_peer_name(hass), "ha": True}
+
+        async def _wait_caller_cancel() -> tuple[str, dict]:
+            try:
+                decision = await asyncio.wait_for(route_future, timeout=RING_GROUP_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                return "timeout", {"member": "__caller__", "caller_control": True}
+            action = str((decision or {}).get("action") or "").strip().lower()
+            return ("cancelled" if action == "cancel" else "ignored", {"member": "__caller__", "caller_control": True})
+
         tasks = [hass.async_create_task(_dial(attempt)) for attempt in attempts]
+        if ha_member:
+            tasks.append(hass.async_create_task(_wait_ha()))
+        else:
+            tasks.append(hass.async_create_task(_wait_caller_cancel()))
         winner: dict | None = None
+        ha_winner = False
         final_result = "timeout"
         try:
             deadline = asyncio.get_running_loop().time() + RING_GROUP_TIMEOUT_S
@@ -653,6 +707,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     if result == "in_call" and attempt["client"].dialog is not None:
                         winner = attempt
                         break
+                    if result == "in_call_ha":
+                        winner = attempt
+                        ha_winner = True
+                        break
+                    if result == "cancelled" and (attempt.get("caller_control") or attempt.get("ha")):
+                        pending_tasks.clear()
+                        break
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -664,7 +725,24 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     client.cancel()
                 await client.close()
                 _release_sip_rtp_port_pair(hass, attempt["ports"])
+            if ha_member and not ha_winner:
+                _pending_routes(hass).pop(invite.call_id, None)
+                _set_ha_softphone_call_state(
+                    hass,
+                    CallState.CANCELLED.value if winner is not None else CallState.IDLE.value,
+                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    caller=invite.caller,
+                    callee=entry.display_name,
+                    peer_name=invite.caller,
+                    direction="incoming",
+                    call_id=invite.call_id,
+                    reason=TerminalReason.CANCELLED.value if winner is not None else TerminalReason.TIMEOUT.value,
+                    terminal_reason=TerminalReason.CANCELLED.value if winner is not None else TerminalReason.TIMEOUT.value,
+                    route_kind=GROUP_TYPE_RING,
+                    last_sip_event="SIP_RESPONSE",
+                )
             if winner is None:
+                _pending_routes(hass).pop(invite.call_id, None)
                 if str(cfg.get(CONF_RING_GROUP_FALLBACK) or "reject") == "answer_ha":
                     _defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING, callee=_ha_peer_name(hass))
                     return
@@ -685,6 +763,50 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     route_kind=GROUP_TYPE_RING,
                 )
                 return
+            if ha_winner:
+                _pending_routes(hass).pop(invite.call_id, None)
+                local_rtp_port = _allocate_sip_rtp_port(hass)
+                answer = build_answer_directional(
+                    local_ip,
+                    local_ip,
+                    local_rtp_port,
+                    invite.send_format,
+                    invite.recv_format,
+                )
+                registry.pending_invites.pop(invite.call_id, None)
+                registry.softphone_media[invite.call_id] = {
+                    "invite": invite,
+                    "local_rtp_port": local_rtp_port,
+                }
+                registry.upsert(
+                    invite.call_id,
+                    state=CallState.IN_CALL.value,
+                    caller=invite.caller,
+                    callee=entry.display_name,
+                    route_kind=GROUP_TYPE_RING,
+                )
+                registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.IN_CALL.value)
+                _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
+                _set_ha_softphone_call_state(
+                    hass,
+                    CallState.IN_CALL.value,
+                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    caller=invite.caller,
+                    callee=entry.display_name,
+                    peer_name=invite.caller,
+                    direction="incoming",
+                    call_id=invite.call_id,
+                    selected_tx_format=invite.send_format.audio_format.wire_token(),
+                    selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                    selected_tx_rtp_format=invite.send_format.wire_token(),
+                    selected_rx_rtp_format=invite.recv_format.wire_token(),
+                    audio_mode="full_duplex",
+                    route_kind=GROUP_TYPE_RING,
+                    sip_status_code=200,
+                    last_sip_event="SIP_RESPONSE",
+                )
+                return
+            _pending_routes(hass).pop(invite.call_id, None)
             client = winner["client"]
             source_relay_port, dest_relay_port = winner["ports"]
             registry.register_bridge(
@@ -767,6 +889,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             await _terminate_sip_bridge(hass, client.dialog_ids.call_id, terminal_reason=terminal_reason)
         except asyncio.CancelledError:
+            _pending_routes(hass).pop(invite.call_id, None)
             for attempt in attempts:
                 with contextlib.suppress(Exception):
                     attempt["client"].bye_or_cancel()
@@ -846,6 +969,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     caller=attempt["member"],
                     client=client,
                     local_ports=attempt["ports"],
+                    role="auto_invited",
                 )
                 if not owned_by_room:
                     return

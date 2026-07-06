@@ -33,6 +33,9 @@ from .config import (
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_HA_CONFERENCE_GROUP,
+    CONF_HA_CONFERENCE_RING,
+    CONF_HA_RING_GROUP,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -514,6 +517,9 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             local_ha=True,
             sip_port=cfg["sip_port"],
             rtp_port=cfg["rtp_port"],
+            conference_group=str(cfg.get(CONF_HA_CONFERENCE_GROUP) or ""),
+            conference_ring=bool(cfg.get(CONF_HA_CONFERENCE_RING, False)),
+            ring_group=str(cfg.get(CONF_HA_RING_GROUP) or ""),
             audio_mode="full_duplex",
         ))
     else:
@@ -1023,16 +1029,20 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     if not call_id:
         call_id = _single_pending_route_call_id(hass)
     if call_id and call_id in _pending_routes(hass):
-        _set_pending_route_decision(
-            hass,
-            {
-                "call_id": call_id,
-                "action": "cancel",
-                "reason": "Request Terminated",
-                "decline_reason": TerminalReason.LOCAL_HANGUP.value,
-            },
-        )
-        return
+        future = _pending_routes(hass)[call_id].get("future")
+        if future is not None and future.done():
+            _pending_routes(hass).pop(call_id, None)
+        else:
+            _set_pending_route_decision(
+                hass,
+                {
+                    "call_id": call_id,
+                    "action": "cancel",
+                    "reason": "Request Terminated",
+                    "decline_reason": TerminalReason.LOCAL_HANGUP.value,
+                },
+            )
+            return
     registry = _call_registry(hass)
     clients = registry.sip_clients
     relays = registry.relays
@@ -1266,26 +1276,20 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     if route.action is RouteAction.TRUNK and not use_trunk:
         raise ServiceValidationError(f"{target} requires a registered SIP trunk")
     route_uri = route.sip_uri
+    if route.action is RouteAction.GROUP:
+        route_uri = ha_uri_for(route.target or target, contacts)
     if use_trunk:
         trunk_target = route.target or target
         route_uri = (
             f"sip:{trunk_target}@{trunk_cfg[CONF_TRUNK_SERVER]}:{int(trunk_cfg[CONF_TRUNK_PORT])};"
             f"transport={str(trunk_cfg[CONF_TRUNK_TRANSPORT]).lower()}"
         )
-    if not use_trunk and (route.action not in {RouteAction.DIRECT, RouteAction.FORWARD, RouteAction.BRIDGE} or not route_uri):
+    if not use_trunk and (route.action not in {RouteAction.DIRECT, RouteAction.FORWARD, RouteAction.BRIDGE, RouteAction.GROUP} or not route_uri):
         raise ServiceValidationError(f"cannot resolve SIP target: {target}")
     await _async_prepare_ha_outbound_call(hass)
     uri = parse_sip_uri(route_uri)
-    remote_tx_formats = (
-        _device_formats(dest_device, "tx_formats")
-        if dest_device is not None
-        else _roster_entry_formats(route.entry, "tx_formats")
-    )
-    remote_rx_formats = (
-        _device_formats(dest_device, "rx_formats")
-        if dest_device is not None
-        else _roster_entry_formats(route.entry, "rx_formats")
-    )
+    remote_tx_formats = _roster_entry_formats(route.entry, "tx_formats") or _device_formats(dest_device, "tx_formats")
+    remote_rx_formats = _roster_entry_formats(route.entry, "rx_formats") or _device_formats(dest_device, "rx_formats")
     sip_send_formats, sip_recv_formats = _sip_target_audio_profile(
         remote_tx_formats=remote_tx_formats,
         remote_rx_formats=remote_rx_formats,

@@ -18,6 +18,9 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_HA_CONFERENCE_GROUP,
+    CONF_HA_CONFERENCE_RING,
+    CONF_HA_RING_GROUP,
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
     CONF_RING_GROUP_FALLBACK,
@@ -74,6 +77,9 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
             CONF_TRUNK_DTMF_ROUTES: existing.get(CONF_TRUNK_DTMF_ROUTES, ""),
             CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
+            CONF_HA_RING_GROUP: existing.get(CONF_HA_RING_GROUP, ""),
+            CONF_HA_CONFERENCE_GROUP: existing.get(CONF_HA_CONFERENCE_GROUP, ""),
+            CONF_HA_CONFERENCE_RING: existing.get(CONF_HA_CONFERENCE_RING, False),
             "sip_accounts": existing.get("sip_accounts", []),
             CONF_PHONEBOOK_CONTACTS: existing.get(CONF_PHONEBOOK_CONTACTS, []),
         }
@@ -126,6 +132,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
             CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
             CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
+            CONF_HA_RING_GROUP: existing.get(CONF_HA_RING_GROUP, ""),
+            CONF_HA_CONFERENCE_GROUP: existing.get(CONF_HA_CONFERENCE_GROUP, ""),
+            CONF_HA_CONFERENCE_RING: existing.get(CONF_HA_CONFERENCE_RING, False),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
         }
         schema = vol.Schema(
@@ -142,6 +151,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_RING_GROUP_FALLBACK, default=defaults[CONF_RING_GROUP_FALLBACK]): SelectSelector(
                     SelectSelectorConfig(options=["reject", "answer_ha"])
                 ),
+                vol.Optional(CONF_HA_RING_GROUP, default=defaults[CONF_HA_RING_GROUP]): TextSelector(),
+                vol.Optional(CONF_HA_CONFERENCE_GROUP, default=defaults[CONF_HA_CONFERENCE_GROUP]): TextSelector(),
+                vol.Required(CONF_HA_CONFERENCE_RING, default=defaults[CONF_HA_CONFERENCE_RING]): BooleanSelector(),
                 vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
             }
         )
@@ -151,7 +163,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             # Number selectors hand floats; coerce to int once on the boundary.
             for k in ("sip_port", "rtp_port"):
                 user_input[k] = int(user_input[k])
-            for k in ("advertise_host",):
+            for k in ("advertise_host", CONF_HA_RING_GROUP, CONF_HA_CONFERENCE_GROUP):
                 user_input[k] = (user_input.get(k) or "").strip()
 
             if not errors:
@@ -253,6 +265,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
                         CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
+                        CONF_HA_RING_GROUP: existing.get(CONF_HA_RING_GROUP, ""),
+                        CONF_HA_CONFERENCE_GROUP: existing.get(CONF_HA_CONFERENCE_GROUP, ""),
+                        CONF_HA_CONFERENCE_RING: bool(existing.get(CONF_HA_CONFERENCE_RING, False)),
                     }
                 )
                 return self._store_entry(_disabled_trunk_data(data, existing))
