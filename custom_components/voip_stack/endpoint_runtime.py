@@ -774,6 +774,104 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     _release_sip_rtp_port_pair(hass, attempt["ports"])
             raise
 
+    async def _ring_conference_members(
+        invite: SipInvite,
+        entry: RosterEntry,
+        peers: list[Peer],
+        roster_entries: list[RosterEntry],
+    ) -> None:
+        manager = conference_manager(hass, local_ip=local_ip)
+        room_name = str(entry.name or entry.id or invite.target)
+        members = [str(member).strip() for member in (entry.metadata.get("ring_members") or []) if str(member).strip()]
+        attempts: list[dict] = []
+        for member in members:
+            if _caller_matches_member(invite, member, peers) or _is_ha_target(member):
+                continue
+            decision_uri, peer_target, member_entry = _sip_uri_for_member(member, peers, roster_entries)
+            if decision_uri is None or decision_uri.host == local_ip:
+                continue
+            try:
+                local_ports = _allocate_sip_rtp_port_pair(hass)
+            except RuntimeError as err:
+                _LOGGER.warning("SIP conference member RTP port allocation failed member=%s: %s", member, err)
+                break
+            remote_tx_formats = _peer_audio_formats(peer_target, "tx_formats") or _roster_entry_formats(member_entry, "tx_formats")
+            remote_rx_formats = _peer_audio_formats(peer_target, "rx_formats") or _roster_entry_formats(member_entry, "rx_formats")
+            sip_send_formats, sip_recv_formats = _sip_target_audio_profile(
+                remote_tx_formats=remote_tx_formats,
+                remote_rx_formats=remote_rx_formats,
+                target=member,
+            )
+            bridge_to_softphone = bool(member_entry is not None and member_entry.sip_uri and member_entry.metadata.get("registered"))
+            if bridge_to_softphone:
+                sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
+                sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
+            client = SipCallClient(
+                local_ip=local_ip,
+                local_name=room_name,
+                local_sip_port=int(cfg["sip_port"]),
+                local_rtp_port=local_ports[0],
+                supported_send_formats=sip_send_formats,
+                supported_recv_formats=sip_recv_formats,
+                signaling_transport=_sip_uri_transport(decision_uri),
+                include_common_codecs=bridge_to_softphone,
+            )
+            _enable_reused_sip_tcp_connection(
+                hass,
+                client,
+                decision_uri,
+                target=member,
+                default_sip_port=int(cfg["sip_port"]),
+            )
+            attempts.append({"member": member, "uri": decision_uri, "client": client, "ports": local_ports})
+
+        async def _dial(attempt: dict) -> None:
+            client = attempt["client"]
+            uri = attempt["uri"]
+            owned_by_room = False
+            try:
+                result = await client.invite(
+                    target=uri.user or attempt["member"],
+                    remote_host=uri.host,
+                    remote_sip_port=uri.port or int(cfg["sip_port"]),
+                    timeout=8.0,
+                )
+                if result == "ringing":
+                    result = await client.wait_for_final(timeout=RING_GROUP_TIMEOUT_S)
+                if result != "in_call" or client.dialog is None:
+                    return
+                owned_by_room = await manager.add_client_leg(
+                    room_name,
+                    call_id=client.dialog_ids.call_id,
+                    caller=attempt["member"],
+                    client=client,
+                    local_ports=attempt["ports"],
+                )
+                if not owned_by_room:
+                    return
+                terminal = await client.wait_for_dialog_termination()
+                terminal_reason = (
+                    TerminalReason.REMOTE_HANGUP.value
+                    if terminal == "remote_hangup"
+                    else _sip_terminal_reason(terminal, _sip_public_state(terminal))
+                )
+                await manager.leave_call(client.dialog_ids.call_id, reason=terminal_reason)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    client.bye_or_cancel()
+                raise
+            except Exception as err:
+                _LOGGER.debug("SIP conference member invite failed member=%s: %s", attempt["member"], err)
+            finally:
+                if not owned_by_room:
+                    with contextlib.suppress(Exception):
+                        client.bye_or_cancel()
+                        await client.close()
+                    _release_sip_rtp_port_pair(hass, attempt["ports"])
+
+        for attempt in attempts:
+            hass.async_create_task(_dial(attempt))
+
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
         caller_peer = _peer_for_target(invite.caller, peers)
@@ -810,6 +908,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if decision.action is RouteAction.GROUP:
             group_type = str((decision.entry.metadata or {}).get("group_type") or "") if decision.entry is not None else ""
             if group_type == GROUP_TYPE_CONFERENCE:
+                ring_members = [str(member).strip() for member in ((decision.entry.metadata or {}).get("ring_members") or [])]
+                ring_ha = any(_is_ha_target(member) for member in ring_members)
                 registry.upsert(
                     invite.call_id,
                     state=CallState.IN_CALL.value,
@@ -818,7 +918,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     route_kind=GROUP_TYPE_CONFERENCE,
                 )
                 registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.IN_CALL.value)
-                return await conference_manager(hass, local_ip=local_ip).join(invite, decision.entry)
+                result = await conference_manager(hass, local_ip=local_ip).join(invite, decision.entry, ring_ha=ring_ha)
+                if result.status == 200:
+                    hass.async_create_task(_ring_conference_members(invite, decision.entry, peers, roster_entries))
+                return result
             if group_type == GROUP_TYPE_RING and decision.entry is not None:
                 registry.upsert(
                     invite.call_id,

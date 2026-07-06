@@ -82,6 +82,7 @@ class _ConferenceLeg:
     decoder: RtpPayloadDecoder | None = None
     encoder: RtpPayloadEncoder | None = None
     local_out: asyncio.Queue[bytes] | None = None
+    client: Any | None = None
     in_fifo: list[bytes] = field(default_factory=list)
     last_rx: float = field(default_factory=time.monotonic)
     sequence: int = field(default_factory=lambda: random.randrange(0, 0xFFFF))
@@ -120,8 +121,9 @@ class ConferenceRoom:
         self.legs: dict[str, _ConferenceLeg] = {}
         self._task: asyncio.Task | None = None
         self._closed = False
+        self._ha_softphone_announced = False
 
-    async def join(self, invite: SipInvite) -> SipInviteResult:
+    async def join(self, invite: SipInvite, *, ring_ha: bool = False) -> SipInviteResult:
         if len(self.legs) >= MAX_CONFERENCE_LEGS:
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         local_ports = allocate_sip_rtp_port_pair(self.hass)
@@ -148,8 +150,9 @@ class ConferenceRoom:
             self.legs[invite.call_id] = leg
             if self._task is None or self._task.done():
                 self._task = self.hass.async_create_task(self._mix_loop())
-            if was_empty:
+            if was_empty and ring_ha:
                 self._set_softphone_ringing(invite)
+            if was_empty:
                 self._fire("conference_started", invite.call_id, count=1)
             self._fire("conference_participant_joined", invite.call_id, caller=invite.caller, count=len(self.legs))
             answer = build_answer_directional(
@@ -160,6 +163,44 @@ class ConferenceRoom:
                 invite.recv_format,
             )
             return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
+        except Exception:
+            if transport is not None:
+                transport.close()
+            release_sip_rtp_port_pair(self.hass, local_ports)
+            raise
+
+    async def add_client_leg(self, *, call_id: str, caller: str, client: Any, local_ports: tuple[int, int]) -> bool:
+        dialog = getattr(client, "dialog", None)
+        if dialog is None:
+            release_sip_rtp_port_pair(self.hass, local_ports)
+            return False
+        transport: asyncio.DatagramTransport | None = None
+        try:
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _ConferenceRtpProtocol(self, call_id),
+                local_addr=("0.0.0.0", int(dialog.local_rtp_port)),
+            )
+            was_empty = not self.legs
+            self.legs[call_id] = _ConferenceLeg(
+                call_id=call_id,
+                caller=caller,
+                remote_host=dialog.remote_rtp_host,
+                remote_port=int(dialog.remote_rtp_port),
+                local_ports=local_ports,
+                transport=transport,
+                decoder=RtpPayloadDecoder(dialog.recv_format),
+                encoder=RtpPayloadEncoder(dialog.send_format),
+                in_converter=PcmFrameConverter(dialog.recv_format.audio_format, CONFERENCE_FORMAT),
+                out_converter=PcmFrameConverter(CONFERENCE_FORMAT, dialog.send_format.audio_format),
+                client=client,
+            )
+            if self._task is None or self._task.done():
+                self._task = self.hass.async_create_task(self._mix_loop())
+            if was_empty:
+                self._fire("conference_started", call_id, count=1)
+            self._fire("conference_participant_joined", call_id, caller=caller, count=len(self.legs))
+            return True
         except Exception:
             if transport is not None:
                 transport.close()
@@ -193,10 +234,7 @@ class ConferenceRoom:
         leg = self.legs.pop(call_id, None)
         if leg is None:
             return False
-        if leg.transport is not None:
-            leg.transport.close()
-        if leg.local_ports != (0, 0):
-            release_sip_rtp_port_pair(self.hass, leg.local_ports)
+        await self._dispose_leg(leg, reason=reason)
         self._fire("conference_participant_left", call_id, caller=leg.caller, count=len(self.legs), reason=reason)
         if not self.legs:
             await self.close(reason=reason)
@@ -208,15 +246,23 @@ class ConferenceRoom:
         self._closed = True
         for call_id in list(self.legs):
             leg = self.legs.pop(call_id)
-            if leg.transport is not None:
-                leg.transport.close()
-            if leg.local_ports != (0, 0):
-                release_sip_rtp_port_pair(self.hass, leg.local_ports)
+            await self._dispose_leg(leg, reason=reason)
         if self._task is not None and self._task is not asyncio.current_task():
             self._task.cancel()
         self._task = None
         self._set_softphone_idle(reason)
         self._fire("conference_ended", "", count=0, reason=reason)
+
+    async def _dispose_leg(self, leg: _ConferenceLeg, *, reason: str) -> None:
+        if leg.transport is not None:
+            leg.transport.close()
+        if leg.client is not None:
+            with contextlib.suppress(Exception):
+                if getattr(leg.client, "dialog", None) is not None and reason != "remote_hangup":
+                    leg.client.bye_or_cancel()
+                await leg.client.close()
+        if leg.local_ports != (0, 0):
+            release_sip_rtp_port_pair(self.hass, leg.local_ports)
 
     async def _mix_loop(self) -> None:
         next_deadline = time.monotonic()
@@ -302,6 +348,7 @@ class ConferenceRoom:
         if self._task is None or self._task.done():
             self._task = self.hass.async_create_task(self._mix_loop())
         self._fire("conference_participant_joined", call_id, caller="HA", count=len(self.legs))
+        self._ha_softphone_announced = True
         return queue
 
     async def remove_ha_softphone_leg(self) -> None:
@@ -320,6 +367,7 @@ class ConferenceRoom:
             leg.in_fifo.append(frame)
 
     def _set_softphone_ringing(self, invite: SipInvite) -> None:
+        self._ha_softphone_announced = True
         _set_ha_softphone_call_state(
             self.hass,
             CallState.RINGING.value,
@@ -335,6 +383,8 @@ class ConferenceRoom:
         )
 
     def _set_softphone_idle(self, reason: str) -> None:
+        if not self._ha_softphone_announced:
+            return
         _set_ha_softphone_call_state(
             self.hass,
             CallState.IDLE.value,
@@ -370,13 +420,21 @@ class ConferenceManager:
         self.local_ip = local_ip
         self.rooms: dict[str, ConferenceRoom] = {}
 
-    async def join(self, invite: SipInvite, entry: Any) -> SipInviteResult:
+    async def join(self, invite: SipInvite, entry: Any, *, ring_ha: bool = False) -> SipInviteResult:
         room_name = str(getattr(entry, "name", "") or getattr(entry, "id", "") or invite.target)
         room = self.rooms.get(room_name)
         if room is None or room._closed:
             room = ConferenceRoom(self.hass, name=room_name, local_ip=self.local_ip)
             self.rooms[room_name] = room
-        return await room.join(invite)
+        return await room.join(invite, ring_ha=ring_ha)
+
+    async def add_client_leg(self, room_name: str, *, call_id: str, caller: str, client: Any, local_ports: tuple[int, int]) -> bool:
+        room_key = str(room_name or "").strip()
+        room = self.rooms.get(room_key)
+        if room is None or room._closed:
+            room = ConferenceRoom(self.hass, name=room_key, local_ip=self.local_ip)
+            self.rooms[room_key] = room
+        return await room.add_client_leg(call_id=call_id, caller=caller, client=client, local_ports=local_ports)
 
     async def leave_call(self, call_id: str, reason: str = "remote_hangup") -> bool:
         for name, room in list(self.rooms.items()):

@@ -154,7 +154,7 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
             remote_rtp_port=45678,
         )
         entry = types.SimpleNamespace(name="Conference", id="Conference")
-        result = await manager.join(invite, entry)
+        result = await manager.join(invite, entry, ring_ha=True)
         self.assertEqual(result.status, 200)
         self.assertIn("m=audio", result.answer_sdp)
 
@@ -180,6 +180,31 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Conference", manager.rooms)
         pool = hass.data[const.DOMAIN]["sip_rtp_port_pool"]
         self.assertFalse(pool["used"])
+
+    async def test_conference_join_does_not_ring_ha_without_ring_flag(self) -> None:
+        hass = _FakeHass()
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        invite = sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri("sip:Conference@127.0.0.1"),
+            caller_uri=voip_sip.parse_sip_uri("sip:Kitchen@127.0.0.1"),
+            target="Conference",
+            caller="Kitchen",
+            call_id="call-2",
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45679,
+        )
+        entry = types.SimpleNamespace(name="Conference", id="Conference")
+        result = await manager.join(invite, entry)
+        self.assertEqual(result.status, 200)
+        self.assertNotIn("ha_softphone", hass.data[const.DOMAIN])
+        await manager.leave_call("call-2", reason="remote_hangup")
 
 
 if __name__ == "__main__":

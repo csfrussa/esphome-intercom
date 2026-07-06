@@ -19,6 +19,7 @@ class GroupDef:
     name: str
     group_type: str
     members: list[str] = field(default_factory=list)
+    ring_members: list[str] = field(default_factory=list)
     auto: bool = True
 
 
@@ -27,12 +28,25 @@ def _append_member(group: GroupDef, member: str) -> None:
         group.members.append(member)
 
 
+def _append_ring_member(group: GroupDef, member: str) -> None:
+    _append_member(group, member)
+    if member and member not in group.ring_members:
+        group.ring_members.append(member)
+
+
+def _metadata_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _declare(
     groups: dict[str, GroupDef],
     *,
     name: str,
     group_type: str,
     member: str,
+    ring: bool = False,
 ) -> None:
     group_name = (name or "").strip()
     if not group_name or not member:
@@ -44,14 +58,15 @@ def _declare(
             _LOGGER.warning("Group %s declared as both ring and conference; conference wins", group_name)
             existing.group_type = GROUP_TYPE_CONFERENCE
             existing.members.clear()
-            _append_member(existing, member)
+            existing.ring_members.clear()
+            (_append_ring_member if ring else _append_member)(existing, member)
         else:
             _LOGGER.warning("Group %s declared as both conference and ring; ignoring ring declaration", group_name)
         return
     if existing is None:
         existing = GroupDef(name=group_name, group_type=group_type)
         groups[key] = existing
-    _append_member(existing, member)
+    (_append_ring_member if ring else _append_member)(existing, member)
 
 
 def _entry_group(entry: RosterEntry, key: str) -> str:
@@ -69,11 +84,24 @@ def collect_groups(
     groups: dict[str, GroupDef] = {}
     for peer in peers:
         member = str(getattr(peer, "name", "") or "").strip()
-        _declare(groups, name=str(getattr(peer, "conference_group", "") or ""), group_type=GROUP_TYPE_CONFERENCE, member=member)
+        _declare(
+            groups,
+            name=str(getattr(peer, "conference_group", "") or ""),
+            group_type=GROUP_TYPE_CONFERENCE,
+            member=member,
+            ring=bool(getattr(peer, "conference_ring", False)),
+        )
         _declare(groups, name=str(getattr(peer, "ring_group", "") or ""), group_type=GROUP_TYPE_RING, member=member)
     for entry in list(manual_entries) + list(registered_entries):
         member = entry.id or entry.name
-        _declare(groups, name=_entry_group(entry, "conference_group"), group_type=GROUP_TYPE_CONFERENCE, member=member)
+        metadata = entry.metadata or {}
+        _declare(
+            groups,
+            name=_entry_group(entry, "conference_group"),
+            group_type=GROUP_TYPE_CONFERENCE,
+            member=member,
+            ring=_metadata_bool(metadata.get("conference_ring")),
+        )
         _declare(groups, name=_entry_group(entry, "ring_group"), group_type=GROUP_TYPE_RING, member=member)
 
     existing = {normalize_roster_key(entry.id) for entry in existing_entries}

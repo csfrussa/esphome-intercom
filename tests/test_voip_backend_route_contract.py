@@ -74,7 +74,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
         self.assertNotIn("RouteAction.GROUP", routeable)
         self.assertIn("if decision.action is RouteAction.GROUP:", on_invite)
-        self.assertIn("conference_manager(hass, local_ip=local_ip).join", on_invite)
+        self.assertIn("ring_ha = any(_is_ha_target(member) for member in ring_members)", on_invite)
+        self.assertIn("conference_manager(hass, local_ip=local_ip).join(invite, decision.entry, ring_ha=ring_ha)", on_invite)
+        self.assertIn("_ring_conference_members(invite, decision.entry, peers, roster_entries)", on_invite)
         self.assertIn("_run_ring_group_call(invite, decision.entry, peers, roster_entries)", on_invite)
         self.assertIn('return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)', on_invite)
 
@@ -106,9 +108,27 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         services_yaml = SERVICES_YAML.read_text()
 
         self.assertIn('"conference_group"', services)
+        self.assertIn('"conference_ring"', services)
         self.assertIn('"ring_group"', services)
         self.assertIn("conference_group:", services_yaml)
+        self.assertIn("conference_ring:", services_yaml)
         self.assertIn("ring_group:", services_yaml)
+
+    def test_registered_softphone_accounts_accept_group_membership_metadata(self) -> None:
+        services = SERVICES.read_text()
+        account_services = ACCOUNT_SERVICES.read_text()
+        services_yaml = SERVICES_YAML.read_text()
+
+        account_schema = services[services.index("sip_account_create_schema") : services.index("sip_account_name_schema")]
+        self.assertIn('"conference_group"', account_schema)
+        self.assertIn('"conference_ring"', account_schema)
+        self.assertIn('"ring_group"', account_schema)
+        self.assertIn("conference_group=str(call.data.get", account_services)
+        self.assertIn("conference_ring=bool(call.data.get", account_services)
+        self.assertIn("ring_group=str(call.data.get", account_services)
+        self.assertIn("conference_group:", services_yaml[services_yaml.index("create_account:") :])
+        self.assertIn("conference_ring:", services_yaml[services_yaml.index("create_account:") :])
+        self.assertIn("ring_group:", services_yaml[services_yaml.index("create_account:") :])
 
     def test_ring_group_fallback_is_configured_and_uses_ha_softphone(self) -> None:
         config_flow = CONFIG_FLOW.read_text()

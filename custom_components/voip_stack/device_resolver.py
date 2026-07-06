@@ -48,6 +48,10 @@ def _valid_audio_mode(value: str | None) -> str:
     return "full_duplex"
 
 
+def _parse_bool(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _match_name(value: str | None, *candidates: str | None) -> bool:
     wanted = (value or "").strip()
     if not wanted:
@@ -126,6 +130,7 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
         "extension": parts[8] if len(parts) >= 9 else "",
         "conference_group": parts[9] if len(parts) >= 10 else "",
         "ring_group": parts[10] if len(parts) >= 11 else "",
+        "conference_ring": _parse_bool(parts[11]) if len(parts) >= 12 else False,
         "extras": parts[9:] if len(parts) > 9 else [],
     }
 
@@ -249,6 +254,9 @@ class VoipDeviceResolver:
                 "rtp_port": endpoint.get("rtp_port"),
                 "sip_transport": endpoint.get("sip_transport") or "",
                 "extension": endpoint.get("extension") or "",
+                "conference_group": endpoint.get("conference_group") or "",
+                "conference_ring": bool(endpoint.get("conference_ring", False)),
+                "ring_group": endpoint.get("ring_group") or "",
                 "audio_mode": endpoint["audio_mode"],
                 "tx_formats": _format_tokens(endpoint["tx_formats"]),
                 "rx_formats": _format_tokens(endpoint["rx_formats"]),

@@ -102,6 +102,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("rx_formats"): vol.Any(cv.string, [cv.string]),
             vol.Optional("max_payload_bytes"): vol.Coerce(int),
             vol.Optional("conference_group", default=""): cv.string,
+            vol.Optional("conference_ring", default=False): cv.boolean,
             vol.Optional("ring_group", default=""): cv.string,
         },
         extra=vol.PREVENT_EXTRA,
@@ -116,6 +117,9 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("password", default=""): cv.string,
             vol.Optional("enabled", default=True): cv.boolean,
             vol.Optional("replace", default=False): cv.boolean,
+            vol.Optional("conference_group", default=""): cv.string,
+            vol.Optional("conference_ring", default=False): cv.boolean,
+            vol.Optional("ring_group", default=""): cv.string,
         },
         extra=vol.PREVENT_EXTRA,
     )

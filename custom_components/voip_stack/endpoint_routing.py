@@ -167,6 +167,7 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
                     "rtp_port": peer.rtp_port,
                     "audio_mode": peer.audio_mode,
                     "conference_group": peer.conference_group,
+                    "conference_ring": bool(peer.conference_ring),
                     "ring_group": peer.ring_group,
                 },
             )
@@ -185,6 +186,7 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
                 metadata={
                     "group_type": group.group_type,
                     "members": list(group.members),
+                    "ring_members": list(group.ring_members),
                     "auto": bool(group.auto),
                 },
             )

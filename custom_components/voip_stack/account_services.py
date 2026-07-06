@@ -37,6 +37,9 @@ def build_account_service_handlers(
             display_name=display_name,
             password=password,
             enabled=bool(call.data.get("enabled", True)),
+            conference_group=str(call.data.get("conference_group") or "").strip(),
+            conference_ring=bool(call.data.get("conference_ring", False)),
+            ring_group=str(call.data.get("ring_group") or "").strip(),
         )
         accounts = [item for item in accounts if str(item.get("username") or "").lower() != username.lower()]
         accounts.append(dump_account(account))
@@ -122,6 +125,9 @@ def build_account_service_handlers(
                 "username": item.get("username", ""),
                 "display_name": item.get("display_name", ""),
                 "enabled": bool(item.get("enabled", True)),
+                "conference_group": str(item.get("conference_group") or ""),
+                "conference_ring": bool(item.get("conference_ring", False)),
+                "ring_group": str(item.get("ring_group") or ""),
             }
             for item in sip_account_dicts(call.hass)
         ]

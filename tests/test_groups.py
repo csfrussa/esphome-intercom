@@ -45,33 +45,35 @@ router = _load_module("router")
 class GroupAggregationTest(unittest.TestCase):
     def test_collects_groups_from_peers_and_manual_entries(self) -> None:
         peers = [
-            SimpleNamespace(name="Kitchen", conference_group="Conference", ring_group="Casa"),
-            SimpleNamespace(name="Bedroom", conference_group="", ring_group="Casa"),
+            SimpleNamespace(name="Kitchen", conference_group="Conference", conference_ring=True, ring_group="Casa"),
+            SimpleNamespace(name="Bedroom", conference_group="", conference_ring=False, ring_group="Casa"),
         ]
         manual = [
             roster.RosterEntry(
                 id="Zoiper",
                 name="Zoiper",
-                metadata={"conference_group": "Conference"},
+                metadata={"conference_group": "Conference", "conference_ring": False},
             )
         ]
         collected = groups.collect_groups(peers, manual, [])
         self.assertEqual(collected["Conference"].group_type, groups.GROUP_TYPE_CONFERENCE)
         self.assertEqual(collected["Conference"].members, ["Kitchen", "Zoiper"])
+        self.assertEqual(collected["Conference"].ring_members, ["Kitchen"])
         self.assertEqual(collected["Casa"].group_type, groups.GROUP_TYPE_RING)
         self.assertEqual(collected["Casa"].members, ["Kitchen", "Bedroom"])
 
     def test_conference_wins_type_conflict(self) -> None:
         peers = [
-            SimpleNamespace(name="Kitchen", conference_group="Casa", ring_group=""),
-            SimpleNamespace(name="Bedroom", conference_group="", ring_group="Casa"),
+            SimpleNamespace(name="Kitchen", conference_group="Casa", conference_ring=True, ring_group=""),
+            SimpleNamespace(name="Bedroom", conference_group="", conference_ring=False, ring_group="Casa"),
         ]
         collected = groups.collect_groups(peers, [], [])
         self.assertEqual(collected["Casa"].group_type, groups.GROUP_TYPE_CONFERENCE)
         self.assertEqual(collected["Casa"].members, ["Kitchen"])
+        self.assertEqual(collected["Casa"].ring_members, ["Kitchen"])
 
     def test_skips_group_name_colliding_with_existing_contact(self) -> None:
-        peers = [SimpleNamespace(name="Kitchen", conference_group="", ring_group="Casa")]
+        peers = [SimpleNamespace(name="Kitchen", conference_group="", conference_ring=False, ring_group="Casa")]
         existing = [roster.RosterEntry(id="Casa", name="Casa")]
         collected = groups.collect_groups(peers, [], [], existing_entries=existing)
         self.assertNotIn("Casa", collected)
@@ -92,7 +94,12 @@ class GroupAggregationTest(unittest.TestCase):
             id="Conference",
             name="Conference",
             ha_bridge=True,
-            metadata={"group_type": groups.GROUP_TYPE_CONFERENCE, "members": ["Kitchen"], "auto": True},
+            metadata={
+                "group_type": groups.GROUP_TYPE_CONFERENCE,
+                "members": ["Kitchen", "Bedroom"],
+                "ring_members": ["Kitchen"],
+                "auto": True,
+            },
         )
         parsed = roster.parse_roster_json(roster.dump_roster_json([entry]))
         self.assertEqual(len(parsed), 1)
@@ -101,6 +108,7 @@ class GroupAggregationTest(unittest.TestCase):
         self.assertEqual(parsed[0].sip_uri, "")
         self.assertTrue(parsed[0].ha_bridge)
         self.assertEqual(parsed[0].metadata["group_type"], groups.GROUP_TYPE_CONFERENCE)
+        self.assertEqual(parsed[0].metadata["ring_members"], ["Kitchen"])
 
 
 if __name__ == "__main__":

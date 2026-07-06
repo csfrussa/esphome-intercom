@@ -1626,6 +1626,38 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].sip_uri, "sip:Zoiper@192.168.1.50:5062;transport=tcp")
 
+    async def test_registered_softphone_roster_entry_carries_group_membership(self) -> None:
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[
+                sip_registrar.SipAccount(
+                    "Zoiper",
+                    "Zoiper",
+                    "secret",
+                    conference_group="CG Casa",
+                    conference_ring=True,
+                    ring_group="RG Casa",
+                )
+            ],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+        )
+        registrar.registrations["Zoiper"] = sip_registrar.SipRegistration(
+            username="Zoiper",
+            contact_uri="sip:Zoiper@192.168.1.50:5062;transport=udp",
+            source_host="192.168.1.50",
+            source_port=5062,
+            transport="UDP",
+            expires_at=9999999999,
+        )
+
+        entries = registrar.registered_roster_entries()
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].metadata["conference_group"], "CG Casa")
+        self.assertTrue(entries[0].metadata["conference_ring"])
+        self.assertEqual(entries[0].metadata["ring_group"], "RG Casa")
+
     async def test_register_with_active_and_expired_contacts_keeps_active_binding(self) -> None:
         registrar = sip_registrar.SipRegistrar(
             enabled=True,

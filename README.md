@@ -787,21 +787,25 @@ ESP devices can declare membership in their `voip_stack` component:
 voip_stack:
   id: phone
   conference_group: Conference
+  conference_ring: true
   ring_group: Casa
 ```
 
 Manual contacts and registered SIP softphones can join the same groups through
 the `voip_stack.add_contact` service fields `conference_group` and
-`ring_group`. HA aggregates every declaration into one phonebook entry per
-group. Group names must not collide with existing device/contact names; if the
-same name is declared as both a conference and a ring group, conference wins.
+`conference_ring`, and `ring_group`. HA aggregates every declaration into one
+phonebook entry per group. Group names must not collide with existing
+device/contact names; if the same name is declared as both a conference and a
+ring group, conference wins.
 
 Conference groups behave like a SIP conference focus: calling `Conference`
-joins the caller immediately, HA mixes the audio, and the HA softphone rings.
-The Lovelace card remains only the softphone UI and audio surface: it mirrors
-the normal `ringing` / `in_call` state and uses the same bidirectional audio
-WebSocket as every other HA softphone call. ESP firmware does not need a
-special conference mode.
+joins the caller immediately and HA mixes the audio. Members with
+`conference_ring: true` ring so they can answer into the conference; members
+without it can still call the conference contact manually. The Lovelace card
+remains only the softphone UI and audio surface: it mirrors the normal
+`ringing` / `in_call` state and uses the same bidirectional audio WebSocket as
+every other HA softphone call. ESP firmware does not need a special conference
+mode.
 
 Ring groups behave like SIP forking: calling `Casa` rings all members in
 parallel, excluding the caller when it is also a member. The first member to

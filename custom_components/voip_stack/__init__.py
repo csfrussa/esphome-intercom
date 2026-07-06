@@ -498,6 +498,7 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             rtp_port=int(d.get("rtp_port") or cfg["rtp_port"]),
             extension=str(d.get("extension") or ""),
             conference_group=str(d.get("conference_group") or ""),
+            conference_ring=bool(d.get("conference_ring", False)),
             ring_group=str(d.get("ring_group") or ""),
             audio_mode=d.get("audio_mode", "full_duplex"),
             tx_formats=list(d.get("tx_formats") or []),

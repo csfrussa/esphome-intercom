@@ -108,6 +108,27 @@ class SipEndpointParseTest(unittest.TestCase):
             self.assertEqual(parsed["extras"], extras)
             self.assertEqual(parsed["conference_group"], extras[0] if len(extras) >= 1 else "")
             self.assertEqual(parsed["ring_group"], extras[1] if len(extras) >= 2 else "")
+            self.assertFalse(parsed["conference_ring"])
+
+    def test_parses_conference_ring_from_forward_compatible_endpoint(self) -> None:
+        endpoint = (
+            "Spotpear | 192.168.1.31 | 5060 | 40000 | "
+            "full_duplex | 16000:s16le:1:10 | 48000:s16le:1:10 | sip_udp | 101 | CG Casa | RG Casa | 1"
+        )
+        parsed = device_resolver.parse_voip_endpoint(endpoint)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed["conference_group"], "CG Casa")
+        self.assertEqual(parsed["ring_group"], "RG Casa")
+        self.assertTrue(parsed["conference_ring"])
+        self.assertEqual(parsed["extras"], ["CG Casa", "RG Casa", "1"])
+
+    def test_list_devices_preserves_group_membership_fields(self) -> None:
+        source = (PKG_DIR / "device_resolver.py").read_text(encoding="utf-8")
+        list_devices = source[source.index("async def list_devices") : source.index("async def resolve_target")]
+        self.assertIn('"conference_group": endpoint.get("conference_group") or ""', list_devices)
+        self.assertIn('"conference_ring": bool(endpoint.get("conference_ring", False))', list_devices)
+        self.assertIn('"ring_group": endpoint.get("ring_group") or ""', list_devices)
 
     def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
         parsed = device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")

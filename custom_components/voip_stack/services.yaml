@@ -332,6 +332,13 @@ add_contact:
       required: false
       selector:
         text:
+    conference_ring:
+      name: Ring On Conference Start
+      description: Rings this contact when another participant starts its conference group. The contact can still join manually when this is off.
+      required: false
+      default: false
+      selector:
+        boolean:
     ring_group:
       name: Optional Ring Group
       description: Adds this contact as a member of the named VoIP ring group.
@@ -416,6 +423,25 @@ create_account:
       default: false
       selector:
         boolean:
+    conference_group:
+      name: Optional Conference Group
+      description: Adds this registered softphone account to the named conference group, for example CG Casa.
+      required: false
+      selector:
+        text:
+    conference_ring:
+      name: Ring On Conference Start
+      description: Rings this registered softphone when another participant starts its conference group. The account can still join manually when this is off.
+      required: false
+      default: false
+      selector:
+        boolean:
+    ring_group:
+      name: Optional Ring Group
+      description: Adds this registered softphone account to the named ring group, for example RG Casa.
+      required: false
+      selector:
+        text:
 
 remove_account:
   name: Remove SIP Softphone Account
