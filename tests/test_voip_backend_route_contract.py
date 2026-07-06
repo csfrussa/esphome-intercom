@@ -121,6 +121,23 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", websocket)
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", sensor)
 
+    def test_config_flow_preserves_new_ha_group_options_when_trunk_is_disabled(self) -> None:
+        config_flow = CONFIG_FLOW.read_text()
+        disabled_trunk = config_flow[
+            config_flow.index("def _disabled_trunk_data")
+            : config_flow.index("class VoipStackConfigFlow")
+        ]
+        for token in ("CONF_RING_GROUP_FALLBACK", "CONF_HA_RING_GROUP", "CONF_HA_CONFERENCE_GROUP", "CONF_HA_CONFERENCE_RING"):
+            self.assertIn(f"{token}: data.get({token}, existing.get", disabled_trunk)
+
+        trunk_submit = config_flow[
+            config_flow.index("async def async_step_trunk")
+            : config_flow.index("return self.async_show_form(step_id=\"trunk\"")
+        ]
+        self.assertIn("CONF_HA_RING_GROUP: existing.get(CONF_HA_RING_GROUP", trunk_submit)
+        self.assertIn("CONF_HA_CONFERENCE_GROUP: existing.get(CONF_HA_CONFERENCE_GROUP", trunk_submit)
+        self.assertIn("CONF_HA_CONFERENCE_RING: bool(existing.get(CONF_HA_CONFERENCE_RING", trunk_submit)
+
     def test_ha_softphone_can_join_conference_group_without_sip_self_invite(self) -> None:
         init_py = INIT.read_text()
         call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
