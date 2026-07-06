@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from array import array
 import importlib.util
+import socket
 import sys
 import types
 import unittest
@@ -70,6 +72,41 @@ def _load_module(name: str):
 
 
 conference = _load_module("conference")
+sip_listener = _load_module("sip_listener")
+sip_client = _load_module("sip_client")
+sdp = _load_module("sdp")
+rtp = _load_module("rtp")
+voip_sip = _load_module("sip")
+const = _load_module("const")
+
+
+class _FakeBus:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type: str, event: dict) -> None:
+        self.events.append((event_type, dict(event)))
+
+
+class _FakeHass:
+    def __init__(self) -> None:
+        self.data: dict = {const.DOMAIN: {"transport_config": {"sip_port": 5060, "rtp_port": _free_rtp_base()}}}
+        self.config = types.SimpleNamespace(location_name="HA")
+        self.bus = _FakeBus()
+
+    def async_create_task(self, coro):
+        return asyncio.create_task(coro)
+
+
+def _free_rtp_base() -> int:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    finally:
+        sock.close()
+    base = max(10000, port - 2)
+    return base if base % 2 == 0 else base - 1
 
 
 def _frame(value: int) -> bytes:
@@ -94,6 +131,55 @@ class ConferenceMixerTest(unittest.TestCase):
     def test_bad_length_is_silence(self) -> None:
         out = conference.mix_frames([_frame(1000), b""])
         self.assertEqual([_first_sample(frame) for frame in out], [0, 1000])
+
+
+class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_rtp_reaches_ha_softphone_participant(self) -> None:
+        hass = _FakeHass()
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        invite = sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri("sip:Conference@127.0.0.1"),
+            caller_uri=voip_sip.parse_sip_uri("sip:Kitchen@127.0.0.1"),
+            target="Conference",
+            caller="Kitchen",
+            call_id="call-1",
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45678,
+        )
+        entry = types.SimpleNamespace(name="Conference", id="Conference")
+        result = await manager.join(invite, entry)
+        self.assertEqual(result.status, 200)
+        self.assertIn("m=audio", result.answer_sdp)
+
+        queue = manager.join_ha_softphone("Conference")
+        self.assertIsNotNone(queue)
+        assert queue is not None
+        room = manager.rooms["Conference"]
+        payload = _frame(1200)
+        encoded = sip_client.RtpPayloadEncoder(fmt).encode(payload)
+        room.handle_rtp(
+            "call-1",
+            rtp.build_packet(rtp.RtpPacket(payload_type=96, sequence=1, timestamp=0, ssrc=1, payload=encoded)),
+            ("127.0.0.1", 45678),
+        )
+        heard = await asyncio.wait_for(queue.get(), timeout=1.0)
+        self.assertEqual(_first_sample(heard), 1200)
+        store = hass.data[const.DOMAIN]["ha_softphone"]
+        self.assertEqual(store["state"], "ringing")
+        self.assertEqual(store["call_id"], "conference:Conference")
+
+        await manager.leave_ha_softphone("Conference")
+        await manager.leave_call("call-1", reason="remote_hangup")
+        self.assertNotIn("Conference", manager.rooms)
+        pool = hass.data[const.DOMAIN]["sip_rtp_port_pool"]
+        self.assertFalse(pool["used"])
 
 
 if __name__ == "__main__":

@@ -1503,6 +1503,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
             return
         if relay is not None or client is not None:
+            if watcher is not None:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
+            if client is not None:
+                await client.terminate()
+                await client.close()
+            if relay is not None:
+                await relay.stop()
             _set_sip_bridge_call_state(
                 hass,
                 terminal_state,

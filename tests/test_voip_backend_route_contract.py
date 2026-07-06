@@ -120,6 +120,15 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("CONF_RING_GROUP_FALLBACK", self.source)
         self.assertIn("_defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING", self.source)
 
+    def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
+        terminated = self.source[self.source.index("async def _on_terminated("):]
+        bridge_branch = terminated[terminated.index("if relay is not None or client is not None:"):]
+        bridge_branch = bridge_branch[: bridge_branch.index("if (")]
+        self.assertIn("watcher.cancel()", bridge_branch)
+        self.assertIn("await client.terminate()", bridge_branch)
+        self.assertIn("await client.close()", bridge_branch)
+        self.assertIn("await relay.stop()", bridge_branch)
+
 
 if __name__ == "__main__":
     unittest.main()
