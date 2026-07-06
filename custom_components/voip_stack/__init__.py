@@ -33,9 +33,6 @@ from .config import (
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
-    CONF_HA_CONFERENCE_GROUP,
-    CONF_HA_CONFERENCE_RING,
-    CONF_HA_RING_GROUP,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -55,11 +52,12 @@ from .const import (
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
+    HA_SOFTPHONE_ENDPOINT_ENTITY_ID,
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
 from .dtmf import parse_dtmf_route_map
-from .device_resolver import get_resolver
+from .device_resolver import get_resolver, parse_voip_endpoint
 from .endpoint_lifecycle import call_registry as _call_registry
 from .endpoint_routing import (
     device_formats as _device_formats,
@@ -113,6 +111,7 @@ from .websocket_api import (
     _get_voip_devices,
     _fire_call_event,
     _async_save_ha_softphone_store,
+    async_set_ha_softphone_groups,
     _ha_softphone_dnd,
     _ha_softphone_state,
     _ha_softphone_store,
@@ -477,7 +476,7 @@ def _device_transport(hass: HomeAssistant, d: dict, udp_manager=None) -> str:
 
 
 async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
-    """Snapshot of every online peer (ESPs + HA itself)."""
+    """Snapshot of every online peer published through endpoint sensors."""
     devices = await _get_voip_devices(hass)
     cfg = _get_transport_config(hass)
     out: list[Peer] = []
@@ -508,24 +507,28 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             rx_formats=list(d.get("rx_formats") or []),
         ))
         d["sip_transport"] = sip_transport
-    ha_host = await _ha_advertise_host(hass)
-    if ha_host:
+
+    ha_endpoint_state = hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)
+    ha_endpoint = parse_voip_endpoint(ha_endpoint_state.state if ha_endpoint_state else None)
+    if ha_endpoint is not None:
         out.append(Peer(
             device=None,
-            name=_ha_peer_name(hass),
-            host=ha_host,
+            name=ha_endpoint["name"],
+            host=ha_endpoint["host"],
             local_ha=True,
-            sip_port=cfg["sip_port"],
-            rtp_port=cfg["rtp_port"],
-            conference_group=str(cfg.get(CONF_HA_CONFERENCE_GROUP) or ""),
-            conference_ring=bool(cfg.get(CONF_HA_CONFERENCE_RING, False)),
-            ring_group=str(cfg.get(CONF_HA_RING_GROUP) or ""),
-            audio_mode="full_duplex",
+            sip_port=int(ha_endpoint.get("sip_port") or cfg["sip_port"]),
+            rtp_port=int(ha_endpoint.get("rtp_port") or cfg["rtp_port"]),
+            extension=str(ha_endpoint.get("extension") or ""),
+            conference_group=str(ha_endpoint.get("conference_group") or ""),
+            conference_ring=bool(ha_endpoint.get("conference_ring", False)),
+            ring_group=str(ha_endpoint.get("ring_group") or ""),
+            audio_mode=ha_endpoint.get("audio_mode", "full_duplex"),
+            tx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("tx_formats") or []],
+            rx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("rx_formats") or []],
         ))
     else:
         _LOGGER.warning(
-            "Cannot determine HA announce IP (network.async_get_announce_addresses "
-            "returned empty); HA will not appear in the SIP phonebook until this is fixed."
+            "HA softphone endpoint sensor is unavailable; HA will not appear in the SIP phonebook"
         )
     return out
 
@@ -1233,6 +1236,16 @@ async def _handle_set_dnd_service(call: ServiceCall) -> None:
     _LOGGER.info("HA softphone DND set to %s via service", enabled)
 
 
+async def _handle_set_ha_softphone_groups_service(call: ServiceCall) -> None:
+    hass = call.hass
+    await async_set_ha_softphone_groups(
+        hass,
+        ring_group=call.data.get("ring_group"),
+        conference_group=call.data.get("conference_group"),
+        conference_ring=call.data.get("conference_ring"),
+    )
+
+
 async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge: bool = False) -> None:
     """Originate a standards SIP call from HA to a roster target or URI-shaped target."""
     from homeassistant.exceptions import ServiceValidationError
@@ -1504,6 +1517,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "hangup": _handle_sip_hangup_service,
             **phonebook_handlers,
             "set_dnd": _handle_set_dnd_service,
+            "set_ha_softphone_groups": _handle_set_ha_softphone_groups_service,
             "call": _handle_sip_call_target_service,
             "forward": _handle_sip_forward_service,
             "route": _handle_sip_route_service,

@@ -86,19 +86,39 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         config_flow = CONFIG_FLOW.read_text()
         strings = STRINGS_JSON.read_text()
         init_py = INIT.read_text()
+        websocket = (ROOT / "custom_components" / "voip_stack" / "websocket_api.py").read_text()
+        sensor = SENSOR.read_text()
+        const = (ROOT / "custom_components" / "voip_stack" / "const.py").read_text()
 
         for token in ("CONF_HA_RING_GROUP", "CONF_HA_CONFERENCE_GROUP", "CONF_HA_CONFERENCE_RING"):
             self.assertIn(token, config_flow)
-            self.assertIn(token, init_py)
+            self.assertIn(token, websocket)
+            self.assertNotIn(token, init_py)
         self.assertIn('"ha_ring_group"', strings)
         self.assertIn('"ha_conference_group"', strings)
         self.assertIn('"ha_conference_ring"', strings)
+        self.assertIn("WS_TYPE_SET_HA_SOFTPHONE_GROUPS", websocket)
+        self.assertIn("HA_SOFTPHONE_ENDPOINT_ENTITY_ID", const)
+        self.assertIn("class HaSoftphoneEndpointSensor", sensor)
+        self.assertIn("HA_ENDPOINT_FORMATS", sensor)
+        self.assertIn('"48000:s16le:1:10"', sensor)
+        self.assertNotIn("HA_SIP_PCM_TX_FORMATS", sensor)
+        self.assertNotIn("HA_SIP_PCM_RX_FORMATS", sensor)
+        self.assertIn("new_set.add(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)", sensor)
+        self.assertIn('hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)', init_py)
+        self.assertIn("parse_voip_endpoint", init_py)
+        self.assertIn("async_prune_ha_softphone_groups", sensor)
+        self.assertIn("local_ha_seen = False", websocket)
+        self.assertIn("if not local_ha_seen:", websocket)
+        self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", websocket)
+        self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", sensor)
 
-    def test_ha_softphone_can_originate_to_group_via_backend_self_invite(self) -> None:
+    def test_ha_softphone_can_join_conference_group_without_sip_self_invite(self) -> None:
         init_py = INIT.read_text()
         call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
         self.assertIn("if route.action is RouteAction.GROUP:", call_service)
-        self.assertIn("route_uri = ha_uri_for(route.target or target, contacts)", call_service)
+        self.assertIn("manager.start_ha_softphone(room_name)", call_service)
+        self.assertIn('last_sip_event="LOCAL_CONFERENCE_JOIN"', call_service)
         self.assertIn("RouteAction.GROUP", call_service[call_service.index("if not use_trunk and"):])
 
     def test_ha_direct_esp_calls_prefer_roster_audio_profile_over_device_registry(self) -> None:
@@ -141,7 +161,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_run_conference_audio_session", audio_ws)
         self.assertIn("manager.push_ha_audio(session.conference_room, pcm)", audio_ws)
         self.assertIn("await manager.leave_ha_softphone(conference_room)", init_py)
-        self.assertNotIn("conference", CARD_JS.read_text().lower())
+        card = CARD_JS.read_text()
+        self.assertNotIn("conference_manager", card)
+        self.assertNotIn("_ringConference", card)
+        self.assertNotIn("_run_conference_audio_session", card)
 
     def test_conference_tracks_leg_roles_and_owner_cleanup(self) -> None:
         conference = (ROOT / "custom_components" / "voip_stack" / "conference.py").read_text()

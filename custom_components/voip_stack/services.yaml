@@ -389,6 +389,33 @@ set_dnd:
       selector:
         boolean:
 
+set_ha_softphone_groups:
+  name: Set HA Softphone Groups
+  description: >-
+    Set the Home Assistant softphone ring group, conference group and
+    ring-on-conference behavior. Group names are matched against the central
+    VoIP phonebook and stale selections are cleared automatically when a group
+    no longer exists.
+  fields:
+    ring_group:
+      name: Ring Group
+      description: Optional PBX-style ring group membership for the Home Assistant softphone.
+      required: false
+      selector:
+        text:
+    conference_group:
+      name: Conference Group
+      description: Optional conference room membership for the Home Assistant softphone.
+      required: false
+      selector:
+        text:
+    conference_ring:
+      name: Ring On Conference
+      description: Ring the Home Assistant softphone when another participant starts or joins the selected conference group.
+      required: false
+      selector:
+        boolean:
+
 create_account:
   name: Create SIP Softphone Account
   description: Create or replace a local SIP account for a standard softphone registering to Home Assistant.

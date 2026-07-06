@@ -82,8 +82,12 @@ def collect_groups(
 ) -> dict[str, GroupDef]:
     """Collect auto group definitions from ESP peers and roster metadata."""
     groups: dict[str, GroupDef] = {}
+    ha_peers = []
     for peer in peers:
         member = str(getattr(peer, "name", "") or "").strip()
+        if bool(getattr(peer, "is_ha", False)):
+            ha_peers.append(peer)
+            continue
         _declare(
             groups,
             name=str(getattr(peer, "conference_group", "") or ""),
@@ -103,6 +107,21 @@ def collect_groups(
             ring=_metadata_bool(metadata.get("conference_ring")),
         )
         _declare(groups, name=_entry_group(entry, "ring_group"), group_type=GROUP_TYPE_RING, member=member)
+
+    for peer in ha_peers:
+        member = str(getattr(peer, "name", "") or "").strip()
+        conference_name = str(getattr(peer, "conference_group", "") or "")
+        if normalize_roster_key(conference_name) in groups:
+            _declare(
+                groups,
+                name=conference_name,
+                group_type=GROUP_TYPE_CONFERENCE,
+                member=member,
+                ring=bool(getattr(peer, "conference_ring", False)),
+            )
+        ring_name = str(getattr(peer, "ring_group", "") or "")
+        if normalize_roster_key(ring_name) in groups:
+            _declare(groups, name=ring_name, group_type=GROUP_TYPE_RING, member=member)
 
     existing = {normalize_roster_key(entry.id) for entry in existing_entries}
     existing |= {normalize_roster_key(entry.name) for entry in existing_entries}

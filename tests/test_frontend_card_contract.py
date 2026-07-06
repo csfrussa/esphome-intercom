@@ -89,6 +89,16 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("entry.address || entry.sip_uri", self.source)
         self.assertNotIn("_isCallableRosterEntry", self.source)
 
+    def test_ha_softphone_group_controls_are_dynamic_backend_state(self) -> None:
+        load = _method_body(self.source, "_loadSharedRoster")
+        groups = _method_body(self.source, "_availableSoftphoneGroups")
+        setter = _method_body(self.source, "async _setHaSoftphoneGroup")
+        self.assertIn("roster_json", load)
+        self.assertIn("metadata?.group_type", groups)
+        self.assertIn('"voip_stack/set_ha_softphone_groups"', setter)
+        self.assertNotIn("conference_manager", self.source)
+        self.assertNotIn("_ringConference", self.source)
+
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")
         ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]

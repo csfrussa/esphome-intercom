@@ -11,7 +11,15 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .call_registry import CallRegistry
-from .const import CONF_DEBUG_MODE, DOMAIN, HA_PEER_FALLBACK_NAME, HA_SOFTPHONE_DEVICE_ID
+from .const import (
+    CONF_DEBUG_MODE,
+    CONF_HA_CONFERENCE_GROUP,
+    CONF_HA_CONFERENCE_RING,
+    CONF_HA_RING_GROUP,
+    DOMAIN,
+    HA_PEER_FALLBACK_NAME,
+    HA_SOFTPHONE_DEVICE_ID,
+)
 from .fsm import CallState, TerminalReason, sip_phone_state, sip_public_state as _sip_public_state
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,7 +37,13 @@ WS_TYPE_RESOLVE_DEVICE = f"{DOMAIN}/resolve_device"
 WS_TYPE_HA_SOFTPHONE_START = f"{DOMAIN}/ha_softphone_start"
 WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
 WS_TYPE_SET_HA_SOFTPHONE_DND = f"{DOMAIN}/set_ha_softphone_dnd"
+WS_TYPE_SET_HA_SOFTPHONE_GROUPS = f"{DOMAIN}/set_ha_softphone_groups"
 WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
+
+
+def _clean_group_name(value: object) -> str:
+    return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
     return (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
@@ -145,6 +159,78 @@ def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone", {"dnd": False})
 
 
+def _ha_softphone_groups(hass: HomeAssistant) -> dict[str, Any]:
+    store = _ha_softphone_store(hass)
+    groups = store.setdefault("groups", {})
+    return {
+        "ring_group": _clean_group_name(groups.get("ring_group")),
+        "conference_group": _clean_group_name(groups.get("conference_group")),
+        "conference_ring": bool(groups.get("conference_ring", False)),
+    }
+
+
+async def async_set_ha_softphone_groups(
+    hass: HomeAssistant,
+    *,
+    ring_group: object = None,
+    conference_group: object = None,
+    conference_ring: object = None,
+) -> dict[str, Any]:
+    groups = _ha_softphone_groups(hass)
+    if ring_group is not None:
+        groups["ring_group"] = _clean_group_name(ring_group)
+    if conference_group is not None:
+        groups["conference_group"] = _clean_group_name(conference_group)
+    if conference_ring is not None:
+        groups["conference_ring"] = bool(conference_ring)
+    _ha_softphone_store(hass)["groups"] = groups
+    await _async_save_ha_softphone_store(hass)
+    endpoint_sensor = hass.data.get(DOMAIN, {}).get("ha_softphone_endpoint_sensor")
+    if endpoint_sensor is not None:
+        await endpoint_sensor.async_update()
+    state = _ha_softphone_state(hass)
+    _fire_call_event(hass, state, "session")
+    return state
+
+
+async def async_prune_ha_softphone_groups(hass: HomeAssistant, roster_entries) -> bool:
+    available_ring = set()
+    available_conference = set()
+    local_ha_seen = False
+    for entry in roster_entries:
+        metadata = getattr(entry, "metadata", {}) or {}
+        if metadata.get("local_ha"):
+            local_ha_seen = True
+        group_type = str(metadata.get("group_type") or "")
+        name = _clean_group_name(getattr(entry, "name", "") or getattr(entry, "id", ""))
+        if not name:
+            continue
+        if group_type == "ring":
+            available_ring.add(name)
+        elif group_type == "conference":
+            available_conference.add(name)
+
+    if not local_ha_seen:
+        return False
+
+    groups = _ha_softphone_groups(hass)
+    changed = False
+    if groups["ring_group"] and groups["ring_group"] not in available_ring:
+        groups["ring_group"] = ""
+        changed = True
+    if groups["conference_group"] and groups["conference_group"] not in available_conference:
+        groups["conference_group"] = ""
+        groups["conference_ring"] = False
+        changed = True
+    if changed:
+        _ha_softphone_store(hass)["groups"] = groups
+        await _async_save_ha_softphone_store(hass)
+        endpoint_sensor = hass.data.get(DOMAIN, {}).get("ha_softphone_endpoint_sensor")
+        if endpoint_sensor is not None:
+            await endpoint_sensor.async_update()
+    return changed
+
+
 def _sip_bridge_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("sip_bridge_state", {})
 
@@ -193,13 +279,30 @@ async def _async_load_ha_softphone_store(hass: HomeAssistant) -> None:
     runtime = _ha_softphone_store(hass)
     runtime["storage"] = store
     runtime["dnd"] = bool(data.get("dnd", runtime.get("dnd", False)))
+    stored_groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
+    if not stored_groups:
+        entries = hass.config_entries.async_entries(DOMAIN)
+        entry_data = dict(entries[0].data) if entries else {}
+        stored_groups = {
+            "ring_group": entry_data.get(CONF_HA_RING_GROUP, ""),
+            "conference_group": entry_data.get(CONF_HA_CONFERENCE_GROUP, ""),
+            "conference_ring": bool(entry_data.get(CONF_HA_CONFERENCE_RING, False)),
+        }
+    runtime["groups"] = {
+        "ring_group": _clean_group_name(stored_groups.get("ring_group")),
+        "conference_group": _clean_group_name(stored_groups.get("conference_group")),
+        "conference_ring": bool(stored_groups.get("conference_ring", False)),
+    }
 
 
 async def _async_save_ha_softphone_store(hass: HomeAssistant) -> None:
     runtime = _ha_softphone_store(hass)
     store = runtime.get("storage")
     if store is not None:
-        await store.async_save({"dnd": bool(runtime.get("dnd", False))})
+        await store.async_save({
+            "dnd": bool(runtime.get("dnd", False)),
+            "groups": _ha_softphone_groups(hass),
+        })
 
 
 def _ha_softphone_dnd(hass: HomeAssistant) -> bool:
@@ -368,6 +471,7 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "device_id": HA_SOFTPHONE_DEVICE_ID,
         "session_device_id": store.get("session_device_id", ""),
         "dnd": _ha_softphone_dnd(hass),
+        "groups": _ha_softphone_groups(hass),
         "busy": bool(store.get("session_device_id") and active_softphone),
         "state": store.get("state", CallState.IDLE.value),
         "sip_state": store.get("sip_state", store.get("state", CallState.IDLE.value)),
@@ -597,6 +701,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_ha_softphone_start)
     websocket_api.async_register_command(hass, websocket_ha_softphone_state)
     websocket_api.async_register_command(hass, websocket_set_ha_softphone_dnd)
+    websocket_api.async_register_command(hass, websocket_set_ha_softphone_groups)
     websocket_api.async_register_command(hass, websocket_list_devices)
     websocket_api.async_register_command(hass, websocket_resolve_device)
 
@@ -669,6 +774,29 @@ async def websocket_set_ha_softphone_dnd(
     await _async_save_ha_softphone_store(hass)
     state = _ha_softphone_state(hass)
     _fire_call_event(hass, state, "session")
+    connection.send_result(msg["id"], state)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_HA_SOFTPHONE_GROUPS,
+        vol.Optional("ring_group"): str,
+        vol.Optional("conference_group"): str,
+        vol.Optional("conference_ring"): bool,
+    }
+)
+@websocket_api.async_response
+async def websocket_set_ha_softphone_groups(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: Dict[str, Any],
+) -> None:
+    state = await async_set_ha_softphone_groups(
+        hass,
+        ring_group=msg.get("ring_group"),
+        conference_group=msg.get("conference_group"),
+        conference_ring=msg.get("conference_ring"),
+    )
     connection.send_result(msg["id"], state)
 
 

@@ -19,12 +19,17 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN
+from .const import DOMAIN, HA_SOFTPHONE_ENDPOINT_ENTITY_ID
 
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 UNAVAILABLE_STATES = {"", "unknown", "unavailable"}
+HA_ENDPOINT_FORMATS = (
+    "48000:s16le:1:10",
+    "16000:s16le:1:16",
+    "16000:s16le:1:10",
+)
 
 
 def _state_is_available(state) -> bool:
@@ -36,10 +41,61 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    ha_endpoint_sensor = HaSoftphoneEndpointSensor(hass)
     unified_sensor = VoipPhonebookSensor(hass)
-    async_add_entities([unified_sensor], True)
+    async_add_entities([ha_endpoint_sensor, unified_sensor], True)
     bucket = hass.data.setdefault(DOMAIN, {})
+    bucket["ha_softphone_endpoint_sensor"] = ha_endpoint_sensor
     bucket["phonebook_sensor"] = unified_sensor
+
+
+class HaSoftphoneEndpointSensor(SensorEntity):
+    """Local HA softphone endpoint, published in the same shape as ESP endpoints."""
+
+    _attr_has_entity_name = False
+    _attr_should_poll = False
+    _attr_icon = "mdi:phone-voip"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+        self._attr_unique_id = "voip_stack_ha_softphone_voip_endpoint"
+        self._attr_name = "VoIP Stack HA Softphone Endpoint"
+        self.entity_id = HA_SOFTPHONE_ENDPOINT_ENTITY_ID
+        self._attr_native_value = "unknown"
+        self._attr_extra_state_attributes = {"local_ha": True}
+
+    async def async_update(self) -> None:
+        from . import _get_transport_config, _ha_advertise_host
+        from .websocket_api import _ha_peer_name, _ha_softphone_groups
+
+        host = await _ha_advertise_host(self.hass)
+        if not host:
+            self._attr_native_value = "unavailable"
+            self._attr_extra_state_attributes = {"local_ha": True, "available": False}
+            if self.hass and self.entity_id:
+                self.async_write_ha_state()
+            return
+
+        cfg = _get_transport_config(self.hass)
+        groups = _ha_softphone_groups(self.hass)
+        tx = ";".join(HA_ENDPOINT_FORMATS)
+        rx = tx
+        endpoint = (
+            f"{_ha_peer_name(self.hass)}|{host}|{int(cfg['sip_port'])}|{int(cfg['rtp_port'])}|"
+            f"full_duplex|{tx}|{rx}|sip_tcp|"
+            f"|{groups['conference_group']}|{groups['ring_group']}|"
+            f"{1 if groups['conference_ring'] else 0}"
+        )
+        self._attr_native_value = endpoint
+        self._attr_extra_state_attributes = {
+            "local_ha": True,
+            "available": True,
+            "ring_group": groups["ring_group"],
+            "conference_group": groups["conference_group"],
+            "conference_ring": bool(groups["conference_ring"]),
+        }
+        if self.hass and self.entity_id:
+            self.async_write_ha_state()
 
 
 class VoipPhonebookSensor(SensorEntity):
@@ -100,6 +156,7 @@ class VoipPhonebookSensor(SensorEntity):
             for e in entity_registry.entities.values()
             if "voip_state" in e.entity_id or "voip_endpoint" in e.entity_id
         }
+        new_set.add(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)
         if new_set == self._tracked_entities and not initial:
             return
         self._tracked_entities = new_set
@@ -139,10 +196,15 @@ class VoipPhonebookSensor(SensorEntity):
         )
         from .endpoint_routing import roster_from_peers, softphone_targets_from_roster
         from .roster import dump_roster_json
+        from .websocket_api import async_prune_ha_softphone_groups
 
         peers = await _async_build_peer_snapshot(self.hass)
         entries = [format_entry_unified(p) for p in peers]
         roster_entries = roster_from_peers(self.hass, peers, registered_roster_entries(self.hass))
+        if await async_prune_ha_softphone_groups(self.hass, roster_entries):
+            peers = await _async_build_peer_snapshot(self.hass)
+            entries = [format_entry_unified(p) for p in peers]
+            roster_entries = roster_from_peers(self.hass, peers, registered_roster_entries(self.hass))
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
         softphone_targets_json = json.dumps(
