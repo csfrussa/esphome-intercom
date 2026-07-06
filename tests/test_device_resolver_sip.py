@@ -85,6 +85,25 @@ class SipEndpointParseTest(unittest.TestCase):
         self.assertIsNotNone(parsed)
         assert parsed is not None
         self.assertEqual(parsed["extension"], "101")
+        self.assertEqual(parsed["extras"], [])
+
+    def test_parses_forward_compatible_endpoint_extras(self) -> None:
+        base = (
+            "Spotpear | 192.168.1.31 | 5060 | 40000 | "
+            "full_duplex | 16000:s16le:1:10 | 48000:s16le:1:10 | sip_udp"
+        )
+        for suffix, extension, extras in (
+            ("", "", []),
+            (" | 101", "101", []),
+            (" | 101 | Conference", "101", ["Conference"]),
+            (" | 101 | Conference | Casa", "101", ["Conference", "Casa"]),
+            (" | 101 | Conference | Casa | future", "101", ["Conference", "Casa", "future"]),
+        ):
+            parsed = device_resolver.parse_voip_endpoint(base + suffix)
+            self.assertIsNotNone(parsed)
+            assert parsed is not None
+            self.assertEqual(parsed["extension"], extension)
+            self.assertEqual(parsed["extras"], extras)
 
     def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
         parsed = device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")

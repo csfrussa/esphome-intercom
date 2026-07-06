@@ -69,7 +69,7 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_voip_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP voip_stack.
 
-    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp[|extension]
+    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp[|extension[|extras...]]
     """
     if not value:
         return None
@@ -77,7 +77,7 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
     if not text or text.lower() in ("unknown", "unavailable"):
         return None
     parts = [part.strip() for part in text.split("|")]
-    if len(parts) not in (5, 8, 9):
+    if len(parts) < 5:
         return None
 
     name, host = parts[0], parts[1]
@@ -101,8 +101,10 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
     secondary_port = _valid_port(parts[3])
     if primary_port is None or secondary_port is None:
         return None
-    if len(parts) not in (8, 9):
+    if len(parts) == 5:
         _LOGGER.warning("Ignoring voip endpoint using obsolete no-format shape: %r", text)
+        return None
+    if len(parts) < 8:
         return None
     parsed_tail = parse_formats(4)
     if parsed_tail is None:
@@ -121,7 +123,8 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
         "audio_mode": mode,
         "tx_formats": tx_formats,
         "rx_formats": rx_formats,
-        "extension": parts[8] if len(parts) == 9 else "",
+        "extension": parts[8] if len(parts) >= 9 else "",
+        "extras": parts[9:] if len(parts) > 9 else [],
     }
 
 

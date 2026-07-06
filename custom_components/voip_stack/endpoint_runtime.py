@@ -45,7 +45,11 @@ from .fsm import (
     sip_public_state as _sip_public_state,
     sip_terminal_reason as _sip_terminal_reason,
 )
-from .media_ports import allocate_sip_rtp_port as _allocate_sip_rtp_port
+from .media_ports import (
+    allocate_sip_rtp_port as _allocate_sip_rtp_port,
+    allocate_sip_rtp_port_pair as _allocate_sip_rtp_port_pair,
+    release_sip_rtp_port_pair as _release_sip_rtp_port_pair,
+)
 from .phonebook_runtime import registered_roster_entries as _registered_roster_entries
 from .router import CallContext, RouteAction, RouteHintSource, RouteReason, route_inbound_trunk, resolve_ha_router
 from .sip_bridge import build_invite_client_relay
@@ -358,6 +362,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if result != "in_call" or client.dialog is None:
             _LOGGER.info("SIP trunk destination failed destination=%s result=%s", destination, result)
             await client.close()
+            _release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))
             _sip_send_bye(hass, invite.call_id)
             public_result = _sip_public_state(result)
             terminal_reason = _sip_terminal_reason(result, public_result)
@@ -392,12 +397,14 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 source_relay_port=source_relay_port,
                 dest_relay_port=dest_relay_port,
                 debug_capture=_debug_mode(hass),
+                on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
             )
             await relay.start()
         except Exception as err:
             _LOGGER.warning("SIP trunk RTP bridge unavailable: %s", err)
             client.bye()
             await client.close()
+            _release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))
             _sip_send_bye(hass, invite.call_id)
             _set_sip_bridge_call_state(
                 hass,
@@ -528,10 +535,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         if _is_trunk_invite(invite):
-            next_port = int(bucket.get("sip_rtp_next_port", int(cfg["rtp_port"]) + 2))
-            source_relay_port = next_port
-            dest_relay_port = next_port + 2
-            bucket["sip_rtp_next_port"] = next_port + 4
+            try:
+                source_relay_port, dest_relay_port = _allocate_sip_rtp_port_pair(hass)
+            except RuntimeError as err:
+                _LOGGER.warning("SIP trunk RTP bridge port allocation failed: %s", err)
+                return SipInviteResult(503, "Service Unavailable", to_tag="")
             trunk_cfg = _get_trunk_config(hass)
             routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
             dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
@@ -777,18 +785,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 bridge_uri = parse_sip_uri(
                     f"sip:{decision.target or invite.target}@{peer_target.host}:{peer_target.sip_port or cfg['sip_port']};transport={sip_transport}"
                 )
-            elif decision.entry.sip_uri:
+            elif decision.entry is not None and decision.entry.sip_uri:
                 bridge_uri = parse_sip_uri(decision.entry.sip_uri)
-            elif not decision.entry.metadata.get("local_ha") and decision.entry.address:
+            elif decision.entry is not None and not decision.entry.metadata.get("local_ha") and decision.entry.address:
                 bridge_port = int(decision.entry.port or (decision.entry.metadata or {}).get("port") or (decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
                 bridge_uri = parse_sip_uri(f"sip:{decision.entry.id}@{decision.entry.address}:{bridge_port}")
             decision_uri = bridge_uri or (parse_sip_uri(decision.sip_uri) if decision.sip_uri else None)
             if decision_uri is not None and decision_uri.host != local_ip:
-                bucket = hass.data.setdefault(DOMAIN, {})
-                next_port = int(bucket.get("sip_rtp_next_port", int(cfg["rtp_port"]) + 2))
-                source_relay_port = next_port
-                dest_relay_port = next_port + 2
-                bucket["sip_rtp_next_port"] = next_port + 4
+                try:
+                    source_relay_port, dest_relay_port = _allocate_sip_rtp_port_pair(hass)
+                except RuntimeError as err:
+                    _LOGGER.warning("SIP RTP bridge port allocation failed: %s", err)
+                    return SipInviteResult(503, "Service Unavailable", to_tag="")
                 peer_target = _peer_for_target(decision.target or invite.target, peers)
                 remote_tx_formats = _peer_audio_formats(peer_target, "tx_formats") or _roster_entry_formats(decision.entry, "tx_formats")
                 remote_rx_formats = _peer_audio_formats(peer_target, "rx_formats") or _roster_entry_formats(decision.entry, "rx_formats")
@@ -838,6 +846,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if result not in {"ringing", "in_call"}:
                     status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(result)
                     await client.close()
+                    _release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))
                     _set_sip_bridge_call_state(
                         hass,
                         public_state,
@@ -899,6 +908,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                         registry.client_watchers.pop(client.dialog_ids.call_id, None)
                         await client.close()
+                        _release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))
                         _set_sip_bridge_call_state(
                             hass,
                             public_state,
@@ -923,6 +933,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             source_relay_port=source_relay_port,
                             dest_relay_port=dest_relay_port,
                             debug_capture=_debug_mode(hass),
+                            on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
                         )
                         await relay.start()
                     except Exception as err:
@@ -942,6 +953,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                         registry.client_watchers.pop(client.dialog_ids.call_id, None)
                         await client.close()
+                        _release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))
                         return
                     registry.relays[invite.call_id] = relay
                     registry.upsert(

@@ -45,6 +45,21 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("other_pending", busy_guard)
         self.assertNotIn("if route_bucket or pending", busy_guard)
 
+    def test_entryless_sip_uri_route_is_guarded_and_uses_fallback_uri(self) -> None:
+        start = self.source.index("routeable_sip_target =")
+        bridge_path = self.source[start : self.source.index("if decision_uri is not None and decision_uri.host != local_ip", start)]
+        self.assertIn("decision.entry is not None and decision.entry.sip_uri", bridge_path)
+        self.assertIn("decision.entry is not None and not decision.entry.metadata.get", bridge_path)
+        self.assertIn("parse_sip_uri(decision.sip_uri) if decision.sip_uri else None", bridge_path)
+        self.assertNotIn("elif decision.entry.sip_uri", bridge_path)
+        self.assertNotIn("elif not decision.entry.metadata.get", bridge_path)
+
+    def test_bridge_relay_uses_bounded_port_pool_and_release_callback(self) -> None:
+        self.assertIn("_allocate_sip_rtp_port_pair(hass)", self.source)
+        self.assertNotIn('bucket.get("sip_rtp_next_port"', self.source)
+        self.assertIn("on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports)", self.source)
+        self.assertIn("_release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))", self.source)
+
     def test_softphone_account_list_service_is_registered_and_documented(self) -> None:
         services = SERVICES.read_text()
         account_services = ACCOUNT_SERVICES.read_text()

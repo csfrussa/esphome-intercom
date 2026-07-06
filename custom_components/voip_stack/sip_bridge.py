@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .sip_client import SipCallClient
 from .sip_listener import SipInvite
 from .sip_rtp_bridge import RtpPeer, SipRtpRelay
@@ -14,6 +16,7 @@ def build_invite_client_relay(
     source_relay_port: int,
     dest_relay_port: int,
     debug_capture: bool = False,
+    on_release: Callable[[tuple[int, int]], None] | None = None,
 ) -> SipRtpRelay:
     """Build the RTP relay for an inbound INVITE bridged to an outbound client."""
     if client.dialog is None:
@@ -43,4 +46,5 @@ def build_invite_client_relay(
         right_port=dest_relay_port,
         debug_capture=debug_capture,
         capture_name=f"{invite.call_id}_{client.dialog_ids.call_id}",
+        on_release=on_release,
     )

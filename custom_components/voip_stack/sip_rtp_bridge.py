@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 import secrets
 import socket
-from typing import Any
+from typing import Any, Callable
 import wave
 
 from . import rtp
@@ -86,6 +86,7 @@ class SipRtpRelay:
         right_port: int,
         debug_capture: bool = False,
         capture_name: str = "",
+        on_release: Callable[[tuple[int, int]], None] | None = None,
     ) -> None:
         self.left = left
         self.right = right
@@ -93,6 +94,8 @@ class SipRtpRelay:
         self.right_port = int(right_port)
         self.left_transport: asyncio.DatagramTransport | None = None
         self.right_transport: asyncio.DatagramTransport | None = None
+        self._on_release = on_release
+        self._released = False
         self.forwarded = 0
         self.dropped = 0
         self.left_rx_packets = 0
@@ -213,8 +216,13 @@ class SipRtpRelay:
         if self.right_transport is not None:
             self.right_transport.close()
             self.right_transport = None
-        await asyncio.to_thread(self._write_debug_capture_files)
-        self._capture_buffers.clear()
+        try:
+            await asyncio.to_thread(self._write_debug_capture_files)
+        finally:
+            self._capture_buffers.clear()
+            if self._on_release is not None and not self._released:
+                self._released = True
+                self._on_release((self.left_port, self.right_port))
 
     def handle_packet(self, side: str, data: bytes, addr) -> None:
         source = self.left if side == "left" else self.right
