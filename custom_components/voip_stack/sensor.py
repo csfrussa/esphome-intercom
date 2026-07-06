@@ -26,6 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 UNAVAILABLE_STATES = {"", "unknown", "unavailable"}
+HA_ENDPOINT_AUDIO_FORMATS = tuple(fmt.wire_token() for fmt in HA_SIP_PCM_FORMATS[:8])
 
 
 def _state_is_available(state) -> bool:
@@ -67,14 +68,14 @@ class HaSoftphoneEndpointSensor(SensorEntity):
         host = await _ha_advertise_host(self.hass)
         if not host:
             self._attr_native_value = "unavailable"
-            self._attr_extra_state_attributes = {"local_ha": True, "available": False}
+            self._attr_extra_state_attributes = {"local_ha": True, "available": False, "endpoint": ""}
             if self.hass and self.entity_id:
                 self.async_write_ha_state()
             return
 
         cfg = _get_transport_config(self.hass)
         groups = _ha_softphone_groups(self.hass)
-        tx = ";".join(fmt.wire_token() for fmt in HA_SIP_PCM_FORMATS)
+        tx = ";".join(HA_ENDPOINT_AUDIO_FORMATS)
         rx = tx
         endpoint = (
             f"{_ha_peer_name(self.hass)}|{host}|{int(cfg['sip_port'])}|{int(cfg['rtp_port'])}|"
@@ -82,10 +83,11 @@ class HaSoftphoneEndpointSensor(SensorEntity):
             f"|{groups['conference_group']}|{groups['ring_group']}|"
             f"{1 if groups['conference_ring'] else 0}"
         )
-        self._attr_native_value = endpoint
+        self._attr_native_value = "online"
         self._attr_extra_state_attributes = {
             "local_ha": True,
             "available": True,
+            "endpoint": endpoint,
             "ring_group": groups["ring_group"],
             "conference_group": groups["conference_group"],
             "conference_ring": bool(groups["conference_ring"]),
@@ -165,7 +167,9 @@ class VoipPhonebookSensor(SensorEntity):
             if "voip_endpoint" in entity_id:
                 old_value = old_state.state if old_state is not None else None
                 new_value = new_state.state if new_state is not None else None
-                if old_value != new_value:
+                old_endpoint = (old_state.attributes or {}).get("endpoint") if old_state is not None else None
+                new_endpoint = (new_state.attributes or {}).get("endpoint") if new_state is not None else None
+                if old_value != new_value or old_endpoint != new_endpoint:
                     self.hass.async_create_task(self._recompute())
                 return
             old_avail = _state_is_available(old_state)

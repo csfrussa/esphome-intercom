@@ -509,7 +509,10 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
         d["sip_transport"] = sip_transport
 
     ha_endpoint_state = hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)
-    ha_endpoint = parse_voip_endpoint(ha_endpoint_state.state if ha_endpoint_state else None)
+    ha_endpoint_payload = ""
+    if ha_endpoint_state is not None:
+        ha_endpoint_payload = str((ha_endpoint_state.attributes or {}).get("endpoint") or ha_endpoint_state.state or "")
+    ha_endpoint = parse_voip_endpoint(ha_endpoint_payload)
     if ha_endpoint is not None:
         out.append(Peer(
             device=None,

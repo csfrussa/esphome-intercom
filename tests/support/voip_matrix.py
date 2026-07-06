@@ -37,7 +37,7 @@ def _ha_audio_formats() -> tuple[str, ...]:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return tuple(fmt.wire_token() for fmt in module.HA_SIP_PCM_FORMATS)
+    return tuple(fmt.wire_token() for fmt in module.HA_SIP_PCM_FORMATS[:8])
 
 
 HA_AUDIO_FORMATS = _ha_audio_formats()
