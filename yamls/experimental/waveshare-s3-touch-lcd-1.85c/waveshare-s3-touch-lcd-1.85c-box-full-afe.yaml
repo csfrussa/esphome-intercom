@@ -8,9 +8,9 @@
 # V2 is required. Waveshare documents V1 with PCM5101 + digital MEMS mic and V2
 # with ES8311 + ES7210 + dual analog microphones. This YAML targets V2/BOX only.
 #
-# Audio pipeline (esp_audio_stack @ 48 kHz, single-mic AFE):
+# Audio pipeline (esp_audio_stack @ 48 kHz, single-mic AEC):
 #
-#   ES7210 slot 0 mic + slot 1 hardware ref -> esp_ae_rate_cvt x3 -> esp_afe (AEC+NS+AGC) -> mic_afe -> VA / VoIP TX / MWW
+#   ES7210 slot 0 mic + slot 1 hardware ref -> esp_ae_rate_cvt x3 -> esp_aec -> mic_afe -> VA / VoIP TX / MWW
 #
 #   Music/radio → media_speaker_input (resampler) ───────────┐
 #   VA TTS      → tts_speaker_input (resampler) ─────────────┼── mixer (48kHz) → hw_speaker → ES8311
@@ -136,7 +136,7 @@ packages:
   phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml
   s3_base: !include ../../../packages/platform/esp32s3_base.yaml
   native_diagnostics: !include ../../../packages/diagnostics/native.yaml
-  afe_entities: !include ../../../packages/esp_afe/single_mic_entities.yaml
+  aec_entities: !include ../../../packages/esp_audio_stack/aec_controls.yaml
   audio_stack_controls: !include ../../../packages/esp_audio_stack/controls.yaml
   speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
   speaker_mixer: !include ../../../packages/audio/shared_mono_mixer_48k.yaml
@@ -157,6 +157,8 @@ esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   name_add_mac_suffix: false
+  platformio_options:
+    board_build.partitions: ../../../partitions_16mb_huge_factory.csv
   on_boot:
     priority: 600
     then:
@@ -223,7 +225,7 @@ external_components:
   - source: ${runtime_controller_components_source}
     components: [runtime_controller]
   - source: ${audio_stack_components_source}
-    components: [esp_audio_stack, esp_afe]
+    components: [esp_audio_stack, esp_aec]
 
 # =============================================================================
 # CONNECTIVITY
@@ -364,7 +366,7 @@ esp_audio_stack:
   output_sample_rate: 16000      # Mic/AEC/MWW/VA output rate
   bits_per_sample: 16
   slot_bit_width: 16
-  processor_id: afe_processor
+  processor_id: aec_processor
   audio_effects:
     rate_cvt_complexity: 3
     rate_cvt_perf_type: speed
@@ -388,32 +390,11 @@ esp_audio_stack:
   buffers_in_psram: true       # All audio buffers in PSRAM; required for 512-sample AEC frames
   audio_task_stack_in_psram: true   # Full VA + MWW + API needs internal heap headroom; keep only DMA/ESP-SR scratch internal.
 
-esp_afe:
-  id: afe_processor
-  type: fd
-  mode: low_cost
-  mic_num: 1
-  aec_enabled: true
-  aec_filter_length: 4
-  aec_nlp_level: normal
-  se_enabled: false
-  ns_enabled: true
-  vad_enabled: true
-  continuous_vad: true
-  agc_enabled: true
-  memory_alloc_mode: more_psram
-  task_core: 1
-  task_priority: 5
-  ringbuf_size: 8
-  feed_task_core: 0
-  feed_task_priority: 5
-  feed_task_stack_size: 3072
-  fetch_task_core: 1
-  fetch_task_priority: 5
-  fetch_task_stack_size: 3072
-  feed_buf_in_psram: false
-  feed_ring_in_psram: true
-  fetch_ring_in_psram: false
+esp_aec:
+  id: aec_processor
+  sample_rate: 16000
+  filter_length: 4
+  mode: sr_low_cost
 
 # =============================================================================
 # Bus I2S: ES8311 shared backend for speaker, mic and AEC reference
@@ -3391,8 +3372,6 @@ switch:
           event: speaker_unmuted
   # VoIP controls
 
-  # AEC runtime controls
-
 select:
   - platform: template
     name: AEC Mode
@@ -3401,12 +3380,9 @@ select:
     options:
       - "sr_low_cost"
       - "sr_high_perf"
-      - "fd_low_cost"
-      - "fd_high_perf"
-    initial_option: "fd_high_perf"
-    # Non-optimistic: this reflects hardware state owned by the audio graph.
+    initial_option: "sr_low_cost"
     optimistic: false
-    restore_value: false
+    restore_value: true
     set_action:
       - if:
           condition:
@@ -3430,35 +3406,18 @@ select:
                       args: ['x.c_str()']
                   - micro_wake_word.stop:
                   - esp_audio_stack.stop_and_wait: audio_stack
-                  - wait_until:
-                      condition:
-                        esp_audio_stack.is_idle: audio_stack
-                      timeout: 2s
-                  - esp_afe.set_mode:
-                      id: afe_processor
+                  - esp_aec.set_mode:
+                      id: aec_processor
                       mode: !lambda 'return x;'
-                  - wait_until:
-                      condition:
-                        lambda: 'return id(afe_processor).is_reconfigure_idle();'
-                      timeout: 20s
+                  - esp_audio_stack.start: audio_stack
+                  - delay: 300ms
                   - if:
                       condition:
-                        lambda: 'return id(afe_processor).is_reconfigure_idle() && id(afe_processor).get_last_reconfigure_ok();'
+                        switch.is_off: mute
                       then:
-                        - esp_audio_stack.start: audio_stack
-                        - delay: 300ms
-                        - if:
-                            condition:
-                              switch.is_off: mute
-                            then:
-                              - script.execute: start_mww_when_ready
-                      else:
-                        - logger.log:
-                            level: ERROR
-                            tag: main
-                            format: "AFE mode switch did not complete cleanly; audio restart skipped"
+                        - script.execute: start_mww_when_ready
       - lambda: |-
-          id(aec_mode_select).publish_state(id(afe_processor).get_mode_name());
+          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
 
 interval:
   - interval: 30s
