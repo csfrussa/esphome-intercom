@@ -101,6 +101,8 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("tx_formats"): vol.Any(cv.string, [cv.string]),
             vol.Optional("rx_formats"): vol.Any(cv.string, [cv.string]),
             vol.Optional("max_payload_bytes"): vol.Coerce(int),
+            vol.Optional("conference_group", default=""): cv.string,
+            vol.Optional("ring_group", default=""): cv.string,
         },
         extra=vol.PREVENT_EXTRA,
     )

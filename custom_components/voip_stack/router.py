@@ -214,6 +214,8 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
     if entry is not None and not entry.enabled:
         return RouteDecision(RouteAction.REJECT, target=target, status=403, reason=RouteReason.TARGET_DISABLED, entry=entry)
     if entry is not None:
+        if entry.metadata.get("group_type"):
+            return RouteDecision(RouteAction.GROUP, target=entry.id, reason=RouteReason.EXPLICIT_ROUTE, source="phonebook", entry=entry)
         if bool(entry.metadata.get("local_ha")):
             return RouteDecision(RouteAction.ANSWER_HA, target=entry.id, reason=RouteReason.DEFAULT_HA, source="phonebook", entry=entry)
         matched_extension = entry_matches_extension(entry, target)

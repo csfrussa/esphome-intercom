@@ -20,6 +20,7 @@ from .const import (
     CONF_DEBUG_MODE,
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
+    CONF_RING_GROUP_FALLBACK,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
     CONF_TRUNK_DTMF_ENABLED,
@@ -72,6 +73,7 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
             CONF_TRUNK_DTMF_TIMEOUT_MS: int(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)),
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
             CONF_TRUNK_DTMF_ROUTES: existing.get(CONF_TRUNK_DTMF_ROUTES, ""),
+            CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
             "sip_accounts": existing.get("sip_accounts", []),
             CONF_PHONEBOOK_CONTACTS: existing.get(CONF_PHONEBOOK_CONTACTS, []),
         }
@@ -123,6 +125,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
             CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
+            CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
         }
         schema = vol.Schema(
@@ -136,6 +139,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 ): BooleanSelector(),
                 vol.Required(CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]): BooleanSelector(),
                 vol.Required(CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]): BooleanSelector(),
+                vol.Required(CONF_RING_GROUP_FALLBACK, default=defaults[CONF_RING_GROUP_FALLBACK]): SelectSelector(
+                    SelectSelectorConfig(options=["reject", "answer_ha"])
+                ),
                 vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
             }
         )
@@ -246,6 +252,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
+                        CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
                     }
                 )
                 return self._store_entry(_disabled_trunk_data(data, existing))
@@ -270,6 +277,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
+                        CONF_RING_GROUP_FALLBACK: existing.get(CONF_RING_GROUP_FALLBACK, "reject"),
                     }
                 )
                 data[CONF_TRUNK_ENABLED] = True

@@ -16,6 +16,8 @@ class Peer:
     sip_port: int | None = None
     rtp_port: int | None = None
     extension: str = ""
+    conference_group: str = ""
+    ring_group: str = ""
     audio_mode: Literal["full_duplex", "mic_only", "speaker_only", "control_only"] = "full_duplex"
     tx_formats: list[str] | None = None
     rx_formats: list[str] | None = None

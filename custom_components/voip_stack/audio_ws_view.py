@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import json
 import logging
@@ -35,6 +36,8 @@ class _SoftphoneMediaSession:
     remote_rtp_port: int
     send_format: Any
     recv_format: Any
+    conference_room: str = ""
+    conference_queue: asyncio.Queue[bytes] | None = None
 
 
 class _RtpAudioProtocol(asyncio.DatagramProtocol):
@@ -177,6 +180,21 @@ def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSessi
     inbound = registry.softphone_media
     if call_id and call_id in inbound:
         item = inbound[call_id]
+        conference_room = str(item.get("conference_room") or "")
+        conference_queue = item.get("conference_queue")
+        if conference_room and conference_queue is not None:
+            from .conference import CONFERENCE_RTP_FORMAT
+
+            return _SoftphoneMediaSession(
+                call_id=call_id,
+                local_rtp_port=0,
+                remote_rtp_host="",
+                remote_rtp_port=0,
+                send_format=CONFERENCE_RTP_FORMAT,
+                recv_format=CONFERENCE_RTP_FORMAT,
+                conference_room=conference_room,
+                conference_queue=conference_queue,
+            )
         invite = item.get("invite")
         local_rtp_port = int(item.get("local_rtp_port") or 0)
         if invite is not None and local_rtp_port:
@@ -210,6 +228,9 @@ async def _run_audio_session(
     ws: web.WebSocketResponse,
     session: _SoftphoneMediaSession,
 ) -> None:
+    if session.conference_queue is not None:
+        await _run_conference_audio_session(hass, ws, session)
+        return
     queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
     try:
@@ -444,3 +465,73 @@ async def _run_audio_session(
         )
         if debug_capture is not None:
             await hass.async_add_executor_job(debug_capture.write, counters)
+
+
+async def _run_conference_audio_session(
+    hass: HomeAssistant,
+    ws: web.WebSocketResponse,
+    session: _SoftphoneMediaSession,
+) -> None:
+    closed = asyncio.Event()
+    counters = {
+        "ws_rx": 0,
+        "ws_tx": 0,
+        "rtp_rx": 0,
+        "rtp_tx": 0,
+        "rtp_rx_bytes": 0,
+        "rtp_tx_bytes": 0,
+        "drop_addr": 0,
+        "drop_payload_type": 0,
+        "drop_error": 0,
+        "drop_tx_queue": 0,
+        "tx_error": 0,
+        "tx_silence_keepalive": 0,
+    }
+    await ws.send_json(
+        {
+            "state": "in_call",
+            "call_id": session.call_id,
+            "tx_format": session.send_format.audio_format.wire_token(),
+            "rx_format": session.recv_format.audio_format.wire_token(),
+            "selected_tx_format": session.send_format.audio_format.wire_token(),
+            "selected_rx_format": session.recv_format.audio_format.wire_token(),
+            "selected_tx_rtp_format": session.send_format.wire_token(),
+            "selected_rx_rtp_format": session.recv_format.wire_token(),
+        }
+    )
+    _LOGGER.info("HA softphone conference websocket attached call_id=%s room=%s", session.call_id, session.conference_room)
+
+    async def room_to_ws() -> None:
+        assert session.conference_queue is not None
+        while not closed.is_set():
+            pcm = await session.conference_queue.get()
+            await ws.send_bytes(encode_audio_frame(pcm))
+            counters["ws_tx"] += 1
+
+    rx_task = asyncio.create_task(room_to_ws())
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY:
+                try:
+                    pcm = decode_audio_frame(bytes(msg.data))
+                    manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
+                    if manager is not None:
+                        manager.push_ha_audio(session.conference_room, pcm)
+                    counters["ws_rx"] += 1
+                except Exception as err:  # noqa: BLE001 - keep media path alive.
+                    counters["tx_error"] += 1
+                    _LOGGER.debug("HA softphone conference audio TX drop: %s", err)
+            elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
+                break
+    finally:
+        closed.set()
+        rx_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await rx_task
+        manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
+        if manager is not None:
+            await manager.leave_ha_softphone(session.conference_room)
+        store = _ha_softphone_store(hass)
+        if str(store.get("call_id") or "") == session.call_id:
+            store.update({"last_sip_event": "conference_media", **counters})
+        _fire_call_event(hass, dict(store, device_id=HA_SOFTPHONE_DEVICE_ID), "session")

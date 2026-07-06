@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS, HA_TRUNK_AUDIO_FORMATS
 from .const import (
     CONF_REGISTRAR_ENABLED,
+    CONF_RING_GROUP_FALLBACK,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DTMF_ENABLED,
     CONF_TRUNK_DTMF_ROUTES,
@@ -57,6 +58,7 @@ from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphon
 
 _LOGGER = logging.getLogger(__name__)
 SIP_ROUTE_DECISION_TIMEOUT = 1.5
+RING_GROUP_TIMEOUT_S = 30.0
 
 
 async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
@@ -87,6 +89,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
     from .sip_registrar import SipRegistrar
+    from .conference import conference_manager
+    from .groups import GROUP_TYPE_CONFERENCE, GROUP_TYPE_RING
 
     if hass.data.get(DOMAIN, {}).get("sip_endpoint") is not None:
         _LOGGER.debug("Stopping existing SIP endpoint before rebinding listeners")
@@ -139,6 +143,78 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         trunk_cfg = _get_trunk_config(hass)
         trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
         return resolve_ha_router(target, entries, trunk_ready=trunk_ready)
+
+    def _roster_entry_for_target(target: str, entries: list[RosterEntry]):
+        for entry in entries:
+            if _same_route_name(entry.id, target) or _same_route_name(entry.name, target):
+                return entry
+            if entry.extension and str(entry.extension).strip() == str(target).strip():
+                return entry
+        return None
+
+    def _sip_uri_for_member(member: str, peers: list[Peer], entries: list[RosterEntry]):
+        peer = _peer_for_target(member, peers)
+        if peer is not None and peer.host:
+            sip_transport = str((peer.device or {}).get("sip_transport") or "tcp").lower()
+            if sip_transport not in {"tcp", "udp"}:
+                sip_transport = "tcp"
+            return (
+                parse_sip_uri(f"sip:{member}@{peer.host}:{peer.sip_port or cfg['sip_port']};transport={sip_transport}"),
+                peer,
+                None,
+            )
+        entry = _roster_entry_for_target(member, entries)
+        if entry is None:
+            return None, None, None
+        if entry.sip_uri:
+            return parse_sip_uri(entry.sip_uri), None, entry
+        if not entry.metadata.get("local_ha") and entry.address:
+            bridge_port = int(entry.port or (entry.metadata or {}).get("port") or (entry.metadata or {}).get("sip_port") or cfg["sip_port"])
+            return parse_sip_uri(f"sip:{entry.id}@{entry.address}:{bridge_port}"), None, entry
+        return None, None, entry
+
+    def _caller_matches_member(invite: SipInvite, member: str, peers: list[Peer]) -> bool:
+        if _same_route_name(member, invite.caller):
+            return True
+        peer = _peer_for_target(member, peers)
+        return bool(peer is not None and peer.host and peer.host == invite.source_host)
+
+    def _defer_invite_to_ha_softphone(
+        invite: SipInvite,
+        *,
+        route_kind: str,
+        callee: str | None = None,
+        sip_uri: str | None = None,
+    ) -> None:
+        registry = _call_registry(hass)
+        registry.pending_invites[invite.call_id] = invite
+        registry.upsert(
+            invite.call_id,
+            state=CallState.RINGING.value,
+            caller=invite.caller,
+            callee=callee or invite.target,
+            route_kind=route_kind,
+        )
+        registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.RINGING.value)
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.RINGING.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=invite.caller,
+            callee=callee or invite.target,
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=invite.call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
+            audio_mode="full_duplex",
+            route_kind=route_kind,
+            sip_uri=sip_uri,
+            sip_status_code=180,
+            last_sip_event="INVITE",
+        )
 
     def _inbound_route_decision(invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]):
         # Once an INVITE reached HA, HA is the router. ESP-origin direct-vs-HA
@@ -471,6 +547,233 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             "sip",
         )
 
+    async def _run_ring_group_call(
+        invite: SipInvite,
+        entry: RosterEntry,
+        peers: list[Peer],
+        roster_entries: list[RosterEntry],
+    ) -> None:
+        registry = _call_registry(hass)
+        members = [str(member).strip() for member in (entry.metadata.get("members") or []) if str(member).strip()]
+        attempts: list[dict] = []
+        for member in members:
+            if _caller_matches_member(invite, member, peers) or _is_ha_target(member):
+                continue
+            decision_uri, peer_target, member_entry = _sip_uri_for_member(member, peers, roster_entries)
+            if decision_uri is None or decision_uri.host == local_ip:
+                continue
+            try:
+                source_relay_port, dest_relay_port = _allocate_sip_rtp_port_pair(hass)
+            except RuntimeError as err:
+                _LOGGER.warning("SIP ring group RTP port allocation failed member=%s: %s", member, err)
+                break
+            remote_tx_formats = _peer_audio_formats(peer_target, "tx_formats") or _roster_entry_formats(member_entry, "tx_formats")
+            remote_rx_formats = _peer_audio_formats(peer_target, "rx_formats") or _roster_entry_formats(member_entry, "rx_formats")
+            sip_send_formats, sip_recv_formats = _sip_target_audio_profile(
+                remote_tx_formats=remote_tx_formats,
+                remote_rx_formats=remote_rx_formats,
+                target=member,
+            )
+            bridge_to_softphone = bool(member_entry is not None and member_entry.sip_uri and member_entry.metadata.get("registered"))
+            if bridge_to_softphone:
+                sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
+                sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
+            client = SipCallClient(
+                local_ip=local_ip,
+                local_name=invite.caller or _ha_peer_name(hass),
+                local_sip_port=int(cfg["sip_port"]),
+                local_rtp_port=dest_relay_port,
+                supported_send_formats=sip_send_formats,
+                supported_recv_formats=sip_recv_formats,
+                signaling_transport=_sip_uri_transport(decision_uri),
+                include_common_codecs=bridge_to_softphone,
+            )
+            _enable_reused_sip_tcp_connection(
+                hass,
+                client,
+                decision_uri,
+                target=member,
+                default_sip_port=int(cfg["sip_port"]),
+            )
+            attempts.append(
+                {
+                    "member": member,
+                    "uri": decision_uri,
+                    "client": client,
+                    "ports": (source_relay_port, dest_relay_port),
+                }
+            )
+        if not attempts:
+            _sip_send_final_response(
+                hass,
+                invite.call_id,
+                480,
+                "Temporarily Unavailable",
+                decline_reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+            )
+            return
+
+        async def _dial(attempt: dict) -> tuple[str, dict]:
+            client = attempt["client"]
+            uri = attempt["uri"]
+            result = await client.invite(
+                target=uri.user or attempt["member"],
+                remote_host=uri.host,
+                remote_sip_port=uri.port or int(cfg["sip_port"]),
+                timeout=8.0,
+            )
+            if result == "ringing":
+                result = await client.wait_for_final(timeout=RING_GROUP_TIMEOUT_S)
+            return result, attempt
+
+        tasks = [hass.async_create_task(_dial(attempt)) for attempt in attempts]
+        winner: dict | None = None
+        final_result = "timeout"
+        try:
+            deadline = asyncio.get_running_loop().time() + RING_GROUP_TIMEOUT_S
+            pending_tasks = set(tasks)
+            while pending_tasks and winner is None:
+                timeout = max(0.0, deadline - asyncio.get_running_loop().time())
+                if timeout <= 0:
+                    break
+                done, pending_tasks = await asyncio.wait(
+                    pending_tasks,
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    break
+                for task in done:
+                    try:
+                        result, attempt = task.result()
+                    except Exception as err:
+                        _LOGGER.debug("SIP ring group member task failed: %s", err)
+                        continue
+                    final_result = result
+                    if result == "in_call" and attempt["client"].dialog is not None:
+                        winner = attempt
+                        break
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for attempt in attempts:
+                client = attempt["client"]
+                if attempt is winner:
+                    continue
+                with contextlib.suppress(Exception):
+                    client.cancel()
+                await client.close()
+                _release_sip_rtp_port_pair(hass, attempt["ports"])
+            if winner is None:
+                if str(cfg.get(CONF_RING_GROUP_FALLBACK) or "reject") == "answer_ha":
+                    _defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING, callee=_ha_peer_name(hass))
+                    return
+                status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(final_result)
+                _sip_send_final_response(hass, invite.call_id, status_code, sip_reason, decline_reason=terminal_reason)
+                _set_sip_bridge_call_state(
+                    hass,
+                    public_state,
+                    caller=invite.caller,
+                    callee=invite.target,
+                    peer_name=invite.target,
+                    call_id=invite.call_id,
+                    reason=terminal_reason,
+                    terminal_reason=terminal_reason,
+                    origin="remote",
+                    sip_status_code=status_code,
+                    last_sip_event="SIP_RESPONSE",
+                    route_kind=GROUP_TYPE_RING,
+                )
+                return
+            client = winner["client"]
+            source_relay_port, dest_relay_port = winner["ports"]
+            registry.register_bridge(
+                source_call_id=invite.call_id,
+                dest_call_id=client.dialog_ids.call_id,
+                client=client,
+                state=CallState.CONNECTING.value,
+                caller=invite.caller,
+                callee=invite.target,
+                route_kind=GROUP_TYPE_RING,
+                source_state=CallState.CONNECTING.value,
+                dest_state=CallState.IN_CALL.value,
+            )
+            try:
+                relay = build_invite_client_relay(
+                    invite=invite,
+                    client=client,
+                    source_relay_port=source_relay_port,
+                    dest_relay_port=dest_relay_port,
+                    debug_capture=_debug_mode(hass),
+                    on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
+                )
+                await relay.start()
+            except Exception as err:
+                _LOGGER.warning("SIP ring group media bridge unavailable: %s", err)
+                _sip_send_final_response(
+                    hass,
+                    invite.call_id,
+                    488,
+                    "Not Acceptable Here",
+                    decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                )
+                registry.discard_bridge_session(
+                    invite.call_id,
+                    client.dialog_ids.call_id,
+                    reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                    state=CallState.MEDIA_INCOMPATIBLE.value,
+                )
+                await client.close()
+                _release_sip_rtp_port_pair(hass, winner["ports"])
+                return
+            registry.relays[invite.call_id] = relay
+            registry.upsert(
+                invite.call_id,
+                state=CallState.IN_CALL.value,
+                caller=invite.caller,
+                callee=invite.target,
+                route_kind=GROUP_TYPE_RING,
+            )
+            answer = build_answer_directional(
+                local_ip,
+                local_ip,
+                source_relay_port,
+                invite.send_format,
+                invite.recv_format,
+            )
+            _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
+            _set_sip_bridge_call_state(
+                hass,
+                CallState.IN_CALL.value,
+                caller=invite.caller,
+                callee=invite.target,
+                peer_name=winner["member"],
+                call_id=invite.call_id,
+                dest_call_id=client.dialog_ids.call_id,
+                selected_tx_format=invite.send_format.audio_format.wire_token(),
+                selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
+                sip_status_code=200,
+                last_sip_event="SIP_RESPONSE",
+                route_kind=GROUP_TYPE_RING,
+                sip_uri=str(winner["uri"]),
+            )
+            terminal = await client.wait_for_dialog_termination()
+            terminal_reason = (
+                TerminalReason.REMOTE_HANGUP.value
+                if terminal == "remote_hangup"
+                else _sip_terminal_reason(terminal, _sip_public_state(terminal))
+            )
+            await _terminate_sip_bridge(hass, client.dialog_ids.call_id, terminal_reason=terminal_reason)
+        except asyncio.CancelledError:
+            for attempt in attempts:
+                with contextlib.suppress(Exception):
+                    attempt["client"].bye_or_cancel()
+                    await attempt["client"].close()
+                    _release_sip_rtp_port_pair(hass, attempt["ports"])
+            raise
+
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
         caller_peer = _peer_for_target(invite.caller, peers)
@@ -504,6 +807,30 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if invite.call_id in pending:
             _LOGGER.debug("SIP INVITE retransmit while HA softphone is ringing call_id=%s", invite.call_id)
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        if decision.action is RouteAction.GROUP:
+            group_type = str((decision.entry.metadata or {}).get("group_type") or "") if decision.entry is not None else ""
+            if group_type == GROUP_TYPE_CONFERENCE:
+                registry.upsert(
+                    invite.call_id,
+                    state=CallState.IN_CALL.value,
+                    caller=invite.caller,
+                    callee=invite.target,
+                    route_kind=GROUP_TYPE_CONFERENCE,
+                )
+                registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.IN_CALL.value)
+                return await conference_manager(hass, local_ip=local_ip).join(invite, decision.entry)
+            if group_type == GROUP_TYPE_RING and decision.entry is not None:
+                registry.upsert(
+                    invite.call_id,
+                    state=CallState.RINGING.value,
+                    caller=invite.caller,
+                    callee=invite.target,
+                    route_kind=GROUP_TYPE_RING,
+                )
+                registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.RINGING.value)
+                hass.async_create_task(_run_ring_group_call(invite, decision.entry, peers, roster_entries))
+                return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+            return SipInviteResult(480, "Temporarily Unavailable", to_tag="")
         active_media = len([call_id for call_id in registry.softphone_media if call_id != invite.call_id])
         ha_softphone_active = _ha_softphone_has_active_call(hass)
         other_routes = len([call_id for call_id in route_bucket if call_id != invite.call_id])
@@ -767,7 +1094,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             RouteAction.DIRECT,
             RouteAction.FORWARD,
             RouteAction.BRIDGE,
-            RouteAction.GROUP,
         } and (decision.entry is not None or bool(decision.sip_uri))
         if not force_ha_softphone and (bridge_to_trunk or routeable_sip_target):
             peer_target = _peer_for_target(decision.target or invite.target, peers)
@@ -1097,34 +1423,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     last_sip_event="SIP_RESPONSE",
                 )
                 return SipInviteResult(486, "Busy Here", to_tag="", decline_reason="busy")
-            pending[invite.call_id] = invite
-            registry.upsert(
-                invite.call_id,
-                state=CallState.RINGING.value,
-                caller=invite.caller,
-                callee=invite.target,
-                route_kind=decision.action.value,
-            )
-            registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.RINGING.value)
-            _set_ha_softphone_call_state(
-                hass,
-                "ringing",
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=invite.caller,
-                callee=invite.target,
-                peer_name=invite.caller,
-                direction="incoming",
-                call_id=invite.call_id,
-                selected_tx_format=invite.send_format.audio_format.wire_token(),
-                selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                selected_tx_rtp_format=invite.send_format.wire_token(),
-                selected_rx_rtp_format=invite.recv_format.wire_token(),
-                audio_mode="full_duplex",
-                route_kind=decision.action.value,
-                sip_uri=decision.sip_uri,
-                sip_status_code=180,
-                last_sip_event="INVITE",
-            )
+            _defer_invite_to_ha_softphone(invite, route_kind=decision.action.value, sip_uri=decision.sip_uri)
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
         local_rtp_port = _allocate_sip_rtp_port(hass)
         answer = build_answer_directional(
@@ -1199,6 +1498,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if terminal_reason == TerminalReason.CANCELLED.value
             else CallState.IDLE.value
         )
+        manager = bucket.get("conference_manager")
+        if manager is not None and await manager.leave_call(call_id, reason=terminal_reason):
+            registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
+            return
         if relay is not None or client is not None:
             _set_sip_bridge_call_state(
                 hass,

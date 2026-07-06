@@ -497,6 +497,8 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             sip_port=int(d.get("sip_port") or cfg["sip_port"]),
             rtp_port=int(d.get("rtp_port") or cfg["rtp_port"]),
             extension=str(d.get("extension") or ""),
+            conference_group=str(d.get("conference_group") or ""),
+            ring_group=str(d.get("ring_group") or ""),
             audio_mode=d.get("audio_mode", "full_duplex"),
             tx_formats=list(d.get("tx_formats") or []),
             rx_formats=list(d.get("rx_formats") or []),
@@ -828,6 +830,42 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
         return
     registry = _call_registry(hass)
+    if call_id.startswith("conference:"):
+        room_name = call_id.split(":", 1)[1]
+        manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
+        queue = manager.join_ha_softphone(room_name) if manager is not None else None
+        if queue is None:
+            _LOGGER.warning("sip_answer: conference room not found for %s", call_id)
+            return
+        registry.softphone_media[call_id] = {
+            "conference_room": room_name,
+            "conference_queue": queue,
+        }
+        registry.upsert(
+            call_id,
+            state=CallState.IN_CALL.value,
+            caller=room_name,
+            callee=_ha_peer_name(hass),
+            route_kind="conference",
+        )
+        registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.IN_CALL.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=room_name,
+            callee=_ha_peer_name(hass),
+            peer_name=room_name,
+            direction="incoming",
+            call_id=call_id,
+            sip_status_code=200,
+            last_sip_event="SIP_RESPONSE",
+            selected_tx_format="16000:s16le:1:20",
+            selected_rx_format="16000:s16le:1:20",
+            selected_tx_rtp_format="pt=96:L16/16000/1/20ms",
+            selected_rx_rtp_format="pt=96:L16/16000/1/20ms",
+        )
+        return
     pending = registry.pending_invites
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))

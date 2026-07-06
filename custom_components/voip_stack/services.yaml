@@ -326,6 +326,18 @@ add_contact:
           max: 1400
           step: 1
           mode: box
+    conference_group:
+      name: Optional Conference Group
+      description: Adds this contact as a member of the named VoIP conference group.
+      required: false
+      selector:
+        text:
+    ring_group:
+      name: Optional Ring Group
+      description: Adds this contact as a member of the named VoIP ring group.
+      required: false
+      selector:
+        text:
 
 remove_contact:
   name: Remove Phonebook Contact

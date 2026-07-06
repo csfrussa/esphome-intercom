@@ -124,6 +124,8 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
         "tx_formats": tx_formats,
         "rx_formats": rx_formats,
         "extension": parts[8] if len(parts) >= 9 else "",
+        "conference_group": parts[9] if len(parts) >= 10 else "",
+        "ring_group": parts[10] if len(parts) >= 11 else "",
         "extras": parts[9:] if len(parts) > 9 else [],
     }
 

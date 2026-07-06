@@ -74,6 +74,8 @@ Routing is data-driven:
 - `number` is an external/public number used through the optional trunk;
 - registered SIP accounts become callable contacts while registered;
 - HA and discovered ESP entries are generated automatically.
+- group entries are generated automatically from endpoint or manual-contact
+  membership declarations.
 
 Manual contacts and service calls use the same minimum contract:
 
@@ -89,6 +91,22 @@ data:
 `address`, `sip_uri`, `transport`, `port`, and `rtp_port` are optional
 and are filled by ESP endpoint publication, manual entries or SIP account
 registration when available.
+
+Group membership uses the same roster metadata for every endpoint type:
+
+- ESP peers publish `conference_group` and `ring_group` in their endpoint
+  identity.
+- Manual contacts and registered SIP softphones can declare
+  `conference_group` and `ring_group` through `voip_stack.add_contact`.
+- HA creates one name-only `ha_bridge` roster entry per group with
+  `metadata.group_type` set to `conference` or `ring` and
+  `metadata.members` containing the member names.
+- A conference group is an HA-mixed SIP conference focus. Calling the group
+  joins immediately.
+- A ring group forks the call to all members except the caller. The first
+  answer wins and the other legs are cancelled.
+- Group names must not collide with device or contact names. If the same name
+  is declared as both ring and conference, conference wins.
 
 Central roster services:
 

@@ -144,6 +144,7 @@ def sip_target_audio_profile(
 
 
 def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries) -> list:
+    from .groups import collect_groups
     from .roster import RosterEntry, merge_roster_overrides
 
     entries: list[RosterEntry] = []
@@ -165,9 +166,27 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
                     "sip_port": peer.sip_port,
                     "rtp_port": peer.rtp_port,
                     "audio_mode": peer.audio_mode,
+                    "conference_group": peer.conference_group,
+                    "ring_group": peer.ring_group,
                 },
             )
         )
-    entries = merge_roster_overrides(entries, manual_roster_entries(hass))
+    manual_entries = manual_roster_entries(hass)
+    entries = merge_roster_overrides(entries, manual_entries)
     entries.extend(registered_entries)
+    groups = collect_groups(peers, manual_entries, registered_entries, existing_entries=entries)
+    for group in groups.values():
+        entries.append(
+            RosterEntry(
+                id=group.name,
+                name=group.name,
+                ha_bridge=True,
+                enabled=bool(group.members),
+                metadata={
+                    "group_type": group.group_type,
+                    "members": list(group.members),
+                    "auto": bool(group.auto),
+                },
+            )
+        )
     return entries

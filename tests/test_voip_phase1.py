@@ -29,6 +29,8 @@ def _load_intercom_module(name: str):
         sys.modules[PKG_NAME] = pkg
 
     full_name = f"{PKG_NAME}.{name}"
+    if full_name in sys.modules:
+        return sys.modules[full_name]
     spec = importlib.util.spec_from_file_location(full_name, PKG_DIR / f"{name}.py")
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {full_name}")
@@ -1766,8 +1768,8 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
 class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
     async def test_busy_bridge_target_returns_terminal_response_without_ringing(self) -> None:
         local = "127.0.0.1"
-        with _reserved_udp_ports(3) as ports:
-            ha_sip, caller_rtp, dest_sip = ports
+        with _reserved_udp_ports(4) as ports:
+            ha_sip, caller_rtp, dest_sip, caller_sip = ports
         audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
         stats = {"dest_invites": 0}
 
@@ -1829,7 +1831,7 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
         caller = sip_client.SipCallClient(
             local_ip=local,
             local_name="Spotpear",
-            local_sip_port=5066,
+            local_sip_port=caller_sip,
             local_rtp_port=caller_rtp,
             supported_formats=[audio],
         )
@@ -1847,8 +1849,8 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_symbolic_target_bridges_through_ha_with_rtp_relay(self) -> None:
         local = "127.0.0.1"
-        with _reserved_udp_ports(6) as ports:
-            ha_sip, caller_rtp, dest_sip, dest_rtp, ha_rtp_left, ha_rtp_right = ports
+        with _reserved_udp_ports(7) as ports:
+            ha_sip, caller_rtp, dest_sip, dest_rtp, ha_rtp_left, ha_rtp_right, caller_sip = ports
         audio = audio_format.AudioFormat(16000, "s16le", 1, 32)
         stats = {"dest_invites": 0, "caller_rtp_rx": 0, "dest_rtp_rx": 0}
 
@@ -2012,7 +2014,7 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
         caller = sip_client.SipCallClient(
             local_ip=local,
             local_name="Spotpear",
-            local_sip_port=5066,
+            local_sip_port=caller_sip,
             local_rtp_port=caller_rtp,
             supported_formats=[audio],
         )
@@ -2024,11 +2026,17 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
                 caller.dialog.remote_rtp_port,
                 caller.dialog.selected_format.payload_type,
             )
-            await asyncio.sleep(0.4)
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while (
+                asyncio.get_running_loop().time() < deadline
+                and (stats["caller_rtp_rx"] == 0 or stats["dest_rtp_rx"] == 0)
+            ):
+                await asyncio.sleep(0.05)
             self.assertEqual(stats["dest_invites"], 1)
-            self.assertGreater(stats["caller_rtp_rx"], 0)
-            self.assertGreater(stats["dest_rtp_rx"], 0)
             assert relay is not None
+            relay_snapshot = relay.snapshot()
+            self.assertGreater(stats["caller_rtp_rx"], 0, relay_snapshot)
+            self.assertGreater(stats["dest_rtp_rx"], 0, relay_snapshot)
             self.assertGreater(relay.forwarded, 0)
             self.assertEqual(relay.dropped, 0)
         finally:

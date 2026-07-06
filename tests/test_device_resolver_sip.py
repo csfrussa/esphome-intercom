@@ -45,6 +45,8 @@ def _load_module(name: str):
         pkg.__path__ = [str(PKG_DIR)]
         sys.modules[PKG_NAME] = pkg
     full_name = f"{PKG_NAME}.{name}"
+    if full_name in sys.modules:
+        return sys.modules[full_name]
     spec = importlib.util.spec_from_file_location(full_name, PKG_DIR / f"{name}.py")
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {full_name}")
@@ -104,6 +106,8 @@ class SipEndpointParseTest(unittest.TestCase):
             assert parsed is not None
             self.assertEqual(parsed["extension"], extension)
             self.assertEqual(parsed["extras"], extras)
+            self.assertEqual(parsed["conference_group"], extras[0] if len(extras) >= 1 else "")
+            self.assertEqual(parsed["ring_group"], extras[1] if len(extras) >= 2 else "")
 
     def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
         parsed = device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")

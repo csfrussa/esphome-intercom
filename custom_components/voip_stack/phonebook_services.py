@@ -42,6 +42,8 @@ def build_phonebook_service_handlers(
                 "tx_formats",
                 "rx_formats",
                 "max_payload_bytes",
+                "conference_group",
+                "ring_group",
             )
             if key in call.data and metadata_value(key) is not None
         }

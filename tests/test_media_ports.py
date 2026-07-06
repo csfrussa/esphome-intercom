@@ -47,6 +47,8 @@ def _load_module(name: str):
         pkg.__path__ = [str(PKG_DIR)]
         sys.modules[PKG_NAME] = pkg
     full_name = f"{PKG_NAME}.{name}"
+    if full_name in sys.modules:
+        return sys.modules[full_name]
     spec = importlib.util.spec_from_file_location(full_name, PKG_DIR / f"{name}.py")
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {full_name}")

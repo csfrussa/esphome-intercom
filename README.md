@@ -775,6 +775,39 @@ phonebook services and let HA push the canonical JSON to every online ESP.
 
 See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contract.
 
+#### Groups
+
+VoIP Stack can publish HA-managed group contacts into the same central
+phonebook. ESP devices still dial by normal contact name; HA owns the group
+routing and media.
+
+ESP devices can declare membership in their `voip_stack` component:
+
+```yaml
+voip_stack:
+  id: phone
+  conference_group: Conference
+  ring_group: Casa
+```
+
+Manual contacts and registered SIP softphones can join the same groups through
+the `voip_stack.add_contact` service fields `conference_group` and
+`ring_group`. HA aggregates every declaration into one phonebook entry per
+group. Group names must not collide with existing device/contact names; if the
+same name is declared as both a conference and a ring group, conference wins.
+
+Conference groups behave like a SIP conference focus: calling `Conference`
+joins the caller immediately, HA mixes the audio, and the HA softphone rings.
+The Lovelace card remains only the softphone UI and audio surface: it mirrors
+the normal `ringing` / `in_call` state and uses the same bidirectional audio
+WebSocket as every other HA softphone call. ESP firmware does not need a
+special conference mode.
+
+Ring groups behave like SIP forking: calling `Casa` rings all members in
+parallel, excluding the caller when it is also a member. The first member to
+answer wins, HA bridges audio to that leg, and the other ringing legs receive
+CANCEL.
+
 #### Apartment VoIP panel
 
 For multi-room setups, each GPIO button can call a specific room directly. Use
