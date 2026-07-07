@@ -50,6 +50,15 @@ def _frame_ms(fmt: str) -> int:
         return 0
 
 
+def _group_names(value: object) -> list[str]:
+    names: list[str] = []
+    for raw in str(value or "").split(","):
+        name = raw.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 @dataclass(slots=True)
 class Endpoint:
     name: str
@@ -149,45 +158,45 @@ class MiniPbx:
         for name, account in self.sip_accounts.items():
             if account.get("registered", True):
                 phonebook[name] = {"type": "sip_account", "name": name, **account}
-        ring_groups = sorted({endpoint.ring_group for endpoint in active if endpoint.ring_group})
+        ring_groups = sorted({group for endpoint in active for group in _group_names(endpoint.ring_group)})
         ring_groups.extend(
-            str(contact.get("ring_group") or "")
+            group
             for contact in [*self.manual_contacts.values(), *self.sip_accounts.values()]
-            if contact.get("ring_group")
+            for group in _group_names(contact.get("ring_group"))
         )
-        conference_groups = sorted({endpoint.conference_group for endpoint in active if endpoint.conference_group})
+        conference_groups = sorted({group for endpoint in active for group in _group_names(endpoint.conference_group)})
         conference_groups.extend(
-            str(contact.get("conference_group") or "")
+            group
             for contact in [*self.manual_contacts.values(), *self.sip_accounts.values()]
-            if contact.get("conference_group")
+            for group in _group_names(contact.get("conference_group"))
         )
         ring_groups = sorted(set(ring_groups))
         conference_groups = sorted(set(conference_groups))
         for group in ring_groups:
-            members = [endpoint.name for endpoint in active if endpoint.ring_group == group]
+            members = [endpoint.name for endpoint in active if group in _group_names(endpoint.ring_group)]
             members.extend(
                 name
                 for name, contact in [*self.manual_contacts.items(), *self.sip_accounts.items()]
-                if contact.get("ring_group") == group and contact.get("registered", True)
+                if group in _group_names(contact.get("ring_group")) and contact.get("registered", True)
             )
             if members:
                 phonebook[group] = {"type": "ring", "name": group, "members": members}
         for group in conference_groups:
-            members = [endpoint.name for endpoint in active if endpoint.conference_group == group]
+            members = [endpoint.name for endpoint in active if group in _group_names(endpoint.conference_group)]
             members.extend(
                 name
                 for name, contact in [*self.manual_contacts.items(), *self.sip_accounts.items()]
-                if contact.get("conference_group") == group and contact.get("registered", True)
+                if group in _group_names(contact.get("conference_group")) and contact.get("registered", True)
             )
             ring_members = [
                 endpoint.name
                 for endpoint in active
-                if endpoint.conference_group == group and endpoint.conference_ring
+                if group in _group_names(endpoint.conference_group) and endpoint.conference_ring
             ]
             ring_members.extend(
                 name
                 for name, contact in [*self.manual_contacts.items(), *self.sip_accounts.items()]
-                if contact.get("conference_group") == group
+                if group in _group_names(contact.get("conference_group"))
                 and contact.get("conference_ring")
                 and contact.get("registered", True)
             )
@@ -375,7 +384,7 @@ class MiniPbx:
         return [
             endpoint.name
             for endpoint in self.endpoints.values()
-            if endpoint.ring_group == group and endpoint.name != exclude and endpoint.callable
+            if group in _group_names(endpoint.ring_group) and endpoint.name != exclude and endpoint.callable
         ]
 
     def negotiate_audio(self, caller: str, callee: str) -> dict[str, str] | None:
@@ -412,7 +421,7 @@ class MiniPbx:
         return [
             endpoint.name
             for endpoint in self.endpoints.values()
-            if endpoint.conference_group == group
+            if group in _group_names(endpoint.conference_group)
             and endpoint.conference_ring
             and endpoint.name != exclude
             and endpoint.callable
@@ -634,8 +643,8 @@ def run_scenario(name: str) -> dict:
         call = pbx.call_selected("WS3")
         return {"scenario": name, "contacts": contacts, "selected": selected, "call": asdict(call)}
     if name == "services":
-        pbx.add_contact("Desk SIP", sip_uri="sip:desk@192.168.1.60:5060", ring_group="RG Casa")
-        pbx.create_sip_account("MobileOffice", conference_group="CG Casa", conference_ring=True)
+        pbx.add_contact("Desk SIP", sip_uri="sip:desk@192.168.1.60:5060", ring_group="RG Casa, RG Desk")
+        pbx.create_sip_account("MobileOffice", conference_group="CG Casa, CG Mobile", conference_ring=True)
         pbx.add_trunk("Wildix")
         trunk = pbx.call_trunk("Casa", "+390551234567")
         return {"scenario": name, "phonebook": pbx.phonebook, "pushes": len(pbx.pushes), "trunk": asdict(trunk)}
@@ -773,8 +782,12 @@ def validate_result(result: dict) -> list[str]:
         phonebook = result["phonebook"]
         if "Desk SIP" not in phonebook.get("RG Casa", {}).get("members", []):
             errors.append("manual contact was not added to ring group")
+        if "Desk SIP" not in phonebook.get("RG Desk", {}).get("members", []):
+            errors.append("comma-separated manual contact ring group was not expanded")
         if "MobileOffice" not in phonebook.get("CG Casa", {}).get("ring_members", []):
             errors.append("registered SIP account was not added as conference ring member")
+        if "MobileOffice" not in phonebook.get("CG Mobile", {}).get("ring_members", []):
+            errors.append("comma-separated SIP account conference group was not expanded")
         if result["trunk"]["state"] != IN_CALL:
             errors.append("trunk simulation did not connect")
     elif scenario == "services-delete":

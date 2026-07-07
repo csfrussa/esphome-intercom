@@ -1,4 +1,4 @@
-"""Local SIP registrar for softphones registered to Home Assistant."""
+"""Local SIP registrar for standard SIP endpoints registered to Home Assistant."""
 
 from __future__ import annotations
 

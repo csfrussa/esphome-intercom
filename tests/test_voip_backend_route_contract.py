@@ -207,7 +207,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('await self.close(reason="owner_left")', conference)
         self.assertIn('not self._has_explicit_participant()', conference)
 
-    def test_softphone_account_list_service_is_registered_and_documented(self) -> None:
+    def test_sip_endpoint_account_list_service_is_registered_and_documented(self) -> None:
         services = SERVICES.read_text()
         account_services = ACCOUNT_SERVICES.read_text()
         services_yaml = SERVICES_YAML.read_text()
@@ -217,6 +217,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"list_accounts": list_accounts', account_services)
         self.assertIn("list_accounts:", services_yaml)
         self.assertIn('"list_accounts"', icons_json)
+        self.assertIn("SIP Endpoint Accounts", services_yaml)
+        self.assertIn("VoIP Stack SIP Endpoint Accounts", account_services)
+        self.assertNotIn("SIP Softphone Account", services_yaml)
+        self.assertNotIn("SIP Softphone Accounts", services_yaml)
 
     def test_add_contact_accepts_group_membership_metadata(self) -> None:
         services = SERVICES.read_text()
@@ -229,7 +233,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("conference_ring:", services_yaml)
         self.assertIn("ring_group:", services_yaml)
 
-    def test_registered_softphone_accounts_accept_group_membership_metadata(self) -> None:
+    def test_registered_sip_endpoint_accounts_accept_group_membership_metadata(self) -> None:
         services = SERVICES.read_text()
         account_services = ACCOUNT_SERVICES.read_text()
         services_yaml = SERVICES_YAML.read_text()

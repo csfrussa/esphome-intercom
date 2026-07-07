@@ -73,6 +73,15 @@ def _entry_group(entry: RosterEntry, key: str) -> str:
     return str((entry.metadata or {}).get(key) or "").strip()
 
 
+def _group_names(value: object) -> list[str]:
+    names: list[str] = []
+    for raw in str(value or "").split(","):
+        name = raw.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def collect_groups(
     peers,
     manual_entries: Iterable[RosterEntry],
@@ -88,38 +97,42 @@ def collect_groups(
         if bool(getattr(peer, "is_ha", False)):
             ha_peers.append(peer)
             continue
-        _declare(
-            groups,
-            name=str(getattr(peer, "conference_group", "") or ""),
-            group_type=GROUP_TYPE_CONFERENCE,
-            member=member,
-            ring=bool(getattr(peer, "conference_ring", False)),
-        )
-        _declare(groups, name=str(getattr(peer, "ring_group", "") or ""), group_type=GROUP_TYPE_RING, member=member)
+        for name in _group_names(getattr(peer, "conference_group", "")):
+            _declare(
+                groups,
+                name=name,
+                group_type=GROUP_TYPE_CONFERENCE,
+                member=member,
+                ring=bool(getattr(peer, "conference_ring", False)),
+            )
+        for name in _group_names(getattr(peer, "ring_group", "")):
+            _declare(groups, name=name, group_type=GROUP_TYPE_RING, member=member)
     for entry in list(manual_entries) + list(registered_entries):
         member = entry.id or entry.name
         metadata = entry.metadata or {}
-        _declare(
-            groups,
-            name=_entry_group(entry, "conference_group"),
-            group_type=GROUP_TYPE_CONFERENCE,
-            member=member,
-            ring=_metadata_bool(metadata.get("conference_ring")),
-        )
-        _declare(groups, name=_entry_group(entry, "ring_group"), group_type=GROUP_TYPE_RING, member=member)
+        for name in _group_names(_entry_group(entry, "conference_group")):
+            _declare(
+                groups,
+                name=name,
+                group_type=GROUP_TYPE_CONFERENCE,
+                member=member,
+                ring=_metadata_bool(metadata.get("conference_ring")),
+            )
+        for name in _group_names(_entry_group(entry, "ring_group")):
+            _declare(groups, name=name, group_type=GROUP_TYPE_RING, member=member)
 
     for peer in ha_peers:
         member = str(getattr(peer, "name", "") or "").strip()
-        conference_name = str(getattr(peer, "conference_group", "") or "")
-        _declare(
-            groups,
-            name=conference_name,
-            group_type=GROUP_TYPE_CONFERENCE,
-            member=member,
-            ring=bool(getattr(peer, "conference_ring", False)),
-        )
-        ring_name = str(getattr(peer, "ring_group", "") or "")
-        _declare(groups, name=ring_name, group_type=GROUP_TYPE_RING, member=member)
+        for conference_name in _group_names(getattr(peer, "conference_group", "")):
+            _declare(
+                groups,
+                name=conference_name,
+                group_type=GROUP_TYPE_CONFERENCE,
+                member=member,
+                ring=bool(getattr(peer, "conference_ring", False)),
+            )
+        for ring_name in _group_names(getattr(peer, "ring_group", "")):
+            _declare(groups, name=ring_name, group_type=GROUP_TYPE_RING, member=member)
 
     existing = {normalize_roster_key(entry.id) for entry in existing_entries}
     existing |= {normalize_roster_key(entry.name) for entry in existing_entries}

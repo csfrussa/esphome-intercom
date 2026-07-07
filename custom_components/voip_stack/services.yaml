@@ -328,7 +328,7 @@ add_contact:
           mode: box
     conference_group:
       name: Optional Conference Group
-      description: Adds this contact as a member of the named VoIP conference group.
+      description: Adds this contact as a member of one or more VoIP conference groups. Use a comma-separated list for multiple groups.
       required: false
       selector:
         text:
@@ -341,7 +341,7 @@ add_contact:
         boolean:
     ring_group:
       name: Optional Ring Group
-      description: Adds this contact as a member of the named VoIP ring group.
+      description: Adds this contact as a member of one or more VoIP ring groups. Use a comma-separated list for multiple groups.
       required: false
       selector:
         text:
@@ -452,7 +452,7 @@ create_account:
         boolean:
     conference_group:
       name: Optional Conference Group
-      description: Adds this registered SIP account to the named conference group, for example CG Casa.
+      description: Adds this registered SIP endpoint account to one or more conference groups. Use a comma-separated list for multiple groups.
       required: false
       selector:
         text:
@@ -465,13 +465,13 @@ create_account:
         boolean:
     ring_group:
       name: Optional Ring Group
-      description: Adds this registered SIP account to the named ring group, for example RG Casa.
+      description: Adds this registered SIP endpoint account to one or more ring groups. Use a comma-separated list for multiple groups.
       required: false
       selector:
         text:
 
 remove_account:
-  name: Remove SIP Softphone Account
+  name: Remove SIP Endpoint Account
   description: Remove one local SIP account and its active registration.
   fields:
     username:
@@ -481,7 +481,7 @@ remove_account:
         text:
 
 rotate_account_password:
-  name: Rotate SIP Softphone Password
+  name: Rotate SIP Endpoint Password
   description: Generate a new password for a local SIP account and clear its active registration.
   fields:
     username:
@@ -491,7 +491,7 @@ rotate_account_password:
         text:
 
 enable_account:
-  name: Enable SIP Softphone Account
+  name: Enable SIP Endpoint Account
   description: Enable a local SIP account.
   fields:
     username:
@@ -501,7 +501,7 @@ enable_account:
         text:
 
 disable_account:
-  name: Disable SIP Softphone Account
+  name: Disable SIP Endpoint Account
   description: Disable a local SIP account and clear its active registration.
   fields:
     username:
@@ -511,9 +511,9 @@ disable_account:
         text:
 
 list_accounts:
-  name: List SIP Softphone Accounts
-  description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.
+  name: List SIP Endpoint Accounts
+  description: Show configured local SIP endpoint accounts without passwords and emit them in the voip_stack call event stream.
 
 export_accounts:
-  name: Export SIP Softphone Accounts
-  description: Emit configured local SIP accounts without passwords in the voip_stack call event stream.
+  name: Export SIP Endpoint Accounts
+  description: Show configured local SIP endpoint accounts without passwords and emit them in the voip_stack call event stream.

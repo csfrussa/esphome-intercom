@@ -45,7 +45,7 @@ router = _load_module("router")
 class GroupAggregationTest(unittest.TestCase):
     def test_collects_groups_from_peers_and_manual_entries(self) -> None:
         peers = [
-            SimpleNamespace(name="Kitchen", conference_group="Conference", conference_ring=True, ring_group="Casa"),
+            SimpleNamespace(name="Kitchen", conference_group="Conference, Upstairs", conference_ring=True, ring_group="Casa, Night"),
             SimpleNamespace(name="Bedroom", conference_group="", conference_ring=False, ring_group="Casa"),
         ]
         manual = [
@@ -59,8 +59,10 @@ class GroupAggregationTest(unittest.TestCase):
         self.assertEqual(collected["Conference"].group_type, groups.GROUP_TYPE_CONFERENCE)
         self.assertEqual(collected["Conference"].members, ["Kitchen", "Zoiper"])
         self.assertEqual(collected["Conference"].ring_members, ["Kitchen"])
+        self.assertEqual(collected["Upstairs"].members, ["Kitchen"])
         self.assertEqual(collected["Casa"].group_type, groups.GROUP_TYPE_RING)
         self.assertEqual(collected["Casa"].members, ["Kitchen", "Bedroom"])
+        self.assertEqual(collected["Night"].members, ["Kitchen"])
 
     def test_ha_peer_can_create_and_join_groups(self) -> None:
         ha = SimpleNamespace(name="Casa", is_ha=True, conference_group="CG Casa", conference_ring=True, ring_group="RG Casa")

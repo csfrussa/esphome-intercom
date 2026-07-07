@@ -1,4 +1,4 @@
-"""HA service handlers for local SIP registrar accounts."""
+"""HA service handlers for standard SIP endpoint accounts."""
 
 from __future__ import annotations
 
@@ -132,6 +132,20 @@ def build_account_service_handlers(
             for item in sip_account_dicts(call.hass)
         ]
         _fire_call_event(call.hass, {"state": state, "accounts": accounts}, "sip")
+        lines = [
+            (
+                f"- `{item['username']}`"
+                f" ({item['display_name'] or item['username']})"
+                f": {'enabled' if item['enabled'] else 'disabled'}"
+            )
+            for item in accounts
+        ]
+        persistent_notification.async_create(
+            call.hass,
+            "\n".join(lines) if lines else "No local SIP endpoint accounts configured.",
+            title="VoIP Stack SIP Endpoint Accounts",
+            notification_id=f"{DOMAIN}_sip_endpoint_accounts",
+        )
 
     async def list_accounts(call: ServiceCall) -> None:
         emit_accounts(call, "list_accounts")

@@ -8,11 +8,11 @@ Turn ESPHome audio devices and Home Assistant into a real local VoIP system.
 This is no longer just an intercom. ESP devices are SIP phones, Home Assistant
 is a SIP endpoint, call router, bridge, local registrar and optional trunk
 endpoint. You can build a door intercom, room phones, HA-routed calls,
-local SIP accounts and external SIP trunk calls without running Asterisk next
+local SIP endpoint accounts and external SIP trunk calls without running Asterisk next
 to Home Assistant.
 
 Flash a YAML, add the ESP to Home Assistant, install the card, and you already
-have a working full-duplex VoIP endpoint. Add the phonebook, local SIP accounts
+have a working full-duplex VoIP endpoint. Add the phonebook, local SIP endpoint accounts
 or a trunk when you want the system to grow.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
@@ -121,7 +121,7 @@ LVGL button, automation, service call or Lovelace card.
 
 `2026.7.0` is the SIP/VoIP migration release. It replaces the old
 project-specific call-control path with SIP/SDP/RTP call handling, ESP SIP
-endpoints, Home Assistant routing/bridging, local SIP accounts and
+endpoints, Home Assistant routing/bridging, local SIP endpoint accounts and
 optional trunk support.
 
 Read the release details:
@@ -177,7 +177,7 @@ The phonebook merges:
 - ESP endpoints published by online ESPHome devices;
 - Home Assistant itself as a softphone target;
 - manual contacts created with HA services;
-- local SIP accounts registered to HA;
+- local SIP endpoint accounts registered to HA;
 - trunk-routed phone targets and group entries when configured.
 
 A contact has one required field: `name`. Everything else is optional and
@@ -788,9 +788,9 @@ ESP devices can declare membership in their `voip_stack` component:
 ```yaml
 voip_stack:
   id: phone
-  conference_group: "CG Home"
+  conference_group: "CG Home, CG Upstairs"
   conference_ring: true
-  ring_group: "RG Home"
+  ring_group: "RG Home, RG Night"
 ```
 
 Manual contacts and registered SIP endpoints can join the same groups through
@@ -801,12 +801,14 @@ service: voip_stack.add_contact
 data:
   name: Desk Phone
   sip_uri: sip:desk@192.168.1.60:5060
-  ring_group: "RG Home"
-  conference_group: "CG Home"
+  ring_group: "RG Home, RG Desk"
+  conference_group: "CG Home, CG Office"
   conference_ring: true
 ```
 
 HA aggregates every declaration into one phonebook entry per group. Group names
+can be a single value or a comma-separated list; every listed group gets the
+endpoint/contact/account as a member. Group names
 must not collide with existing device/contact names; if the same name is
 declared as both a conference and a ring group, conference wins.
 
@@ -835,7 +837,7 @@ stream, while other open cards mirror state without attaching their
 microphone/speaker.
 
 Because the HA backend speaks SIP, Asterisk is optional rather than required.
-HA can register to a SIP trunk itself, can host local SIP accounts for
+HA can register to a SIP trunk itself, can host local SIP endpoint accounts for
 VoIP phones, ATAs and softphones such as Zoiper, and can act as a small PBX for ESP devices,
 registered SIP endpoints, ring groups and conference groups. Advanced dial-plan overrides are
 intended to be handled through HA services/events and automations on top of the
@@ -1072,7 +1074,7 @@ The high-level model is described in [Phonebook And Routing](#phonebook-and-rout
 The canonical roster JSON, SIP URI fields and audio capability fields are
 documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
 
-### Local SIP Accounts
+### Local SIP Endpoint Accounts
 
 VoIP Stack can optionally act as a local SIP registrar for standard
 SIP endpoints. Create an account from Developer Tools -> Services with
@@ -1087,7 +1089,7 @@ data:
 
 ![Create SIP account service](docs/images/create-account-service.png)
 
-_Create a local SIP account from Developer Tools -> Actions._
+_Create a local SIP endpoint account from Developer Tools -> Actions._
 
 ![Create SIP account filled](docs/images/create-account-service-filled.png)
 
