@@ -63,7 +63,7 @@ class HaSoftphoneEndpointSensor(SensorEntity):
 
     async def async_update(self) -> None:
         from . import _get_transport_config, _ha_advertise_host
-        from .websocket_api import _ha_peer_name, _ha_softphone_groups
+        from .websocket_api import _ha_peer_name, _ha_softphone_extension, _ha_softphone_groups
 
         host = await _ha_advertise_host(self.hass)
         if not host:
@@ -75,12 +75,13 @@ class HaSoftphoneEndpointSensor(SensorEntity):
 
         cfg = _get_transport_config(self.hass)
         groups = _ha_softphone_groups(self.hass)
+        extension = _ha_softphone_extension(self.hass)
         tx = ";".join(HA_ENDPOINT_AUDIO_FORMATS)
         rx = tx
         endpoint = (
             f"{_ha_peer_name(self.hass)}|{host}|{int(cfg['sip_port'])}|{int(cfg['rtp_port'])}|"
             f"full_duplex|{tx}|{rx}|sip_tcp|"
-            f"|{groups['conference_group']}|{groups['ring_group']}|"
+            f"{extension}|{groups['conference_group']}|{groups['ring_group']}|"
             f"{1 if groups['conference_ring'] else 0}"
         )
         self._attr_native_value = "online"
@@ -88,6 +89,7 @@ class HaSoftphoneEndpointSensor(SensorEntity):
             "local_ha": True,
             "available": True,
             "endpoint": endpoint,
+            "extension": extension,
             "ring_group": groups["ring_group"],
             "conference_group": groups["conference_group"],
             "conference_ring": bool(groups["conference_ring"]),

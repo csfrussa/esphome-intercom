@@ -49,12 +49,13 @@ Provider inbound calls arrive at HA's SIP endpoint. HA answers the trunk leg
 with SDP so it can receive RFC2833/telephone-event DTMF digits from normal
 mobile dialers and SIP softphones.
 
-Example DTMF route map:
+DTMF digits resolve against the central phonebook `extension` field:
 
-```text
-100=Kitchen
-101=Bedroom
-9=HA
+```yaml
+service: voip_stack.add_contact
+data:
+  name: Kitchen
+  extension: "100"
 ```
 
 Example user flow:
@@ -62,16 +63,17 @@ Example user flow:
 1. A caller dials the public provider number.
 2. HA answers the trunk leg.
 3. The caller sends post-dial digits such as `100`.
-4. HA routes the call to the matching local phonebook target.
+4. HA routes the call to the phonebook entry whose `extension` is `100`.
 5. If no digits/route hint arrive before timeout, HA rings the HA softphone or
    the configured default target.
 6. If explicit digits arrive but do not resolve, HA terminates the answered leg
    as `route_not_found`.
 
 No final `#` is required. `trunk_dtmf_terminator` can be set if a deployment
-wants one, but the normal path is a short timeout. Ambiguous prefixes are not
-rejected during setup: HA collects within the timeout, tries the final digit
-buffer, and fails loudly if that explicit buffer cannot be resolved.
+wants one, but the normal path is a short timeout. Ambiguous prefixes are
+resolved against the live phonebook extensions: HA collects within the timeout,
+tries the final digit buffer, and fails loudly if that explicit buffer cannot
+be resolved.
 
 If a provider/PBX does not advertise `telephone-event` in the SDP offer and
 does not forward SIP INFO DTMF, HA has no standard digit channel to inspect. In

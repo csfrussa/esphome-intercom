@@ -13,10 +13,8 @@ from homeassistant.core import HomeAssistant
 from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS, HA_TRUNK_AUDIO_FORMATS
 from .const import (
     CONF_REGISTRAR_ENABLED,
-    CONF_RING_GROUP_FALLBACK,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DTMF_ENABLED,
-    CONF_TRUNK_DTMF_ROUTES,
     CONF_TRUNK_DTMF_TERMINATOR,
     CONF_TRUNK_DTMF_TIMEOUT_MS,
     CONF_TRUNK_INBOUND_DEFAULT_TARGET,
@@ -38,7 +36,6 @@ from .endpoint_routing import (
     same_route_name as _same_route_name,
     sip_target_audio_profile as _sip_target_audio_profile,
 )
-from .dtmf import parse_dtmf_route_map
 from .fsm import (
     CallState,
     TerminalReason,
@@ -59,6 +56,14 @@ from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphon
 _LOGGER = logging.getLogger(__name__)
 SIP_ROUTE_DECISION_TIMEOUT = 1.5
 RING_GROUP_TIMEOUT_S = 30.0
+
+
+def _dtmf_extension_routes(entries) -> dict[str, str]:
+    return {
+        str(entry.extension).strip(): str(entry.extension).strip()
+        for entry in entries
+        if str(getattr(entry, "extension", "") or "").strip()
+    }
 
 
 async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
@@ -230,13 +235,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         bucket = hass.data.setdefault(DOMAIN, {})
         bucket.setdefault("trunk_closed_calls", set()).discard(invite.call_id)
         trunk_cfg = _get_trunk_config(hass)
-        routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
         dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
         dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
         dtmf_format = dtmf_formats[0] if dtmf_formats else None
         destination = ""
         digits = ""
-        if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_timeout_ms > 0 and dtmf_format is not None:
+        peers = await _async_build_peer_snapshot(hass)
+        roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
+        routes = _dtmf_extension_routes(roster_entries)
+        if trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and dtmf_timeout_ms > 0 and dtmf_format is not None:
             try:
                 collector = DtmfCollector(
                     host="0.0.0.0",
@@ -249,7 +256,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 digits, destination = await collector.collect()
             except Exception as err:
                 _LOGGER.info("SIP trunk DTMF collection unavailable: %s", err)
-        elif trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_timeout_ms > 0:
+        elif trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and dtmf_timeout_ms > 0:
             timeout = float(dtmf_timeout_ms) / 1000.0
             _LOGGER.info(
                 "SIP trunk inbound call has no telephone-event SDP offer; ringing default destination after %.1fs",
@@ -263,7 +270,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
         default_target = str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA"
         route_hint = destination or digits
-        peers = await _async_build_peer_snapshot(hass)
         decision = route_inbound_trunk(
             CallContext(
                 call_id=invite.call_id,
@@ -276,7 +282,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 route_hint_source=RouteHintSource.DTMF if route_hint else RouteHintSource.NONE,
                 source_host=invite.source_host,
             ),
-            _roster_from_peers(hass, peers, _registered_roster_entries(hass)),
+            roster_entries,
             trunk_ready=False,
         )
         if decision.action is RouteAction.ANSWER_HA:
@@ -743,9 +749,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
             if winner is None:
                 _pending_routes(hass).pop(invite.call_id, None)
-                if str(cfg.get(CONF_RING_GROUP_FALLBACK) or "reject") == "answer_ha":
-                    _defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING, callee=_ha_peer_name(hass))
-                    return
                 status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(final_result)
                 _sip_send_final_response(hass, invite.call_id, status_code, sip_reason, decline_reason=terminal_reason)
                 _set_sip_bridge_call_state(
@@ -1124,9 +1127,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 _LOGGER.warning("SIP trunk RTP bridge port allocation failed: %s", err)
                 return SipInviteResult(503, "Service Unavailable", to_tag="")
             trunk_cfg = _get_trunk_config(hass)
-            routes = parse_dtmf_route_map(trunk_cfg.get(CONF_TRUNK_DTMF_ROUTES))
             dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
-            dtmf_preanswer = bool(trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and routes and dtmf_timeout_ms > 0)
+            dtmf_preanswer = bool(trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and dtmf_timeout_ms > 0)
             if not dtmf_preanswer:
                 _LOGGER.info(
                     "SIP trunk inbound skips DTMF pre-answer call_id=%s caller=%s",

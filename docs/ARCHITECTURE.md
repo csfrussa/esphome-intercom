@@ -186,7 +186,7 @@ HA-router routing:
 
 The optional SIP trunk is used only when configured and registered. It never
 registers ESP devices to the provider. ESP devices remain local SIP user agents;
-HA maps provider-side numbers or DTMF route digits to local SIP targets.
+HA maps provider-side numbers or DTMF extension digits to local SIP targets.
 
 Inbound trunk calls use deterministic policy:
 

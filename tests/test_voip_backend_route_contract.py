@@ -83,7 +83,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_run_ring_group_call(invite, decision.entry, peers, roster_entries)", on_invite)
         self.assertIn('return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)', on_invite)
 
-    def test_ha_softphone_group_membership_is_configured_in_backend(self) -> None:
+    def test_ha_softphone_runtime_settings_publish_virtual_endpoint(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
         strings = STRINGS_JSON.read_text()
         init_py = INIT.read_text()
@@ -92,13 +92,17 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         const = (ROOT / "custom_components" / "voip_stack" / "const.py").read_text()
 
         for token in ("CONF_HA_RING_GROUP", "CONF_HA_CONFERENCE_GROUP", "CONF_HA_CONFERENCE_RING"):
-            self.assertIn(token, config_flow)
-            self.assertIn(token, websocket)
+            self.assertNotIn(token, config_flow)
+            self.assertNotIn(token, websocket)
             self.assertNotIn(token, init_py)
-        self.assertIn('"ha_ring_group"', strings)
-        self.assertIn('"ha_conference_group"', strings)
-        self.assertIn('"ha_conference_ring"', strings)
+            self.assertNotIn(token, const)
+        self.assertNotIn('"ha_ring_group"', strings)
+        self.assertNotIn('"ha_conference_group"', strings)
+        self.assertNotIn('"ha_conference_ring"', strings)
+        self.assertIn("WS_TYPE_SET_HA_SOFTPHONE_SETTINGS", websocket)
         self.assertIn("WS_TYPE_SET_HA_SOFTPHONE_GROUPS", websocket)
+        self.assertIn("async_set_ha_softphone_settings", websocket)
+        self.assertIn("_ha_softphone_extension", websocket)
         self.assertIn("HA_SOFTPHONE_ENDPOINT_ENTITY_ID", const)
         self.assertIn("class HaSoftphoneEndpointSensor", sensor)
         self.assertIn("HA_SIP_PCM_FORMATS", sensor)
@@ -108,6 +112,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("HA_ENDPOINT_FORMATS", sensor)
         self.assertIn('self._attr_native_value = "online"', sensor)
         self.assertIn('"endpoint": endpoint', sensor)
+        self.assertIn('"extension": extension', sensor)
+        self.assertIn("f\"{extension}|{groups['conference_group']}|{groups['ring_group']}|\"", sensor.replace("\n", ""))
         self.assertIn("old_endpoint", sensor)
         self.assertIn("new_endpoint", sensor)
         self.assertIn("new_set.add(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)", sensor)
@@ -121,22 +127,24 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", websocket)
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", sensor)
 
-    def test_config_flow_preserves_new_ha_group_options_when_trunk_is_disabled(self) -> None:
+    def test_config_flow_has_no_softphone_group_or_ring_fallback_policy(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
-        disabled_trunk = config_flow[
-            config_flow.index("def _disabled_trunk_data")
-            : config_flow.index("class VoipStackConfigFlow")
-        ]
-        for token in ("CONF_RING_GROUP_FALLBACK", "CONF_HA_RING_GROUP", "CONF_HA_CONFERENCE_GROUP", "CONF_HA_CONFERENCE_RING"):
-            self.assertIn(f"{token}: data.get({token}, existing.get", disabled_trunk)
+        strings = STRINGS_JSON.read_text()
+        const = (ROOT / "custom_components" / "voip_stack" / "const.py").read_text()
 
-        trunk_submit = config_flow[
-            config_flow.index("async def async_step_trunk")
-            : config_flow.index("return self.async_show_form(step_id=\"trunk\"")
-        ]
-        self.assertIn("CONF_HA_RING_GROUP: existing.get(CONF_HA_RING_GROUP", trunk_submit)
-        self.assertIn("CONF_HA_CONFERENCE_GROUP: existing.get(CONF_HA_CONFERENCE_GROUP", trunk_submit)
-        self.assertIn("CONF_HA_CONFERENCE_RING: bool(existing.get(CONF_HA_CONFERENCE_RING", trunk_submit)
+        for token in (
+            "CONF_RING_GROUP_FALLBACK",
+            "CONF_HA_RING_GROUP",
+            "CONF_HA_CONFERENCE_GROUP",
+            "CONF_HA_CONFERENCE_RING",
+            "ring_group_fallback",
+            "ha_ring_group",
+            "ha_conference_group",
+            "ha_conference_ring",
+        ):
+            self.assertNotIn(token, config_flow)
+            self.assertNotIn(token, strings)
+            self.assertNotIn(token, const)
 
     def test_ha_softphone_can_join_conference_group_without_sip_self_invite(self) -> None:
         init_py = INIT.read_text()
@@ -237,15 +245,28 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("conference_ring:", services_yaml[services_yaml.index("create_account:") :])
         self.assertIn("ring_group:", services_yaml[services_yaml.index("create_account:") :])
 
-    def test_ring_group_fallback_is_configured_and_uses_ha_softphone(self) -> None:
+    def test_ring_group_timeout_has_no_configurable_ha_fallback(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
         strings = STRINGS_JSON.read_text()
 
-        self.assertIn("CONF_RING_GROUP_FALLBACK", config_flow)
-        self.assertIn('SelectSelectorConfig(options=["reject", "answer_ha"])', config_flow)
-        self.assertIn('"ring_group_fallback"', strings)
-        self.assertIn("CONF_RING_GROUP_FALLBACK", self.source)
-        self.assertIn("_defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING", self.source)
+        self.assertNotIn("CONF_RING_GROUP_FALLBACK", config_flow)
+        self.assertNotIn('SelectSelectorConfig(options=["reject", "answer_ha"])', config_flow)
+        self.assertNotIn('"ring_group_fallback"', strings)
+        self.assertNotIn("CONF_RING_GROUP_FALLBACK", self.source)
+        self.assertNotIn("_defer_invite_to_ha_softphone(invite, route_kind=GROUP_TYPE_RING", self.source)
+
+    def test_trunk_dtmf_uses_phonebook_extensions_not_manual_route_map(self) -> None:
+        config_flow = CONFIG_FLOW.read_text()
+        strings = STRINGS_JSON.read_text()
+        const = (ROOT / "custom_components" / "voip_stack" / "const.py").read_text()
+
+        for source in (config_flow, strings, const, self.source):
+            self.assertNotIn("CONF_TRUNK_DTMF_ROUTES", source)
+            self.assertNotIn("trunk_dtmf_routes", source)
+            self.assertNotIn("parse_dtmf_route_map", source)
+        self.assertIn("def _dtmf_extension_routes(entries)", self.source)
+        self.assertIn("routes = _dtmf_extension_routes(roster_entries)", self.source)
+        self.assertIn("route_hint = destination or digits", self.source)
 
     def test_ring_group_treats_ha_member_as_parallel_contender(self) -> None:
         ring_group = self.source[self.source.index("async def _run_ring_group_call(") : self.source.index("async def _ring_conference_members(")]
@@ -291,7 +312,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     def test_softphone_settings_changes_do_not_emit_call_lifecycle_events(self) -> None:
         websocket = WEBSOCKET_API.read_text()
         group_update = websocket[
-            websocket.index("async def async_set_ha_softphone_groups(") : websocket.index("def _sip_runtime_snapshot(")
+            websocket.index("async def async_set_ha_softphone_settings(") : websocket.index("def _sip_runtime_snapshot(")
         ]
         dnd_ws = websocket[
             websocket.index("async def websocket_set_ha_softphone_dnd(") : websocket.index("async def websocket_set_ha_softphone_groups(")

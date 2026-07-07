@@ -444,7 +444,7 @@ Recommended first setup:
 When trunk is enabled, the next step asks for provider/PBX credentials. The
 DTMF timeout controls incoming external calls: `0` skips DTMF collection and
 rings HA immediately; a value from `1` to `10` seconds lets callers dial a
-route such as `101` before HA falls back to the default target.
+phonebook `extension` such as `101` before HA falls back to the default target.
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
@@ -826,12 +826,13 @@ the same room, not a winner-takes-all bridge. When the final participant leaves,
 HA closes the room and releases the media resources.
 
 The HA softphone can also subscribe to a ring group and/or conference group.
-The Lovelace card exposes those settings dynamically from the central roster.
-Changing them updates the HA softphone endpoint sensor, which triggers the same
-phonebook rebuild and push path used by ESP endpoints. The card remains only
-the softphone UI and browser audio surface: the browser that starts or answers
-the call owns the WebSocket media stream, while other open cards mirror state
-without attaching their microphone/speaker.
+The Lovelace card exposes those settings and the HA softphone extension
+dynamically from the central roster. Changing them updates the HA softphone
+endpoint sensor, which triggers the same phonebook rebuild and push path used
+by ESP endpoints. The card remains only the softphone UI and browser audio
+surface: the browser that starts or answers the call owns the WebSocket media
+stream, while other open cards mirror state without attaching their
+microphone/speaker.
 
 Because the HA backend speaks SIP, Asterisk is optional rather than required.
 HA can register to a SIP trunk itself, can host local SIP accounts for
@@ -1123,8 +1124,9 @@ register to that trunk: they call names or numbers through HA, and HA owns the
 external SIP leg, codec negotiation, RTP bridge and terminal reason propagation.
 
 Inbound trunk calls with no explicit route hint ring the HA softphone/default
-target. Explicit DTMF/SIP route hints must resolve to a phonebook contact or HA
-terminates the leg with a route error instead of silently falling back.
+target. Explicit DTMF digits are resolved as phonebook extensions; unresolved
+DTMF/SIP route hints terminate the leg with a route error instead of silently
+falling back.
 
 ## Call Routing
 

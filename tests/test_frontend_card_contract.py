@@ -92,10 +92,12 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_ha_softphone_group_controls_are_dynamic_backend_state(self) -> None:
         load = _method_body(self.source, "_loadSharedRoster")
         groups = _method_body(self.source, "_availableSoftphoneGroups")
-        setter = _method_body(self.source, "async _setHaSoftphoneGroup")
+        setter = _method_body(self.source, "async _setHaSoftphoneSettings")
         self.assertIn("roster_json", load)
         self.assertIn("metadata?.group_type", groups)
-        self.assertIn('"voip_stack/set_ha_softphone_groups"', setter)
+        self.assertIn('"voip_stack/set_ha_softphone_settings"', setter)
+        self.assertIn("extension: this._softphoneExtension", setter)
+        self.assertIn('id = "ha-softphone-extension"', self.source)
         self.assertNotIn("conference_manager", self.source)
         self.assertNotIn("_ringConference", self.source)
 

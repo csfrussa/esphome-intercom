@@ -37,7 +37,6 @@ from .const import (
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
     CONF_TRUNK_DTMF_ENABLED,
-    CONF_TRUNK_DTMF_ROUTES,
     CONF_TRUNK_DTMF_TERMINATOR,
     CONF_TRUNK_DTMF_TIMEOUT_MS,
     CONF_TRUNK_ENABLED,
@@ -56,7 +55,6 @@ from .const import (
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
-from .dtmf import parse_dtmf_route_map
 from .device_resolver import get_resolver, parse_voip_endpoint
 from .endpoint_lifecycle import call_registry as _call_registry
 from .endpoint_routing import (

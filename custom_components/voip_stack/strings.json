@@ -11,10 +11,6 @@
           "assist_intents": "Enable Assist intents",
           "debug_mode": "Enable SIP/RTP debug mode",
           "sip_registrar_enabled": "Enable local SIP accounts",
-          "ring_group_fallback": "Ring group fallback",
-          "ha_ring_group": "HA softphone ring group",
-          "ha_conference_group": "HA softphone conference group",
-          "ha_conference_ring": "Ring HA for conference group",
           "trunk_enabled": "Enable optional SIP trunk"
         },
         "data_description": {
@@ -24,10 +20,6 @@
           "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live VoIP phonebook.",
           "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
           "sip_registrar_enabled": "Accept REGISTER from local SIP endpoints such as VoIP phones, Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
-          "ring_group_fallback": "What HA does when no member answers a ring group before timeout. Reject returns 480; answer_ha rings the HA softphone.",
-          "ha_ring_group": "Optional ring group membership for the Home Assistant softphone only.",
-          "ha_conference_group": "Optional conference group membership for the Home Assistant softphone only.",
-          "ha_conference_ring": "When enabled, HA rings when another participant starts the configured conference group.",
           "trunk_enabled": "Show provider/PBX trunk settings. When disabled, no trunk registration, external route or DTMF collector starts."
         }
       },
@@ -47,8 +39,7 @@
           "trunk_inbound_default_target": "Inbound default target",
           "trunk_dtmf_enabled": "Enable inbound DTMF routing",
           "trunk_dtmf_timeout_ms": "DTMF timeout (seconds)",
-          "trunk_dtmf_terminator": "DTMF terminator",
-          "trunk_dtmf_routes": "DTMF routes"
+          "trunk_dtmf_terminator": "DTMF terminator"
         },
         "data_description": {
           "trunk_transport": "SIP transport used from HA to the provider.",
@@ -60,19 +51,17 @@
           "trunk_password": "Digest auth password.",
           "trunk_register_expires": "REGISTER expiration in seconds.",
           "trunk_outbound_proxy": "Optional proxy host or sip:host:port used as signaling next hop.",
-          "trunk_inbound_default_target": "Local phonebook target used when no DTMF route resolves. Use HA for the HA softphone.",
-          "trunk_dtmf_enabled": "Collect RFC2833/telephone-event digits after answering inbound trunk calls.",
+          "trunk_inbound_default_target": "Local phonebook target used when no DTMF extension resolves. Use HA for the HA softphone.",
+          "trunk_dtmf_enabled": "Collect RFC2833/telephone-event digits after answering inbound trunk calls and route them through phonebook extensions.",
           "trunk_dtmf_timeout_ms": "Digit collection window after pre-answer. Default is 3 seconds, maximum is 10 seconds. Set 0 to skip DTMF/pre-answer and let the normal inbound dialplan decide; without an automation override, the HA softphone rings directly.",
-          "trunk_dtmf_terminator": "Optional terminator digit such as #. Empty means timeout or exact route match decides.",
-          "trunk_dtmf_routes": "One route per line using digits=target, for example 100=Kitchen."
+          "trunk_dtmf_terminator": "Optional terminator digit such as #. Empty means timeout or exact phonebook extension match decides."
         }
       }
     },
     "error": {
       "trunk_server_required": "Trunk server is required.",
       "trunk_username_required": "Trunk username is required.",
-      "trunk_password_required": "Trunk password is required.",
-      "trunk_dtmf_routes_invalid": "DTMF routes must use one digits=target entry per line."
+      "trunk_password_required": "Trunk password is required."
     },
     "abort": {
       "reconfigure_successful": "VoIP Stack reconfigured successfully.",

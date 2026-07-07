@@ -112,7 +112,8 @@ final response.
 - Confirm the provider offers RFC2833/telephone-event DTMF in SDP.
 - If the SDP has no `telephone-event` and the provider does not send SIP INFO,
   HA cannot read post-answer digits from that provider leg.
-- Check `trunk_dtmf_routes` entries use `digits=target`, one route per line.
+- Check that the target exists in the central phonebook and has the matching
+  `extension` value.
 - Keep the inbound DTMF timeout short, normally 3 seconds. Set it to `0` when you do not want trunk pre-answer/DTMF and want inbound calls to follow the normal dialplan immediately.
 - If no digits arrive, HA uses `trunk_inbound_default_target`.
 - If digits arrive but do not resolve, HA logs them and terminates the answered

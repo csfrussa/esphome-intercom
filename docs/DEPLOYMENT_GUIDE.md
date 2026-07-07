@@ -79,14 +79,16 @@ installs; no registration, external route or DTMF collector is started.
 
 Enable it only when HA must register to a SIP provider or PBX. The trunk setup
 asks for provider transport, server, credentials, optional outbound proxy,
-default inbound target and optional DTMF route map.
+default inbound target and optional DTMF digit collection.
 
 Inbound provider calls are answered by HA so it can collect DTMF digits when
 the provider exposes a standard digit channel. Normal mobile dialers can use
 post-dial pauses, for example a contact that dials the provider number, waits,
 and sends `100`. If no digits arrive, HA rings the configured default target
-(`HA` by default). If digits arrive and do not resolve, HA terminates the
-answered leg with `route_not_found`.
+or HA softphone. If digits arrive, HA resolves them through central phonebook
+`extension` values.
+If digits arrive and do not resolve, HA terminates the answered leg with
+`route_not_found`.
 
 ## Media
 

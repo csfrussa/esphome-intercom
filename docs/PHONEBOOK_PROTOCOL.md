@@ -156,10 +156,10 @@ Contact into the roster so ESP devices can call them by name.
 - `ha_bridge: true` forces HA to act as a SIP bridge.
 - If HA has a registered trunk, external numbers and unresolved number-like
   targets can route through the trunk.
-- Inbound trunk DTMF routes map digit strings to the same local target namespace
-  as the phonebook. No DTMF route hint means "ring HA". A received explicit
-  route hint that cannot be resolved terminates as `route_not_found`; it does
-  not silently fall back to HA.
+- Inbound trunk DTMF digits resolve against phonebook `extension` values. No
+  DTMF route hint means "ring HA". A received explicit route hint that cannot
+  be resolved terminates as `route_not_found`; it does not silently fall back
+  to HA.
 - HA automations can override a pending route request by listening for
   `voip_stack.route_request` and calling `voip_stack.route`.
 - Missing or incompatible media routes must fail explicitly with SIP terminal

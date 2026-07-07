@@ -39,8 +39,7 @@
           "trunk_inbound_default_target": "Destinazione default ingresso",
           "trunk_dtmf_enabled": "Abilita routing DTMF ingresso",
           "trunk_dtmf_timeout_ms": "Timeout DTMF (secondi)",
-          "trunk_dtmf_terminator": "Terminatore DTMF",
-          "trunk_dtmf_routes": "Rotte DTMF"
+          "trunk_dtmf_terminator": "Terminatore DTMF"
         },
         "data_description": {
           "trunk_transport": "Transport SIP usato da HA verso il provider.",
@@ -52,19 +51,17 @@
           "trunk_password": "Password digest auth.",
           "trunk_register_expires": "Scadenza REGISTER in secondi.",
           "trunk_outbound_proxy": "Proxy opzionale o sip:host:port usato come next hop di signaling.",
-          "trunk_inbound_default_target": "Target rubrica locale usato quando nessuna rotta DTMF risolve. Usa HA per il softphone HA.",
-          "trunk_dtmf_enabled": "Raccoglie cifre RFC2833/telephone-event dopo aver risposto alle chiamate trunk in ingresso.",
+          "trunk_inbound_default_target": "Target rubrica locale usato quando nessuna extension DTMF risolve. Usa HA per il softphone HA.",
+          "trunk_dtmf_enabled": "Raccoglie cifre RFC2833/telephone-event dopo aver risposto alle chiamate trunk in ingresso e le instrada tramite le extension della rubrica.",
           "trunk_dtmf_timeout_ms": "Finestra di raccolta cifre dopo pre-risposta. Default 3 secondi, massimo 10 secondi. Imposta 0 per saltare DTMF/pre-risposta e lasciare decidere il normale dialplan in ingresso; senza override di automazione squilla direttamente il softphone HA.",
-          "trunk_dtmf_terminator": "Terminatore opzionale, per esempio #. Vuoto significa che decide timeout o match esatto.",
-          "trunk_dtmf_routes": "Una rotta per riga nel formato cifre=target, per esempio 100=Cucina."
+          "trunk_dtmf_terminator": "Terminatore opzionale, per esempio #. Vuoto significa che decide timeout o match esatto con una extension in rubrica."
         }
       }
     },
     "error": {
       "trunk_server_required": "Il server trunk è obbligatorio.",
       "trunk_username_required": "Lo username trunk è obbligatorio.",
-      "trunk_password_required": "La password trunk è obbligatoria.",
-      "trunk_dtmf_routes_invalid": "Le rotte DTMF devono usare una voce cifre=target per riga."
+      "trunk_password_required": "La password trunk è obbligatoria."
     },
     "abort": {
       "reconfigure_successful": "VoIP Stack riconfigurato correttamente.",

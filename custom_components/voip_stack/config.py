@@ -6,14 +6,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_HA_CONFERENCE_GROUP,
-    CONF_HA_CONFERENCE_RING,
-    CONF_HA_RING_GROUP,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
     CONF_TRUNK_DTMF_ENABLED,
-    CONF_TRUNK_DTMF_ROUTES,
     CONF_TRUNK_DTMF_TERMINATOR,
     CONF_TRUNK_DTMF_TIMEOUT_MS,
     CONF_TRUNK_ENABLED,
@@ -38,9 +34,6 @@ def entry_transport_config(entry: ConfigEntry | None = None) -> dict:
         "sip_port": int(data.get("sip_port", VOIP_STACK_SIP_PORT)),
         "rtp_port": int(data.get("rtp_port", VOIP_STACK_RTP_PORT)),
         "advertise_host": (data.get("advertise_host") or "").strip(),
-        CONF_HA_RING_GROUP: str(data.get(CONF_HA_RING_GROUP) or "").strip(),
-        CONF_HA_CONFERENCE_GROUP: str(data.get(CONF_HA_CONFERENCE_GROUP) or "").strip(),
-        CONF_HA_CONFERENCE_RING: bool(data.get(CONF_HA_CONFERENCE_RING, False)),
     }
 
 
@@ -64,7 +57,6 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
         CONF_TRUNK_DTMF_ENABLED: bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)),
         CONF_TRUNK_DTMF_TIMEOUT_MS: max(0, min(10000, dtmf_timeout_ms)),
         CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
-        CONF_TRUNK_DTMF_ROUTES: str(data.get(CONF_TRUNK_DTMF_ROUTES) or "").strip(),
     }
 
 
@@ -75,9 +67,6 @@ def transport_config(hass: HomeAssistant) -> dict:
             "sip_port": VOIP_STACK_SIP_PORT,
             "rtp_port": VOIP_STACK_RTP_PORT,
             "advertise_host": "",
-            CONF_HA_RING_GROUP: "",
-            CONF_HA_CONFERENCE_GROUP: "",
-            CONF_HA_CONFERENCE_RING: False,
         },
     )
 

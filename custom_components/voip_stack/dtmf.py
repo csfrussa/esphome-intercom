@@ -26,33 +26,6 @@ _EVENT_DIGITS = {
 }
 
 
-def parse_dtmf_route_map(value: object) -> dict[str, str]:
-    if value in (None, ""):
-        return {}
-    if isinstance(value, dict):
-        return {
-            str(key).strip(): str(dest).strip()
-            for key, dest in value.items()
-            if str(key).strip() and str(dest).strip()
-        }
-    out: dict[str, str] = {}
-    for raw in str(value).replace("\r\n", "\n").split("\n"):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, dest = line.split("=", 1)
-        elif ":" in line:
-            key, dest = line.split(":", 1)
-        else:
-            raise ValueError(f"invalid DTMF route line {line!r}; use code=destination")
-        key = key.strip()
-        dest = dest.strip()
-        if key and dest:
-            out[key] = dest
-    return out
-
-
 def _match_dtmf(buffer: str, routes: dict[str, str], *, terminator: str = "") -> tuple[str, bool]:
     if terminator and buffer.endswith(terminator):
         code = buffer[: -len(terminator)]

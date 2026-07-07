@@ -146,16 +146,16 @@ When `trunk_enabled` is true, the second step adds:
 | `trunk_password` | Digest auth password. |
 | `trunk_register_expires` | REGISTER expiration in seconds. |
 | `trunk_outbound_proxy` | Optional proxy host or `sip:host:port` used as signaling next hop. |
-| `trunk_inbound_default_target` | Local target used when no DTMF route hint arrives. Default `HA`. |
+| `trunk_inbound_default_target` | Local target used when no DTMF extension arrives. Default `HA`. |
 | `trunk_dtmf_enabled` | Enable inbound RFC2833/telephone-event digit collection. |
 | `trunk_dtmf_timeout_ms` | Digit collection window. The setup UI shows seconds; internally this is stored in milliseconds. Default 3 s, maximum 10 s. `0` skips DTMF/pre-answer and uses the normal inbound dialplan. |
-| `trunk_dtmf_terminator` | Optional terminator digit such as `#`. Empty means timeout or exact route match decides. |
-| `trunk_dtmf_routes` | Newline-separated `digits=target` routes, for example `100=Kitchen`. |
+| `trunk_dtmf_terminator` | Optional terminator digit such as `#`. Empty means timeout or exact phonebook extension match decides. |
 
-Ambiguous DTMF digit prefixes are not rejected at setup. HA collects within the
-timeout and tries the final buffer. If no digits arrive, HA uses
-`trunk_inbound_default_target`. If explicit digits arrive and do not resolve,
-HA logs the digits and terminates the answered leg as `route_not_found`.
+Ambiguous DTMF digit prefixes are resolved at runtime against the live
+phonebook `extension` fields. HA collects within the timeout and tries the
+final buffer. If no digits arrive, HA uses `trunk_inbound_default_target`. If
+explicit digits arrive and do not resolve, HA logs the digits and terminates
+the answered leg as `route_not_found`.
 
 ## HA SIP Events
 
