@@ -132,6 +132,13 @@ HA_SOFTPHONE_ACTIVE_STATES = {
 }
 
 
+def _release_media_reservation(item) -> None:
+    """Release an owned RTP reservation stored in runtime dict metadata."""
+    reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
+    if reservation is not None and hasattr(reservation, "release"):
+        reservation.release()
+
+
 def _pending_routes(hass: HomeAssistant) -> dict:
     return _call_registry(hass).pending_routes
 
@@ -907,6 +914,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     registry.softphone_media[call_id] = {
         "invite": invite,
         "local_rtp_port": local_rtp_port,
+        "rtp_reservation": (preanswered or {}).get("rtp_reservation"),
     }
     registry.upsert(
         call_id,
@@ -979,8 +987,9 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
     pending.pop(call_id, None)
-    was_preanswered = bool(call_id and registry.preanswered.pop(call_id, None) is not None)
-    if was_preanswered:
+    preanswered_item = registry.preanswered.pop(call_id, None) if call_id else None
+    if preanswered_item is not None:
+        _release_media_reservation(preanswered_item)
         _sip_send_bye(hass, call_id)
         _LOGGER.info("SIP declined pre-answered trunk call_id=%s reason=%s", call_id, app_reason)
         _set_ha_softphone_call_state(
@@ -1103,6 +1112,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     client, watcher = registry.detach_client(call_id) if call_id else (None, None)
     relay = relays.pop(call_id, None) if call_id else None
     media_session = media_sessions.pop(call_id, None) if call_id else None
+    _release_media_reservation(media_session)
     conference_room = str((media_session or {}).get("conference_room") or "")
     if conference_room:
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
@@ -1126,7 +1136,9 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         invite = pending.pop(pending_call_id, None)
         if invite is None:
             continue
-        if preanswered.pop(pending_call_id, None) is not None:
+        preanswered_item = preanswered.pop(pending_call_id, None)
+        if preanswered_item is not None:
+            _release_media_reservation(preanswered_item)
             if _sip_send_bye(hass, pending_call_id):
                 pending_closed += 1
         elif _sip_send_final_response(

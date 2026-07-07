@@ -18,7 +18,7 @@ from .audio_pcm import PcmFrameConverter
 from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .fsm import CallState, TerminalReason
 from .groups import GROUP_TYPE_CONFERENCE
-from .media_ports import allocate_sip_rtp_port_pair, release_sip_rtp_port_pair
+from .media_ports import RtpPortReservation
 from .rtp import RtpPacket, build_packet, next_sequence, next_timestamp, parse_packet
 from .sdp import build_answer_directional
 from . import sdp
@@ -86,6 +86,7 @@ class _ConferenceLeg:
     encoder: RtpPayloadEncoder | None = None
     local_out: asyncio.Queue[bytes] | None = None
     client: Any | None = None
+    port_reservation: RtpPortReservation | None = None
     in_fifo: list[bytes] = field(default_factory=list)
     last_rx: float = field(default_factory=time.monotonic)
     sequence: int = field(default_factory=lambda: random.randrange(0, 0xFFFF))
@@ -122,15 +123,12 @@ class ConferenceRoom:
         self._task: asyncio.Task | None = None
         self._closed = False
         self._ha_softphone_announced = False
-        self._owner_call_id = ""
-
-    def _has_explicit_participant(self) -> bool:
-        return any(leg.role in {"owner", "manual", "ha"} for leg in self.legs.values())
 
     async def join(self, invite: SipInvite, *, ring_ha: bool = False) -> SipInviteResult:
         if len(self.legs) >= MAX_CONFERENCE_LEGS:
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
-        local_ports = allocate_sip_rtp_port_pair(self.hass)
+        port_reservation = RtpPortReservation.allocate(self.hass)
+        local_ports = port_reservation.ports
         transport: asyncio.DatagramTransport | None = None
         try:
             was_empty = not self.legs
@@ -147,14 +145,13 @@ class ConferenceRoom:
                 remote_port=int(invite.remote_rtp_port),
                 local_ports=local_ports,
                 transport=transport,
+                port_reservation=port_reservation,
                 decoder=RtpPayloadDecoder(invite.recv_format),
                 encoder=RtpPayloadEncoder(invite.send_format),
                 in_converter=PcmFrameConverter(invite.recv_format.audio_format, CONFERENCE_FORMAT),
                 out_converter=PcmFrameConverter(CONFERENCE_FORMAT, invite.send_format.audio_format),
             )
             self.legs[invite.call_id] = leg
-            if was_empty:
-                self._owner_call_id = invite.call_id
             if self._task is None or self._task.done():
                 self._task = self.hass.async_create_task(self._mix_loop())
             if was_empty and ring_ha:
@@ -173,17 +170,26 @@ class ConferenceRoom:
         except Exception:
             if transport is not None:
                 transport.close()
-            release_sip_rtp_port_pair(self.hass, local_ports)
+            port_reservation.release()
             raise
 
-    async def add_client_leg(self, *, call_id: str, caller: str, client: Any, local_ports: tuple[int, int], role: str = "manual") -> bool:
+    async def add_client_leg(
+        self,
+        *,
+        call_id: str,
+        caller: str,
+        client: Any,
+        port_reservation: RtpPortReservation,
+        role: str = "manual",
+    ) -> bool:
         if self._closed:
-            release_sip_rtp_port_pair(self.hass, local_ports)
+            port_reservation.release()
             return False
         dialog = getattr(client, "dialog", None)
         if dialog is None:
-            release_sip_rtp_port_pair(self.hass, local_ports)
+            port_reservation.release()
             return False
+        local_ports = port_reservation.ports
         transport: asyncio.DatagramTransport | None = None
         try:
             loop = asyncio.get_running_loop()
@@ -200,6 +206,7 @@ class ConferenceRoom:
                 remote_port=int(dialog.remote_rtp_port),
                 local_ports=local_ports,
                 transport=transport,
+                port_reservation=port_reservation,
                 decoder=RtpPayloadDecoder(dialog.recv_format),
                 encoder=RtpPayloadEncoder(dialog.send_format),
                 in_converter=PcmFrameConverter(dialog.recv_format.audio_format, CONFERENCE_FORMAT),
@@ -215,7 +222,7 @@ class ConferenceRoom:
         except Exception:
             if transport is not None:
                 transport.close()
-            release_sip_rtp_port_pair(self.hass, local_ports)
+            port_reservation.release()
             raise
 
     def handle_rtp(self, call_id: str, data: bytes, addr) -> None:
@@ -249,8 +256,6 @@ class ConferenceRoom:
         self._fire("conference_participant_left", call_id, caller=leg.caller, count=len(self.legs), reason=reason)
         if not self.legs:
             await self.close(reason=reason)
-        elif call_id == self._owner_call_id and not self._has_explicit_participant():
-            await self.close(reason="owner_left")
         return True
 
     async def close(self, reason: str = "idle") -> None:
@@ -274,8 +279,8 @@ class ConferenceRoom:
                 if getattr(leg.client, "dialog", None) is not None and reason != "remote_hangup":
                     leg.client.bye_or_cancel()
                 await leg.client.close()
-        if leg.local_ports != (0, 0):
-            release_sip_rtp_port_pair(self.hass, leg.local_ports)
+        if leg.port_reservation is not None:
+            leg.port_reservation.release()
 
     async def _mix_loop(self) -> None:
         next_deadline = time.monotonic()
@@ -453,18 +458,24 @@ class ConferenceManager:
         call_id: str,
         caller: str,
         client: Any,
-        local_ports: tuple[int, int],
+        port_reservation: RtpPortReservation,
         role: str = "manual",
     ) -> bool:
         room_key = str(room_name or "").strip()
         room = self.rooms.get(room_key)
         if room is None or room._closed:
             if role == "auto_invited":
-                release_sip_rtp_port_pair(self.hass, local_ports)
+                port_reservation.release()
                 return False
             room = ConferenceRoom(self.hass, name=room_key, local_ip=self.local_ip)
             self.rooms[room_key] = room
-        return await room.add_client_leg(call_id=call_id, caller=caller, client=client, local_ports=local_ports, role=role)
+        return await room.add_client_leg(
+            call_id=call_id,
+            caller=caller,
+            client=client,
+            port_reservation=port_reservation,
+            role=role,
+        )
 
     async def leave_call(self, call_id: str, reason: str = "remote_hangup") -> bool:
         for name, room in list(self.rooms.items()):

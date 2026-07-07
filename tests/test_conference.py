@@ -246,6 +246,58 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         await manager.leave_call("call-3", reason="remote_hangup")
         self.assertNotIn("Conference", manager.rooms)
 
+    async def test_creator_leaving_does_not_close_room_with_remaining_participants(self) -> None:
+        hass = _FakeHass()
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        entry = types.SimpleNamespace(name="Conference", id="Conference")
+
+        first = sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri("sip:Conference@127.0.0.1"),
+            caller_uri=voip_sip.parse_sip_uri("sip:Kitchen@127.0.0.1"),
+            target="Conference",
+            caller="Kitchen",
+            call_id="owner-call",
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45681,
+        )
+        second = sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri("sip:Conference@127.0.0.1"),
+            caller_uri=voip_sip.parse_sip_uri("sip:Hall@127.0.0.1"),
+            target="Conference",
+            caller="Hall",
+            call_id="second-call",
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45682,
+        )
+
+        self.assertEqual((await manager.join(first, entry)).status, 200)
+        self.assertEqual((await manager.join(second, entry)).status, 200)
+        room = manager.rooms["Conference"]
+        self.assertEqual(set(room.legs), {"owner-call", "second-call"})
+
+        await manager.leave_call("owner-call", reason="remote_hangup")
+        self.assertIn("Conference", manager.rooms)
+        self.assertEqual(set(room.legs), {"second-call"})
+        self.assertFalse(room._closed)
+
+        await manager.leave_call("second-call", reason="remote_hangup")
+        self.assertNotIn("Conference", manager.rooms)
+        pool = hass.data[const.DOMAIN]["sip_rtp_port_pool"]
+        self.assertFalse(pool["used"])
+
 
 if __name__ == "__main__":
     unittest.main()

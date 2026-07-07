@@ -65,14 +65,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("elif not decision.entry.metadata.get", bridge_path)
 
     def test_bridge_relay_uses_bounded_port_pool_and_release_callback(self) -> None:
-        self.assertIn("_allocate_sip_rtp_port_pair(hass)", self.source)
+        self.assertIn("RtpPortReservation.allocate(hass)", self.source)
         self.assertNotIn('bucket.get("sip_rtp_next_port"', self.source)
         self.assertIn("on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports)", self.source)
-        self.assertIn("_release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))", self.source)
+        self.assertNotIn("_release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))", self.source)
         self.assertIn("class OutboundLeg", self.source)
-        self.assertIn("RtpPortReservation.allocate(hass)", self.source)
         self.assertIn("attempt.ports.release()", self.source)
         self.assertIn("winner.ports.detach()", self.source)
+        self.assertIn("bridge_ports.detach()", self.source)
 
     def test_group_routes_have_dedicated_dispatch_not_generic_bridge(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:"):]
@@ -211,13 +211,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("_ringConference", card)
         self.assertNotIn("_run_conference_audio_session", card)
 
-    def test_conference_tracks_leg_roles_and_owner_cleanup(self) -> None:
+    def test_conference_tracks_leg_roles_and_participant_lifetime(self) -> None:
         conference = (ROOT / "custom_components" / "voip_stack" / "conference.py").read_text()
         self.assertIn('role: str', conference)
         self.assertIn('role="owner" if was_empty else "manual"', conference)
         self.assertIn('role="auto_invited"', self.source)
-        self.assertIn('await self.close(reason="owner_left")', conference)
-        self.assertIn('not self._has_explicit_participant()', conference)
+        self.assertNotIn('await self.close(reason="owner_left")', conference)
+        self.assertNotIn("self._owner_call_id", conference)
+        self.assertIn("port_reservation: RtpPortReservation", conference)
 
     def test_sip_endpoint_account_list_service_is_registered_and_documented(self) -> None:
         services = SERVICES.read_text()
@@ -352,8 +353,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         trunk_branch = on_invite[on_invite.index("if _is_trunk_invite(invite):") : on_invite.index("loop = asyncio.get_running_loop()")]
         no_dtmf_branch = trunk_branch[trunk_branch.index("if not dtmf_preanswer:") : trunk_branch.index("else:")]
         dtmf_branch = trunk_branch[trunk_branch.index("else:") :]
-        self.assertNotIn("_allocate_sip_rtp_port_pair", no_dtmf_branch)
-        self.assertIn("_allocate_sip_rtp_port_pair", dtmf_branch)
+        self.assertNotIn("RtpPortReservation.allocate", no_dtmf_branch)
+        self.assertIn("RtpPortReservation.allocate(hass)", dtmf_branch)
 
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated("):]
