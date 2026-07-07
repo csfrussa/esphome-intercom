@@ -74,7 +74,11 @@ from .fsm import (
     sip_public_state as _sip_public_state,
     sip_terminal_reason as _sip_terminal_reason,
 )
-from .media_ports import allocate_sip_rtp_port as _allocate_sip_rtp_port
+from .media_ports import (
+    allocate_sip_rtp_port as _allocate_sip_rtp_port,
+    release_media_reservation as _release_media_reservation,
+)
+from .session_cleanup import async_cleanup_sip_runtime
 from .audio_format import (
     HA_SIP_PCM_FORMATS,
     HA_SIP_PCM_RX_FORMATS,
@@ -130,13 +134,6 @@ HA_SOFTPHONE_ACTIVE_STATES = {
     CallState.IN_CALL.value,
     CallState.TERMINATING.value,
 }
-
-
-def _release_media_reservation(item) -> None:
-    """Release an owned RTP reservation stored in runtime dict metadata."""
-    reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
-    if reservation is not None and hasattr(reservation, "release"):
-        reservation.release()
 
 
 def _pending_routes(hass: HomeAssistant) -> dict:
@@ -783,13 +780,8 @@ async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
 
     for call_id, client in list(registry.sip_clients.items()):
         _client, watcher = registry.detach_client(call_id)
-        if watcher is not None:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
         try:
-            await client.terminate()
-            await client.close()
+            await async_cleanup_sip_runtime(client=client, watcher=watcher, terminate_client=True)
         except Exception:
             _LOGGER.debug("Ignoring stale HA SIP client cleanup error", exc_info=True)
         registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
@@ -1121,17 +1113,13 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     pending_ids = [call_id] if call_id and call_id in pending else ([] if call_id else list(pending))
     server_bye = False
     pending_closed = 0
-    if client is not None:
-        if watcher is not None:
-            watcher.cancel()
-            try:
-                await watcher
-            except asyncio.CancelledError:
-                pass
-        await client.terminate()
-        await client.close()
-    if relay is not None:
-        await relay.stop()
+    await async_cleanup_sip_runtime(
+        relay=relay,
+        client=client,
+        watcher=watcher,
+        terminate_client=True,
+        relay_first=False,
+    )
     for pending_call_id in pending_ids:
         invite = pending.pop(pending_call_id, None)
         if invite is None:

@@ -36,6 +36,13 @@ class RtpPortReservation:
         self.released = True
 
 
+def release_media_reservation(item) -> None:
+    """Release an owned RTP reservation stored in runtime dict metadata."""
+    reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
+    if reservation is not None and hasattr(reservation, "release"):
+        reservation.release()
+
+
 def rtp_port_available(port: int) -> bool:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:

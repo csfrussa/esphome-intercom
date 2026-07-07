@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from collections.abc import Callable
 
 from homeassistant.core import HomeAssistant
 
 from .endpoint_lifecycle import call_registry
 from .fsm import TerminalReason
+from .session_cleanup import async_cleanup_sip_runtime
 
 
 async def async_terminate_sip_bridge(
@@ -26,25 +25,15 @@ async def async_terminate_sip_bridge(
     source_call_id, dest_call_id, relay, client, watcher, called_by_dest = registry.detach_bridge(call_id)
     if not source_call_id:
         return False, "", "", False, False
-    if relay is not None:
-        await relay.stop()
 
-    client_closed = False
-    if dest_call_id:
-        if watcher is not None:
-            current_task = asyncio.current_task()
-            if watcher is not current_task:
-                watcher.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await watcher
-        if client is not None and not called_by_dest:
-            await client.terminate()
-            await client.close()
-            client_closed = True
-        elif client is not None:
-            await client.close()
-            client_closed = True
+    cleanup = await async_cleanup_sip_runtime(
+        relay=relay,
+        client=client if dest_call_id else None,
+        watcher=watcher if dest_call_id else None,
+        terminate_client=not called_by_dest,
+        relay_first=True,
+    )
 
     source_bye = send_bye(source_call_id)
     registry.finish_and_pop(source_call_id, reason=terminal_reason or TerminalReason.LOCAL_HANGUP.value)
-    return True, source_call_id, dest_call_id, client_closed, source_bye
+    return True, source_call_id, dest_call_id, cleanup.client_closed, source_bye

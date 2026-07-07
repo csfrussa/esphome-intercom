@@ -360,10 +360,11 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         terminated = self.source[self.source.index("async def _on_terminated("):]
         bridge_branch = terminated[terminated.index("if relay is not None or client is not None:"):]
         bridge_branch = bridge_branch[: bridge_branch.index("if (")]
-        self.assertIn("watcher.cancel()", bridge_branch)
-        self.assertIn("await client.terminate()", bridge_branch)
-        self.assertIn("await client.close()", bridge_branch)
-        self.assertIn("await relay.stop()", bridge_branch)
+        self.assertIn("await async_cleanup_sip_runtime(", bridge_branch)
+        self.assertIn("relay=relay", bridge_branch)
+        self.assertIn("client=client", bridge_branch)
+        self.assertIn("watcher=watcher", bridge_branch)
+        self.assertIn("terminate_client=True", bridge_branch)
 
 
 if __name__ == "__main__":

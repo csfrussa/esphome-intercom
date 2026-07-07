@@ -46,22 +46,18 @@ from .fsm import (
 from .media_ports import (
     RtpPortReservation,
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
+    release_media_reservation as _release_media_reservation,
     release_sip_rtp_port_pair as _release_sip_rtp_port_pair,
 )
 from .phonebook_runtime import registered_roster_entries as _registered_roster_entries
 from .router import CallContext, RouteAction, RouteHintSource, RouteReason, route_inbound_trunk, resolve_ha_router
+from .session_cleanup import async_cleanup_sip_runtime
 from .sip_bridge import build_invite_client_relay
 from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphone_call_state, _set_sip_bridge_call_state
 
 _LOGGER = logging.getLogger(__name__)
 SIP_ROUTE_DECISION_TIMEOUT = 1.5
 RING_GROUP_TIMEOUT_S = 30.0
-
-
-def _release_media_reservation(item) -> None:
-    reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
-    if reservation is not None and hasattr(reservation, "release"):
-        reservation.release()
 
 
 def _dtmf_extension_routes(entries) -> dict[str, str]:
@@ -1778,15 +1774,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
             return
         if relay is not None or client is not None:
-            if watcher is not None:
-                watcher.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await watcher
-            if client is not None:
-                await client.terminate()
-                await client.close()
-            if relay is not None:
-                await relay.stop()
+            await async_cleanup_sip_runtime(
+                relay=relay,
+                client=client,
+                watcher=watcher,
+                terminate_client=True,
+                relay_first=False,
+            )
             _set_sip_bridge_call_state(
                 hass,
                 terminal_state,
