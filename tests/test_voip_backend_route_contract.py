@@ -99,9 +99,12 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn('"ha_ring_group"', strings)
         self.assertNotIn('"ha_conference_group"', strings)
         self.assertNotIn('"ha_conference_ring"', strings)
-        self.assertIn("WS_TYPE_SET_HA_SOFTPHONE_SETTINGS", websocket)
-        self.assertIn("WS_TYPE_SET_HA_SOFTPHONE_GROUPS", websocket)
         self.assertIn("async_set_ha_softphone_settings", websocket)
+        self.assertNotIn("WS_TYPE_SET_HA_SOFTPHONE_SETTINGS", websocket)
+        self.assertNotIn("WS_TYPE_SET_HA_SOFTPHONE_GROUPS", websocket)
+        self.assertNotIn("WS_TYPE_SET_HA_SOFTPHONE_DND", websocket)
+        self.assertIn('"set_ha_softphone_settings": _handle_set_ha_softphone_settings_service', init_py)
+        self.assertIn('hass.services.async_register(\n        DOMAIN,\n        "set_ha_softphone_settings"', SERVICES.read_text())
         self.assertIn("_ha_softphone_extension", websocket)
         self.assertIn("HA_SOFTPHONE_ENDPOINT_ENTITY_ID", const)
         self.assertIn("class HaSoftphoneEndpointSensor", sensor)
@@ -318,17 +321,20 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         group_update = websocket[
             websocket.index("async def async_set_ha_softphone_settings(") : websocket.index("def _sip_runtime_snapshot(")
         ]
-        dnd_ws = websocket[
-            websocket.index("async def websocket_set_ha_softphone_dnd(") : websocket.index("async def websocket_set_ha_softphone_groups(")
-        ]
         init_py = INIT.read_text()
         dnd_service = init_py[
-            init_py.index("async def _handle_set_dnd_service(") : init_py.index("async def _handle_set_ha_softphone_groups_service(")
+            init_py.index("async def _handle_set_dnd_service(") : init_py.index("async def _handle_set_ha_softphone_settings_service(")
+        ]
+        settings_service = init_py[
+            init_py.index("async def _handle_set_ha_softphone_settings_service(") : init_py.index("async def _handle_sip_call_target_service(")
         ]
 
         self.assertNotIn("_fire_call_event", group_update)
-        self.assertNotIn("_fire_call_event", dnd_ws)
+        self.assertNotIn("websocket_set_ha_softphone_dnd", websocket)
+        self.assertNotIn("websocket_set_ha_softphone_groups", websocket)
+        self.assertNotIn("websocket_set_ha_softphone_settings", websocket)
         self.assertNotIn("_fire_call_event", dnd_service)
+        self.assertNotIn("_fire_call_event", settings_service)
 
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated("):]

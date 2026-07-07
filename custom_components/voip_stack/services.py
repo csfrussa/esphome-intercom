@@ -110,8 +110,9 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     phonebook_remove_schema = vol.Schema({vol.Required("name"): cv.string}, extra=vol.PREVENT_EXTRA)
     phonebook_set_schema = vol.Schema({vol.Required("roster_json"): cv.string}, extra=vol.PREVENT_EXTRA)
     set_dnd_schema = vol.Schema({vol.Required("dnd"): cv.boolean}, extra=vol.PREVENT_EXTRA)
-    set_ha_softphone_groups_schema = vol.Schema(
+    set_ha_softphone_settings_schema = vol.Schema(
         {
+            vol.Optional("extension"): cv.string,
             vol.Optional("ring_group"): cv.string,
             vol.Optional("conference_group"): cv.string,
             vol.Optional("conference_ring"): cv.boolean,
@@ -155,9 +156,9 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     hass.services.async_register(DOMAIN, "set_dnd", handler_for("set_dnd"), schema=set_dnd_schema)
     hass.services.async_register(
         DOMAIN,
-        "set_ha_softphone_groups",
-        handler_for("set_ha_softphone_groups"),
-        schema=set_ha_softphone_groups_schema,
+        "set_ha_softphone_settings",
+        handler_for("set_ha_softphone_settings"),
+        schema=set_ha_softphone_settings_schema,
     )
     hass.services.async_register(DOMAIN, "create_account", handler_for("create_account"), schema=sip_account_create_schema)
     hass.services.async_register(DOMAIN, "remove_account", handler_for("remove_account"), schema=sip_account_name_schema)

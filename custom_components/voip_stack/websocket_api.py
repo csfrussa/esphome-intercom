@@ -33,9 +33,6 @@ WS_TYPE_LIST = f"{DOMAIN}/list_devices"
 WS_TYPE_RESOLVE_DEVICE = f"{DOMAIN}/resolve_device"
 WS_TYPE_HA_SOFTPHONE_START = f"{DOMAIN}/ha_softphone_start"
 WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
-WS_TYPE_SET_HA_SOFTPHONE_DND = f"{DOMAIN}/set_ha_softphone_dnd"
-WS_TYPE_SET_HA_SOFTPHONE_GROUPS = f"{DOMAIN}/set_ha_softphone_groups"
-WS_TYPE_SET_HA_SOFTPHONE_SETTINGS = f"{DOMAIN}/set_ha_softphone_settings"
 WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
 
 
@@ -208,21 +205,6 @@ async def async_set_ha_softphone_settings(
         await endpoint_sensor.async_update()
     state = _ha_softphone_state(hass)
     return state
-
-
-async def async_set_ha_softphone_groups(
-    hass: HomeAssistant,
-    *,
-    ring_group: object = None,
-    conference_group: object = None,
-    conference_ring: object = None,
-) -> dict[str, Any]:
-    return await async_set_ha_softphone_settings(
-        hass,
-        ring_group=ring_group,
-        conference_group=conference_group,
-        conference_ring=conference_ring,
-    )
 
 
 def _sip_bridge_store(hass: HomeAssistant) -> dict[str, Any]:
@@ -695,9 +677,6 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_subscribe_call_events)
     websocket_api.async_register_command(hass, websocket_ha_softphone_start)
     websocket_api.async_register_command(hass, websocket_ha_softphone_state)
-    websocket_api.async_register_command(hass, websocket_set_ha_softphone_dnd)
-    websocket_api.async_register_command(hass, websocket_set_ha_softphone_groups)
-    websocket_api.async_register_command(hass, websocket_set_ha_softphone_settings)
     websocket_api.async_register_command(hass, websocket_list_devices)
     websocket_api.async_register_command(hass, websocket_resolve_device)
 
@@ -755,69 +734,6 @@ async def websocket_ha_softphone_state(
     msg: Dict[str, Any],
 ) -> None:
     connection.send_result(msg["id"], _ha_softphone_state(hass))
-
-
-@websocket_api.websocket_command(
-    {vol.Required("type"): WS_TYPE_SET_HA_SOFTPHONE_DND, vol.Required("dnd"): bool}
-)
-@websocket_api.async_response
-async def websocket_set_ha_softphone_dnd(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: Dict[str, Any],
-) -> None:
-    _ha_softphone_store(hass)["dnd"] = bool(msg["dnd"])
-    await _async_save_ha_softphone_store(hass)
-    state = _ha_softphone_state(hass)
-    connection.send_result(msg["id"], state)
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): WS_TYPE_SET_HA_SOFTPHONE_GROUPS,
-        vol.Optional("ring_group"): str,
-        vol.Optional("conference_group"): str,
-        vol.Optional("conference_ring"): bool,
-    }
-)
-@websocket_api.async_response
-async def websocket_set_ha_softphone_groups(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: Dict[str, Any],
-) -> None:
-    state = await async_set_ha_softphone_groups(
-        hass,
-        ring_group=msg.get("ring_group"),
-        conference_group=msg.get("conference_group"),
-        conference_ring=msg.get("conference_ring"),
-    )
-    connection.send_result(msg["id"], state)
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): WS_TYPE_SET_HA_SOFTPHONE_SETTINGS,
-        vol.Optional("extension"): str,
-        vol.Optional("ring_group"): str,
-        vol.Optional("conference_group"): str,
-        vol.Optional("conference_ring"): bool,
-    }
-)
-@websocket_api.async_response
-async def websocket_set_ha_softphone_settings(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: Dict[str, Any],
-) -> None:
-    state = await async_set_ha_softphone_settings(
-        hass,
-        extension=msg.get("extension"),
-        ring_group=msg.get("ring_group"),
-        conference_group=msg.get("conference_group"),
-        conference_ring=msg.get("conference_ring"),
-    )
-    connection.send_result(msg["id"], state)
 
 
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST})

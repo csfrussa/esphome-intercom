@@ -2096,11 +2096,8 @@ class VoipStackCard extends HTMLElement {
     this._softphoneDnd = next;
     this._render();
     try {
-      const result = await this._hass.connection.sendMessagePromise({
-        type: "voip_stack/set_ha_softphone_dnd",
-        dnd: next,
-      });
-      this._softphoneDnd = !!result?.dnd;
+      await this._hass.callService("voip_stack", "set_dnd", { dnd: next });
+      await this._loadSoftphoneState();
     } catch (err) {
       this._softphoneDnd = !next;
       this._showError(err.message || String(err));
@@ -2155,14 +2152,13 @@ class VoipStackCard extends HTMLElement {
     if (!this._softphoneGroups.conference_group) this._softphoneGroups.conference_ring = false;
     this._render();
     try {
-      const result = await this._hass.connection.sendMessagePromise({
-        type: "voip_stack/set_ha_softphone_settings",
+      await this._hass.callService("voip_stack", "set_ha_softphone_settings", {
         extension: this._softphoneExtension,
         ring_group: this._softphoneGroups.ring_group,
         conference_group: this._softphoneGroups.conference_group,
         conference_ring: !!this._softphoneGroups.conference_ring,
       });
-      this._applySoftphoneSnapshot(result || {});
+      await this._loadSoftphoneState();
     } catch (err) {
       this._softphoneExtension = previousExtension;
       this._softphoneGroups = previousGroups;

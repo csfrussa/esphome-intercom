@@ -389,23 +389,29 @@ set_dnd:
       selector:
         boolean:
 
-set_ha_softphone_groups:
-  name: Set HA Softphone Groups
+set_ha_softphone_settings:
+  name: Set HA Softphone Settings
   description: >-
-    Set the Home Assistant softphone ring group, conference group and
-    ring-on-conference behavior. A manually entered group name is a valid
+    Set the Home Assistant softphone extension, ring group, conference group
+    and ring-on-conference behavior. A manually entered group name is a valid
     declaration: the HA softphone endpoint publishes it to the central phonebook,
     which creates or updates the dynamic group like it does for ESP endpoints.
   fields:
+    extension:
+      name: Extension
+      description: Optional extension number published by the Home Assistant softphone endpoint.
+      required: false
+      selector:
+        text:
     ring_group:
       name: Ring Group
-      description: Optional PBX-style ring group membership for the Home Assistant softphone.
+      description: Optional PBX-style ring group membership for the Home Assistant softphone. Use a comma-separated list for multiple groups.
       required: false
       selector:
         text:
     conference_group:
       name: Conference Group
-      description: Optional conference room membership for the Home Assistant softphone.
+      description: Optional conference room membership for the Home Assistant softphone. Use a comma-separated list for multiple groups.
       required: false
       selector:
         text:

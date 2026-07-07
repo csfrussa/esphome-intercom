@@ -109,7 +109,7 @@ from .websocket_api import (
     _get_voip_devices,
     _fire_call_event,
     _async_save_ha_softphone_store,
-    async_set_ha_softphone_groups,
+    async_set_ha_softphone_settings,
     _ha_softphone_dnd,
     _ha_softphone_state,
     _ha_softphone_store,
@@ -1235,10 +1235,11 @@ async def _handle_set_dnd_service(call: ServiceCall) -> None:
     _LOGGER.info("HA softphone DND set to %s via service", enabled)
 
 
-async def _handle_set_ha_softphone_groups_service(call: ServiceCall) -> None:
+async def _handle_set_ha_softphone_settings_service(call: ServiceCall) -> None:
     hass = call.hass
-    await async_set_ha_softphone_groups(
+    await async_set_ha_softphone_settings(
         hass,
+        extension=call.data.get("extension"),
         ring_group=call.data.get("ring_group"),
         conference_group=call.data.get("conference_group"),
         conference_ring=call.data.get("conference_ring"),
@@ -1516,7 +1517,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "hangup": _handle_sip_hangup_service,
             **phonebook_handlers,
             "set_dnd": _handle_set_dnd_service,
-            "set_ha_softphone_groups": _handle_set_ha_softphone_groups_service,
+            "set_ha_softphone_settings": _handle_set_ha_softphone_settings_service,
             "call": _handle_sip_call_target_service,
             "forward": _handle_sip_forward_service,
             "route": _handle_sip_route_service,
