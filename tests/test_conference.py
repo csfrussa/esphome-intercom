@@ -122,15 +122,19 @@ def _first_sample(frame: bytes) -> int:
 class ConferenceMixerTest(unittest.TestCase):
     def test_mix_frames_is_n_minus_one(self) -> None:
         out = conference.mix_frames([_frame(1000), _frame(2000), _frame(-500)])
-        self.assertEqual([_first_sample(frame) for frame in out], [750, 250, 1500])
+        self.assertEqual([_first_sample(frame) for frame in out], [1500, 500, 3000])
 
-    def test_mix_frames_keeps_headroom_for_three_participants(self) -> None:
+    def test_mix_frames_scales_only_when_sum_exceeds_int16(self) -> None:
         out = conference.mix_frames([_frame(30000), _frame(30000), _frame(30000)])
-        self.assertEqual([_first_sample(frame) for frame in out], [30000, 30000, 30000])
+        self.assertEqual([_first_sample(frame) for frame in out], [32767, 32767, 32767])
 
     def test_mix_frames_clips_two_participant_sum(self) -> None:
         out = conference.mix_frames([_frame(32767), _frame(-32768)])
         self.assertEqual([_first_sample(frame) for frame in out], [-32768, 32767])
+
+    def test_mix_frames_single_talker_is_unity_gain(self) -> None:
+        out = conference.mix_frames([_frame(30000), _frame(0), _frame(0)])
+        self.assertEqual([_first_sample(frame) for frame in out], [0, 30000, 30000])
 
     def test_bad_length_is_silence(self) -> None:
         out = conference.mix_frames([_frame(1000), b""])

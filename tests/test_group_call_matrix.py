@@ -512,6 +512,16 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(room.participants, ["Spotpear", "WS3"])
         self.assertEqual(pbx.endpoint("WS3").state, IN_CALL)
 
+    def test_chaos_matrix_leaves_no_active_runtime_state(self) -> None:
+        results, errors = run_matrix(("chaos",))
+        self.assertEqual(errors, [])
+        result = results[0]
+        self.assertEqual(result["double_answer_rejected"], 100)
+        self.assertEqual(result["owner_leave_kept_room"], 100)
+        self.assertEqual(result["runtime"]["active_endpoints"], {})
+        self.assertIsNone(result["runtime"]["active_ring"])
+        self.assertEqual(result["runtime"]["active_conferences"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

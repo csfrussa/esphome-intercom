@@ -565,6 +565,22 @@ class MiniPbx:
                     candidate.peer = ""
         return result
 
+    def active_runtime_summary(self) -> dict[str, object]:
+        """Return active runtime state that should be empty after cleanup."""
+        return {
+            "active_endpoints": {
+                name: {"state": endpoint.state, "peer": endpoint.peer}
+                for name, endpoint in self.endpoints.items()
+                if endpoint.state != IDLE or endpoint.peer
+            },
+            "active_ring": asdict(self.ring_call) if self.ring_call is not None and self.ring_call.state in {RINGING, IN_CALL} else None,
+            "active_conferences": {
+                name: asdict(room)
+                for name, room in self.conferences.items()
+                if room.state != ENDED and (room.participants or room.ringing)
+            },
+        }
+
 
 def build_default_pbx() -> MiniPbx:
     pbx = MiniPbx(
@@ -707,6 +723,50 @@ def run_scenario(name: str) -> dict:
             "asymmetric_no_common_ptime": asdict(asymmetric_no_common_ptime),
             "incompatible": asdict(incompatible),
         }
+    if name == "chaos":
+        double_answer_rejected = 0
+        owner_leave_kept_room = 0
+        for idx in range(100):
+            pbx.call_ring_group("Casa", "RG Casa")
+            pbx.caller_cancels_ring_group()
+
+            pbx.call_ring_group("Casa", "RG Casa")
+            won = pbx.answer_ring_group("Spotpear")
+            late = pbx.answer_ring_group("WS3")
+            if won.state == IN_CALL and won.winner == "Spotpear" and late.state == UNAVAILABLE:
+                double_answer_rejected += 1
+            pbx.hangup_ring_group("Casa")
+
+            pbx.endpoint("Spotpear").auto_answer = True
+            pbx.call_endpoint("WS3", "Spotpear")
+            pbx.disconnect("Spotpear")
+            pbx.set_online("Spotpear", True)
+            pbx.endpoint("Spotpear").auto_answer = False
+
+            room = pbx.call_conference_group("Spotpear", "CG Casa")
+            pbx.answer_conference_invite("Casa", "CG Casa")
+            pbx.call_conference_group("WS3", "CG Casa")
+            room = pbx.leave_conference("Spotpear", "CG Casa")
+            if room.state == IN_CALL and set(room.participants) == {"Casa", "WS3"}:
+                owner_leave_kept_room += 1
+            pbx.leave_conference("Casa", "CG Casa")
+            pbx.leave_conference("WS3", "CG Casa")
+
+            pbx.set_group_membership(
+                "Casa",
+                ring_group=f"RG Temp {idx}",
+                conference_group=f"CG Temp {idx}",
+                conference_ring=bool(idx % 2),
+            )
+            pbx.set_group_membership("Casa", ring_group="RG Casa", conference_group="CG Casa", conference_ring=True)
+
+        return {
+            "scenario": name,
+            "double_answer_rejected": double_answer_rejected,
+            "owner_leave_kept_room": owner_leave_kept_room,
+            "runtime": pbx.active_runtime_summary(),
+            "pushes": len(pbx.pushes),
+        }
     raise ValueError(f"unknown scenario: {name}")
 
 
@@ -724,6 +784,7 @@ SCENARIO_NAMES = (
     "dynamic-groups",
     "errors",
     "audio",
+    "chaos",
 )
 
 
@@ -826,6 +887,16 @@ def validate_result(result: dict) -> list[str]:
             errors.append("directional audio without common ptime did not fail with media_incompatible")
         if result["incompatible"]["state"] != MEDIA_INCOMPATIBLE:
             errors.append("incompatible audio profile did not fail with media_incompatible")
+    elif scenario == "chaos":
+        if result["double_answer_rejected"] != 100:
+            errors.append("ring group did not reject every late second answer")
+        if result["owner_leave_kept_room"] != 100:
+            errors.append("conference owner leave did not keep every non-empty room alive")
+        runtime = result["runtime"]
+        if runtime["active_endpoints"] or runtime["active_ring"] or runtime["active_conferences"]:
+            errors.append(f"chaos scenario left active runtime state: {runtime}")
+        if result["pushes"] < 200:
+            errors.append("group churn did not rebuild and push phonebook changes")
     else:
         errors.append(f"no validator for scenario {scenario}")
     return errors
