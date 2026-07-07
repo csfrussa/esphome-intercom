@@ -84,7 +84,8 @@ def parse_roster_json(value: str | bytes | dict[str, Any] | list[dict[str, Any]]
 
 def dump_roster_json(entries: list[RosterEntry]) -> str:
     payload = {
-        "version": 1,
+        "version": 2,
+        "capabilities": ["extension", "ring_group", "conference_group", "conference_ring"],
         "contacts": [
             {
                 "id": entry.id,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import socket
 
 from homeassistant.core import HomeAssistant
@@ -10,6 +11,29 @@ from .config import transport_config
 from .const import DOMAIN
 
 RTP_RELAY_POOL_WIDTH = 400
+
+
+@dataclass(slots=True)
+class RtpPortReservation:
+    """Owned RTP relay port pair that must be released or detached."""
+
+    hass: HomeAssistant
+    ports: tuple[int, int]
+    released: bool = False
+
+    @classmethod
+    def allocate(cls, hass: HomeAssistant) -> "RtpPortReservation":
+        return cls(hass=hass, ports=allocate_sip_rtp_port_pair(hass))
+
+    def detach(self) -> tuple[int, int]:
+        self.released = True
+        return self.ports
+
+    def release(self) -> None:
+        if self.released:
+            return
+        release_sip_rtp_port_pair(self.hass, self.ports)
+        self.released = True
 
 
 def rtp_port_available(port: int) -> bool:

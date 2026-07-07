@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from types import SimpleNamespace
 import sys
 import types
@@ -134,6 +135,11 @@ class GroupAggregationTest(unittest.TestCase):
         self.assertTrue(parsed[0].ha_bridge)
         self.assertEqual(parsed[0].metadata["group_type"], groups.GROUP_TYPE_CONFERENCE)
         self.assertEqual(parsed[0].metadata["ring_members"], ["Kitchen"])
+
+        payload = json.loads(roster.dump_roster_json([entry]))
+        self.assertEqual(payload["version"], 2)
+        self.assertIn("conference_group", payload["capabilities"])
+        self.assertIn("ring_group", payload["capabilities"])
 
 
 if __name__ == "__main__":

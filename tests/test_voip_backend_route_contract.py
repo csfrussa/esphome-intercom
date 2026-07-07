@@ -69,6 +69,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn('bucket.get("sip_rtp_next_port"', self.source)
         self.assertIn("on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports)", self.source)
         self.assertIn("_release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))", self.source)
+        self.assertIn("class OutboundLeg", self.source)
+        self.assertIn("RtpPortReservation.allocate(hass)", self.source)
+        self.assertIn("attempt.ports.release()", self.source)
+        self.assertIn("winner.ports.detach()", self.source)
 
     def test_group_routes_have_dedicated_dispatch_not_generic_bridge(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:"):]
@@ -302,10 +306,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
 
     def test_ring_group_external_winner_publishes_connected_party(self) -> None:
         ring_group = self.source[self.source.index("async def _run_ring_group_call(") : self.source.index("async def _ring_conference_members(")]
-        external_winner = ring_group[ring_group.index('client = winner["client"]') : ring_group.index('terminal = await client.wait_for_dialog_termination()')]
+        external_winner = ring_group[ring_group.index("client = winner.client") : ring_group.index("terminal = await client.wait_for_dialog_termination()")]
 
         self.assertIn("dialed_target = entry.display_name or invite.target", external_winner)
-        self.assertIn('connected_party = str(winner["member"] or "").strip() or invite.target', external_winner)
+        self.assertIn("connected_party = str(winner.member or \"\").strip() or invite.target", external_winner)
         self.assertIn("callee=dialed_target", external_winner)
         self.assertIn("peer_name=connected_party", external_winner)
         self.assertIn("dialed_target=dialed_target", external_winner)

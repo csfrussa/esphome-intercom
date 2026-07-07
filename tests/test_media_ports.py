@@ -113,6 +113,21 @@ class MediaPortPoolTest(unittest.TestCase):
             media_ports.release_sip_rtp_port_pair(hass, ports)
             self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set())
 
+    def test_reservation_release_and_detach_ownership(self) -> None:
+        hass = FakeHass()
+        with patch.object(media_ports, "rtp_port_available", return_value=True):
+            reservation = media_ports.RtpPortReservation.allocate(hass)
+            self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set(reservation.ports))
+            reservation.release()
+            reservation.release()
+            self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set())
+
+            detached = media_ports.RtpPortReservation.allocate(hass)
+            ports = detached.detach()
+            detached.release()
+            self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set(ports))
+            media_ports.release_sip_rtp_port_pair(hass, ports)
+
 
 if __name__ == "__main__":
     unittest.main()

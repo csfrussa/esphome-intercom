@@ -111,7 +111,7 @@ class VoipPhonebookSensor(SensorEntity):
         self.entity_id = "sensor.voip_phonebook"
         self._attr_native_value = "0 entries"
         self._phonebook = ""
-        self._roster_json = '{"version":1,"contacts":[]}'
+        self._roster_json = '{"version":2,"capabilities":["extension","ring_group","conference_group","conference_ring"],"contacts":[]}'
         self._count = 0
         self._tracked_entities: set[str] = set()
         self._unsub_state = None
