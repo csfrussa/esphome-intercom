@@ -3,14 +3,14 @@
     "step": {
       "user": {
         "title": "VoIP Stack",
-        "description": "SIP softphone and SIP bridge/router for ESPHome VoIP phones. HA listens on SIP UDP and TCP automatically.",
+        "description": "SIP endpoint, bridge/router and local registrar for ESPHome VoIP phones. HA listens on SIP UDP and TCP automatically.",
         "data": {
           "sip_port": "SIP port",
           "rtp_port": "RTP port",
           "advertise_host": "Advertised HA host/IP",
           "assist_intents": "Enable Assist intents",
           "debug_mode": "Enable SIP/RTP debug mode",
-          "sip_registrar_enabled": "Enable local SIP softphone accounts",
+          "sip_registrar_enabled": "Enable local SIP accounts",
           "ring_group_fallback": "Ring group fallback",
           "ha_ring_group": "HA softphone ring group",
           "ha_conference_group": "HA softphone conference group",
@@ -23,7 +23,7 @@
           "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices.",
           "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live VoIP phonebook.",
           "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
-          "sip_registrar_enabled": "Accept REGISTER from local softphones such as Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
+          "sip_registrar_enabled": "Accept REGISTER from local SIP endpoints such as VoIP phones, Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
           "ring_group_fallback": "What HA does when no member answers a ring group before timeout. Reject returns 480; answer_ha rings the HA softphone.",
           "ha_ring_group": "Optional ring group membership for the Home Assistant softphone only.",
           "ha_conference_group": "Optional conference group membership for the Home Assistant softphone only.",

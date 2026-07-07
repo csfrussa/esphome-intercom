@@ -1,7 +1,7 @@
 # SIP Phonebook Contract
 
 The phonebook is the SIP dial plan shared by ESP devices, Home Assistant,
-registered local softphones and the optional trunk. SIP is implicit everywhere:
+registered local SIP endpoints and the optional trunk. SIP is implicit everywhere:
 `transport` only chooses SIP/TCP or SIP/UDP signaling, never a second
 call-control protocol.
 
@@ -51,7 +51,7 @@ Rules:
 ## HA Roster
 
 HA owns the central `sensor.voip_phonebook` roster. It contains ESP peers,
-HA itself, local softphones registered to HA, manual phone endpoints,
+HA itself, local SIP endpoints registered to HA, manual phone endpoints,
 trunk-routed external targets when configured, and groups.
 
 Roster entries use JSON fields:
@@ -97,7 +97,7 @@ Group membership uses the same roster metadata for every endpoint type:
 - ESP peers publish `conference_group` and `ring_group` in their endpoint
   identity. They may also publish `conference_ring` to request an invitation
   when the conference room starts.
-- Manual contacts and registered SIP softphones can declare
+- Manual contacts and registered SIP endpoints can declare
   `conference_group`, `conference_ring` and `ring_group` through
   `voip_stack.add_contact` or account services.
 - The HA softphone publishes a virtual endpoint using the same identity
@@ -142,7 +142,7 @@ that device's mirror/manual entries. In HA-managed installs, prefer the central
 `voip_stack.*` services above and let HA push `sensor.voip_phonebook` to the
 devices.
 
-Local softphone accounts are created with `voip_stack.create_account`.
+Local SIP accounts are created with `voip_stack.create_account`.
 The `username` becomes the SIP username and central roster ID. If `password` is
 omitted, HA generates one and shows it once in a persistent notification and in
 the `voip_stack.call_event` stream. Registered clients publish a dynamic
@@ -180,7 +180,7 @@ HA-router calls:
 
 - local HA target rings the HA softphone;
 - ESP targets forward to their SIP URI/host;
-- local softphones forward to their registered Contact while registered;
+- local SIP endpoints forward to their registered Contact while registered;
 - phone/external numbers use the trunk only when the trunk is registered;
 - disabled entries reject with a SIP terminal reason.
 

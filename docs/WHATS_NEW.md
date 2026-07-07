@@ -18,7 +18,7 @@ That means you can now build setups that previously required an external PBX:
 - ESP-to-ESP room calls;
 - Home Assistant calling ESP devices;
 - Zoiper, Linphone, baresip or pjsua registering directly to Home Assistant;
-- ESP devices calling registered softphones;
+- ESP devices calling registered SIP endpoints;
 - Home Assistant calling real phone numbers through a SIP trunk;
 - external calls reaching Home Assistant and being routed to ESPs or local
   contacts.
@@ -52,15 +52,15 @@ Main highlights:
   from the Lovelace card.
 - Home Assistant can route and bridge calls between ESPs, the HA softphone,
   local SIP accounts and an optional trunk.
-- ESP devices can call registered softphones and external numbers through Home
+- ESP devices can call registered SIP endpoints and external numbers through Home
   Assistant routing.
 - The central phonebook is now the normal dial plan. `name` is required;
   direct endpoint fields, numbers and route metadata are optional.
-- Standard softphones such as Zoiper, Linphone, baresip or pjsua can register
+- Standard SIP endpoints such as Zoiper, Linphone, baresip or pjsua can register
   to Home Assistant with local SIP accounts.
 - Home Assistant can register one optional trunk for inbound/outbound external
   calls.
-- Home Assistant can create local SIP accounts for standard softphones; when
+- Home Assistant can create local SIP accounts for standard SIP endpoints; when
   they register, they appear in the central phonebook and are pushed to ESPs.
 - Inbound trunk calls can ring HA by default or be routed to a local contact
   through route hints/DTMF and automations.
@@ -76,6 +76,6 @@ Main highlights:
 - The HA softphone card now includes a manual keypad/text target view for calls
   outside the visible contact selector.
 - The central phonebook is pushed automatically to online ESPs when HA contacts,
-  ESP endpoints or registered softphones change.
+  ESP endpoints or registered SIP endpoints change.
 - Full-experience YAMLs move further toward the source-based media path,
   runtime reducer and shared audio arbitration model.

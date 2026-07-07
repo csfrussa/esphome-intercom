@@ -42,7 +42,7 @@ options or old component names.
 | `docs/images/voip-stack-add-integration.png` | Screenshot | HA Add Integration search | Captured: VoIP Stack entry in Settings -> Integrations |
 | `docs/images/voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
 | `docs/images/create-account-service.png` | Screenshot | SIP account service form | Captured: Developer Tools -> Actions account creation |
-| `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local softphone account |
+| `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local SIP account |
 | `docs/images/create-account-notification.png` | Screenshot | Generated account notification | Captured: one-time generated password notification |
 | `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Recapture if entity names, device names or ESPHome onboarding UI changed. |
 | `docs/images/card-selection.png` | Screenshot | Card picker | Must show `VoIP Stack Card`, not old Intercom card names. |
@@ -69,7 +69,7 @@ replace individual photos or GIFs if the UI changes before release.
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/sip-topology.png` / `.svg` | Diagram | SIP/VoIP topology | Created: ESP SIP phones, HA softphone/router/B2BUA, local registrar, registered softphones and optional provider trunk |
+| `docs/images/sip-topology.png` / `.svg` | Diagram | SIP/VoIP topology | Created: ESP SIP phones, HA softphone/router/B2BUA, local registrar, registered SIP endpoints and optional provider trunk |
 | `docs/images/phonebook-endpoint.png` / `.svg` | Diagram | SIP phonebook and dial plan | Created: endpoint publication, manual/static contacts, SIP account registration, direct/bridge/trunk/reject routing |
 | `docs/images/tcp-udp-choice.png` / `.svg` | Diagram | ESP SIP transport guidance | Created: ESP SIP/TCP vs SIP/UDP signaling choice, RTP always UDP, HA bridge path when routing needs it |
 | `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |

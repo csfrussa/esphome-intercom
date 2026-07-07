@@ -417,8 +417,8 @@ set_ha_softphone_groups:
         boolean:
 
 create_account:
-  name: Create SIP Softphone Account
-  description: Create or replace a local SIP account for a standard softphone registering to Home Assistant.
+  name: Create SIP Account
+  description: Create or replace a local SIP account for a standard SIP endpoint registering to Home Assistant.
   fields:
     username:
       name: Username
@@ -452,20 +452,20 @@ create_account:
         boolean:
     conference_group:
       name: Optional Conference Group
-      description: Adds this registered softphone account to the named conference group, for example CG Casa.
+      description: Adds this registered SIP account to the named conference group, for example CG Casa.
       required: false
       selector:
         text:
     conference_ring:
       name: Ring On Conference Start
-      description: Rings this registered softphone when another participant starts its conference group. The account can still join manually when this is off.
+      description: Rings this registered SIP endpoint when another participant starts its conference group. The endpoint can still join manually when this is off.
       required: false
       default: false
       selector:
         boolean:
     ring_group:
       name: Optional Ring Group
-      description: Adds this registered softphone account to the named ring group, for example RG Casa.
+      description: Adds this registered SIP account to the named ring group, for example RG Casa.
       required: false
       selector:
         text:

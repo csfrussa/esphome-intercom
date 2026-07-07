@@ -56,7 +56,7 @@ def build_account_service_handlers(
                 (
                     f"SIP account `{username}` created for `{display_name}`.\n\n"
                     f"Password: `{password}`\n\n"
-                    "This generated password is shown only now. Save it in the softphone "
+                    "This generated password is shown only now. Save it in the SIP endpoint "
                     "configuration or rotate the account password later."
                 ),
                 title="VoIP Stack SIP Account",

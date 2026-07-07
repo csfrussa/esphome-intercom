@@ -19,7 +19,7 @@ flows.
 This does not remove the simple door intercom use case. An ESP can still be a
 one-button door intercom or room intercom with the same user workflow: call, answer,
 talk, hang up. It is now a real SIP/VoIP phone underneath, so the same device
-can also join direct SIP calls, HA-routed calls, registered softphone calls and
+can also join direct SIP calls, HA-routed calls, registered SIP endpoint calls and
 trunk calls when those paths are configured.
 
 That means this release can do things that previously required an external PBX
@@ -30,10 +30,11 @@ such as Asterisk:
 - ESP devices can call Home Assistant as an independent softphone.
 - Home Assistant can call ESP devices from the Lovelace softphone card,
   automations, Assist intents or services.
-- Home Assistant can bridge calls between ESPs, registered softphones and trunk
+- Home Assistant can bridge calls between ESPs, registered SIP endpoints and trunk
   legs while preserving SIP call state and terminal reasons.
-- A standard softphone such as Zoiper, Linphone, baresip or pjsua can register
-  to Home Assistant as a local SIP account and become a phonebook contact.
+- A standard SIP endpoint, including VoIP phones or apps such as Zoiper,
+  Linphone, baresip or pjsua, can register to Home Assistant as a local SIP
+  account and become a phonebook contact.
 - Home Assistant can register one optional provider/PBX trunk. External numbers
   and provider inbound calls can be routed through VoIP Stack.
 - With a trunk configured, ESPs and Home Assistant can place and receive

@@ -21,7 +21,7 @@ Home Assistant is more than a card backend:
 - HA is a SIP router/B2BUA for logical names, numbers, bridge requests and
   transport boundaries;
 - HA can optionally register one provider/PBX trunk;
-- HA can optionally act as a local registrar for standard softphones such as
+- HA can optionally act as a local registrar for standard SIP endpoints such as
   Zoiper, Linphone, baresip or pjsua.
 
 The default install needs no user dialplan. Direct ESP calls happen when the
@@ -51,7 +51,7 @@ Component ownership:
 - `esp_audio_stack`, native ESPHome microphone/speaker components, `esp_aec`
   and `esp_afe` own physical audio capture/playback and processing.
 - `voip_stack` owns HA-side SIP dialogs, route decisions, trunk
-  registration, local softphone registrations and HA softphone media sessions.
+  registration, local SIP endpoint registrations and HA softphone media sessions.
 - Cards never own the call FSM. They render state pushed by the owner and send
   user commands back to that owner.
 
@@ -72,7 +72,7 @@ All call control is SIP:
   provider/PBX only
 
 ESP devices do not implement provider/PBX registration. HA trunk registration
-and HA local softphone registration are separate features that live only in
+and HA local SIP registration are separate features that live only in
 `voip_stack`.
 
 For outbound INVITE failures, HA sends the required ACK for non-2xx final
@@ -178,7 +178,7 @@ HA-router routing:
 
 - HA target: ring HA softphone;
 - ESP target: forward/bridge to the ESP SIP endpoint;
-- registered local softphone: forward to its REGISTER Contact;
+- registered local SIP endpoint: forward to its REGISTER Contact;
 - external/public number: trunk if registered, otherwise reject
   `trunk_unavailable`;
 - disabled entry: reject;

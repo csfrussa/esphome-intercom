@@ -33,8 +33,8 @@ collect:
   is ringing or in-call should receive busy.
 - For trunk calls, no route hint means HA/default target; an explicit unresolved
   route hint terminates as `route_not_found`.
-- For local registered softphones, confirm the REGISTER Contact is present in
-  HA logs and the phonebook includes the registered softphone contact.
+- For local registered SIP endpoints, confirm the REGISTER Contact is present in
+  HA logs and the phonebook includes the registered SIP endpoint contact.
 
 ## Call Fails With `media_incompatible`
 
@@ -73,7 +73,7 @@ leg to a compatible PCM format.
   password. Do not configure an external PBX/outbound proxy for local HA
   registration.
 - Confirm HA logs show REGISTER and a dynamic phonebook contact for the
-  registered softphone.
+  registered SIP endpoint.
 
 ## Busy Or DND
 

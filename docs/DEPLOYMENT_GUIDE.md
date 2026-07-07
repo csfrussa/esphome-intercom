@@ -68,7 +68,7 @@ advertise host so ESPs and softphones see a reachable SIP Contact/SDP address.
 
 Use `ha_bridge` for routed or logical calls that should pass through HA.
 
-Enable the local registrar if standard softphones should register to HA. Create
+Enable the local registrar if standard SIP endpoints should register to HA. Create
 accounts with `voip_stack.create_account`; registered clients appear
 in the central phonebook as softphone contacts.
 

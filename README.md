@@ -6,9 +6,9 @@
 Turn ESPHome audio devices and Home Assistant into a real local VoIP system.
 
 This is no longer just an intercom. ESP devices are SIP phones, Home Assistant
-is a SIP softphone, call router, bridge, local registrar and optional trunk
+is a SIP endpoint, call router, bridge, local registrar and optional trunk
 endpoint. You can build a door intercom, room phones, HA-routed calls,
-softphone accounts and external SIP trunk calls without running Asterisk next
+local SIP accounts and external SIP trunk calls without running Asterisk next
 to Home Assistant.
 
 Flash a YAML, add the ESP to Home Assistant, install the card, and you already
@@ -52,7 +52,7 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 | A full-duplex door intercom | Flash a ready VoIP YAML, add the ESP to Home Assistant and add the card. | Press the ESP button and Home Assistant rings. Answer from browser, wall tablet or Companion app. |
 | Room-to-room ESP phones | Flash one VoIP YAML per room device. | ESP devices call each other by phonebook name, such as `Kitchen`, `Bedroom` or `Garage`. |
 | Home Assistant as a softphone | Use the Lovelace card in `ha_softphone` mode. | HA can ring, answer, decline, hang up and originate calls. |
-| Standard SIP softphones | Enable the local registrar and create an account with `voip_stack.create_account`. | Zoiper, Linphone, baresip or pjsua can register to HA and become phonebook contacts. |
+| Standard SIP endpoints | Enable the local registrar and create an account with `voip_stack.create_account`. | VoIP phones, ATAs, Zoiper, Linphone, baresip or pjsua can register to HA and become phonebook contacts. |
 | External outbound calls | Configure an optional SIP trunk and add contacts with numbers, or use the card dial pad. | HA or ESP devices can call external numbers through the trunk. |
 | Incoming external calls | Register a provider/PBX trunk. | External calls can ring HA, follow DTMF routing, or be forwarded to ESPs/local contacts. |
 | Voice Assistant calling | Enable the optional VoIP Stack Assist intents. | Satellites can call contacts, answer, decline or hang up by voice. |
@@ -104,7 +104,7 @@ control panels without pretending every device is full-duplex.
 |---|---|---|
 | One ESP as a full-duplex intercom with Home Assistant | [`yamls/voip-only/`](yamls/voip-only/) | The ESP calls HA, HA can call the ESP, and the Lovelace card can answer from browser or mobile app. |
 | Room-to-room ESP VoIP | One voip-only YAML per ESP | Devices call each other by phonebook name. HA publishes the standard roster and can bridge when needed. |
-| Softphone or trunk testing | `voip_stack.create_account` or the optional trunk setup | Register a real SIP softphone to HA, or let HA route calls through a provider/PBX trunk. |
+| SIP endpoint or trunk testing | `voip_stack.create_account` or the optional trunk setup | Register a real SIP endpoint to HA, or let HA route calls through a provider/PBX trunk. |
 | Full voice device | [`yamls/full-experience/`](yamls/full-experience/) | Media player, Piper TTS, Micro Wake Word, Voice Assistant, AFE/AEC and VoIP calls on the same ESP. |
 | Full voice device with hardware/DSP echo cancellation or separated native audio paths | [`generic-s3-full-esphome-native.yaml`](yamls/full-experience/esphome-native/generic-s3-full-esphome-native.yaml) | Full experience on native ESPHome microphone/speaker components. Good starting point for XMOS-style front-ends that already remove echo in hardware, or for boards with independent mic/speaker I2S paths. |
 | Standalone native ESPHome VoIP endpoint | [`yamls/voip-only/esphome-native/`](yamls/voip-only/esphome-native/) | Native mic-only, speaker-only and separated-path full-duplex examples using standard ESPHome audio components, without `esp_audio_stack`. |
@@ -121,7 +121,7 @@ LVGL button, automation, service call or Lovelace card.
 
 `2026.7.0` is the SIP/VoIP migration release. It replaces the old
 project-specific call-control path with SIP/SDP/RTP call handling, ESP SIP
-endpoints, Home Assistant routing/bridging, local softphone accounts and
+endpoints, Home Assistant routing/bridging, local SIP accounts and
 optional trunk support.
 
 Read the release details:
@@ -166,7 +166,7 @@ Assistant learns its endpoint and publishes it into the central phonebook.
 The simple use case stays simple: one ESP can still behave like a normal
 full-duplex intercom device. The difference is that the call foundation is now
 SIP/VoIP, so the same system can grow to ESP-to-ESP calls, HA calls,
-registered softphones and external trunk calls without requiring Asterisk.
+registered SIP endpoints and external trunk calls without requiring Asterisk.
 
 ## Phonebook And Routing
 
@@ -193,7 +193,7 @@ Routing follows the data available for the selected contact:
 
 - complete direct SIP endpoint: compatible ESPs can call it directly;
 - name or extension without direct endpoint: the ESP sends the call to HA;
-- registered softphone: HA routes to the active SIP registration;
+- registered SIP endpoint: HA routes to the active SIP registration;
 - external number: HA uses the configured trunk;
 - no valid route: HA rejects the call with a clear terminal reason.
 
@@ -524,7 +524,7 @@ The integration will:
 - Register the WebSocket API commands for the card.
 - Publish the SIP phonebook (`sensor.voip_phonebook`) for ESP subscribers.
 - Optionally register a provider/PBX trunk.
-- Optionally accept REGISTER from local softphones with generated accounts.
+- Optionally accept REGISTER from local SIP endpoints with generated accounts.
 - Register SIP-first services (`answer`, `decline`, `hangup`, `call`, `forward`,
   `route`, contact and SIP account services).
 - Auto-register the Lovelace card as a frontend resource.
@@ -746,7 +746,7 @@ sensor.voip_phonebook.attributes.roster_json # canonical SIP roster
 
 The ESP-side package subscribes to the roster JSON and calls
 `voip_stack.set_roster_json` after a debounce. HA rows, ESP rows, manual SIP
-contacts and registered local softphones share the same route vocabulary.
+contacts and registered local SIP endpoints share the same route vocabulary.
 Canonical row formats live in
 [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md). For manual/local automations you can still use the ESPHome API actions exposed
 by the standard packages:
@@ -778,7 +778,7 @@ See [docs/PHONEBOOK_PROTOCOL.md](docs/PHONEBOOK_PROTOCOL.md) for the full contra
 #### Groups
 
 VoIP Stack can publish HA-managed group contacts into the same central
-phonebook. ESP devices, registered softphones and the HA softphone still dial
+phonebook. ESP devices, registered SIP endpoints and the HA softphone still dial
 by normal contact name; HA owns the group routing and media. Groups are
 ordinary phonebook entries from the endpoint point of view, not special
 firmware modes.
@@ -793,7 +793,7 @@ voip_stack:
   ring_group: "RG Home"
 ```
 
-Manual contacts and registered SIP softphones can join the same groups through
+Manual contacts and registered SIP endpoints can join the same groups through
 the `voip_stack.add_contact` and `voip_stack.create_account` service fields:
 
 ```yaml
@@ -835,8 +835,8 @@ without attaching their microphone/speaker.
 
 Because the HA backend speaks SIP, Asterisk is optional rather than required.
 HA can register to a SIP trunk itself, can host local SIP accounts for
-softphones such as Zoiper, and can act as a small PBX for ESP devices,
-softphones, ring groups and conference groups. Advanced dial-plan overrides are
+VoIP phones, ATAs and softphones such as Zoiper, and can act as a small PBX for ESP devices,
+registered SIP endpoints, ring groups and conference groups. Advanced dial-plan overrides are
 intended to be handled through HA services/events and automations on top of the
 central roster contract.
 
@@ -1030,7 +1030,7 @@ compatibility path.
 
 Supported SIP methods in the local profile are `INVITE`, `ACK`, `CANCEL`,
 `BYE`, `OPTIONS`, `INFO` for DTMF interop where used, and `REGISTER` only for
-optional local softphone accounts on Home Assistant. ESP firmware does not
+optional local SIP accounts on Home Assistant. ESP firmware does not
 register to a PBX and does not require SIP auth.
 
 SDP negotiates PCM RTP media. ESP firmware accepts compatible L16/L24 PCM only;
@@ -1071,10 +1071,10 @@ The high-level model is described in [Phonebook And Routing](#phonebook-and-rout
 The canonical roster JSON, SIP URI fields and audio capability fields are
 documented in [`docs/PHONEBOOK_PROTOCOL.md`](docs/PHONEBOOK_PROTOCOL.md).
 
-### Local Softphone Accounts
+### Local SIP Accounts
 
 VoIP Stack can optionally act as a local SIP registrar for standard
-softphones. Create an account from Developer Tools -> Services with
+SIP endpoints. Create an account from Developer Tools -> Services with
 `voip_stack.create_account`:
 
 ```yaml
@@ -1084,11 +1084,11 @@ data:
   display_name: "Mobile Office"
 ```
 
-![Create softphone account service](docs/images/create-account-service.png)
+![Create SIP account service](docs/images/create-account-service.png)
 
 _Create a local SIP account from Developer Tools -> Actions._
 
-![Create softphone account filled](docs/images/create-account-service-filled.png)
+![Create SIP account filled](docs/images/create-account-service-filled.png)
 
 _You can provide a password or let Home Assistant generate one._
 
@@ -1096,7 +1096,7 @@ If `password` is omitted, HA generates one and shows it once in a Home
 VoIP Stack persistent notification and in the
 `voip_stack.call_event` stream.
 
-![Generated softphone account notification](docs/images/create-account-notification.png)
+![Generated SIP account notification](docs/images/create-account-notification.png)
 
 _Generated credentials are shown once in a persistent notification._
 

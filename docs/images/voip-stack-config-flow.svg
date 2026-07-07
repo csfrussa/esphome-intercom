@@ -20,7 +20,7 @@
   <rect class="bg" width="900" height="820"/>
   <rect class="panel" x="110" y="52" width="680" height="716" rx="22"/>
   <text class="title" x="154" y="104">VoIP Stack</text>
-  <text class="body" x="154" y="150">SIP softphone and SIP bridge/router for ESPHome VoIP phones.</text>
+  <text class="body" x="154" y="150">SIP endpoint, bridge/router and local registrar for ESPHome VoIP phones.</text>
   <text class="body" x="154" y="176">Configure ports, routing helpers and optional VoIP services.</text>
 
   <rect class="pill" x="154" y="210" width="160" height="28"/>
@@ -47,7 +47,7 @@
   <rect class="switch-track" x="690" y="594" width="50" height="28"/>
   <circle class="switch-knob" cx="704" cy="608" r="11"/>
 
-  <text class="body" x="154" y="660">Enable local SIP softphone accounts</text>
+  <text class="body" x="154" y="660">Enable local SIP accounts</text>
   <rect class="switch-on" x="690" y="640" width="50" height="28"/>
   <circle class="switch-knob" cx="725" cy="654" r="11"/>
 

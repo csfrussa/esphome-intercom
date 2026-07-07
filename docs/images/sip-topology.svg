@@ -24,7 +24,7 @@
   .dash { stroke-dasharray: 10 8; }
   .legend { font: 600 13px sans-serif; fill: #172033; }
 </style></defs><rect class="bg" x="0" y="0" width="1400" height="760"/>
-<text class="title" x="54" y="62">SIP/VoIP topology</text><text class="subtitle" x="56" y="92">ESP phones, Home Assistant softphone/router, local softphones and optional trunk</text>
+<text class="title" x="54" y="62">SIP/VoIP topology</text><text class="subtitle" x="56" y="92">ESP phones, Home Assistant softphone/router, local SIP endpoints and optional trunk</text>
 <rect class="box box-esp" x="70" y="145" width="260" height="150"/>
 <text class="label" x="92" y="181">ESP phone A</text>
 <text class="small" x="92" y="209">SIP UA, no REGISTER</text>
@@ -41,7 +41,7 @@
 <text class="small" x="522" y="306">SIP router/B2BUA</text>
 <text class="small" x="522" y="328">RTP relay/resampler</text>
 <text class="small" x="522" y="350">central phonebook / dial plan</text>
-<text class="small" x="522" y="372">local softphone registrar</text>
+<text class="small" x="522" y="372">local SIP account registrar</text>
 <text class="small" x="522" y="394">optional provider trunk client</text>
 <rect class="box box-soft" x="1050" y="140" width="280" height="150"/>
 <text class="label" x="1072" y="176">Registered softphone</text>
