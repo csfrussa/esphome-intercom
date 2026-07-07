@@ -39,7 +39,7 @@ def allocate_sip_rtp_port(hass: HomeAssistant, *, step: int = 2) -> int:
             bucket["sip_rtp_next_port"] = candidate + int(step)
             return candidate
         candidate += int(step)
-    return base_port
+    raise RuntimeError("SIP RTP port allocation exhausted")
 
 
 def _relay_pool(hass: HomeAssistant, step: int) -> tuple[dict, int, int, int]:

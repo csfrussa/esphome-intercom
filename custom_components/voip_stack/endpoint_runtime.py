@@ -1121,11 +1121,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         if _is_trunk_invite(invite):
-            try:
-                source_relay_port, dest_relay_port = _allocate_sip_rtp_port_pair(hass)
-            except RuntimeError as err:
-                _LOGGER.warning("SIP trunk RTP bridge port allocation failed: %s", err)
-                return SipInviteResult(503, "Service Unavailable", to_tag="")
             trunk_cfg = _get_trunk_config(hass)
             dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
             dtmf_preanswer = bool(trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and dtmf_timeout_ms > 0)
@@ -1155,6 +1150,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 source_relay_port = 0
                 dest_relay_port = 0
             else:
+                try:
+                    source_relay_port, dest_relay_port = _allocate_sip_rtp_port_pair(hass)
+                except RuntimeError as err:
+                    _LOGGER.warning("SIP trunk RTP bridge port allocation failed: %s", err)
+                    return SipInviteResult(503, "Service Unavailable", to_tag="")
                 dtmf_format = None
                 dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
                 dtmf_format = dtmf_formats[0] if dtmf_formats else None
@@ -1816,15 +1816,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 origin="remote",
             )
             registry.finish_and_pop(call_id, reason=terminal_reason, state=terminal_state)
-        if relay is not None:
-            await relay.stop()
-        if watcher is not None:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
-        if client is not None:
-            await client.terminate()
-            await client.close()
         if relay is not None or client is not None:
             _LOGGER.info(
                 "SIP bridge terminated call_id=%s reason=%s relay=%s dest_client=%s",

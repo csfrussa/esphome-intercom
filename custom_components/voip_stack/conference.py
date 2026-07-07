@@ -63,9 +63,10 @@ def mix_frames(frames: list[bytes]) -> list[bytes]:
         for idx, sample in enumerate(frame):
             total[idx] += int(sample)
 
+    gain = 1.0 / max(1, len(decoded) - 1)
     outputs: list[bytes] = []
     for own in decoded:
-        mixed = array("h", (_clip16(total[idx] - int(sample)) for idx, sample in enumerate(own)))
+        mixed = array("h", (_clip16(round((total[idx] - int(sample)) * gain)) for idx, sample in enumerate(own)))
         outputs.append(mixed.tobytes())
     return outputs
 

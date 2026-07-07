@@ -77,7 +77,10 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_voip_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP voip_stack.
 
-    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp[|extension[|extras...]]
+    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp|extension|conference_group|ring_group|conference_ring[|extras...]
+
+    Unknown trailing fields are preserved in `extras` so newer endpoint
+    publishers do not disappear from older HA resolvers.
     """
     if not value:
         return None

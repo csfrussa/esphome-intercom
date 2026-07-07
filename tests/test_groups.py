@@ -87,6 +87,16 @@ class GroupAggregationTest(unittest.TestCase):
         self.assertEqual(collected["Casa"].members, ["Kitchen"])
         self.assertEqual(collected["Casa"].ring_members, ["Kitchen"])
 
+    def test_ring_members_survive_when_group_is_promoted_to_conference(self) -> None:
+        peers = [
+            SimpleNamespace(name="Bedroom", conference_group="", conference_ring=False, ring_group="Casa"),
+            SimpleNamespace(name="Kitchen", conference_group="Casa", conference_ring=False, ring_group=""),
+        ]
+        collected = groups.collect_groups(peers, [], [])
+        self.assertEqual(collected["Casa"].group_type, groups.GROUP_TYPE_CONFERENCE)
+        self.assertEqual(collected["Casa"].members, ["Bedroom", "Kitchen"])
+        self.assertEqual(collected["Casa"].ring_members, ["Bedroom"])
+
     def test_skips_group_name_colliding_with_existing_contact(self) -> None:
         peers = [SimpleNamespace(name="Kitchen", conference_group="", conference_ring=False, ring_group="Casa")]
         existing = [roster.RosterEntry(id="Casa", name="Casa")]

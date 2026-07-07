@@ -78,7 +78,7 @@ class Endpoint:
         """Return a voip_stack endpoint sensor payload with group fields."""
         base = (
             f"{self.name}|192.0.2.{abs(hash(self.name)) % 200 + 1}|5060|40000|full_duplex|"
-            f"{';'.join(self.tx_formats)}|{';'.join(self.rx_formats)}|udp|"
+            f"{';'.join(self.tx_formats)}|{';'.join(self.rx_formats)}|sip_udp|"
             f"{self.name}|{self.conference_group}|{self.ring_group}"
         )
         return f"{base}|{'true' if self.conference_ring else 'false'}"

@@ -129,6 +129,11 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("local_ha_seen = False", websocket)
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", websocket)
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", sensor)
+        self.assertIn("def _clean_group_token", websocket)
+        self.assertIn('.replace("|", " ")', websocket)
+        self.assertIn('.replace(";", " ")', websocket)
+        self.assertIn("[:32]", websocket)
+        self.assertIn('for raw in str(value or "").split(",")', websocket)
 
     def test_config_flow_has_no_softphone_group_or_ring_fallback_policy(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
@@ -330,11 +335,21 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
 
         self.assertNotIn("_fire_call_event", group_update)
+        self.assertIn('if not groups["conference_group"]:', group_update)
+        self.assertIn('groups["conference_ring"] = False', group_update)
         self.assertNotIn("websocket_set_ha_softphone_dnd", websocket)
         self.assertNotIn("websocket_set_ha_softphone_groups", websocket)
         self.assertNotIn("websocket_set_ha_softphone_settings", websocket)
         self.assertNotIn("_fire_call_event", dnd_service)
         self.assertNotIn("_fire_call_event", settings_service)
+
+    def test_trunk_without_dtmf_preanswer_does_not_allocate_relay_ports(self) -> None:
+        on_invite = self.source[self.source.index("async def _on_invite(invite:"):]
+        trunk_branch = on_invite[on_invite.index("if _is_trunk_invite(invite):") : on_invite.index("loop = asyncio.get_running_loop()")]
+        no_dtmf_branch = trunk_branch[trunk_branch.index("if not dtmf_preanswer:") : trunk_branch.index("else:")]
+        dtmf_branch = trunk_branch[trunk_branch.index("else:") :]
+        self.assertNotIn("_allocate_sip_rtp_port_pair", no_dtmf_branch)
+        self.assertIn("_allocate_sip_rtp_port_pair", dtmf_branch)
 
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated("):]

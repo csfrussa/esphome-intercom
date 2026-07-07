@@ -36,11 +36,27 @@ WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
 WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
 
 
+def _clean_group_token(value: object) -> str:
+    return (
+        str(value or "")
+        .replace("|", " ")
+        .replace(";", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .strip()[:32]
+    )
+
+
 def _clean_group_name(value: object) -> str:
-    return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    groups: list[str] = []
+    for raw in str(value or "").split(","):
+        group = _clean_group_token(raw)
+        if group and group not in groups:
+            groups.append(group)
+    return ", ".join(groups)
 
 
-def _clean_endpoint_field(value: object) -> str:
+def _clean_endpoint_field(value: object, *, max_len: int = 32) -> str:
     return (
         str(value or "")
         .replace("|", " ")
@@ -49,7 +65,7 @@ def _clean_endpoint_field(value: object) -> str:
         .replace("\r", " ")
         .replace("\n", " ")
         .strip()
-    )
+    )[:max_len]
 
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
@@ -198,6 +214,8 @@ async def async_set_ha_softphone_settings(
         groups["conference_group"] = _clean_group_name(conference_group)
     if conference_ring is not None:
         groups["conference_ring"] = bool(conference_ring)
+    if not groups["conference_group"]:
+        groups["conference_ring"] = False
     store["groups"] = groups
     await _async_save_ha_softphone_store(hass)
     endpoint_sensor = hass.data.get(DOMAIN, {}).get("ha_softphone_endpoint_sensor")

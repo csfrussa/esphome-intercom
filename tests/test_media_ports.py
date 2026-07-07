@@ -75,6 +75,18 @@ class FakeHass:
 
 
 class MediaPortPoolTest(unittest.TestCase):
+    def test_single_allocator_uses_base_when_available(self) -> None:
+        hass = FakeHass()
+        with patch.object(media_ports, "rtp_port_available", return_value=True):
+            self.assertEqual(media_ports.allocate_sip_rtp_port(hass), 40000)
+            self.assertEqual(hass.data["voip_stack"]["sip_rtp_next_port"], 40002)
+
+    def test_single_allocator_raises_when_no_port_is_available(self) -> None:
+        hass = FakeHass()
+        with patch.object(media_ports, "rtp_port_available", return_value=False):
+            with self.assertRaises(RuntimeError):
+                media_ports.allocate_sip_rtp_port(hass)
+
     def test_pair_allocator_wraps_and_reuses_released_ports(self) -> None:
         hass = FakeHass()
         with patch.object(media_ports, "RTP_RELAY_POOL_WIDTH", 4), patch.object(media_ports, "rtp_port_available", return_value=True):
