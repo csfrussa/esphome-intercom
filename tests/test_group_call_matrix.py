@@ -248,8 +248,11 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertNotIn("Casa", visible)
 
         stale_entries = self._roster(peers=[self._peers()[2]], registered=[])
-        self.assertNotIn("RG Casa", {entry.id for entry in stale_entries})
-        self.assertNotIn("CG Casa", {entry.id for entry in stale_entries})
+        stale_by_id = {entry.id: entry for entry in stale_entries}
+        self.assertIn("RG Casa", stale_by_id)
+        self.assertIn("CG Casa", stale_by_id)
+        self.assertEqual(stale_by_id["RG Casa"].metadata["members"], ["Casa"])
+        self.assertEqual(stale_by_id["CG Casa"].metadata["members"], ["Casa"])
 
     def test_group_routing_matrix_preserves_sip_pbx_roles(self) -> None:
         entries = self._roster()

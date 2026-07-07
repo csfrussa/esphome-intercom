@@ -121,9 +121,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('ha_endpoint_state.attributes or {}', init_py)
         self.assertIn('get("endpoint")', init_py)
         self.assertIn("parse_voip_endpoint", init_py)
-        self.assertIn("async_prune_ha_softphone_groups", sensor)
-        self.assertIn("local_ha_seen = False", websocket)
-        self.assertIn("if not local_ha_seen:", websocket)
+        self.assertNotIn("async_prune_ha_softphone_groups", sensor)
+        self.assertNotIn("async_prune_ha_softphone_groups", websocket)
+        self.assertNotIn("local_ha_seen = False", websocket)
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", websocket)
         self.assertNotIn("HA_SOFTPHONE_GROUPS_UPDATED_EVENT", sensor)
 

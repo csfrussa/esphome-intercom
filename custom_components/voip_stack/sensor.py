@@ -195,15 +195,10 @@ class VoipPhonebookSensor(SensorEntity):
         )
         from .endpoint_routing import roster_from_peers
         from .roster import dump_roster_json
-        from .websocket_api import async_prune_ha_softphone_groups
 
         peers = await _async_build_peer_snapshot(self.hass)
         entries = [format_entry_unified(p) for p in peers]
         roster_entries = roster_from_peers(self.hass, peers, registered_roster_entries(self.hass))
-        if await async_prune_ha_softphone_groups(self.hass, roster_entries):
-            peers = await _async_build_peer_snapshot(self.hass)
-            entries = [format_entry_unified(p) for p in peers]
-            roster_entries = roster_from_peers(self.hass, peers, registered_roster_entries(self.hass))
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
         visible_count = len(roster_entries)

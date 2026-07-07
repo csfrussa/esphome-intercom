@@ -225,44 +225,6 @@ async def async_set_ha_softphone_groups(
     )
 
 
-async def async_prune_ha_softphone_groups(hass: HomeAssistant, roster_entries) -> bool:
-    available_ring = set()
-    available_conference = set()
-    local_ha_seen = False
-    for entry in roster_entries:
-        metadata = getattr(entry, "metadata", {}) or {}
-        if metadata.get("local_ha"):
-            local_ha_seen = True
-        group_type = str(metadata.get("group_type") or "")
-        name = _clean_group_name(getattr(entry, "name", "") or getattr(entry, "id", ""))
-        if not name:
-            continue
-        if group_type == "ring":
-            available_ring.add(name)
-        elif group_type == "conference":
-            available_conference.add(name)
-
-    if not local_ha_seen:
-        return False
-
-    groups = _ha_softphone_groups(hass)
-    changed = False
-    if groups["ring_group"] and groups["ring_group"] not in available_ring:
-        groups["ring_group"] = ""
-        changed = True
-    if groups["conference_group"] and groups["conference_group"] not in available_conference:
-        groups["conference_group"] = ""
-        groups["conference_ring"] = False
-        changed = True
-    if changed:
-        _ha_softphone_store(hass)["groups"] = groups
-        await _async_save_ha_softphone_store(hass)
-        endpoint_sensor = hass.data.get(DOMAIN, {}).get("ha_softphone_endpoint_sensor")
-        if endpoint_sensor is not None:
-            await endpoint_sensor.async_update()
-    return changed
-
-
 def _sip_bridge_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("sip_bridge_state", {})
 

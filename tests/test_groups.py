@@ -62,9 +62,12 @@ class GroupAggregationTest(unittest.TestCase):
         self.assertEqual(collected["Casa"].group_type, groups.GROUP_TYPE_RING)
         self.assertEqual(collected["Casa"].members, ["Kitchen", "Bedroom"])
 
-    def test_ha_peer_can_join_existing_groups_but_does_not_create_them(self) -> None:
+    def test_ha_peer_can_create_and_join_groups(self) -> None:
         ha = SimpleNamespace(name="Casa", is_ha=True, conference_group="CG Casa", conference_ring=True, ring_group="RG Casa")
-        self.assertEqual(groups.collect_groups([ha], [], []), {})
+        ha_only = groups.collect_groups([ha], [], [])
+        self.assertEqual(ha_only["CG Casa"].members, ["Casa"])
+        self.assertEqual(ha_only["CG Casa"].ring_members, ["Casa"])
+        self.assertEqual(ha_only["RG Casa"].members, ["Casa"])
 
         esp = SimpleNamespace(name="Kitchen", is_ha=False, conference_group="CG Casa", conference_ring=False, ring_group="RG Casa")
         collected = groups.collect_groups([esp, ha], [], [])

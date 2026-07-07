@@ -393,9 +393,9 @@ set_ha_softphone_groups:
   name: Set HA Softphone Groups
   description: >-
     Set the Home Assistant softphone ring group, conference group and
-    ring-on-conference behavior. Group names are matched against the central
-    VoIP phonebook and stale selections are cleared automatically when a group
-    no longer exists.
+    ring-on-conference behavior. A manually entered group name is a valid
+    declaration: the HA softphone endpoint publishes it to the central phonebook,
+    which creates or updates the dynamic group like it does for ESP endpoints.
   fields:
     ring_group:
       name: Ring Group

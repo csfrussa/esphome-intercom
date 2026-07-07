@@ -102,6 +102,10 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('"voip_stack/set_ha_softphone_settings"', setter)
         self.assertIn("extension: this._softphoneExtension", setter)
         self.assertIn('id = "ha-softphone-extension"', self.source)
+        self.assertIn('type = "text"', self.source)
+        self.assertIn('setAttribute("list", "ha-softphone-ring-group-options")', self.source)
+        self.assertIn('setAttribute("list", "ha-softphone-conference-group-options")', self.source)
+        self.assertNotIn("_populateGroupSelect", self.source)
         self.assertNotIn("conference_manager", self.source)
         self.assertNotIn("_ringConference", self.source)
 

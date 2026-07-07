@@ -1600,10 +1600,16 @@ class VoipStackCard extends HTMLElement {
     const ringGroupLabel = document.createElement("label");
     ringGroupLabel.htmlFor = "ha-softphone-ring-group";
     ringGroupLabel.textContent = "Ring Group";
-    const ringGroupSelect = document.createElement("select");
-    ringGroupSelect.id = "ha-softphone-ring-group";
+    const ringGroupInput = document.createElement("input");
+    ringGroupInput.type = "text";
+    ringGroupInput.id = "ha-softphone-ring-group";
+    ringGroupInput.setAttribute("list", "ha-softphone-ring-group-options");
+    ringGroupInput.autocomplete = "off";
+    const ringGroupOptions = document.createElement("datalist");
+    ringGroupOptions.id = "ha-softphone-ring-group-options";
     ringGroupRow.appendChild(ringGroupLabel);
-    ringGroupRow.appendChild(ringGroupSelect);
+    ringGroupRow.appendChild(ringGroupInput);
+    ringGroupRow.appendChild(ringGroupOptions);
     softphoneGroupsPanel.appendChild(ringGroupRow);
 
     const conferenceGroupRow = document.createElement("div");
@@ -1611,10 +1617,16 @@ class VoipStackCard extends HTMLElement {
     const conferenceGroupLabel = document.createElement("label");
     conferenceGroupLabel.htmlFor = "ha-softphone-conference-group";
     conferenceGroupLabel.textContent = "Conference Group";
-    const conferenceGroupSelect = document.createElement("select");
-    conferenceGroupSelect.id = "ha-softphone-conference-group";
+    const conferenceGroupInput = document.createElement("input");
+    conferenceGroupInput.type = "text";
+    conferenceGroupInput.id = "ha-softphone-conference-group";
+    conferenceGroupInput.setAttribute("list", "ha-softphone-conference-group-options");
+    conferenceGroupInput.autocomplete = "off";
+    const conferenceGroupOptions = document.createElement("datalist");
+    conferenceGroupOptions.id = "ha-softphone-conference-group-options";
     conferenceGroupRow.appendChild(conferenceGroupLabel);
-    conferenceGroupRow.appendChild(conferenceGroupSelect);
+    conferenceGroupRow.appendChild(conferenceGroupInput);
+    conferenceGroupRow.appendChild(conferenceGroupOptions);
     softphoneGroupsPanel.appendChild(conferenceGroupRow);
 
     const conferenceRingRow = document.createElement("div");
@@ -1654,7 +1666,7 @@ class VoipStackCard extends HTMLElement {
       statusIndicator, statusText, statusReason,
       runtimeControls, keypadBtn, settingsBtn, settingsPanel,
       autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox,
-      softphoneGroupsPanel, extensionInput, ringGroupSelect, conferenceGroupSelect, conferenceRingRow, conferenceRingCheckbox,
+      softphoneGroupsPanel, extensionInput, ringGroupInput, ringGroupOptions, conferenceGroupInput, conferenceGroupOptions, conferenceRingRow, conferenceRingCheckbox,
       stats, err,
     };
 
@@ -1727,8 +1739,8 @@ class VoipStackCard extends HTMLElement {
         }
       };
     }
-    if (els.ringGroupSelect) els.ringGroupSelect.onchange = (event) => this._setHaSoftphoneSettings({ ring_group: event.target.value });
-    if (els.conferenceGroupSelect) els.conferenceGroupSelect.onchange = (event) => this._setHaSoftphoneSettings({ conference_group: event.target.value });
+    if (els.ringGroupInput) els.ringGroupInput.onchange = (event) => this._setHaSoftphoneSettings({ ring_group: event.target.value });
+    if (els.conferenceGroupInput) els.conferenceGroupInput.onchange = (event) => this._setHaSoftphoneSettings({ conference_group: event.target.value });
     if (els.conferenceRingCheckbox) els.conferenceRingCheckbox.onchange = (event) => this._setHaSoftphoneSettings({ conference_ring: event.target.checked });
     els.callBtn.onclick = () => this._startCall();
     els.hangupBtn.onclick = () => this._hangup();
@@ -2096,24 +2108,23 @@ class VoipStackCard extends HTMLElement {
     this._render();
   }
 
-  _populateGroupSelect(select, groups, selected) {
-    if (!select) return;
+  _populateGroupSuggestions(input, datalist, groups, selected) {
+    if (!input) return;
     const current = String(selected || "").trim();
-    const options = ["", ...groups];
-    if (current && !options.includes(current)) options.push(current);
+    const options = [...groups];
     const wanted = JSON.stringify(options);
-    if (select.dataset.options !== wanted) {
-      select.replaceChildren(
+    if (datalist && datalist.dataset.options !== wanted) {
+      datalist.replaceChildren(
         ...options.map(name => {
           const option = document.createElement("option");
           option.value = name;
-          option.textContent = name || "None";
+          option.textContent = name;
           return option;
         })
       );
-      select.dataset.options = wanted;
+      datalist.dataset.options = wanted;
     }
-    select.value = current;
+    if (input.value !== current) input.value = current;
   }
 
   _renderSoftphoneGroupControls() {
@@ -2123,8 +2134,8 @@ class VoipStackCard extends HTMLElement {
     if (els.extensionInput && els.extensionInput.value !== this._softphoneExtension) {
       els.extensionInput.value = this._softphoneExtension;
     }
-    this._populateGroupSelect(els.ringGroupSelect, ringGroups, this._softphoneGroups.ring_group);
-    this._populateGroupSelect(els.conferenceGroupSelect, conferenceGroups, this._softphoneGroups.conference_group);
+    this._populateGroupSuggestions(els.ringGroupInput, els.ringGroupOptions, ringGroups, this._softphoneGroups.ring_group);
+    this._populateGroupSuggestions(els.conferenceGroupInput, els.conferenceGroupOptions, conferenceGroups, this._softphoneGroups.conference_group);
     if (els.conferenceRingCheckbox) {
       els.conferenceRingCheckbox.checked = !!this._softphoneGroups.conference_ring;
       els.conferenceRingCheckbox.disabled = !this._softphoneGroups.conference_group;
