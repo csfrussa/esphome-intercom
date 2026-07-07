@@ -70,9 +70,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports)", self.source)
         self.assertNotIn("_release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))", self.source)
         self.assertIn("class OutboundLeg", self.source)
+        self.assertIn("async def _close_client_and_release(", self.source)
+        self.assertIn("async def _close_outbound_leg(", self.source)
         self.assertIn("attempt.ports.release()", self.source)
         self.assertIn("winner.ports.detach()", self.source)
         self.assertIn("bridge_ports.detach()", self.source)
+        self.assertNotIn("await client.close()\n            bridge_ports.release()", self.source)
+        self.assertNotIn("await client.close()\n                    bridge_ports.release()", self.source)
+        self.assertNotIn("await attempt.client.close()\n                    attempt.ports.release()", self.source)
 
     def test_group_routes_have_dedicated_dispatch_not_generic_bridge(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:"):]

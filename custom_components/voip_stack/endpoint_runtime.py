@@ -234,6 +234,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             ports.release()
             raise
 
+    async def _close_client_and_release(client: SipCallClient, ports: RtpPortReservation, *, bye: bool = False) -> None:
+        try:
+            if bye:
+                client.bye()
+            await client.close()
+        finally:
+            ports.release()
+
+    async def _close_outbound_leg(attempt: OutboundLeg, *, cancel: bool = False, bye_or_cancel: bool = False) -> None:
+        try:
+            if cancel:
+                with contextlib.suppress(Exception):
+                    attempt.client.cancel()
+            elif bye_or_cancel:
+                with contextlib.suppress(Exception):
+                    attempt.client.bye_or_cancel()
+            await attempt.client.close()
+        finally:
+            attempt.ports.release()
+
     def _caller_matches_member(invite: SipInvite, member: str, peers: list[Peer]) -> bool:
         if _same_route_name(member, invite.caller):
             return True
@@ -503,8 +523,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             result = await client.wait_for_final()
         if result != "in_call" or client.dialog is None:
             _LOGGER.info("SIP trunk destination failed destination=%s result=%s", destination, result)
-            await client.close()
-            bridge_ports.release()
+            await _close_client_and_release(client, bridge_ports)
             _sip_send_bye(hass, invite.call_id)
             public_result = _sip_public_state(result)
             terminal_reason = _sip_terminal_reason(result, public_result)
@@ -544,9 +563,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             await relay.start()
         except Exception as err:
             _LOGGER.warning("SIP trunk RTP bridge unavailable: %s", err)
-            client.bye()
-            await client.close()
-            bridge_ports.release()
+            await _close_client_and_release(client, bridge_ports, bye=True)
             _sip_send_bye(hass, invite.call_id)
             _set_sip_bridge_call_state(
                 hass,
@@ -754,13 +771,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if not task.done():
                     task.cancel()
             for attempt in attempts:
-                client = attempt.client
                 if attempt is winner:
                     continue
-                with contextlib.suppress(Exception):
-                    client.cancel()
-                await client.close()
-                attempt.ports.release()
+                await _close_outbound_leg(attempt, cancel=True)
             if ha_member and not ha_winner:
                 _pending_routes(hass).pop(invite.call_id, None)
                 _set_ha_softphone_call_state(
@@ -879,8 +892,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
                     state=CallState.MEDIA_INCOMPATIBLE.value,
                 )
-                await client.close()
-                winner.ports.release()
+                await _close_outbound_leg(winner)
                 return
             winner.ports.detach()
             registry.relays[invite.call_id] = relay
@@ -956,9 +968,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             _pending_routes(hass).pop(invite.call_id, None)
             for attempt in attempts:
                 with contextlib.suppress(Exception):
-                    attempt.client.bye_or_cancel()
-                    await attempt.client.close()
-                    attempt.ports.release()
+                    await _close_outbound_leg(attempt, bye_or_cancel=True)
             raise
 
     async def _ring_conference_members(
@@ -1029,9 +1039,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             finally:
                 if not owned_by_room:
                     with contextlib.suppress(Exception):
-                        client.bye_or_cancel()
-                        await client.close()
-                    attempt.ports.release()
+                        await _close_outbound_leg(attempt, bye_or_cancel=True)
 
         for attempt in attempts:
             hass.async_create_task(_dial(attempt))
@@ -1438,8 +1446,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 if result not in {"ringing", "in_call"}:
                     status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(result)
-                    await client.close()
-                    bridge_ports.release()
+                    await _close_client_and_release(client, bridge_ports)
                     _set_sip_bridge_call_state(
                         hass,
                         public_state,
@@ -1500,8 +1507,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             state=public_state,
                         )
                         registry.client_watchers.pop(client.dialog_ids.call_id, None)
-                        await client.close()
-                        bridge_ports.release()
+                        await _close_client_and_release(client, bridge_ports)
                         _set_sip_bridge_call_state(
                             hass,
                             public_state,
@@ -1545,8 +1551,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             state=CallState.MEDIA_INCOMPATIBLE.value,
                         )
                         registry.client_watchers.pop(client.dialog_ids.call_id, None)
-                        await client.close()
-                        bridge_ports.release()
+                        await _close_client_and_release(client, bridge_ports)
                         return
                     bridge_ports.detach()
                     registry.relays[invite.call_id] = relay
