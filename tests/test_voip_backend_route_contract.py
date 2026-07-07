@@ -167,19 +167,19 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
         self.assertNotIn('if dest_device is not None\n        else _roster_entry_formats', call_service)
 
-    def test_backend_prepares_softphone_targets_for_card(self) -> None:
+    def test_phonebook_sensor_exposes_only_the_central_roster_for_the_card(self) -> None:
         routing = ENDPOINT_ROUTING.read_text()
         sensor = SENSOR.read_text()
         card = CARD_JS.read_text()
 
-        self.assertIn("def softphone_targets_from_roster", routing)
         self.assertIn('"tx_formats": list(peer.tx_formats or [])', routing)
         self.assertIn('"rx_formats": list(peer.rx_formats or [])', routing)
-        self.assertIn('metadata.get("local_ha")', routing)
-        self.assertIn('metadata.get("group_type")', routing)
-        self.assertIn("getattr(entry, \"ha_bridge\", False) and group_type", routing)
-        self.assertIn("softphone_targets_json", sensor)
-        self.assertIn("softphone_targets_json", card)
+        self.assertIn('"group_type": group.group_type', routing)
+        self.assertNotIn("def softphone_targets_from_roster", routing)
+        self.assertNotIn("softphone_targets_json", sensor)
+        self.assertNotIn("softphone_targets_json", card)
+        self.assertIn("_targetFromRosterEntry(entry)", card)
+        self.assertIn("metadata.local_ha", card)
 
     def test_ha_softphone_media_path_can_join_conference_without_card_logic(self) -> None:
         init_py = INIT.read_text()

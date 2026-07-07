@@ -10,7 +10,6 @@ ESP YAMLs subscribe to the unified sensor and normalize it locally into their
 SIP dial plan.
 """
 import logging
-import json
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -113,7 +112,6 @@ class VoipPhonebookSensor(SensorEntity):
         self._attr_native_value = "0 entries"
         self._phonebook = ""
         self._roster_json = '{"version":1,"contacts":[]}'
-        self._softphone_targets_json = "[]"
         self._count = 0
         self._tracked_entities: set[str] = set()
         self._unsub_state = None
@@ -124,7 +122,6 @@ class VoipPhonebookSensor(SensorEntity):
         return {
             "phonebook": self._phonebook,
             "roster_json": self._roster_json,
-            "softphone_targets_json": self._softphone_targets_json,
             "count": self._count,
         }
 
@@ -196,7 +193,7 @@ class VoipPhonebookSensor(SensorEntity):
             push_roster_json_to_esps,
             registered_roster_entries,
         )
-        from .endpoint_routing import roster_from_peers, softphone_targets_from_roster
+        from .endpoint_routing import roster_from_peers
         from .roster import dump_roster_json
         from .websocket_api import async_prune_ha_softphone_groups
 
@@ -209,24 +206,16 @@ class VoipPhonebookSensor(SensorEntity):
             roster_entries = roster_from_peers(self.hass, peers, registered_roster_entries(self.hass))
         phonebook = ",".join(entries)
         roster_json = dump_roster_json(roster_entries)
-        softphone_targets_json = json.dumps(
-            softphone_targets_from_roster(roster_entries),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
         visible_count = len(roster_entries)
         new_value = f"{visible_count} entry" if visible_count == 1 else f"{visible_count} entries"
         if (
             new_value != self._attr_native_value
             or phonebook != self._phonebook
             or roster_json != self._roster_json
-            or softphone_targets_json != self._softphone_targets_json
         ):
             self._attr_native_value = new_value
             self._phonebook = phonebook
             self._roster_json = roster_json
-            self._softphone_targets_json = softphone_targets_json
             self._count = visible_count
             _LOGGER.debug(
                 "Phonebook recomputed (%d entries)", visible_count

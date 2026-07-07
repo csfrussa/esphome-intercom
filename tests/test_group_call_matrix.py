@@ -224,7 +224,7 @@ class GroupCallMatrixTest(unittest.TestCase):
         pbx.rebuild_phonebook()
         return pbx
 
-    def test_group_roster_matrix_is_dynamic_and_visible_to_softphone_targets(self) -> None:
+    def test_group_roster_matrix_is_dynamic_and_visible_in_the_central_roster(self) -> None:
         entries = self._roster()
         by_id = {entry.id: entry for entry in entries}
 
@@ -236,12 +236,16 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(by_id["CG Casa"].metadata["members"], ["Spotpear", "WS3", "Zoiper", "Casa"])
         self.assertEqual(by_id["CG Casa"].metadata["ring_members"], ["Zoiper", "Casa"])
 
-        targets = {item["name"]: item for item in endpoint_routing.softphone_targets_from_roster(entries)}
-        self.assertIn("RG Casa", targets)
-        self.assertIn("CG Casa", targets)
-        self.assertIn("Spotpear", targets)
-        self.assertIn("WS3", targets)
-        self.assertNotIn("Casa", targets)
+        visible = {
+            (entry.name or entry.id)
+            for entry in entries
+            if entry.enabled and not (entry.metadata or {}).get("local_ha")
+        }
+        self.assertIn("RG Casa", visible)
+        self.assertIn("CG Casa", visible)
+        self.assertIn("Spotpear", visible)
+        self.assertIn("WS3", visible)
+        self.assertNotIn("Casa", visible)
 
         stale_entries = self._roster(peers=[self._peers()[2]], registered=[])
         self.assertNotIn("RG Casa", {entry.id for entry in stale_entries})

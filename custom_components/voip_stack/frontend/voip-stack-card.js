@@ -720,14 +720,27 @@ class VoipStackCard extends HTMLElement {
   }
 
   _softphoneTargets() {
-    return this._softphoneTargetsFromBackend || [];
+    const targets = [];
+    for (const entry of this._rosterEntries || []) {
+      if (!entry || entry.enabled === false) continue;
+      const metadata = entry.metadata || {};
+      if (metadata.local_ha) continue;
+      const target = this._targetFromRosterEntry(entry);
+      if (!target.device_id || !target.name) continue;
+      targets.push(target);
+    }
+    return targets;
   }
 
   _availableSoftphoneGroups(groupType) {
-    return (this._rosterEntries || [])
-      .filter(entry => entry?.enabled !== false && String(entry?.metadata?.group_type || "") === groupType)
-      .map(entry => entry.name || entry.id)
-      .filter(Boolean);
+    const groups = [];
+    for (const entry of this._rosterEntries || []) {
+      if (!entry || entry.enabled === false) continue;
+      if (String(entry.metadata?.group_type || "") !== groupType) continue;
+      const name = entry.name || entry.id;
+      if (name) groups.push(name);
+    }
+    return groups;
   }
 
   _getSoftphoneTargetDevice() {
@@ -740,9 +753,7 @@ class VoipStackCard extends HTMLElement {
   _loadSharedRoster() {
     const attr = this._hass?.states?.["sensor.voip_phonebook"]?.attributes || {};
     const raw = attr.roster_json || "";
-    const rawTargets = attr.softphone_targets_json || "[]";
     let contacts = [];
-    let targets = [];
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
@@ -751,16 +762,13 @@ class VoipStackCard extends HTMLElement {
         console.error("Invalid voip roster_json:", err);
       }
     }
-    try {
-      const parsedTargets = JSON.parse(rawTargets);
-      targets = Array.isArray(parsedTargets) ? parsedTargets : [];
-    } catch (err) {
-      console.error("Invalid voip softphone_targets_json:", err);
-    }
-    this._rosterEntries = contacts
-      .filter(entry => entry && typeof entry === "object")
-      .map(entry => ({
-        id: String(entry.id || entry.name || "").trim(),
+    const rosterEntries = [];
+    for (const entry of contacts) {
+      if (!entry || typeof entry !== "object") continue;
+      const id = String(entry.id || entry.name || "").trim();
+      if (!id) continue;
+      rosterEntries.push({
+        id,
         name: String(entry.name || entry.id || "").trim(),
         address: String(entry.address || entry.host || "").trim(),
         sip_uri: String(entry.sip_uri || "").trim(),
@@ -770,18 +778,9 @@ class VoipStackCard extends HTMLElement {
         ha_bridge: !!entry.ha_bridge,
         enabled: entry.enabled !== false,
         metadata: entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {},
-      }))
-      .filter(entry => entry.id);
-    this._softphoneTargetsFromBackend = targets
-      .filter(target => target && typeof target === "object")
-      .map(target => ({
-        device_id: String(target.device_id || target.route_id || target.name || "").trim(),
-        name: String(target.name || target.device_id || target.route_id || "").trim(),
-        route_id: String(target.route_id || target.device_id || target.name || "").trim(),
-        ha_bridge: !!target.ha_bridge,
-        group_type: String(target.group_type || "").trim(),
-      }))
-      .filter(target => target.device_id && target.name);
+      });
+    }
+    this._rosterEntries = rosterEntries;
     if (this._isHaSoftphoneMode() && !this._getSoftphoneTargetDevice()) {
       this._softphoneTargetDeviceId = this._softphoneTargets()[0]?.device_id || null;
     }
