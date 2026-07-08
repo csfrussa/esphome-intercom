@@ -1438,6 +1438,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         target=uri.user,
         remote_host=uri.host,
         remote_sip_port=uri.port or int(cfg["sip_port"]),
+        request_uri=str(uri),
         timeout=SIP_TIMER_B if use_trunk else 8.0,
     )
     if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.metadata.get("registered"):

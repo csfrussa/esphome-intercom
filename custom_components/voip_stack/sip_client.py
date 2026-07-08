@@ -430,6 +430,7 @@ class SipCallClient:
         target: str,
         remote_host: str,
         remote_sip_port: int,
+        request_uri: str = "",
         timeout: float = 8.0,
     ) -> str:
         try:
@@ -449,9 +450,10 @@ class SipCallClient:
             )
             return "transport_unreachable"
         transport_param = (("transport", self.signaling_transport.lower()),)
-        request_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port), params=transport_param))
+        request_uri = request_uri or str(sip.SipUri(target, remote_host, int(remote_sip_port), params=transport_param))
+        sip.parse_sip_uri(request_uri)
         local_uri = str(sip.SipUri(self.local_name, self.local_ip, self.local_sip_port, params=transport_param))
-        remote_uri = str(sip.SipUri(target, remote_host, int(remote_sip_port), params=transport_param))
+        remote_uri = request_uri
         self._pending_target = target
         self._pending_remote_host = remote_host
         self._pending_remote_sip_port = int(remote_sip_port)

@@ -520,6 +520,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             target=bridge_uri.user,
             remote_host=bridge_uri.host,
             remote_sip_port=bridge_uri.port or int(cfg["sip_port"]),
+            request_uri=str(bridge_uri),
         )
         if result == "ringing":
             result = await client.wait_for_final()
@@ -702,6 +703,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 target=uri.user or attempt.member,
                 remote_host=uri.host,
                 remote_sip_port=uri.port or int(cfg["sip_port"]),
+                request_uri=str(uri),
                 timeout=8.0,
             )
             if result == "ringing":
@@ -1011,6 +1013,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     target=uri.user or attempt.member,
                     remote_host=uri.host,
                     remote_sip_port=uri.port or int(cfg["sip_port"]),
+                    request_uri=str(uri),
                     timeout=8.0,
                 )
                 if result == "ringing":
@@ -1454,6 +1457,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     target=decision_uri.user,
                     remote_host=decision_uri.host,
                     remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
+                    request_uri=str(decision_uri),
                     timeout=SIP_TIMER_B if bridge_to_trunk else 8.0,
                 )
                 if invite.call_id in bucket.get("trunk_closed_calls", set()):

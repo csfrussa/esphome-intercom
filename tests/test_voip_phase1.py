@@ -348,6 +348,38 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(parsed.header("X-Voip-Stack-Caller-Route"), "Casa")
         self.assertEqual(parsed.header("X-Voip-Stack-Dest-Name"), "Cucina")
 
+    def test_invite_preserves_registered_contact_request_uri_params(self) -> None:
+        sent: list[bytes] = []
+        contact_uri = "sip:Zoiper@192.168.1.50:5062;transport=tcp;ob;line=abc123"
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="Casa",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+            signaling_transport="TCP",
+        )
+        client.use_reused_tcp_connection(
+            send=sent.append,
+            responses=asyncio.Queue(),
+            close=lambda: None,
+        )
+
+        asyncio.run(
+            client.invite(
+                target="Zoiper",
+                remote_host="192.168.1.50",
+                remote_sip_port=5062,
+                request_uri=contact_uri,
+                timeout=0,
+            )
+        )
+
+        self.assertTrue(sent)
+        raw = sent[0].decode()
+        self.assertTrue(raw.startswith(f"INVITE {contact_uri} SIP/2.0\r\n"))
+        parsed = sip.parse_message(sent[0])
+        self.assertEqual(parsed.header("To"), f"<{contact_uri}>")
+
     def test_tcp_invite_connection_refused_returns_transport_unreachable(self) -> None:
         async def run() -> str:
             server = await asyncio.start_server(lambda _r, _w: None, "127.0.0.1", 0)
