@@ -147,32 +147,6 @@ def sip_failure_response(result: str) -> tuple[int, str, str, str]:
     return 480, "Temporarily Unavailable", terminal_reason, public_state
 
 
-def terminal_state_for_decline(reason: str) -> str:
-    """Map SIP final/terminal reasons to public SIP call states."""
-    reason = (reason or "").strip()
-    if not reason:
-        return CallState.IDLE.value
-    if reason == TerminalReason.BUSY.value:
-        return CallState.BUSY.value
-    if reason == TerminalReason.CANCELLED.value:
-        return CallState.CANCELLED.value
-    if reason == TerminalReason.MEDIA_INCOMPATIBLE.value:
-        return CallState.MEDIA_INCOMPATIBLE.value
-    if reason in (
-        TerminalReason.AUTH_REQUIRED_UNSUPPORTED.value,
-        TerminalReason.PROXY_AUTH_REQUIRED_UNSUPPORTED.value,
-    ):
-        return CallState.AUTH_REQUIRED_UNSUPPORTED.value
-    if reason == TerminalReason.TRANSPORT_UNREACHABLE.value:
-        return CallState.TRANSPORT_UNREACHABLE.value
-    return CallState.DECLINED.value
-
-
-def terminal_reason_for_decline(reason: str) -> str:
-    """Normalize SIP terminal reason for HA events."""
-    return reason or TerminalReason.REMOTE_HANGUP.value
-
-
 def sip_terminal_status(reason: str) -> tuple[str, int, str]:
     """Classify an internal terminal reason as HA event class/SIP code/reason."""
     value = (reason or "").strip()
@@ -194,30 +168,3 @@ def sip_terminal_status(reason: str) -> tuple[str, int, str]:
         except ValueError:
             return ("error", 0, value)
     return ("error", 0, value or TerminalReason.PROTOCOL_ERROR.value)
-
-
-def is_hangup_reason(reason: str) -> bool:
-    return reason in (
-        TerminalReason.LOCAL_HANGUP.value,
-        TerminalReason.REMOTE_HANGUP.value,
-    )
-
-
-def localize_bridge_reason(
-    role: str,
-    reason: str | None,
-    origin: str | None,
-) -> str | None:
-    """Translate a bridge terminal reason into one device's perspective."""
-    if origin not in ("source", "dest"):
-        return reason
-    if reason in (
-        TerminalReason.LOCAL_HANGUP.value,
-        TerminalReason.REMOTE_HANGUP.value,
-    ):
-        return (
-            TerminalReason.LOCAL_HANGUP.value
-            if role == origin
-            else TerminalReason.REMOTE_HANGUP.value
-        )
-    return reason
