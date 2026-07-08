@@ -11,8 +11,6 @@ from dataclasses import replace
 import logging
 import time
 
-import voluptuous as vol
-
 from homeassistant.core import HomeAssistant, CoreState, Event, ServiceCall, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED
@@ -198,29 +196,6 @@ async def _ha_advertise_host(hass: HomeAssistant) -> str:
     return addresses[0] if addresses else ""
 
 
-def _resolve_esphome_route_id(hass: HomeAssistant, host: str) -> str:
-    """ESPHome node_name slug for `host`, or '' if not configured."""
-    return get_resolver(hass).route_id_for_host(host)
-
-
-def _state_entity_is_busy(hass: HomeAssistant, device: dict) -> bool:
-    """True when the ESP-published FSM state says this device is not idle."""
-    state_entity = (device.get("entities") or {}).get("voip_state")
-    if not state_entity:
-        return False
-    state = hass.states.get(state_entity)
-    if state is None:
-        return False
-    return str(state.state or "").strip().lower() in {
-        "calling",
-        "remote_ringing",
-        "ringing",
-        "connecting",
-        "in_call",
-        "terminating",
-    }
-
-
 def _device_entity_state(hass: HomeAssistant, device: dict, key: str) -> str:
     entity_id = (device.get("entities") or {}).get(key)
     if not entity_id:
@@ -228,31 +203,6 @@ def _device_entity_state(hass: HomeAssistant, device: dict, key: str) -> str:
     state = hass.states.get(entity_id)
     value = (state.state if state is not None else "").strip()
     return "" if value.lower() in ("unknown", "unavailable") else value
-
-
-def _sip_active_dialog_count(server: object | None) -> int:
-    count = getattr(server, "active_dialog_count", None)
-    if callable(count):
-        try:
-            return int(count())
-        except Exception:
-            return 0
-    dialogs = getattr(server, "active_dialogs", None)
-    if isinstance(dialogs, dict):
-        return len(dialogs)
-    endpoint = getattr(server, "endpoint", None)
-    dialogs = getattr(endpoint, "active_dialogs", None)
-    if isinstance(dialogs, dict):
-        return len(dialogs)
-    endpoints = getattr(server, "endpoints", None)
-    if isinstance(endpoints, set):
-        total = 0
-        for endpoint in endpoints:
-            endpoint_dialogs = getattr(endpoint, "active_dialogs", None)
-            if isinstance(endpoint_dialogs, dict):
-                total += len(endpoint_dialogs)
-        return total
-    return 0
 
 
 def _sip_servers(hass: HomeAssistant) -> list[object]:
@@ -420,11 +370,6 @@ def _device_is_phonebook_available(hass: HomeAssistant, device: dict) -> bool:
     return True
 
 
-def _device_can_answer_locally(hass: HomeAssistant, device: dict) -> bool:
-    state = _device_entity_state(hass, device, "voip_state").lower()
-    return state in ("ringing", "incoming")
-
-
 async def _press_device_button(hass: HomeAssistant, device: dict, key: str, label: str) -> bool:
     button_eid = (device.get("entities") or {}).get(key)
     if not button_eid:
@@ -471,7 +416,7 @@ async def _resolve_command_phone(hass: HomeAssistant, call: ServiceCall) -> dict
     return await _resolve_target_device(hass, call)
 
 
-def _device_transport(hass: HomeAssistant, d: dict, udp_manager=None) -> str:
+def _device_transport(hass: HomeAssistant, d: dict) -> str:
     """Read the endpoint-declared SIP signaling transport."""
     value = str(d.get("sip_transport") or "").lower()
     return value if value in ("udp", "tcp") else ""
@@ -601,52 +546,6 @@ async def _resolve_source_device_from_call(hass: HomeAssistant, call: ServiceCal
         ):
             return device
     return None
-
-
-def _call_destination(call: ServiceCall, dest_device: dict | None = None) -> str:
-    value = str(
-        call.data.get("destination")
-        or call.data.get("target")
-        or call.data.get("call")
-        or ""
-    ).strip()
-    if value:
-        return value
-    if dest_device is not None:
-        return str(dest_device.get("name") or "").strip()
-    return ""
-
-
-def _with_target_device(op_label: str):
-    """Decorator: resolve the call target or raise ServiceValidationError."""
-    from homeassistant.exceptions import ServiceValidationError
-
-    def decorator(fn):
-        async def wrapper(call: ServiceCall) -> None:
-            hass: HomeAssistant = call.hass
-            device = await _resolve_target_device(hass, call)
-            if not device:
-                raise ServiceValidationError(
-                    f"voip_stack.{op_label}: no VoIP device matches the target"
-                )
-            await fn(call, device)
-        return wrapper
-    return decorator
-
-
-def _require_service_target(value: dict) -> dict:
-    """Service calls need one explicit device selector in data."""
-    if any(value.get(key) for key in ("device_id", "entity_id", "name", "friendly_name")):
-        return value
-    raise vol.Invalid("provide one target: device_id, entity_id, name, or friendly_name")
-
-
-def _require_call_destination(value: dict) -> dict:
-    if any(value.get(key) for key in ("device_id", "entity_id", "name", "friendly_name")):
-        return value
-    if any(str(value.get(key) or "").strip() for key in ("destination", "target", "call")):
-        return value
-    raise vol.Invalid("provide a destination device or destination/target/call")
 
 
 def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, target: str, sip_uri: str = "") -> None:
