@@ -232,9 +232,6 @@ class SipEndpointManager:
                         snapshots.append(dict(snap()))
         return snapshots
 
-    def pending_invite_count(self) -> int:
-        return sum(len(self._pending_call_ids(server)) for server in self.servers)
-
     def active_dialog_count(self) -> int:
         return sum(self._active_dialog_count_for(server) for server in self.servers)
 

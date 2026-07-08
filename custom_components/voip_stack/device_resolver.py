@@ -149,9 +149,6 @@ class VoipDeviceResolver:
     def install_listeners(self) -> None:
         """Compatibility hook; device resolution reads live state on demand."""
 
-    def shutdown(self) -> None:
-        """Compatibility hook."""
-
     def route_id_for_host(self, host: str) -> str:
         """ESPHome node_name slug for `host`, used as ESPHome service prefix."""
         entry = _esphome_entry_for_host(self.hass, host)
@@ -270,18 +267,6 @@ class VoipDeviceResolver:
             if dev["device_id"] in device_ids:
                 return dev
             if any(_match_name(name, dev.get("name"), dev.get("esphome_id"), dev.get("route_id")) for name in names):
-                return dev
-        return None
-
-    async def resolve_selector(self, selector: str | None) -> Optional[dict]:
-        """Resolve a card selector once and return the canonical device."""
-        wanted = (selector or "").strip()
-        if not wanted:
-            return None
-        for dev in await self.list_devices():
-            if dev.get("device_id") == wanted:
-                return dev
-            if _match_name(wanted, dev.get("name"), dev.get("esphome_id"), dev.get("route_id")):
                 return dev
         return None
 

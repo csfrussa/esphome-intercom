@@ -90,11 +90,3 @@ class OpusEncoder:
         if len(packets) > 1:
             _LOGGER.debug("Opus encoder produced %d packets for one RTP frame", len(packets))
         return b"".join(bytes(packet) for packet in packets)
-
-
-def opus_available() -> bool:
-    try:
-        import av  # noqa: F401
-    except Exception:
-        return False
-    return True

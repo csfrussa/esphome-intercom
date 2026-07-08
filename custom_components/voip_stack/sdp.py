@@ -203,10 +203,6 @@ def _rtp_compatible_audio(offered: RtpPcmFormat, local: AudioFormat) -> RtpPcmFo
     return None
 
 
-def _rtp_matches_audio(offered: RtpPcmFormat, local: AudioFormat) -> bool:
-    return _rtp_compatible_audio(offered, local) is not None
-
-
 def _best_offered_match(offered: list[RtpPcmFormat], local_preferred: list[AudioFormat]) -> RtpPcmFormat | None:
     for local in local_preferred:
         for offered_fmt in offered:
