@@ -35,17 +35,5 @@ HA_PEER_FALLBACK_NAME = "voip-stack"
 HA_SOFTPHONE_DEVICE_ID = "__voip_stack_ha_softphone__"
 HA_SOFTPHONE_ENDPOINT_ENTITY_ID = "sensor.voip_stack_ha_softphone_voip_endpoint"
 
-# Project default ports for the SIP phone/bridge.
-VOIP_STACK_PORT = 5060
 VOIP_STACK_SIP_PORT = 5060
 VOIP_STACK_RTP_PORT = 40000
-
-# Length limits for SIP metadata mirrored between HA and ESP snapshots.
-MAX_CALL_ID_LEN = 64
-MAX_ROUTE_ID_LEN = 64
-MAX_NAME_LEN = 64
-MAX_REASON_LEN = 160
-
-# Timeouts
-CONNECT_TIMEOUT = 5.0
-PING_INTERVAL = 5.0

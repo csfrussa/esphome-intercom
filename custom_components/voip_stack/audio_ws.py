@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 AUDIO_FRAME_TYPE = 1
-LEGACY_AUDIO_CHUNK_BYTES = 1024
 
 
 def encode_audio_frame(payload: bytes) -> bytes:

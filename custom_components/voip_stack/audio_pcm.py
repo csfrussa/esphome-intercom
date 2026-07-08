@@ -24,33 +24,6 @@ def _sign_extend(value: int, bits: int) -> int:
     return (value ^ sign) - sign
 
 
-def _decode_sample(data: bytes, offset: int, fmt: PcmFormat) -> float:
-    """Scalar decode kept for tests and debug tooling; streams use _decode_frame."""
-    if fmt is PcmFormat.S16LE:
-        return int.from_bytes(data[offset:offset + 2], "little", signed=True) / 32768.0
-    if fmt is PcmFormat.S24LE:
-        return _sign_extend(int.from_bytes(data[offset:offset + 3], "little"), 24) / 8388608.0
-    if fmt is PcmFormat.S24LE_IN_S32:
-        return (int.from_bytes(data[offset:offset + 4], "little", signed=True) >> 8) / 8388608.0
-    return int.from_bytes(data[offset:offset + 4], "little", signed=True) / 2147483648.0
-
-
-def _encode_sample(sample: float, fmt: PcmFormat) -> bytes:
-    """Scalar encode kept for tests and debug tooling; streams use _encode_frame."""
-    sample = max(-1.0, min(1.0, sample))
-    if fmt is PcmFormat.S16LE:
-        value = int(sample * (32768 if sample < 0 else 32767))
-        return value.to_bytes(2, "little", signed=True)
-    if fmt is PcmFormat.S24LE:
-        value = int(sample * (8388608 if sample < 0 else 8388607))
-        return (value & 0xFFFFFF).to_bytes(3, "little")
-    if fmt is PcmFormat.S24LE_IN_S32:
-        value = int(sample * (8388608 if sample < 0 else 8388607)) << 8
-        return value.to_bytes(4, "little", signed=True)
-    value = int(sample * (2147483648 if sample < 0 else 2147483647))
-    return value.to_bytes(4, "little", signed=True)
-
-
 def _decode_frame(data: bytes, fmt: AudioFormat) -> np.ndarray:
     """Decode PCM bytes to a float64 array shaped (channels, samples)."""
     stride = fmt.container_bytes_per_sample * fmt.channels
@@ -136,25 +109,6 @@ class _PolyphaseResampler:
         x = np.concatenate([self._tail, channels], axis=1)
         self._tail = x[:, -self._history:]
         return np.einsum("ot,cot->co", self._coeffs, x[:, self._gather], optimize=True)
-
-
-def convert_audio_frame(data: bytes, src: AudioFormat, dst: AudioFormat) -> bytes:
-    """Convert one PCM frame between negotiated VoIP formats.
-
-    Matching formats return the original bytes. Use PcmFrameConverter for
-    streams, especially when sample rate or frame duration changes.
-    """
-    if src == dst:
-        return data
-    if src.frame_ms != dst.frame_ms:
-        raise ValueError(
-            f"frame_ms conversion requires stateful reframing: {src.wire_token()} -> {dst.wire_token()}"
-        )
-    channels = _map_channels(_decode_frame(data, src), dst.channels)
-    resampler = _PolyphaseResampler(
-        src.sample_rate, dst.sample_rate, channels.shape[1], dst.channels
-    )
-    return _encode_frame(resampler.process(channels), dst)
 
 
 class PcmFrameConverter:

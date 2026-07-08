@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 
 
 class PcmFormat(StrEnum):
@@ -13,31 +13,11 @@ class PcmFormat(StrEnum):
     S32LE = "s32le"
 
 
-class PcmFormatId(IntEnum):
-    S16LE = 1
-    S24LE = 2
-    S24LE_IN_S32 = 3
-    S32LE = 4
-
-
-_FORMAT_TO_ID = {
-    PcmFormat.S16LE: PcmFormatId.S16LE,
-    PcmFormat.S24LE: PcmFormatId.S24LE,
-    PcmFormat.S24LE_IN_S32: PcmFormatId.S24LE_IN_S32,
-    PcmFormat.S32LE: PcmFormatId.S32LE,
-}
-_ID_TO_FORMAT = {value: key for key, value in _FORMAT_TO_ID.items()}
 _CONTAINER_BYTES = {
     PcmFormat.S16LE: 2,
     PcmFormat.S24LE: 3,
     PcmFormat.S24LE_IN_S32: 4,
     PcmFormat.S32LE: 4,
-}
-_SIGNIFICANT_BITS = {
-    PcmFormat.S16LE: 16,
-    PcmFormat.S24LE: 24,
-    PcmFormat.S24LE_IN_S32: 24,
-    PcmFormat.S32LE: 32,
 }
 
 SUPPORTED_SAMPLE_RATES = frozenset({8000, 12000, 16000, 24000, 32000, 44100, 48000})
@@ -67,14 +47,6 @@ class AudioFormat:
             )
 
     @property
-    def format_id(self) -> int:
-        return int(_FORMAT_TO_ID[self.pcm_format])
-
-    @property
-    def significant_bits(self) -> int:
-        return _SIGNIFICANT_BITS[self.pcm_format]
-
-    @property
     def container_bytes_per_sample(self) -> int:
         return _CONTAINER_BYTES[self.pcm_format]
 
@@ -83,28 +55,16 @@ class AudioFormat:
         return (self.sample_rate * self.frame_ms) // 1000
 
     @property
-    def exact_frame_samples(self) -> bool:
-        return (self.sample_rate * self.frame_ms) % 1000 == 0
-
-    @property
     def nominal_frame_bytes(self) -> int:
         return self.nominal_frame_samples * self.channels * self.container_bytes_per_sample
 
-    @property
-    def udp_safe(self) -> bool:
-        return self.nominal_frame_bytes <= UDP_SAFE_PAYLOAD_BYTES
-
     def fits_udp_payload(self, max_payload: int = UDP_SAFE_PAYLOAD_BYTES) -> bool:
         return self.nominal_frame_bytes <= max_payload
-
-    def wire_tuple(self) -> tuple[int, int, int, int]:
-        return (self.sample_rate, self.format_id, self.channels, self.frame_ms)
 
     def wire_token(self) -> str:
         return f"{self.sample_rate}:{self.pcm_format.value}:{self.channels}:{self.frame_ms}"
 
 
-DEFAULT_AUDIO_FORMAT = AudioFormat(16000, PcmFormat.S16LE, 1, 16)
 PREFERRED_FRAME_MS = (10, 16, 20, 32)
 
 
@@ -146,27 +106,6 @@ HA_TRUNK_AUDIO_FORMATS = (
 )
 
 
-def pcm_format_from_id(format_id: int) -> PcmFormat:
-    try:
-        return _ID_TO_FORMAT[PcmFormatId(format_id)]
-    except (KeyError, ValueError) as err:
-        raise ValueError(f"unsupported pcm_format id {format_id}") from err
-
-
-def audio_format_from_wire(
-    sample_rate: int,
-    format_id: int,
-    channels: int,
-    frame_ms: int,
-) -> AudioFormat:
-    return AudioFormat(
-        sample_rate=sample_rate,
-        pcm_format=pcm_format_from_id(format_id),
-        channels=channels,
-        frame_ms=frame_ms,
-    )
-
-
 def parse_audio_format_token(token: str | None) -> AudioFormat:
     if not token:
         raise ValueError("audio format token is required")
@@ -191,30 +130,6 @@ def parse_audio_format_list(value: str | None) -> list[AudioFormat]:
     if len(formats) > 8:
         raise ValueError("too many audio formats (max 8)")
     return formats
-
-
-def require_udp_safe_formats(
-    formats: list[AudioFormat],
-    *,
-    context: str,
-    max_payload: int = UDP_SAFE_PAYLOAD_BYTES,
-) -> list[AudioFormat]:
-    oversized = [fmt for fmt in formats if not fmt.fits_udp_payload(max_payload)]
-    if oversized:
-        examples = ", ".join(f"{fmt.wire_token()} ({fmt.nominal_frame_bytes} bytes)" for fmt in oversized[:3])
-        raise ValueError(
-            f"{context} contains UDP audio frames above {max_payload} bytes: {examples}; "
-            "use TCP or lower sample_rate/channels/bit depth/frame_ms"
-        )
-    return formats
-
-
-def choose_common_format(preferred: list[AudioFormat], supported: list[AudioFormat]) -> AudioFormat | None:
-    supported_set = set(supported)
-    for fmt in preferred:
-        if fmt in supported_set:
-            return fmt
-    return None
 
 
 def choose_common_frame_ms(*format_lists: list[AudioFormat]) -> int | None:
