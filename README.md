@@ -919,10 +919,16 @@ name: Home Assistant Softphone
 show_extended_info: true
 ```
 
-In `ha_softphone` mode the card has its own destination selector, Auto Answer and
-Do Not Disturb controls. It rings only for calls addressed to Home Assistant and
-does not mirror an ESP card state. Only `hybrid` cards must be bound to an ESP
-with `device_id`.
+In `esp_mirror` mode the card follows ESPHome entities. Its contact buttons use
+the ESP's own phonebook cycler, while the keypad view sends a manual target to
+that same ESP `start_call` action without overwriting the selected-contact
+sensor. ESP mirror options manipulate the ESP-exposed DND/group entities when
+they are present.
+
+In `ha_softphone` mode the card has its own destination selector, Auto Answer,
+Do Not Disturb, extension and group controls. It rings only for calls addressed
+to Home Assistant and does not mirror an ESP card state. Only `esp_mirror`
+cards are bound to an ESP with `device_id`.
 
 The two modes intentionally display calls differently. An `esp_mirror` card shows
 Answer/Decline when its mirrored ESP is ringing, including the case where that
@@ -944,7 +950,12 @@ _The HA softphone card owns HA-only controls such as Auto Answer, DND and browse
 
 _The keypad view lets the HA softphone call a phonebook name, extension, SIP URI or external number without editing the roster first._
 
-The card automatically discovers ESPHome devices with the `voip_stack` component through their `voip_endpoint` sensor. The visual editor stores the HA `device_id`, while manual YAML can use the ESP friendly name, for example `device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise the ESP friendly name. With `show_extended_info: true`, the header appends the local SIP signaling transport and audio mode.
+The card automatically discovers ESPHome devices with the `voip_stack` entity
+surface, starting from the `voip_endpoint` sensor. The visual editor stores the
+HA `device_id`, while manual YAML can use the ESP friendly name, for example
+`device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise
+the ESP friendly name. With `show_extended_info: true`, the header appends the
+local SIP signaling transport and audio mode.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.voip_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
 

@@ -51,6 +51,12 @@ leg to a compatible PCM format.
 ## HA Cannot Route A Name
 
 - Ensure `sensor.voip_phonebook` contains the target.
+- If an ESP has just rebooted or been reflashed, check
+  `sensor.<device>_voip_contacts`. If it is `unknown` or empty while the device
+  is otherwise online, wait for HA to see the ESPHome
+  `esphome.<slug>_set_roster_json` service or call `voip_stack.push_phonebook`
+  for diagnostics. Current builds automatically refresh when that service is
+  registered.
 - For local ESP-only routing, declare the contact in
   `voip_stack.static_contacts`.
 - Use a direct SIP URI (`sip:name@host:5060`) when bypassing HA.
@@ -94,6 +100,14 @@ final response.
 - If one direction is silent but counters increase, inspect the source device:
   mic-only/speaker-only mode, muted switch, low analog gain, AFE/AEC output
   surface, or silence in the room.
+- For generic ESPHome-native YAMLs, verify the hardware matches the YAML. The
+  reference native full/speaker examples are written around INMP441 plus a
+  MAX98357A-style I2S amplifier. A PCM5102 is a line-level DAC, not a speaker
+  amplifier, and may need a powered speaker or amplifier plus correct mute/XSMT
+  wiring. INMP441 boards also depend on the L/R strap; if the selected
+  `channels: [1]` path is silent, test `channels: [0]`.
+- `speaker_only` profiles intentionally have no microphone path. They can play
+  remote audio but cannot send local microphone audio back.
 - If one browser works and another does not, check which browser owns the HA
   softphone media WebSocket for that active call.
 

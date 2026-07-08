@@ -24,12 +24,18 @@ The practical change:
   local SIP registrar support, Assist intents or optional trunk settings.
 - Standard softphones can register to Home Assistant as local SIP accounts and
   become phonebook contacts.
+- Local SIP account services now describe generic SIP endpoint accounts, not
+  only "softphones". Real VoIP phones, ATAs, baresip, pjsua, Zoiper and Linphone
+  all use the same account model.
 - Home Assistant can register one provider/PBX trunk, so ESPs and the HA
   softphone can make and receive external calls without requiring Asterisk next
   to the integration.
 - The shared phonebook is now a SIP dial plan: explicit `sip:name@host` /
   `name@host` routes go direct, known local endpoints can be bridged by HA, and
   external numbers can use the trunk when configured.
+- Phonebook `extension` values are the internal dial-plan aliases. Static DTMF
+  route maps are not a second routing table; inbound DTMF and numeric local
+  calls resolve against roster extensions.
 - SIP call reasons are surfaced to ESP displays, HA state and cards: busy, DND,
   declined, cancelled, timeout, media-incompatible, transport-unreachable and
   route errors are no longer hidden behind the old intercom FSM.
@@ -53,6 +59,15 @@ Migration impact:
 - The old ESP-only network scanning/discovery path is gone. Use explicit SIP
   URIs, ESP `static_contacts` entries or the HA-managed roster.
 - The old project-specific VoIP call-control protocol is not a fallback.
+- ESP group membership is not packed into the endpoint sensor anymore. The
+  endpoint sensor stays short and stable; group membership is read from optional
+  sibling ESPHome entities (`voip_ring_groups`, `voip_conference_groups` and
+  `voip_conference_ring`) when those entities are exposed by the HA integration
+  package.
+- `voip_stack:` alone is only the ESP SIP/RTP engine. HA discovery, mirror-card
+  state, group membership and phonebook synchronization require the maintained
+  `packages/voip/ha_integration.yaml` entity surface or equivalent manual
+  `platform: voip_stack` entities.
 
 ## SIP consolidation audit
 
@@ -97,12 +112,11 @@ sets activities, and policies drive LED/display/audio/timer outputs from one
 committed snapshot.
 
 Voice Assistant response state is now tied to TTS/media-player announcement
-lifecycle callbacks through `runtime_controller`. Slow local TTS backends can exceed
-ESPHome's historical 2-second playback-start watchdog, especially XTTS running
-locally. This release temporarily ships a project-local `voice_assistant`
-fork that exposes `tts_playback_start_timeout`; maintained full profiles set
-it to `10s`. Custom full profiles using the maintained `core_cpp` package get
-that setting automatically.
+lifecycle callbacks through `runtime_controller`. Slow local TTS backends can
+exceed ESPHome's historical 2-second playback-start watchdog, especially XTTS
+running locally. This release temporarily ships a project-local
+`voice_assistant` fork that exposes `tts_playback_start_timeout`; maintained
+full profiles set it to `10s` through the full voice/runtime packages.
 
 Sendspin is included in maintained full-experience profiles as a Music Assistant
 media source. It is not required for normal HA media, TTS, timer sounds,
@@ -145,11 +159,16 @@ The HA softphone card exposes Auto Answer, DND and browser ringtone behind an
 idle-only Options panel. Browser ringtone is a per-browser localStorage
 preference; HA softphone DND is stored in Home Assistant state.
 
-Hybrid and HA-softphone Lovelace modes have intentionally separate semantics.
-`hybrid` mirrors one ESP endpoint and exposes controls from that ESP's
-perspective. `ha_softphone` represents Home Assistant itself. If you previously
-depended on one card mixing both models, split it into one hybrid ESP card and
-one optional HA softphone card.
+ESP mirror and HA-softphone Lovelace modes have intentionally separate
+semantics. `esp_mirror` mirrors one ESP endpoint and exposes controls from that
+ESP's perspective. `ha_softphone` represents Home Assistant itself. If you
+previously depended on one card mixing both models, split it into one ESP mirror
+card and one optional HA softphone card.
+
+ESP mirror cards now have a keypad/manual target view. This still calls the
+mirrored ESP's own `start_call` action; it is not a separate HA-side contact or
+number path. The ESP uses its local synced phonebook first and sends unresolved
+targets to HA for central dial-plan/trunk/group routing.
 
 Browser audio setup now waits for the HA SIP softphone control response and
 uses the negotiated TX/RX formats from that response before creating the AudioWorklets.

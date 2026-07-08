@@ -58,6 +58,24 @@ session, HA returns `486 Busy Here`.
 The card does not decide routing and does not filter the phonebook. It displays
 the central roster and mirrors HA softphone state.
 
+## ESP Mirror Card To Target
+
+1. The ESP mirror card is bound to one ESPHome device.
+2. Contact next/previous buttons press that ESP's own contact-cycler controls.
+3. The normal Call button presses the ESP call control for the currently
+   selected contact.
+4. The keypad/manual target view sends the typed target to the same ESP
+   `start_call` action.
+5. The ESP first resolves the target through its local synced phonebook. Direct
+   SIP targets can be called by the ESP itself.
+6. If the target is not locally direct, the ESP sends the call to HA and HA
+   applies the central dial plan: extension, group, registered SIP endpoint,
+   trunk number or reject.
+
+The keypad is not a second HA-only routing path and it must not overwrite the
+ESP selected-contact sensor. Closing the keypad returns to the ESP contact
+cycler.
+
 ## Registered SIP Endpoint To Registered SIP Endpoint
 
 1. Endpoint A registers to HA with a local SIP account.
@@ -161,4 +179,3 @@ It is not expected for:
 - HA/card calling a roster target;
 - ESP calling a known roster target;
 - `forward` to a registered account.
-

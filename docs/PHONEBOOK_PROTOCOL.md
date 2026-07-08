@@ -65,6 +65,11 @@ an ESP participates in PBX groups, HA reads `text platform: voip_stack
 type: ring_groups`, `text platform: voip_stack type: conference_groups` and
 `switch platform: voip_stack conference_ring` from the same ESPHome device.
 
+The maintained `packages/voip/ha_integration.yaml` package exposes the normal
+entity surface. Custom YAMLs can omit it for standalone ESP-only SIP devices,
+but then HA will not discover that ESP, mirror its call state or read dynamic
+group membership.
+
 Roster entries use JSON fields:
 
 - `id`
@@ -153,6 +158,12 @@ ESPHome also exposes native API actions such as
 that device's mirror/manual entries. In HA-managed installs, prefer the central
 `voip_stack.*` services above and let HA push `sensor.voip_phonebook` to the
 devices.
+
+HA pushes the canonical roster whenever the phonebook sensor changes. It also
+refreshes after ESPHome registers an `esphome.<slug>_set_roster_json` service,
+which covers the common reboot timing where a device's endpoint sensor appears
+before its action service is callable. `voip_stack.push_phonebook` remains a
+diagnostic/manual recovery tool, not the normal synchronization path.
 
 Local SIP accounts are created with `voip_stack.create_account`.
 The `username` becomes the SIP username and central roster ID. If `password` is

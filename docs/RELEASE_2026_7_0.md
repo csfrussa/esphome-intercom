@@ -37,6 +37,13 @@ such as Asterisk:
   account and become a phonebook contact.
 - Home Assistant can register one optional provider/PBX trunk. External numbers
   and provider inbound calls can be routed through VoIP Stack.
+- Ring groups and conference groups are now HA-owned PBX primitives. Ring
+  groups fork calls to all callable members and bridge the first answered leg.
+  Conference groups create HA-mixed SIP conference rooms where participants join
+  by calling the group contact.
+- ESP devices, HA itself, manual contacts and registered SIP endpoint accounts
+  can all declare ring/conference group membership. Group entries are generated
+  dynamically in the same central phonebook.
 - With a trunk configured, ESPs and Home Assistant can place and receive
   external calls without carrying Asterisk beside the integration.
 - Audio quality is negotiated per direction. A device can receive the best
@@ -103,6 +110,21 @@ VoIP call-control path is not a compatibility layer.
 - 🔄 Browser/card reload during an active HA softphone call can explicitly rebind
   to the existing server session within a short grace window, avoiding the old
   "dashboard refresh killed or desynced the softphone call" behavior.
+- 👥 HA can materialize ring groups and conference groups from ESP entities,
+  manual contacts and registered SIP endpoint accounts. Ring groups behave like
+  PBX forking; conference groups behave like a SIP focus hosted by HA.
+- 🧑‍💼 Local SIP account services now model generic SIP endpoint accounts, not
+  only softphones. Optional `extension`, `ring_group`, `conference_group` and
+  `conference_ring` fields make registered phones first-class phonebook
+  members.
+- 🧭 DTMF/inbound numeric routing now resolves against phonebook `extension`
+  values instead of a separate static route map.
+- 🔁 Phonebook push is retriggered when ESPHome registers a
+  `*_set_roster_json` service, closing the reboot timing window where an ESP
+  could be discovered before its roster service was callable.
+- 🔐 SIP digest-auth INVITE retry now increments CSeq, regenerates the Via
+  branch and rebuilds dialog headers before adding Authorization. This improves
+  interoperability with stricter PBX/FRITZ!Box transactions.
 - 📞 ESP -> HA browser-answer calls now initialize the browser audio pipeline
   only after the HA SIP answer/control reply carries the negotiated TX/RX formats.
   This keeps the ESP-caller / HA-responder path aligned with HA-originated
@@ -135,19 +157,25 @@ VoIP call-control path is not a compatibility layer.
   browser rebinds inside the server grace window.
 - 🧭 Device identity remains `device_id` based in the frontend. Legacy
   name/esphome-id matching is resolved server-side, once.
-- 🔔 HA softphone has an idle-only Options panel for Auto Answer, DND and
-  browser ringtone. Ringtone is a per-browser preference; HA softphone DND is
-  stored in HA state.
+- 🔔 HA softphone has an idle-only Options panel for Auto Answer, DND,
+  extension, ring group, conference group, conference ringing and browser
+  ringtone. Ringtone is a per-browser preference; the other settings are stored
+  in HA state and republished through HA's virtual endpoint.
 - ⌨️ HA softphone also has a keypad/manual target view for calling a phonebook
   name, extension, SIP URI or external number directly from the card.
 
 ![HA softphone keypad](images/ha-softphone-keypad.jpg)
 
-- 🪞 Hybrid cards keep the original mirror semantics: the card represents the
-  selected ESP, mirrors ESP ringing/in_call state, and becomes the HA
-  softphone leg only when that ESP is calling Home Assistant. A separate
-  `ha_softphone` card represents HA itself and shows Answer/Decline only for
-  calls addressed to HA.
+- 🪞 ESP mirror cards keep mirror semantics: the card represents the selected
+  ESP, mirrors ESP ringing/in_call state, and presses that ESP's own controls.
+  A separate `ha_softphone` card represents HA itself and shows Answer/Decline
+  only for calls addressed to HA.
+- ⌨️ ESP mirror cards now include their own keypad/manual target view. The
+  keypad does not write into the ESP selected-contact text sensor; it calls the
+  ESP `start_call` action with the typed target, preserving the ESP phonebook
+  cycler.
+- 👥 ESP mirror and HA softphone options expose ring/conference group membership
+  through the same backend services/entities used by the central phonebook.
 - 🧹 Ringing/In-call screens hide runtime options, so only the call actions
   relevant to the current state are visible.
 - 🧾 Terminal text uses the active call peer. A card or display no longer reports
@@ -282,6 +310,12 @@ VoIP call-control path is not a compatibility layer.
   of requiring a reboot or relying on YAML-level automations.
 - 🧭 HA rebuilds the phonebook from endpoint sensors and routes through canonical
   rows.
+- 🧩 ESP endpoint sensors stay short. Group membership is read from sibling
+  `voip_ring_groups`, `voip_conference_groups` and `voip_conference_ring`
+  entities when exposed by `packages/voip/ha_integration.yaml`.
+- 🔁 If an ESP reboots and HA sees it before `esphome.<slug>_set_roster_json`
+  is registered, HA refreshes and pushes the phonebook again when that service
+  appears.
 - 📥 Incoming calls are not phonebook-gated on the receiving ESP. Unknown but
   protocol-valid external callers can ring/stream; use DND or explicit routing
   policy when you want to reject them.
@@ -291,6 +325,8 @@ VoIP call-control path is not a compatibility layer.
 - 🧹 Documentation was cleaned up to state the HA-managed phonebook model once,
   instead of repeating the same "do not rely on mDNS as the primary contract"
   guidance in several places.
+- 🧪 Added a reusable local qualification matrix for routing, groups,
+  conference lifecycle, terminal cleanup, port ownership and service contracts.
 
 ## 📦 YAML Presets
 
@@ -348,6 +384,8 @@ VoIP call-control path is not a compatibility layer.
   branches, TCP vs UDP tradeoffs and Sendspin validation status.
 - 🧾 Breaking/compatibility notes were updated for the SIP/VoIP migration,
   negotiated formats and the new media path.
+- 📒 Added operational docs for the dial-plan resolver, service surface, call
+  flows, ESP entity surface, ring/conference groups and testing/debug workflow.
 - 🛒 HACS guidance was refreshed now that the project is accepted in the HACS
   default repository flow. Custom repository instructions remain useful for
   development and release testing.
@@ -381,3 +419,7 @@ VoIP call-control path is not a compatibility layer.
   the caller is absent from the local phonebook. Custom security/policy behavior
   should be implemented explicitly; missing phonebook rows are not an inbound
   access-control mechanism.
+- If a custom YAML expects HA discovery, ESP mirror cards or dynamic groups,
+  include `packages/voip/ha_integration.yaml` or expose equivalent
+  `platform: voip_stack` entities. The SIP engine alone can run standalone but
+  does not publish the HA entity surface.

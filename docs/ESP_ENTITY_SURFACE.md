@@ -11,6 +11,12 @@ packages:
   voip_ha_integration: !include packages/voip/ha_integration.yaml
 ```
 
+Maintained YAMLs already include the appropriate entity package. When building
+a custom YAML from the bare `voip_stack` component, add this package or declare
+the equivalent entities manually. Otherwise the ESP may still be a working SIP
+phone, but Home Assistant will not discover it as a phonebook peer and ESP
+mirror cards will not have state to display.
+
 ## Entities
 
 | Entity | Required for | Purpose |

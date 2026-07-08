@@ -132,7 +132,10 @@ Emit the current central JSON phonebook as a `voip_stack.call_event`.
 Push the current central JSON phonebook to online ESP devices.
 
 The normal path is automatic: phonebook changes trigger a rebuild and push.
-Use this service for diagnostics or recovery.
+Home Assistant also refreshes and pushes again when an ESPHome
+`*_set_roster_json` service is registered, so rebooting ESPs receive the roster
+after their action surface is ready. Use this service for diagnostics or manual
+recovery.
 
 ### `voip_stack.purge_devices`
 
@@ -200,4 +203,3 @@ Fields:
 
 Use this only for the automation fallback path. Known roster targets should be
 handled by the central dial plan without waiting for this service.
-

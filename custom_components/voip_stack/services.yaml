@@ -377,7 +377,11 @@ export_phonebook:
 
 push_phonebook:
   name: Push Phonebook
-  description: Push the current central JSON phonebook to all online ESP endpoints.
+  description: >-
+    Push the current central JSON phonebook to all online ESP endpoints. The
+    normal path is automatic: phonebook changes trigger a push, and HA refreshes
+    again when an ESPHome *_set_roster_json service registers after reboot.
+    Use this for diagnostics or manual recovery.
 
 set_dnd:
   name: Set SIP DND
