@@ -23,8 +23,15 @@ from typing import Any
 import urllib.error
 import urllib.request
 
-from aioesphomeapi import APIClient
-import websockets
+try:
+    from aioesphomeapi import APIClient
+except ModuleNotFoundError:  # pragma: no cover - dependency-light CI only imports contracts.
+    APIClient = None
+
+try:
+    import websockets
+except ModuleNotFoundError:  # pragma: no cover - dependency-light CI only imports contracts.
+    websockets = None
 
 
 DEFAULT_HA_URL = "https://f0260ef3d722.sn.mynetname.net"
@@ -105,6 +112,8 @@ class HaWs:
         self.events: list[dict[str, Any]] = []
 
     async def __aenter__(self) -> "HaWs":
+        if websockets is None:
+            raise RuntimeError("websockets is required to run live HA websocket qualification")
         url = self.base_url.replace("https://", "wss://").replace("http://", "ws://") + "/api/websocket"
         self.ws = await websockets.connect(url, ssl=self.ssl_context)
         hello = json.loads(await self.ws.recv())
@@ -158,6 +167,8 @@ class HaWs:
 
 class EspApi:
     def __init__(self, spec: EspDevice) -> None:
+        if APIClient is None:
+            raise RuntimeError("aioesphomeapi is required to run live ESP qualification")
         self.spec = spec
         self.client = APIClient(spec.host, spec.port, spec.password)
         self.entities: dict[str, Any] = {}

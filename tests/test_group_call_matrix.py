@@ -60,6 +60,11 @@ def _install_ha_fakes() -> None:
         websocket_api.websocket_command = lambda _schema: (lambda fn: fn)
         websocket_api.async_response = lambda fn: fn
         sys.modules["homeassistant.components.websocket_api"] = websocket_api
+    if "voluptuous" not in sys.modules:
+        vol = types.ModuleType("voluptuous")
+        vol.Required = lambda key: key
+        vol.Optional = lambda key, default=None: key
+        sys.modules["voluptuous"] = vol
 
 
 def _load_module(name: str):

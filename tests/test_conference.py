@@ -37,6 +37,7 @@ def _install_ha_fakes() -> None:
     device_registry = sys.modules.setdefault("homeassistant.helpers.device_registry", types.ModuleType("homeassistant.helpers.device_registry"))
     entity_registry = sys.modules.setdefault("homeassistant.helpers.entity_registry", types.ModuleType("homeassistant.helpers.entity_registry"))
     websocket_api = sys.modules.setdefault("homeassistant.components.websocket_api", types.ModuleType("homeassistant.components.websocket_api"))
+    vol = sys.modules.setdefault("voluptuous", types.ModuleType("voluptuous"))
 
     core.HomeAssistant = getattr(core, "HomeAssistant", type("HomeAssistant", (), {}))
     core.ServiceCall = getattr(core, "ServiceCall", type("ServiceCall", (), {}))
@@ -47,6 +48,8 @@ def _install_ha_fakes() -> None:
     websocket_api.async_register_command = getattr(websocket_api, "async_register_command", lambda *args, **kwargs: None)
     websocket_api.websocket_command = getattr(websocket_api, "websocket_command", lambda _schema: (lambda fn: fn))
     websocket_api.async_response = getattr(websocket_api, "async_response", lambda fn: fn)
+    vol.Required = getattr(vol, "Required", lambda key: key)
+    vol.Optional = getattr(vol, "Optional", lambda key, default=None: key)
 
 
 def _load_module(name: str):
