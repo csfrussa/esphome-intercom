@@ -55,6 +55,7 @@ class VoipStackCard extends HTMLElement {
     this._softphoneManualTarget = "";
     this._mirrorKeypadOpen = false;
     this._mirrorManualTarget = "";
+    this._lastKnownMirrorDestination = "";
     this._softphoneStateLoaded = false;
     this._softphoneStateLoading = false;
 
@@ -757,6 +758,12 @@ class VoipStackCard extends HTMLElement {
     return entity?.state || this._getHaName();
   }
 
+  _contactCyclerDestination(destination) {
+    if (this._isHaSoftphoneMode()) return destination;
+    if (!this._lastEndInfo) this._lastKnownMirrorDestination = destination;
+    return this._lastEndInfo ? this._lastKnownMirrorDestination || destination : destination;
+  }
+
   _softphoneTargets() {
     const targets = [];
     for (const entry of this._rosterEntries || []) {
@@ -1193,7 +1200,7 @@ class VoipStackCard extends HTMLElement {
     const softphoneMode = this._isHaSoftphoneMode();
     const keypadOpen = this._keypadOpen();
     els.destRow.hidden = !showCall || keypadOpen;
-    els.destValue.textContent = destination;
+    els.destValue.textContent = this._contactCyclerDestination(destination);
     if (els.destSelect) {
       els.destSelect.hidden = !softphoneMode || keypadOpen;
       els.destValueWrap.classList.toggle("selecting", softphoneMode && !keypadOpen);

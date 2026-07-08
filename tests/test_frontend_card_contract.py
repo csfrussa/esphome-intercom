@@ -64,6 +64,15 @@ class FrontendCardContractTest(unittest.TestCase):
         keypress = _method_body(self.source, "_pressKeypadKey")
         self.assertNotIn("this._isHaSoftphoneMode()", keypress)
 
+    def test_esp_manual_terminal_destination_does_not_replace_contact_cycler(self) -> None:
+        render = _method_body(self.source, "_render")
+        cycler = _method_body(self.source, "_contactCyclerDestination")
+        self.assertIn("this._contactCyclerDestination(destination)", render)
+        self.assertIn("this._isHaSoftphoneMode()", cycler)
+        self.assertIn("!this._lastEndInfo", cycler)
+        self.assertIn("this._lastKnownMirrorDestination = destination", cycler)
+        self.assertIn("this._lastEndInfo ? this._lastKnownMirrorDestination || destination : destination", cycler)
+
     def test_esp_answer_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _answer")
         esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
