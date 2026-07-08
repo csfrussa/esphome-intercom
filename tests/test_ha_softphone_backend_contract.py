@@ -87,6 +87,15 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("_state_is_available(old_state)", sensor)
         self.assertIn("_state_is_available(new_state)", sensor)
 
+    def test_esphome_roster_service_registration_refreshes_phonebook(self) -> None:
+        self.assertIn("EVENT_SERVICE_REGISTERED", self.source)
+        body = _function_body(self.source, "_register_phonebook_service_event_sync")
+        self.assertIn('"phonebook_service_event_unsub"', body)
+        self.assertIn('event.data.get("domain") != "esphome"', body)
+        self.assertIn('service.endswith("_set_roster_json")', body)
+        self.assertIn("_refresh_and_push_phonebook(hass)", body)
+        self.assertNotIn("retry", body.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

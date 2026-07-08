@@ -15,7 +15,7 @@ import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, CoreState, Event, ServiceCall, callback
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, EVENT_HOMEASSISTANT_STARTED, EVENT_STATE_CHANGED
+from homeassistant.const import Platform, EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED
 from homeassistant.exceptions import ConfigEntryError
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -1229,6 +1229,27 @@ async def _deferred_phonebook_sync(hass: HomeAssistant) -> None:
         await _refresh_and_push_phonebook(hass)
 
 
+def _register_phonebook_service_event_sync(hass: HomeAssistant) -> None:
+    """Refresh the phonebook when an ESPHome roster service appears."""
+    bucket = hass.data.setdefault(DOMAIN, {})
+    if bucket.get("phonebook_service_event_unsub") is not None:
+        return
+
+    @callback
+    def _on_service_registered(event: Event) -> None:
+        if event.data.get("domain") != "esphome":
+            return
+        service = str(event.data.get("service") or "")
+        if not service.endswith("_set_roster_json"):
+            return
+        hass.async_create_task(_refresh_and_push_phonebook(hass))
+
+    bucket["phonebook_service_event_unsub"] = hass.bus.async_listen(
+        EVENT_SERVICE_REGISTERED,
+        _on_service_registered,
+    )
+
+
 async def _handle_set_dnd_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     enabled = bool(call.data.get("dnd"))
@@ -1564,6 +1585,7 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
     async_register_audio_ws_view(hass)
     await _async_register_services(hass)
     _register_esp_state_event_bridge(hass)
+    _register_phonebook_service_event_sync(hass)
 
     # Sensor platform is forwarded per config entry; YAML setup gets only
     # services + websocket API.
@@ -1633,6 +1655,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.get(DOMAIN, {}).pop("sip_registrar", None)
     await _async_stop_sip_endpoint(hass)
     unsub = hass.data.get(DOMAIN, {}).pop("esp_state_event_bridge_unsub", None)
+    if unsub is not None:
+        unsub()
+    unsub = hass.data.get(DOMAIN, {}).pop("phonebook_service_event_unsub", None)
     if unsub is not None:
         unsub()
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
