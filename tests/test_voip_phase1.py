@@ -1714,7 +1714,7 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
     def test_registered_softphone_entry_is_sip_uri_contact(self) -> None:
         registrar = sip_registrar.SipRegistrar(
             enabled=True,
-            accounts=[sip_registrar.SipAccount("Zoiper", "Zoiper", "secret")],
+            accounts=[sip_registrar.SipAccount("Zoiper", "Zoiper", "secret", extension="201")],
             local_ip="192.168.1.10",
             local_sip_port=5060,
         )
@@ -1732,8 +1732,15 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].id, "Zoiper")
         self.assertEqual(entries[0].sip_uri, "sip:Zoiper@192.168.1.50:5062;transport=tcp")
+        self.assertEqual(entries[0].extension, "201")
         self.assertTrue(entries[0].metadata["registered"])
         self.assertNotIn("softphone", entries[0].metadata)
+        by_name = router.resolve_ha_router("Zoiper", entries, trunk_ready=False)
+        by_extension = router.resolve_ha_router("201", entries, trunk_ready=False)
+        self.assertEqual(by_name.action, router.RouteAction.FORWARD)
+        self.assertEqual(by_extension.action, router.RouteAction.FORWARD)
+        self.assertEqual(by_extension.target, "Zoiper")
+        self.assertEqual(by_extension.sip_uri, "sip:Zoiper@192.168.1.50:5062;transport=tcp")
 
     def test_account_without_registration_is_not_a_callable_roster_entry(self) -> None:
         registrar = sip_registrar.SipRegistrar(

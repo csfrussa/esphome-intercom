@@ -456,6 +456,12 @@ create_account:
       default: false
       selector:
         boolean:
+    extension:
+      name: Optional Extension
+      description: Optional internal extension published in the central phonebook. When set, this SIP endpoint can be called by name or by extension.
+      required: false
+      selector:
+        text:
     conference_group:
       name: Optional Conference Group
       description: Adds this registered SIP endpoint account to one or more conference groups. Use a comma-separated list for multiple groups.

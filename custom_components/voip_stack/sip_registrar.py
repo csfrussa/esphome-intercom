@@ -26,6 +26,7 @@ class SipAccount:
     display_name: str
     password: str
     enabled: bool = True
+    extension: str = ""
     conference_group: str = ""
     conference_ring: bool = False
     ring_group: str = ""
@@ -84,6 +85,7 @@ def account_from_mapping(raw: dict[str, Any]) -> SipAccount:
         display_name=str(raw.get("display_name") or raw.get("name") or username).strip(),
         password=str(raw.get("password") or ""),
         enabled=bool(raw.get("enabled", True)),
+        extension=str(raw.get("extension") or "").strip(),
         conference_group=str(raw.get("conference_group") or "").strip(),
         conference_ring=bool(raw.get("conference_ring", False)),
         ring_group=str(raw.get("ring_group") or "").strip(),
@@ -307,6 +309,7 @@ class SipRegistrar:
                     id=account.username,
                     name=account.roster_name,
                     sip_uri=registration.contact_uri,
+                    extension=account.extension,
                     metadata={
                         "sip_transport": registration.transport.lower(),
                         "registered": True,

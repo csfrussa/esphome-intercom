@@ -42,13 +42,27 @@ class FrontendCardContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = CARD.read_text()
 
-    def test_esp_start_call_is_a_pure_button_press(self) -> None:
+    def test_esp_contact_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _startCall")
         esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
         esp_branch = esp_branch.split("catch (err)", 1)[0]
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
+        self.assertIn("this._mirrorKeypadOpen", esp_branch)
+        self.assertIn('this._hass.callService(domain, service, { dest: manualTarget })', esp_branch)
         self.assertNotIn("_startP2P", esp_branch)
         self.assertNotIn("destination === this._getHaName()", esp_branch)
+
+    def test_esp_keypad_has_separate_manual_buffer_and_never_writes_destination(self) -> None:
+        self.assertIn("this._mirrorManualTarget", self.source)
+        self.assertIn("this._mirrorKeypadOpen", self.source)
+        self.assertIn('this._mirrorManualTarget = ""', self.source)
+        self.assertIn("_destinationEntityId = e.destination || null", self.source)
+        self.assertNotIn('this._hass.callService("text", "set_value", { entity_id: this._destinationEntityId', self.source)
+        self.assertNotIn('this._setTextEntity(this._destinationEntityId', self.source)
+        toggle = _method_body(self.source, "_toggleKeypad")
+        self.assertIn("!this._isHaSoftphoneMode() && !this._startCallService", toggle)
+        keypress = _method_body(self.source, "_pressKeypadKey")
+        self.assertNotIn("this._isHaSoftphoneMode()", keypress)
 
     def test_esp_answer_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _answer")
@@ -74,7 +88,23 @@ class FrontendCardContractTest(unittest.TestCase):
         call_event = _method_body(self.source, "_onCallEvent")
         self.assertIn('scope === "session"', call_event)
         self.assertIn("this._onSessionStateEvent(event)", call_event)
+        self.assertIn('scope === "sip_bridge"', call_event)
+        self.assertIn("this._onMirroredBridgeStateEvent(event)", call_event)
         self.assertNotIn("_onSipStateEvent", self.source)
+
+    def test_esp_mirror_terminal_bridge_event_uses_dialed_target_and_reason(self) -> None:
+        body = _method_body(self.source, "_onMirroredBridgeStateEvent")
+        self.assertIn("this._eventConcernsThisCard(data)", body)
+        self.assertIn('"busy"', body)
+        self.assertIn("data.terminal_reason || data.reason || state", body)
+        self.assertIn("data.target || data.dialed_target || data.peer_name || data.callee", body)
+        self.assertIn('this._captureEndReason("terminal", reason, data.origin || "remote", peer)', body)
+
+    def test_ha_softphone_terminal_label_prefers_dialed_target(self) -> None:
+        render = _method_body(self.source, "_render")
+        terminal_branch = render.split("this._softphoneSnapshot?.terminal_reason", 1)[1].split("} else if", 1)[0]
+        self.assertIn("this._softphoneSnapshot.dialed_target || this._softphoneSnapshot.peer_name", terminal_branch)
+        self.assertIn("terminalTarget", terminal_branch)
 
     def test_ha_softphone_targets_come_from_shared_roster(self) -> None:
         body = _method_body(self.source, "_softphoneTargets")
@@ -112,6 +142,30 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("_populateGroupSelect", self.source)
         self.assertNotIn("conference_manager", self.source)
         self.assertNotIn("_ringConference", self.source)
+
+    def test_esp_mirror_settings_write_exposed_esp_entities(self) -> None:
+        finder = _method_body(self.source, "async _findEntityIds")
+        self.assertIn("e.auto_answer", finder)
+        self.assertIn("e.dnd", finder)
+        self.assertIn("e.voip_ring_groups", finder)
+        self.assertIn("e.voip_conference_groups", finder)
+        self.assertIn("e.voip_conference_ring", finder)
+        self.assertIn("e.voip_extension", finder)
+        self.assertIn("e.start_call_service", finder)
+        self.assertNotIn("deviceInfo.route_id", finder)
+        self.assertNotIn("`esphome.${deviceInfo.route_id}_start_call`", self.source)
+        set_text = _method_body(self.source, "async _setTextEntity")
+        set_switch = _method_body(self.source, "async _setSwitchEntity")
+        group_setter = _method_body(self.source, "async _setGroupSetting")
+        auto_answer = _method_body(self.source, "async _toggleAutoAnswer")
+        self.assertIn('"text", "set_value"', set_text)
+        self.assertIn('"switch", enabled ? "turn_on" : "turn_off"', set_switch)
+        self.assertIn("async _setExtensionSetting", self.source)
+        self.assertIn("this._extensionTextEntityId", self.source)
+        self.assertIn("this._ringGroupsTextEntityId", group_setter)
+        self.assertIn("this._conferenceGroupsTextEntityId", group_setter)
+        self.assertIn("this._conferenceRingSwitchEntityId", group_setter)
+        self.assertIn("this._autoAnswerSwitchEntityId", auto_answer)
 
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")

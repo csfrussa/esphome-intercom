@@ -77,10 +77,11 @@ def _match_name(value: str | None, *candidates: str | None) -> bool:
 def parse_voip_endpoint(value: str | None) -> dict | None:
     """Parse the project endpoint standard published by ESP voip_stack.
 
-    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp|extension|conference_group|ring_group|conference_ring[|extras...]
+    Name|host|sip_port|rtp_port|audio_mode|tx_formats|rx_formats|sip_tcp|extension[|extras...]
 
-    Unknown trailing fields are preserved in `extras` so newer endpoint
-    publishers do not disappear from older HA resolvers.
+    Group membership is intentionally not carried in this state payload. ESP
+    devices publish group membership through sibling voip_stack text/switch
+    entities so the endpoint state stays below Home Assistant's state limit.
     """
     if not value:
         return None
@@ -135,9 +136,6 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
         "tx_formats": tx_formats,
         "rx_formats": rx_formats,
         "extension": parts[8] if len(parts) >= 9 else "",
-        "conference_group": parts[9] if len(parts) >= 10 else "",
-        "ring_group": parts[10] if len(parts) >= 11 else "",
-        "conference_ring": _parse_bool(parts[11]) if len(parts) >= 12 else False,
         "extras": parts[9:] if len(parts) > 9 else [],
     }
 
@@ -217,6 +215,11 @@ class VoipDeviceResolver:
             route_id = self.route_id_for_host(endpoint["host"])
             if not route_id:
                 route_id = self._route_id_from_device(device)
+            if route_id:
+                entities["start_call_service"] = f"esphome.{route_id}_start_call"
+            ring_group = self._state_value(entities.get("voip_ring_groups"))
+            conference_group = self._state_value(entities.get("voip_conference_groups"))
+            extension = self._state_value(entities.get("voip_extension")) or endpoint.get("extension") or ""
 
             out.append({
                 "device_id": device_id,
@@ -226,10 +229,10 @@ class VoipDeviceResolver:
                 "sip_port": endpoint.get("sip_port"),
                 "rtp_port": endpoint.get("rtp_port"),
                 "sip_transport": endpoint.get("sip_transport") or "",
-                "extension": endpoint.get("extension") or "",
-                "conference_group": endpoint.get("conference_group") or "",
-                "conference_ring": bool(endpoint.get("conference_ring", False)),
-                "ring_group": endpoint.get("ring_group") or "",
+                "extension": extension,
+                "conference_group": conference_group,
+                "conference_ring": _parse_bool(self._state_value(entities.get("voip_conference_ring"))),
+                "ring_group": ring_group,
                 "audio_mode": endpoint["audio_mode"],
                 "tx_formats": _format_tokens(endpoint["tx_formats"]),
                 "rx_formats": _format_tokens(endpoint["rx_formats"]),
@@ -307,9 +310,25 @@ class VoipDeviceResolver:
                 out["voip_state"] = eid
             elif "voip_endpoint" in eid and "voip_endpoint" not in out:
                 out["voip_endpoint"] = eid
+            elif "voip_extension" in eid and "voip_extension" not in out:
+                out["voip_extension"] = eid
             elif "voip_transport" in eid and "voip_transport" not in out:
                 # source of truth for "udp"/"tcp".
                 out["voip_transport"] = eid
+            elif "voip_ring_groups" in eid and "voip_ring_groups" not in out:
+                out["voip_ring_groups"] = eid
+            elif "voip_conference_groups" in eid and "voip_conference_groups" not in out:
+                out["voip_conference_groups"] = eid
+            elif "voip_ring_on_conference" in eid and "voip_conference_ring" not in out:
+                out["voip_conference_ring"] = eid
+            elif eid.startswith("switch.") and "auto_answer" in eid and "auto_answer" not in out:
+                out["auto_answer"] = eid
+            elif (
+                eid.startswith("switch.")
+                and ("do_not_disturb" in eid or eid.endswith("_dnd") or "_dnd_" in eid)
+                and "dnd" not in out
+            ):
+                out["dnd"] = eid
             elif ("incoming_caller" in eid or eid.endswith("_caller")) and "incoming_caller" not in out:
                 out["incoming_caller"] = eid
             elif "destination" in eid and "destination" not in out:
@@ -328,6 +347,14 @@ class VoipDeviceResolver:
             elif eid.startswith("button.") and "call" in eid and "decline" not in eid and "call" not in out:
                 out["call"] = eid
         return out
+
+    def _state_value(self, entity_id: str | None) -> str:
+        if not entity_id:
+            return ""
+        state = self.hass.states.get(entity_id)
+        if state is None or str(state.state or "").strip().lower() in ("unknown", "unavailable"):
+            return ""
+        return str(state.state or "").strip()
 
 
 def get_resolver(hass: HomeAssistant) -> VoipDeviceResolver:

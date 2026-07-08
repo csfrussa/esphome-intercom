@@ -214,6 +214,22 @@ The updated phonebook is pushed to online ESP devices automatically.
 `voip_stack.push_phonebook` exists for diagnostics or manual recovery, but it
 should not be required during normal use.
 
+Detailed operational docs:
+
+- [Dial plan and resolver](docs/DIALPLAN_RESOLVER.md): how names,
+  extensions, groups, registered SIP endpoints and trunk targets resolve.
+- [ESP entity surface](docs/ESP_ENTITY_SURFACE.md): which ESPHome
+  `voip_stack` entities enable HA discovery, ESP mirror cards, groups and
+  debug.
+- [Call flows](docs/CALL_FLOWS.md): expected SIP/SDP/RTP path for ESP, HA,
+  registered endpoint, group and trunk calls.
+- [Services](docs/SERVICES.md): every `voip_stack.*` service and when to use
+  it.
+- [Ring groups and conference groups](docs/GROUPS.md): PBX-style group
+  semantics and membership declarations.
+- [Testing and debug](docs/TESTING_AND_DEBUG.md): local tests, real SIP
+  matrix, service matrix, log filters and audio captures.
+
 ## Quick Start Examples
 
 These examples show the normal user flows. Use the ready-to-flash YAMLs when
@@ -250,9 +266,9 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - voip_stack.call_contact:
+      - voip_stack.call:
           id: phone
-          contact: "Home"  # replace with Settings -> System -> General -> Location name
+          target: "Home"  # replace with Settings -> System -> General -> Location name
 ```
 
 When the ESP calls that HA contact, the Lovelace card rings and can answer from
@@ -267,9 +283,10 @@ full-duplex audio stream. Decline stays in the automation path and calls
 
 ### Room-to-room VoIP: fixed buttons
 
-For an apartment-style panel, bind one GPIO button to each exact phonebook
-contact name. `call_contact` is safer than selecting then calling: if the name
-does not exist, the call fails instead of falling through to another contact.
+For an apartment-style panel, bind one GPIO button to each destination string.
+`voip_stack.call` first resolves the ESP local phonebook cache for direct calls;
+if the target is not local, the ESP sends it to HA so the central dialplan can
+resolve a contact, group, extension, SIP URI or trunk number.
 
 ```yaml
 binary_sensor:
@@ -280,9 +297,9 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - voip_stack.call_contact:
+      - voip_stack.call:
           id: phone
-          contact: "Kitchen Phone"
+          target: "Kitchen Phone"
 
   - platform: gpio
     name: Call Bedroom
@@ -291,9 +308,9 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     on_press:
-      - voip_stack.call_contact:
+      - voip_stack.call:
           id: phone
-          contact: "Bedroom Phone"
+          target: "Bedroom Phone"
 ```
 
 Contact names are exact and case-sensitive. Check `sensor.<device>_destination`
@@ -684,7 +701,6 @@ voip_stack:
 # Switches (with restore from flash)
 switch:
   - platform: voip_stack
-    voip_stack_id: phone
     auto_answer:
       name: "Auto Answer"
       restore_mode: RESTORE_DEFAULT_OFF
@@ -732,9 +748,9 @@ button:
   - platform: template
     name: "Call Kitchen"
     on_press:
-      - voip_stack.call_contact:
+      - voip_stack.call:
           id: phone
-          contact: "Kitchen Phone"
+          target: "Kitchen Phone"
 ```
 
 Current public YAMLs use shared phonebook subscription packages. HA publishes:
@@ -783,15 +799,25 @@ by normal contact name; HA owns the group routing and media. Groups are
 ordinary phonebook entries from the endpoint point of view, not special
 firmware modes.
 
-ESP devices can declare membership in their `voip_stack` component:
+ESP devices can declare default membership in their `voip_stack` component and
+expose editable group entities through the HA integration package:
 
 ```yaml
 voip_stack:
   id: phone
-  conference_group: "CG Home, CG Upstairs"
+  conference_groups: "CG Home, CG Upstairs"
   conference_ring: true
-  ring_group: "RG Home, RG Night"
+  ring_groups: "RG Home, RG Night"
+
+packages:
+  voip_ha_integration: !include packages/voip/ha_integration.yaml
 ```
+
+`voip_stack:` alone is the SIP/RTP engine and can run standalone. The
+`ha_integration` package exposes the `voip_endpoint` discovery sensor, ESP
+mirror-state sensors and editable `text.voip_ring_groups` /
+`text.voip_conference_groups` entities so HA can discover the ESP, update group
+membership dynamically and push the central roster.
 
 Manual contacts and registered SIP endpoints can join the same groups through
 the `voip_stack.add_contact` and `voip_stack.create_account` service fields:
@@ -831,7 +857,7 @@ The HA softphone can also subscribe to a ring group and/or conference group.
 The Lovelace card exposes those settings and the HA softphone extension
 dynamically from the central roster. Changing them updates the HA softphone
 endpoint sensor, which triggers the same phonebook rebuild and push path used
-by ESP endpoints. The card remains only the softphone UI and browser audio
+by ESP endpoint/group entity changes. The card remains only the softphone UI and browser audio
 surface: the browser that starts or answers the call owns the WebSocket media
 stream, while other open cards mirror state without attaching their
 microphone/speaker.
@@ -846,8 +872,10 @@ central roster contract.
 #### Apartment VoIP panel
 
 For multi-room setups, each GPIO button can call a specific room directly. Use
-`voip_stack.call_contact` with the exact phonebook name and handle terminal
-failures with `on_call_failed` when the UI needs explicit feedback.
+`voip_stack.call` with the exact phonebook name, extension, group, URI or trunk
+number. The ESP dials local phonebook matches directly and routes unresolved
+targets through HA. Handle terminal failures with `on_call_failed` when the UI
+needs explicit feedback.
 
 ### 3. Lovelace Card
 

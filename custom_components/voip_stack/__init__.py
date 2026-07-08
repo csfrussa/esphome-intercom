@@ -512,8 +512,10 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
 
     ha_endpoint_state = hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)
     ha_endpoint_payload = ""
+    ha_endpoint_attrs = {}
     if ha_endpoint_state is not None:
-        ha_endpoint_payload = str((ha_endpoint_state.attributes or {}).get("endpoint") or ha_endpoint_state.state or "")
+        ha_endpoint_attrs = ha_endpoint_state.attributes or {}
+        ha_endpoint_payload = str(ha_endpoint_attrs.get("endpoint") or ha_endpoint_state.state or "")
     ha_endpoint = parse_voip_endpoint(ha_endpoint_payload)
     if ha_endpoint is not None:
         out.append(Peer(
@@ -524,9 +526,9 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             sip_port=int(ha_endpoint.get("sip_port") or cfg["sip_port"]),
             rtp_port=int(ha_endpoint.get("rtp_port") or cfg["rtp_port"]),
             extension=str(ha_endpoint.get("extension") or ""),
-            conference_group=str(ha_endpoint.get("conference_group") or ""),
-            conference_ring=bool(ha_endpoint.get("conference_ring", False)),
-            ring_group=str(ha_endpoint.get("ring_group") or ""),
+            conference_group=str(ha_endpoint_attrs.get("conference_group") or ""),
+            conference_ring=bool(ha_endpoint_attrs.get("conference_ring", False)),
+            ring_group=str(ha_endpoint_attrs.get("ring_group") or ""),
             audio_mode=ha_endpoint.get("audio_mode", "full_duplex"),
             tx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("tx_formats") or []],
             rx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("rx_formats") or []],
@@ -912,7 +914,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         call_id,
         state=CallState.IN_CALL.value,
         caller=invite.caller,
-        callee=_ha_peer_name(hass),
+        callee=invite.target,
         route_kind="ha_softphone",
     )
     registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
@@ -922,10 +924,11 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         CallState.IN_CALL.value,
         session_device_id=HA_SOFTPHONE_DEVICE_ID,
         caller=invite.caller,
-        callee=_ha_peer_name(hass),
+        callee=invite.target,
         peer_name=invite.caller,
         direction="incoming",
         call_id=call_id,
+        dialed_target=invite.target,
         sip_status_code=200,
         last_sip_event="SIP_RESPONSE",
         selected_tx_format=invite.send_format.audio_format.wire_token(),
@@ -1285,7 +1288,11 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         RouteAction.TRUNK,
         RouteAction.REJECT,
     }:
-        route = replace(route, action=RouteAction.BRIDGE, sip_uri=ha_uri_for(route.target or target, contacts))
+        if route.entry is not None and route.entry.metadata.get("registered"):
+            bridge_uri = route.sip_uri
+        else:
+            bridge_uri = ha_uri_for(route.target or target, contacts)
+        route = replace(route, action=RouteAction.BRIDGE, sip_uri=bridge_uri)
     use_trunk = route.action is RouteAction.TRUNK and trunk_ready
     use_registered_contact_codecs = bool(
         route.entry is not None and route.entry.sip_uri and route.entry.metadata.get("registered")
@@ -1342,6 +1349,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 },
                 "sip",
             )
+            ring_members = hass.data.setdefault(DOMAIN, {}).get("async_ring_conference_members")
+            if ring_members is not None:
+                hass.async_create_task(ring_members(route.entry))
             _LOGGER.info("HA softphone joined conference room=%s", room_name)
             return
     route_uri = route.sip_uri

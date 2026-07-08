@@ -1,0 +1,18 @@
+# =============================================================================
+# VoIP Stack debug entity surface.
+#
+# Optional diagnostics for transport visibility and compact SIP/media snapshots.
+# Keep this separate from ha_integration.yaml so production devices do not need
+# to expose high-churn debug state.
+# =============================================================================
+
+text_sensor:
+  - platform: voip_stack
+    type: transport
+    id: voip_transport
+    name: VoIP Transport
+
+  - platform: voip_stack
+    type: sip_snapshot
+    id: voip_sip_snapshot
+    name: VoIP SIP Snapshot

@@ -1,0 +1,69 @@
+# =============================================================================
+# VoIP Stack Home Assistant integration surface.
+#
+# Include this package when the ESP should participate in the Home Assistant
+# central phonebook/dialplan or be mirrored by the HA softphone card.
+#
+# `voip_stack:` alone is the SIP/RTP engine and works headless with static
+# contacts. These entities are the HA-facing surface:
+#   - endpoint: discovery and SIP/audio capabilities for the central dialplan
+#   - state/caller/destination/last_reason/contacts: ESP mirror card state
+#   - extension/ring/conference groups: PBX metadata editable from HA
+#
+# Required:
+#   - exactly one voip_stack component in the YAML, normally id: phone
+# =============================================================================
+
+text_sensor:
+  - platform: voip_stack
+    type: endpoint
+    id: voip_endpoint
+    name: VoIP Endpoint
+
+  - platform: voip_stack
+    type: state
+    id: voip_state
+    name: VoIP State
+
+  - platform: voip_stack
+    type: caller
+    id: voip_caller
+    name: VoIP Caller
+
+  - platform: voip_stack
+    type: destination
+    id: voip_destination
+    name: VoIP Destination
+
+  - platform: voip_stack
+    type: last_reason
+    id: voip_last_reason
+    name: VoIP Last Reason
+
+  - platform: voip_stack
+    type: contacts
+    id: voip_contacts
+    name: VoIP Contacts
+
+text:
+  - platform: voip_stack
+    type: extension
+    id: voip_extension
+    name: VoIP Extension
+
+  - platform: voip_stack
+    type: ring_groups
+    id: voip_ring_groups
+    name: VoIP Ring Groups
+
+  - platform: voip_stack
+    type: conference_groups
+    id: voip_conference_groups
+    name: VoIP Conference Groups
+
+switch:
+  - platform: voip_stack
+    conference_ring:
+      id: voip_conference_ring
+      name: VoIP Ring On Conference
+      icon: mdi:account-voice

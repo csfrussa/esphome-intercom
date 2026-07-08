@@ -37,6 +37,7 @@ def build_account_service_handlers(
             display_name=display_name,
             password=password,
             enabled=bool(call.data.get("enabled", True)),
+            extension=str(call.data.get("extension") or "").strip(),
             conference_group=str(call.data.get("conference_group") or "").strip(),
             conference_ring=bool(call.data.get("conference_ring", False)),
             ring_group=str(call.data.get("ring_group") or "").strip(),
@@ -50,18 +51,19 @@ def build_account_service_handlers(
             {"state": "sip_account_created", "username": username, "display_name": display_name, "password": password},
             "sip",
         )
-        if not provided_password:
-            persistent_notification.async_create(
-                hass,
-                (
-                    f"SIP account `{username}` created for `{display_name}`.\n\n"
-                    f"Password: `{password}`\n\n"
-                    "This generated password is shown only now. Save it in the SIP endpoint "
-                    "configuration or rotate the account password later."
-                ),
-                title="VoIP Stack SIP Account",
-                notification_id=f"{DOMAIN}_sip_account_{username.lower()}",
-            )
+        password_note = (
+            f"Password: `{password}`\n\n"
+            "This generated password is shown only now. Save it in the SIP endpoint "
+            "configuration or rotate the account password later."
+            if not provided_password
+            else "Password: user-provided value (not shown)."
+        )
+        persistent_notification.async_create(
+            hass,
+            f"SIP account `{username}` created for `{display_name}`.\n\n{password_note}",
+            title="VoIP Stack SIP Account",
+            notification_id=f"{DOMAIN}_sip_account_{username.lower()}",
+        )
         _LOGGER.info("SIP local account created username=%s enabled=%s", username, account.enabled)
 
     async def remove_account(call: ServiceCall) -> None:
@@ -125,6 +127,7 @@ def build_account_service_handlers(
                 "username": item.get("username", ""),
                 "display_name": item.get("display_name", ""),
                 "enabled": bool(item.get("enabled", True)),
+                "extension": str(item.get("extension") or ""),
                 "conference_group": str(item.get("conference_group") or ""),
                 "conference_ring": bool(item.get("conference_ring", False)),
                 "ring_group": str(item.get("ring_group") or ""),
@@ -136,6 +139,7 @@ def build_account_service_handlers(
             (
                 f"- `{item['username']}`"
                 f" ({item['display_name'] or item['username']})"
+                f"{' ext ' + item['extension'] if item['extension'] else ''}"
                 f": {'enabled' if item['enabled'] else 'disabled'}"
             )
             for item in accounts

@@ -22,6 +22,7 @@
 # =============================================================================
 
 packages:
+  ha_integration: !include voip/ha_integration.yaml
   simple_led_status_full_duplex: !include voip/simple_led_status_full_duplex.yaml
   callbacks: !include voip/callbacks.yaml
 

@@ -77,14 +77,14 @@ api:
         - runtime_controller.dump:
             id: runtime
             reason: !lambda 'return reason;'
-    # Card/HA -> voip_stack.call(source=this) ends up here. Sets the
-    # current phonebook entry to `dest` and sends a SIP INVITE locally.
+    # Card/HA -> voip_stack.call(source=this) ends up here. The ESP first
+    # tries its local phonebook cache; unresolved targets route through HA.
     - action: start_call
       variables:
         dest: string
       then:
-        - voip_stack.call_contact:
-            contact: !lambda 'return dest;'
+        - voip_stack.call:
+            target: !lambda 'return dest;'
     # Direct ESP-side decline with an optional free-form reason. This keeps
     # HA automations useful even for ESP<->ESP calls where HA is only
     # mirroring state and is not the signaling bridge.

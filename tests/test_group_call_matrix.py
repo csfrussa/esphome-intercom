@@ -38,6 +38,7 @@ def _install_ha_fakes() -> None:
     if "homeassistant.core" not in sys.modules:
         core = types.ModuleType("homeassistant.core")
         core.HomeAssistant = object
+        core.ServiceCall = object
         core.callback = lambda fn: fn
         sys.modules["homeassistant.core"] = core
     if "homeassistant.config_entries" not in sys.modules:
@@ -301,9 +302,72 @@ class GroupCallMatrixTest(unittest.TestCase):
         websocket_api._set_ha_softphone_call_state(hass, fsm.CallState.IDLE.value, reason="local_hangup")
         idle = websocket_api._ha_softphone_state(hass)
         self.assertEqual(idle["state"], fsm.CallState.IDLE.value)
-        self.assertEqual(idle["dialed_target"], "")
+        self.assertEqual(idle["dialed_target"], "RG Casa")
         self.assertEqual(idle["connected_party"], "")
         self.assertEqual(idle["answered_by"], "")
+
+    def test_ha_softphone_state_prefers_connected_party_over_group_peer_in_call(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            session_device_id=const.HA_SOFTPHONE_DEVICE_ID,
+            caller="Casa",
+            callee="RG Casa",
+            peer_name="RG Casa",
+            direction="outgoing",
+            call_id="ha-rg-1",
+            dialed_target="RG Casa",
+            connected_party="Waveshare S3 Audio",
+            answered_by="Waveshare S3 Audio",
+            route_kind=groups.GROUP_TYPE_RING,
+            last_sip_event="SIP_RESPONSE",
+            sip_status_code=200,
+        )
+        state = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(state["callee"], "RG Casa")
+        self.assertEqual(state["peer_name"], "Waveshare S3 Audio")
+        self.assertEqual(state["dialed_target"], "RG Casa")
+        self.assertEqual(state["contact"], "Waveshare S3 Audio")
+
+    def test_ha_softphone_terminal_state_preserves_incoming_dialed_extension(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            session_device_id=const.HA_SOFTPHONE_DEVICE_ID,
+            caller="Waveshare S3 Audio",
+            callee="666",
+            peer_name="Waveshare S3 Audio",
+            direction="incoming",
+            call_id="ws3-666",
+        )
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            session_device_id=const.HA_SOFTPHONE_DEVICE_ID,
+            caller="Waveshare S3 Audio",
+            callee="666",
+            peer_name="Waveshare S3 Audio",
+            direction="incoming",
+            call_id="ws3-666",
+            dialed_target="666",
+        )
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IDLE.value,
+            session_device_id=const.HA_SOFTPHONE_DEVICE_ID,
+            caller="Waveshare S3 Audio",
+            callee="666",
+            peer_name="Waveshare S3 Audio",
+            direction="incoming",
+            call_id="ws3-666",
+            reason="local_hangup",
+        )
+        idle = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(idle["peer_name"], "Waveshare S3 Audio")
+        self.assertEqual(idle["dialed_target"], "666")
+        self.assertEqual(idle["terminal_reason"], "local_hangup")
 
     def test_virtual_endpoint_phonebook_push_matrix(self) -> None:
         pbx = self._mini_pbx()

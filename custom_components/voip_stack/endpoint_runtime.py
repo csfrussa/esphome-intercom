@@ -254,11 +254,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         finally:
             attempt.ports.release()
 
-    def _caller_matches_member(invite: SipInvite, member: str, peers: list[Peer]) -> bool:
-        if _same_route_name(member, invite.caller):
+    def _caller_matches_member(caller: str, source_host: str, member: str, peers: list[Peer]) -> bool:
+        if _same_route_name(member, caller):
             return True
         peer = _peer_for_target(member, peers)
-        return bool(peer is not None and peer.host and peer.host == invite.source_host)
+        return bool(peer is not None and peer.host and peer.host == source_host)
 
     def _defer_invite_to_ha_softphone(
         invite: SipInvite,
@@ -277,24 +277,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             route_kind=route_kind,
         )
         registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.RINGING.value)
-        _set_ha_softphone_call_state(
-            hass,
-            CallState.RINGING.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=invite.caller,
-            callee=callee or invite.target,
-            peer_name=invite.caller,
-            direction="incoming",
-            call_id=invite.call_id,
-            selected_tx_format=invite.send_format.audio_format.wire_token(),
-            selected_rx_format=invite.recv_format.audio_format.wire_token(),
-            selected_tx_rtp_format=invite.send_format.wire_token(),
-            selected_rx_rtp_format=invite.recv_format.wire_token(),
-            audio_mode="full_duplex",
-            route_kind=route_kind,
-            sip_uri=sip_uri,
-            sip_status_code=180,
-            last_sip_event="INVITE",
+        hass.loop.call_soon(
+            lambda: _set_ha_softphone_call_state(
+                hass,
+                CallState.RINGING.value,
+                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                caller=invite.caller,
+                callee=callee or invite.target,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                selected_tx_format=invite.send_format.audio_format.wire_token(),
+                selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
+                audio_mode="full_duplex",
+                route_kind=route_kind,
+                sip_uri=sip_uri,
+                sip_status_code=180,
+                last_sip_event="INVITE",
+            )
         )
 
     def _inbound_route_decision(invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]):
@@ -642,7 +644,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         attempts: list[OutboundLeg] = []
         ha_member = False
         for member in members:
-            if _caller_matches_member(invite, member, peers):
+            if _caller_matches_member(invite.caller, invite.source_host, member, peers):
                 continue
             if _is_ha_target(member):
                 ha_member = True
@@ -972,17 +974,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             raise
 
     async def _ring_conference_members(
-        invite: SipInvite,
+        *,
+        room_name: str,
+        caller: str,
+        source_host: str,
         entry: RosterEntry,
         peers: list[Peer],
         roster_entries: list[RosterEntry],
     ) -> None:
         manager = conference_manager(hass, local_ip=local_ip)
-        room_name = str(entry.name or entry.id or invite.target)
         members = [str(member).strip() for member in (entry.metadata.get("ring_members") or []) if str(member).strip()]
         attempts: list[OutboundLeg] = []
         for member in members:
-            if _caller_matches_member(invite, member, peers) or _is_ha_target(member):
+            if _caller_matches_member(caller, source_host, member, peers) or _is_ha_target(member):
                 continue
             try:
                 leg = _prepare_outbound_leg(
@@ -1044,6 +1048,21 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         for attempt in attempts:
             hass.async_create_task(_dial(attempt))
 
+    async def _ring_conference_members_from_ha(entry: RosterEntry) -> None:
+        peers = await _async_build_peer_snapshot(hass)
+        roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
+        room_name = str(entry.name or entry.id or "")
+        await _ring_conference_members(
+            room_name=room_name,
+            caller=_ha_peer_name(hass),
+            source_host=local_ip,
+            entry=entry,
+            peers=peers,
+            roster_entries=roster_entries,
+        )
+
+    hass.data.setdefault(DOMAIN, {})["async_ring_conference_members"] = _ring_conference_members_from_ha
+
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
         caller_peer = _peer_for_target(invite.caller, peers)
@@ -1065,7 +1084,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 return SipInviteResult(488, "Not Acceptable Here", to_tag="", decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value)
             invite = replace(invite, send_format=selected.send, recv_format=selected.recv)
-        roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
+        registered_entries = _registered_roster_entries(hass)
+        roster_entries = _roster_from_peers(hass, peers, registered_entries)
+        caller_entry = _roster_entry_for_target(invite.caller, registered_entries)
+        if caller_entry is None and invite.caller_uri is not None:
+            caller_entry = _roster_entry_for_target(invite.caller_uri.user, registered_entries)
+        caller_is_registered_endpoint = bool(caller_entry is not None and caller_entry.metadata.get("registered"))
         decision = _inbound_route_decision(invite, peers, roster_entries)
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
@@ -1092,7 +1116,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.IN_CALL.value)
                 result = await conference_manager(hass, local_ip=local_ip).join(invite, decision.entry, ring_ha=ring_ha)
                 if result.status == 200:
-                    hass.async_create_task(_ring_conference_members(invite, decision.entry, peers, roster_entries))
+                    hass.async_create_task(
+                        _ring_conference_members(
+                            room_name=str(decision.entry.name or decision.entry.id or invite.target),
+                            caller=invite.caller,
+                            source_host=invite.source_host,
+                            entry=decision.entry,
+                            peers=peers,
+                            roster_entries=roster_entries,
+                        )
+                    )
                 return result
             if group_type == GROUP_TYPE_RING and decision.entry is not None:
                 registry.upsert(
@@ -1106,36 +1139,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 hass.async_create_task(_run_ring_group_call(invite, decision.entry, peers, roster_entries))
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
             return SipInviteResult(480, "Temporarily Unavailable", to_tag="")
-        active_media = len([call_id for call_id in registry.softphone_media if call_id != invite.call_id])
-        ha_softphone_active = _ha_softphone_has_active_call(hass)
-        other_routes = len([call_id for call_id in route_bucket if call_id != invite.call_id])
-        other_pending = len([call_id for call_id in pending if call_id != invite.call_id])
-        if other_routes or other_pending or active_media or ha_softphone_active:
-            _LOGGER.info(
-                "SIP INVITE from %s rejected: HA SIP endpoint is busy "
-                "(routes=%d pending=%d media=%d ha_softphone=%s)",
-                invite.caller or invite.source_host,
-                other_routes,
-                other_pending,
-                active_media,
-                ha_softphone_active,
-            )
-            _fire_call_event(
-                hass,
-                {
-                    "state": CallState.BUSY.value,
-                    "call_id": invite.call_id,
-                    "caller": invite.caller,
-                    "callee": invite.target,
-                    "peer_name": invite.caller,
-                    "direction": "incoming",
-                    "terminal_reason": TerminalReason.BUSY.value,
-                    "sip_status_code": 486,
-                    "last_sip_event": "SIP_RESPONSE",
-                },
-                "sip",
-            )
-            return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         if _is_trunk_invite(invite):
             trunk_cfg = _get_trunk_config(hass)
             dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
@@ -1206,86 +1209,95 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                 )
                 return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT
-        route_bucket[invite.call_id] = {
-            "future": future,
-            "invite": invite,
-            "decision": decision,
-            "created_at": time.time(),
-            "expires_at": expires_at,
-        }
-        _set_sip_bridge_call_state(
-            hass,
-            "route_requested",
-            caller=invite.caller,
-            callee=invite.target,
-            peer_name=invite.caller,
-            call_id=invite.call_id,
-            selected_tx_format=invite.send_format.audio_format.wire_token(),
-            selected_rx_format=invite.recv_format.audio_format.wire_token(),
-            selected_tx_rtp_format=invite.send_format.wire_token(),
-            selected_rx_rtp_format=invite.recv_format.wire_token(),
-            audio_mode="full_duplex",
-            route_kind=decision.action.value,
-            sip_uri=decision.sip_uri,
-            sip_status_code=100,
-            last_sip_event="INVITE",
-        )
-        _fire_call_event(
-            hass,
-            {
-                "state": "route_requested",
-                "caller": invite.caller,
-                "callee": invite.target,
-                "peer_name": invite.caller,
-                "local_name": _ha_peer_name(hass),
-                "direction": "incoming",
-                "call_id": invite.call_id,
-                "source_host": invite.source_host,
-                "target": decision.target,
-                "route_kind": decision.action.value,
-                "default_destination": decision.target,
-                "sip_uri": decision.sip_uri,
-                "expires_at": expires_at,
-                "decision_timeout_ms": int(SIP_ROUTE_DECISION_TIMEOUT * 1000),
-                "selected_tx_format": invite.send_format.audio_format.wire_token(),
-                "selected_rx_format": invite.recv_format.audio_format.wire_token(),
-                "rtp_format": (
-                    f"{invite.selected_format.encoding}/"
-                    f"{invite.selected_format.sample_rate}/"
-                    f"{invite.selected_format.channels}"
-                ),
-            },
-            "sip",
-        )
-        _LOGGER.info(
-            "SIP route requested: caller=%s target=%s route=%s uri=%s media=%s/%s",
-            invite.caller or invite.source_host,
-            invite.target,
-            decision.action.value,
-            decision.sip_uri or "-",
-            invite.selected_format.encoding,
-            invite.selected_format.sample_rate,
-        )
         route_action = "default"
         route_destination = ""
         route_status = 0
         route_reason = ""
         route_decline_reason = ""
-        try:
-            route_decision = await asyncio.wait_for(future, timeout=SIP_ROUTE_DECISION_TIMEOUT)
-        except asyncio.TimeoutError:
-            route_decision = {}
-        finally:
-            route_bucket.pop(invite.call_id, None)
-        if isinstance(route_decision, dict):
-            route_action = str(route_decision.get("action") or "default").strip().lower()
-            route_destination = str(route_decision.get("destination") or "").strip()
-            route_status = int(route_decision.get("status") or 0)
-            route_reason = str(route_decision.get("reason") or "").strip()
-            route_decline_reason = str(route_decision.get("decline_reason") or "").strip()
+        if caller_is_registered_endpoint:
+            _LOGGER.debug(
+                "SIP registered endpoint uses central dialplan caller=%s target=%s route=%s uri=%s",
+                invite.caller or invite.source_host,
+                invite.target,
+                decision.action.value,
+                decision.sip_uri or "-",
+            )
+        else:
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future = loop.create_future()
+            expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT
+            route_bucket[invite.call_id] = {
+                "future": future,
+                "invite": invite,
+                "decision": decision,
+                "created_at": time.time(),
+                "expires_at": expires_at,
+            }
+            _set_sip_bridge_call_state(
+                hass,
+                "route_requested",
+                caller=invite.caller,
+                callee=invite.target,
+                peer_name=invite.caller,
+                call_id=invite.call_id,
+                selected_tx_format=invite.send_format.audio_format.wire_token(),
+                selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                selected_tx_rtp_format=invite.send_format.wire_token(),
+                selected_rx_rtp_format=invite.recv_format.wire_token(),
+                audio_mode="full_duplex",
+                route_kind=decision.action.value,
+                sip_uri=decision.sip_uri,
+                sip_status_code=100,
+                last_sip_event="INVITE",
+            )
+            _fire_call_event(
+                hass,
+                {
+                    "state": "route_requested",
+                    "caller": invite.caller,
+                    "callee": invite.target,
+                    "peer_name": invite.caller,
+                    "local_name": _ha_peer_name(hass),
+                    "direction": "incoming",
+                    "call_id": invite.call_id,
+                    "source_host": invite.source_host,
+                    "target": decision.target,
+                    "route_kind": decision.action.value,
+                    "default_destination": decision.target,
+                    "sip_uri": decision.sip_uri,
+                    "expires_at": expires_at,
+                    "decision_timeout_ms": int(SIP_ROUTE_DECISION_TIMEOUT * 1000),
+                    "selected_tx_format": invite.send_format.audio_format.wire_token(),
+                    "selected_rx_format": invite.recv_format.audio_format.wire_token(),
+                    "rtp_format": (
+                        f"{invite.selected_format.encoding}/"
+                        f"{invite.selected_format.sample_rate}/"
+                        f"{invite.selected_format.channels}"
+                    ),
+                },
+                "sip",
+            )
+            _LOGGER.info(
+                "SIP route requested: caller=%s target=%s route=%s uri=%s media=%s/%s",
+                invite.caller or invite.source_host,
+                invite.target,
+                decision.action.value,
+                decision.sip_uri or "-",
+                invite.selected_format.encoding,
+                invite.selected_format.sample_rate,
+            )
+            try:
+                route_decision = await asyncio.wait_for(future, timeout=SIP_ROUTE_DECISION_TIMEOUT)
+            except asyncio.TimeoutError:
+                route_decision = {}
+            finally:
+                route_bucket.pop(invite.call_id, None)
+            if isinstance(route_decision, dict):
+                route_action = str(route_decision.get("action") or "default").strip().lower()
+                route_destination = str(route_decision.get("destination") or "").strip()
+                route_status = int(route_decision.get("status") or 0)
+                route_reason = str(route_decision.get("reason") or "").strip()
+                route_decline_reason = str(route_decision.get("decline_reason") or "").strip()
 
         if route_action in {"decline", "busy", "cancel"}:
             if route_action == "busy":
@@ -1444,6 +1456,21 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
                     timeout=SIP_TIMER_B if bridge_to_trunk else 8.0,
                 )
+                if invite.call_id in bucket.get("trunk_closed_calls", set()):
+                    bucket["trunk_closed_calls"].discard(invite.call_id)
+                    _LOGGER.info(
+                        "SIP bridge invite completed after caller cancelled call_id=%s; closing outbound leg",
+                        invite.call_id,
+                    )
+                    with contextlib.suppress(Exception):
+                        client.bye_or_cancel()
+                    await _close_client_and_release(client, bridge_ports)
+                    return SipInviteResult(
+                        487,
+                        "Request Terminated",
+                        to_tag="",
+                        decline_reason=TerminalReason.CANCELLED.value,
+                    )
                 if result not in {"ringing", "in_call"}:
                     status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(result)
                     await _close_client_and_release(client, bridge_ports)
@@ -1690,12 +1717,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     peer_name=invite.caller,
                     direction="incoming",
                     call_id=invite.call_id,
-                    reason="busy",
+                    reason="dnd",
+                    terminal_reason="dnd",
                     origin="self",
                     sip_status_code=486,
                     last_sip_event="SIP_RESPONSE",
                 )
-                return SipInviteResult(486, "Busy Here", to_tag="", decline_reason="busy")
+                return SipInviteResult(486, "Busy Here", to_tag="", decline_reason="dnd")
             _defer_invite_to_ha_softphone(invite, route_kind=decision.action.value, sip_uri=decision.sip_uri)
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
         local_rtp_port = _allocate_sip_rtp_port(hass)
@@ -1763,9 +1791,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         active_media_invite = active_media.get("invite")
         if invite is None:
             invite = active_media_invite
+        session = registry.sessions.get(registry.resolve_session_id(call_id))
         source_call_id, dest_call_id, relay, client, watcher, _called_by_dest = registry.detach_bridge(call_id)
         if source_call_id:
             call_id = source_call_id
+        event_caller = invite.caller if invite is not None else (session.caller if session is not None else "")
+        event_callee = invite.target if invite is not None else (session.callee if session is not None else "")
         softphone_store = bucket.get("ha_softphone", {})
         softphone_call_id = str(softphone_store.get("call_id") or "")
         terminal_reason = reason or "remote_hangup"
@@ -1791,9 +1822,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 terminal_state,
                 call_id=call_id,
                 dest_call_id=dest_call_id,
-                caller=(invite.caller if invite is not None else ""),
-                callee=(invite.target if invite is not None else ""),
-                peer_name=(invite.caller if invite is not None else ""),
+                caller=event_caller,
+                callee=event_callee,
+                peer_name=event_callee,
                 reason=terminal_reason,
                 terminal_reason=terminal_reason,
                 origin="remote",
@@ -1806,6 +1837,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "scope": "sip_bridge",
                     "call_id": call_id,
                     "dest_call_id": dest_call_id,
+                    "caller": event_caller,
+                    "callee": event_callee,
+                    "peer_name": event_callee,
+                    "target": event_callee,
                     "reason": terminal_reason,
                     "terminal_reason": terminal_reason,
                 },

@@ -27,6 +27,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = BACKEND.read_text()
+        cls.init_source = INIT.read_text()
 
     def test_default_answer_ha_invite_rings_until_explicit_answer(self) -> None:
         start = self.source.index("async def _on_invite(invite:")
@@ -44,6 +45,28 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_set_ha_softphone_call_state(", self.source)
         self.assertIn("CallState.RINGING.value", self.source)
 
+    def test_ha_softphone_busy_is_scoped_to_answer_ha_route(self) -> None:
+        start = self.source.index("async def _on_invite(invite:")
+        source = self.source[start:]
+        answer_ha = "if not force_ha_softphone and decision.action is RouteAction.ANSWER_HA:"
+        self.assertIn(answer_ha, source)
+        before_answer_ha = source[: source.index(answer_ha)]
+        answer_ha_branch = source[source.index(answer_ha) : source.index("local_rtp_port = _allocate_sip_rtp_port(hass)")]
+
+        self.assertNotIn("HA SIP endpoint is busy", before_answer_ha)
+        self.assertNotIn("HA softphone is busy", before_answer_ha)
+        self.assertIn("HA softphone is busy", answer_ha_branch)
+        self.assertIn("_ha_softphone_has_active_call(hass, ignore_call_id=invite.call_id)", answer_ha_branch)
+
+    def test_ha_softphone_dnd_declines_with_dnd_reason(self) -> None:
+        start = self.source.index("if _ha_softphone_dnd(hass):")
+        dnd_branch = self.source[start : self.source.index("_defer_invite_to_ha_softphone", start)]
+        self.assertIn('reason="dnd"', dnd_branch)
+        self.assertIn('terminal_reason="dnd"', dnd_branch)
+        self.assertIn('decline_reason="dnd"', dnd_branch)
+        self.assertNotIn('reason="busy"', dnd_branch)
+        self.assertNotIn('decline_reason="busy"', dnd_branch)
+
     def test_retransmitted_invite_is_not_rejected_as_busy(self) -> None:
         start = self.source.index("async def _on_invite(invite:")
         source = self.source[start:]
@@ -51,9 +74,42 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('return SipInviteResult(100, "Trying"', busy_guard)
         self.assertIn('if invite.call_id in pending:', busy_guard)
         self.assertIn('return SipInviteResult(180, "Ringing"', busy_guard)
-        self.assertIn("other_routes", busy_guard)
-        self.assertIn("other_pending", busy_guard)
+        self.assertNotIn("HA SIP endpoint is busy", busy_guard)
+        self.assertNotIn("other_routes", busy_guard)
+        self.assertNotIn("other_pending", busy_guard)
+        self.assertNotIn("ha_softphone_active", busy_guard)
         self.assertNotIn("if route_bucket or pending", busy_guard)
+
+    def test_registered_sip_callers_bypass_route_requested(self) -> None:
+        on_invite = self.source[self.source.index("async def _on_invite(invite:"):]
+        pre_route = on_invite[: on_invite.index('if caller_is_registered_endpoint:')]
+        registered_branch = on_invite[
+            on_invite.index('if caller_is_registered_endpoint:') : on_invite.index('if route_action in {"decline", "busy", "cancel"}:')
+        ]
+        self.assertIn("registered_entries = _registered_roster_entries(hass)", pre_route)
+        self.assertIn("caller_entry = _roster_entry_for_target(invite.caller, registered_entries)", pre_route)
+        self.assertIn("if caller_entry is None and invite.caller_uri is not None:", pre_route)
+        self.assertIn("caller_entry = _roster_entry_for_target(invite.caller_uri.user, registered_entries)", pre_route)
+        self.assertIn('caller_entry.metadata.get("registered")', pre_route)
+        self.assertIn("SIP registered endpoint uses central dialplan", registered_branch)
+        self.assertIn("else:", registered_branch)
+        route_requested_branch = registered_branch[registered_branch.index("else:") :]
+        self.assertIn('"route_requested"', route_requested_branch)
+        self.assertIn("await asyncio.wait_for(future, timeout=SIP_ROUTE_DECISION_TIMEOUT)", route_requested_branch)
+
+    def test_forward_to_registered_account_keeps_contact_uri(self) -> None:
+        call_service = self.init_source[self.init_source.index("async def _handle_sip_call_target_service") :]
+        force_bridge = call_service[
+            call_service.index('if (force_ha_bridge or bool(call.data.get("ha_bridge", False)))') :
+            call_service.index("use_trunk = route.action is RouteAction.TRUNK", 1)
+        ]
+        self.assertIn(
+            'if route.entry is not None and route.entry.metadata.get("registered"):',
+            force_bridge,
+        )
+        self.assertIn("bridge_uri = route.sip_uri", force_bridge)
+        self.assertIn("bridge_uri = ha_uri_for(route.target or target, contacts)", force_bridge)
+        self.assertIn("route = replace(route, action=RouteAction.BRIDGE, sip_uri=bridge_uri)", force_bridge)
 
     def test_entryless_sip_uri_route_is_guarded_and_uses_fallback_uri(self) -> None:
         start = self.source.index("routeable_sip_target =")
@@ -77,6 +133,17 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("bridge_ports.detach()", self.source)
         self.assertNotIn("await client.close()\n            bridge_ports.release()", self.source)
         self.assertNotIn("await client.close()\n                    bridge_ports.release()", self.source)
+
+    def test_bridge_invite_does_not_register_after_caller_cancel(self) -> None:
+        bridge_path = self.source[
+            self.source.index("result = await client.invite(") :
+            self.source.index("if result not in {\"ringing\", \"in_call\"}:")
+        ]
+        self.assertIn('invite.call_id in bucket.get("trunk_closed_calls", set())', bridge_path)
+        self.assertIn('bucket["trunk_closed_calls"].discard(invite.call_id)', bridge_path)
+        self.assertIn("client.bye_or_cancel()", bridge_path)
+        self.assertIn("await _close_client_and_release(client, bridge_ports)", bridge_path)
+        self.assertIn('return SipInviteResult(\n                        487,\n                        "Request Terminated"', bridge_path)
         self.assertNotIn("await attempt.client.close()\n                    attempt.ports.release()", self.source)
 
     def test_group_routes_have_dedicated_dispatch_not_generic_bridge(self) -> None:
@@ -88,7 +155,11 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("if decision.action is RouteAction.GROUP:", on_invite)
         self.assertIn("ring_ha = any(_is_ha_target(member) for member in ring_members)", on_invite)
         self.assertIn("conference_manager(hass, local_ip=local_ip).join(invite, decision.entry, ring_ha=ring_ha)", on_invite)
-        self.assertIn("_ring_conference_members(invite, decision.entry, peers, roster_entries)", on_invite)
+        self.assertIn("async def _ring_conference_members_from_ha", self.source)
+        self.assertIn('hass.data.setdefault(DOMAIN, {})["async_ring_conference_members"] = _ring_conference_members_from_ha', self.source)
+        self.assertIn("caller=_ha_peer_name(hass)", self.source)
+        self.assertIn("source_host=local_ip", self.source)
+        self.assertIn("_ring_conference_members(", on_invite)
         self.assertIn("_run_ring_group_call(invite, decision.entry, peers, roster_entries)", on_invite)
         self.assertIn('return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)', on_invite)
 
@@ -125,9 +196,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('self._attr_native_value = "online"', sensor)
         self.assertIn('"endpoint": endpoint', sensor)
         self.assertIn('"extension": extension', sensor)
-        self.assertIn("f\"{extension}|{groups['conference_group']}|{groups['ring_group']}|\"", sensor.replace("\n", ""))
+        self.assertIn('"ring_group": groups["ring_group"]', sensor)
+        self.assertIn('"conference_group": groups["conference_group"]', sensor)
+        self.assertNotIn("f\"{extension}|{groups['conference_group']}|{groups['ring_group']}|\"", sensor.replace("\n", ""))
         self.assertIn("old_endpoint", sensor)
         self.assertIn("new_endpoint", sensor)
+        self.assertIn("voip_ring_groups", sensor)
+        self.assertIn("voip_conference_groups", sensor)
+        self.assertIn("voip_ring_on_conference", sensor)
         self.assertIn("new_set.add(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)", sensor)
         self.assertIn('hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)', init_py)
         self.assertIn('ha_endpoint_state.attributes or {}', init_py)
@@ -168,6 +244,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
         self.assertIn("if route.action is RouteAction.GROUP:", call_service)
         self.assertIn("manager.start_ha_softphone(room_name)", call_service)
+        self.assertIn('"async_ring_conference_members"', call_service)
+        self.assertIn("hass.async_create_task(ring_members(route.entry))", call_service)
         self.assertIn('last_sip_event="LOCAL_CONFERENCE_JOIN"', call_service)
         self.assertIn("RouteAction.GROUP", call_service[call_service.index("if not use_trunk and"):])
 
@@ -260,12 +338,26 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"conference_group"', account_schema)
         self.assertIn('"conference_ring"', account_schema)
         self.assertIn('"ring_group"', account_schema)
+        self.assertIn('"extension"', account_schema)
+        self.assertIn("extension=str(call.data.get", account_services)
+        self.assertIn('"extension": str(item.get("extension")', account_services)
         self.assertIn("conference_group=str(call.data.get", account_services)
         self.assertIn("conference_ring=bool(call.data.get", account_services)
         self.assertIn("ring_group=str(call.data.get", account_services)
+        self.assertIn("extension:", services_yaml[services_yaml.index("create_account:") :])
         self.assertIn("conference_group:", services_yaml[services_yaml.index("create_account:") :])
         self.assertIn("conference_ring:", services_yaml[services_yaml.index("create_account:") :])
         self.assertIn("ring_group:", services_yaml[services_yaml.index("create_account:") :])
+
+    def test_create_account_always_notifies_without_echoing_manual_password(self) -> None:
+        account_services = ACCOUNT_SERVICES.read_text()
+        create_account = account_services[
+            account_services.index("async def create_account(") : account_services.index("async def remove_account(")
+        ]
+        self.assertIn("persistent_notification.async_create", create_account)
+        self.assertNotIn("if not provided_password:\n            persistent_notification.async_create", create_account)
+        self.assertIn("Password: user-provided value (not shown).", create_account)
+        self.assertIn("This generated password is shown only now.", create_account)
 
     def test_ring_group_timeout_has_no_configurable_ha_fallback(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
@@ -327,7 +419,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         websocket = WEBSOCKET_API.read_text()
         state = websocket[websocket.index("def _ha_softphone_state(") : websocket.index("def _set_ha_softphone_call_state(")]
         terminal = websocket[websocket.index("def _set_ha_softphone_call_state(") : websocket.index("def _set_sip_bridge_call_state(")]
-        for field in ("dialed_target", "connected_party", "answered_by"):
+        self.assertIn('"dialed_target": dialed_target', state)
+        self.assertIn('store.get("last_terminal_dialed_target", "")', state)
+        for field in ("connected_party", "answered_by"):
             self.assertIn(f'"{field}": store.get("{field}", "")', state)
             self.assertIn(f'"{field}",', terminal)
 
@@ -365,11 +459,18 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         terminated = self.source[self.source.index("async def _on_terminated("):]
         bridge_branch = terminated[terminated.index("if relay is not None or client is not None:"):]
         bridge_branch = bridge_branch[: bridge_branch.index("if (")]
+        pre_cleanup = terminated[: terminated.index("if relay is not None or client is not None:")]
+        self.assertIn("session = registry.sessions.get(registry.resolve_session_id(call_id))", pre_cleanup)
+        self.assertIn("event_caller = invite.caller if invite is not None else (session.caller if session is not None else \"\")", pre_cleanup)
+        self.assertIn("event_callee = invite.target if invite is not None else (session.callee if session is not None else \"\")", pre_cleanup)
         self.assertIn("await async_cleanup_sip_runtime(", bridge_branch)
         self.assertIn("relay=relay", bridge_branch)
         self.assertIn("client=client", bridge_branch)
         self.assertIn("watcher=watcher", bridge_branch)
         self.assertIn("terminate_client=True", bridge_branch)
+        self.assertIn("caller=event_caller", bridge_branch)
+        self.assertIn("callee=event_callee", bridge_branch)
+        self.assertIn('"target": event_callee', bridge_branch)
 
 
 if __name__ == "__main__":

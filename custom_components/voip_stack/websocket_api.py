@@ -431,7 +431,11 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     last_event = store.get("last_sip_event", "") or runtime["last_sip_event"]
     caller = store.get("caller", "") or store.get("last_terminal_caller", "")
     callee = store.get("callee", "") or store.get("last_terminal_callee", "")
+    connected_party = str(store.get("connected_party", "") or store.get("answered_by", ""))
     peer_name = store.get("peer_name", "") or store.get("last_terminal_peer_name", "")
+    if store.get("state") == CallState.IN_CALL.value and connected_party:
+        peer_name = connected_party
+    dialed_target = store.get("dialed_target", "") or store.get("last_terminal_dialed_target", "")
     direction = store.get("direction", "") or store.get("last_terminal_direction", "")
     call_id = store.get("call_id", "") or store.get("last_terminal_call_id", "")
     phone = sip_phone_state(
@@ -468,7 +472,7 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "callee": callee,
         "local_name": store.get("local_name", _ha_peer_name(hass)),
         "peer_name": peer_name,
-        "dialed_target": store.get("dialed_target", ""),
+        "dialed_target": dialed_target,
         "connected_party": store.get("connected_party", ""),
         "answered_by": store.get("answered_by", ""),
         "direction": direction,
@@ -548,6 +552,11 @@ def _set_ha_softphone_call_state(
         store["last_terminal_caller"] = canonical.get("caller", "")
         store["last_terminal_callee"] = canonical.get("callee", "")
         store["last_terminal_peer_name"] = canonical.get("peer_name", "")
+        store["last_terminal_dialed_target"] = (
+            extra.get("dialed_target")
+            or store.get("dialed_target")
+            or canonical.get("callee", "")
+        )
         if extra.get("last_sip_event"):
             store["last_sip_event"] = extra["last_sip_event"]
         if extra.get("last_sip_reason"):
@@ -588,6 +597,7 @@ def _set_ha_softphone_call_state(
             "last_terminal_caller",
             "last_terminal_callee",
             "last_terminal_peer_name",
+            "last_terminal_dialed_target",
         ):
             store.pop(key, None)
         store.update(canonical)
@@ -604,6 +614,8 @@ def _set_ha_softphone_call_state(
     payload.update({k: v for k, v in extra.items() if v not in (None, "")})
     if terminal and store.get("terminal_reason"):
         payload["terminal_reason"] = store["terminal_reason"]
+    if terminal and store.get("last_terminal_dialed_target"):
+        payload["dialed_target"] = store["last_terminal_dialed_target"]
     _LOGGER.info(
         "HA softphone state=%s call_id=%s direction=%s caller=%s callee=%s peer=%s reason=%s event=%s",
         state,

@@ -16,22 +16,26 @@ PKG_DIR = ROOT / "custom_components" / "voip_stack"
 
 
 def _install_ha_fakes() -> None:
-    if "homeassistant.core" not in sys.modules:
-        ha = types.ModuleType("homeassistant")
-        helpers = types.ModuleType("homeassistant.helpers")
-        core = types.ModuleType("homeassistant.core")
-        device_registry = types.ModuleType("homeassistant.helpers.device_registry")
-        entity_registry = types.ModuleType("homeassistant.helpers.entity_registry")
-        core.HomeAssistant = type("HomeAssistant", (), {})
-        core.ServiceCall = type("ServiceCall", (), {})
-        core.callback = lambda fn: fn
-        device_registry.async_get = lambda _hass: None
-        entity_registry.async_get = lambda _hass: None
-        sys.modules["homeassistant"] = ha
-        sys.modules["homeassistant.core"] = core
-        sys.modules["homeassistant.helpers"] = helpers
-        sys.modules["homeassistant.helpers.device_registry"] = device_registry
-        sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
+    ha = sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
+    if not hasattr(ha, "__path__"):
+        ha.__path__ = []
+    helpers = sys.modules.setdefault("homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
+    if not hasattr(helpers, "__path__"):
+        helpers.__path__ = []
+    core = sys.modules.setdefault("homeassistant.core", types.ModuleType("homeassistant.core"))
+    device_registry = sys.modules.setdefault(
+        "homeassistant.helpers.device_registry",
+        types.ModuleType("homeassistant.helpers.device_registry"),
+    )
+    entity_registry = sys.modules.setdefault(
+        "homeassistant.helpers.entity_registry",
+        types.ModuleType("homeassistant.helpers.entity_registry"),
+    )
+    core.HomeAssistant = getattr(core, "HomeAssistant", type("HomeAssistant", (), {}))
+    core.ServiceCall = getattr(core, "ServiceCall", type("ServiceCall", (), {}))
+    core.callback = getattr(core, "callback", lambda fn: fn)
+    device_registry.async_get = getattr(device_registry, "async_get", lambda _hass: None)
+    entity_registry.async_get = getattr(entity_registry, "async_get", lambda _hass: None)
 
 
 def _load_module(name: str):
@@ -106,11 +110,8 @@ class SipEndpointParseTest(unittest.TestCase):
             assert parsed is not None
             self.assertEqual(parsed["extension"], extension)
             self.assertEqual(parsed["extras"], extras)
-            self.assertEqual(parsed["conference_group"], extras[0] if len(extras) >= 1 else "")
-            self.assertEqual(parsed["ring_group"], extras[1] if len(extras) >= 2 else "")
-            self.assertFalse(parsed["conference_ring"])
 
-    def test_parses_conference_ring_from_forward_compatible_endpoint(self) -> None:
+    def test_does_not_parse_group_membership_from_endpoint_extras(self) -> None:
         endpoint = (
             "Spotpear | 192.168.1.31 | 5060 | 40000 | "
             "full_duplex | 16000:s16le:1:10 | 48000:s16le:1:10 | sip_udp | 101 | CG Casa | RG Casa | 1"
@@ -118,28 +119,48 @@ class SipEndpointParseTest(unittest.TestCase):
         parsed = device_resolver.parse_voip_endpoint(endpoint)
         self.assertIsNotNone(parsed)
         assert parsed is not None
-        self.assertEqual(parsed["conference_group"], "CG Casa")
-        self.assertEqual(parsed["ring_group"], "RG Casa")
-        self.assertTrue(parsed["conference_ring"])
         self.assertEqual(parsed["extras"], ["CG Casa", "RG Casa", "1"])
+        self.assertNotIn("conference_group", parsed)
+        self.assertNotIn("ring_group", parsed)
+        self.assertNotIn("conference_ring", parsed)
 
-    def test_list_devices_preserves_group_membership_fields(self) -> None:
+    def test_list_devices_reads_group_membership_from_sibling_entities(self) -> None:
         source = (PKG_DIR / "device_resolver.py").read_text(encoding="utf-8")
         list_devices = source[source.index("async def list_devices") : source.index("async def resolve_target")]
-        self.assertIn('"conference_group": endpoint.get("conference_group") or ""', list_devices)
-        self.assertIn('"conference_ring": bool(endpoint.get("conference_ring", False))', list_devices)
-        self.assertIn('"ring_group": endpoint.get("ring_group") or ""', list_devices)
+        self.assertIn('"conference_group": conference_group', list_devices)
+        self.assertIn('"conference_ring": _parse_bool(self._state_value(entities.get("voip_conference_ring")))', list_devices)
+        self.assertIn('"ring_group": ring_group', list_devices)
+        self.assertIn('extension = self._state_value(entities.get("voip_extension")) or endpoint.get("extension") or ""', list_devices)
+        self.assertIn('"extension": extension', list_devices)
+        self.assertIn('entities["start_call_service"] = f"esphome.{route_id}_start_call"', list_devices)
+        collect_entities = source[source.index("def _collect_entities") : source.index("def _state_value")]
+        self.assertIn('"auto_answer"', collect_entities)
+        self.assertIn('"dnd"', collect_entities)
+        self.assertIn('"voip_extension"', collect_entities)
+        self.assertIn('"voip_ring_groups"', collect_entities)
+        self.assertIn('"voip_conference_groups"', collect_entities)
+        self.assertIn('"voip_ring_on_conference"', collect_entities)
 
     def test_list_devices_re_reads_live_endpoint_state(self) -> None:
         class FakeEntity:
-            entity_id = "sensor.ws3_voip_endpoint"
-            device_id = "dev-ws3"
+            def __init__(self, entity_id: str) -> None:
+                self.entity_id = entity_id
+                self.device_id = "dev-ws3"
 
         class FakeEntityRegistry:
-            entities = {"sensor.ws3_voip_endpoint": FakeEntity()}
+            entities = {
+                "sensor.ws3_voip_endpoint": FakeEntity("sensor.ws3_voip_endpoint"),
+                "text.ws3_voip_extension": FakeEntity("text.ws3_voip_extension"),
+                "text.ws3_voip_ring_groups": FakeEntity("text.ws3_voip_ring_groups"),
+                "text.ws3_voip_conference_groups": FakeEntity("text.ws3_voip_conference_groups"),
+                "switch.ws3_voip_ring_on_conference": FakeEntity("switch.ws3_voip_ring_on_conference"),
+                "switch.ws3_auto_answer": FakeEntity("switch.ws3_auto_answer"),
+                "switch.ws3_do_not_disturb": FakeEntity("switch.ws3_do_not_disturb"),
+            }
 
         class FakeDevice:
             name = "WS3"
+            device_id = "dev-ws3"
             identifiers = {("esphome", "waveshare-s3")}
             connections = set()
             config_entries = {"entry-ws3"}
@@ -158,8 +179,18 @@ class SipEndpointParseTest(unittest.TestCase):
             def __init__(self) -> None:
                 self.value = "unknown"
 
-            def get(self, _entity_id):
-                return FakeState(self.value)
+            def get(self, entity_id):
+                if entity_id == "sensor.ws3_voip_endpoint":
+                    return FakeState(self.value)
+                if entity_id == "text.ws3_voip_extension":
+                    return FakeState("999")
+                if entity_id == "text.ws3_voip_ring_groups":
+                    return FakeState("RG Casa")
+                if entity_id == "text.ws3_voip_conference_groups":
+                    return FakeState("CG Casa")
+                if entity_id == "switch.ws3_voip_ring_on_conference":
+                    return FakeState("on")
+                return None
 
         class FakeConfigEntry:
             domain = "esphome"
@@ -191,7 +222,7 @@ class SipEndpointParseTest(unittest.TestCase):
             self.assertEqual(asyncio.run(resolver.list_devices()), [])
             hass.states.value = (
                 "Waveshare S3 Audio | 192.168.1.47 | 5060 | 40000 | "
-                "full_duplex | 16000:s16le:1:10 | 48000:s16le:1:10 | sip_udp |  | CG Casa | RG Casa | 1"
+                "full_duplex | 16000:s16le:1:10 | 48000:s16le:1:10 | sip_udp"
             )
             devices = asyncio.run(resolver.list_devices())
         finally:
@@ -200,8 +231,14 @@ class SipEndpointParseTest(unittest.TestCase):
 
         self.assertEqual(len(devices), 1)
         self.assertEqual(devices[0]["name"], "Waveshare S3 Audio")
+        self.assertEqual(devices[0]["extension"], "999")
         self.assertEqual(devices[0]["conference_group"], "CG Casa")
         self.assertEqual(devices[0]["ring_group"], "RG Casa")
+        self.assertTrue(devices[0]["conference_ring"])
+        self.assertEqual(devices[0]["entities"]["auto_answer"], "switch.ws3_auto_answer")
+        self.assertEqual(devices[0]["entities"]["dnd"], "switch.ws3_do_not_disturb")
+        self.assertEqual(devices[0]["entities"]["start_call_service"], "esphome.waveshare_s3_start_call")
+        self.assertEqual(devices[0]["entities"]["voip_conference_ring"], "switch.ws3_voip_ring_on_conference")
 
     def test_rejects_obsolete_minimal_endpoint_sensor(self) -> None:
         parsed = device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|sip_udp")

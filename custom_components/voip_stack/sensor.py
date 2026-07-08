@@ -32,6 +32,19 @@ def _state_is_available(state) -> bool:
     return state is not None and str(state.state or "").strip().lower() not in UNAVAILABLE_STATES
 
 
+def _is_voip_roster_entity(entity_id: str) -> bool:
+    return any(
+        token in entity_id
+        for token in (
+            "voip_state",
+            "voip_endpoint",
+            "voip_ring_groups",
+            "voip_conference_groups",
+            "voip_ring_on_conference",
+        )
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -79,9 +92,7 @@ class HaSoftphoneEndpointSensor(SensorEntity):
         rx = tx
         endpoint = (
             f"{_ha_peer_name(self.hass)}|{host}|{int(cfg['sip_port'])}|{int(cfg['rtp_port'])}|"
-            f"full_duplex|{tx}|{rx}|sip_tcp|"
-            f"{extension}|{groups['conference_group']}|{groups['ring_group']}|"
-            f"{1 if groups['conference_ring'] else 0}"
+            f"full_duplex|{tx}|{rx}|sip_tcp|{extension}"
         )
         self._attr_native_value = "online"
         self._attr_extra_state_attributes = {
@@ -129,7 +140,7 @@ class VoipPhonebookSensor(SensorEntity):
         @callback
         def _on_registry_change(event) -> None:
             entity_id = event.data.get("entity_id") or ""
-            if "voip_state" not in entity_id and "voip_endpoint" not in entity_id:
+            if not _is_voip_roster_entity(entity_id):
                 return
             self.hass.async_create_task(self._refresh_tracked_entities())
 
@@ -151,7 +162,7 @@ class VoipPhonebookSensor(SensorEntity):
         new_set = {
             e.entity_id
             for e in entity_registry.entities.values()
-            if "voip_state" in e.entity_id or "voip_endpoint" in e.entity_id
+            if _is_voip_roster_entity(e.entity_id)
         }
         new_set.add(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)
         if new_set == self._tracked_entities and not initial:
@@ -169,6 +180,16 @@ class VoipPhonebookSensor(SensorEntity):
                 old_endpoint = (old_state.attributes or {}).get("endpoint") if old_state is not None else None
                 new_endpoint = (new_state.attributes or {}).get("endpoint") if new_state is not None else None
                 if old_value != new_value or old_endpoint != new_endpoint:
+                    self.hass.async_create_task(self._recompute())
+                return
+            if (
+                "voip_ring_groups" in entity_id
+                or "voip_conference_groups" in entity_id
+                or "voip_ring_on_conference" in entity_id
+            ):
+                old_value = old_state.state if old_state is not None else None
+                new_value = new_state.state if new_state is not None else None
+                if old_value != new_value:
                     self.hass.async_create_task(self._recompute())
                 return
             old_avail = _state_is_available(old_state)

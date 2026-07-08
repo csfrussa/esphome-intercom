@@ -5,6 +5,11 @@ registered local SIP endpoints and the optional trunk. SIP is implicit everywher
 `transport` only chooses SIP/TCP or SIP/UDP signaling, never a second
 call-control protocol.
 
+For behavior-level routing examples, see
+[DIALPLAN_RESOLVER.md](DIALPLAN_RESOLVER.md). For signaling/media flows, see
+[CALL_FLOWS.md](CALL_FLOWS.md). For service calls that mutate the roster, see
+[SERVICES.md](SERVICES.md).
+
 ## ESP Static Contacts
 
 Declare static local entries directly in `voip_stack` only when an ESP must
@@ -54,6 +59,12 @@ HA owns the central `sensor.voip_phonebook` roster. It contains ESP peers,
 HA itself, local SIP endpoints registered to HA, manual phone endpoints,
 trunk-routed external targets when configured, and groups.
 
+ESP discovery starts from `text_sensor platform: voip_stack type: endpoint`.
+That endpoint state is deliberately short and does not contain group lists. If
+an ESP participates in PBX groups, HA reads `text platform: voip_stack
+type: ring_groups`, `text platform: voip_stack type: conference_groups` and
+`switch platform: voip_stack conference_ring` from the same ESPHome device.
+
 Roster entries use JSON fields:
 
 - `id`
@@ -94,9 +105,10 @@ registration when available.
 
 Group membership uses the same roster metadata for every endpoint type:
 
-- ESP peers publish `conference_group` and `ring_group` in their endpoint
-  identity. They may also publish `conference_ring` to request an invitation
-  when the conference room starts.
+- ESP peers publish a short endpoint identity plus optional sibling entities:
+  `text.voip_conference_groups`, `text.voip_ring_groups` and
+  `switch.voip_conference_ring`. HA re-reads the device whenever those entities
+  change and rebuilds the central roster.
 - Manual contacts and registered SIP endpoints can declare
   `conference_group`, `conference_ring` and `ring_group` through
   `voip_stack.add_contact` or account services.

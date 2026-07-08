@@ -53,6 +53,8 @@ class VoipStackCard extends HTMLElement {
     this._softphoneTargetDeviceId = null;
     this._softphoneKeypadOpen = false;
     this._softphoneManualTarget = "";
+    this._mirrorKeypadOpen = false;
+    this._mirrorManualTarget = "";
     this._softphoneStateLoaded = false;
     this._softphoneStateLoading = false;
 
@@ -78,6 +80,13 @@ class VoipStackCard extends HTMLElement {
     this._nextButtonEntityId = null;
     this._callButtonEntityId = null;
     this._declineButtonEntityId = null;
+    this._autoAnswerSwitchEntityId = null;
+    this._dndSwitchEntityId = null;
+    this._ringGroupsTextEntityId = null;
+    this._conferenceGroupsTextEntityId = null;
+    this._extensionTextEntityId = null;
+    this._conferenceRingSwitchEntityId = null;
+    this._startCallService = "";
 
     // Persistent error message (survives _render() DOM rebuild)
     this._errorMsg = "";
@@ -174,6 +183,8 @@ class VoipStackCard extends HTMLElement {
     const scope = (event?.data?.scope || "").toLowerCase();
     if (this._isHaSoftphoneMode() && scope === "session") {
       this._onSessionStateEvent(event);
+    } else if (!this._isHaSoftphoneMode() && scope === "sip_bridge") {
+      this._onMirroredBridgeStateEvent(event);
     }
   }
 
@@ -182,6 +193,17 @@ class VoipStackCard extends HTMLElement {
     if (!this._eventConcernsThisCard(data)) return;
     this._applySoftphoneSnapshot(data);
     this._ensureHaSoftphoneAudioPath(data);
+    this._render();
+  }
+
+  _onMirroredBridgeStateEvent(event) {
+    const data = event?.data || {};
+    if (!this._eventConcernsThisCard(data)) return;
+    const state = String(data.state || data.sip_state || "").toLowerCase();
+    if (!["idle", "busy", "declined", "cancelled", "media_incompatible", "transport_unreachable", "auth_required_unsupported", "error"].includes(state)) return;
+    const reason = data.terminal_reason || data.reason || state;
+    const peer = data.target || data.dialed_target || data.peer_name || data.callee || "";
+    this._captureEndReason("terminal", reason, data.origin || "remote", peer);
     this._render();
   }
 
@@ -492,6 +514,22 @@ class VoipStackCard extends HTMLElement {
             break;
           }
         }
+      }
+
+      for (const entityId of [
+        this._autoAnswerSwitchEntityId,
+        this._dndSwitchEntityId,
+        this._ringGroupsTextEntityId,
+        this._conferenceGroupsTextEntityId,
+        this._conferenceRingSwitchEntityId,
+      ]) {
+        if (!entityId) continue;
+        if (hass.states[entityId]?.state !== oldHass?.states?.[entityId]?.state) {
+          needsRender = true;
+        }
+      }
+      if (!this._isHaSoftphoneMode() && this._autoAnswerSwitchEntityId) {
+        this._autoAnswer = String(hass.states[this._autoAnswerSwitchEntityId]?.state || "").toLowerCase() === "on";
       }
 
       // Check caller (for incoming call info)
@@ -885,6 +923,25 @@ class VoipStackCard extends HTMLElement {
     await this._hass.callService("button", "press", { entity_id: entityId });
   }
 
+  _entityState(entityId) {
+    if (!entityId) return "";
+    const state = this._hass?.states?.[entityId]?.state || "";
+    return state === "unknown" || state === "unavailable" ? "" : state;
+  }
+
+  async _setSwitchEntity(entityId, enabled) {
+    if (!entityId) throw new Error("Switch entity not available");
+    await this._hass.callService("switch", enabled ? "turn_on" : "turn_off", { entity_id: entityId });
+  }
+
+  async _setTextEntity(entityId, value) {
+    if (!entityId) throw new Error("Text entity not available");
+    await this._hass.callService("text", "set_value", {
+      entity_id: entityId,
+      value: String(value || "").trim(),
+    });
+  }
+
   _getLastReason() {
     if (!this._hass || !this._lastReasonEntityId) return "";
     const entity = this._hass.states[this._lastReasonEntityId];
@@ -926,6 +983,13 @@ class VoipStackCard extends HTMLElement {
       this._nextButtonEntityId = e.next || null;
       this._callButtonEntityId = e.call || null;
       this._declineButtonEntityId = e.decline || null;
+      this._autoAnswerSwitchEntityId = e.auto_answer || null;
+      this._dndSwitchEntityId = e.dnd || null;
+      this._extensionTextEntityId = e.voip_extension || null;
+      this._ringGroupsTextEntityId = e.voip_ring_groups || null;
+      this._conferenceGroupsTextEntityId = e.voip_conference_groups || null;
+      this._conferenceRingSwitchEntityId = e.voip_conference_ring || null;
+      this._startCallService = e.start_call_service || "";
       this._render();
       return;
     }
@@ -949,6 +1013,12 @@ class VoipStackCard extends HTMLElement {
         else if (id.startsWith("button.") && id.includes("next")) this._nextButtonEntityId = id;
         else if (id.startsWith("button.") && id.includes("call") && !id.includes("decline")) this._callButtonEntityId = id;
         else if (id.startsWith("button.") && id.includes("decline")) this._declineButtonEntityId = id;
+        else if (id.startsWith("switch.") && id.includes("auto_answer")) this._autoAnswerSwitchEntityId = id;
+        else if (id.startsWith("switch.") && (id.includes("do_not_disturb") || id.includes("_dnd"))) this._dndSwitchEntityId = id;
+        else if (id.startsWith("text.") && id.includes("voip_extension")) this._extensionTextEntityId = id;
+        else if (id.startsWith("text.") && id.includes("voip_ring_groups")) this._ringGroupsTextEntityId = id;
+        else if (id.startsWith("text.") && id.includes("voip_conference_groups")) this._conferenceGroupsTextEntityId = id;
+        else if (id.startsWith("switch.") && id.includes("voip_conference_ring")) this._conferenceRingSwitchEntityId = id;
       }
       this._render();
     } catch (err) {
@@ -1062,7 +1132,8 @@ class VoipStackCard extends HTMLElement {
       case "idle":
         if (this._isHaSoftphoneMode() && this._softphoneSnapshot?.terminal_reason) {
           const reason = this._softphoneSnapshot.terminal_reason;
-          const peerLabel = this._softphoneSnapshot.peer_name ? ` with ${this._softphoneSnapshot.peer_name}` : "";
+          const terminalTarget = this._softphoneSnapshot.dialed_target || this._softphoneSnapshot.peer_name;
+          const peerLabel = terminalTarget ? ` with ${terminalTarget}` : "";
           statusText = `Call${peerLabel} ended.`;
           statusReason = `Reason: ${this._formatKnownReason(reason) || reason}`;
           statusClass = "idle";
@@ -1117,10 +1188,10 @@ class VoipStackCard extends HTMLElement {
 
     els.headerName.textContent = this._formatHeaderTitle(displayName);
 
-    // ESP cards are pure mirrors. Only ha_softphone mode owns an in-card
-    // destination selector and browser audio path.
+    // ESP cards mirror the ESP contact cycler. The optional keypad keeps its
+    // own manual buffer and calls the ESPHome start_call service directly.
     const softphoneMode = this._isHaSoftphoneMode();
-    const keypadOpen = softphoneMode && this._softphoneKeypadOpen;
+    const keypadOpen = this._keypadOpen();
     els.destRow.hidden = !showCall || keypadOpen;
     els.destValue.textContent = destination;
     if (els.destSelect) {
@@ -1130,17 +1201,18 @@ class VoipStackCard extends HTMLElement {
     }
     if (els.keypadPanel) {
       els.keypadPanel.hidden = !(showCall && keypadOpen);
-      els.keypadInput.value = this._softphoneManualTarget;
+      els.keypadInput.value = this._manualTarget();
       for (const btn of Object.values(els.keypadKeys || {})) {
         btn.disabled = buttonDisabled;
       }
     }
-    els.prevBtn.disabled = buttonDisabled || softphoneMode;
-    els.nextBtn.disabled = buttonDisabled || softphoneMode;
-    els.prevBtn.hidden = softphoneMode;
-    els.nextBtn.hidden = softphoneMode;
-    els.prevBtn.style.display = softphoneMode ? "none" : "";
-    els.nextBtn.style.display = softphoneMode ? "none" : "";
+    const hideContactCycler = softphoneMode || keypadOpen;
+    els.prevBtn.disabled = buttonDisabled || hideContactCycler;
+    els.nextBtn.disabled = buttonDisabled || hideContactCycler;
+    els.prevBtn.hidden = hideContactCycler;
+    els.nextBtn.hidden = hideContactCycler;
+    els.prevBtn.style.display = hideContactCycler ? "none" : "";
+    els.nextBtn.style.display = hideContactCycler ? "none" : "";
 
     // Action buttons: exactly one set visible at a time.
     els.answerBtn.hidden = !showAnswer;
@@ -1164,25 +1236,37 @@ class VoipStackCard extends HTMLElement {
     // cannot be changed mid-call.
     const showRuntimeOptions = showCall && !this._starting && !this._stopping;
     const showSettingsPanel = showRuntimeOptions && this._settingsOpen;
+    const canUseKeypad = softphoneMode || !!this._startCallService;
     els.runtimeControls.hidden = !showRuntimeOptions;
-    els.keypadBtn.hidden = !(showRuntimeOptions && this._isHaSoftphoneMode());
-    els.keypadBtn.textContent = this._softphoneKeypadOpen ? "Contacts" : "Keypad";
+    els.keypadBtn.hidden = !(showRuntimeOptions && canUseKeypad);
+    els.keypadBtn.textContent = keypadOpen ? "Contacts" : "Keypad";
     els.settingsBtn.hidden = !showRuntimeOptions;
     els.settingsPanel.hidden = !showSettingsPanel;
-    els.autoAnswerRow.hidden = !showSettingsPanel;
-    els.autoAnswerCheckbox.checked = !!this._autoAnswer;
+    const autoAnswerAvailable = softphoneMode || !!this._autoAnswerSwitchEntityId;
+    els.autoAnswerRow.hidden = !(showSettingsPanel && autoAnswerAvailable);
+    els.autoAnswerCheckbox.checked = softphoneMode
+      ? !!this._autoAnswer
+      : this._entityState(this._autoAnswerSwitchEntityId).toLowerCase() === "on";
     if (els.ringtoneRow) {
       els.ringtoneRow.hidden = !(showSettingsPanel && this._isHaSoftphoneMode());
       els.ringtoneCheckbox.checked = !!this._ringtoneEnabled;
     }
     if (els.dndRow) {
-      els.dndRow.hidden = !(showSettingsPanel && this._isHaSoftphoneMode());
-      els.dndCheckbox.checked = !!this._softphoneDnd;
+      const dndAvailable = softphoneMode || !!this._dndSwitchEntityId;
+      els.dndRow.hidden = !(showSettingsPanel && dndAvailable);
+      els.dndCheckbox.checked = softphoneMode
+        ? !!this._softphoneDnd
+        : this._entityState(this._dndSwitchEntityId).toLowerCase() === "on";
     }
     if (els.softphoneGroupsPanel) {
-      const showGroups = showSettingsPanel && this._isHaSoftphoneMode();
+      const showGroups = showSettingsPanel && (
+        softphoneMode ||
+        !!this._ringGroupsTextEntityId ||
+        !!this._conferenceGroupsTextEntityId ||
+        !!this._conferenceRingSwitchEntityId
+      );
       els.softphoneGroupsPanel.hidden = !showGroups;
-      if (showGroups) this._renderSoftphoneGroupControls();
+      if (showGroups) this._renderGroupControls();
     }
 
     // Stats line
@@ -1666,7 +1750,7 @@ class VoipStackCard extends HTMLElement {
       statusIndicator, statusText, statusReason,
       runtimeControls, keypadBtn, settingsBtn, settingsPanel,
       autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox,
-      softphoneGroupsPanel, extensionInput, ringGroupInput, ringGroupOptions, conferenceGroupInput, conferenceGroupOptions, conferenceRingRow, conferenceRingCheckbox,
+      softphoneGroupsPanel, extensionRow, extensionInput, ringGroupInput, ringGroupOptions, conferenceGroupInput, conferenceGroupOptions, conferenceRingRow, conferenceRingCheckbox,
       stats, err,
     };
 
@@ -1719,11 +1803,11 @@ class VoipStackCard extends HTMLElement {
   _attachEventHandlers() {
     const els = this._els;
     if (!els) return;
-    if (els.keypadBtn) els.keypadBtn.onclick = () => this._toggleSoftphoneKeypad();
-    if (els.keypadInput) els.keypadInput.oninput = (event) => this._setSoftphoneManualTarget(event.target.value);
+    if (els.keypadBtn) els.keypadBtn.onclick = () => this._toggleKeypad();
+    if (els.keypadInput) els.keypadInput.oninput = (event) => this._setManualTarget(event.target.value);
     if (els.keypadKeys) {
       for (const [key, btn] of Object.entries(els.keypadKeys)) {
-        btn.onclick = () => this._pressSoftphoneKey(key);
+        btn.onclick = () => this._pressKeypadKey(key);
       }
     }
     if (els.settingsBtn) els.settingsBtn.onclick = () => this._toggleSettings();
@@ -1731,7 +1815,7 @@ class VoipStackCard extends HTMLElement {
     if (els.dndCheckbox) els.dndCheckbox.onchange = () => this._toggleDnd();
     if (els.ringtoneCheckbox) els.ringtoneCheckbox.onchange = () => this._toggleRingtone();
     if (els.extensionInput) {
-      els.extensionInput.onchange = (event) => this._setHaSoftphoneSettings({ extension: event.target.value });
+      els.extensionInput.onchange = (event) => this._setExtensionSetting(event.target.value);
       els.extensionInput.onkeydown = (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -1739,9 +1823,9 @@ class VoipStackCard extends HTMLElement {
         }
       };
     }
-    if (els.ringGroupInput) els.ringGroupInput.onchange = (event) => this._setHaSoftphoneSettings({ ring_group: event.target.value });
-    if (els.conferenceGroupInput) els.conferenceGroupInput.onchange = (event) => this._setHaSoftphoneSettings({ conference_group: event.target.value });
-    if (els.conferenceRingCheckbox) els.conferenceRingCheckbox.onchange = (event) => this._setHaSoftphoneSettings({ conference_ring: event.target.checked });
+    if (els.ringGroupInput) els.ringGroupInput.onchange = (event) => this._setGroupSetting("ring_group", event.target.value);
+    if (els.conferenceGroupInput) els.conferenceGroupInput.onchange = (event) => this._setGroupSetting("conference_group", event.target.value);
+    if (els.conferenceRingCheckbox) els.conferenceRingCheckbox.onchange = (event) => this._setGroupSetting("conference_ring", event.target.checked);
     els.callBtn.onclick = () => this._startCall();
     els.hangupBtn.onclick = () => this._hangup();
     els.answerBtn.onclick = () => this._answer();
@@ -1781,31 +1865,45 @@ class VoipStackCard extends HTMLElement {
     this._render();
   }
 
-  _toggleSoftphoneKeypad() {
-    if (!this._isHaSoftphoneMode()) return;
-    this._softphoneKeypadOpen = !this._softphoneKeypadOpen;
-    if (this._softphoneKeypadOpen) this._settingsOpen = false;
+  _keypadOpen() {
+    return this._isHaSoftphoneMode() ? this._softphoneKeypadOpen : this._mirrorKeypadOpen;
+  }
+
+  _manualTarget() {
+    return this._isHaSoftphoneMode() ? this._softphoneManualTarget : this._mirrorManualTarget;
+  }
+
+  _setManualTarget(value) {
+    const clean = String(value || "").replace(/[\r\n]/g, "").trimStart();
+    if (this._isHaSoftphoneMode()) this._softphoneManualTarget = clean;
+    else this._mirrorManualTarget = clean;
+  }
+
+  _toggleKeypad() {
+    if (!this._isHaSoftphoneMode() && !this._startCallService) return;
+    if (this._isHaSoftphoneMode()) {
+      this._softphoneKeypadOpen = !this._softphoneKeypadOpen;
+    } else {
+      this._mirrorKeypadOpen = !this._mirrorKeypadOpen;
+      if (this._mirrorKeypadOpen) this._mirrorManualTarget = "";
+    }
+    if (this._keypadOpen()) this._settingsOpen = false;
     this._render();
-    if (this._softphoneKeypadOpen) {
+    if (this._keypadOpen()) {
       requestAnimationFrame(() => this._els?.keypadInput?.focus());
     }
   }
 
-  _setSoftphoneManualTarget(value) {
-    this._softphoneManualTarget = String(value || "").replace(/[\r\n]/g, "").trimStart();
-  }
-
-  _pressSoftphoneKey(key) {
-    if (!this._isHaSoftphoneMode()) return;
+  _pressKeypadKey(key) {
     if (key === "Clear") {
-      this._softphoneManualTarget = "";
+      this._setManualTarget("");
     } else if (key === "⌫") {
-      this._softphoneManualTarget = this._softphoneManualTarget.slice(0, -1);
+      this._setManualTarget(this._manualTarget().slice(0, -1));
     } else {
-      this._softphoneManualTarget += key;
+      this._setManualTarget(this._manualTarget() + key);
     }
     if (this._els?.keypadInput) {
-      this._els.keypadInput.value = this._softphoneManualTarget;
+      this._els.keypadInput.value = this._manualTarget();
       this._els.keypadInput.focus();
     }
   }
@@ -1849,7 +1947,16 @@ class VoipStackCard extends HTMLElement {
     this._render();
 
     try {
-      await this._pressEspButton(this._callButtonEntityId, "Call");
+      if (this._mirrorKeypadOpen) {
+        const manualTarget = this._mirrorManualTarget.trim();
+        if (!manualTarget) throw new Error("No destination entered");
+        if (!this._startCallService) throw new Error("ESP start_call service not available");
+        const [domain, service] = this._startCallService.split(".", 2);
+        if (!domain || !service) throw new Error("Invalid ESP start_call service");
+        await this._hass.callService(domain, service, { dest: manualTarget });
+      } else {
+        await this._pressEspButton(this._callButtonEntityId, "Call");
+      }
     } catch (err) {
       this._showError(err.message || String(err));
       await this._cleanup();
@@ -2045,8 +2152,21 @@ class VoipStackCard extends HTMLElement {
     }
   }
 
-  _toggleAutoAnswer() {
+  async _toggleAutoAnswer() {
     this._settingsOpen = true;
+    if (!this._isHaSoftphoneMode() && this._autoAnswerSwitchEntityId) {
+      const next = this._entityState(this._autoAnswerSwitchEntityId).toLowerCase() !== "on";
+      this._autoAnswer = next;
+      this._render();
+      try {
+        await this._setSwitchEntity(this._autoAnswerSwitchEntityId, next);
+      } catch (err) {
+        this._autoAnswer = !next;
+        this._showError(err.message || String(err));
+      }
+      this._render();
+      return;
+    }
     this._autoAnswer = !this._autoAnswer;
     const deviceId = this._autoAnswerStorageId();
     if (deviceId) {
@@ -2092,7 +2212,20 @@ class VoipStackCard extends HTMLElement {
 
   async _toggleDnd() {
     this._settingsOpen = true;
-    const next = !this._softphoneDnd;
+    const espMode = !this._isHaSoftphoneMode();
+    const next = espMode
+      ? this._entityState(this._dndSwitchEntityId).toLowerCase() !== "on"
+      : !this._softphoneDnd;
+    if (espMode) {
+      this._render();
+      try {
+        await this._setSwitchEntity(this._dndSwitchEntityId, next);
+      } catch (err) {
+        this._showError(err.message || String(err));
+      }
+      this._render();
+      return;
+    }
     this._softphoneDnd = next;
     this._render();
     try {
@@ -2124,19 +2257,68 @@ class VoipStackCard extends HTMLElement {
     if (input.value !== current) input.value = current;
   }
 
-  _renderSoftphoneGroupControls() {
+  _renderGroupControls() {
     const els = this._els || {};
     const ringGroups = this._availableSoftphoneGroups("ring");
     const conferenceGroups = this._availableSoftphoneGroups("conference");
-    if (els.extensionInput && els.extensionInput.value !== this._softphoneExtension) {
-      els.extensionInput.value = this._softphoneExtension;
+    const softphoneMode = this._isHaSoftphoneMode();
+    const extension = softphoneMode ? this._softphoneExtension : this._entityState(this._extensionTextEntityId);
+    const ringGroup = softphoneMode ? this._softphoneGroups.ring_group : this._entityState(this._ringGroupsTextEntityId);
+    const conferenceGroup = softphoneMode ? this._softphoneGroups.conference_group : this._entityState(this._conferenceGroupsTextEntityId);
+    const conferenceRing = softphoneMode
+      ? !!this._softphoneGroups.conference_ring
+      : this._entityState(this._conferenceRingSwitchEntityId).toLowerCase() === "on";
+    if (els.extensionRow) els.extensionRow.hidden = !softphoneMode && !this._extensionTextEntityId;
+    if (els.extensionInput) {
+      els.extensionInput.disabled = !softphoneMode && !this._extensionTextEntityId;
+      if (els.extensionInput.value !== extension) els.extensionInput.value = extension;
     }
-    this._populateGroupSuggestions(els.ringGroupInput, els.ringGroupOptions, ringGroups, this._softphoneGroups.ring_group);
-    this._populateGroupSuggestions(els.conferenceGroupInput, els.conferenceGroupOptions, conferenceGroups, this._softphoneGroups.conference_group);
+    if (els.ringGroupInput) els.ringGroupInput.disabled = !softphoneMode && !this._ringGroupsTextEntityId;
+    if (els.conferenceGroupInput) els.conferenceGroupInput.disabled = !softphoneMode && !this._conferenceGroupsTextEntityId;
+    this._populateGroupSuggestions(els.ringGroupInput, els.ringGroupOptions, ringGroups, ringGroup);
+    this._populateGroupSuggestions(els.conferenceGroupInput, els.conferenceGroupOptions, conferenceGroups, conferenceGroup);
     if (els.conferenceRingCheckbox) {
-      els.conferenceRingCheckbox.checked = !!this._softphoneGroups.conference_ring;
-      els.conferenceRingCheckbox.disabled = !this._softphoneGroups.conference_group;
+      els.conferenceRingCheckbox.checked = conferenceRing;
+      els.conferenceRingCheckbox.disabled =
+        !conferenceGroup || (!softphoneMode && !this._conferenceRingSwitchEntityId);
     }
+  }
+
+  async _setGroupSetting(key, value) {
+    if (this._isHaSoftphoneMode()) {
+      await this._setHaSoftphoneSettings({ [key]: value });
+      return;
+    }
+    this._settingsOpen = true;
+    try {
+      if (key === "ring_group") {
+        await this._setTextEntity(this._ringGroupsTextEntityId, value);
+      } else if (key === "conference_group") {
+        await this._setTextEntity(this._conferenceGroupsTextEntityId, value);
+        if (!String(value || "").trim() && this._conferenceRingSwitchEntityId) {
+          await this._setSwitchEntity(this._conferenceRingSwitchEntityId, false);
+        }
+      } else if (key === "conference_ring") {
+        await this._setSwitchEntity(this._conferenceRingSwitchEntityId, !!value);
+      }
+    } catch (err) {
+      this._showError(err.message || String(err));
+    }
+    this._render();
+  }
+
+  async _setExtensionSetting(value) {
+    if (this._isHaSoftphoneMode()) {
+      await this._setHaSoftphoneSettings({ extension: value });
+      return;
+    }
+    this._settingsOpen = true;
+    try {
+      await this._setTextEntity(this._extensionTextEntityId, value);
+    } catch (err) {
+      this._showError(err.message || String(err));
+    }
+    this._render();
   }
 
   async _setHaSoftphoneSettings(patch) {

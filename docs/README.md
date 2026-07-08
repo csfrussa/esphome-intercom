@@ -32,6 +32,27 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   documents canonical endpoint rows, `audio_mode`, `tx_formats`/`rx_formats`
   and how HA shapes direct SIP or HA-bridged routes for each ESP.
 
+- 🧩 **ESP entity surface**: [ESP_ENTITY_SURFACE.md](ESP_ENTITY_SURFACE.md)
+  explains which `voip_stack` entities enable HA discovery, ESP mirror cards,
+  dynamic groups and debug.
+
+- 🧭 **Dial plan / resolver**: [DIALPLAN_RESOLVER.md](DIALPLAN_RESOLVER.md)
+  explains how HA resolves names, extensions, groups, registered SIP endpoints
+  and trunk numbers.
+
+- 📞 **Call flows**: [CALL_FLOWS.md](CALL_FLOWS.md) explains the expected
+  signaling/media path for ESP, HA, registered endpoint, group and trunk calls.
+
+- 🧰 **HA services**: [SERVICES.md](SERVICES.md) documents every
+  `voip_stack.*` service and the expected side effects.
+
+- 👥 **Groups**: [GROUPS.md](GROUPS.md) documents ring group and conference
+  group semantics, including `conference_ring`.
+
+- 🧪 **Testing and debug**: [TESTING_AND_DEBUG.md](TESTING_AND_DEBUG.md)
+  collects local pytest commands, real SIP matrix expectations, service-matrix
+  checks, log filters and audio-debug capture paths.
+
 - 🧱 **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) describes component
   decomposition, threading/core affinity, per-frame data flow, the
   internal audio core contract, and the drain protocol for glitch-free config
