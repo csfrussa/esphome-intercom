@@ -418,7 +418,10 @@ class SipCallClient:
             if raw is None:
                 return None
             return sip.parse_message(raw), (self._pending_remote_host, self._pending_remote_sip_port)
-        data, addr = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+        try:
+            data, addr = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
         return sip.parse_message(data), addr
 
     async def invite(
@@ -555,14 +558,30 @@ class SipCallClient:
                     _LOGGER.info("SIP digest auth failed to build INVITE response: %s", err)
                     return sip.sip_failure_reason(msg.status_code)
                 self.dialog_ids.cseq += 1
+                self.dialog_ids.branch = sip.make_branch()
                 self._invite_cseq = self.dialog_ids.cseq
-                retry_headers = list(headers)
-                retry_headers = [(k, v) for k, v in retry_headers if k not in {"CSeq", auth_header}]
-                retry_headers.append(("CSeq", f"{self._invite_cseq} INVITE"))
+                retry_headers = sip.dialog_headers(
+                    request_uri=request_uri,
+                    local_uri=local_uri,
+                    remote_uri=remote_uri,
+                    dialog=self.dialog_ids,
+                    method="INVITE",
+                    contact_uri=local_uri,
+                    content_type="application/sdp",
+                    transport=self.signaling_transport,
+                )
+                if caller_name:
+                    retry_headers.append(("X-Voip-Stack-Caller-Name", caller_name))
+                    retry_headers.append(("X-Voip-Stack-Caller-Route", caller_name))
+                if dest_name:
+                    retry_headers.append(("X-Voip-Stack-Dest-Name", dest_name))
+                    retry_headers.append(("X-Voip-Stack-Dest-Route", dest_name))
                 retry_headers.append((auth_header, auth_value))
                 raw = sip.build_request("INVITE", request_uri, retry_headers, body)
                 self._mark_sip_event("INVITE")
                 await self._send_raw(raw, remote_host, int(remote_sip_port))
+                retransmit_interval = SIP_T1
+                next_retransmit = loop.time() + retransmit_interval
                 continue
             if msg.status_code and msg.status_code >= 300:
                 self._send_invite_error_ack(msg, addr[0], addr[1])

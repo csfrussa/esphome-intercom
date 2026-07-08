@@ -1501,6 +1501,30 @@ class SipProtocolBugFixTest(unittest.TestCase):
 
 
 class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_udp_read_response_timeout_returns_none(self) -> None:
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="HA",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+            signaling_transport="UDP",
+        )
+
+        self.assertIsNone(await client._read_response(0.001))
+
+    def test_invite_auth_retry_rebuilds_transaction_headers(self) -> None:
+        source = (PKG_DIR / "sip_client.py").read_text()
+        auth_branch = source[
+            source.index("if msg.status_code in {401, 407}")
+            : source.index("if msg.status_code and msg.status_code >= 300")
+        ]
+
+        self.assertIn("self.dialog_ids.branch = sip.make_branch()", auth_branch)
+        self.assertIn("retry_headers = sip.dialog_headers(", auth_branch)
+        self.assertIn("retry_headers.append((auth_header, auth_value))", auth_branch)
+        self.assertIn("next_retransmit = loop.time() + retransmit_interval", auth_branch)
+        self.assertNotIn("retry_headers = list(headers)", auth_branch)
+
     async def test_invite_treats_183_session_progress_as_ringing(self) -> None:
         sent: list[bytes] = []
         responses: asyncio.Queue[bytes] = asyncio.Queue()
