@@ -261,12 +261,6 @@ class SipCallClient:
         self.last_sip_status_code = 0
         self.last_sip_reason = ""
 
-    def _mark_sip_event(self, event: str, status: int = 0, reason: str = "") -> None:
-        self.last_sip_event = event
-        if status:
-            self.last_sip_status_code = int(status)
-            self.last_sip_reason = reason or ""
-
     async def start(self) -> None:
         if self.signaling_transport == "TCP":
             return
@@ -398,7 +392,7 @@ class SipCallClient:
         ]
         raw = sip.build_response(status, reason, headers, b"")
         self._send_dialog_request(raw, host, int(port))
-        self._mark_sip_event("SIP_RESPONSE", int(status), reason)
+        sip.mark_sip_event(self, "SIP_RESPONSE", int(status), reason)
         _LOGGER.info("SIP TX %s %s to %s:%s", status, reason, host, port)
 
     async def _read_response(self, timeout: float) -> tuple[sip.SipMessage, tuple[str, int]] | None:
@@ -439,7 +433,7 @@ class SipCallClient:
             else:
                 await self.start()
         except OSError as err:
-            self._mark_sip_event("TRANSPORT_ERROR", 0, str(err))
+            sip.mark_sip_event(self, "TRANSPORT_ERROR", 0, str(err))
             _LOGGER.info(
                 "SIP transport unreachable target=%s host=%s:%s transport=%s error=%s",
                 target,
@@ -488,7 +482,7 @@ class SipCallClient:
             headers.append(("X-Voip-Stack-Dest-Route", dest_name))
         self._invite_cseq = self.dialog_ids.cseq
         raw = sip.build_request("INVITE", request_uri, headers, body)
-        self._mark_sip_event("INVITE")
+        sip.mark_sip_event(self, "INVITE")
         await self._send_raw(raw, remote_host, int(remote_sip_port))
         _LOGGER.info(
             "SIP TX INVITE %s@%s:%s offered=[%s]",
@@ -534,7 +528,7 @@ class SipCallClient:
                 continue
             if not msg.is_response:
                 continue
-            self._mark_sip_event("SIP_RESPONSE", int(msg.status_code or 0), msg.reason)
+            sip.mark_sip_event(self, "SIP_RESPONSE", int(msg.status_code or 0), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
             if _is_invite_progress_response(msg.status_code):
                 return "ringing"
@@ -580,7 +574,7 @@ class SipCallClient:
                     retry_headers.append(("X-Voip-Stack-Dest-Route", dest_name))
                 retry_headers.append((auth_header, auth_value))
                 raw = sip.build_request("INVITE", request_uri, retry_headers, body)
-                self._mark_sip_event("INVITE")
+                sip.mark_sip_event(self, "INVITE")
                 await self._send_raw(raw, remote_host, int(remote_sip_port))
                 retransmit_interval = SIP_T1
                 next_retransmit = loop.time() + retransmit_interval
@@ -607,7 +601,7 @@ class SipCallClient:
                 continue
             if not msg.is_response or msg.status_code is None:
                 continue
-            self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+            sip.mark_sip_event(self, "SIP_RESPONSE", int(msg.status_code), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
             if "CANCEL" in msg.header("CSeq").upper():
                 continue
@@ -659,7 +653,7 @@ class SipCallClient:
             msg, addr = received
             if msg.is_response:
                 if msg.status_code is not None:
-                    self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+                    sip.mark_sip_event(self, "SIP_RESPONSE", int(msg.status_code), msg.reason)
                     _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
                 continue
             if msg.method == "BYE":
@@ -698,7 +692,7 @@ class SipCallClient:
             _LOGGER.info("SIP 200 OK rejected: no compatible answer media offered=[%s]", offered)
             return False
         parsed = sdp.parse_sdp(msg.body)
-        self.dialog_ids.remote_tag = _extract_tag(msg.header("To"))
+        self.dialog_ids.remote_tag = sip.extract_tag(msg.header("To"))
         if not request_uri:
             request_uri = str(sip.SipUri(target or "voip", remote_host, remote_sip_port))
         transport_param = (("transport", self.signaling_transport.lower()),)
@@ -750,7 +744,7 @@ class SipCallClient:
         )
         raw = sip.build_request("ACK", request_uri, headers, b"")
         self._send_dialog_request(raw, host, port)
-        self._mark_sip_event("ACK")
+        sip.mark_sip_event(self, "ACK")
         _LOGGER.info("SIP TX ACK %s:%s", host, port)
 
     def _send_invite_error_ack(self, msg: sip.SipMessage, host: str, port: int) -> None:
@@ -764,7 +758,7 @@ class SipCallClient:
         ack_ids = sip.SipDialogIds(
             call_id=self.dialog_ids.call_id,
             local_tag=self.dialog_ids.local_tag,
-            remote_tag=_extract_tag(msg.header("To")),
+            remote_tag=sip.extract_tag(msg.header("To")),
             cseq=self._invite_cseq,
             branch=self.dialog_ids.branch,
         )
@@ -779,7 +773,7 @@ class SipCallClient:
         )
         raw = sip.build_request("ACK", request_uri, headers, b"")
         self._send_dialog_request(raw, host, int(port))
-        self._mark_sip_event("ACK")
+        sip.mark_sip_event(self, "ACK")
         _LOGGER.info("SIP TX ACK final INVITE error %s:%s", host, port)
 
     def bye(self) -> None:
@@ -803,7 +797,7 @@ class SipCallClient:
         )
         raw = sip.build_request("BYE", self.dialog.remote_uri, headers, b"")
         self._send_dialog_request(raw, self.dialog.remote_host, self.dialog.remote_sip_port)
-        self._mark_sip_event("BYE")
+        sip.mark_sip_event(self, "BYE")
         _LOGGER.info("SIP TX BYE %s:%s", self.dialog.remote_host, self.dialog.remote_sip_port)
 
     def cancel(self) -> bool:
@@ -839,7 +833,7 @@ class SipCallClient:
         )
         raw = sip.build_request("CANCEL", self._pending_request_uri, headers, b"")
         self._send_dialog_request(raw, self._pending_remote_host, self._pending_remote_sip_port)
-        self._mark_sip_event("CANCEL")
+        sip.mark_sip_event(self, "CANCEL")
         _LOGGER.info("SIP TX CANCEL %s:%s", self._pending_remote_host, self._pending_remote_sip_port)
         return True
 
@@ -872,7 +866,7 @@ class SipCallClient:
                 msg, addr = received
                 if not msg.is_response or msg.status_code is None:
                     continue
-                self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+                sip.mark_sip_event(self, "SIP_RESPONSE", int(msg.status_code), msg.reason)
                 _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
                 if 200 <= msg.status_code < 300:
                     return "remote_hangup"
@@ -896,7 +890,7 @@ class SipCallClient:
             msg, addr = received
             if not msg.is_response or msg.status_code is None:
                 continue
-            self._mark_sip_event("SIP_RESPONSE", int(msg.status_code), msg.reason)
+            sip.mark_sip_event(self, "SIP_RESPONSE", int(msg.status_code), msg.reason)
             _LOGGER.info("SIP RX %s %s from %s:%s", msg.status_code, msg.reason, addr[0], addr[1])
             cseq = msg.header("CSeq").upper()
             if "CANCEL" in cseq and 200 <= msg.status_code < 300:
@@ -933,11 +927,3 @@ class SipCallClient:
             "last_sip_status_code": self.last_sip_status_code,
             "last_sip_reason": self.last_sip_reason,
         }
-
-
-def _extract_tag(header: str) -> str:
-    for part in (header or "").split(";"):
-        part = part.strip()
-        if part.startswith("tag="):
-            return part.removeprefix("tag=")
-    return ""

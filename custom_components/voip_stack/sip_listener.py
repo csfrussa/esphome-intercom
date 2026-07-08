@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 import logging
-import re
 from typing import Any, Awaitable, Callable
 
 from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS
@@ -16,7 +15,6 @@ from .sip_tcp_io import SipTcpWriter
 
 
 _LOGGER = logging.getLogger(__name__)
-_TAG_RE = re.compile(r"(?:^|;)tag=([^;>\s]+)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,11 +70,6 @@ TerminateHandler = Callable[[str, str], Awaitable[None]]
 RegisterHandler = Callable[[sip.SipMessage, tuple[str, int], str], Awaitable[Any]]
 SendHandler = Callable[[bytes, tuple[str, int]], None]
 TcpDialogSender = Callable[[bytes], None]
-
-
-def _extract_tag(header: str) -> str:
-    match = _TAG_RE.search(header or "")
-    return match.group(1) if match else ""
 
 
 def _uri_from_header(header: str) -> sip.SipUri | None:
@@ -205,12 +198,6 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.last_sip_status_code = 0
         self.last_sip_reason = ""
 
-    def _mark_sip_event(self, event: str, status: int = 0, reason: str = "") -> None:
-        self.last_sip_event = event
-        if status:
-            self.last_sip_status_code = int(status)
-            self.last_sip_reason = reason or ""
-
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
         self._closed_waiter = asyncio.get_running_loop().create_future()
@@ -273,7 +260,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             headers.append(("X-Voip-Stack-Decline-Reason", clean_reason))
         raw = sip.build_response(status, reason, headers, body)
         _LOGGER.info("SIP TX %s %s to %s:%s", status, reason, addr[0], addr[1])
-        self._mark_sip_event("SIP_RESPONSE", int(status), reason)
+        sip.mark_sip_event(self, "SIP_RESPONSE", int(status), reason)
         self._send(raw, addr)
 
     async def _handle_datagram(self, data: bytes, addr) -> None:
@@ -284,11 +271,11 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             return
         if not request.is_request:
             _LOGGER.info("SIP RX response ignored from %s:%s", addr[0], addr[1])
-            self._mark_sip_event("SIP_RESPONSE", int(request.status_code or 0), request.reason)
+            sip.mark_sip_event(self, "SIP_RESPONSE", int(request.status_code or 0), request.reason)
             return
 
         _LOGGER.info("SIP RX %s %s from %s:%s", request.method, request.uri, addr[0], addr[1])
-        self._mark_sip_event(request.method or "SIP_REQUEST")
+        sip.mark_sip_event(self, request.method or "SIP_REQUEST")
         if request.method not in sip.SUPPORTED_METHODS:
             status, reason = _unsupported_method_response(request.method or "")
             self._send_response(request, addr, status, reason)
@@ -303,7 +290,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 headers.extend(tuple(getattr(result, "headers", ()) or ()))
                 raw = sip.build_response(int(result.status), str(result.reason), headers, b"")
                 _LOGGER.info("SIP TX %s %s to %s:%s", result.status, result.reason, addr[0], addr[1])
-                self._mark_sip_event("SIP_RESPONSE", int(result.status), str(result.reason))
+                sip.mark_sip_event(self, "SIP_RESPONSE", int(result.status), str(result.reason))
                 self._send(raw, addr)
                 return
             self._send_response(request, addr, 405, "Method Not Allowed")
@@ -410,7 +397,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         local_uri = _uri_text_from_header(dialog.request.header("To"))
         if not remote_uri or not local_uri:
             return False
-        remote_tag = _extract_tag(dialog.request.header("From"))
+        remote_tag = sip.extract_tag(dialog.request.header("From"))
         ids = sip.SipDialogIds(
             call_id=call_id,
             local_tag=dialog.to_tag,
@@ -429,7 +416,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         )
         raw = sip.build_request("BYE", remote_uri, headers, b"")
         _LOGGER.info("SIP TX BYE call_id=%s to %s:%s", call_id, dialog.addr[0], dialog.addr[1])
-        self._mark_sip_event("BYE")
+        sip.mark_sip_event(self, "BYE")
         self._send(raw, dialog.addr)
         return True
 

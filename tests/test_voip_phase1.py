@@ -62,6 +62,11 @@ class SipUriTest(unittest.TestCase):
         self.assertEqual(uri.params, (("transport", "tcp"),))
         self.assertEqual(str(uri), "sip:192.168.1.10;transport=tcp")
 
+    def test_extract_tag_ignores_quoted_display_name_parameters(self) -> None:
+        self.assertEqual(sip.extract_tag("<sip:a@b>;tag=abc;x=y"), "abc")
+        self.assertEqual(sip.extract_tag(""), "")
+        self.assertEqual(sip.extract_tag('"not;tag=quoted" <sip:a@b>;tag=real;x=y'), "real")
+
 
 def _load_sip_transport_with_homeassistant_stubs():
     if "homeassistant" not in sys.modules:

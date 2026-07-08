@@ -9,6 +9,7 @@ ordinary SIP/2.0 messages.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from secrets import token_hex
 from typing import Iterable
 
@@ -30,6 +31,8 @@ KNOWN_UNSUPPORTED_METHODS = frozenset(
     }
 )
 _TOKEN_SEPARATORS = set("()<>@,;:\\\"/[]?={} \t")
+_QUOTED_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+_TAG_RE = re.compile(r"(?:^|;)tag=([^;>\s]+)")
 
 
 class SipError(ValueError):
@@ -39,6 +42,19 @@ class SipError(ValueError):
 def is_sip_token(value: str) -> bool:
     """Return true when *value* is a syntactically valid SIP token."""
     return bool(value) and all(0x21 <= ord(ch) <= 0x7E and ch not in _TOKEN_SEPARATORS for ch in value)
+
+
+def extract_tag(header: str) -> str:
+    clean = _QUOTED_STRING_RE.sub('""', header or "")
+    match = _TAG_RE.search(clean)
+    return match.group(1) if match else ""
+
+
+def mark_sip_event(target: object, event: str, status: int = 0, reason: str = "") -> None:
+    target.last_sip_event = event
+    if status:
+        target.last_sip_status_code = int(status)
+        target.last_sip_reason = reason or ""
 
 
 @dataclass(frozen=True, slots=True)
