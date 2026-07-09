@@ -1221,6 +1221,14 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         raise ServiceValidationError(f"{target} requires a registered SIP trunk")
     if route.action is RouteAction.GROUP and route.entry is not None:
         group_type = str((route.entry.metadata or {}).get("group_type") or "")
+        if group_type == "ring":
+            start_ring_group = hass.data.setdefault(DOMAIN, {}).get("async_start_ring_group_from_ha")
+            if start_ring_group is None:
+                raise ServiceValidationError(f"{target} is not available yet")
+            await _async_prepare_ha_outbound_call(hass)
+            await start_ring_group(route.entry)
+            _LOGGER.info("HA softphone started ring group=%s", route.entry.display_name)
+            return
         if group_type == "conference":
             room_name = route.entry.name or route.entry.id or target
             from .conference import conference_manager

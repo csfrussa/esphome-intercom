@@ -961,6 +961,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     last_sip_event="SIP_RESPONSE",
                     sip_uri=str(winner.uri),
                 )
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                registry.client_watchers[client.dialog_ids.call_id] = current_task
             terminal = await client.wait_for_dialog_termination()
             terminal_reason = (
                 TerminalReason.REMOTE_HANGUP.value
@@ -1064,7 +1067,63 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             roster_entries=roster_entries,
         )
 
+    async def _start_ring_group_from_ha(entry: RosterEntry) -> str:
+        peers = await _async_build_peer_snapshot(hass)
+        roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
+        group_name = str(entry.name or entry.id or "")
+        call_id = f"ha-{int(time.time() * 1000):x}"
+        send_format = next(
+            fmt
+            for fmt in HA_SIP_PCM_TX_FORMATS
+            if fmt.channels == 1 and fmt.nominal_frame_bytes <= 1200
+        )
+        recv_format = next(
+            fmt
+            for fmt in HA_SIP_PCM_RX_FORMATS
+            if fmt.channels == 1 and fmt.nominal_frame_bytes <= 1200
+        )
+        invite = SipInvite(
+            source_host=local_ip,
+            source_port=int(cfg["sip_port"]),
+            request_uri=parse_sip_uri(f"sip:{group_name.replace(' ', '_')}@{local_ip};transport=tcp"),
+            caller_uri=parse_sip_uri(f"sip:{_ha_peer_name(hass).replace(' ', '_')}@{local_ip};transport=tcp"),
+            target=group_name,
+            caller=_ha_peer_name(hass),
+            call_id=call_id,
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=sip_sdp.audio_format_to_rtp(send_format, 96),
+            recv_format=sip_sdp.audio_format_to_rtp(recv_format, 96),
+            remote_rtp_host=local_ip,
+            remote_rtp_port=0,
+        )
+        registry = _call_registry(hass)
+        registry.upsert(
+            call_id,
+            state=CallState.RINGING.value,
+            caller=_ha_peer_name(hass),
+            callee=group_name,
+            route_kind=GROUP_TYPE_RING,
+        )
+        registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.REMOTE_RINGING.value)
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.REMOTE_RINGING.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=_ha_peer_name(hass),
+            callee=group_name,
+            peer_name=group_name,
+            direction="outgoing",
+            call_id=call_id,
+            route_kind=GROUP_TYPE_RING,
+            sip_status_code=180,
+            last_sip_event="LOCAL_RING_GROUP",
+        )
+        hass.async_create_task(_run_ring_group_call(invite, entry, peers, roster_entries))
+        return call_id
+
     hass.data.setdefault(DOMAIN, {})["async_ring_conference_members"] = _ring_conference_members_from_ha
+    hass.data.setdefault(DOMAIN, {})["async_start_ring_group_from_ha"] = _start_ring_group_from_ha
 
     async def _on_invite(invite: SipInvite) -> SipInviteResult:
         peers = await _async_build_peer_snapshot(hass)
@@ -1406,6 +1465,25 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 bridge_port = int(decision.entry.port or (decision.entry.metadata or {}).get("port") or (decision.entry.metadata or {}).get("sip_port") or cfg["sip_port"])
                 bridge_uri = parse_sip_uri(f"sip:{decision.entry.id}@{decision.entry.address}:{bridge_port}")
             decision_uri = bridge_uri or (parse_sip_uri(decision.sip_uri) if decision.sip_uri else None)
+            if (
+                peer_target is not None
+                and peer_target.host
+                and invite.source_host
+                and peer_target.host == invite.source_host
+            ):
+                _set_sip_bridge_call_state(
+                    hass,
+                    CallState.BUSY.value,
+                    caller=invite.caller,
+                    callee=invite.target,
+                    peer_name=invite.caller,
+                    call_id=invite.call_id,
+                    reason=TerminalReason.BUSY.value,
+                    origin="self",
+                    sip_status_code=486,
+                    last_sip_event="SIP_RESPONSE",
+                )
+                return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
             if decision_uri is not None and decision_uri.host != local_ip:
                 try:
                     bridge_ports = RtpPortReservation.allocate(hass)

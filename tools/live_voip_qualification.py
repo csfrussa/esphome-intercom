@@ -57,11 +57,12 @@ class EspDevice:
     host: str
     port: int = 6053
     password: str = ""
+    ha_state_entity: str = ""
 
 
 DEFAULT_ESPS = {
-    "ws3": EspDevice("ws3", "Waveshare S3 Audio", "192.168.1.47"),
-    "spotpear": EspDevice("spotpear", "Spotpear Ball v2", "192.168.1.31"),
+    "ws3": EspDevice("ws3", "Waveshare S3 Audio", "192.168.1.47", ha_state_entity="sensor.cucina_waveshare_s3_audio_voip_state"),
+    "spotpear": EspDevice("spotpear", "Spotpear Ball v2", "192.168.1.31", ha_state_entity="sensor.casa_spotpear_ball_v2_voip_state"),
 }
 
 
@@ -250,6 +251,23 @@ class EspApi:
                 pass
         raise AssertionError(f"{self.spec.key}: {object_id} expected {sorted(wanted)}, current={self.values.get(object_id)!r}")
 
+    async def wait_predicate(
+        self,
+        predicate: Callable[[], bool],
+        description: str,
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            try:
+                await asyncio.wait_for(self._updates.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                pass
+        raise AssertionError(f"{self.spec.key}: timed out waiting for {description}; snapshot={self.snapshot()}")
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "device": self.spec.key,
@@ -369,6 +387,24 @@ async def wait_softphone_state(ctx: LiveContext, wanted: set[str], *, timeout: f
     raise AssertionError(f"HA softphone expected {sorted(wanted)}, last={last}")
 
 
+async def wait_esp_voip_state(ctx: LiveContext, wanted: set[str], *, timeout: float = 10.0) -> Any:
+    try:
+        return await ctx.esp.wait("voip_state", wanted, timeout=timeout)
+    except AssertionError as err:
+        if not ctx.esp.spec.ha_state_entity:
+            raise
+        wanted_norm = {norm(item) for item in wanted}
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            state = await ctx.ha.state(ctx.esp.spec.ha_state_entity)
+            value = state.get("state")
+            ctx.esp.values["voip_state"] = value
+            if norm(value) in wanted_norm:
+                return value
+            await asyncio.sleep(0.25)
+        raise err
+
+
 async def set_baseline(ctx: LiveContext) -> dict[str, Any]:
     original = {
         "extension": str(ctx.esp.values.get("voip_extension") or ""),
@@ -414,14 +450,14 @@ async def restore_baseline(ctx: LiveContext, original: dict[str, Any]) -> None:
 async def scenario_ha_to_esp_extension_answer_hangup(ctx: LiveContext) -> None:
     await ctx.cleanup()
     await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
-    await ctx.esp.wait("voip_state", {"ringing", "incoming"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
     await ctx.esp.button("call")
-    await ctx.esp.wait("voip_state", {"in_call"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"in_call"}, timeout=8)
     if str(soft.get("peer_name") or "") not in {ctx.esp.spec.name, ctx.args.esp_extension}:
         raise AssertionError(f"HA softphone did not resolve ESP extension to ESP peer: {soft}")
     await ctx.ha.service("voip_stack", "hangup", {})
-    await ctx.esp.wait("voip_state", {"idle"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     ctx.capture("ha_to_esp_extension_answer_hangup")
 
 
@@ -430,7 +466,7 @@ async def scenario_ha_to_esp_dnd(ctx: LiveContext) -> None:
     await ctx.esp.switch("do_not_disturb", True)
     try:
         await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
-        await ctx.esp.wait("voip_state", {"idle"}, timeout=10)
+        await wait_esp_voip_state(ctx, {"idle"}, timeout=10)
         soft = await wait_softphone_state(ctx, {"idle", "busy", "declined"}, timeout=10)
         if norm(soft.get("terminal_reason")) not in {"busy", "dnd", "declined", "remote_hangup"}:
             raise AssertionError(f"HA softphone did not surface ESP DND/busy terminal: {soft}")
@@ -442,14 +478,14 @@ async def scenario_ha_to_esp_dnd(ctx: LiveContext) -> None:
 async def scenario_ha_to_ring_group_answer(ctx: LiveContext) -> None:
     await ctx.cleanup()
     await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.ring_group})
-    await ctx.esp.wait("voip_state", {"ringing", "incoming"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
     await ctx.esp.button("call")
-    await ctx.esp.wait("voip_state", {"in_call"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"in_call"}, timeout=8)
     if str(soft.get("peer_name") or "") == ctx.args.ring_group:
         raise AssertionError(f"HA softphone still displays ring group instead of winning member: {soft}")
     await ctx.ha.service("voip_stack", "hangup", {})
-    await ctx.esp.wait("voip_state", {"idle"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     ctx.capture("ha_to_ring_group_answer")
 
 
@@ -465,13 +501,13 @@ async def scenario_ha_to_conference_group_rings_esp(ctx: LiveContext) -> None:
             timeout=15,
         )
         await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.conference_group})
-        await ctx.esp.wait("voip_state", {"ringing", "incoming"}, timeout=12)
+        await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
         await ctx.esp.button("call")
-        await ctx.esp.wait("voip_state", {"in_call"}, timeout=12)
+        await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
         await ctx.ha.service("voip_stack", "hangup", {})
         await asyncio.sleep(0.5)
         await ctx.esp.service("decline_call", {"reason": "qualification_cleanup"})
-        await ctx.esp.wait("voip_state", {"idle"}, timeout=12)
+        await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     finally:
         await ctx.esp.switch("voip_ring_on_conference", False)
     ctx.capture("ha_to_conference_group_rings_esp")
@@ -480,12 +516,12 @@ async def scenario_ha_to_conference_group_rings_esp(ctx: LiveContext) -> None:
 async def scenario_esp_to_ha_extension_cancel(ctx: LiveContext) -> None:
     await ctx.cleanup()
     await ctx.esp.service("start_call", {"dest": ctx.args.ha_extension})
-    await ctx.esp.wait("voip_state", {"calling", "remote_ringing"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"calling", "remote_ringing"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"ringing"}, timeout=8)
     if str(soft.get("dialed_target") or soft.get("callee") or "") != ctx.args.ha_extension:
         raise AssertionError(f"HA softphone did not preserve dialed extension: {soft}")
     await ctx.esp.service("decline_call", {"reason": "qualification_cancel"})
-    await ctx.esp.wait("voip_state", {"idle"}, timeout=12)
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"idle", "cancelled"}, timeout=10)
     if soft.get("active_dialogs") or soft.get("pending_call_ids"):
         raise AssertionError(f"HA softphone kept SIP runtime after ESP cancel: {soft}")
@@ -495,7 +531,13 @@ async def scenario_esp_to_ha_extension_cancel(ctx: LiveContext) -> None:
 async def scenario_esp_to_self_extension_busy(ctx: LiveContext) -> None:
     await ctx.cleanup()
     await ctx.esp.service("start_call", {"dest": ctx.args.esp_extension})
-    await ctx.esp.wait("voip_state", {"idle"}, timeout=12)
+    await ctx.esp.wait_predicate(
+        lambda: str(ctx.esp.values.get("voip_destination") or "") == ctx.args.esp_extension
+        or norm(ctx.esp.values.get("voip_last_reason")) in {"busy", "declined", "cancelled", "routing_failed", "local_hangup"},
+        f"ESP self-extension attempt to {ctx.args.esp_extension}",
+        timeout=4,
+    )
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     reason = norm(ctx.esp.values.get("voip_last_reason"))
     if reason not in {"busy", "declined", "cancelled", "routing_failed", "local_hangup"}:
         raise AssertionError(f"ESP self-extension terminal reason was not explicit: {ctx.esp.snapshot()}")
@@ -507,9 +549,9 @@ async def scenario_esp_to_trunk_cancel(ctx: LiveContext) -> None:
         raise RuntimeError("trunk scenario requires --allow-trunk")
     await ctx.cleanup()
     await ctx.esp.service("start_call", {"dest": ctx.args.trunk_number})
-    await ctx.esp.wait("voip_state", {"calling", "remote_ringing"}, timeout=18)
+    await wait_esp_voip_state(ctx, {"calling", "remote_ringing"}, timeout=18)
     await ctx.esp.service("decline_call", {"reason": "qualification_cancel"})
-    await ctx.esp.wait("voip_state", {"idle"}, timeout=18)
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=18)
     snap = ctx.esp.snapshot()
     if str(snap.get("destination") or "") not in {ctx.args.trunk_number, ""}:
         raise AssertionError(f"ESP trunk terminal target was rewritten unexpectedly: {snap}")

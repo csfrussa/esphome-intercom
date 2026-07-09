@@ -249,6 +249,17 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('last_sip_event="LOCAL_CONFERENCE_JOIN"', call_service)
         self.assertIn("RouteAction.GROUP", call_service[call_service.index("if not use_trunk and"):])
 
+    def test_ha_softphone_starts_ring_group_without_sip_self_invite(self) -> None:
+        init_py = INIT.read_text()
+        runtime = BACKEND.read_text()
+        call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
+        self.assertIn('"async_start_ring_group_from_ha"', call_service)
+        self.assertIn("await start_ring_group(route.entry)", call_service)
+        self.assertIn("return", call_service[call_service.index('if group_type == "ring":') : call_service.index('if group_type == "conference":')])
+        self.assertIn('hass.data.setdefault(DOMAIN, {})["async_start_ring_group_from_ha"] = _start_ring_group_from_ha', runtime)
+        self.assertIn('last_sip_event="LOCAL_RING_GROUP"', runtime)
+        self.assertIn("fmt.nominal_frame_bytes <= 1200", runtime)
+
     def test_ha_direct_esp_calls_prefer_roster_audio_profile_over_device_registry(self) -> None:
         init_py = INIT.read_text()
         call_service = init_py[init_py.index("async def _handle_sip_call_target_service") : init_py.index("async def _handle_sip_route_service")]
@@ -424,6 +435,11 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         for field in ("connected_party", "answered_by"):
             self.assertIn(f'"{field}": store.get("{field}", "")', state)
             self.assertIn(f'"{field}",', terminal)
+
+    def test_esp_origin_forward_to_same_source_host_is_rejected(self) -> None:
+        self.assertIn("peer_target.host == invite.source_host", self.source)
+        self.assertIn('SipInviteResult(486, "Busy Here"', self.source)
+        self.assertIn("decline_reason=TerminalReason.BUSY.value", self.source)
 
     def test_softphone_settings_changes_do_not_emit_call_lifecycle_events(self) -> None:
         websocket = WEBSOCKET_API.read_text()
