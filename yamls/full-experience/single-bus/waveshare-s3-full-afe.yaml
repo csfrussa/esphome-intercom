@@ -302,15 +302,13 @@ esp_afe:
   # - SE/BSS worker preference stays on Core 1 at the official low priority.
   # - GMF AFE manager feed/fetch tasks stay on different cores, as Espressif's
   #   own GMF troubleshooting recommends for avoiding AFE task WDT.
-  # - WS3 qualification keeps the heavy feed path on core 1 and fetch on core 0
-  #   to avoid concentrating AFE feed, audio_stack and network work on core 0.
   task_core: 1
   task_priority: 5
   ringbuf_size: 8
-  feed_task_core: 1
+  feed_task_core: 0
   feed_task_priority: 5
   feed_task_stack_size: 3072
-  fetch_task_core: 0
+  fetch_task_core: 1
   fetch_task_priority: 5
   fetch_task_stack_size: 3072
   se_enabled: true
