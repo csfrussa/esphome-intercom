@@ -308,6 +308,7 @@ class LiveContext:
             pending = list(last.get("pending_call_ids") or [])
             state = norm(self.esp.values.get("voip_state"))
             if active == 0 and not pending and state == "idle":
+                await asyncio.sleep(0.8)
                 return
             await asyncio.sleep(0.3)
         raise AssertionError(f"cleanup did not settle HA/ESP runtime: softphone={last} esp={self.esp.snapshot()}")
