@@ -1,78 +1,105 @@
-# Example Lovelace Dashboard for VoIP Stack
+# Example three-column Lovelace dashboard for VoIP Stack.
 #
-# Each device section includes the VoIP Stack card plus common device controls:
-# volume, mic gain, AEC on/off, AEC mode select, auto answer, wake word,
-# mic mute, and speaker mute.
+# Replace every <...> placeholder with the device or entity ID exposed by your
+# installation. The mini-media-player rows are optional and require the
+# mini-media-player custom card.
 
-title: VoIP Stack
-views:
-  - title: VoIP Stack
-    icon: mdi:phone-voip
-    cards: []
-    type: sections
-    max_columns: 2
-    sections:
-      # --- Home Assistant softphone ---
-      - type: grid
+title: VoIP
+icon: mdi:phone-voip
+type: sections
+max_columns: 3
+sections:
+  # ESP phone with its most useful audio controls grouped below the call card.
+  - type: grid
+    cards:
+      - type: custom:voip-stack-card
+        device_id: <first_esp_device_id>
+        name: First ESP Phone
+        mode: esp_mirror
+        show_protocol: true
+        show_extended_info: true
+      - type: vertical-stack
         cards:
-          - type: custom:voip-stack-card
-            mode: ha_softphone
-            name: Home Assistant Phone
-          - type: markdown
-            title: Rubrica VoIP
-            content: |-
-              {% set raw = state_attr('sensor.voip_phonebook', 'roster_json') %}
-              {% set roster = raw | from_json if raw else {'contacts': []} %}
-              {% set contacts = roster.get('contacts', []) %}
-              {% if contacts | count == 0 %}
-              _Nessun contatto disponibile._
-              {% else %}
-              {% for contact in contacts if contact.get('enabled', true) %}
-              {% set name = contact.get('name') or contact.get('id') or 'Senza nome' %}
-              {% set extension = contact.get('extension', '') %}
-              {% set number = contact.get('number', '') %}
-              <ha-icon icon="{{ 'mdi:phone-classic' if number else 'mdi:account-voice' }}"></ha-icon> **{{ name }}**
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - number.<first_esp>_master_volume
+              - type: custom:mini-media-player
+                entity: media_player.<first_esp>
+                group: true
+                artwork: none
+                volume_stateless: false
+                hide:
+                  icon: true
+                  info: true
+                  power: true
+                  source: true
+                  sound_mode: true
+                  controls: true
+                  progress: true
+                  runtime: true
+                  volume_level: true
+                  mute: true
+              - number.<first_esp>_mic_gain
 
-              {% if extension %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Interno: `{{ extension }}`<br>
-              {% endif %}{% if number %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Numero: [{{ number }}](tel:{{ number | replace(' ', '') }})<br>
-              {% endif %}
-              {% endfor %}
-              {% endif %}
-      # --- VA + VoIP device (with AEC mode select) ---
-      - type: grid
+  - type: grid
+    cards:
+      - type: custom:voip-stack-card
+        device_id: <second_esp_device_id>
+        name: Second ESP Phone
+        mode: esp_mirror
+        show_protocol: true
+        show_extended_info: true
+      - type: vertical-stack
         cards:
-          - type: custom:voip-stack-card
-            entity_id: <your_device_id>
-            name: My ESP Phone
           - type: entities
+            show_header_toggle: false
             entities:
-              - entity: number.<your_device>_master_volume
-                name: Volume
-              - entity: number.<your_device>_mic_gain
-                name: Mic gain
-              - entity: switch.<your_device>_echo_cancellation
-              - entity: select.<your_device>_aec_mode
-              - entity: switch.<your_device>_auto_answer
-              - entity: button.<your_device>_restart
-              - entity: sensor.<your_device>_contacts
-              - entity: select.<your_device>_wake_word
-              - entity: switch.<your_device>_wake_word
-              - entity: switch.<your_device>_mic_mute
-              - entity: switch.<your_device>_speaker_mute
-      # --- VoIP-only device (no VA, no wake word) ---
-      - type: grid
-        cards:
-          - type: custom:voip-stack-card
-            entity_id: <your_device_id>
-            name: Room Phone
-          - type: entities
-            entities:
-              - entity: number.<your_device>_master_volume
-                name: Volume
-              - entity: number.<your_device>_mic_gain
-                name: Mic gain
-              - entity: switch.<your_device>_echo_cancellation
-              - entity: switch.<your_device>_auto_answer
-              - entity: button.<your_device>_restart
-              - entity: switch.<your_device>_mic_mute
-              - entity: switch.<your_device>_speaker_mute
+              - number.<second_esp>_master_volume
+              - type: custom:mini-media-player
+                entity: media_player.<second_esp>
+                group: true
+                artwork: none
+                volume_stateless: false
+                hide:
+                  icon: true
+                  info: true
+                  power: true
+                  source: true
+                  sound_mode: true
+                  controls: true
+                  progress: true
+                  runtime: true
+                  volume_level: true
+                  mute: true
+              - number.<second_esp>_mic_gain
+
+  # Live view of the canonical VoIP roster, alphabetically sorted. A contact
+  # may expose a name only, an extension, a number, or both.
+  - type: grid
+    cards:
+      - type: markdown
+        title: VoIP Phonebook
+        content: |-
+          {% set raw = state_attr('sensor.voip_phonebook', 'roster_json') %}
+          {% set roster = raw | from_json if raw else {'contacts': []} %}
+          {% set contacts = roster.get('contacts', []) | sort(attribute='name', case_sensitive=false) %}
+
+          {% if contacts | count == 0 %}
+          _No contacts available._
+          {% else %}
+          {% for contact in contacts if contact.get('enabled', true) %}
+          {% set name = contact.get('name') or contact.get('id') or 'Unnamed' %}
+          {% set extension = contact.get('extension', '') %}
+          {% set number = contact.get('number', '') %}
+
+          <ha-icon icon="{{ 'mdi:phone-classic' if number else 'mdi:account-voice' }}"></ha-icon> **{{ name }}**
+
+          {% if extension %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Extension: `{{ extension }}`<br>
+          {% endif %}{% if number %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Number: [{{ number }}](tel:{{ number | replace(' ', '') }})<br>
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+
+cards: []
+# theme: <your_dashboard_theme>

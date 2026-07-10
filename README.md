@@ -17,6 +17,8 @@ or a trunk when you want the system to grow.
 
 Under the hood: full-duplex I2S support, ESP-SR echo cancellation, optional dual-mic Speech Enhancement, Espressif rate conversion, audio mixing with ducking, native Home Assistant integration and a Lovelace card.
 
+![VoIP Dashboard](docs/images/voip-dashboard-phonebook.png)
+
 ![Dashboard Demo](docs/images/dashboard.gif)
 
 _Runtime demo: browser softphone, ESP call state and audio controls moving together._
