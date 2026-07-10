@@ -55,6 +55,7 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 | Standard SIP endpoints | Enable the local registrar and create an account with `voip_stack.create_account`. | VoIP phones, ATAs, Zoiper, Linphone, baresip or pjsua can register to HA and become phonebook contacts. |
 | External outbound calls | Configure an optional SIP trunk and add contacts with numbers, or use the card dial pad. | HA or ESP devices can call external numbers through the trunk. |
 | Incoming external calls | Register a provider/PBX trunk. | External calls can ring HA, follow DTMF routing, or be forwarded to ESPs/local contacts. |
+| Call a Home Assistant voice assistant | Enable **Include voice assistant**, choose an Assist pipeline and assign an extension. | ESPs, registered SIP phones and external trunk callers can hold a multi-turn voice conversation with that pipeline. |
 | Voice Assistant calling | Enable the optional VoIP Stack Assist intents. | Satellites can call contacts, answer, decline or hang up by voice. |
 
 ## Endpoint Capabilities
@@ -154,10 +155,11 @@ snapshot:
 - ESP structured contacts use `ip` and `transport`; the richer
   `address`/`sip_uri` schema belongs to the HA phonebook.
 - The phonebook is an outbound dial plan, not an inbound caller allowlist.
-- In-dialog re-INVITE/hold is rejected with `488` while the established call
-  remains active; full hold/resume renegotiation is not implemented.
-- Trunk digit routing consumes RTP `telephone-event`; SIP INFO bodies are not a
-  digit input.
+- A hold or media-changing in-dialog re-INVITE is rejected with `488` while the
+  established call remains active. HA may acknowledge an unchanged session
+  refresh without rerouting; full hold/resume renegotiation is not implemented.
+- Trunk digit routing accepts RTP `telephone-event` and standard SIP INFO DTMF;
+  acoustic in-band tones are not decoded.
 - Disabling the parent audio processor switch is an explicit raw-microphone
   bypass on the same microphone surface.
 
@@ -178,7 +180,8 @@ VoIP Stack has four main pieces:
 - **ESP device**: a lightweight local SIP phone. It owns its call state,
   microphone, speaker and local phonebook mirror.
 - **Home Assistant**: SIP softphone plus router, bridge, resampler, central
-  phonebook publisher, local SIP registrar and optional trunk client.
+  phonebook publisher, local SIP registrar, optional trunk client and optional
+  native Assist pipeline destination.
 - **Phonebook**: the shared dial plan. It contains names, numbers, SIP
   endpoints, softphone registrations and trunk-routed contacts.
 - **Lovelace card**: the UI for the HA softphone or for mirroring/controlling
@@ -203,6 +206,7 @@ The phonebook merges:
 - Home Assistant itself as a softphone target;
 - manual contacts created with HA services;
 - local SIP endpoint accounts registered to HA;
+- the optional native Assist pipeline destination;
 - trunk-routed phone targets and group entries when configured.
 
 A contact has one required field: `name`. Everything else is optional and
@@ -473,13 +477,15 @@ Recommended first setup:
   multihomed hosts or routed networks.
 - **Assist intents**: enable if you want Home Assistant Assist phrases such as
   call, answer, decline and hang up.
-- **Include voice assistant**: optionally publishes Home Assistant's native
-  Assist pipeline as a SIP destination. When enabled, the next step uses HA's
-  native pipeline selector and asks for the extension; no extension is assumed
-  or reserved by default. Calls may
-  come from ESP endpoints, registered clients, trunks or unregistered SIP
-  callers. Choose the pipeline for the generated VoIP satellite from its
-  **Assistant** select entity in Home Assistant.
+- **Include voice assistant**: optionally publishes the selected Home Assistant
+  Assist pipeline as a phonebook destination. The next step lets you use HA's
+  preferred pipeline or choose a specific one, and asks for its extension; both
+  fields are empty until you enable the feature and no extension is reserved by
+  default. Calls may come from ESP endpoints, registered clients, trunks or
+  other compatible SIP callers. VoIP Stack passes the SIP caller identity to
+  Assist, streams the configured STT/conversation/TTS pipeline over the same
+  open call, and returns to listening after every reply. This does not create a
+  second SIP listener or a separate Assist satellite.
 - **Debug mode**: keep disabled for normal use. Enable only while collecting
   SIP/RTP diagnostics.
 - **Trunk enabled**: leave disabled unless you want HA to register to a
@@ -1693,9 +1699,12 @@ The Voice Assistant, Micro Wake Word, and VoIP call path coexist on the same har
   optional ESPHome `voice_quiet` action for "shut up" style assistant silence.
 - **Assist by telephone**: enable **Include voice assistant** in the VoIP Stack
   config flow, choose a native Assist pipeline and assign its SIP extension.
-  The route is independent of the conversation provider, so it works with
-  Codex Assist and other HA conversation agents alike. The generated satellite
-  select entity can still switch pipelines later without reconfiguration.
+  The pipeline becomes a normal phonebook destination. It receives the caller
+  identity, speaks first, listens through its configured STT provider, replies
+  through its configured TTS provider and keeps the conversation open until the
+  SIP caller hangs up. The route is independent of the conversation provider,
+  so it works with Codex Assist and other HA conversation agents alike without
+  Home Assistant's separate VoIP integration or another SIP port.
 - **Runtime AEC mode switching**: An `AEC Mode` select entity in Home Assistant lets you switch between SR and VOIP AEC modes at runtime without reflashing
 - **Weather at a glance**: Current conditions, temperature, and 5-day forecast updated automatically (touch displays)
 - **Mood-aware responses**: The assistant shows different expressions (happy, neutral, angry) based on the tone of its reply. Requires instructing your LLM to prepend an ASCII emoticon (`:-)` `:-(` `:-|`) to each response based on its tone

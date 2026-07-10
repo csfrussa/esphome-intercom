@@ -323,6 +323,7 @@ class SipTrunkClient:
             on_invite=manager.on_invite,
             on_terminated=manager.on_terminated,
             on_register=getattr(manager, "on_register", None),
+            on_info=getattr(manager, "on_info", None),
             send_override=self.send_response,
             signaling_transport=self.transport_name,
         )

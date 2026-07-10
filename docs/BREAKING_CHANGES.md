@@ -23,9 +23,9 @@ automation, SIP client or card fork.
   ordinary hold or codec replacement, receives `488 Not Acceptable Here`. The
   original media/dialog remains established and a later BYE still terminates
   it normally.
-- **DTMF route input.** HA acknowledges SIP INFO as a supported method, but the
-  trunk digit router consumes RTP `telephone-event`; it does not parse INFO
-  bodies as digits.
+- **DTMF route input.** The trunk digit router accepts RTP `telephone-event`
+  and standard SIP INFO DTMF. It does not decode acoustic in-band tones from
+  the call audio.
 - **Processor bypass semantics.** When the configured audio processor is
   enabled, unavailable processed output fails closed to silence. Disabling the
   parent AEC switch explicitly publishes converted raw microphone audio on the

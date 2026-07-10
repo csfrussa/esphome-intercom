@@ -955,6 +955,8 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     media_sessions = registry.softphone_media
     preanswered = registry.preanswered
     softphone_store = _ha_softphone_store(hass)
+    if not call_id and len(registry.bridge_clients) == 1:
+        call_id = next(iter(registry.bridge_clients))
     if not call_id and len(clients) == 1:
         call_id = next(iter(clients))
     if not call_id and len(pending) == 1:
@@ -963,10 +965,33 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         call_id = next(iter(media_sessions))
     if not call_id:
         call_id = str(softphone_store.get("call_id") or "").strip()
-    caller = str(softphone_store.get("caller") or softphone_store.get("last_terminal_caller") or "")
-    callee = str(softphone_store.get("callee") or softphone_store.get("last_terminal_callee") or "")
-    peer_name = str(softphone_store.get("peer_name") or softphone_store.get("last_terminal_peer_name") or "")
-    direction = str(softphone_store.get("direction") or softphone_store.get("last_terminal_direction") or "")
+    active_session = (
+        registry.sessions.get(registry.resolve_session_id(call_id)) if call_id else None
+    )
+    caller = str(
+        (active_session.caller if active_session is not None else "")
+        or softphone_store.get("caller")
+        or softphone_store.get("last_terminal_caller")
+        or ""
+    )
+    callee = str(
+        (active_session.callee if active_session is not None else "")
+        or softphone_store.get("callee")
+        or softphone_store.get("last_terminal_callee")
+        or ""
+    )
+    peer_name = str(
+        callee
+        or softphone_store.get("peer_name")
+        or softphone_store.get("last_terminal_peer_name")
+        or ""
+    )
+    direction = str(
+        ("incoming" if active_session is not None else "")
+        or softphone_store.get("direction")
+        or softphone_store.get("last_terminal_direction")
+        or ""
+    )
     bridge_handled, bridge_source_call_id, bridge_dest_call_id, bridge_client, bridge_server_bye = await _terminate_sip_bridge(hass, call_id)
     if bridge_handled:
         call_id = bridge_source_call_id
@@ -1548,13 +1573,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bool(entry.data.get(CONF_ASSIST_INTENTS, False)),
     )
     if assist_cfg[CONF_ASSIST_ENDPOINT_ENABLED]:
-        from .assist_companion import async_prepare_assist_companion
+        from homeassistant.components.assist_pipeline.pipeline import async_get_pipeline
 
-        hass.data[DOMAIN]["assist_sip_port"] = await async_prepare_assist_companion(
+        pipeline_id = assist_cfg[CONF_ASSIST_PIPELINE]
+        pipeline = async_get_pipeline(
             hass,
-            stack_sip_port=cfg["sip_port"],
-            pipeline_id=assist_cfg[CONF_ASSIST_PIPELINE],
+            pipeline_id=None if pipeline_id in {"", "preferred"} else pipeline_id,
         )
+        assist_cfg["name"] = pipeline.name
     if not await _async_start_sip_endpoint(hass):
         raise ConfigEntryError(
             f"Failed to bind SIP port {cfg['sip_port']}. Another SIP "

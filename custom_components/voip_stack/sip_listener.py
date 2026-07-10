@@ -88,6 +88,7 @@ class _CompletedRequest:
 InviteHandler = Callable[[SipInvite], Awaitable[SipInviteResult]]
 TerminateHandler = Callable[[str, str], Awaitable[None]]
 RegisterHandler = Callable[[sip.SipMessage, tuple[str, int], str], Awaitable[Any]]
+InfoHandler = Callable[[sip.SipMessage, tuple[str, int], str], Awaitable[None]]
 SendHandler = Callable[[bytes, tuple[str, int]], bool | None]
 TcpDialogSender = Callable[[bytes], bool | None]
 
@@ -144,6 +145,25 @@ def _same_request_transaction(
         and current_cseq.number == original_cseq.number
         and bool(current_branch)
         and current_branch == original_branch
+    )
+
+
+def _same_dialog_request(request: sip.SipMessage, dialog: _ActiveDialog, addr: tuple[str, int]) -> bool:
+    """Match a new in-dialog request, not an INVITE retransmission."""
+    try:
+        cseq = sip.parse_cseq(request.header("CSeq"))
+        from_tag = sip.extract_tag(request.header("From"))
+        to_tag = sip.extract_tag(request.header("To"))
+        remote_tag = sip.extract_tag(dialog.request.header("From"))
+    except (TypeError, ValueError, sip.SipError):
+        return False
+    return bool(
+        dialog.addr[0] == addr[0]
+        and cseq.number >= dialog.cseq
+        and from_tag
+        and from_tag == remote_tag
+        and to_tag
+        and to_tag == dialog.to_tag
     )
 
 
@@ -226,6 +246,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
         on_register: RegisterHandler | None = None,
+        on_info: InfoHandler | None = None,
         send_override: SendHandler | None = None,
         signaling_transport: str = "UDP",
     ) -> None:
@@ -238,6 +259,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.on_invite = on_invite
         self.on_terminated = on_terminated
         self.on_register = on_register
+        self.on_info = on_info
         self.send_override = send_override
         self.signaling_transport = (signaling_transport or "UDP").upper()
         self.transport: asyncio.DatagramTransport | None = None
@@ -246,6 +268,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.completed_invites: dict[str, _PendingInvite] = {}
         self.active_dialogs: dict[str, _ActiveDialog] = {}
         self.completed_byes: dict[str, _CompletedRequest] = {}
+        self.completed_infos: dict[tuple[str, int], _CompletedRequest] = {}
         self._logged_incompatible_invites: set[str] = set()
         self._request_tasks: set[asyncio.Task[None]] = set()
         self._invite_tasks: set[asyncio.Task[None]] = set()
@@ -418,6 +441,27 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             self._send_response(request, addr, 405, "Method Not Allowed")
             return
         if request.method == "INFO":
+            call_id = request.header("Call-ID")
+            info_key = (call_id, request_cseq.number)
+            completed_info = self.completed_infos.get(info_key)
+            if completed_info is not None:
+                if _same_request_transaction(request, completed_info.request, addr, completed_info.addr):
+                    self._send_response(request, addr, completed_info.status, completed_info.reason)
+                else:
+                    self._send_response(request, addr, 481, "Call/Transaction Does Not Exist")
+                return
+            dialog = self.active_dialogs.get(call_id)
+            if dialog is None or not _same_dialog_request(request, dialog, addr):
+                self._send_response(request, addr, 481, "Call/Transaction Does Not Exist")
+                return
+            if self.on_info is not None:
+                await self.on_info(request, addr, self.signaling_transport)
+            self._remember_completed(
+                self.completed_infos,
+                info_key,
+                _CompletedRequest(request, addr, 200, "OK"),
+            )
+            dialog.cseq = max(dialog.cseq, request_cseq.number + 1)
             self._send_response(request, addr, 200, "OK")
             return
         if request.method == "CANCEL":
@@ -523,6 +567,23 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             return
         if request.method == "ACK":
             return
+        call_id = request.header("Call-ID")
+        existing_dialog = self.active_dialogs.get(call_id)
+        if existing_dialog is not None:
+            retransmit = _same_request_transaction(request, existing_dialog.request, addr, existing_dialog.addr)
+            if not retransmit and not _same_dialog_request(request, existing_dialog, addr):
+                self._send_response(request, addr, 481, "Call/Transaction Does Not Exist", to_tag=existing_dialog.to_tag)
+                return
+            if not retransmit and request.body and request.body != existing_dialog.request.body:
+                self._send_response(request, addr, 488, "Not Acceptable Here", to_tag=existing_dialog.to_tag)
+                return
+            body = existing_dialog.answer_sdp.encode("utf-8") if existing_dialog.answer_sdp else b""
+            if self._send_response(request, addr, 200, "OK", body=body, to_tag=existing_dialog.to_tag):
+                if not retransmit:
+                    existing_dialog.request = request
+                    existing_dialog.addr = addr
+                    existing_dialog.cseq = request_cseq.number + 1
+            return
         invite = self._parse_invite(request, addr)
         if invite is None:
             self._send_response(request, addr, 488, "Not Acceptable Here", to_tag=sip.make_tag())
@@ -574,22 +635,6 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 decline_reason=completed_invite.decline_reason,
             )
             return
-        existing_dialog = self.active_dialogs.get(invite.call_id)
-        if existing_dialog is not None:
-            if not _same_request_transaction(request, existing_dialog.request, addr, existing_dialog.addr):
-                self._send_response(request, addr, 488, "Not Acceptable Here", to_tag=existing_dialog.to_tag)
-                return
-            body = existing_dialog.answer_sdp.encode("utf-8") if existing_dialog.answer_sdp else b""
-            self._send_response(
-                request,
-                addr,
-                existing_dialog.status,
-                existing_dialog.reason,
-                body=body,
-                to_tag=existing_dialog.to_tag,
-            )
-            return
-
         to_tag = sip.make_tag()
         pending = _PendingInvite(request, addr, to_tag, self.signaling_transport)
         self.pending_invites[invite.call_id] = pending
@@ -823,6 +868,7 @@ class SipUdpServer:
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
         on_register: RegisterHandler | None = None,
+        on_info: InfoHandler | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -834,6 +880,7 @@ class SipUdpServer:
         self.on_invite = on_invite
         self.on_terminated = on_terminated
         self.on_register = on_register
+        self.on_info = on_info
         self.transport: asyncio.DatagramTransport | None = None
         self.endpoint: SipUdpEndpoint | None = None
 
@@ -853,6 +900,7 @@ class SipUdpServer:
                     on_invite=self.on_invite,
                     on_terminated=self.on_terminated,
                     on_register=self.on_register,
+                    on_info=self.on_info,
                     signaling_transport="UDP",
                 )
                 return self.endpoint
@@ -911,6 +959,7 @@ class SipTcpServer:
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
         on_register: RegisterHandler | None = None,
+        on_info: InfoHandler | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -922,6 +971,7 @@ class SipTcpServer:
         self.on_invite = on_invite
         self.on_terminated = on_terminated
         self.on_register = on_register
+        self.on_info = on_info
         self.server: asyncio.AbstractServer | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
         self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
@@ -963,6 +1013,7 @@ class SipTcpServer:
             on_invite=self.on_invite,
             on_terminated=self.on_terminated,
             on_register=self.on_register,
+            on_info=self.on_info,
             send_override=_send,
             signaling_transport="TCP",
         )

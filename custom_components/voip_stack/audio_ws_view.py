@@ -431,6 +431,8 @@ async def _run_audio_session(
                 counters["drop_error"] += 1
                 _LOGGER.debug("HA softphone RTP RX drop: %s", err)
 
+    # Browser frames can arrive in short scheduler-driven bursts. Keep a
+    # shallow FIFO jitter buffer and consume exactly one frame per RTP tick.
     tx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
     async def ws_to_rtp() -> None:
         nonlocal sequence, timestamp
@@ -445,9 +447,6 @@ async def _run_audio_session(
                     break
             try:
                 pcm = tx_queue.get_nowait()
-                while not tx_queue.empty():
-                    pcm = tx_queue.get_nowait()
-                    counters["drop_tx_queue"] += 1
             except asyncio.QueueEmpty:
                 pcm = silence_pcm
                 counters["tx_silence_keepalive"] += 1

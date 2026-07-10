@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-LegRole = Literal["caller", "callee", "trunk", "ha_softphone", "esp", "softphone", "router"]
+LegRole = Literal["caller", "callee", "trunk", "ha_softphone", "esp", "softphone", "router", "assist"]
 TERMINAL_STATES = {
     "idle",
     "busy",

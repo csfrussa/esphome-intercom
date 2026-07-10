@@ -26,7 +26,9 @@ Home Assistant is more than a card backend:
   transport boundaries;
 - HA can optionally register one provider/PBX trunk;
 - HA can optionally act as a local registrar for standard SIP endpoints such as
-  Zoiper, Linphone, baresip or pjsua.
+  Zoiper, Linphone, baresip or pjsua;
+- HA can optionally expose one native Assist pipeline as a local phonebook
+  destination.
 
 The default install needs no user dialplan. Direct ESP calls happen when the
 phonebook has complete direct SIP endpoint data. Logical names, numeric targets
@@ -42,6 +44,7 @@ ESP voip_stack
 Home Assistant voip_stack
   HA softphone + SIP UDP/TCP endpoint + router/B2BUA + RTP relay/resampler
   + central phonebook + optional local registrar + optional trunk client
+  + optional native Assist pipeline media consumer
 
 Lovelace card
   ESP mirror mode: ESPHome entities and ESP buttons
@@ -55,7 +58,8 @@ Component ownership:
 - `esp_audio_stack`, native ESPHome microphone/speaker components, `esp_aec`
   and `esp_afe` own physical audio capture/playback and processing.
 - `voip_stack` owns HA-side SIP dialogs, route decisions, trunk
-  registration, local SIP endpoint registrations and HA softphone media sessions.
+  registration, local SIP endpoint registrations, HA softphone media sessions
+  and the optional Assist call adapter.
 - Cards never own the call FSM. They render state pushed by the owner and send
   user commands back to that owner.
 
@@ -83,10 +87,12 @@ For outbound INVITE failures, HA sends the required ACK for non-2xx final
 responses before surfacing the terminal reason. This keeps failed calls SIP
 compliant rather than relying on retry side effects.
 
-The current profile does not renegotiate an established session. ESP and HA
-reject an in-dialog re-INVITE (including hold) with `488 Not Acceptable Here`
-without replacing or tearing down the original dialog. Existing media and a
-later BYE continue to use the original negotiated session.
+The current profile does not renegotiate established media. ESP and HA reject a
+hold or media-changing in-dialog re-INVITE with `488 Not Acceptable Here`
+without replacing or tearing down the original dialog. HA may acknowledge a
+session refresh whose SDP is unchanged, without rerunning routing or replacing
+media. Existing media and a later BYE continue to use the original negotiated
+session.
 
 ## Media
 
@@ -119,9 +125,15 @@ reframes between the formats. If conversion is not possible, the bridge fails
 with `media_incompatible`.
 
 Inbound provider trunk calls are also two-leg calls. HA answers the trunk leg to
-receive DTMF routing digits when a standard digit channel exists, then
-originates a normal SIP call to HA softphone or a local phonebook target and
-bridges RTP with the same relay.
+receive DTMF routing digits through RTP `telephone-event` or standard SIP INFO,
+then originates a normal SIP call to HA softphone or a local phonebook target
+and bridges RTP with the same relay.
+
+An Assist destination is local to the HA SIP endpoint, so it does not create a
+second SIP dialog or listener. VoIP Stack decodes the negotiated incoming RTP,
+feeds continuous 16 kHz mono PCM to HA's selected pipeline, and encodes streamed
+TTS chunks back into the call's negotiated RTP format. The SIP Call-ID and HA
+conversation ID remain stable across repeated listen/reply turns until hangup.
 
 Current non-goals are RTCP, SRTP and SIP/TLS on ESP devices. The supported
 trust boundary is a local LAN/VPN plus Home Assistant and ESPHome API security.
@@ -189,6 +201,7 @@ ESP-origin routing:
 HA-router routing:
 
 - HA target: ring HA softphone;
+- Assist target: answer locally and run the configured native HA pipeline;
 - ESP target: forward/bridge to the ESP SIP endpoint;
 - registered local SIP endpoint: forward to its REGISTER Contact;
 - external/public number: trunk if registered, otherwise reject

@@ -1065,6 +1065,120 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sip.parse_message(sent[-1]).status_code, 200)
         self.assertEqual(terminated, [("pending-call", "cancelled"), ("active-call", "remote_hangup")])
 
+    async def test_listener_accepts_in_dialog_reinvite_without_restarting_route(self) -> None:
+        sent: list[bytes] = []
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40000,
+            supported_formats=[audio_format.AudioFormat(16000, "s16le", 1, 20)],
+            on_invite=lambda _: None,  # type: ignore[arg-type]
+            send_override=lambda data, _addr: sent.append(data),
+        )
+        addr = ("192.168.1.48", 5060)
+        original = sip.parse_message(
+            sip.build_request(
+                "INVITE",
+                "sip:Casa@192.168.1.10",
+                [
+                    ("Via", "SIP/2.0/UDP 192.168.1.48;branch=z9hG4bKinitial"),
+                    ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                    ("To", "<sip:Casa@192.168.1.10>"),
+                    ("Call-ID", "reinvite-call"),
+                    ("CSeq", "1 INVITE"),
+                    ("Content-Type", "application/sdp"),
+                ],
+                b"v=0\r\n",
+            )
+        )
+        endpoint.active_dialogs["reinvite-call"] = sip_listener._ActiveDialog(
+            original, addr, "local", 2, "UDP", answer_sdp="v=0\r\n"
+        )
+        reinvite = sip.build_request(
+            "INVITE",
+            "sip:Casa@192.168.1.10",
+            [
+                ("Via", "SIP/2.0/UDP 192.168.1.48;branch=z9hG4bKrefresh"),
+                ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                ("To", "<sip:Casa@192.168.1.10>;tag=local"),
+                ("Call-ID", "reinvite-call"),
+                ("CSeq", "2 INVITE"),
+                ("Content-Type", "application/sdp"),
+            ],
+            b"v=0\r\n",
+        )
+        await endpoint._handle_datagram(reinvite, addr)
+        response = sip.parse_message(sent[-1])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, b"v=0\r\n")
+        self.assertIn("reinvite-call", endpoint.active_dialogs)
+
+        media_change = sip.build_request(
+            "INVITE",
+            "sip:Casa@192.168.1.10",
+            [
+                ("Via", "SIP/2.0/UDP 192.168.1.48;branch=z9hG4bKhold"),
+                ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                ("To", "<sip:Casa@192.168.1.10>;tag=local"),
+                ("Call-ID", "reinvite-call"),
+                ("CSeq", "3 INVITE"),
+                ("Content-Type", "application/sdp"),
+            ],
+            b"v=0\r\na=sendonly\r\n",
+        )
+        await endpoint._handle_datagram(media_change, addr)
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 488)
+        self.assertIn("reinvite-call", endpoint.active_dialogs)
+
+    async def test_listener_delivers_in_dialog_sip_info_dtmf(self) -> None:
+        sent: list[bytes] = []
+        received: list[str] = []
+
+        async def on_info(request, _addr, _transport) -> None:
+            received.append(dtmf.parse_sip_info_digit(request.header("Content-Type"), request.body))
+
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40000,
+            supported_formats=[audio_format.AudioFormat(16000, "s16le", 1, 20)],
+            on_invite=lambda _: None,  # type: ignore[arg-type]
+            on_info=on_info,
+            send_override=lambda data, _addr: sent.append(data),
+        )
+        addr = ("192.168.1.48", 5060)
+        original = sip.parse_message(
+            sip.build_request(
+                "INVITE",
+                "sip:Casa@192.168.1.10",
+                [
+                    ("Via", "SIP/2.0/UDP 192.168.1.48;branch=z9hG4bKinitial"),
+                    ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                    ("To", "<sip:Casa@192.168.1.10>"),
+                    ("Call-ID", "info-call"),
+                    ("CSeq", "1 INVITE"),
+                ],
+            )
+        )
+        endpoint.active_dialogs["info-call"] = sip_listener._ActiveDialog(original, addr, "local", 2, "UDP")
+        info = sip.build_request(
+            "INFO",
+            "sip:Casa@192.168.1.10",
+            [
+                ("Via", "SIP/2.0/UDP 192.168.1.48;branch=z9hG4bKinfo"),
+                ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                ("To", "<sip:Casa@192.168.1.10>;tag=local"),
+                ("Call-ID", "info-call"),
+                ("CSeq", "2 INFO"),
+                ("Content-Type", "application/dtmf-relay"),
+            ],
+            b"Signal=6\r\nDuration=160\r\n",
+        )
+        await endpoint._handle_datagram(info, addr)
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 200)
+        self.assertEqual(received, ["6"])
+        await endpoint._handle_datagram(info, addr)
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 200)
+        self.assertEqual(received, ["6"])
+
     def test_listener_bye_uses_contact_as_target_and_from_as_identity(self) -> None:
         sent: list[bytes] = []
         endpoint = sip_listener.SipUdpEndpoint(

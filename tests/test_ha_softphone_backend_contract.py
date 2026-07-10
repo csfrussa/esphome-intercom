@@ -129,7 +129,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         audio_ws = (ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py").read_text()
         self.assertIn("tx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)", audio_ws)
         self.assertIn("pcm = tx_queue.get_nowait()", audio_ws)
-        self.assertIn("while not tx_queue.empty():", audio_ws)
+        self.assertNotIn("while not tx_queue.empty():", audio_ws)
         self.assertIn("payload = rtp_encoder.encode(pcm)", audio_ws)
         self.assertIn("tx_queue.put_nowait(pcm)", audio_ws)
         self.assertNotIn("await asyncio.wait_for(tx_queue.get(), timeout=frame_delay)", audio_ws)

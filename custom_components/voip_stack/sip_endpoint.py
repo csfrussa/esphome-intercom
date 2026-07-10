@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from .audio_format import AudioFormat
-from .sip_listener import InviteHandler, RegisterHandler, SipTcpServer, SipUdpServer, TerminateHandler
+from .sip_listener import InfoHandler, InviteHandler, RegisterHandler, SipTcpServer, SipUdpServer, TerminateHandler
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ class SipEndpointManager:
         on_invite: InviteHandler,
         on_terminated: TerminateHandler | None = None,
         on_register: RegisterHandler | None = None,
+        on_info: InfoHandler | None = None,
         udp_enabled: bool = True,
         tcp_enabled: bool = True,
     ) -> None:
@@ -62,6 +63,7 @@ class SipEndpointManager:
         self.on_invite = on_invite
         self.on_terminated = on_terminated
         self.on_register = on_register
+        self.on_info = on_info
         self.udp_enabled = bool(udp_enabled)
         self.tcp_enabled = bool(tcp_enabled)
         self.udp_server: SipUdpServer | None = None
@@ -91,6 +93,7 @@ class SipEndpointManager:
                 on_invite=self.on_invite,
                 on_terminated=self.on_terminated,
                 on_register=self.on_register,
+                on_info=self.on_info,
             )
             if not await udp.start():
                 return False
@@ -107,6 +110,7 @@ class SipEndpointManager:
                 on_invite=self.on_invite,
                 on_terminated=self.on_terminated,
                 on_register=self.on_register,
+                on_info=self.on_info,
             )
             if not await tcp.start():
                 if udp is not None:

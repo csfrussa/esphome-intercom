@@ -31,7 +31,7 @@ from .const import (
 
 
 def entry_assist_config(entry: ConfigEntry | None = None) -> dict:
-    """Return the optional native Assist SIP endpoint configuration."""
+    """Return the optional local Assist pipeline endpoint configuration."""
     data = entry.data if entry is not None else {}
     return {
         CONF_ASSIST_ENDPOINT_ENABLED: bool(data.get(CONF_ASSIST_ENDPOINT_ENABLED, False)),

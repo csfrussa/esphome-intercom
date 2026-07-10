@@ -112,15 +112,17 @@ The HA registrar authenticates REGISTER and publishes the endpoint's current
 Contact. It does not make registered accounts the only callers HA or an ESP can
 receive. Use network policy when an installation needs that restriction.
 
-## Hold Or Other Re-INVITE
+## Hold Or Media-Changing Re-INVITE
 
 1. A call is already established with its original negotiated media.
-2. One peer sends an in-dialog INVITE, for example to signal hold or replace a
-   codec.
+2. One peer sends an in-dialog INVITE whose SDP signals hold or changes media.
 3. The ESP or HA returns `488 Not Acceptable Here`.
 4. The established dialog and RTP selection remain active; no second call
    state is created.
 5. Either peer can later send BYE and both sides clean up the original call.
+
+HA may answer an in-dialog session refresh with unchanged SDP using the
+existing answer. It does not rerun the dial plan or create a second call.
 
 ## Registered SIP Endpoint To HA
 

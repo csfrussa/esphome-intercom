@@ -28,6 +28,28 @@ call and audio paths for everyday use.
 - 🧹 Endpoint departure, reboot and roster-service timing are handled
   automatically, so stale contacts and missed phonebook pushes are less likely.
 
+## 🗣️ Call Home Assistant Assist By Phone
+
+Enable **Include voice assistant**, choose HA's preferred Assist pipeline or a
+specific one, and assign an extension. The selected assistant appears in the
+same phonebook used by every other destination; no extension is assumed or
+reserved automatically.
+
+- 📞 ESP phones, locally registered SIP clients, direct compatible SIP callers
+  and external callers arriving through a trunk can call the assistant.
+- 👋 The assistant receives the SIP caller identity as its first turn and can
+  greet first. A matching phonebook name is used when available; otherwise the
+  original caller string or number is preserved.
+- 🔁 After speaking, it listens for the caller, runs STT and the conversation
+  agent, streams the TTS reply back into the same call, and repeats until the
+  caller hangs up. Conversation context is retained between turns.
+- 🧩 VoIP Stack runs the selected native HA pipeline, so its existing STT,
+  conversation agent, TTS, language and voice settings remain authoritative.
+  Piper, Wyoming, cloud providers, Codex Assist and other HA agents use the same
+  route without provider-specific code.
+- 🏠 No separate Home Assistant VoIP integration, second SIP port or generated
+  Assist satellite is required.
+
 ## 🎛️ Lovelace Card
 
 - 🪞 ESP mirror cards keep their original meaning: each card represents one ESP
@@ -103,13 +125,16 @@ last participant leaves.
   bounded.
 - Unsupported hold or codec-changing re-INVITE requests receive `488 Not
   Acceptable Here` without destroying the call already in progress.
+- Incoming digit routing accepts both RTP `telephone-event` and standard SIP
+  INFO DTMF, including four-digit trunk destinations entered at human speed.
 - Ring-group legs, conference members, RTP ports, registrations and transaction
   caches all have explicit limits instead of growing without bound.
 
 ## 🔊 Audio And ESP Real-Time Performance
 
 - Browser audio has one owner per call and uses stateful codecs, absolute pacing
-  and bounded queues.
+  and bounded queues. A short FIFO jitter buffer smooths Chrome microphone
+  bursts instead of discarding adjacent speech frames.
 - PCMA 8 kHz, L16 48 kHz and Opus 48 kHz paths are used where the endpoints on
   that leg support them.
 - ESP audio conversion state and working buffers are prepared outside the
@@ -123,7 +148,7 @@ last participant leaves.
 
 ## ✅ Validation
 
-- Home Assistant, integration, card and tooling: 281 tests plus 25 subtests.
+- Home Assistant, integration, card and tooling: 294 tests plus 25 subtests.
 - ESP VoIP stack: 55 tests.
 - Audio and AFE: 19 tests.
 - Runtime controller: 6 tests.
@@ -133,6 +158,10 @@ last participant leaves.
 - Real WS3 and Spotpear calls covered HA-to-ESP, ESP-to-HA, ESP-to-ESP,
   registered SIP endpoints, callers absent from the phonebook, ring groups,
   conferences, DND, Auto Answer, trunk cancellation and immediate reuse.
+- Assist validation covered a local HA-registered SIP account over Opus 48 kHz
+  and an external mobile caller over trunk PCMA 8 kHz. The external call kept
+  one conversation across three spoken turns, including a Home Assistant
+  control request, with zero RTP drops or media errors.
 - Both S3 targets completed clean ESPHome 2026.6.5 builds, concurrent OTA
   deployment and return-to-online checks.
 
@@ -145,7 +174,8 @@ development snapshot. In particular:
   and group fields belong to the HA phonebook;
 - the phonebook is an outbound dial plan, not an inbound caller allowlist;
 - full hold/resume renegotiation is not implemented;
-- trunk digit routing consumes RTP `telephone-event`, not SIP INFO bodies;
+- trunk digit routing accepts RTP `telephone-event` and SIP INFO DTMF; acoustic
+  in-band DTMF tones are not decoded;
 - ESP SIP/RTP remains plaintext and belongs on a trusted LAN or VPN, or behind
   an SBC.
 

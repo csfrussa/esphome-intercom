@@ -171,7 +171,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     async def async_step_assist(self, user_input=None):
-        """Configure the optional native Assist SIP extension."""
+        """Configure the optional local Assist pipeline extension."""
         _current_entry, existing = self._current_entry_data()
         suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
         pipeline = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()

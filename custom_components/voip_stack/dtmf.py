@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import socket
 import time
 from typing import Callable
@@ -26,6 +27,52 @@ _EVENT_DIGITS = {
     10: "*",
     11: "#",
 }
+_INFO_SIGNAL_RE = re.compile(r"(?:^|\r?\n)\s*Signal\s*=\s*([0-9*#A-D])\s*(?:\r?\n|$)", re.IGNORECASE)
+
+
+def parse_sip_info_digit(content_type: str, body: bytes) -> str:
+    """Parse one RFC 2833-style digit carried by SIP INFO."""
+    media_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    text = body.decode("ascii", errors="ignore").strip()
+    if media_type == "application/dtmf-relay":
+        match = _INFO_SIGNAL_RE.search(text)
+        return match.group(1).upper() if match else ""
+    if media_type == "application/dtmf" and text:
+        digit = text[0].upper()
+        return digit if digit in "0123456789*#ABCD" else ""
+    return ""
+
+
+async def collect_info_digits(
+    queue: asyncio.Queue[str],
+    *,
+    routes: dict[str, str],
+    timeout: float,
+    terminator: str = "",
+) -> tuple[str, str]:
+    """Collect SIP INFO digits until a route resolves or timeout expires."""
+    started = time.monotonic()
+    deadline = started + max(0.1, float(timeout))
+    buffer = ""
+    destination = ""
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            digit = await asyncio.wait_for(queue.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            break
+        buffer += digit
+        destination, terminal = _match_dtmf(buffer, routes, terminator=terminator)
+        if terminal:
+            break
+    if not destination:
+        destination = routes.get(buffer, "")
+    _LOGGER.info(
+        "SIP trunk INFO DTMF collection finished buffer=%s destination=%s elapsed_ms=%d",
+        buffer or "-",
+        destination or "-",
+        int((time.monotonic() - started) * 1000),
+    )
+    return buffer, destination
 
 
 def _match_dtmf(buffer: str, routes: dict[str, str], *, terminator: str = "") -> tuple[str, bool]:

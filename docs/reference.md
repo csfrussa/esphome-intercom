@@ -200,9 +200,17 @@ The setup flow has two layers:
 | `rtp_port` | Base HA RTP UDP port used by HA softphone media and relays. |
 | `advertise_host` | Optional Contact/SDP host override for routed, VPN, LXC, Docker or multihomed installs. |
 | `assist_intents` | Optional Assist intents for call, answer, decline and hangup. |
+| `assist_endpoint_enabled` | Publish a native HA Assist pipeline as a callable phonebook destination. Disabled by default. |
+| `assist_extension` | Explicit 1-8 digit extension for the Assist destination. No extension is assumed or reserved. |
+| `assist_pipeline` | HA pipeline ID, or `preferred` to resolve HA's preferred pipeline. The pipeline's existing STT, conversation agent, TTS, language and voice settings are used. |
 | `debug_mode` | Opt-in detailed diagnostics and bounded audio captures. Leave disabled for normal operation. |
 | `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
+
+When `assist_endpoint_enabled` is true, the setup flow asks for
+`assist_extension` and `assist_pipeline`. The resulting contact is part of the
+central phonebook/dial plan. Calls run directly against the selected HA Assist
+pipeline; no separate SIP port or Assist satellite is created.
 
 When `trunk_enabled` is true, the second step adds:
 
@@ -218,7 +226,7 @@ When `trunk_enabled` is true, the second step adds:
 | `trunk_register_expires` | REGISTER expiration in seconds. |
 | `trunk_outbound_proxy` | Optional proxy host or `sip:host:port` used as signaling next hop. |
 | `trunk_inbound_default_target` | Local target used when no DTMF extension arrives. Default `HA`. |
-| `trunk_dtmf_enabled` | Enable inbound RFC2833/telephone-event digit collection. |
+| `trunk_dtmf_enabled` | Enable inbound RFC2833/telephone-event and SIP INFO DTMF collection. Acoustic in-band tones are not decoded. |
 | `trunk_dtmf_timeout_ms` | Digit collection window. The setup UI shows seconds; internally this is stored in milliseconds. Default 3 s, maximum 10 s. `0` skips DTMF/pre-answer and uses the normal inbound dialplan. |
 | `trunk_dtmf_terminator` | Optional terminator digit such as `#`. Empty means timeout or exact phonebook extension match decides. |
 

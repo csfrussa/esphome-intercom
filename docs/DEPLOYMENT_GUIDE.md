@@ -72,6 +72,12 @@ Enable the local registrar if standard SIP endpoints should register to HA. Crea
 accounts with `voip_stack.create_account`; registered clients appear
 in the central phonebook as softphone contacts.
 
+Enable **Include voice assistant** only when a native HA Assist pipeline should
+be callable. Choose HA's preferred pipeline or a specific one and assign an
+explicit extension. The assistant becomes a normal phonebook destination and
+uses that pipeline's existing STT, conversation agent and TTS configuration;
+no second SIP listener or separate Assist satellite is deployed.
+
 ## Optional SIP Trunk
 
 The trunk is disabled by default. Leave it disabled for local-only VoIP
@@ -81,11 +87,11 @@ Enable it only when HA must register to a SIP provider or PBX. The trunk setup
 asks for provider transport, server, credentials, optional outbound proxy,
 default inbound target and optional DTMF digit collection.
 
-Inbound provider calls are answered by HA so it can collect DTMF digits when
-the provider exposes a standard digit channel. Normal mobile dialers can use
+Inbound provider calls are answered by HA so it can collect DTMF digits through
+RTP `telephone-event` or standard SIP INFO. Normal mobile dialers can use
 post-dial pauses, for example a contact that dials the provider number, waits,
-and sends `100`. If no digits arrive, HA rings the configured default target
-or HA softphone. If digits arrive, HA resolves them through central phonebook
+and sends `100`. If no digits arrive, HA rings the configured default target or
+HA softphone. If digits arrive, HA resolves them through central phonebook
 `extension` values.
 If digits arrive and do not resolve, HA terminates the answered leg with
 `route_not_found`.

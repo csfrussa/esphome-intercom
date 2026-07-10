@@ -1,4 +1,4 @@
-"""Tests for the optional native Assist SIP route."""
+"""Tests for the optional local Assist pipeline route."""
 
 import importlib.util
 from pathlib import Path
@@ -40,15 +40,14 @@ def test_virtual_assist_route_resolves_by_extension_and_name() -> None:
         id="Assist",
         name="Voice Assistant",
         extension="7319",
-        sip_uri="sip:assist@127.0.0.1:5065;transport=udp",
         ha_bridge=True,
-        metadata={"virtual_endpoint": "assist_satellite"},
+        metadata={"virtual_endpoint": "assist_pipeline"},
     )
 
     for target in ("7319", "Assist", "Voice Assistant"):
         decision = router.resolve_ha_router(target, [entry])
         assert decision.action is router.RouteAction.ASSIST
-        assert decision.sip_uri == "sip:assist@127.0.0.1:5065;transport=udp"
+        assert not decision.sip_uri
 
 
 def test_assist_extension_collision_checks_persisted_routes() -> None:

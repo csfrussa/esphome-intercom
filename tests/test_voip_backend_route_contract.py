@@ -604,7 +604,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
                 "async def _run_ring_group_call("
             )
         ]
-        after_collect = trunk_route.split("digits, destination = await collector.collect()", 1)[1]
+        self.assertIn("collect_info_digits(", trunk_route)
+        self.assertIn("DtmfCollector(", trunk_route)
+        self.assertIn("asyncio.FIRST_COMPLETED", trunk_route)
+        after_collect = trunk_route.split(
+            'bucket.setdefault("trunk_info_queues", {}).pop(invite.call_id, None)',
+            1,
+        )[1]
         self.assertIn('invite.call_id in bucket.get("trunk_closed_calls", set())', after_collect)
         self.assertIn("bridge_ports.release()", after_collect)
         self.assertIn("remote_host=invite.remote_rtp_host", trunk_route)
