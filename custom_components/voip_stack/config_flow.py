@@ -175,9 +175,10 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         _current_entry, existing = self._current_entry_data()
         suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
         pipeline = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
+        extension_key = vol.Required(CONF_ASSIST_EXTENSION, default=suggested) if suggested else vol.Required(CONF_ASSIST_EXTENSION)
         pipeline_key = vol.Required(CONF_ASSIST_PIPELINE, default=pipeline) if pipeline else vol.Required(CONF_ASSIST_PIPELINE)
         schema = vol.Schema({
-            vol.Required(CONF_ASSIST_EXTENSION, description={"suggested_value": suggested}): TextSelector(),
+            extension_key: TextSelector(),
             pipeline_key: AssistPipelineSelector(),
         })
         errors: dict[str, str] = {}
