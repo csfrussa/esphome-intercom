@@ -18,6 +18,26 @@ views:
           - type: custom:voip-stack-card
             mode: ha_softphone
             name: Home Assistant Phone
+          - type: markdown
+            title: Rubrica VoIP
+            content: |-
+              {% set raw = state_attr('sensor.voip_phonebook', 'roster_json') %}
+              {% set roster = raw | from_json if raw else {'contacts': []} %}
+              {% set contacts = roster.get('contacts', []) %}
+              {% if contacts | count == 0 %}
+              _Nessun contatto disponibile._
+              {% else %}
+              {% for contact in contacts if contact.get('enabled', true) %}
+              {% set name = contact.get('name') or contact.get('id') or 'Senza nome' %}
+              {% set extension = contact.get('extension', '') %}
+              {% set number = contact.get('number', '') %}
+              <ha-icon icon="{{ 'mdi:phone-classic' if number else 'mdi:account-voice' }}"></ha-icon> **{{ name }}**
+
+              {% if extension %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Interno: `{{ extension }}`<br>
+              {% endif %}{% if number %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Numero: [{{ number }}](tel:{{ number | replace(' ', '') }})<br>
+              {% endif %}
+              {% endfor %}
+              {% endif %}
       # --- VA + VoIP device (with AEC mode select) ---
       - type: grid
         cards:
