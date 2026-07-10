@@ -1,4 +1,4 @@
-# 2026.7.1-dev: Group Calls, Conferences And A Stronger VoIP Stack
+# 2026.7.1-dev: Assist By Phone, Groups And A Stronger VoIP Stack
 
 <!-- Canonical source for the v2026.7.1-dev GitHub release body. -->
 

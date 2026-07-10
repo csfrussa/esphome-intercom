@@ -3,7 +3,7 @@
 This page is a short release index. The complete notes for each version live in
 the linked versioned document, which is also the canonical GitHub release body.
 
-## 2026.7.1-dev: Group Calls, Conferences And A Stronger VoIP Stack
+## 2026.7.1-dev: Assist By Phone, Groups And A Stronger VoIP Stack
 
 `2026.7.1-dev` is a manual GitHub pre-release, not a HACS release. It contains
 only changes made after stable `2026.7.0`.
