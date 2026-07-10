@@ -120,28 +120,73 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-`2026.7.1-dev` builds on stable `2026.7.0` with HA-owned ring groups and
-conference rooms, extension and group settings for HA and registered SIP
-phones, and a richer Lovelace experience for both HA and ESP endpoints. ESP
-mirror cards now combine their keypad and endpoint Options view, with labels
-and controls aligned consistently.
+### 🗣️ Your Home Assistant Voice Assistant Now Has A Phone Extension
 
-Call setup, cancellation, teardown, browser audio and ESP real-time processing
-have also been hardened. The qualification covered real WS3 and Spotpear
-hardware, HA and ESP calls, registered and unknown SIP callers, groups,
-conferences, trunk cancellation, 8/16/48 kHz media and concurrent music, TTS
-and VoIP load.
+`2026.7.1-dev` can publish any native Home Assistant Assist pipeline as a
+normal destination in the shared phonebook. Choose an extension, use HA's
+preferred assistant or select a specific pipeline, then call it from an ESP
+intercom, a registered SIP phone or an external number arriving through your
+trunk.
 
-This pre-release is for manual source deployment and device testing, not for
-installation through HACS. Keep HACS pre-release tracking disabled; the normal
-HACS path remains on stable `2026.7.0`.
+The assistant receives the SIP caller identity and can greet first. It listens
+through the pipeline's existing STT provider, answers through its configured
+TTS voice and returns to listening in the same open call for a natural
+multi-turn conversation. The extension is not tied to one AI provider: OpenAI
+Conversation, Codex Assist, local agents and other compatible HA conversation
+integrations all use the same route.
 
-Read the release details:
+<p align="center">
+  <img
+    src="docs/images/voice-assistant-extension.png"
+    alt="Voice assistant extension and Assist pipeline configuration"
+    width="590"
+    style="max-width: 100%; height: auto;"
+  >
+</p>
 
-- [2026.7.1-dev complete release notes](docs/RELEASE_2026_7_1_DEV.md)
-- [Release history](docs/WHATS_NEW.md)
-- [Breaking Changes](docs/BREAKING_CHANGES.md)
-- [Stable 2026.7.0 release notes](docs/RELEASE_2026_7_0.md)
+_Pick the SIP extension yourself and route it to HA's preferred Assist pipeline
+or to a specific assistant. No extension is silently reserved._
+
+### 🏠 One Home, One Phone System
+
+- 🔔 **Ring groups:** call one contact and every available member rings; the
+  first answer wins and late answers cannot steal the call.
+- 🎙️ **Conference rooms:** Home Assistant hosts the room and can invite the
+  selected HA, ESP and registered SIP endpoints when the conference starts.
+- 📒 **One shared dial plan:** extensions, groups, ESP phones, the HA softphone,
+  registered clients, Assist pipelines and optional trunk routes all live in
+  the same phonebook.
+- 🌍 **Real SIP callers:** compatible callers do not need to be pre-approved in
+  the phonebook. Direct clients and external trunk callers can reach the
+  destinations you expose.
+
+### 🎛️ A Lovelace Card That Feels Like A Phone
+
+HA and ESP cards now offer a manual keypad for names, SIP URIs, extensions and
+numbers. ESP mirror Options bring Auto Answer, DND, extension, ring groups and
+conference settings into one aligned view while the selected ESP remains the
+real owner of its calls and settings.
+
+### ⚡ Proven Beyond The Happy Path
+
+This is running code, not a UI mock-up. Qualification covered real WS3 and
+Spotpear hardware, a public mobile call reaching Assist through the trunk,
+registered and unknown SIP callers, HA-to-ESP and ESP-to-HA calls, groups,
+conferences, cancellation and teardown races, 8/16/48 kHz media and concurrent
+music, TTS and VoIP load. Browser audio and ESP real-time paths were hardened
+along the way.
+
+> [!IMPORTANT]
+> `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field
+> testing. It is intentionally not offered through HACS; the normal HACS path
+> remains on stable `2026.7.0`.
+
+Explore the release:
+
+- 🚀 [Complete `2026.7.1-dev` release notes](docs/RELEASE_2026_7_1_DEV.md)
+- 🧭 [Release history](docs/WHATS_NEW.md)
+- ⚠️ [Breaking Changes](docs/BREAKING_CHANGES.md)
+- 📦 [Stable `2026.7.0` release notes](docs/RELEASE_2026_7_0.md)
 
 ## Breaking Changes
 
@@ -490,19 +535,6 @@ Recommended first setup:
   SIP/RTP diagnostics.
 - **Trunk enabled**: leave disabled unless you want HA to register to a
   provider/PBX account for external inbound/outbound calls.
-
-<p align="center">
-  <img
-    src="docs/images/voice-assistant-extension.png"
-    alt="Voice assistant extension and Assist pipeline configuration"
-    width="590"
-    style="max-width: 100%; height: auto;"
-  >
-</p>
-
-_The optional voice-assistant step leaves the extension under your control and
-lets you route telephone calls to HA's preferred pipeline or to a specific
-Assist pipeline._
 
 When trunk is enabled, the next step asks for provider/PBX credentials. The
 DTMF timeout controls incoming external calls: `0` skips DTMF collection and
