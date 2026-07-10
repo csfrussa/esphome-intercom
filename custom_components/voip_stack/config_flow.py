@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigEntry, ConfigFlow
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    AssistPipelineSelector,
     NumberSelector,
     NumberSelectorConfig,
     SelectSelector,
@@ -19,6 +20,7 @@ from .config_validation import extension_conflicts
 from .const import (
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_EXTENSION,
+    CONF_ASSIST_PIPELINE,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
     CONF_PHONEBOOK_CONTACTS,
@@ -155,6 +157,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 if user_input[CONF_ASSIST_ENDPOINT_ENABLED]:
                     return await self.async_step_assist()
                 self._base_input[CONF_ASSIST_EXTENSION] = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
+                self._base_input[CONF_ASSIST_PIPELINE] = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
                 if user_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
                 data = dict(user_input)
@@ -171,9 +174,12 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         """Configure the optional native Assist SIP extension."""
         _current_entry, existing = self._current_entry_data()
         suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
-        schema = vol.Schema(
-            {vol.Required(CONF_ASSIST_EXTENSION, description={"suggested_value": suggested}): TextSelector()}
-        )
+        pipeline = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
+        pipeline_key = vol.Required(CONF_ASSIST_PIPELINE, default=pipeline) if pipeline else vol.Required(CONF_ASSIST_PIPELINE)
+        schema = vol.Schema({
+            vol.Required(CONF_ASSIST_EXTENSION, description={"suggested_value": suggested}): TextSelector(),
+            pipeline_key: AssistPipelineSelector(),
+        })
         errors: dict[str, str] = {}
         if user_input is not None:
             extension = str(user_input.get(CONF_ASSIST_EXTENSION) or "").strip()
@@ -184,6 +190,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             if not errors:
                 assert self._base_input is not None
                 self._base_input[CONF_ASSIST_EXTENSION] = extension
+                self._base_input[CONF_ASSIST_PIPELINE] = str(user_input[CONF_ASSIST_PIPELINE]).strip()
                 if self._base_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
                 data = dict(self._base_input)

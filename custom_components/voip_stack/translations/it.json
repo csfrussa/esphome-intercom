@@ -27,12 +27,14 @@
       },
     "assist": {
       "title": "Interno assistente vocale",
-      "description": "Scegli l'interno SIP che chiama la pipeline Assist selezionata. Non viene imposto alcun interno predefinito.",
-      "data": {
-        "assist_extension": "Interno assistente vocale"
-      },
-      "data_description": {
-        "assist_extension": "Interno numerico da 1 a 8 cifre, univoco tra account, contatti e gruppi."
+        "description": "Scegli l'interno SIP e la pipeline Assist usati per le chiamate telefoniche. Devi scegliere un interno: VoIP Stack non ne assegna uno predefinito.",
+        "data": {
+          "assist_extension": "Interno assistente vocale",
+          "assist_pipeline": "Pipeline assistente vocale"
+        },
+        "data_description": {
+          "assist_extension": "Interno numerico da 1 a 8 cifre, univoco tra account, contatti e gruppi.",
+          "assist_pipeline": "Pipeline Assist usata per riconoscimento vocale, conversazione e sintesi vocale nelle chiamate."
       }
     },
     "trunk": {

@@ -26,6 +26,7 @@ from .config import (
 )
 from .const import (
     CONF_ASSIST_ENDPOINT_ENABLED,
+    CONF_ASSIST_PIPELINE,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
     CONF_TRUNK_AUTH_USERNAME,
@@ -1549,7 +1550,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if assist_cfg[CONF_ASSIST_ENDPOINT_ENABLED]:
         from .assist_companion import async_prepare_assist_companion
 
-        hass.data[DOMAIN]["assist_sip_port"] = await async_prepare_assist_companion(hass, stack_sip_port=cfg["sip_port"])
+        hass.data[DOMAIN]["assist_sip_port"] = await async_prepare_assist_companion(
+            hass,
+            stack_sip_port=cfg["sip_port"],
+            pipeline_id=assist_cfg[CONF_ASSIST_PIPELINE],
+        )
     if not await _async_start_sip_endpoint(hass):
         raise ConfigEntryError(
             f"Failed to bind SIP port {cfg['sip_port']}. Another SIP "

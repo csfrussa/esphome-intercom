@@ -27,12 +27,14 @@
       },
     "assist": {
       "title": "Voice assistant extension",
-      "description": "Choose the SIP extension that calls the selected Home Assistant Assist pipeline. No extension is assumed automatically.",
-      "data": {
-        "assist_extension": "Voice assistant extension"
-      },
-      "data_description": {
-        "assist_extension": "Numeric extension from 1 to 8 digits, unique across accounts, contacts and groups."
+        "description": "Choose the SIP extension and Home Assistant Assist pipeline used for telephone calls. You must choose an extension; VoIP Stack does not assign a default.",
+        "data": {
+          "assist_extension": "Voice assistant extension",
+          "assist_pipeline": "Voice assistant pipeline"
+        },
+        "data_description": {
+          "assist_extension": "Numeric extension from 1 to 8 digits, unique across accounts, contacts and groups.",
+          "assist_pipeline": "Assist pipeline used for speech recognition, conversation and text-to-speech on telephone calls."
       }
     },
     "trunk": {

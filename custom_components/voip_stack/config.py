@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from .const import (
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_EXTENSION,
+    CONF_ASSIST_PIPELINE,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -35,6 +36,7 @@ def entry_assist_config(entry: ConfigEntry | None = None) -> dict:
     return {
         CONF_ASSIST_ENDPOINT_ENABLED: bool(data.get(CONF_ASSIST_ENDPOINT_ENABLED, False)),
         CONF_ASSIST_EXTENSION: str(data.get(CONF_ASSIST_EXTENSION) or "").strip(),
+        CONF_ASSIST_PIPELINE: str(data.get(CONF_ASSIST_PIPELINE) or "").strip(),
     }
 
 

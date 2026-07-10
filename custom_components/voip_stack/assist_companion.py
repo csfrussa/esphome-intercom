@@ -55,7 +55,7 @@ async def _ensure_bridge_allowed(
     *,
     native_port: int,
     stack_sip_port: int,
-) -> None:
+) -> str:
     from voip_utils import CallInfo
     from voip_utils.sip import get_sip_endpoint
 
@@ -86,15 +86,23 @@ async def _ensure_bridge_allowed(
     state = hass.states.get(entity_id)
     if state is None or state.state != STATE_ON:
         await hass.services.async_call("switch", "turn_on", {"entity_id": entity_id}, blocking=True)
+    pipeline_unique_id = f"{device.voip_id}-pipeline"
+    pipeline_entity_id = None
+    async with asyncio.timeout(5):
+        while pipeline_entity_id is None:
+            pipeline_entity_id = er.async_get(hass).async_get_entity_id("select", _NATIVE_DOMAIN, pipeline_unique_id)
+            if pipeline_entity_id is None:
+                await asyncio.sleep(0.05)
     _LOGGER.info(
         "Native VoIP Assist bridge ready port=%s identity=%s allow_entity=%s",
         native_port,
         device.voip_id,
         entity_id,
     )
+    return pipeline_entity_id
 
 
-async def async_prepare_assist_companion(hass: HomeAssistant, *, stack_sip_port: int) -> int:
+async def async_prepare_assist_companion(hass: HomeAssistant, *, stack_sip_port: int, pipeline_id: str = "") -> int:
     """Ensure one native Assist SIP endpoint accepts the fixed B2BUA identity."""
     entry, created = await _native_entry(hass)
     if created:
@@ -111,10 +119,21 @@ async def async_prepare_assist_companion(hass: HomeAssistant, *, stack_sip_port:
     native_port = int(entry.options.get(_NATIVE_CONF_SIP_PORT, 5060))
     if native_port == int(stack_sip_port):
         raise ConfigEntryError("Native VoIP and VoIP Stack cannot listen on the same SIP port")
-    await _ensure_bridge_allowed(
+    pipeline_entity_id = await _ensure_bridge_allowed(
         hass,
         entry,
         native_port=native_port,
         stack_sip_port=stack_sip_port,
     )
+    if pipeline_id:
+        from homeassistant.components.assist_pipeline.pipeline import async_get_pipeline
+
+        pipeline_name = async_get_pipeline(hass, pipeline_id=pipeline_id).name
+        await hass.services.async_call(
+            "select",
+            "select_option",
+            {"entity_id": pipeline_entity_id, "option": pipeline_name},
+            blocking=True,
+        )
+        _LOGGER.info("Native VoIP Assist pipeline selected: %s", pipeline_name)
     return native_port
