@@ -485,11 +485,10 @@ phonebook `extension` such as `101` before HA falls back to the default target.
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
-HACS already includes this repository. You only need **Custom repositories** if
-you intentionally want to test an unreleased development branch. For example,
-while validating `dev`, add `https://github.com/n-IA-hane/esphome-intercom` as
-an **Integration** custom repository in HACS and select the development version
-explicitly. Normal users should install the published HACS entry instead.
+HACS already includes this repository, so normal installations do not need a
+Custom Repository entry. Development pre-releases such as `v2026.7.1-dev` are
+not distributed through HACS and must be tested manually from their GitHub tag
+or a fresh `dev` checkout, following the corresponding release note.
 
 #### After Every VoIP Stack Upgrade: Hard Refresh The Card Page
 
