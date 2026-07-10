@@ -128,7 +128,7 @@ async def async_prepare_assist_companion(hass: HomeAssistant, *, stack_sip_port:
     if pipeline_id:
         from homeassistant.components.assist_pipeline.pipeline import async_get_pipeline
 
-        pipeline_name = async_get_pipeline(hass, pipeline_id=pipeline_id).name
+        pipeline_name = "preferred" if pipeline_id == "preferred" else async_get_pipeline(hass, pipeline_id=pipeline_id).name
         await hass.services.async_call(
             "select",
             "select_option",

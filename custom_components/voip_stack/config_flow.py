@@ -176,7 +176,13 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
         pipeline = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
         extension_key = vol.Required(CONF_ASSIST_EXTENSION, default=suggested) if suggested else vol.Required(CONF_ASSIST_EXTENSION)
-        pipeline_key = vol.Required(CONF_ASSIST_PIPELINE, default=pipeline) if pipeline else vol.Required(CONF_ASSIST_PIPELINE)
+        # HA's native selector represents "Preferred assistant" as an empty
+        # selection, while named pipelines carry their concrete pipeline ID.
+        pipeline_key = (
+            vol.Optional(CONF_ASSIST_PIPELINE, description={"suggested_value": pipeline})
+            if pipeline and pipeline != "preferred"
+            else vol.Optional(CONF_ASSIST_PIPELINE)
+        )
         schema = vol.Schema({
             extension_key: TextSelector(),
             pipeline_key: AssistPipelineSelector(),
@@ -191,7 +197,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             if not errors:
                 assert self._base_input is not None
                 self._base_input[CONF_ASSIST_EXTENSION] = extension
-                self._base_input[CONF_ASSIST_PIPELINE] = str(user_input[CONF_ASSIST_PIPELINE]).strip()
+                self._base_input[CONF_ASSIST_PIPELINE] = str(user_input.get(CONF_ASSIST_PIPELINE) or "preferred").strip()
                 if self._base_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
                 data = dict(self._base_input)
