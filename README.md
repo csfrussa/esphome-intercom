@@ -167,17 +167,6 @@ numbers. ESP mirror Options bring Auto Answer, DND, extension, ring groups and
 conference settings into one aligned view while the selected ESP remains the
 real owner of its calls and settings.
 
-### ⚡ Proven Beyond The Happy Path
-
-This is running code, not a UI mock-up. Qualification covered real WS3 and
-Spotpear hardware, a public mobile call reaching Assist through the trunk,
-registered and unknown SIP callers, HA-to-ESP and ESP-to-HA calls, groups,
-conferences, cancellation and teardown races, 8/16/48 kHz media and concurrent
-music, TTS and VoIP load. Browser audio and ESP real-time paths were hardened
-along the way. PCMA handset calls now preserve the correct G.711 speech level,
-so Assist remains audible through the normal phone earpiece without relying on
-speakerphone.
-
 > [!IMPORTANT]
 > `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field
 > testing. It is intentionally not offered through HACS; the normal HACS path
