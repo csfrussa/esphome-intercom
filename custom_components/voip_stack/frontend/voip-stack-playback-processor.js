@@ -3,7 +3,6 @@ const FRAME_MS = Object.freeze([10, 16, 20, 32]);
 const BUFFER_CAPACITY_SECONDS = 1.28;
 const MIN_START_LATENCY_MS = 80;
 const MAX_START_LATENCY_MS = 320;
-const OVERFLOW_KEEP_LATENCY_MS = 960;
 const JITTER_SAFETY_MULTIPLIER = 4;
 const STABLE_DECAY_SECONDS = 12;
 const PLC_DECAY_PER_SAMPLE = 0.9997;
@@ -40,7 +39,7 @@ class VoipPlaybackProcessor extends AudioWorkletProcessor {
     this._capacityFrames = Math.max(8, Math.ceil((BUFFER_CAPACITY_SECONDS * 1000) / this._format.frameMs));
     this._minStartFrames = Math.max(2, Math.ceil(MIN_START_LATENCY_MS / this._format.frameMs));
     this._maxStartFrames = Math.max(this._minStartFrames, Math.ceil(MAX_START_LATENCY_MS / this._format.frameMs));
-    this._dropFrames = Math.max(this._maxStartFrames + 1, Math.ceil(OVERFLOW_KEEP_LATENCY_MS / this._format.frameMs));
+    this._dropFrames = this._maxStartFrames + 1;
     this._ring = new Float32Array(this._contextFrameSamples * this._format.channels * this._capacityFrames);
     this._read = 0;
     this._write = 0;
@@ -60,7 +59,7 @@ class VoipPlaybackProcessor extends AudioWorkletProcessor {
 
     this.port.onmessage = (event) => {
       const data = event.data;
-      if (data?.type === "audio" && data.buffer) this._push(data.buffer);
+      if (data?.type === "audio" && data.buffer) this._push(data.buffer, data.byteOffset || 0);
     };
   }
 
@@ -72,21 +71,24 @@ class VoipPlaybackProcessor extends AudioWorkletProcessor {
       if (v & 0x800000) v |= 0xff000000;
       return v / 8388608;
     }
-    if (this._format.pcmFormat === "s24le_in_s32") return view.getInt32(offset, true) / 2147483648;
+    if (this._format.pcmFormat === "s24le_in_s32") return view.getInt32(offset, true) / 8388608;
     return view.getInt32(offset, true) / 2147483648;
   }
 
-  _push(buffer) {
+  _push(buffer, byteOffset = 0) {
     const frameBytes = this._format.frameSamples * this._format.channels * this._format.bytesPerSample;
-    if (buffer.byteLength !== frameBytes) return;
+    if (byteOffset < 0 || buffer.byteLength - byteOffset !== frameBytes) return;
     const frameSamples = this._contextFrameSamples * this._format.channels;
     this._updateArrivalJitter();
     if (this._available >= frameSamples * this._dropFrames) {
-      this._read = (this._read + this._contextFrameSamples * this._format.channels) % this._ring.length;
-      this._available -= this._contextFrameSamples * this._format.channels;
-      this._framesDrop++;
+      const queuedFrames = Math.floor(this._available / frameSamples);
+      const framesToDrop = Math.max(1, queuedFrames - this._maxStartFrames);
+      const samplesToDrop = framesToDrop * frameSamples;
+      this._read = (this._read + samplesToDrop) % this._ring.length;
+      this._available -= samplesToDrop;
+      this._framesDrop += framesToDrop;
     }
-    const view = new DataView(buffer);
+    const view = new DataView(buffer, byteOffset, frameBytes);
     for (let i = 0; i < this._contextFrameSamples; i++) {
       const srcPos = i * this._format.sampleRate / sampleRate;
       const base = Math.floor(srcPos);
@@ -158,6 +160,7 @@ class VoipPlaybackProcessor extends AudioWorkletProcessor {
       this._available -= this._format.channels;
     }
 
+    if (underrunThisQuantum) this._started = false;
     this._framesOut++;
     if (currentTime - this._lastStats >= 1) {
       this._lastStats = currentTime;

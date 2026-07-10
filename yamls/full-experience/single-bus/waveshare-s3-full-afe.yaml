@@ -192,11 +192,6 @@ wifi:
 api:
   # `start_call(dest)` actions come from the runtime HA API package.
 
-# OTA update endpoint used by ESPHome Dashboard and `esphome upload`.
-
-ota:
-  - platform: esphome
-
 # USB logger. VoIP/audio domains stay visible at INFO; noisy entity domains stay
 # WARN for normal field use.
 

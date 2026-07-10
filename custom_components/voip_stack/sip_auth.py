@@ -10,6 +10,11 @@ from secrets import token_hex
 _PARAM_RE = re.compile(r'([a-zA-Z0-9_-]+)=("([^"\\]*(?:\\.[^"\\]*)*)"|[^,\s]+)')
 
 
+def sip_digest_md5(value: str) -> str:
+    """Return the MD5 hex required by the SIP Digest protocol."""
+    return hashlib.md5(value.encode(), usedforsecurity=False).hexdigest()
+
+
 def parse_digest_challenge(value: str) -> dict[str, str]:
     raw = (value or "").strip()
     if raw.lower().startswith("digest "):
@@ -41,8 +46,8 @@ def build_digest_authorization(
     digest_user = auth_username or username
     if algorithm not in {"MD5", ""}:
         raise ValueError(f"unsupported SIP digest algorithm {algorithm}")
-    ha1 = hashlib.md5(f"{digest_user}:{realm}:{password}".encode()).hexdigest()
-    ha2 = hashlib.md5(f"{method.upper()}:{uri}".encode()).hexdigest()
+    ha1 = sip_digest_md5(f"{digest_user}:{realm}:{password}")
+    ha2 = sip_digest_md5(f"{method.upper()}:{uri}")
     params = {
         "username": digest_user,
         "realm": realm,
@@ -54,10 +59,10 @@ def build_digest_authorization(
     if qop:
         cnonce = token_hex(8)
         nc = "00000001"
-        response = hashlib.md5(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}".encode()).hexdigest()
+        response = sip_digest_md5(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}")
         params.update({"qop": qop, "nc": nc, "cnonce": cnonce, "response": response})
     else:
-        params["response"] = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+        params["response"] = sip_digest_md5(f"{ha1}:{nonce}:{ha2}")
     rendered = []
     for key, val in params.items():
         if key in {"algorithm", "qop", "nc"}:
@@ -65,4 +70,3 @@ def build_digest_authorization(
         else:
             rendered.append(f'{key}="{str(val).replace(chr(34), "")}"')
     return "Digest " + ", ".join(rendered)
-

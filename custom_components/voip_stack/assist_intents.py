@@ -303,14 +303,14 @@ async def _start_call_to_ha_peer(
     dest_name: str,
 ) -> None:
     """Ask the originating ESP to call HA by its phonebook peer name."""
-    from . import _available_esphome_services
+    from .phonebook_runtime import available_esphome_services
 
     route_id = str(origin.get("route_id") or "").strip()
     if not route_id:
         raise ValueError(f"No route_id for VoIP device {origin.get('name')}")
 
     service_name = f"{route_id}_start_call"
-    if service_name not in _available_esphome_services(hass):
+    if service_name not in available_esphome_services(hass):
         raise ValueError(f"ESPHome service esphome.{service_name} is not registered")
 
     await hass.services.async_call(

@@ -6,7 +6,49 @@ import asyncio
 import contextlib
 import logging
 
+from . import sip
+
 _LOGGER = logging.getLogger(__name__)
+
+
+async def read_sip_stream_message(reader: asyncio.StreamReader) -> bytes | None:
+    """Read one bounded SIP record from a TCP stream."""
+
+    try:
+        head = await reader.readuntil(b"\r\n\r\n")
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+        return None
+    if len(head) > sip.MAX_SIP_MESSAGE_BYTES:
+        return None
+    try:
+        text = head.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    content_length = 0
+    content_length_seen = False
+    for line in text.split("\r\n")[1:]:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        if key.strip().lower() in {"content-length", "l"}:
+            if content_length_seen:
+                return None
+            content_length_seen = True
+            try:
+                content_length = int(value.strip())
+            except ValueError:
+                return None
+    if (
+        content_length < 0
+        or content_length > sip.MAX_SIP_BODY_BYTES
+        or len(head) + content_length > sip.MAX_SIP_MESSAGE_BYTES
+    ):
+        return None
+    try:
+        body = await reader.readexactly(content_length) if content_length else b""
+    except asyncio.IncompleteReadError:
+        return None
+    return head + body
 
 
 class SipTcpWriter:
@@ -31,8 +73,26 @@ class SipTcpWriter:
     async def send(self, data: bytes) -> bool:
         if self.writer.is_closing() or self.task.done():
             return False
-        await self.queue.put(data)
-        return True
+        put_task = asyncio.create_task(self.queue.put(data))
+        try:
+            done, _ = await asyncio.wait(
+                {put_task, self.task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            # queue.put() lives in its own task so it can race writer failure.
+            # Explicitly cancel it with the caller or it could enqueue a stale
+            # SIP message later, after space becomes available.
+            put_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await put_task
+            raise
+        if put_task in done:
+            return not self.task.done()
+        put_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await put_task
+        return False
 
     async def close(self) -> None:
         while not self.task.done():

@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
+import logging
 from typing import Any
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -32,8 +36,11 @@ async def async_cleanup_sip_runtime(
     async def _stop_relay() -> None:
         if relay is None or result.relay_stopped:
             return
-        await relay.stop()
-        result.relay_stopped = True
+        try:
+            await relay.stop()
+            result.relay_stopped = True
+        except Exception:
+            _LOGGER.debug("Ignoring SIP RTP relay cleanup error", exc_info=True)
 
     if relay_first:
         await _stop_relay()
@@ -42,15 +49,21 @@ async def async_cleanup_sip_runtime(
         current_task = asyncio.current_task()
         if watcher is not current_task:
             watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watcher
             result.watcher_cancelled = True
 
     if client is not None:
         if terminate_client:
-            await client.terminate()
-        await client.close()
-        result.client_closed = True
+            try:
+                await client.terminate()
+            except Exception:
+                _LOGGER.debug("Ignoring SIP client terminate cleanup error", exc_info=True)
+        try:
+            await client.close()
+            result.client_closed = True
+        except Exception:
+            _LOGGER.debug("Ignoring SIP client close cleanup error", exc_info=True)
 
     if not relay_first:
         await _stop_relay()

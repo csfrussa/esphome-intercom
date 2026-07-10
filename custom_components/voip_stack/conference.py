@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from array import array
 from dataclasses import dataclass, field
 import logging
 import random
 import time
 from typing import Any
+
+import numpy as np
 
 from homeassistant.core import HomeAssistant
 
@@ -34,18 +35,11 @@ CONFERENCE_TICK_S = CONFERENCE_FORMAT.frame_ms / 1000.0
 CONFERENCE_INACTIVITY_S = 10.0
 MAX_CONFERENCE_LEGS = 8
 CONFERENCE_RTP_FORMAT = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+_CONFERENCE_SILENCE = b"\x00" * CONFERENCE_FRAME_BYTES
 
 
 def _silence() -> bytes:
-    return b"\x00" * CONFERENCE_FRAME_BYTES
-
-
-def _clip16(value: int) -> int:
-    if value > 32767:
-        return 32767
-    if value < -32768:
-        return -32768
-    return value
+    return _CONFERENCE_SILENCE
 
 
 def mix_frames(frames: list[bytes]) -> list[bytes]:
@@ -53,25 +47,14 @@ def mix_frames(frames: list[bytes]) -> list[bytes]:
     if not frames:
         return []
     normalized = [frame if len(frame) == CONFERENCE_FRAME_BYTES else _silence() for frame in frames]
-    decoded: list[array] = []
-    for frame in normalized:
-        pcm = array("h")
-        pcm.frombytes(frame)
-        decoded.append(pcm)
-    total = array("i", [0] * (CONFERENCE_FRAME_BYTES // 2))
-    for frame in decoded:
-        for idx, sample in enumerate(frame):
-            total[idx] += int(sample)
-
+    decoded = np.stack([np.frombuffer(frame, dtype="<i2") for frame in normalized]).astype(np.int32)
+    mixed = decoded.sum(axis=0, dtype=np.int32)[None, :] - decoded
+    peaks = np.maximum(mixed.max(axis=1), -mixed.min(axis=1) - 1)
     outputs: list[bytes] = []
-    for own in decoded:
-        mix = [total[idx] - int(sample) for idx, sample in enumerate(own)]
-        peak = max(max(mix), -min(mix) - 1)
+    for row, peak in zip(mixed, peaks, strict=True):
         if peak > 32767:
-            mixed = array("h", (_clip16((value * 32767) // peak) for value in mix))
-        else:
-            mixed = array("h", mix)
-        outputs.append(mixed.tobytes())
+            row = (row.astype(np.int64) * 32767) // int(peak)
+        outputs.append(np.clip(row, -32768, 32767).astype("<i2").tobytes())
     return outputs
 
 
@@ -96,6 +79,7 @@ class _ConferenceLeg:
     sequence: int = field(default_factory=lambda: random.randrange(0, 0xFFFF))
     timestamp: int = field(default_factory=lambda: random.randrange(0, 0xFFFFFFFF))
     ssrc: int = field(default_factory=lambda: random.randrange(1, 0xFFFFFFFF))
+    rx_ssrc: int | None = None
     rx_packets: int = 0
     tx_packets: int = 0
     dropped_frames: int = 0
@@ -134,13 +118,22 @@ class ConferenceRoom:
         port_reservation = RtpPortReservation.allocate(self.hass)
         local_ports = port_reservation.ports
         transport: asyncio.DatagramTransport | None = None
+        leg: _ConferenceLeg | None = None
         try:
-            was_empty = not self.legs
             loop = asyncio.get_running_loop()
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: _ConferenceRtpProtocol(self, invite.call_id),
                 local_addr=("0.0.0.0", local_ports[0]),
             )
+            # Capacity can change while the socket bind yields to the event
+            # loop. Recheck before publishing the leg so concurrent joins
+            # cannot exceed the fixed mixer bound.
+            if self._closed or (invite.call_id not in self.legs and len(self.legs) >= MAX_CONFERENCE_LEGS):
+                transport.close()
+                transport = None
+                port_reservation.release()
+                return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
+            was_empty = not self.legs
             leg = _ConferenceLeg(
                 call_id=invite.call_id,
                 caller=invite.caller,
@@ -171,7 +164,9 @@ class ConferenceRoom:
                 invite.recv_format,
             )
             return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
-        except Exception:
+        except BaseException:
+            if leg is not None and self.legs.get(invite.call_id) is leg:
+                self.legs.pop(invite.call_id, None)
             if transport is not None:
                 transport.close()
             port_reservation.release()
@@ -189,20 +184,29 @@ class ConferenceRoom:
         if self._closed:
             port_reservation.release()
             return False
+        if call_id not in self.legs and len(self.legs) >= MAX_CONFERENCE_LEGS:
+            port_reservation.release()
+            return False
         dialog = getattr(client, "dialog", None)
         if dialog is None:
             port_reservation.release()
             return False
         local_ports = port_reservation.ports
         transport: asyncio.DatagramTransport | None = None
+        leg: _ConferenceLeg | None = None
         try:
             loop = asyncio.get_running_loop()
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: _ConferenceRtpProtocol(self, call_id),
                 local_addr=("0.0.0.0", int(dialog.local_rtp_port)),
             )
+            if self._closed or (call_id not in self.legs and len(self.legs) >= MAX_CONFERENCE_LEGS):
+                transport.close()
+                transport = None
+                port_reservation.release()
+                return False
             was_empty = not self.legs
-            self.legs[call_id] = _ConferenceLeg(
+            leg = _ConferenceLeg(
                 call_id=call_id,
                 caller=caller,
                 role=role,
@@ -217,13 +221,16 @@ class ConferenceRoom:
                 out_converter=PcmFrameConverter(CONFERENCE_FORMAT, dialog.send_format.audio_format),
                 client=client,
             )
+            self.legs[call_id] = leg
             if self._task is None or self._task.done():
                 self._task = self.hass.async_create_task(self._mix_loop())
             if was_empty:
                 self._fire("conference_started", call_id, count=1)
             self._fire("conference_participant_joined", call_id, caller=caller, count=len(self.legs))
             return True
-        except Exception:
+        except BaseException:
+            if leg is not None and self.legs.get(call_id) is leg:
+                self.legs.pop(call_id, None)
             if transport is not None:
                 transport.close()
             port_reservation.release()
@@ -235,11 +242,24 @@ class ConferenceRoom:
             return
         if leg.decoder is None:
             return
-        if addr[0] != leg.remote_host or int(addr[1]) != leg.remote_port:
+        if addr[0] != leg.remote_host:
             return
         try:
             packet = parse_packet(data)
+            if packet.payload_type != leg.decoder.fmt.payload_type:
+                raise ValueError(
+                    f"payload type {packet.payload_type} != expected {leg.decoder.fmt.payload_type}"
+                )
+            if leg.rx_ssrc is not None and packet.ssrc != leg.rx_ssrc:
+                raise ValueError(f"SSRC {packet.ssrc} != latched {leg.rx_ssrc}")
             pcm = leg.decoder.decode(packet.payload)
+            if not pcm:
+                return
+            if leg.rx_ssrc is None:
+                leg.rx_ssrc = packet.ssrc
+                leg.remote_port = int(addr[1])
+            elif int(addr[1]) != leg.remote_port:
+                leg.remote_port = int(addr[1])
             frames = leg.in_converter.convert(pcm)
         except Exception as err:
             _LOGGER.debug("Conference RTP frame ignored room=%s call_id=%s: %s", self.name, call_id, err)
@@ -266,22 +286,29 @@ class ConferenceRoom:
         if self._closed:
             return
         self._closed = True
-        for call_id in list(self.legs):
-            leg = self.legs.pop(call_id)
-            await self._dispose_leg(leg, reason=reason)
-        if self._task is not None and self._task is not asyncio.current_task():
-            self._task.cancel()
+        legs = list(self.legs.values())
+        self.legs.clear()
+        if legs:
+            await asyncio.gather(*(self._dispose_leg(leg, reason=reason) for leg in legs))
+        task = self._task
         self._task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         self._set_softphone_idle(reason)
         self._fire("conference_ended", "", count=0, reason=reason)
+        manager = self.hass.data.get(DOMAIN, {}).get("conference_manager")
+        if isinstance(manager, ConferenceManager) and manager.rooms.get(self.name) is self:
+            manager.rooms.pop(self.name, None)
 
     async def _dispose_leg(self, leg: _ConferenceLeg, *, reason: str) -> None:
         if leg.transport is not None:
             leg.transport.close()
         if leg.client is not None:
+            if reason != "remote_hangup":
+                with contextlib.suppress(Exception):
+                    await leg.client.terminate()
             with contextlib.suppress(Exception):
-                if getattr(leg.client, "dialog", None) is not None and reason != "remote_hangup":
-                    leg.client.bye_or_cancel()
                 await leg.client.close()
         if leg.port_reservation is not None:
             leg.port_reservation.release()
@@ -295,6 +322,10 @@ class ConferenceRoom:
                     await asyncio.sleep(next_deadline - now)
                 else:
                     await asyncio.sleep(0)
+                    if now - next_deadline > CONFERENCE_TICK_S:
+                        # Never replay missed mixer ticks as a burst. Late audio
+                        # is less useful than current audio in a live room.
+                        next_deadline = now
                 next_deadline += CONFERENCE_TICK_S
                 now = time.monotonic()
                 for call_id, leg in list(self.legs.items()):
@@ -327,10 +358,17 @@ class ConferenceRoom:
                             )
                             leg.transport.sendto(build_packet(packet), (leg.remote_host, leg.remote_port))
                             leg.sequence = next_sequence(leg.sequence)
-                            leg.timestamp = next_timestamp(leg.timestamp, leg.encoder.fmt.audio_format.nominal_frame_samples)
                             leg.tx_packets += 1
                         except Exception as err:
                             _LOGGER.debug("Conference RTP send failed room=%s call_id=%s: %s", self.name, leg.call_id, err)
+                        finally:
+                            # RTP timestamps describe the media clock, not the
+                            # number of successfully emitted packets. Preserve
+                            # wall-clock audio time across an encode/send drop.
+                            leg.timestamp = next_timestamp(
+                                leg.timestamp,
+                                leg.encoder.fmt.audio_format.nominal_frame_samples,
+                            )
         except asyncio.CancelledError:
             raise
         finally:
@@ -353,11 +391,13 @@ class ConferenceRoom:
             },
         }
 
-    def add_ha_softphone_leg(self) -> asyncio.Queue[bytes]:
+    def add_ha_softphone_leg(self) -> asyncio.Queue[bytes] | None:
         call_id = f"conference:{self.name}"
         existing = self.legs.get(call_id)
         if existing is not None and existing.local_out is not None:
             return existing.local_out
+        if len(self.legs) >= MAX_CONFERENCE_LEGS:
+            return None
         was_empty = not self.legs
         queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
         self.legs[call_id] = _ConferenceLeg(
@@ -379,7 +419,10 @@ class ConferenceRoom:
         return queue
 
     async def remove_ha_softphone_leg(self) -> None:
-        await self.leave(f"conference:{self.name}", reason="local_hangup")
+        removed = await self.leave(f"conference:{self.name}", reason="local_hangup")
+        if removed and not self._closed:
+            self._set_softphone_idle("local_hangup")
+            self._ha_softphone_announced = False
 
     def push_ha_audio(self, pcm: bytes) -> None:
         leg = self.legs.get(f"conference:{self.name}")
@@ -495,7 +538,7 @@ class ConferenceManager:
             return None
         return room.add_ha_softphone_leg()
 
-    def start_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes]:
+    def start_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes] | None:
         room_key = str(room_name or "").strip()
         room = self.rooms.get(room_key)
         if room is None or room._closed:
@@ -509,9 +552,18 @@ class ConferenceManager:
             room.push_ha_audio(pcm)
 
     async def leave_ha_softphone(self, room_name: str) -> None:
-        room = self.rooms.get(str(room_name or "").strip())
+        room_key = str(room_name or "").strip()
+        room = self.rooms.get(room_key)
         if room is not None:
             await room.remove_ha_softphone_leg()
+            if room._closed and self.rooms.get(room_key) is room:
+                self.rooms.pop(room_key, None)
+
+    async def close(self, reason: str = "local_hangup") -> None:
+        rooms = list(self.rooms.values())
+        self.rooms.clear()
+        if rooms:
+            await asyncio.gather(*(room.close(reason=reason) for room in rooms))
 
     def snapshot(self) -> dict[str, Any]:
         return {name: room.snapshot() for name, room in self.rooms.items()}

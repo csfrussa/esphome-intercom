@@ -75,6 +75,7 @@ def _load_module(name: str):
 
 
 conference = _load_module("conference")
+endpoint_lifecycle = _load_module("endpoint_lifecycle")
 sip_listener = _load_module("sip_listener")
 sip_client = _load_module("sip_client")
 sdp = _load_module("sdp")
@@ -145,6 +146,200 @@ class ConferenceMixerTest(unittest.TestCase):
 
 
 class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_mixer_advances_rtp_clock_when_one_send_fails(self) -> None:
+        hass = _FakeHass()
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+
+        class FailingEncoder:
+            def __init__(self) -> None:
+                self.fmt = fmt
+
+            def encode(self, _frame: bytes) -> bytes:
+                # End the loop after this one mixer quantum.
+                room.legs.clear()
+                raise RuntimeError("simulated UDP send path failure")
+
+        leg = conference._ConferenceLeg(
+            call_id="drop",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT),
+            out_converter=conference.PcmFrameConverter(conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT),
+            transport=types.SimpleNamespace(sendto=lambda *_args: None),
+            encoder=FailingEncoder(),
+            timestamp=100,
+        )
+        room.legs[leg.call_id] = leg
+
+        await room._mix_loop()
+
+        self.assertEqual(leg.timestamp, 100 + conference.CONFERENCE_FORMAT.nominal_frame_samples)
+
+    async def test_leg_disposal_closes_client_even_when_terminate_fails(self) -> None:
+        hass = _FakeHass()
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        calls: list[str] = []
+
+        class Client:
+            async def terminate(self) -> None:
+                calls.append("terminate")
+                raise RuntimeError("signaling path failed")
+
+            async def close(self) -> None:
+                calls.append("close")
+
+        class Reservation:
+            def release(self) -> None:
+                calls.append("release")
+
+        leg = conference._ConferenceLeg(
+            call_id="outbound",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT),
+            out_converter=conference.PcmFrameConverter(conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT),
+            client=Client(),
+            port_reservation=Reservation(),
+        )
+
+        await room._dispose_leg(leg, reason="local_hangup")
+
+        self.assertEqual(calls, ["terminate", "close", "release"])
+
+    async def test_room_that_closes_itself_is_removed_from_manager(self) -> None:
+        hass = _FakeHass()
+        manager = conference.conference_manager(hass, local_ip="127.0.0.1")
+        room = conference.ConferenceRoom(hass, name="Transient", local_ip="127.0.0.1")
+        manager.rooms[room.name] = room
+
+        await room.close(reason="idle")
+
+        self.assertNotIn(room.name, manager.rooms)
+
+    async def test_manager_close_waits_for_mixer_and_terminates_client_legs(self) -> None:
+        hass = _FakeHass()
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        manager.rooms[room.name] = room
+        calls: list[str] = []
+
+        class Client:
+            async def terminate(self) -> None:
+                calls.append("terminate")
+
+            async def close(self) -> None:
+                calls.append("close")
+
+        class Reservation:
+            def release(self) -> None:
+                calls.append("release")
+
+        room.legs["outbound"] = conference._ConferenceLeg(
+            call_id="outbound",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT),
+            out_converter=conference.PcmFrameConverter(conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT),
+            client=Client(),
+            port_reservation=Reservation(),
+        )
+        mixer = asyncio.create_task(asyncio.Event().wait())
+        room._task = mixer
+
+        await manager.close()
+
+        self.assertEqual(calls, ["terminate", "close", "release"])
+        self.assertTrue(mixer.done())
+        self.assertFalse(manager.rooms)
+
+    async def test_endpoint_shutdown_closes_resources_before_clearing_registry(self) -> None:
+        hass = _FakeHass()
+        registry = endpoint_lifecycle.call_registry(hass)
+        calls: list[str] = []
+
+        class Relay:
+            async def stop(self) -> None:
+                calls.append("relay_stop")
+
+        class Client:
+            async def terminate(self) -> None:
+                calls.append("client_terminate")
+
+            async def close(self) -> None:
+                calls.append("client_close")
+
+        class Manager:
+            async def close(self, *, reason: str) -> None:
+                calls.append(f"conference_{reason}")
+
+        class Endpoint:
+            def snapshot(self):
+                return types.SimpleNamespace(pending_call_ids=("pending",), active_call_ids=("active",))
+
+            def send_final_response(self, call_id, status, reason, *, decline_reason):
+                calls.append(f"final_{call_id}_{status}_{decline_reason}")
+
+            def send_bye(self, call_id):
+                calls.append(f"bye_{call_id}")
+
+            async def stop(self) -> None:
+                calls.append("endpoint_stop")
+
+        watcher = asyncio.create_task(asyncio.Event().wait())
+        runtime_task = endpoint_lifecycle.create_runtime_task(hass, asyncio.Event().wait())
+        registry.relays["call"] = Relay()
+        registry.sip_clients["call"] = Client()
+        registry.client_watchers["call"] = watcher
+        registry.upsert("call", state="in_call")
+        hass.data[const.DOMAIN]["conference_manager"] = Manager()
+        hass.data[const.DOMAIN]["sip_endpoint"] = Endpoint()
+
+        await endpoint_lifecycle.async_stop_sip_endpoint(hass)
+
+        self.assertTrue(watcher.cancelled())
+        self.assertTrue(runtime_task.cancelled())
+        self.assertIn("final_pending_503_shutdown", calls)
+        self.assertIn("bye_active", calls)
+        self.assertIn("conference_local_hangup", calls)
+        self.assertIn("relay_stop", calls)
+        self.assertIn("client_terminate", calls)
+        self.assertIn("client_close", calls)
+        self.assertEqual(calls[-1], "endpoint_stop")
+        self.assertFalse(registry.sessions)
+        self.assertFalse(registry.relays)
+        self.assertFalse(registry.sip_clients)
+
+    async def test_outbound_and_ha_legs_cannot_exceed_room_capacity(self) -> None:
+        hass = _FakeHass()
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        room.legs.update({f"leg-{index}": object() for index in range(conference.MAX_CONFERENCE_LEGS)})
+
+        class Reservation:
+            def __init__(self) -> None:
+                self.released = False
+
+            def release(self) -> None:
+                self.released = True
+
+        reservation = Reservation()
+        client = types.SimpleNamespace(dialog=object())
+        added = await room.add_client_leg(
+            call_id="overflow",
+            caller="Overflow",
+            client=client,
+            port_reservation=reservation,
+        )
+        self.assertFalse(added)
+        self.assertTrue(reservation.released)
+        self.assertIsNone(room.add_ha_softphone_leg())
+
     async def test_remote_rtp_reaches_ha_softphone_participant(self) -> None:
         hass = _FakeHass()
         manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
@@ -177,9 +372,16 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         encoded = sip_client.RtpPayloadEncoder(fmt).encode(payload)
         room.handle_rtp(
             "call-1",
-            rtp.build_packet(rtp.RtpPacket(payload_type=96, sequence=1, timestamp=0, ssrc=1, payload=encoded)),
-            ("127.0.0.1", 45678),
+            rtp.build_packet(rtp.RtpPacket(payload_type=97, sequence=0, timestamp=0, ssrc=1, payload=encoded)),
+            ("127.0.0.1", 46000),
         )
+        room.handle_rtp(
+            "call-1",
+            rtp.build_packet(rtp.RtpPacket(payload_type=96, sequence=1, timestamp=0, ssrc=1, payload=encoded)),
+            ("127.0.0.1", 46000),
+        )
+        self.assertEqual(room.legs["call-1"].remote_port, 46000)
+        self.assertEqual(room.legs["call-1"].rx_packets, 1)
         heard = await asyncio.wait_for(queue.get(), timeout=1.0)
         self.assertEqual(_first_sample(heard), 1200)
         store = hass.data[const.DOMAIN]["ha_softphone"]

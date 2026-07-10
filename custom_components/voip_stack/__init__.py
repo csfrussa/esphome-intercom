@@ -6,22 +6,17 @@ the central phonebook and routed through HA as SIP dialogs when needed.
 """
 
 import asyncio
-import contextlib
 from dataclasses import replace
 import logging
-import time
 
-from homeassistant.core import HomeAssistant, CoreState, Event, ServiceCall, callback
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED
-from homeassistant.exceptions import ConfigEntryError
-
-PLATFORMS: list[Platform] = [Platform.SENSOR]
-from homeassistant.helpers import config_validation as cv
 from homeassistant.components import network
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED, Platform
+from homeassistant.core import HomeAssistant, CoreState, Event, ServiceCall, callback
+from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers import config_validation as cv
 
 from .config import (
-    debug_mode as _debug_mode,
     entry_transport_config as _entry_transport_config,
     entry_trunk_config as _entry_trunk_config,
     transport_config as _get_transport_config,
@@ -31,15 +26,7 @@ from .config import (
 from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
-    CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
-    CONF_TRUNK_DOMAIN,
-    CONF_TRUNK_DTMF_ENABLED,
-    CONF_TRUNK_DTMF_TERMINATOR,
-    CONF_TRUNK_DTMF_TIMEOUT_MS,
-    CONF_TRUNK_ENABLED,
-    CONF_TRUNK_EXPIRES,
-    CONF_TRUNK_INBOUND_DEFAULT_TARGET,
     CONF_TRUNK_OUTBOUND_PROXY,
     CONF_TRUNK_PASSWORD,
     CONF_TRUNK_PORT,
@@ -54,21 +41,15 @@ from .const import (
     VOIP_STACK_SIP_PORT,
 )
 from .device_resolver import get_resolver, parse_voip_endpoint
-from .endpoint_lifecycle import call_registry as _call_registry
+from .endpoint_lifecycle import call_registry as _call_registry, create_runtime_task
 from .endpoint_routing import (
     device_formats as _device_formats,
-    peer_audio_formats as _peer_audio_formats,
-    peer_for_target as _peer_for_target,
-    roster_from_peers as _roster_from_peers,
     roster_entry_formats as _roster_entry_formats,
-    same_route_name as _same_route_name,
     sip_target_audio_profile as _sip_target_audio_profile,
 )
 from .fsm import (
     CallState,
     TerminalReason,
-    sip_failure_response as _sip_failure_response,
-    sip_phone_state,
     sip_public_state as _sip_public_state,
     sip_terminal_reason as _sip_terminal_reason,
 )
@@ -77,33 +58,17 @@ from .media_ports import (
     release_media_reservation as _release_media_reservation,
 )
 from .session_cleanup import async_cleanup_sip_runtime
-from .audio_format import (
-    HA_SIP_PCM_FORMATS,
-    HA_SIP_PCM_RX_FORMATS,
-    HA_SIP_PCM_TX_FORMATS,
-    HA_TRUNK_AUDIO_FORMATS,
-)
+from .audio_format import HA_TRUNK_AUDIO_FORMATS
 from .peer import Peer
-from .phonebook_runtime import (
-    available_esphome_services as _available_esphome_services,
-    format_entry_unified as _format_entry_unified,
-    push_roster_json_to_esps as _push_roster_json_to_esps,
-)
+from .phonebook_runtime import push_roster_json_to_esps as _push_roster_json_to_esps
 from .router import (
-    CallContext,
     RouteAction,
-    RouteHintSource,
-    RouteReason,
     ha_uri_for,
     resolve_ha_router,
-    route_inbound_trunk,
 )
 from .route_decisions import set_pending_route_decision as _set_pending_route_decision
-from .sip_bridge import build_invite_client_relay
 from .store import (
-    config_entry as _config_entry,
     manual_roster_entries as _manual_roster_entries,
-    sip_accounts as _sip_accounts,
 )
 from .websocket_api import (
     async_register_websocket_api,
@@ -112,13 +77,12 @@ from .websocket_api import (
     _fire_call_event,
     _async_save_ha_softphone_store,
     async_set_ha_softphone_settings,
-    _ha_softphone_dnd,
-    _ha_softphone_state,
     _ha_softphone_store,
     _set_ha_softphone_call_state,
     _set_sip_bridge_call_state,
 )
 
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -257,12 +221,32 @@ async def _terminate_sip_bridge(
 ) -> tuple[bool, str, str, bool, bool]:
     from .bridge_manager import async_terminate_sip_bridge
 
-    return await async_terminate_sip_bridge(
+    softphone = _ha_softphone_store(hass)
+    softphone_call_id = str(softphone.get("call_id") or "")
+    result = await async_terminate_sip_bridge(
         hass,
         call_id,
         terminal_reason=terminal_reason,
         send_bye=lambda source_call_id: _sip_send_bye(hass, source_call_id),
     )
+    handled, source_call_id, _dest_call_id, _client_closed, _source_bye = result
+    if handled and source_call_id == softphone_call_id:
+        reason = terminal_reason or TerminalReason.LOCAL_HANGUP.value
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.IDLE.value,
+            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            caller=str(softphone.get("caller") or ""),
+            callee=str(softphone.get("callee") or ""),
+            peer_name=str(softphone.get("peer_name") or ""),
+            direction=str(softphone.get("direction") or ""),
+            call_id=source_call_id,
+            reason=reason,
+            terminal_reason=reason,
+            origin="self" if reason == TerminalReason.LOCAL_HANGUP.value else "remote",
+            last_sip_event="SIP_BYE",
+        )
+    return result
 
 
 async def _async_emit_esp_state_event(
@@ -342,7 +326,8 @@ def _register_esp_state_event_bridge(hass: HomeAssistant) -> None:
         if new_value.lower() in ("unknown", "unavailable"):
             return
         terminal_delay = 0.2 if new_value.strip().lower() in ("idle", "ended", "declined") else 0.0
-        hass.async_create_task(
+        create_runtime_task(
+            hass,
             _async_emit_esp_state_event(hass, entity_id, new_value, old_value, terminal_delay)
         )
 
@@ -548,11 +533,18 @@ async def _resolve_source_device_from_call(hass: HomeAssistant, call: ServiceCal
     return None
 
 
-def _track_outbound_sip_client(hass: HomeAssistant, *, client, result: str, target: str, sip_uri: str = "") -> None:
+async def _track_outbound_sip_client(
+    hass: HomeAssistant,
+    *,
+    client,
+    result: str,
+    target: str,
+    sip_uri: str = "",
+) -> None:
     """Keep an outbound SIP client alive and complete early-dialog INVITEs."""
     registry = _call_registry(hass)
     if result not in {"ringing", "in_call"}:
-        hass.async_create_task(client.close())
+        await client.close()
         return
 
     registry.sip_clients[client.dialog_ids.call_id] = client
@@ -674,18 +666,21 @@ async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
     """Close stale HA softphone SIP clients before creating a new dialog."""
     from homeassistant.exceptions import ServiceValidationError
 
-    registry = _call_registry(hass)
-    store = _ha_softphone_store(hass)
-    if str(store.get("state") or "").strip().lower() in HA_SOFTPHONE_ACTIVE_STATES:
-        raise ServiceValidationError("HA softphone already has an active SIP call")
+    bucket = hass.data.setdefault(DOMAIN, {})
+    start_lock: asyncio.Lock = bucket.setdefault("ha_softphone_start_lock", asyncio.Lock())
+    async with start_lock:
+        registry = _call_registry(hass)
+        store = _ha_softphone_store(hass)
+        if str(store.get("state") or "").strip().lower() in HA_SOFTPHONE_ACTIVE_STATES:
+            raise ServiceValidationError("HA softphone already has an active SIP call")
 
-    for call_id, client in list(registry.sip_clients.items()):
-        _client, watcher = registry.detach_client(call_id)
-        try:
-            await async_cleanup_sip_runtime(client=client, watcher=watcher, terminate_client=True)
-        except Exception:
-            _LOGGER.debug("Ignoring stale HA SIP client cleanup error", exc_info=True)
-        registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
+        for call_id, client in list(registry.sip_clients.items()):
+            _client, watcher = registry.detach_client(call_id)
+            try:
+                await async_cleanup_sip_runtime(client=client, watcher=watcher, terminate_client=True)
+            except Exception:
+                _LOGGER.debug("Ignoring stale HA SIP client cleanup error", exc_info=True)
+            registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
 
 
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
@@ -746,7 +741,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
         queue = manager.join_ha_softphone(room_name) if manager is not None else None
         if queue is None:
-            _LOGGER.warning("sip_answer: conference room not found for %s", call_id)
+            _LOGGER.warning("sip_answer: conference room not found or full for %s", call_id)
             return
         registry.softphone_media[call_id] = {
             "conference_room": room_name,
@@ -1141,7 +1136,7 @@ def _register_phonebook_service_event_sync(hass: HomeAssistant) -> None:
         service = str(event.data.get("service") or "")
         if not service.endswith("_set_roster_json"):
             return
-        hass.async_create_task(_refresh_and_push_phonebook(hass))
+        create_runtime_task(hass, _refresh_and_push_phonebook(hass))
 
     bucket["phonebook_service_event_unsub"] = hass.bus.async_listen(
         EVENT_SERVICE_REGISTERED,
@@ -1233,8 +1228,11 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             room_name = route.entry.name or route.entry.id or target
             from .conference import conference_manager
 
+            await _async_prepare_ha_outbound_call(hass)
             manager = conference_manager(hass, local_ip=local_ip)
             queue = manager.start_ha_softphone(room_name)
+            if queue is None:
+                raise ServiceValidationError(f"Conference {room_name} is full")
             call_id = f"conference:{room_name}"
             registry = _call_registry(hass)
             registry.softphone_media[call_id] = {
@@ -1279,7 +1277,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             )
             ring_members = hass.data.setdefault(DOMAIN, {}).get("async_ring_conference_members")
             if ring_members is not None:
-                hass.async_create_task(ring_members(route.entry))
+                create_runtime_task(hass, ring_members(route.entry))
             _LOGGER.info("HA softphone joined conference room=%s", room_name)
             return
     route_uri = route.sip_uri
@@ -1351,7 +1349,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.metadata.get("registered"):
         await _mark_sip_account_unreachable(hass, route.entry.id)
     public_result = _sip_public_state(result)
-    _track_outbound_sip_client(
+    await _track_outbound_sip_client(
         hass,
         client=client,
         result=result,
@@ -1482,6 +1480,11 @@ async def _async_apply_assist_intents(hass: HomeAssistant, enabled: bool) -> Non
 async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -> None:
     """Shared setup logic for both YAML and config entry."""
     if hass.data.get(DOMAIN, {}).get("initialized"):
+        # Services, websocket commands and HTTP views stay registered across a
+        # config-entry reload. The event listeners are explicitly removed by
+        # unload, so restore just those idempotent subscriptions here.
+        _register_esp_state_event_bridge(hass)
+        _register_phonebook_service_event_sync(hass)
         return
 
     hass.data.setdefault(DOMAIN, {})
@@ -1545,14 +1548,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     await _async_start_sip_trunk(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    hass.async_create_task(_deferred_phonebook_sync(hass))
+    create_runtime_task(hass, _deferred_phonebook_sync(hass))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    await _async_apply_assist_intents(hass, False)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+    await _async_apply_assist_intents(hass, False)
 
     # Stop sessions / bridges before tearing down listeners; otherwise
     # orphaned transports leak sockets across config-entry reload.

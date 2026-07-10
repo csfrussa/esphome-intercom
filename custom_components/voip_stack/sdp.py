@@ -290,6 +290,7 @@ def parse_sdp(sdp: str | bytes) -> dict:
     if isinstance(sdp, bytes):
         sdp = sdp.decode("utf-8", errors="strict")
     session_conn = ""
+    media_conn = ""
     media_port = 0
     payload_order: list[int] = []
     rtpmap: dict[int, tuple[str, int, int]] = {}
@@ -297,46 +298,82 @@ def parse_sdp(sdp: str | bytes) -> dict:
     ptime = 0
     minptime = 0
     maxptime = 0
-    in_audio = False
+    saw_media = False
+    selected_audio = False
+    in_selected_audio = False
     for raw in sdp.replace("\r\n", "\n").split("\n"):
         line = raw.strip()
         if not line:
             continue
-        if line.startswith("c=IN IP4 "):
-            session_conn = line.removeprefix("c=IN IP4 ").strip()
-        elif line.startswith("m="):
-            in_audio = False
+        if line.startswith("m="):
+            saw_media = True
+            in_selected_audio = False
             parts = line.split()
-            if len(parts) >= 4 and parts[0] == "m=audio" and parts[2] == "RTP/AVP":
-                media_port = int(parts[1])
-                payload_order = [int(p) for p in parts[3:]]
-                in_audio = True
-        elif in_audio and line.startswith("a=rtpmap:"):
-            left, spec = line.removeprefix("a=rtpmap:").split(None, 1)
-            pt = int(left)
-            bits = spec.split("/")
-            if len(bits) == 2:
-                encoding, rate = bits
-                channels = 1
-            elif len(bits) == 3:
-                encoding, rate, channels_raw = bits
-                channels = int(channels_raw)
-            else:
-                raise SdpError(f"bad rtpmap: {line}")
-            rtpmap[pt] = (encoding.upper(), int(rate), channels)
-        elif in_audio and line.startswith("a=fmtp:"):
-            left, spec = line.removeprefix("a=fmtp:").split(None, 1)
-            fmtp[int(left)] = spec.strip()
-        elif in_audio and line.startswith("a=ptime:"):
-            ptime = int(line.removeprefix("a=ptime:").strip())
-        elif in_audio and line.startswith("a=minptime:"):
-            minptime = int(line.removeprefix("a=minptime:").strip())
-        elif in_audio and line.startswith("a=maxptime:"):
-            maxptime = int(line.removeprefix("a=maxptime:").strip())
-    if not session_conn or not media_port or not payload_order:
+            if selected_audio or len(parts) < 4 or parts[0] != "m=audio" or parts[2].upper() != "RTP/AVP":
+                continue
+            try:
+                candidate_port = int(parts[1])
+                candidate_payloads = [int(value) for value in parts[3:]]
+            except ValueError as err:
+                raise SdpError(f"bad audio media line: {line}") from err
+            # Port zero rejects this media stream. Continue looking for the
+            # first active RTP/AVP audio section that this single-stream bridge
+            # can actually answer.
+            if candidate_port == 0:
+                continue
+            if not 1 <= candidate_port <= 65535:
+                raise SdpError(f"bad audio media port: {candidate_port}")
+            if not candidate_payloads or any(not 0 <= pt <= 127 for pt in candidate_payloads):
+                raise SdpError(f"bad audio payload list: {line}")
+            media_port = candidate_port
+            payload_order = candidate_payloads
+            selected_audio = True
+            in_selected_audio = True
+            continue
+        if line.startswith("c="):
+            if not saw_media:
+                if not line.startswith("c=IN IP4 "):
+                    raise SdpError(f"unsupported SDP connection: {line}")
+                session_conn = line.removeprefix("c=IN IP4 ").strip()
+            elif in_selected_audio:
+                if not line.startswith("c=IN IP4 "):
+                    raise SdpError(f"unsupported SDP audio connection: {line}")
+                media_conn = line.removeprefix("c=IN IP4 ").strip()
+            continue
+        if not in_selected_audio:
+            continue
+        try:
+            if line.startswith("a=rtpmap:"):
+                left, spec = line.removeprefix("a=rtpmap:").split(None, 1)
+                pt = int(left)
+                if not 0 <= pt <= 127:
+                    raise SdpError(f"bad rtpmap payload type: {pt}")
+                bits = spec.split("/")
+                if len(bits) == 2:
+                    encoding, rate = bits
+                    channels = 1
+                elif len(bits) == 3:
+                    encoding, rate, channels_raw = bits
+                    channels = int(channels_raw)
+                else:
+                    raise SdpError(f"bad rtpmap: {line}")
+                rtpmap[pt] = (encoding.upper(), int(rate), channels)
+            elif line.startswith("a=fmtp:"):
+                left, spec = line.removeprefix("a=fmtp:").split(None, 1)
+                fmtp[int(left)] = spec.strip()
+            elif line.startswith("a=ptime:"):
+                ptime = int(line.removeprefix("a=ptime:").strip())
+            elif line.startswith("a=minptime:"):
+                minptime = int(line.removeprefix("a=minptime:").strip())
+            elif line.startswith("a=maxptime:"):
+                maxptime = int(line.removeprefix("a=maxptime:").strip())
+        except ValueError as err:
+            raise SdpError(f"bad SDP audio attribute: {line}") from err
+    connection_ip = media_conn or session_conn
+    if not connection_ip or not media_port or not payload_order:
         raise SdpError("SDP missing c=, m=audio port, or payload list")
     return {
-        "connection_ip": session_conn,
+        "connection_ip": connection_ip,
         "media_port": media_port,
         "payload_order": payload_order,
         "rtpmap": rtpmap,

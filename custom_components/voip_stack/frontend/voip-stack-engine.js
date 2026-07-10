@@ -11,6 +11,8 @@ const MODULE_VERSION = (() => {
 const { RINGTONE_REPEAT_MS, playVoipRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
+const MAX_AUDIO_WS_BUFFER_MS = 120;
+const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
 const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
 const FRAME_MS = Object.freeze([10, 16, 20, 32]);
 
@@ -32,7 +34,7 @@ class VoipStackEngine extends EventTarget {
     this._captureSink = null;
     this._source = null;
     this._playbackNode = null;
-    this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
+    this._stats = { sent: 0, received: 0, tx_dropped: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
     this._busConnection = null;
     this._busUnsub = null;
     this._callSubscribers = new Set();
@@ -46,7 +48,11 @@ class VoipStackEngine extends EventTarget {
     this._ringtoneTimer = null;
     this._audioFrameBuffer = null;
 
-    window.addEventListener("pagehide", () => this.close("pagehide"));
+    window.addEventListener("pagehide", () => {
+      this._ringtoneRequests.clear();
+      this._stopRingtone();
+      void this.close("pagehide");
+    });
   }
 
   configure(hass) {
@@ -59,9 +65,12 @@ class VoipStackEngine extends EventTarget {
     }
     this._busConnection = conn;
     conn.subscribeMessage((event) => this._onBusEvent(event), { type: WS_SUBSCRIBE_CALL_EVENTS })
-      .then((unsub) => { this._busUnsub = unsub; })
+      .then((unsub) => {
+        if (this._busConnection === conn) this._busUnsub = unsub;
+        else unsub();
+      })
       .catch((err) => {
-        this._busConnection = null;
+        if (this._busConnection === conn) this._busConnection = null;
         console.warn("voip-stack-engine: call_event subscription failed", err);
       });
   }
@@ -84,7 +93,7 @@ class VoipStackEngine extends EventTarget {
 
   statsText() {
     if (!this.active) return "";
-    return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | Buf: ${this._stats.buffered_frames} | Und: ${this._stats.underruns || 0}`;
+    return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | TxDrop: ${this._stats.tx_dropped || 0} | Buf: ${this._stats.buffered_frames} | Und: ${this._stats.underruns || 0}`;
   }
 
   _emit() {
@@ -114,7 +123,12 @@ class VoipStackEngine extends EventTarget {
     if (!data) return;
     const scope = (data.scope || "").toLowerCase();
     for (const id of [data.device_id, data.source_device_id, data.dest_device_id, data.session_device_id]) {
-      if (id) this._lastEvents.set(`${id}|${scope}`, event);
+      if (!id) continue;
+      const key = `${id}|${scope}`;
+      if (!this._lastEvents.has(key) && this._lastEvents.size >= 256) {
+        this._lastEvents.delete(this._lastEvents.keys().next().value);
+      }
+      this._lastEvents.set(key, event);
     }
     for (const cb of this._callSubscribers) {
       try { cb(event); } catch (err) { console.error("voip-stack-engine subscriber", err); }
@@ -203,22 +217,50 @@ class VoipStackEngine extends EventTarget {
     ) {
       return this._connectPromise;
     }
-    await this.close("switch");
+    await this.close("switch", true);
     this._deviceId = deviceId;
     this._callId = wantedCallId;
     this._lastSessionPayload = null;
-    this._ws = new WebSocket(await this._wsUrl(deviceId));
-    this._ws.binaryType = "arraybuffer";
-    this._ws.onmessage = (event) => this._handleMessage(event);
-    this._ws.onclose = () => this._cleanupAudio("ws_close");
-    this._connectPromise = new Promise((resolve, reject) => {
-      this._ws.onopen = resolve;
-      this._ws.onerror = () => reject(new Error("Audio WebSocket failed"));
+    const wsUrl = await this._wsUrl(deviceId);
+    if (this._deviceId !== deviceId || this._callId !== wantedCallId) {
+      throw new Error("Audio WebSocket superseded before connect");
+    }
+    const ws = new WebSocket(wsUrl);
+    this._ws = ws;
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (event) => {
+      if (this._ws === ws) this._handleMessage(event);
+    };
+    let opened = false;
+    const connectPromise = new Promise((resolve, reject) => {
+      ws.onopen = () => {
+        opened = true;
+        if (this._ws === ws) resolve();
+        else {
+          try { ws.close(); } catch (_) {}
+          reject(new Error("Audio WebSocket superseded"));
+        }
+      };
+      ws.onerror = () => reject(new Error("Audio WebSocket failed"));
+      ws.onclose = () => {
+        if (!opened) reject(new Error("Audio WebSocket closed before opening"));
+        if (this._ws !== ws) return;
+        this._ws = null;
+        void this._cleanupAudio("ws_close");
+      };
     });
+    this._connectPromise = connectPromise;
     try {
-      await this._connectPromise;
+      await connectPromise;
+    } catch (err) {
+      if (this._ws === ws) {
+        this._ws = null;
+        this._callId = "";
+        try { ws.close(); } catch (_) {}
+      }
+      throw err;
     } finally {
-      this._connectPromise = null;
+      if (this._connectPromise === connectPromise) this._connectPromise = null;
     }
   }
 
@@ -262,6 +304,19 @@ class VoipStackEngine extends EventTarget {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
     const bytes = new Uint8Array(buffer);
     if (!bytes.byteLength) return;
+    const bytesPerSample = this._txFormat?.pcmFormat === "s16le" ? 2 :
+      this._txFormat?.pcmFormat === "s24le" ? 3 : 4;
+    const bytesPerSecond = Number(this._txFormat?.sampleRate || 0) *
+      Number(this._txFormat?.channels || 0) * bytesPerSample;
+    const maxBufferedBytes = Math.max(
+      bytes.byteLength * MIN_AUDIO_WS_BUFFER_FRAMES,
+      Math.ceil(bytesPerSecond * MAX_AUDIO_WS_BUFFER_MS / 1000),
+    );
+    if (this._ws.bufferedAmount >= maxBufferedBytes) {
+      this._stats.tx_dropped++;
+      if ((this._stats.tx_dropped & 31) === 1) this._emit();
+      return;
+    }
     if (!this._audioFrameBuffer || this._audioFrameBuffer.byteLength !== bytes.byteLength + 1) {
       this._audioFrameBuffer = new Uint8Array(bytes.byteLength + 1);
     }
@@ -286,8 +341,7 @@ class VoipStackEngine extends EventTarget {
     }
     const raw = new Uint8Array(event.data);
     if (raw[0] !== WS_AUDIO || raw.byteLength < 2 || !this._playbackNode) return;
-    const payload = raw.slice(1).buffer;
-    this._playbackNode.port.postMessage({ type: "audio", buffer: payload }, [payload]);
+    this._playbackNode.port.postMessage({ type: "audio", buffer: event.data, byteOffset: 1 }, [event.data]);
     this._stats.received++;
     if ((this._stats.received & 31) === 0) this._emit();
   }
@@ -376,11 +430,20 @@ class VoipStackEngine extends EventTarget {
     return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v) ? v : "full_duplex";
   }
 
-  async _setupAudioOrAbort(deviceId, deviceInfo, reply) {
+  async _setupAudioOrAbort(deviceId, deviceInfo, reply, attachKey = "") {
     try {
+      await this._connect(deviceId, reply?.call_id || "");
       await this._setupAudio(deviceInfo, reply);
+      if (attachKey && this._sessionAttachKey !== attachKey) {
+        await this.close("superseded", true);
+        return false;
+      }
       return true;
     } catch (err) {
+      if (attachKey && this._sessionAttachKey !== attachKey) {
+        await this.close("superseded", true);
+        return false;
+      }
       console.error("voip-stack-engine: audio setup failed", err);
       this.dispatchEvent(new CustomEvent("error", { detail: err?.message || String(err) }));
       if (deviceId === HA_SOFTPHONE_DEVICE_ID && this._hass) {
@@ -415,8 +478,7 @@ class VoipStackEngine extends EventTarget {
         device_id: HA_SOFTPHONE_DEVICE_ID,
         audio_mode: target?.audio_mode || softphoneInfo?.audio_mode || "full_duplex",
       };
-      if (!await this._setupAudioOrAbort(HA_SOFTPHONE_DEVICE_ID, mediaInfo, reply)) return;
-      this._setState("IN_CALL");
+      await this.resumeSession(mediaInfo, HA_SOFTPHONE_DEVICE_ID, reply);
     }
     return reply;
   }
@@ -430,18 +492,23 @@ class VoipStackEngine extends EventTarget {
     if (this._sessionAttachPromise && this._sessionAttachKey === attachKey) {
       return this._sessionAttachPromise;
     }
+    const previousAttach = this._sessionAttachPromise;
     this._sessionAttachKey = attachKey;
-    this._sessionAttachPromise = this._resumeSessionLocked(deviceInfo, deviceId, statePayload)
-      .finally(() => {
-        if (this._sessionAttachKey === attachKey) {
-          this._sessionAttachKey = "";
-          this._sessionAttachPromise = null;
-        }
-      });
+    const attachPromise = (async () => {
+      if (previousAttach) await previousAttach.catch(() => {});
+      if (this._sessionAttachKey !== attachKey) return;
+      return this._resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey);
+    })();
+    const trackedPromise = attachPromise.finally(() => {
+      if (this._sessionAttachPromise !== trackedPromise) return;
+      this._sessionAttachPromise = null;
+      if (this._sessionAttachKey === attachKey) this._sessionAttachKey = "";
+    });
+    this._sessionAttachPromise = trackedPromise;
     return this._sessionAttachPromise;
   }
 
-  async _resumeSessionLocked(deviceInfo, deviceId, statePayload) {
+  async _resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey) {
     const callId = String(statePayload?.call_id || "");
     if (
       this._ws &&
@@ -452,31 +519,33 @@ class VoipStackEngine extends EventTarget {
       this._setState("IN_CALL");
       return;
     }
-    await this._connect(deviceId, callId);
     this._resetStats();
-    if (!await this._setupAudioOrAbort(deviceId, { ...(deviceInfo || {}), device_id: deviceId }, statePayload)) return;
+    if (!await this._setupAudioOrAbort(
+      deviceId,
+      { ...(deviceInfo || {}), device_id: deviceId },
+      statePayload,
+      attachKey,
+    )) return;
+    if (this._sessionAttachKey !== attachKey) return;
     this._setState("IN_CALL");
   }
 
   _resetStats() {
-    this._stats = { sent: 0, received: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
+    this._stats = { sent: 0, received: 0, tx_dropped: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
   }
 
-  async close(_reason = "") {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.close();
-    }
+  async close(_reason = "", preserveAttach = false) {
+    if (!preserveAttach) this._sessionAttachKey = "";
+    const ws = this._ws;
     this._ws = null;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      try { ws.close(); } catch (_) {}
+    }
     this._callId = "";
     await this._cleanupAudio("close");
   }
 
   async _cleanupAudio(_reason) {
-    this._stopRingtone();
-    if (this._hiddenTimer !== null) {
-      window.clearTimeout(this._hiddenTimer);
-      this._hiddenTimer = null;
-    }
     if (this._controlWaiter) {
       window.clearTimeout(this._controlWaiter.timer);
       this._controlWaiter.resolve(null);

@@ -12,13 +12,39 @@ from typing import Any, Awaitable, Callable
 
 from . import sip
 from .sip_auth import build_digest_authorization
-from .sip_client import _SipClientProtocol, _read_sip_stream_message
-from .sip_tcp_io import SipTcpWriter
+from .sip_client import SIP_T1, SIP_T2, _SipClientProtocol
+from .sip_tcp_io import SipTcpWriter, read_sip_stream_message as _read_sip_stream_message
+from .queue_utils import put_drop_oldest
 
 
 _LOGGER = logging.getLogger(__name__)
+_MAX_TRUNK_REQUEST_TASKS = 32
+_MAX_TRUNK_INVITE_TASKS = 24
 
 TrunkRequestHandler = Callable[[bytes, tuple[str, int]], Awaitable[None]]
+
+
+def _registration_expires(message: sip.SipMessage, default: int) -> int:
+    values = [message.header("Expires")]
+    for contact in message.header_values("Contact"):
+        for part in contact.split(";")[1:]:
+            key, separator, value = part.partition("=")
+            if separator and key.strip().lower() == "expires":
+                values.insert(0, value.strip())
+                break
+    for value in values:
+        try:
+            return max(0, min(86400, int(value)))
+        except (TypeError, ValueError):
+            continue
+    return max(0, int(default))
+
+
+def _registration_refresh_delay(configured_expires: int, expires_at: float, now: float) -> float:
+    """Refresh before the granted expiry, including short PBX bindings."""
+
+    until_expiry = max(1.0, float(expires_at) - float(now) - 10.0)
+    return max(1.0, min(float(configured_expires) * 0.8, until_expiry))
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,13 +67,17 @@ class SipTrunkClient:
         self.local_ip = local_ip
         self.local_sip_port = int(local_sip_port)
         self.transport_name = (config.transport or "udp").upper()
-        self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
-        self.responses: asyncio.Queue[sip.SipMessage] = asyncio.Queue()
+        self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue(maxsize=128)
+        self.responses: asyncio.Queue[sip.SipMessage] = asyncio.Queue(maxsize=32)
         self.protocol: _SipClientProtocol | None = None
         self.transport: asyncio.DatagramTransport | None = None
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self._tcp_writer: SipTcpWriter | None = None
+        self._tcp_connect_lock = asyncio.Lock()
+        self._reader_ready = asyncio.Event()
+        self._request_tasks: set[asyncio.Task[None]] = set()
+        self._invite_tasks: set[asyncio.Task[None]] = set()
         self.call_id = sip.make_call_id("trunk-register")
         self.local_tag = sip.make_tag()
         self.cseq = 1
@@ -67,8 +97,23 @@ class SipTrunkClient:
             self._receive_task = asyncio.create_task(self._receive_loop())
 
     @property
+    def registrar_target(self) -> tuple[str, int]:
+        proxy = str(self.config.outbound_proxy or "").strip()
+        if not proxy:
+            return self.config.server, int(self.config.port)
+        try:
+            uri = sip.parse_sip_uri(proxy if proxy.lower().startswith("sip:") else f"sip:{proxy}")
+            return uri.host, int(uri.port or self.config.port)
+        except (TypeError, ValueError, sip.SipError):
+            return proxy, int(self.config.port)
+
+    @property
     def registrar_host(self) -> str:
-        return self.config.outbound_proxy or self.config.server
+        return self.registrar_target[0]
+
+    @property
+    def registrar_port(self) -> int:
+        return self.registrar_target[1]
 
     @property
     def domain(self) -> str:
@@ -131,15 +176,17 @@ class SipTrunkClient:
             except asyncio.CancelledError:
                 pass
             self._receive_task = None
+        await self._cancel_request_tasks()
+        await self._close_inbound_transactions("local_hangup")
         self.request_handler = None
         self.inbound_endpoint = None
         if self.transport is not None:
             self.transport.close()
             self.transport = None
+        if self._tcp_writer is not None:
+            await self._tcp_writer.close()
+            self._tcp_writer = None
         if self.writer is not None:
-            if self._tcp_writer is not None:
-                await self._tcp_writer.close()
-                self._tcp_writer = None
             self.writer.close()
             try:
                 await self.writer.wait_closed()
@@ -147,6 +194,7 @@ class SipTrunkClient:
                 pass
             self.writer = None
             self.reader = None
+        self._reader_ready.clear()
 
     def _ensure_refresh_task(self) -> None:
         if self._refresh_task is None or self._refresh_task.done():
@@ -156,7 +204,11 @@ class SipTrunkClient:
         retry_delay = 30.0
         while not self._stopped:
             if self.registered and self.expires_at > 0:
-                delay = max(30.0, min(float(self.config.expires) * 0.8, max(1.0, self.expires_at - time.time() - 10.0)))
+                delay = _registration_refresh_delay(
+                    self.config.expires,
+                    self.expires_at,
+                    time.time(),
+                )
             else:
                 delay = retry_delay
             await asyncio.sleep(delay)
@@ -187,37 +239,72 @@ class SipTrunkClient:
                 retry_delay = min(300.0, retry_delay * 2.0)
 
     async def _connect_tcp(self) -> None:
-        if self.writer is not None and not self.writer.is_closing():
-            return
-        if self._tcp_writer is not None:
-            await self._tcp_writer.close()
-            self._tcp_writer = None
-        if self.writer is not None:
-            self.writer.close()
-            with contextlib.suppress(Exception):
-                await self.writer.wait_closed()
-            self.writer = None
-            self.reader = None
-        while not self.responses.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self.responses.get_nowait()
-        self.reader, self.writer = await asyncio.wait_for(
-            asyncio.open_connection(self.registrar_host, int(self.config.port)),
-            timeout=2.0,
-        )
-        self._tcp_writer = SipTcpWriter(self.writer, label=f"trunk {self.registrar_host}:{self.config.port}")
+        async with self._tcp_connect_lock:
+            if self.writer is not None and not self.writer.is_closing():
+                return
+            self._reader_ready.clear()
+            if self._tcp_writer is not None:
+                await self._tcp_writer.close()
+                self._tcp_writer = None
+            if self.writer is not None:
+                self.writer.close()
+                with contextlib.suppress(Exception):
+                    await self.writer.wait_closed()
+                self.writer = None
+                self.reader = None
+            while not self.responses.empty():
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self.responses.get_nowait()
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(self.registrar_host, self.registrar_port),
+                timeout=2.0,
+            )
+            self._tcp_writer = SipTcpWriter(self.writer, label=f"trunk {self.registrar_host}:{self.registrar_port}")
+            self._reader_ready.set()
 
     async def _send_raw(self, raw: bytes) -> None:
         if self.transport_name == "TCP":
             await self._connect_tcp()
-            assert self._tcp_writer is not None
-            await self._tcp_writer.send(raw)
+            if self._tcp_writer is None:
+                raise ConnectionError("SIP trunk TCP writer is not available")
+            if not await self._tcp_writer.send(raw):
+                raise ConnectionError("SIP trunk TCP connection is not writable")
             return
-        assert self.transport is not None
-        self.transport.sendto(raw, (self.registrar_host, int(self.config.port)))
+        if self.transport is None:
+            raise ConnectionError("SIP trunk UDP transport is not available")
+        self.transport.sendto(raw, self.registrar_target)
 
-    async def _read_response(self, timeout: float) -> sip.SipMessage | None:
-        return await asyncio.wait_for(self.responses.get(), timeout=timeout)
+    async def _read_response(
+        self,
+        timeout: float,
+        *,
+        expected_cseq: int,
+        expected_branch: str = "",
+    ) -> sip.SipMessage | None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout))
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            message = await asyncio.wait_for(self.responses.get(), timeout=remaining)
+            try:
+                cseq = sip.parse_cseq(message.header("CSeq"))
+                vias = message.header_values("Via")
+                branch = sip.parse_via(vias[0] if vias else "").branch
+                matches = (
+                    message.header("Call-ID") == self.call_id
+                    and cseq.number == expected_cseq
+                    and cseq.method == "REGISTER"
+                    and (not expected_branch or branch == expected_branch)
+                    and message.status_code is not None
+                    and message.status_code >= 200
+                )
+            except (TypeError, ValueError, sip.SipError):
+                matches = False
+            if matches:
+                return message
+            _LOGGER.debug("Ignoring stale/non-REGISTER SIP trunk response")
 
     def set_request_handler(self, handler: TrunkRequestHandler | None) -> None:
         self.request_handler = handler
@@ -242,30 +329,98 @@ class SipTrunkClient:
         self.inbound_endpoint = endpoint
         self.set_request_handler(endpoint._handle_datagram)
 
-    def send_response(self, raw: bytes, addr: tuple[str, int]) -> None:
-        if self.transport_name == "TCP":
-            if self._tcp_writer is not None:
-                self._tcp_writer.send_nowait(raw)
+    def send_response(self, raw: bytes, addr: tuple[str, int]) -> bool:
+        try:
+            if self.transport_name == "TCP":
+                if self._tcp_writer is not None:
+                    return self._tcp_writer.send_nowait(raw)
+                return False
+            if self.transport is not None:
+                self.transport.sendto(raw, addr)
+                return True
+        except (ConnectionError, OSError, RuntimeError) as err:
+            _LOGGER.debug("SIP trunk response send failed for %s:%s: %s", addr[0], addr[1], err)
+        return False
+
+    async def _close_inbound_transactions(self, reason: str) -> None:
+        endpoint = self.inbound_endpoint
+        if endpoint is None:
             return
-        if self.transport is not None:
-            self.transport.sendto(raw, addr)
+        call_ids = set(endpoint.pending_invites) | set(endpoint.active_dialogs)
+        endpoint.pending_invites.clear()
+        endpoint.completed_invites.clear()
+        endpoint.active_dialogs.clear()
+        endpoint.completed_byes.clear()
+        if endpoint.on_terminated is not None:
+            for call_id in call_ids:
+                with contextlib.suppress(Exception):
+                    await endpoint.on_terminated(call_id, reason)
+
+    async def _cancel_request_tasks(self) -> None:
+        tasks = tuple(self._request_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _remote_addr(self) -> tuple[str, int]:
         if self.writer is not None:
             peer = self.writer.get_extra_info("peername")
             if peer:
                 return (str(peer[0]), int(peer[1]))
-        return (self.registrar_host, int(self.config.port))
+        return self.registrar_target
+
+    async def _handle_request(self, raw: bytes, addr: tuple[str, int], method: str) -> None:
+        try:
+            handler = self.request_handler
+            if handler is None:
+                return
+            await handler(raw, addr)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            _LOGGER.exception(
+                "SIP trunk inbound request failed method=%s from=%s:%s error=%s",
+                method,
+                addr[0],
+                addr[1],
+                err,
+            )
+
+    def _submit_request(self, raw: bytes, addr: tuple[str, int], method: str) -> bool:
+        is_invite = method == "INVITE"
+        is_control = method in {"ACK", "BYE", "CANCEL"}
+        if (
+            len(self._request_tasks) >= _MAX_TRUNK_REQUEST_TASKS
+            or (not is_control and len(self._request_tasks) >= _MAX_TRUNK_INVITE_TASKS)
+            or (is_invite and len(self._invite_tasks) >= _MAX_TRUNK_INVITE_TASKS)
+        ):
+            _LOGGER.warning("SIP trunk inbound handler saturated; dropping %s", method)
+            return False
+        task = asyncio.create_task(self._handle_request(raw, addr, method))
+        self._request_tasks.add(task)
+        if is_invite:
+            self._invite_tasks.add(task)
+        task.add_done_callback(self._request_task_done)
+        return True
+
+    def _request_task_done(self, task: asyncio.Task[None]) -> None:
+        self._request_tasks.discard(task)
+        self._invite_tasks.discard(task)
 
     async def _receive_loop(self) -> None:
+        active_reader: asyncio.StreamReader | None = None
         try:
             while True:
                 if self.transport_name == "TCP":
                     if self.reader is None:
-                        await asyncio.sleep(0)
+                        await self._reader_ready.wait()
                         continue
-                    raw = await _read_sip_stream_message(self.reader)
+                    active_reader = self.reader
+                    raw = await _read_sip_stream_message(active_reader)
                     if raw is None:
+                        if active_reader is not self.reader:
+                            continue
                         raise ConnectionError("SIP trunk TCP connection closed")
                     addr = self._remote_addr()
                 else:
@@ -276,24 +431,19 @@ class SipTrunkClient:
                     _LOGGER.info("SIP trunk RX malformed from %s:%s: %s", addr[0], addr[1], err)
                     continue
                 if msg.is_response:
-                    await self.responses.put(msg)
+                    cseq = msg.header("CSeq").split()
+                    if msg.header("Call-ID") != self.call_id or len(cseq) != 2 or cseq[1].upper() != "REGISTER":
+                        _LOGGER.debug("SIP trunk ignored non-registration response")
+                        continue
+                    if put_drop_oldest(self.responses, msg):
+                        _LOGGER.debug("SIP trunk response queue full; dropped oldest response")
                     continue
                 _LOGGER.info("SIP trunk RX %s %s from %s:%s", msg.method, msg.uri, addr[0], addr[1])
                 self.last_sip_event = msg.method or "SIP_REQUEST"
                 if self.request_handler is None:
                     _LOGGER.warning("SIP trunk inbound request ignored: no SIP endpoint is attached")
                     continue
-                try:
-                    await self.request_handler(raw, addr)
-                except Exception as err:
-                    _LOGGER.exception(
-                        "SIP trunk inbound request failed method=%s uri=%s from=%s:%s error=%s",
-                        msg.method,
-                        msg.uri,
-                        addr[0],
-                        addr[1],
-                        err,
-                    )
+                self._submit_request(raw, addr, msg.method or "SIP_REQUEST")
         except asyncio.CancelledError:
             raise
         except Exception as err:
@@ -302,12 +452,23 @@ class SipTrunkClient:
             self.status_reason = str(err)
             _LOGGER.warning("SIP trunk receive loop stopped server=%s transport=%s error=%s", self.config.server, self.transport_name, err)
         finally:
-            if self.transport_name == "TCP":
+            if self.transport_name == "TCP" and active_reader is self.reader:
+                self._reader_ready.clear()
                 writer = self.writer
+                tx = self._tcp_writer
                 self.reader = None
                 self.writer = None
+                self._tcp_writer = None
+                if tx is not None:
+                    await tx.close()
                 if writer is not None and not writer.is_closing():
                     writer.close()
+                    with contextlib.suppress(Exception):
+                        await writer.wait_closed()
+                await self._cancel_request_tasks()
+                await self._close_inbound_transactions(
+                    "local_hangup" if self._stopped else "transport_closed"
+                )
 
     async def register(self, *, expires: int | None = None, timeout: float = 2.0) -> str:
         expires_value = int(self.config.expires if expires is None else expires)
@@ -317,12 +478,37 @@ class SipTrunkClient:
             self.cseq += 1
             request_uri = self.address_uri
             headers = self._register_headers(expires_value, auth_value=auth_value)
+            via_values = [value for key, value in headers if key.lower() == "via"]
+            expected_branch = sip.parse_via(via_values[0] if via_values else "").branch
             raw = sip.build_request("REGISTER", request_uri, headers, b"")
             await self._send_raw(raw)
             self.last_sip_event = "REGISTER"
             _LOGGER.info("SIP trunk TX REGISTER %s expires=%s", self.domain, expires_value)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(0.0, float(timeout))
+            retransmit_interval = SIP_T1
+            next_retransmit = loop.time() + retransmit_interval
             try:
-                msg = await self._read_response(timeout)
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    read_timeout = remaining
+                    if self.transport_name != "TCP":
+                        read_timeout = min(read_timeout, max(0.0, next_retransmit - loop.time()))
+                    try:
+                        msg = await self._read_response(
+                            read_timeout,
+                            expected_cseq=self.cseq,
+                            expected_branch=expected_branch,
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        if self.transport_name == "TCP" or loop.time() >= deadline:
+                            raise
+                        await self._send_raw(raw)
+                        retransmit_interval = min(retransmit_interval * 2.0, SIP_T2)
+                        next_retransmit = loop.time() + retransmit_interval
             except asyncio.TimeoutError:
                 self.registered = False
                 self.status_code = 0
@@ -368,14 +554,15 @@ class SipTrunkClient:
                     auth_value = "Authorization: " + auth_value
                 continue
             if 200 <= msg.status_code < 300:
-                self.registered = expires_value > 0
-                self.expires_at = time.time() + expires_value if self.registered else 0.0
+                granted_expires = _registration_expires(msg, expires_value)
+                self.registered = expires_value > 0 and granted_expires > 0
+                self.expires_at = time.time() + granted_expires if self.registered else 0.0
                 if self.registered:
                     _LOGGER.info(
                         "SIP trunk registered server=%s transport=%s expires=%ss status=%s %s",
                         self.config.server,
                         self.transport_name,
-                        expires_value,
+                        granted_expires,
                         msg.status_code,
                         msg.reason,
                     )

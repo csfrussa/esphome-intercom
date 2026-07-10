@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import re
 from secrets import token_hex
 from typing import Iterable
+from urllib.parse import quote, unquote
 
 
 CRLF = "\r\n"
@@ -32,7 +33,21 @@ KNOWN_UNSUPPORTED_METHODS = frozenset(
 )
 _TOKEN_SEPARATORS = set("()<>@,;:\\\"/[]?={} \t")
 _QUOTED_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
-_TAG_RE = re.compile(r"(?:^|;)tag=([^;>\s]+)")
+_TAG_RE = re.compile(r"(?:^|;)tag=([^;>\s]+)", re.IGNORECASE)
+_COMPACT_HEADER_NAMES = {
+    "call-id": "i",
+    "contact": "m",
+    "content-encoding": "e",
+    "content-length": "l",
+    "content-type": "c",
+    "from": "f",
+    "subject": "s",
+    "supported": "k",
+    "to": "t",
+    "via": "v",
+}
+_CANONICAL_HEADER_NAMES = {compact: full for full, compact in _COMPACT_HEADER_NAMES.items()}
+_SINGLETON_HEADERS = frozenset({"call-id", "cseq", "from", "to"})
 
 
 class SipError(ValueError):
@@ -69,7 +84,10 @@ class SipUri:
         host = self.host.strip()
         if not host:
             raise SipError("SIP URI requires non-empty host")
-        uri = f"sip:{user}@{host}" if user else f"sip:{host}"
+        if any(ord(ch) < 0x21 or ch in '<>"/@,;?\\' for ch in host):
+            raise SipError("SIP URI contains an invalid host")
+        safe_user = quote(user, safe="!$&'()*+,-./:;=?_~")
+        uri = f"sip:{safe_user}@{host}" if safe_user else f"sip:{host}"
         if self.port is not None:
             if not 1 <= int(self.port) <= 65535:
                 raise SipError(f"SIP URI port out of range: {self.port}")
@@ -77,7 +95,10 @@ class SipUri:
         for key, value in self.params:
             if not key:
                 continue
-            uri += f";{key}" if value is None else f";{key}={value}"
+            if not is_sip_token(key) or (value is not None and any(ord(ch) < 0x20 for ch in value)):
+                raise SipError("SIP URI contains an invalid parameter")
+            safe_value = None if value is None else quote(value, safe="!$&'()*+,-./:[]_~%")
+            uri += f";{key}" if safe_value is None else f";{key}={safe_value}"
         return uri
 
 
@@ -100,7 +121,13 @@ class SipMessage:
 
     def header_values(self, name: str) -> list[str]:
         wanted = name.lower()
-        return [value for key, value in self.headers if key.lower() == wanted]
+        canonical = _CANONICAL_HEADER_NAMES.get(wanted, wanted)
+        compact = _COMPACT_HEADER_NAMES.get(canonical)
+        return [
+            value
+            for key, value in self.headers
+            if key.lower() == canonical or (compact is not None and key.lower() == compact)
+        ]
 
     def header(self, name: str, default: str = "") -> str:
         values = self.header_values(name)
@@ -147,8 +174,12 @@ def make_branch() -> str:
 
 def parse_sip_uri(value: str) -> SipUri:
     raw = value.strip()
-    if raw.startswith("<") and ">" in raw:
-        raw = raw[1:raw.index(">")].strip()
+    if any(ch in "\r\n" for ch in raw):
+        raise SipError("SIP URI contains a line break")
+    left = raw.find("<")
+    right = raw.find(">", left + 1) if left >= 0 else -1
+    if left >= 0 and right > left + 1:
+        raw = raw[left + 1:right].strip()
     if not raw.lower().startswith("sip:"):
         raise SipError(f"not a sip URI: {value!r}")
     rest = raw[4:]
@@ -175,7 +206,11 @@ def parse_sip_uri(value: str) -> SipUri:
             params.append((key.strip(), val.strip()))
         else:
             params.append((param.strip(), None))
-    uri = SipUri(user=user.strip(), host=host.strip(), port=port, params=tuple(params))
+    try:
+        user = unquote(user.strip(), errors="strict")
+    except UnicodeDecodeError as err:
+        raise SipError("SIP URI user has invalid percent encoding") from err
+    uri = SipUri(user=user, host=host.strip(), port=port, params=tuple(params))
     str(uri)
     return uri
 
@@ -235,7 +270,7 @@ def parse_cseq(value: str) -> SipCSeq:
         raise SipError(f"bad CSeq header: {value!r}")
     number = int(parts[0])
     method = parts[1].upper()
-    if number < 0:
+    if not 0 <= number <= 0x7FFFFFFF:
         raise SipError(f"bad CSeq number: {value!r}")
     if method not in SUPPORTED_METHODS:
         raise SipError(f"unsupported CSeq method {method}")
@@ -288,12 +323,27 @@ def parse_message(data: bytes) -> SipMessage:
             raise SipError(f"malformed SIP header: {line!r}")
         key, value = line.split(":", 1)
         key = key.strip()
-        if not key:
-            raise SipError("empty SIP header name")
-        headers.append((key, value.strip()))
+        if not is_sip_token(key):
+            raise SipError("invalid SIP header name")
+        value = value.strip()
+        if any(ord(ch) < 0x20 and ch != "\t" for ch in value):
+            raise SipError("invalid control character in SIP header")
+        headers.append((key, value))
 
-    content_lengths = [v for k, v in headers if k.lower() == "content-length"]
-    content_length = int(content_lengths[-1]) if content_lengths else 0
+    header_counts: dict[str, int] = {}
+    for key, _value in headers:
+        canonical = _CANONICAL_HEADER_NAMES.get(key.lower(), key.lower())
+        header_counts[canonical] = header_counts.get(canonical, 0) + 1
+    if any(header_counts.get(name, 0) > 1 for name in _SINGLETON_HEADERS):
+        raise SipError("ambiguous duplicate SIP dialog header")
+
+    content_lengths = [v for k, v in headers if k.lower() in {"content-length", "l"}]
+    if len(content_lengths) > 1:
+        raise SipError("ambiguous SIP Content-Length")
+    try:
+        content_length = int(content_lengths[0]) if content_lengths else 0
+    except ValueError as err:
+        raise SipError("invalid SIP Content-Length") from err
     if content_length < 0 or content_length > MAX_SIP_BODY_BYTES:
         raise SipError("invalid SIP Content-Length")
     if len(body_tail) < content_length:
@@ -310,6 +360,8 @@ def parse_message(data: bytes) -> SipMessage:
         code = int(parts[1])
         if not 100 <= code <= 699:
             raise SipError(f"SIP status code out of range: {code}")
+        if any(ord(ch) < 0x20 for ch in parts[2]):
+            raise SipError("invalid SIP reason phrase")
         return SipMessage(status_code=code, reason=parts[2], headers=tuple(headers), body=body)
 
     if len(parts) != 3 or parts[2] != SIP_VERSION:
@@ -317,6 +369,8 @@ def parse_message(data: bytes) -> SipMessage:
     method = parts[0].upper()
     if not is_sip_token(method):
         raise SipError(f"malformed SIP method {method!r}")
+    if "<" in parts[1] or ">" in parts[1]:
+        raise SipError("SIP request URI must not use name-address syntax")
     parse_sip_uri(parts[1])
     return SipMessage(method=method, uri=parts[1], headers=tuple(headers), body=body)
 
@@ -325,7 +379,9 @@ def _render_headers(headers: Iterable[tuple[str, str]], body: bytes) -> str:
     out: list[str] = []
     saw_content_length = False
     for key, value in headers:
-        if key.lower() == "content-length":
+        if not is_sip_token(str(key)) or any(ord(ch) < 0x20 and ch != "\t" for ch in str(value)):
+            raise SipError("invalid SIP header")
+        if key.lower() in {"content-length", "l"}:
             saw_content_length = True
             value = str(len(body))
         out.append(f"{key}: {value}")
@@ -339,6 +395,8 @@ def build_request(method: str, uri: str | SipUri, headers: Iterable[tuple[str, s
     if method not in SUPPORTED_METHODS:
         raise SipError(f"unsupported SIP method {method}")
     uri_text = str(uri)
+    if "<" in uri_text or ">" in uri_text:
+        raise SipError("SIP request URI must not use name-address syntax")
     parse_sip_uri(uri_text)
     body = body or b""
     head = f"{method} {uri_text} {SIP_VERSION}{CRLF}{_render_headers(headers, body)}"
@@ -348,6 +406,8 @@ def build_request(method: str, uri: str | SipUri, headers: Iterable[tuple[str, s
 def build_response(status_code: int, reason: str, headers: Iterable[tuple[str, str]], body: bytes = b"") -> bytes:
     if not 100 <= int(status_code) <= 699:
         raise SipError(f"SIP status code out of range: {status_code}")
+    if any(ord(ch) < 0x20 for ch in reason):
+        raise SipError("invalid SIP reason phrase")
     body = body or b""
     head = f"{SIP_VERSION} {int(status_code)} {reason}{CRLF}{_render_headers(headers, body)}"
     return head.encode("utf-8") + b"\r\n\r\n" + body

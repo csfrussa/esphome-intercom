@@ -142,6 +142,8 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input[k] = int(user_input[k])
             for k in ("advertise_host",):
                 user_input[k] = (user_input.get(k) or "").strip()
+            if user_input["sip_port"] == user_input["rtp_port"]:
+                errors["base"] = "sip_rtp_port_conflict"
 
             if not errors:
                 self._base_input = dict(user_input)
@@ -210,12 +212,14 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_TRUNK_DOMAIN,
                 CONF_TRUNK_USERNAME,
                 CONF_TRUNK_AUTH_USERNAME,
-                CONF_TRUNK_PASSWORD,
                 CONF_TRUNK_OUTBOUND_PROXY,
                 CONF_TRUNK_INBOUND_DEFAULT_TARGET,
                 CONF_TRUNK_DTMF_TERMINATOR,
             ):
                 user_input[k] = (user_input.get(k) or "").strip()
+            # SIP digest credentials are opaque. Leading/trailing whitespace is
+            # uncommon but valid and must survive a reconfigure unchanged.
+            user_input[CONF_TRUNK_PASSWORD] = str(user_input.get(CONF_TRUNK_PASSWORD) or "")
             trunk_fields_empty = not any(
                 user_input.get(k)
                 for k in (

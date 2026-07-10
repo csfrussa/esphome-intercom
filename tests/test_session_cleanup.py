@@ -59,6 +59,22 @@ class FakeRelay:
         self.events.append("relay.stop")
 
 
+class FailingRelay(FakeRelay):
+    async def stop(self) -> None:
+        await super().stop()
+        raise OSError("relay stop failed")
+
+
+class FailingClient(FakeClient):
+    async def terminate(self) -> None:
+        await super().terminate()
+        raise OSError("terminate failed")
+
+    async def close(self) -> None:
+        await super().close()
+        raise OSError("close failed")
+
+
 async def _sleep_forever(events: list[str]) -> None:
     try:
         await asyncio.Event().wait()
@@ -95,6 +111,27 @@ class SipRuntimeCleanupTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.watcher_cancelled)
         self.assertTrue(result.client_closed)
         self.assertTrue(result.relay_stopped)
+
+    async def test_cleanup_attempts_every_resource_after_independent_failures(self) -> None:
+        events: list[str] = []
+        watcher = asyncio.create_task(_sleep_forever(events))
+        await asyncio.sleep(0)
+
+        result = await session_cleanup.async_cleanup_sip_runtime(
+            relay=FailingRelay(events),
+            client=FailingClient(events),
+            watcher=watcher,
+            terminate_client=True,
+            relay_first=True,
+        )
+
+        self.assertEqual(
+            events,
+            ["relay.stop", "watcher.cancelled", "client.terminate", "client.close"],
+        )
+        self.assertTrue(result.watcher_cancelled)
+        self.assertFalse(result.client_closed)
+        self.assertFalse(result.relay_stopped)
 
 
 if __name__ == "__main__":

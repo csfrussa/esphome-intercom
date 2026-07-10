@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from .endpoint_lifecycle import call_registry
 from .fsm import TerminalReason
+from .media_ports import release_media_reservation
 from .session_cleanup import async_cleanup_sip_runtime
 
 
@@ -25,6 +26,9 @@ async def async_terminate_sip_bridge(
     source_call_id, dest_call_id, relay, client, watcher, called_by_dest = registry.detach_bridge(call_id)
     if not source_call_id:
         return False, "", "", False, False
+
+    media = registry.softphone_media.pop(source_call_id, None)
+    release_media_reservation(media)
 
     cleanup = await async_cleanup_sip_runtime(
         relay=relay,

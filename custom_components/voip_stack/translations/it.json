@@ -59,6 +59,7 @@
       }
     },
     "error": {
+      "sip_rtp_port_conflict": "SIP e RTP devono usare porte diverse.",
       "trunk_server_required": "Il server trunk è obbligatorio.",
       "trunk_username_required": "Lo username trunk è obbligatorio.",
       "trunk_password_required": "La password trunk è obbligatoria."

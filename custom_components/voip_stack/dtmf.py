@@ -8,6 +8,8 @@ import socket
 import time
 from typing import Callable
 
+from .rtp import parse_packet
+
 
 _LOGGER = logging.getLogger(__name__)
 _EVENT_DIGITS = {
@@ -38,36 +40,49 @@ def _match_dtmf(buffer: str, routes: dict[str, str], *, terminator: str = "") ->
 
 
 class _DtmfProtocol(asyncio.DatagramProtocol):
-    def __init__(self, payload_type: int, on_digit: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        payload_type: int,
+        on_digit: Callable[[str], None],
+        *,
+        remote_host: str = "",
+    ) -> None:
         self.payload_type = int(payload_type)
         self.on_digit = on_digit
+        self.remote_host = str(remote_host or "")
+        self._ssrc: int | None = None
         self._seen_events: set[tuple[int, int]] = set()
 
     def datagram_received(self, data: bytes, addr) -> None:
-        if len(data) < 16:
+        if self.remote_host and str(addr[0]) != self.remote_host:
             return
-        version = data[0] >> 6
-        if version != 2:
+        try:
+            packet = parse_packet(data)
+        except ValueError:
             return
-        cc = data[0] & 0x0F
-        header_len = 12 + cc * 4
-        if len(data) < header_len + 4:
+        if packet.payload_type != self.payload_type or len(packet.payload) < 4:
             return
-        payload_type = data[1] & 0x7F
-        if payload_type != self.payload_type:
-            return
-        sequence = int.from_bytes(data[2:4], "big")
-        timestamp = int.from_bytes(data[4:8], "big")
-        event = data[header_len]
-        ended = bool(data[header_len + 1] & 0x80)
+        event = packet.payload[0]
+        ended = bool(packet.payload[1] & 0x80)
         digit = _EVENT_DIGITS.get(event)
         if not digit:
             return
-        key = (timestamp, event)
+        if self._ssrc is None:
+            self._ssrc = packet.ssrc
+        elif packet.ssrc != self._ssrc:
+            return
+        key = (packet.timestamp, event)
         if key in self._seen_events:
             return
         self._seen_events.add(key)
-        _LOGGER.debug("SIP trunk DTMF RX digit=%s seq=%s end=%s from=%s:%s", digit, sequence, ended, addr[0], addr[1])
+        _LOGGER.debug(
+            "SIP trunk DTMF RX digit=%s seq=%s end=%s from=%s:%s",
+            digit,
+            packet.sequence,
+            ended,
+            addr[0],
+            addr[1],
+        )
         self.on_digit(digit)
 
 
@@ -81,6 +96,7 @@ class DtmfCollector:
         routes: dict[str, str],
         timeout: float,
         terminator: str = "",
+        remote_host: str = "",
     ) -> None:
         self.host = host
         self.port = int(port)
@@ -88,6 +104,7 @@ class DtmfCollector:
         self.routes = routes
         self.timeout = max(0.1, float(timeout))
         self.terminator = terminator
+        self.remote_host = str(remote_host or "")
         self.buffer = ""
         self.transport: asyncio.DatagramTransport | None = None
         self._done: asyncio.Future[str] | None = None
@@ -95,7 +112,11 @@ class DtmfCollector:
     async def collect(self) -> tuple[str, str]:
         loop = asyncio.get_running_loop()
         self._done = loop.create_future()
-        protocol = _DtmfProtocol(self.payload_type, self._on_digit)
+        protocol = _DtmfProtocol(
+            self.payload_type,
+            self._on_digit,
+            remote_host=self.remote_host,
+        )
         transport, _ = await loop.create_datagram_endpoint(
             lambda: protocol,
             local_addr=(self.host, self.port),

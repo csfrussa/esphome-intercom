@@ -9,6 +9,8 @@ Entity names:
 ESP YAMLs subscribe to the unified sensor and normalize it locally into their
 SIP dial plan.
 """
+import asyncio
+import contextlib
 import logging
 
 from homeassistant.components.sensor import SensorEntity
@@ -127,6 +129,8 @@ class VoipPhonebookSensor(SensorEntity):
         self._tracked_entities: set[str] = set()
         self._unsub_state = None
         self._unsub_registry = None
+        self._recompute_task: asyncio.Task | None = None
+        self._recompute_requested = False
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
@@ -156,6 +160,36 @@ class VoipPhonebookSensor(SensorEntity):
         if self._unsub_registry:
             self._unsub_registry()
             self._unsub_registry = None
+        if self._recompute_task is not None:
+            self._recompute_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._recompute_task
+            self._recompute_task = None
+
+    @callback
+    def _schedule_recompute(self) -> None:
+        """Coalesce state bursts while guaranteeing a final fresh snapshot."""
+        self._recompute_requested = True
+        if self._recompute_task is None or self._recompute_task.done():
+            self._recompute_task = self.hass.async_create_task(self._drain_recomputes())
+
+    async def _drain_recomputes(self) -> None:
+        current = asyncio.current_task()
+        try:
+            while self._recompute_requested:
+                self._recompute_requested = False
+                await self._recompute()
+        finally:
+            if self._recompute_task is current:
+                self._recompute_task = None
+                if self._recompute_requested:
+                    self._schedule_recompute()
+
+    async def _schedule_and_wait_recompute(self) -> None:
+        self._schedule_recompute()
+        task = self._recompute_task
+        if task is not None:
+            await task
 
     async def _refresh_tracked_entities(self, initial: bool = False) -> None:
         entity_registry = er.async_get(self.hass)
@@ -180,7 +214,7 @@ class VoipPhonebookSensor(SensorEntity):
                 old_endpoint = (old_state.attributes or {}).get("endpoint") if old_state is not None else None
                 new_endpoint = (new_state.attributes or {}).get("endpoint") if new_state is not None else None
                 if old_value != new_value or old_endpoint != new_endpoint:
-                    self.hass.async_create_task(self._recompute())
+                    self._schedule_recompute()
                 return
             if (
                 "voip_ring_groups" in entity_id
@@ -190,13 +224,13 @@ class VoipPhonebookSensor(SensorEntity):
                 old_value = old_state.state if old_state is not None else None
                 new_value = new_state.state if new_state is not None else None
                 if old_value != new_value:
-                    self.hass.async_create_task(self._recompute())
+                    self._schedule_recompute()
                 return
             old_avail = _state_is_available(old_state)
             new_avail = _state_is_available(new_state)
             if old_avail == new_avail:
                 return
-            self.hass.async_create_task(self._recompute())
+            self._schedule_recompute()
 
         if self._unsub_state:
             self._unsub_state()
@@ -205,7 +239,7 @@ class VoipPhonebookSensor(SensorEntity):
             self._unsub_state = async_track_state_change_event(
                 self.hass, list(new_set), _on_state_change
             )
-        await self._recompute()
+        await self._schedule_and_wait_recompute()
 
     async def _recompute(self) -> None:
         from . import _async_build_peer_snapshot
@@ -238,7 +272,7 @@ class VoipPhonebookSensor(SensorEntity):
             )
             if self.hass and self.entity_id:
                 self.async_write_ha_state()
-                self.hass.async_create_task(push_roster_json_to_esps(self.hass, roster_json))
+                await push_roster_json_to_esps(self.hass, roster_json)
 
     async def async_update(self) -> None:
-        await self._recompute()
+        await self._schedule_and_wait_recompute()

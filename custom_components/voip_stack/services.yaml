@@ -444,7 +444,7 @@ create_account:
         text:
     password:
       name: Optional Password
-      description: Optional password. If omitted, Home Assistant generates one and shows it once in the call event stream and in a persistent notification.
+      description: Optional password, preserved exactly as entered and never echoed. If omitted, Home Assistant generates one and shows it once in the call event stream and in a persistent notification.
       required: false
       selector:
         text:
@@ -498,7 +498,7 @@ remove_account:
 
 rotate_account_password:
   name: Rotate SIP Endpoint Password
-  description: Generate a new password for a local SIP account and clear its active registration.
+  description: Generate a new password for a local SIP account, clear its active registration and show the replacement once in the call event stream and a persistent notification.
   fields:
     username:
       name: Username

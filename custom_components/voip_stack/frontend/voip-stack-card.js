@@ -66,6 +66,8 @@ class VoipStackCard extends HTMLElement {
     // Device info
     this._activeDeviceInfo = null;
     this._resolvedDeviceId = null;
+    this._deviceBindingsLoading = false;
+    this._deviceBindingsRetryTimer = null;
     this._availableDevices = [];
     this._availableDevicesLoading = false;
     this._availableDevicesRetryTimer = null;
@@ -132,6 +134,10 @@ class VoipStackCard extends HTMLElement {
     if (this._availableDevicesRetryTimer) {
       clearTimeout(this._availableDevicesRetryTimer);
       this._availableDevicesRetryTimer = null;
+    }
+    if (this._deviceBindingsRetryTimer) {
+      clearTimeout(this._deviceBindingsRetryTimer);
+      this._deviceBindingsRetryTimer = null;
     }
     if (this._devicesRetryTimer) {
       clearTimeout(this._devicesRetryTimer);
@@ -421,19 +427,49 @@ class VoipStackCard extends HTMLElement {
 
   setConfig(config) {
     const oldSelector = this.config?.entity_id || this.config?.device_id || "";
+    const oldMode = this.config?.mode || this.config?.card_mode || "esp_mirror";
     this.config = config;
     const newSelector = this.config?.entity_id || this.config?.device_id || "";
-    if (oldSelector !== newSelector) this._resolvedDeviceId = null;
+    const newMode = this.config?.mode || this.config?.card_mode || "esp_mirror";
+    if (oldSelector !== newSelector || oldMode !== newMode) {
+      this._resetDeviceBindings();
+      this._softphoneStateLoaded = false;
+      this._softphoneSnapshot = null;
+      this._activeSessionDeviceId = null;
+      this._markSoftphoneMediaOwner("");
+    }
     this._softphoneTargetDeviceId =
       this._loadSoftphoneTargetPreference() ||
       this._softphoneTargetDeviceId;
     // Load auto-answer preference from localStorage
     const deviceId = this._autoAnswerStorageId();
     if (deviceId) {
-      this._autoAnswer = localStorage.getItem(`voip_auto_answer_${deviceId}`) === "true";
-      this._ringtoneEnabled = localStorage.getItem(`voip_ringtone_${deviceId}`) === "true";
+      try {
+        this._autoAnswer = localStorage.getItem(`voip_auto_answer_${deviceId}`) === "true";
+        this._ringtoneEnabled = localStorage.getItem(`voip_ringtone_${deviceId}`) === "true";
+      } catch (_) {}
     }
+    if (this._hass && this._isHaSoftphoneMode()) this._loadSoftphoneState();
+    else if (this._hass) this._findEntityIds();
     this._render();
+  }
+
+  _resetDeviceBindings() {
+    this._activeDeviceInfo = null;
+    this._resolvedDeviceId = null;
+    if (this._deviceBindingsRetryTimer) {
+      clearTimeout(this._deviceBindingsRetryTimer);
+      this._deviceBindingsRetryTimer = null;
+    }
+    for (const key of [
+      "_voipStateEntityId", "_transportEntityId", "_callerEntityId",
+      "_destinationEntityId", "_lastReasonEntityId", "_previousButtonEntityId",
+      "_nextButtonEntityId", "_callButtonEntityId", "_declineButtonEntityId",
+      "_autoAnswerSwitchEntityId", "_dndSwitchEntityId", "_ringGroupsTextEntityId",
+      "_conferenceGroupsTextEntityId", "_extensionTextEntityId",
+      "_conferenceRingSwitchEntityId",
+    ]) this[key] = null;
+    this._startCallService = "";
   }
 
   set hass(hass) {
@@ -972,65 +1008,91 @@ class VoipStackCard extends HTMLElement {
   async _findEntityIds() {
     if (!this._hass) return;
     if (this._isHaSoftphoneMode()) return;
+    if (this._deviceBindingsLoading || this._deviceBindingsRetryTimer) return;
 
-    const deviceInfo = await this._getDeviceInfo();
-    const configDeviceId = this._getConfigDeviceId();
-    const targetDeviceId = deviceInfo?.device_id || configDeviceId;
-    if (!targetDeviceId) return;
-
-    // Use entities mapping from backend
-    if (deviceInfo?.entities && typeof deviceInfo.entities === "object") {
-      const e = deviceInfo.entities;
-      this._voipStateEntityId = e.voip_state || null;
-      this._transportEntityId = e.voip_transport || null;
-      this._callerEntityId = e.incoming_caller || null;
-      this._destinationEntityId = e.destination || null;
-      this._lastReasonEntityId = e.last_reason || null;
-      this._previousButtonEntityId = e.previous || null;
-      this._nextButtonEntityId = e.next || null;
-      this._callButtonEntityId = e.call || null;
-      this._declineButtonEntityId = e.decline || null;
-      this._autoAnswerSwitchEntityId = e.auto_answer || null;
-      this._dndSwitchEntityId = e.dnd || null;
-      this._extensionTextEntityId = e.voip_extension || null;
-      this._ringGroupsTextEntityId = e.voip_ring_groups || null;
-      this._conferenceGroupsTextEntityId = e.voip_conference_groups || null;
-      this._conferenceRingSwitchEntityId = e.voip_conference_ring || null;
-      this._startCallService = e.start_call_service || "";
-      this._render();
-      return;
-    }
-
-    // Fallback: entity registry
+    const expectedSelector = this._getConfigSelector();
+    this._deviceBindingsLoading = true;
     try {
-      const registry = await this._hass.connection.sendMessagePromise({
-        type: "config/entity_registry/list",
-      });
-      if (!registry) return;
+      const deviceInfo = await this._getDeviceInfo();
+      if (this._isHaSoftphoneMode() || expectedSelector !== this._getConfigSelector()) return;
+      const configDeviceId = this._getConfigDeviceId();
+      const targetDeviceId = deviceInfo?.device_id || configDeviceId;
+      if (!targetDeviceId) return;
 
-      for (const entity of registry) {
-        if (entity.device_id !== targetDeviceId) continue;
-        const id = entity.entity_id;
-        if (id.includes("voip_state")) this._voipStateEntityId = id;
-        else if (id.includes("voip_transport")) this._transportEntityId = id;
-        else if (id.includes("caller")) this._callerEntityId = id;
-        else if (id.includes("destination")) this._destinationEntityId = id;
-        else if (id.includes("voip_last_reason") || id.includes("last_reason") || id.includes("end_reason")) this._lastReasonEntityId = id;
-        else if (id.startsWith("button.") && id.includes("previous")) this._previousButtonEntityId = id;
-        else if (id.startsWith("button.") && id.includes("next")) this._nextButtonEntityId = id;
-        else if (id.startsWith("button.") && id.includes("call") && !id.includes("decline")) this._callButtonEntityId = id;
-        else if (id.startsWith("button.") && id.includes("decline")) this._declineButtonEntityId = id;
-        else if (id.startsWith("switch.") && id.includes("auto_answer")) this._autoAnswerSwitchEntityId = id;
-        else if (id.startsWith("switch.") && (id.includes("do_not_disturb") || id.includes("_dnd"))) this._dndSwitchEntityId = id;
-        else if (id.startsWith("text.") && id.includes("voip_extension")) this._extensionTextEntityId = id;
-        else if (id.startsWith("text.") && id.includes("voip_ring_groups")) this._ringGroupsTextEntityId = id;
-        else if (id.startsWith("text.") && id.includes("voip_conference_groups")) this._conferenceGroupsTextEntityId = id;
-        else if (id.startsWith("switch.") && id.includes("voip_conference_ring")) this._conferenceRingSwitchEntityId = id;
+      // Use entities mapping from backend
+      if (deviceInfo?.entities && typeof deviceInfo.entities === "object") {
+        const e = deviceInfo.entities;
+        this._voipStateEntityId = e.voip_state || null;
+        this._transportEntityId = e.voip_transport || null;
+        this._callerEntityId = e.incoming_caller || null;
+        this._destinationEntityId = e.destination || null;
+        this._lastReasonEntityId = e.last_reason || null;
+        this._previousButtonEntityId = e.previous || null;
+        this._nextButtonEntityId = e.next || null;
+        this._callButtonEntityId = e.call || null;
+        this._declineButtonEntityId = e.decline || null;
+        this._autoAnswerSwitchEntityId = e.auto_answer || null;
+        this._dndSwitchEntityId = e.dnd || null;
+        this._extensionTextEntityId = e.voip_extension || null;
+        this._ringGroupsTextEntityId = e.voip_ring_groups || null;
+        this._conferenceGroupsTextEntityId = e.voip_conference_groups || null;
+        this._conferenceRingSwitchEntityId = e.voip_conference_ring || null;
+        this._startCallService = e.start_call_service || "";
+        this._render();
+        return;
       }
-      this._render();
-    } catch (err) {
-      console.error("Entity discovery failed:", err);
+
+      // Fallback: entity registry
+      try {
+        const registry = await this._hass.connection.sendMessagePromise({
+          type: "config/entity_registry/list",
+        });
+        if (
+          !registry ||
+          this._isHaSoftphoneMode() ||
+          expectedSelector !== this._getConfigSelector()
+        ) return;
+
+        for (const entity of registry) {
+          if (entity.device_id !== targetDeviceId) continue;
+          const id = entity.entity_id;
+          if (id.includes("voip_state")) this._voipStateEntityId = id;
+          else if (id.includes("voip_transport")) this._transportEntityId = id;
+          else if (id.includes("caller")) this._callerEntityId = id;
+          else if (id.includes("destination")) this._destinationEntityId = id;
+          else if (id.includes("voip_last_reason") || id.includes("last_reason") || id.includes("end_reason")) this._lastReasonEntityId = id;
+          else if (id.startsWith("button.") && id.includes("previous")) this._previousButtonEntityId = id;
+          else if (id.startsWith("button.") && id.includes("next")) this._nextButtonEntityId = id;
+          else if (id.startsWith("button.") && id.includes("call") && !id.includes("decline")) this._callButtonEntityId = id;
+          else if (id.startsWith("button.") && id.includes("decline")) this._declineButtonEntityId = id;
+          else if (id.startsWith("switch.") && id.includes("auto_answer")) this._autoAnswerSwitchEntityId = id;
+          else if (id.startsWith("switch.") && (id.includes("do_not_disturb") || id.includes("_dnd"))) this._dndSwitchEntityId = id;
+          else if (id.startsWith("text.") && id.includes("voip_extension")) this._extensionTextEntityId = id;
+          else if (id.startsWith("text.") && id.includes("voip_ring_groups")) this._ringGroupsTextEntityId = id;
+          else if (id.startsWith("text.") && id.includes("voip_conference_groups")) this._conferenceGroupsTextEntityId = id;
+          else if (id.startsWith("switch.") && id.includes("voip_conference_ring")) this._conferenceRingSwitchEntityId = id;
+        }
+        this._render();
+      } catch (err) {
+        console.error("Entity discovery failed:", err);
+      }
+    } finally {
+      this._deviceBindingsLoading = false;
+      if (
+        this.isConnected &&
+        !this._voipStateEntityId &&
+        !this._isHaSoftphoneMode() &&
+        expectedSelector === this._getConfigSelector()
+      ) this._scheduleDeviceBindingsLoad();
     }
+  }
+
+  _scheduleDeviceBindingsLoad() {
+    if (this._deviceBindingsRetryTimer) return;
+    this._deviceBindingsRetryTimer = setTimeout(() => {
+      this._deviceBindingsRetryTimer = null;
+      this._findEntityIds();
+    }, 2000);
   }
 
   async _loadAvailableDevices() {
@@ -1137,7 +1199,12 @@ class VoipStackCard extends HTMLElement {
 
     switch (espState.toLowerCase()) {
       case "idle":
-        if (this._isHaSoftphoneMode() && this._softphoneSnapshot?.terminal_reason) {
+        if (this._isHaSoftphoneMode() && this._softphoneDnd) {
+          statusText = "Do Not Disturb";
+          statusReason = "Incoming calls to Home Assistant are declined.";
+          statusClass = "idle";
+          showCall = true;
+        } else if (this._isHaSoftphoneMode() && this._softphoneSnapshot?.terminal_reason) {
           const reason = this._softphoneSnapshot.terminal_reason;
           const terminalTarget = this._softphoneSnapshot.dialed_target || this._softphoneSnapshot.peer_name;
           const peerLabel = terminalTarget ? ` with ${terminalTarget}` : "";
@@ -1150,11 +1217,6 @@ class VoipStackCard extends HTMLElement {
           const peerLabel = this._lastEndInfo.peer ? ` with ${this._lastEndInfo.peer}` : "";
           statusText = `Call${peerLabel} ended.`;
           statusReason = `Reason: ${reasonLabel}`;
-          statusClass = "idle";
-          showCall = true;
-        } else if (this._isHaSoftphoneMode() && this._softphoneDnd) {
-          statusText = "Do Not Disturb";
-          statusReason = "Incoming calls to Home Assistant are declined.";
           statusClass = "idle";
           showCall = true;
         } else {
@@ -1247,8 +1309,10 @@ class VoipStackCard extends HTMLElement {
     els.runtimeControls.hidden = !showRuntimeOptions;
     els.keypadBtn.hidden = !(showRuntimeOptions && canUseKeypad);
     els.keypadBtn.textContent = keypadOpen ? "Contacts" : "Keypad";
+    els.keypadBtn.setAttribute("aria-expanded", String(showCall && keypadOpen));
     els.settingsBtn.hidden = !showRuntimeOptions;
     els.settingsPanel.hidden = !showSettingsPanel;
+    els.settingsBtn.setAttribute("aria-expanded", String(showSettingsPanel));
     const autoAnswerAvailable = softphoneMode || !!this._autoAnswerSwitchEntityId;
     els.autoAnswerRow.hidden = !(showSettingsPanel && autoAnswerAvailable);
     els.autoAnswerCheckbox.checked = softphoneMode
@@ -1497,6 +1561,7 @@ class VoipStackCard extends HTMLElement {
     prevBtn.type = "button";
     prevBtn.className = "nav-btn";
     prevBtn.title = "Previous";
+    prevBtn.setAttribute("aria-label", "Previous destination");
     prevBtn.textContent = "<";
     const destValueWrap = document.createElement("div");
     destValueWrap.className = "destination-value";
@@ -1511,12 +1576,14 @@ class VoipStackCard extends HTMLElement {
     destValueWrap.appendChild(destText);
     const destSelect = document.createElement("select");
     destSelect.className = "destination-select";
+    destSelect.setAttribute("aria-label", "Destination");
     destSelect.hidden = true;
     destValueWrap.appendChild(destSelect);
     const nextBtn = document.createElement("button");
     nextBtn.type = "button";
     nextBtn.className = "nav-btn";
     nextBtn.title = "Next";
+    nextBtn.setAttribute("aria-label", "Next destination");
     nextBtn.textContent = ">";
     destRow.appendChild(prevBtn);
     destRow.appendChild(destValueWrap);
@@ -1525,6 +1592,7 @@ class VoipStackCard extends HTMLElement {
 
     const keypadPanel = document.createElement("div");
     keypadPanel.className = "keypad-panel";
+    keypadPanel.id = "voip-keypad-panel";
     keypadPanel.hidden = true;
     const keypadInput = document.createElement("input");
     keypadInput.className = "keypad-input";
@@ -1533,6 +1601,7 @@ class VoipStackCard extends HTMLElement {
     keypadInput.autocomplete = "off";
     keypadInput.spellcheck = false;
     keypadInput.placeholder = "Number, name or SIP URI";
+    keypadInput.setAttribute("aria-label", "Number, name or SIP URI");
     keypadPanel.appendChild(keypadInput);
     const keypadGrid = document.createElement("div");
     keypadGrid.className = "keypad-grid";
@@ -1542,6 +1611,8 @@ class VoipStackCard extends HTMLElement {
       btn.type = "button";
       btn.className = "keypad-key";
       btn.textContent = key;
+      if (key === "Clear") btn.setAttribute("aria-label", "Clear destination");
+      if (key === "⌫") btn.setAttribute("aria-label", "Delete last character");
       keypadKeys[key] = btn;
       keypadGrid.appendChild(btn);
     }
@@ -1550,6 +1621,7 @@ class VoipStackCard extends HTMLElement {
 
     const offlinePanel = document.createElement("div");
     offlinePanel.className = "offline-panel";
+    offlinePanel.setAttribute("role", "status");
     offlinePanel.hidden = true;
     const offlineIcon = document.createElement("div");
     offlineIcon.className = "offline-icon";
@@ -1598,6 +1670,8 @@ class VoipStackCard extends HTMLElement {
     // Status line + optional reason on its own row
     const statusRow = document.createElement("div");
     statusRow.className = "status";
+    statusRow.setAttribute("role", "status");
+    statusRow.setAttribute("aria-live", "polite");
     const statusIndicator = document.createElement("span");
     statusIndicator.className = "status-indicator idle";
     statusRow.appendChild(statusIndicator);
@@ -1618,17 +1692,22 @@ class VoipStackCard extends HTMLElement {
     keypadBtn.type = "button";
     keypadBtn.className = "settings-btn";
     keypadBtn.textContent = "Keypad";
+    keypadBtn.setAttribute("aria-controls", "voip-keypad-panel");
+    keypadBtn.setAttribute("aria-expanded", "false");
     runtimeControls.appendChild(keypadBtn);
 
     const settingsBtn = document.createElement("button");
     settingsBtn.type = "button";
     settingsBtn.className = "settings-btn";
     settingsBtn.textContent = "Options";
+    settingsBtn.setAttribute("aria-controls", "voip-settings-panel");
+    settingsBtn.setAttribute("aria-expanded", "false");
     runtimeControls.appendChild(settingsBtn);
     card.appendChild(runtimeControls);
 
     const settingsPanel = document.createElement("div");
     settingsPanel.className = "settings-panel";
+    settingsPanel.id = "voip-settings-panel";
     settingsPanel.hidden = true;
 
     // Auto-answer toggle
@@ -1740,6 +1819,7 @@ class VoipStackCard extends HTMLElement {
 
     const err = document.createElement("div");
     err.className = "error";
+    err.setAttribute("role", "alert");
     card.appendChild(err);
 
     const version = document.createElement("div");
@@ -2177,7 +2257,9 @@ class VoipStackCard extends HTMLElement {
     this._autoAnswer = !this._autoAnswer;
     const deviceId = this._autoAnswerStorageId();
     if (deviceId) {
-      localStorage.setItem(`voip_auto_answer_${deviceId}`, this._autoAnswer.toString());
+      try {
+        localStorage.setItem(`voip_auto_answer_${deviceId}`, this._autoAnswer.toString());
+      } catch (_) {}
     }
     // If enabling, request mic permission now (user gesture from the toggle click)
     const device = this._isHaSoftphoneMode()
@@ -2210,7 +2292,9 @@ class VoipStackCard extends HTMLElement {
     this._ringtoneEnabled = !this._ringtoneEnabled;
     const deviceId = this._autoAnswerStorageId();
     if (deviceId) {
-      localStorage.setItem(`voip_ringtone_${deviceId}`, this._ringtoneEnabled.toString());
+      try {
+        localStorage.setItem(`voip_ringtone_${deviceId}`, this._ringtoneEnabled.toString());
+      } catch (_) {}
     }
     if (this._ringtoneEnabled) voipStackEngine.unlockRingtone();
     this._syncRingtoneRequest(this._getEspState());
@@ -2358,11 +2442,13 @@ class VoipStackCard extends HTMLElement {
 
   async _loadSoftphoneState() {
     if (!this._hass?.connection || this._softphoneStateLoading) return;
+    const connection = this._hass.connection;
     this._softphoneStateLoading = true;
     try {
-      const result = await this._hass.connection.sendMessagePromise({
+      const result = await connection.sendMessagePromise({
         type: "voip_stack/ha_softphone_state",
       });
+      if (!this._isHaSoftphoneMode() || this._hass?.connection !== connection) return;
       this._applySoftphoneSnapshot(result || { state: "idle" });
       this._softphoneStateLoaded = true;
     } catch (err) {
@@ -2393,14 +2479,16 @@ class VoipStackCard extends HTMLElement {
           softphone: true,
         };
       }
+      const expectedSelector = this._getConfigSelector();
       const result = await this._hass.connection.sendMessagePromise({
         type: "voip_stack/resolve_device",
-        device_id: this._getConfigSelector(),
+        device_id: expectedSelector,
       });
+      if (this._isHaSoftphoneMode() || expectedSelector !== this._getConfigSelector()) return null;
       if (result?.device?.device_id) this._resolvedDeviceId = result.device.device_id;
       return result?.device || null;
     } catch (err) {
-      console.error("Failed to get device info:", err);
+      if (!this._isUnknownCommandError(err)) console.error("Failed to get device info:", err);
     }
     return null;
   }
@@ -2432,6 +2520,17 @@ class VoipStackCardEditor extends HTMLElement {
     this._devicesLoading = false;
     this._devicesRetryTimer = null;
     this._els = null;
+  }
+
+  connectedCallback() {
+    if (this._hass && !this._devicesLoaded) this._loadDevices();
+  }
+
+  disconnectedCallback() {
+    if (this._devicesRetryTimer) {
+      clearTimeout(this._devicesRetryTimer);
+      this._devicesRetryTimer = null;
+    }
   }
 
   setConfig(config) {
@@ -2618,7 +2717,8 @@ class VoipStackCardEditor extends HTMLElement {
     placeholder.value = "";
     placeholder.textContent = "-- Select device --";
     const newOptions = [placeholder];
-    for (const d of this._devices) {
+    const mirrorDevices = this._devices.filter(d => !d.softphone);
+    for (const d of mirrorDevices) {
       const opt = document.createElement("option");
       opt.value = d.device_id;
       opt.textContent = `${d.name} (${this._audioModeLabel(d.audio_mode)})`;
@@ -2629,10 +2729,10 @@ class VoipStackCardEditor extends HTMLElement {
 
     if (!this._devicesLoaded) {
       els.deviceInfo.textContent = "Loading...";
-    } else if (this._devices.length === 0) {
+    } else if (mirrorDevices.length === 0) {
       els.deviceInfo.textContent = "No devices found";
     } else {
-      const selected = this._devices.find(d => d.device_id === (this._config.device_id || this._config.entity_id));
+      const selected = mirrorDevices.find(d => d.device_id === (this._config.device_id || this._config.entity_id));
       els.deviceInfo.textContent = selected
         ? `Audio: ${this._normaliseAudioMode(selected.audio_mode).replace("_", " ")}`
         : (softphoneMode ? "Home Assistant softphone does not belong to an ESP." : "Required for ESP mirror mode.");
@@ -2681,9 +2781,11 @@ if (!customElements.get("voip-stack-card-editor")) {
 }
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "voip-stack-card",
-  name: "VoIP Stack Card",
-  description: "ESP SIP phone mirror and HA SIP softphone controls",
-  preview: true,
-});
+if (!window.customCards.some(card => card.type === "voip-stack-card")) {
+  window.customCards.push({
+    type: "voip-stack-card",
+    name: "VoIP Stack Card",
+    description: "ESP SIP phone mirror and HA SIP softphone controls",
+    preview: true,
+  });
+}

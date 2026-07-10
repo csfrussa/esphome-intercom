@@ -115,6 +115,16 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._softphoneSnapshot.dialed_target || this._softphoneSnapshot.peer_name", terminal_branch)
         self.assertIn("terminalTarget", terminal_branch)
 
+    def test_ha_softphone_dnd_status_outweighs_terminal_history(self) -> None:
+        render = _method_body(self.source, "_render")
+        idle_branch = render.split('case "idle":', 1)[1].split('case "calling":', 1)[0]
+        self.assertLess(
+            idle_branch.index("this._softphoneDnd"),
+            idle_branch.index("this._softphoneSnapshot?.terminal_reason"),
+        )
+        self.assertIn('statusText = "Do Not Disturb"', idle_branch)
+        self.assertIn("Incoming calls to Home Assistant are declined.", idle_branch)
+
     def test_ha_softphone_targets_come_from_shared_roster(self) -> None:
         body = _method_body(self.source, "_softphoneTargets")
         self.assertIn("this._rosterEntries", body)
@@ -232,6 +242,41 @@ class FrontendCardContractTest(unittest.TestCase):
         setter = _method_body(self.source, "set hass")
         self.assertNotIn("this._maybeAnswerFromUrl(newEspState)", setter)
 
+    def test_reconfigure_discards_stale_device_entity_bindings(self) -> None:
+        config = _method_body(self.source, "setConfig")
+        reset = _method_body(self.source, "_resetDeviceBindings")
+        finder = _method_body(self.source, "async _findEntityIds")
+        resolver = _method_body(self.source, "async _getDeviceInfo")
+
+        self.assertIn("oldSelector !== newSelector || oldMode !== newMode", config)
+        self.assertIn("this._resetDeviceBindings()", config)
+        self.assertIn('this._startCallService = ""', reset)
+        self.assertIn('"_voipStateEntityId"', reset)
+        self.assertIn("expectedSelector !== this._getConfigSelector()", finder)
+        self.assertIn("expectedSelector !== this._getConfigSelector()", resolver)
+        self.assertGreaterEqual(
+            finder.count("expectedSelector !== this._getConfigSelector()"),
+            2,
+        )
+
+    def test_device_discovery_is_single_flight_with_bounded_startup_retry(self) -> None:
+        finder = _method_body(self.source, "async _findEntityIds")
+        scheduler = _method_body(self.source, "_scheduleDeviceBindingsLoad")
+        resolver = _method_body(self.source, "async _getDeviceInfo")
+        disconnect = _method_body(self.source, "disconnectedCallback")
+
+        self.assertIn("this._deviceBindingsLoading || this._deviceBindingsRetryTimer", finder)
+        self.assertIn("this._deviceBindingsLoading = true", finder)
+        self.assertIn("this._deviceBindingsLoading = false", finder)
+        self.assertIn("this._scheduleDeviceBindingsLoad()", finder)
+        self.assertIn("this._deviceBindingsRetryTimer = setTimeout", scheduler)
+        self.assertIn("this._isUnknownCommandError(err)", resolver)
+        self.assertIn("clearTimeout(this._deviceBindingsRetryTimer)", disconnect)
+        softphone_state = _method_body(self.source, "async _loadSoftphoneState")
+        self.assertIn("const connection = this._hass.connection", softphone_state)
+        self.assertIn("!this._isHaSoftphoneMode()", softphone_state)
+        self.assertIn("this._hass?.connection !== connection", softphone_state)
+
     def test_frontend_has_no_esp_call_control_ws_commands(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         for token in (
@@ -253,6 +298,71 @@ class FrontendCardContractTest(unittest.TestCase):
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         self.assertNotIn("hidden_timeout", engine)
         self.assertNotIn('document.addEventListener("visibilitychange"', engine)
+
+    def test_browser_audio_websocket_is_bounded_and_stale_close_is_isolated(self) -> None:
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        playback = (
+            ROOT
+            / "custom_components"
+            / "voip_stack"
+            / "frontend"
+            / "voip-stack-playback-processor.js"
+        ).read_text()
+        capture = (
+            ROOT
+            / "custom_components"
+            / "voip_stack"
+            / "frontend"
+            / "voip-stack-processor.js"
+        ).read_text()
+
+        self.assertIn("this._ws.bufferedAmount >= maxBufferedBytes", engine)
+        self.assertIn("this._stats.tx_dropped++", engine)
+        self.assertIn("if (this._ws !== ws) return", engine)
+        self.assertIn("if (this._connectPromise === connectPromise)", engine)
+        self.assertIn("this._deviceId !== deviceId || this._callId !== wantedCallId", engine)
+        self.assertIn("Audio WebSocket superseded before connect", engine)
+        self.assertIn('await this._connect(deviceId, reply?.call_id || "")', engine)
+        self.assertNotIn("raw.slice(1)", engine)
+        self.assertIn("byteOffset: 1", engine)
+        self.assertIn("new DataView(buffer, byteOffset, frameBytes)", playback)
+        self.assertIn("this._dropFrames = this._maxStartFrames + 1", playback)
+        self.assertIn("if (underrunThisQuantum) this._started = false", playback)
+        self.assertIn('pcmFormat === "s24le_in_s32") return view.getInt32(offset, true) / 8388608', playback)
+        self.assertIn("s * 0x800000 : s * 0x7fffff", capture)
+        self.assertNotIn("0x7fffff00", capture)
+        self.assertIn("await this.resumeSession(mediaInfo, HA_SOFTPHONE_DEVICE_ID, reply)", engine)
+        self.assertIn("const previousAttach = this._sessionAttachPromise", engine)
+        self.assertIn("if (previousAttach) await previousAttach.catch", engine)
+        self.assertIn("if (this._sessionAttachKey !== attachKey) return", engine)
+        self.assertIn('await this.close("superseded", true)', engine)
+        setup = _method_body(engine, "async _setupAudioOrAbort")
+        self.assertIn("await this._setupAudio(deviceInfo, reply)", setup)
+        after_setup = setup.split("await this._setupAudio(deviceInfo, reply)", 1)[1]
+        self.assertIn("this._sessionAttachKey !== attachKey", after_setup)
+        self.assertIn('await this.close("superseded", true)', after_setup)
+        self.assertIn('await this.close("switch", true)', engine)
+        self.assertIn('if (!preserveAttach) this._sessionAttachKey = ""', engine)
+        self.assertIn("if (this._sessionAttachPromise !== trackedPromise) return", engine)
+
+    def test_dynamic_call_controls_expose_accessible_state(self) -> None:
+        source = CARD.read_text()
+        self.assertIn('statusRow.setAttribute("aria-live", "polite")', source)
+        self.assertIn('err.setAttribute("role", "alert")', source)
+        self.assertIn('prevBtn.setAttribute("aria-label", "Previous destination")', source)
+        self.assertIn('nextBtn.setAttribute("aria-label", "Next destination")', source)
+        self.assertIn('els.keypadBtn.setAttribute("aria-expanded"', source)
+        self.assertIn('els.settingsBtn.setAttribute("aria-expanded"', source)
+
+    def test_editor_only_lists_esps_and_cleans_retry_timer(self) -> None:
+        editor = self.source[self.source.index("class VoipStackCardEditor") :]
+        self.assertIn("const mirrorDevices = this._devices.filter(d => !d.softphone)", editor)
+        self.assertIn("disconnectedCallback()", editor)
+        self.assertIn("clearTimeout(this._devicesRetryTimer)", editor)
+        self.assertIn(
+            'if (!window.customCards.some(card => card.type === "voip-stack-card"))',
+            editor,
+        )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Awaitable, Callable
+import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
@@ -22,6 +23,7 @@ import time
 from typing import Any
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 try:
     from aioesphomeapi import APIClient
@@ -37,6 +39,20 @@ except ModuleNotFoundError:  # pragma: no cover - dependency-light CI only impor
 DEFAULT_HA_URL = "https://f0260ef3d722.sn.mynetname.net"
 DEFAULT_TOKEN_FILE = Path("/home/codex/.secrets/esphome-intercom/ha_token_codex")
 OUT = Path("test_runs/live_voip_qualification")
+
+
+def normalize_ha_url(value: str) -> str:
+    url = str(value or "").strip().rstrip("/")
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("HA URL must be an absolute http:// or https:// URL")
+    return url
+
+
+def ha_ssl_context(base_url: str, *, insecure: bool) -> ssl.SSLContext | None:
+    if urlsplit(base_url).scheme != "https":
+        return None
+    return ssl._create_unverified_context() if insecure else ssl.create_default_context()
 
 
 def norm(value: Any) -> str:
@@ -76,10 +92,10 @@ class Scenario:
 
 
 class HaRest:
-    def __init__(self, base_url: str, token: str) -> None:
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str, token: str, *, insecure: bool = False) -> None:
+        self.base_url = normalize_ha_url(base_url)
         self.token = token
-        self.ssl_context = ssl._create_unverified_context()
+        self.ssl_context = ha_ssl_context(self.base_url, insecure=insecure)
 
     def _request(self, method: str, path: str, data: dict[str, Any] | None = None) -> Any:
         raw = None
@@ -104,10 +120,10 @@ class HaRest:
 
 
 class HaWs:
-    def __init__(self, base_url: str, token: str) -> None:
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str, token: str, *, insecure: bool = False) -> None:
+        self.base_url = normalize_ha_url(base_url)
         self.token = token
-        self.ssl_context = ssl._create_unverified_context()
+        self.ssl_context = ha_ssl_context(self.base_url, insecure=insecure)
         self.ws: Any = None
         self._next_id = 1
         self.events: list[dict[str, Any]] = []
@@ -176,7 +192,7 @@ class EspApi:
         self.services: dict[str, Any] = {}
         self.values: dict[str, Any] = {}
         self._object_by_key: dict[int, str] = {}
-        self._updates: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        self._updates = asyncio.Event()
 
     async def __aenter__(self) -> "EspApi":
         await self.client.connect(login=True)
@@ -200,7 +216,7 @@ class EspApi:
         if value is None:
             value = getattr(state, "value", None)
         self.values[object_id] = value
-        self._updates.put_nowait((object_id, value))
+        self._updates.set()
 
     async def service(self, name: str, data: dict[str, Any] | None = None) -> None:
         service = self.services.get(name)
@@ -246,7 +262,8 @@ class EspApi:
             elif norm(current) in wanted_norm:
                 return current
             try:
-                await asyncio.wait_for(self._updates.get(), timeout=0.2)
+                await asyncio.wait_for(self._updates.wait(), timeout=0.2)
+                self._updates.clear()
             except asyncio.TimeoutError:
                 pass
         raise AssertionError(f"{self.spec.key}: {object_id} expected {sorted(wanted)}, current={self.values.get(object_id)!r}")
@@ -263,7 +280,8 @@ class EspApi:
             if predicate():
                 return
             try:
-                await asyncio.wait_for(self._updates.get(), timeout=0.2)
+                await asyncio.wait_for(self._updates.wait(), timeout=0.2)
+                self._updates.clear()
             except asyncio.TimeoutError:
                 pass
         raise AssertionError(f"{self.spec.key}: timed out waiting for {description}; snapshot={self.snapshot()}")
@@ -298,7 +316,7 @@ class LiveContext:
         for _ in range(2):
             await self.ha.service("voip_stack", "hangup", {})
             await self.ha.service("voip_stack", "decline", {"reason": "cleanup", "decline_reason": "cleanup"})
-        with contextlib_suppress():
+        with contextlib.suppress(Exception):
             await self.esp.service("decline_call", {"reason": "cleanup"})
         deadline = time.monotonic() + 8.0
         last: dict[str, Any] | None = None
@@ -319,14 +337,6 @@ class LiveContext:
             "t": time.monotonic(),
             "esp": self.esp.snapshot(),
         })
-
-
-class contextlib_suppress:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *_: object) -> bool:
-        return True
 
 
 async def wait_phonebook_contains(ha: HaRest, target: str, *, timeout: float = 12.0) -> dict[str, Any]:
@@ -636,11 +646,11 @@ async def run(args: argparse.Namespace) -> int:
             print(f"{scenario.id}: {scenario.title} requires={','.join(sorted(scenario.requires))}")
         return 0
     token = args.token or args.token_file.read_text(encoding="utf-8").strip()
-    ha = HaRest(args.ha_url, token)
+    ha = HaRest(args.ha_url, token, insecure=args.insecure)
     esp_spec = DEFAULT_ESPS[args.esp]
     OUT.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
-    async with HaWs(args.ha_url, token) as ws:
+    async with HaWs(args.ha_url, token, insecure=args.insecure) as ws:
         async with EspApi(esp_spec) as esp:
             ctx = LiveContext(ha=ha, ws=ws, esp=esp, args=args)
             await ctx.cleanup()
@@ -678,6 +688,11 @@ async def run(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ha-url", default=DEFAULT_HA_URL)
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable HTTPS certificate verification for an explicitly trusted HA endpoint.",
+    )
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE)
     parser.add_argument("--token")
     parser.add_argument("--esp", choices=sorted(DEFAULT_ESPS), default="ws3")

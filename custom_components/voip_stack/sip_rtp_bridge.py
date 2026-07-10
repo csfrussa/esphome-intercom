@@ -14,11 +14,17 @@ import wave
 from . import rtp
 from .audio_format import AudioFormat
 from .audio_pcm import PcmFrameConverter
+from .debug_capture import (
+    DEBUG_CAPTURE_DIR,
+    ensure_debug_capture_dir,
+    prune_debug_captures,
+    safe_capture_name,
+    wav_pcm_payload,
+)
 from .sdp import RtpPcmFormat, audio_format_to_rtp
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 
 _LOGGER = logging.getLogger(__name__)
-_DEBUG_CAPTURE_DIR = Path("/tmp/voip_stack_debug")
 _DEBUG_CAPTURE_SECONDS = 8
 _RTP_IP_TOS = 0xB8
 
@@ -33,6 +39,7 @@ class RtpPeer:
     send_payload_type: int | None = None
     send_audio_format: AudioFormat | None = None
     send_rtp_format: RtpPcmFormat | None = None
+    rx_ssrc: int | None = None
     sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
     timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
     ssrc: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
@@ -120,11 +127,9 @@ class SipRtpRelay:
             self._prepare_debug_capture(capture_name)
 
     def _prepare_debug_capture(self, capture_name: str) -> None:
-        safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in capture_name)[:80]
-        if not safe_name:
-            safe_name = f"relay_{self.left_port}_{self.right_port}"
+        safe_name = safe_capture_name(capture_name or f"relay_{self.left_port}_{self.right_port}")
         for side, fmt in (("left", self.left.audio_format), ("right", self.right.audio_format)):
-            path = _DEBUG_CAPTURE_DIR / f"{safe_name}_{side}_rx.wav"
+            path = DEBUG_CAPTURE_DIR / f"{safe_name}_{side}_rx.wav"
             self._capture_buffers[side] = bytearray()
             self._capture_paths[side] = path
             self._capture_formats[side] = fmt
@@ -150,15 +155,16 @@ class SipRtpRelay:
     def _write_debug_capture_files(self) -> None:
         if not self._capture_buffers:
             return
-        _DEBUG_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_debug_capture_dir()
         for side, pcm in self._capture_buffers.items():
             fmt = self._capture_formats[side]
             path = self._capture_paths[side]
+            sample_width, wav_payload = wav_pcm_payload(fmt, pcm)
             with wave.open(str(path), "wb") as wav:
                 wav.setnchannels(fmt.channels)
-                wav.setsampwidth(2)
+                wav.setsampwidth(sample_width)
                 wav.setframerate(fmt.sample_rate)
-                wav.writeframes(bytes(pcm))
+                wav.writeframes(wav_payload)
             _LOGGER.info(
                 "SIP RTP debug capture wrote side=%s path=%s bytes=%d format=%s",
                 side,
@@ -166,19 +172,37 @@ class SipRtpRelay:
                 len(pcm),
                 fmt.wire_token(),
             )
+        prune_debug_captures()
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
-        left_sock = self._rtp_socket(self.left_port)
-        right_sock = self._rtp_socket(self.right_port)
-        self.left_transport, _ = await loop.create_datagram_endpoint(
-            lambda: _RelayProtocol(self, "left"),
-            sock=left_sock,
-        )
-        self.right_transport, _ = await loop.create_datagram_endpoint(
-            lambda: _RelayProtocol(self, "right"),
-            sock=right_sock,
-        )
+        left_sock: socket.socket | None = None
+        right_sock: socket.socket | None = None
+        try:
+            left_sock = self._rtp_socket(self.left_port)
+            right_sock = self._rtp_socket(self.right_port)
+            self.left_transport, _ = await loop.create_datagram_endpoint(
+                lambda: _RelayProtocol(self, "left"),
+                sock=left_sock,
+            )
+            left_sock = None
+            self.right_transport, _ = await loop.create_datagram_endpoint(
+                lambda: _RelayProtocol(self, "right"),
+                sock=right_sock,
+            )
+            right_sock = None
+        except BaseException:
+            if self.left_transport is not None:
+                self.left_transport.close()
+                self.left_transport = None
+            if self.right_transport is not None:
+                self.right_transport.close()
+                self.right_transport = None
+            if left_sock is not None:
+                left_sock.close()
+            if right_sock is not None:
+                right_sock.close()
+            raise
         _LOGGER.info(
             "SIP RTP relay listening left=%s right=%s left=%s->%s right=%s->%s",
             self.left_port,
@@ -192,11 +216,15 @@ class SipRtpRelay:
     @staticmethod
     def _rtp_socket(port: int) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setblocking(False)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, _RTP_IP_TOS)
-        sock.bind(("0.0.0.0", int(port)))
-        return sock
+        try:
+            sock.setblocking(False)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, _RTP_IP_TOS)
+            sock.bind(("0.0.0.0", int(port)))
+            return sock
+        except BaseException:
+            sock.close()
+            raise
 
     async def stop(self) -> None:
         _LOGGER.info(
@@ -231,7 +259,7 @@ class SipRtpRelay:
         if transport is None:
             self.dropped += 1
             return
-        if addr[0] != source.host or int(addr[1]) != int(source.port):
+        if addr[0] != source.host:
             self.dropped += 1
             _LOGGER.debug("RTP relay rejected packet from unexpected %s:%s", addr[0], addr[1])
             return
@@ -239,10 +267,18 @@ class SipRtpRelay:
             packet = rtp.parse_packet(data)
             if packet.payload_type != source.payload_type:
                 raise ValueError(f"payload type {packet.payload_type} != expected {source.payload_type}")
+            if source.rx_ssrc is not None and packet.ssrc != source.rx_ssrc:
+                raise ValueError(f"SSRC {packet.ssrc} != latched {source.rx_ssrc}")
             decoder = self.left_decoder if side == "left" else self.right_decoder
             pcm = decoder.decode(packet.payload)
             if not pcm:
                 return
+            if source.rx_ssrc is None:
+                source.rx_ssrc = packet.ssrc
+                source.port = int(addr[1])
+            elif int(addr[1]) != int(source.port):
+                # Symmetric RTP: follow a valid same-SSRC NAT port rebind.
+                source.port = int(addr[1])
             self._capture_pcm(side, pcm)
             converter = self.left_to_right if side == "left" else self.right_to_left
             converted_frames = converter.convert(pcm)
@@ -276,7 +312,12 @@ class SipRtpRelay:
             self.right_rx_packets += 1
             self.right_rx_bytes += len(data)
         for out in outgoing:
-            transport.sendto(out, (dest.host, dest.port))
+            try:
+                transport.sendto(out, (dest.host, dest.port))
+            except (OSError, RuntimeError) as err:
+                self.dropped += 1
+                _LOGGER.debug("RTP relay send drop: %s", err)
+                continue
             if side == "left":
                 self.right_tx_packets += 1
                 self.right_tx_bytes += len(out)

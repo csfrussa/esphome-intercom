@@ -27,7 +27,7 @@ substitutions:
 # phonebook sync and HA call-control actions.
 
 packages:
-  voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@main
+  voice_pe_base: github://esphome/home-assistant-voice-pe/home-assistant-voice.yaml@dev
   ha_integration: !include ../../../packages/voip/ha_integration.yaml
   voip_transport: !include ../../../packages/voip/transport.yaml
   phonebook_subscribe: !include ../../../packages/voip/phonebook_subscribe.yaml

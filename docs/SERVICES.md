@@ -164,8 +164,8 @@ Fields:
   called by name or extension.
 - `ring_group`, `conference_group`, `conference_ring`: group membership.
 
-If a manual password is provided, HA creates a notification but does not echo
-the password back.
+If a manual password is provided, HA preserves it exactly and creates a
+notification without echoing the password back.
 
 ### `voip_stack.remove_account`
 
@@ -181,7 +181,8 @@ Disable an account and clear active registration.
 
 ### `voip_stack.rotate_account_password`
 
-Generate a new password and clear active registration.
+Generate a new password, clear active registration and show the replacement
+once in both the call event stream and a persistent notification.
 
 ### `voip_stack.list_accounts` / `voip_stack.export_accounts`
 

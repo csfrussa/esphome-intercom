@@ -6,11 +6,14 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, replace
 import logging
+import secrets
 import time
+from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 
 from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS, HA_TRUNK_AUDIO_FORMATS
+from .config import debug_mode as _debug_mode
 from .const import (
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -27,7 +30,11 @@ from .const import (
     DOMAIN,
     HA_SOFTPHONE_DEVICE_ID,
 )
-from .endpoint_lifecycle import call_registry as _call_registry, async_stop_sip_endpoint
+from .endpoint_lifecycle import (
+    async_stop_sip_endpoint,
+    call_registry as _call_registry,
+    create_runtime_task,
+)
 from .endpoint_routing import (
     peer_audio_formats as _peer_audio_formats,
     peer_for_target as _peer_for_target,
@@ -53,11 +60,30 @@ from .phonebook_runtime import registered_roster_entries as _registered_roster_e
 from .router import CallContext, RouteAction, RouteHintSource, RouteReason, route_inbound_trunk, resolve_ha_router
 from .session_cleanup import async_cleanup_sip_runtime
 from .sip_bridge import build_invite_client_relay
+from .store import sip_accounts as _sip_accounts
 from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphone_call_state, _set_sip_bridge_call_state
+
+if TYPE_CHECKING:
+    from .peer import Peer
+    from .roster import RosterEntry
 
 _LOGGER = logging.getLogger(__name__)
 SIP_ROUTE_DECISION_TIMEOUT = 1.5
 RING_GROUP_TIMEOUT_S = 30.0
+MAX_RING_GROUP_ATTEMPTS = 16
+
+
+def _unique_group_members(value) -> list[str]:
+    members: list[str] = []
+    seen: set[str] = set()
+    raw_members = value.split(",") if isinstance(value, str) else (value or [])
+    for raw in raw_members:
+        member = str(raw).strip()
+        key = member.casefold()
+        if member and key not in seen:
+            seen.add(key)
+            members.append(member)
+    return members
 
 
 def _dtmf_extension_routes(entries) -> dict[str, str]:
@@ -71,7 +97,6 @@ def _dtmf_extension_routes(entries) -> dict[str, str]:
 async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     """Bind the enabled SIP signaling listeners for HA softphone and bridge calls."""
     from . import (
-        _debug_mode,
         _get_transport_config,
         _get_trunk_config,
         _trunk_enabled,
@@ -81,7 +106,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _sip_send_bye,
         _sip_send_final_response,
         _sip_uri_transport,
-        _sip_accounts,
         _enable_reused_sip_tcp_connection,
         _async_build_peer_snapshot,
         _pending_routes,
@@ -96,7 +120,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
     from .sip_registrar import SipRegistrar
-    from .conference import conference_manager
+    from .conference import MAX_CONFERENCE_LEGS, conference_manager
     from .groups import GROUP_TYPE_CONFERENCE, GROUP_TYPE_RING
 
     if hass.data.get(DOMAIN, {}).get("sip_endpoint") is not None:
@@ -132,11 +156,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             str(trunk_cfg.get(CONF_TRUNK_AUTH_USERNAME) or "").strip().lower(),
         }
         trunk_users.discard("")
-        trunk_hosts = {
-            str(trunk_cfg.get(CONF_TRUNK_SERVER) or "").strip().lower(),
-            str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip().lower(),
-        }
-        trunk_hosts.discard("")
+        trunk_hosts: set[str] = set()
+        for raw_host in (
+            trunk_cfg.get(CONF_TRUNK_SERVER),
+            trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY),
+        ):
+            value = str(raw_host or "").strip()
+            if not value:
+                continue
+            try:
+                parsed = parse_sip_uri(value if value.lower().startswith("sip:") else f"sip:{value}")
+                trunk_hosts.add(parsed.host.lower())
+            except (TypeError, ValueError):
+                trunk_hosts.add(value.lower())
         return bool(
             (target_user and target_user in trunk_users)
             or str(invite.source_host or "").strip().lower() in trunk_hosts
@@ -237,7 +269,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     async def _close_client_and_release(client: SipCallClient, ports: RtpPortReservation, *, bye: bool = False) -> None:
         try:
             if bye:
-                client.bye()
+                with contextlib.suppress(Exception):
+                    await client.terminate()
             await client.close()
         finally:
             ports.release()
@@ -246,10 +279,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         try:
             if cancel:
                 with contextlib.suppress(Exception):
-                    attempt.client.cancel()
+                    attempt.client.bye_or_cancel()
             elif bye_or_cancel:
                 with contextlib.suppress(Exception):
-                    attempt.client.bye_or_cancel()
+                    await attempt.client.terminate()
             await attempt.client.close()
         finally:
             attempt.ports.release()
@@ -311,7 +344,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     ) -> None:
         source_relay_port, dest_relay_port = bridge_ports.ports
         bucket = hass.data.setdefault(DOMAIN, {})
-        bucket.setdefault("trunk_closed_calls", set()).discard(invite.call_id)
         trunk_cfg = _get_trunk_config(hass)
         dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
         dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
@@ -330,6 +362,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     routes=routes,
                     timeout=float(dtmf_timeout_ms) / 1000.0,
                     terminator=str(trunk_cfg.get(CONF_TRUNK_DTMF_TERMINATOR) or ""),
+                    remote_host=invite.remote_rtp_host,
                 )
                 digits, destination = await collector.collect()
             except Exception as err:
@@ -341,11 +374,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 timeout,
             )
             await asyncio.sleep(timeout)
-            if invite.call_id in bucket.get("trunk_closed_calls", set()):
-                bucket["trunk_closed_calls"].discard(invite.call_id)
-                _LOGGER.info("SIP trunk inbound call_id=%s closed before default routing", invite.call_id)
-                bridge_ports.release()
-                return
+
+        if invite.call_id in bucket.get("trunk_closed_calls", set()):
+            bucket["trunk_closed_calls"].discard(invite.call_id)
+            _LOGGER.info("SIP trunk inbound call_id=%s closed before routing", invite.call_id)
+            bridge_ports.release()
+            return
 
         default_target = str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA"
         route_hint = destination or digits
@@ -369,14 +403,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         elif decision.action is RouteAction.REJECT:
             _LOGGER.info("SIP trunk route not found call_id=%s digits=%s hint=%s", invite.call_id, digits or "-", route_hint or "-")
             _sip_send_bye(hass, invite.call_id)
-            _call_registry(hass).upsert(
-                invite.call_id,
-                state=CallState.TRANSPORT_UNREACHABLE.value,
-                caller=invite.caller,
-                callee=route_hint or default_target,
-                route_kind="trunk",
-                terminal_reason="route_not_found",
-            )
             _set_sip_bridge_call_state(
                 hass,
                 CallState.TRANSPORT_UNREACHABLE.value,
@@ -641,7 +667,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         roster_entries: list[RosterEntry],
     ) -> None:
         registry = _call_registry(hass)
-        members = [str(member).strip() for member in (entry.metadata.get("members") or []) if str(member).strip()]
+        members = _unique_group_members(entry.metadata.get("members"))
         attempts: list[OutboundLeg] = []
         ha_member = False
         for member in members:
@@ -650,6 +676,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if _is_ha_target(member):
                 ha_member = True
                 continue
+            if len(attempts) >= MAX_RING_GROUP_ATTEMPTS:
+                _LOGGER.warning(
+                    "SIP ring group %s has more than %d dialable members; excess members were skipped",
+                    entry.display_name,
+                    MAX_RING_GROUP_ATTEMPTS,
+                )
+                break
             try:
                 leg = _prepare_outbound_leg(
                     member=member,
@@ -694,6 +727,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 "Temporarily Unavailable",
                 decline_reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
             )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
             return
 
         async def _dial(attempt: OutboundLeg) -> tuple[str, OutboundLeg]:
@@ -732,14 +770,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             action = str((decision or {}).get("action") or "").strip().lower()
             return ("cancelled" if action == "cancel" else "ignored", {"member": "__caller__", "caller_control": True})
 
-        tasks = [hass.async_create_task(_dial(attempt)) for attempt in attempts]
+        tasks = [asyncio.create_task(_dial(attempt)) for attempt in attempts]
         if ha_member:
-            tasks.append(hass.async_create_task(_wait_ha()))
+            tasks.append(asyncio.create_task(_wait_ha()))
         else:
-            tasks.append(hass.async_create_task(_wait_caller_cancel()))
+            tasks.append(asyncio.create_task(_wait_caller_cancel()))
         winner: OutboundLeg | dict | None = None
         ha_winner = False
         final_result = "timeout"
+        failure_priority = {
+            "ignored": -1,
+            "timeout": 0,
+            "transport_unreachable": 1,
+            "auth_required_unsupported": 2,
+            "proxy_auth_required_unsupported": 2,
+            "media_incompatible": 3,
+            "busy": 4,
+            "declined": 5,
+            "dnd": 5,
+            "cancelled": 6,
+        }
         try:
             deadline = asyncio.get_running_loop().time() + RING_GROUP_TIMEOUT_S
             pending_tasks = set(tasks)
@@ -754,13 +804,35 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 if not done:
                     break
-                for task in done:
+                completed = []
+                # asyncio.wait() returns a set. Preserve configured member order
+                # so simultaneous answers never depend on hash iteration order.
+                for task in tasks:
+                    if task not in done:
+                        continue
                     try:
-                        result, attempt = task.result()
+                        completed.append(task.result())
                     except Exception as err:
                         _LOGGER.debug("SIP ring group member task failed: %s", err)
-                        continue
-                    final_result = result
+
+                # A local/caller cancellation wins even if an outbound answer
+                # became ready in the same event-loop turn.
+                control_cancel = next(
+                    (
+                        (result, attempt)
+                        for result, attempt in completed
+                        if result == "cancelled"
+                        and isinstance(attempt, dict)
+                        and (attempt.get("caller_control") or attempt.get("ha"))
+                    ),
+                    None,
+                )
+                if control_cancel is not None:
+                    final_result = control_cancel[0]
+                    pending_tasks.clear()
+                    break
+
+                for result, attempt in completed:
                     if isinstance(attempt, OutboundLeg) and result == "in_call" and attempt.client.dialog is not None:
                         winner = attempt
                         break
@@ -768,16 +840,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         winner = attempt
                         ha_winner = True
                         break
-                    if result == "cancelled" and (attempt.get("caller_control") or attempt.get("ha")):
-                        pending_tasks.clear()
-                        break
+                    if failure_priority.get(result, 1) > failure_priority.get(final_result, 0):
+                        final_result = result
             for task in tasks:
                 if not task.done():
                     task.cancel()
-            for attempt in attempts:
-                if attempt is winner:
-                    continue
-                await _close_outbound_leg(attempt, cancel=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            losers = [attempt for attempt in attempts if attempt is not winner]
+            await asyncio.gather(
+                *(_close_outbound_leg(attempt, cancel=True) for attempt in losers),
+                return_exceptions=True,
+            )
             if ha_member and not ha_winner:
                 _pending_routes(hass).pop(invite.call_id, None)
                 _set_ha_softphone_call_state(
@@ -811,6 +884,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     sip_status_code=status_code,
                     last_sip_event="SIP_RESPONSE",
                     route_kind=GROUP_TYPE_RING,
+                )
+                registry.finish_and_pop(
+                    invite.call_id,
+                    reason=terminal_reason,
+                    state=public_state,
                 )
                 return
             if ha_winner:
@@ -857,7 +935,21 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 return
             _pending_routes(hass).pop(invite.call_id, None)
-            assert isinstance(winner, OutboundLeg)
+            if not isinstance(winner, OutboundLeg):
+                _LOGGER.error("SIP ring group selected an invalid winner for call_id=%s", invite.call_id)
+                _sip_send_final_response(
+                    hass,
+                    invite.call_id,
+                    500,
+                    "Server Internal Error",
+                    decline_reason=TerminalReason.PROTOCOL_ERROR.value,
+                )
+                registry.finish_and_pop(
+                    invite.call_id,
+                    reason=TerminalReason.PROTOCOL_ERROR.value,
+                    state=CallState.TRANSPORT_UNREACHABLE.value,
+                )
+                return
             client = winner.client
             source_relay_port, dest_relay_port = winner.ports.ports
             registry.register_bridge(
@@ -902,6 +994,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.relays[invite.call_id] = relay
             dialed_target = entry.display_name or invite.target
             connected_party = str(winner.member or "").strip() or invite.target
+            ha_origin = _is_ha_target(invite.caller)
+            if ha_origin:
+                # The synthetic HA caller has no SIP/RTP socket of its own.
+                # Feed the already-running source side of the relay from the
+                # authenticated browser websocket via a local UDP endpoint.
+                registry.softphone_media[invite.call_id] = {
+                    "rtp_loopback": True,
+                    "remote_rtp_host": local_ip,
+                    "remote_rtp_port": source_relay_port,
+                    "send_format": invite.recv_format,
+                    "recv_format": invite.send_format,
+                    "local_ssrc": secrets.randbelow(0xFFFFFFFF) + 1,
+                }
             registry.upsert(
                 invite.call_id,
                 state=CallState.IN_CALL.value,
@@ -937,7 +1042,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 route_kind=GROUP_TYPE_RING,
                 sip_uri=str(winner.uri),
             )
-            if _is_ha_target(invite.caller):
+            if ha_origin:
                 _set_ha_softphone_call_state(
                     hass,
                     CallState.IN_CALL.value,
@@ -951,10 +1056,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     dialed_target=dialed_target,
                     connected_party=connected_party,
                     answered_by=connected_party,
-                    selected_tx_format=invite.send_format.audio_format.wire_token(),
-                    selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                    selected_tx_rtp_format=invite.send_format.wire_token(),
-                    selected_rx_rtp_format=invite.recv_format.wire_token(),
+                    selected_tx_format=invite.recv_format.audio_format.wire_token(),
+                    selected_rx_format=invite.send_format.audio_format.wire_token(),
+                    selected_tx_rtp_format=invite.recv_format.wire_token(),
+                    selected_rx_rtp_format=invite.send_format.wire_token(),
                     audio_mode="full_duplex",
                     route_kind=GROUP_TYPE_RING,
                     sip_status_code=200,
@@ -973,9 +1078,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             await _terminate_sip_bridge(hass, client.dialog_ids.call_id, terminal_reason=terminal_reason)
         except asyncio.CancelledError:
             _pending_routes(hass).pop(invite.call_id, None)
-            for attempt in attempts:
-                with contextlib.suppress(Exception):
-                    await _close_outbound_leg(attempt, bye_or_cancel=True)
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(
+                *(_close_outbound_leg(attempt, bye_or_cancel=True) for attempt in attempts),
+                return_exceptions=True,
+            )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.CANCELLED.value,
+                state=CallState.CANCELLED.value,
+            )
             raise
 
     async def _ring_conference_members(
@@ -988,11 +1103,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         roster_entries: list[RosterEntry],
     ) -> None:
         manager = conference_manager(hass, local_ip=local_ip)
-        members = [str(member).strip() for member in (entry.metadata.get("ring_members") or []) if str(member).strip()]
+        room = manager.rooms.get(str(room_name or "").strip())
+        available_legs = max(0, MAX_CONFERENCE_LEGS - (len(room.legs) if room is not None and not room._closed else 0))
+        members = _unique_group_members(entry.metadata.get("ring_members"))
         attempts: list[OutboundLeg] = []
         for member in members:
             if _caller_matches_member(caller, source_host, member, peers) or _is_ha_target(member):
                 continue
+            if len(attempts) >= available_legs:
+                _LOGGER.warning(
+                    "SIP conference %s has no capacity for additional ring members; excess members were skipped",
+                    room_name,
+                )
+                break
             try:
                 leg = _prepare_outbound_leg(
                     member=member,
@@ -1051,8 +1174,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     with contextlib.suppress(Exception):
                         await _close_outbound_leg(attempt, bye_or_cancel=True)
 
-        for attempt in attempts:
-            hass.async_create_task(_dial(attempt))
+        await asyncio.gather(*(_dial(attempt) for attempt in attempts), return_exceptions=True)
 
     async def _ring_conference_members_from_ha(entry: RosterEntry) -> None:
         peers = await _async_build_peer_snapshot(hass)
@@ -1068,8 +1190,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         )
 
     async def _start_ring_group_from_ha(entry: RosterEntry) -> str:
-        peers = await _async_build_peer_snapshot(hass)
-        roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
         group_name = str(entry.name or entry.id or "")
         call_id = f"ha-{int(time.time() * 1000):x}"
         send_format = next(
@@ -1119,7 +1239,29 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             sip_status_code=180,
             last_sip_event="LOCAL_RING_GROUP",
         )
-        hass.async_create_task(_run_ring_group_call(invite, entry, peers, roster_entries))
+        try:
+            peers = await _async_build_peer_snapshot(hass)
+            roster_entries = _roster_from_peers(hass, peers, _registered_roster_entries(hass))
+        except Exception:
+            registry.finish_and_pop(
+                call_id,
+                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.TRANSPORT_UNREACHABLE.value,
+                call_id=call_id,
+                caller=_ha_peer_name(hass),
+                callee=group_name,
+                peer_name=group_name,
+                direction="outgoing",
+                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                route_kind=GROUP_TYPE_RING,
+                last_sip_event="PEER_SNAPSHOT_FAILED",
+            )
+            raise
+        create_runtime_task(hass, _run_ring_group_call(invite, entry, peers, roster_entries))
         return call_id
 
     hass.data.setdefault(DOMAIN, {})["async_ring_conference_members"] = _ring_conference_members_from_ha
@@ -1168,17 +1310,23 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if group_type == GROUP_TYPE_CONFERENCE:
                 ring_members = [str(member).strip() for member in ((decision.entry.metadata or {}).get("ring_members") or [])]
                 ring_ha = any(_is_ha_target(member) for member in ring_members)
-                registry.upsert(
-                    invite.call_id,
-                    state=CallState.IN_CALL.value,
-                    caller=invite.caller,
-                    callee=invite.target,
-                    route_kind=GROUP_TYPE_CONFERENCE,
-                )
-                registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.IN_CALL.value)
                 result = await conference_manager(hass, local_ip=local_ip).join(invite, decision.entry, ring_ha=ring_ha)
                 if result.status == 200:
-                    hass.async_create_task(
+                    registry.upsert(
+                        invite.call_id,
+                        state=CallState.IN_CALL.value,
+                        caller=invite.caller,
+                        callee=invite.target,
+                        route_kind=GROUP_TYPE_CONFERENCE,
+                    )
+                    registry.add_leg(
+                        invite.call_id,
+                        invite.call_id,
+                        role="caller",
+                        state=CallState.IN_CALL.value,
+                    )
+                    create_runtime_task(
+                        hass,
                         _ring_conference_members(
                             room_name=str(decision.entry.name or decision.entry.id or invite.target),
                             caller=invite.caller,
@@ -1198,7 +1346,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     route_kind=GROUP_TYPE_RING,
                 )
                 registry.add_leg(invite.call_id, invite.call_id, role="caller", state=CallState.RINGING.value)
-                hass.async_create_task(_run_ring_group_call(invite, decision.entry, peers, roster_entries))
+                create_runtime_task(
+                    hass,
+                    _run_ring_group_call(invite, decision.entry, peers, roster_entries),
+                )
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
             return SipInviteResult(480, "Temporarily Unavailable", to_tag="")
         if _is_trunk_invite(invite):
@@ -1231,6 +1382,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 source_relay_port = 0
                 dest_relay_port = 0
             else:
+                # Clear a theoretically reused Call-ID before handing control
+                # back to the event loop. A BYE received after this point must
+                # remain visible to the background DTMF/router task.
+                bucket.setdefault("trunk_closed_calls", set()).discard(invite.call_id)
                 try:
                     bridge_ports = RtpPortReservation.allocate(hass)
                 except RuntimeError as err:
@@ -1264,7 +1419,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     sip_status_code=200,
                     last_sip_event="INVITE",
                 )
-                hass.async_create_task(
+                create_runtime_task(
+                    hass,
                     _run_trunk_inbound_route(
                         invite,
                         bridge_ports=bridge_ports,
@@ -1853,7 +2009,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
         route = _pending_routes(hass).pop(call_id, None)
-        bucket.setdefault("trunk_closed_calls", set()).add(call_id)
+        closed_calls = bucket.setdefault("trunk_closed_calls", set())
+        if len(closed_calls) >= 256:
+            closed_calls.pop()
+        closed_calls.add(call_id)
         if route is not None:
             future = route.get("future")
             if future is not None and not future.done():

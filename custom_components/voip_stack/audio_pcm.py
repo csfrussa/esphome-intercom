@@ -18,12 +18,6 @@ _RESAMPLER_TAPS_PER_PHASE = 24
 _KAISER_BETA = 9.0
 _ROLLOFF = 0.945
 
-
-def _sign_extend(value: int, bits: int) -> int:
-    sign = 1 << (bits - 1)
-    return (value ^ sign) - sign
-
-
 def _decode_frame(data: bytes, fmt: AudioFormat) -> np.ndarray:
     """Decode PCM bytes to a float64 array shaped (channels, samples)."""
     stride = fmt.container_bytes_per_sample * fmt.channels
@@ -42,7 +36,9 @@ def _decode_frame(data: bytes, fmt: AudioFormat) -> np.ndarray:
         )
         flat = value.astype(np.float64) / 8388608.0
     elif fmt.pcm_format is PcmFormat.S24LE_IN_S32:
-        flat = (np.frombuffer(data, dtype="<i4") >> 8).astype(np.float64) / 8388608.0
+        # ESPHome's s24le_in_s32 contract is a sign-extended 24-bit value in
+        # the low 24 bits (right-aligned), matching the RTP L24 converter.
+        flat = np.frombuffer(data, dtype="<i4").astype(np.float64) / 8388608.0
     else:
         flat = np.frombuffer(data, dtype="<i4").astype(np.float64) / 2147483648.0
     return flat.reshape(-1, fmt.channels).T
@@ -58,7 +54,7 @@ def _encode_frame(channels: np.ndarray, dst: AudioFormat) -> bytes:
         scaled = np.minimum(interleaved * 8388608.0, 8388607.0).astype("<i4")
         return scaled.view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
     if dst.pcm_format is PcmFormat.S24LE_IN_S32:
-        scaled = np.minimum(interleaved * 8388608.0, 8388607.0).astype("<i4") << 8
+        scaled = np.minimum(interleaved * 8388608.0, 8388607.0).astype("<i4")
         return scaled.astype("<i4").tobytes()
     scaled = np.minimum(interleaved * 2147483648.0, 2147483647.0)
     return scaled.astype("<i4").tobytes()
@@ -136,12 +132,13 @@ class PcmFrameConverter:
             return [data]
 
         channels = _map_channels(_decode_frame(data, self.src), self.dst.channels)
-        self._pending = np.concatenate(
-            [self._pending, self._resampler.process(channels)], axis=1
-        )
+        converted = self._resampler.process(channels)
+        frame_samples = self.dst.nominal_frame_samples
+        if self._pending.shape[1] == 0 and converted.shape[1] == frame_samples:
+            return [_encode_frame(converted, self.dst)]
+        self._pending = np.concatenate([self._pending, converted], axis=1)
 
         out: list[bytes] = []
-        frame_samples = self.dst.nominal_frame_samples
         while self._pending.shape[1] >= frame_samples:
             out.append(_encode_frame(self._pending[:, :frame_samples], self.dst))
             self._pending = self._pending[:, frame_samples:]

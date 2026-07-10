@@ -52,7 +52,7 @@ class RecorderProcessor extends AudioWorkletProcessor {
       this._view.setUint8(offset + 1, (v >> 8) & 0xff);
       this._view.setUint8(offset + 2, (v >> 16) & 0xff);
     } else if (this._format.pcmFormat === "s24le_in_s32") {
-      this._view.setInt32(offset, Math.trunc(s < 0 ? s * 0x80000000 : s * 0x7fffff00), true);
+      this._view.setInt32(offset, Math.trunc(s < 0 ? s * 0x800000 : s * 0x7fffff), true);
     } else {
       this._view.setInt32(offset, Math.trunc(s < 0 ? s * 0x80000000 : s * 0x7fffffff), true);
     }

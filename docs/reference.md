@@ -142,9 +142,9 @@ directly to HA. The `username` is the SIP username and central roster ID;
 `conference_group` and `conference_ring` are optional. If `password` is omitted,
 HA generates one and shows it once in a persistent notification and in the
 `voip_stack.call_event` stream with `state: sip_account_created`. If a password
-is supplied manually, HA still reports account creation without echoing the
-secret. Registered clients appear in the central phonebook and are pushed to
-ESPs.
+is supplied manually, HA preserves it exactly and still reports account
+creation without echoing the secret. Registered clients appear in the central
+phonebook and are pushed to ESPs.
 Use `list_accounts` or `export_accounts` to emit the configured accounts
 without passwords in the call event stream.
 

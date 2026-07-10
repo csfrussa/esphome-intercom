@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-import hashlib
 import hmac
 import logging
 from secrets import token_hex, token_urlsafe
@@ -11,13 +10,14 @@ import time
 from typing import Any
 
 from . import sip
-from .sip_auth import parse_digest_challenge
+from .sip_auth import parse_digest_challenge, sip_digest_md5
 from .roster import RosterEntry
 
 
 _LOGGER = logging.getLogger(__name__)
 REALM = "voip_stack"
 NONCE_TTL = 600.0
+MAX_ACTIVE_NONCES = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +152,10 @@ def _register_contacts(request: sip.SipMessage) -> list[tuple[str, int, str]]:
         uri = _extract_uri(header)
         if not uri:
             continue
+        try:
+            uri = str(sip.parse_sip_uri(uri))
+        except (TypeError, ValueError, sip.SipError):
+            continue
         contact_expires = _header_param(header, "expires")
         expires = _parse_expires(contact_expires, default_expires) if contact_expires else default_expires
         contacts.append((uri, expires, header))
@@ -182,8 +186,12 @@ class SipRegistrar:
                 self.registrations.pop(username, None)
 
     def _challenge(self) -> tuple[str, str]:
+        now = time.time()
+        self.nonces = {key: exp for key, exp in self.nonces.items() if exp > now}
+        while len(self.nonces) >= MAX_ACTIVE_NONCES:
+            self.nonces.pop(next(iter(self.nonces)))
         nonce = token_hex(16)
-        self.nonces[nonce] = time.time() + NONCE_TTL
+        self.nonces[nonce] = now + NONCE_TTL
         return nonce, f'Digest realm="{REALM}", nonce="{nonce}", algorithm=MD5, qop="auth"'
 
     def _valid_nonce(self, nonce: str) -> bool:
@@ -202,14 +210,16 @@ class SipRegistrar:
         realm = params.get("realm", REALM)
         uri = params.get("uri", request.uri)
         qop = params.get("qop", "")
-        ha1 = hashlib.md5(f"{account.username}:{realm}:{account.password}".encode()).hexdigest()
-        ha2 = hashlib.md5(f"REGISTER:{uri}".encode()).hexdigest()
+        if realm != REALM or uri != request.uri or (qop and qop.lower() != "auth"):
+            return False
+        ha1 = sip_digest_md5(f"{account.username}:{realm}:{account.password}")
+        ha2 = sip_digest_md5(f"REGISTER:{uri}")
         if qop:
-            expected = hashlib.md5(
-                f"{ha1}:{nonce}:{params.get('nc', '')}:{params.get('cnonce', '')}:{qop}:{ha2}".encode()
-            ).hexdigest()
+            expected = sip_digest_md5(
+                f"{ha1}:{nonce}:{params.get('nc', '')}:{params.get('cnonce', '')}:{qop}:{ha2}"
+            )
         else:
-            expected = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+            expected = sip_digest_md5(f"{ha1}:{nonce}:{ha2}")
         return hmac.compare_digest(expected, params.get("response", ""))
 
     async def handle_register(self, request: sip.SipMessage, addr: tuple[str, int], transport: str) -> SipRegisterResult:

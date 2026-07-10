@@ -86,6 +86,7 @@ def sip_public_state(state: str) -> str:
         "terminating": CallState.TERMINATING.value,
         "busy": CallState.BUSY.value,
         "declined": CallState.DECLINED.value,
+        "dnd": CallState.DECLINED.value,
         "cancelled": CallState.CANCELLED.value,
         "media_incompatible": CallState.MEDIA_INCOMPATIBLE.value,
         "transport_unreachable": CallState.TRANSPORT_UNREACHABLE.value,
@@ -104,7 +105,11 @@ def sip_public_state(state: str) -> str:
         "error": CallState.TRANSPORT_UNREACHABLE.value,
         "protocol_error": CallState.TRANSPORT_UNREACHABLE.value,
     }
-    return mapping.get(value, value or CallState.IDLE.value)
+    if value in mapping:
+        return mapping[value]
+    if value.startswith("sip_"):
+        return CallState.TRANSPORT_UNREACHABLE.value
+    return CallState.TRANSPORT_UNREACHABLE.value if value else CallState.IDLE.value
 
 
 def sip_terminal_reason(result: str, public_state: str | None = None) -> str:
@@ -120,6 +125,7 @@ def sip_terminal_reason(result: str, public_state: str | None = None) -> str:
         "sip_488": TerminalReason.MEDIA_INCOMPATIBLE.value,
         "sip_401": TerminalReason.AUTH_REQUIRED_UNSUPPORTED.value,
         "sip_407": TerminalReason.PROXY_AUTH_REQUIRED_UNSUPPORTED.value,
+        "dnd": "dnd",
     }
     if value in reason_mapping:
         return reason_mapping[value]
@@ -127,6 +133,8 @@ def sip_terminal_reason(result: str, public_state: str | None = None) -> str:
         return TerminalReason.TIMEOUT.value
     if value in {"error", "protocol_error"}:
         return TerminalReason.PROTOCOL_ERROR.value
+    if value.startswith("sip_"):
+        return value
     return public_state or sip_public_state(result)
 
 

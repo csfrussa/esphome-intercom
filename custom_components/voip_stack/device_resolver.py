@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -193,7 +193,7 @@ class VoipDeviceResolver:
                 voip_device_ids.add(entity.device_id)
 
         out: list[dict] = []
-        for device_id in voip_device_ids:
+        for device_id in sorted(voip_device_ids):
             device = device_registry.async_get(device_id)
             if not device:
                 continue

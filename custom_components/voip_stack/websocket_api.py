@@ -240,7 +240,6 @@ async def _async_shutdown_all(hass: HomeAssistant) -> None:
         future = route.get("future") if isinstance(route, dict) else None
         if future is not None and not future.done():
             future.cancel()
-    registry.clear_runtime()
     bucket.pop("sip_bridge_state", None)
     bucket.pop("audio_ws_owners", None)
     store = _ha_softphone_store(hass)
@@ -544,6 +543,29 @@ def _set_ha_softphone_call_state(
     )
     previous_call_id = str(store.get("call_id") or "")
     next_call_id = str(canonical.get("call_id") or "")
+    previous_state = str(store.get("state") or "").strip().lower()
+    if (
+        previous_call_id
+        and next_call_id
+        and next_call_id != previous_call_id
+        and previous_state
+        in {
+            CallState.CALLING.value,
+            CallState.REMOTE_RINGING.value,
+            CallState.RINGING.value,
+            CallState.CONNECTING.value,
+            CallState.IN_CALL.value,
+            CallState.TERMINATING.value,
+        }
+    ):
+        _LOGGER.info(
+            "Ignoring stale HA softphone state=%s call_id=%s; active call_id=%s state=%s",
+            state,
+            next_call_id,
+            previous_call_id,
+            previous_state,
+        )
+        return
     if terminal:
         store["terminal_reason"] = extra.get("reason") or extra.get("terminal_reason") or state
         store["sip_status_code"] = extra.get("code") or extra.get("sip_status_code") or store.get("sip_status_code", "")
@@ -744,7 +766,6 @@ async def websocket_ha_softphone_start(
     msg: Dict[str, Any],
 ) -> None:
     selector = str(msg.get("target_name") or msg.get("callee") or msg.get("target_device_id") or "").strip()
-    call_id = str(msg.get("call_id") or "")
     if not selector:
         connection.send_error(msg["id"], "target_required", "SIP target is required")
         return

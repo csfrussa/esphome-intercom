@@ -44,11 +44,13 @@ def release_media_reservation(item) -> None:
 
 
 def rtp_port_available(port: int) -> bool:
+    if not 1 <= int(port) <= 65535:
+        return False
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.bind(("0.0.0.0", int(port)))
         return True
-    except OSError:
+    except (OSError, OverflowError):
         return False
     finally:
         sock.close()

@@ -21,11 +21,20 @@ from . import rtp
 from .audio_ws import decode_audio_frame, encode_audio_frame
 from .call_registry import CallRegistry
 from .const import CONF_DEBUG_MODE, DOMAIN, HA_SOFTPHONE_DEVICE_ID
+from .debug_capture import (
+    DEBUG_CAPTURE_DIR,
+    ensure_debug_capture_dir,
+    prune_debug_captures,
+    safe_capture_name,
+    wav_pcm_payload,
+)
+from .queue_utils import put_drop_oldest
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
 from .websocket_api import _fire_call_event, _ha_softphone_store
 
 _LOGGER = logging.getLogger(__name__)
-_DEBUG_DIR = Path("/tmp/voip_stack_debug")
+_DEBUG_CAPTURE_SECONDS = 15
+_DEBUG_TIMING_MAX_SAMPLES = 4096
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,19 +47,22 @@ class _SoftphoneMediaSession:
     recv_format: Any
     conference_room: str = ""
     conference_queue: asyncio.Queue[bytes] | None = None
+    local_ssrc: int = 0
 
 
 class _RtpAudioProtocol(asyncio.DatagramProtocol):
     def __init__(self, queue: asyncio.Queue[tuple[bytes, tuple[str, int]]]) -> None:
         self.queue = queue
+        self.dropped_packets = 0
 
     def datagram_received(self, data: bytes, addr) -> None:
-        self.queue.put_nowait((data, addr))
+        if put_drop_oldest(self.queue, (data, addr)):
+            self.dropped_packets += 1
 
 
 class _DebugAudioCapture:
     def __init__(self, call_id: str, *, rx_format: Any, tx_format: Any) -> None:
-        self.call_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in call_id)[:96]
+        self.call_id = str(call_id or "call")
         self.rx_format = rx_format.audio_format
         self.tx_format = tx_format.audio_format
         self.rtp_to_ws = bytearray()
@@ -66,11 +78,11 @@ class _DebugAudioCapture:
 
     def note_rtp_rx(self, now: float, pcm: bytes) -> None:
         self._append_delta(self.rtp_to_ws_deltas_ms, "_last_rtp_rx", now)
-        self.rtp_to_ws.extend(pcm)
+        self._append_pcm(self.rtp_to_ws, pcm, self.rx_format)
 
     def note_ws_rx(self, now: float, pcm: bytes) -> None:
         self._append_delta(self.ws_rx_deltas_ms, "_last_ws_rx", now)
-        self.ws_to_rtp.extend(pcm)
+        self._append_pcm(self.ws_to_rtp, pcm, self.tx_format)
 
     def note_ws_send(self, now: float) -> None:
         self._append_delta(self.ws_send_deltas_ms, "_last_ws_send", now)
@@ -80,15 +92,28 @@ class _DebugAudioCapture:
 
     def _append_delta(self, target: list[float], attr: str, now: float) -> None:
         previous = getattr(self, attr)
-        if previous is not None:
+        if previous is not None and len(target) < _DEBUG_TIMING_MAX_SAMPLES:
             target.append((now - previous) * 1000.0)
         setattr(self, attr, now)
 
+    @staticmethod
+    def _append_pcm(target: bytearray, pcm: bytes, fmt: Any) -> None:
+        max_bytes = (
+            int(fmt.sample_rate)
+            * int(fmt.channels)
+            * int(fmt.container_bytes_per_sample)
+            * _DEBUG_CAPTURE_SECONDS
+        )
+        remaining = max(0, max_bytes - len(target))
+        if remaining:
+            target.extend(pcm[:remaining])
+
     def write(self, counters: dict[str, int]) -> None:
-        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-        rx_path = _DEBUG_DIR / f"{self.call_id}_ha_ws_rtp_to_browser.wav"
-        tx_path = _DEBUG_DIR / f"{self.call_id}_ha_ws_browser_to_rtp.wav"
-        meta_path = _DEBUG_DIR / f"{self.call_id}_ha_ws_timing.json"
+        ensure_debug_capture_dir()
+        safe_name = safe_capture_name(self.call_id)
+        rx_path = DEBUG_CAPTURE_DIR / f"{safe_name}_ha_ws_rtp_to_browser.wav"
+        tx_path = DEBUG_CAPTURE_DIR / f"{safe_name}_ha_ws_browser_to_rtp.wav"
+        meta_path = DEBUG_CAPTURE_DIR / f"{safe_name}_ha_ws_timing.json"
         self._write_wav(rx_path, self.rx_format, self.rtp_to_ws)
         self._write_wav(tx_path, self.tx_format, self.ws_to_rtp)
         meta = {
@@ -104,6 +129,7 @@ class _DebugAudioCapture:
             "rtp_tx_deltas_ms": self.rtp_tx_deltas_ms,
         }
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        prune_debug_captures()
         _LOGGER.info(
             "HA softphone audio debug capture wrote call_id=%s rtp_to_browser=%s bytes=%d "
             "browser_to_rtp=%s bytes=%d timing=%s",
@@ -116,12 +142,12 @@ class _DebugAudioCapture:
         )
 
     def _write_wav(self, path: Path, fmt: Any, payload: bytearray) -> None:
-        sample_width = fmt.container_bytes_per_sample
+        sample_width, wav_payload = wav_pcm_payload(fmt, payload)
         with wave.open(str(path), "wb") as wav_file:
             wav_file.setnchannels(int(fmt.channels))
             wav_file.setsampwidth(int(sample_width))
             wav_file.setframerate(int(fmt.sample_rate))
-            wav_file.writeframes(bytes(payload))
+            wav_file.writeframes(wav_payload)
 
 
 class VoipAudioWebSocketView(HomeAssistantView):
@@ -180,6 +206,16 @@ def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSessi
     inbound = registry.softphone_media
     if call_id and call_id in inbound:
         item = inbound[call_id]
+        if item.get("rtp_loopback"):
+            return _SoftphoneMediaSession(
+                call_id=call_id,
+                local_rtp_port=0,
+                remote_rtp_host=str(item["remote_rtp_host"]),
+                remote_rtp_port=int(item["remote_rtp_port"]),
+                send_format=item["send_format"],
+                recv_format=item["recv_format"],
+                local_ssrc=int(item.get("local_ssrc") or 0),
+            )
         conference_room = str(item.get("conference_room") or "")
         conference_queue = item.get("conference_queue")
         if conference_room and conference_queue is not None:
@@ -231,11 +267,14 @@ async def _run_audio_session(
     if session.conference_queue is not None:
         await _run_conference_audio_session(hass, ws, session)
         return
-    queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
+    frame_ms = max(1, int(session.recv_format.audio_format.frame_ms))
+    rx_queue_frames = max(4, min(16, (160 + frame_ms - 1) // frame_ms))
+    queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue(maxsize=rx_queue_frames)
+    protocol = _RtpAudioProtocol(queue)
     loop = asyncio.get_running_loop()
     try:
         transport, _ = await loop.create_datagram_endpoint(
-            lambda: _RtpAudioProtocol(queue),
+            lambda: protocol,
             local_addr=("0.0.0.0", int(session.local_rtp_port)),
         )
     except OSError as err:
@@ -249,7 +288,7 @@ async def _run_audio_session(
         return
     sequence = secrets.randbelow(0x10000)
     timestamp = secrets.randbelow(0x100000000)
-    ssrc = secrets.randbelow(0x100000000)
+    ssrc = int(session.local_ssrc) or secrets.randbelow(0x100000000)
     closed = asyncio.Event()
     counters = {
         "ws_rx": 0,
@@ -261,11 +300,15 @@ async def _run_audio_session(
         "drop_addr": 0,
         "drop_payload_type": 0,
         "drop_error": 0,
+        "drop_rx_queue": 0,
         "drop_tx_queue": 0,
         "tx_error": 0,
         "tx_silence_keepalive": 0,
     }
     logged_first_rtp = False
+    latched_rtp_source: tuple[str, int] | None = None
+    latched_rtp_ssrc: int | None = None
+    remote_rtp_port = int(session.remote_rtp_port)
     last_counter_event = 0.0
     debug_capture = (
         _DebugAudioCapture(session.call_id, rx_format=session.recv_format, tx_format=session.send_format)
@@ -282,6 +325,7 @@ async def _run_audio_session(
         store = _ha_softphone_store(hass)
         if str(store.get("call_id") or "") != session.call_id:
             return
+        counters["drop_rx_queue"] = protocol.dropped_packets
         update = {
             "rtp_tx_packets": counters["rtp_tx"],
             "rtp_rx_packets": counters["rtp_rx"],
@@ -294,7 +338,7 @@ async def _run_audio_session(
                 "call_id": session.call_id,
                 "local_rtp_port": session.local_rtp_port,
                 "remote_rtp_host": session.remote_rtp_host,
-                "remote_rtp_port": session.remote_rtp_port,
+                "remote_rtp_port": remote_rtp_port,
                 "tx_format": session.send_format.audio_format.wire_token(),
                 "rx_format": session.recv_format.audio_format.wire_token(),
                 "tx_rtp_format": session.send_format.wire_token(),
@@ -333,7 +377,7 @@ async def _run_audio_session(
     rtp_encoder = RtpPayloadEncoder(session.send_format)
 
     async def rtp_to_ws() -> None:
-        nonlocal logged_first_rtp
+        nonlocal latched_rtp_source, latched_rtp_ssrc, logged_first_rtp, remote_rtp_port
         while not closed.is_set():
             data, addr = await queue.get()
             if addr[0] != session.remote_rtp_host:
@@ -355,11 +399,27 @@ async def _run_audio_session(
                 if packet.payload_type != session.recv_format.payload_type:
                     counters["drop_payload_type"] += 1
                     continue
-                counters["rtp_rx"] += 1
-                counters["rtp_rx_bytes"] += len(data)
+                if latched_rtp_ssrc is not None and packet.ssrc != latched_rtp_ssrc:
+                    counters["drop_addr"] += 1
+                    continue
                 pcm = rtp_decoder.decode(packet.payload)
                 if not pcm:
                     continue
+                source = (str(addr[0]), int(addr[1]))
+                if latched_rtp_source is None:
+                    latched_rtp_source = source
+                    latched_rtp_ssrc = packet.ssrc
+                    remote_rtp_port = source[1]
+                elif source[0] != latched_rtp_source[0]:
+                    counters["drop_addr"] += 1
+                    continue
+                elif source[1] != latched_rtp_source[1]:
+                    # Preserve the SSRC latch while allowing a NAT mapping to
+                    # change its source port during a long-lived call.
+                    latched_rtp_source = source
+                    remote_rtp_port = source[1]
+                counters["rtp_rx"] += 1
+                counters["rtp_rx_bytes"] += len(data)
                 if debug_capture is not None:
                     debug_capture.note_rtp_rx(loop.time(), pcm)
                 await ws.send_bytes(encode_audio_frame(pcm))
@@ -371,47 +431,63 @@ async def _run_audio_session(
                 counters["drop_error"] += 1
                 _LOGGER.debug("HA softphone RTP RX drop: %s", err)
 
-    tx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=16)
-
+    tx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
     async def ws_to_rtp() -> None:
         nonlocal sequence, timestamp
         frame_delay = max(0.001, session.send_format.audio_format.frame_ms / 1000.0)
         next_send = loop.time()
         silence_pcm = bytes(int(session.send_format.audio_format.nominal_frame_bytes))
         while not closed.is_set():
+            sleep_for = next_send - loop.time()
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+                if closed.is_set():
+                    break
             try:
-                payload = await asyncio.wait_for(tx_queue.get(), timeout=frame_delay)
-            except asyncio.TimeoutError:
-                payload = rtp_encoder.encode(silence_pcm)
+                pcm = tx_queue.get_nowait()
+                while not tx_queue.empty():
+                    pcm = tx_queue.get_nowait()
+                    counters["drop_tx_queue"] += 1
+            except asyncio.QueueEmpty:
+                pcm = silence_pcm
                 counters["tx_silence_keepalive"] += 1
-            if not payload:
-                continue
-            packet = rtp.build_packet(
-                rtp.RtpPacket(
-                    payload_type=session.send_format.payload_type,
-                    sequence=sequence,
-                    timestamp=timestamp,
-                    ssrc=ssrc,
-                    payload=payload,
+            try:
+                payload = rtp_encoder.encode(pcm)
+            except Exception as err:  # noqa: BLE001 - keep the media clock alive.
+                counters["tx_error"] += 1
+                _LOGGER.debug("HA softphone RTP encode drop: %s", err)
+                timestamp = rtp.next_timestamp(
+                    timestamp,
+                    session.send_format.audio_format.nominal_frame_samples,
                 )
-            )
-            transport.sendto(packet, (session.remote_rtp_host, int(session.remote_rtp_port)))
-            if debug_capture is not None:
-                debug_capture.note_rtp_tx(loop.time())
-            counters["rtp_tx"] += 1
-            counters["rtp_tx_bytes"] += len(packet)
-            sequence = rtp.next_sequence(sequence)
+                next_send = max(next_send + frame_delay, loop.time() + frame_delay)
+                continue
+            if payload:
+                packet = rtp.build_packet(
+                    rtp.RtpPacket(
+                        payload_type=session.send_format.payload_type,
+                        sequence=sequence,
+                        timestamp=timestamp,
+                        ssrc=ssrc,
+                        payload=payload,
+                    )
+                )
+                try:
+                    transport.sendto(packet, (session.remote_rtp_host, remote_rtp_port))
+                except (OSError, RuntimeError) as err:
+                    counters["tx_error"] += 1
+                    _LOGGER.debug("HA softphone RTP TX drop: %s", err)
+                else:
+                    if debug_capture is not None:
+                        debug_capture.note_rtp_tx(loop.time())
+                    counters["rtp_tx"] += 1
+                    counters["rtp_tx_bytes"] += len(packet)
+                sequence = rtp.next_sequence(sequence)
             timestamp = rtp.next_timestamp(timestamp, session.send_format.audio_format.nominal_frame_samples)
             publish_counters()
             next_send += frame_delay
-            sleep_for = next_send - loop.time()
-            if sleep_for < -frame_delay:
-                next_send = loop.time()
-                sleep_for = 0.0
-            try:
-                await asyncio.wait_for(closed.wait(), timeout=max(0.0, sleep_for))
-            except asyncio.TimeoutError:
-                pass
+            if next_send <= loop.time():
+                next_send = loop.time() + frame_delay
 
     rx_task = asyncio.create_task(rtp_to_ws())
     tx_task = asyncio.create_task(ws_to_rtp())
@@ -421,15 +497,15 @@ async def _run_audio_session(
                 try:
                     counters["ws_rx"] += 1
                     pcm = decode_audio_frame(bytes(msg.data))
+                    expected = int(session.send_format.audio_format.nominal_frame_bytes)
+                    if len(pcm) != expected:
+                        raise ValueError(f"browser PCM frame has {len(pcm)} bytes, expected {expected}")
                     if debug_capture is not None:
                         debug_capture.note_ws_rx(loop.time(), pcm)
-                    payload = rtp_encoder.encode(pcm)
-                    if not payload:
-                        continue
                     if tx_queue.full():
                         tx_queue.get_nowait()
                         counters["drop_tx_queue"] += 1
-                    tx_queue.put_nowait(payload)
+                    tx_queue.put_nowait(pcm)
                 except Exception as err:  # noqa: BLE001 - report malformed browser frames without killing HA.
                     counters["tx_error"] += 1
                     _LOGGER.debug("HA softphone browser audio TX drop: %s", err)
@@ -451,7 +527,7 @@ async def _run_audio_session(
         publish_counters(force=True)
         _LOGGER.info(
             "HA softphone audio websocket detached call_id=%s ws_rx=%d rtp_tx=%d rtp_rx=%d ws_tx=%d "
-            "drop_addr=%d drop_pt=%d drop_error=%d drop_tx_queue=%d tx_error=%d",
+            "drop_addr=%d drop_pt=%d drop_error=%d drop_rx_queue=%d drop_tx_queue=%d tx_error=%d",
             session.call_id,
             counters["ws_rx"],
             counters["rtp_tx"],
@@ -460,6 +536,7 @@ async def _run_audio_session(
             counters["drop_addr"],
             counters["drop_payload_type"],
             counters["drop_error"],
+            protocol.dropped_packets,
             counters["drop_tx_queue"],
             counters["tx_error"],
         )
@@ -472,6 +549,11 @@ async def _run_conference_audio_session(
     ws: web.WebSocketResponse,
     session: _SoftphoneMediaSession,
 ) -> None:
+    conference_queue = session.conference_queue
+    if conference_queue is None:
+        _LOGGER.error("HA softphone conference session has no media queue call_id=%s", session.call_id)
+        await ws.close(code=1011, message=b"Conference media queue unavailable")
+        return
     closed = asyncio.Event()
     counters = {
         "ws_rx": 0,
@@ -502,9 +584,8 @@ async def _run_conference_audio_session(
     _LOGGER.info("HA softphone conference websocket attached call_id=%s room=%s", session.call_id, session.conference_room)
 
     async def room_to_ws() -> None:
-        assert session.conference_queue is not None
         while not closed.is_set():
-            pcm = await session.conference_queue.get()
+            pcm = await conference_queue.get()
             await ws.send_bytes(encode_audio_frame(pcm))
             counters["ws_tx"] += 1
 
@@ -531,6 +612,12 @@ async def _run_conference_audio_session(
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
         if manager is not None:
             await manager.leave_ha_softphone(session.conference_room)
+        registry = hass.data.setdefault(DOMAIN, {}).get("call_registry")
+        if isinstance(registry, CallRegistry):
+            media = registry.softphone_media.get(session.call_id)
+            if media is not None and media.get("conference_queue") is session.conference_queue:
+                registry.softphone_media.pop(session.call_id, None)
+                registry.finish_and_pop(session.call_id, reason="local_hangup")
         store = _ha_softphone_store(hass)
         if str(store.get("call_id") or "") == session.call_id:
             store.update({"last_sip_event": "conference_media", **counters})

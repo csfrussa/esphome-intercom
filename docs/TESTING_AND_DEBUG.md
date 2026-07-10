@@ -117,7 +117,7 @@ For HA-side runtime, inspect call events, softphone state events and
 When RTP relay debug is enabled, HA writes WAV captures under:
 
 ```text
-/tmp/voip_stack_debug/
+~/.cache/voip_stack_debug/
 ```
 
 The filenames include source/destination call IDs and side labels. Use these

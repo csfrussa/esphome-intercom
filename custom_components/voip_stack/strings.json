@@ -59,6 +59,7 @@
       }
     },
     "error": {
+      "sip_rtp_port_conflict": "SIP and RTP must use different ports.",
       "trunk_server_required": "Trunk server is required.",
       "trunk_username_required": "Trunk username is required.",
       "trunk_password_required": "Trunk password is required."
