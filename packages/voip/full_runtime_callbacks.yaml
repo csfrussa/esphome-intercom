@@ -8,33 +8,29 @@ voip_stack:
   on_calling:
     - script.execute:
         id: ui_call_started
-        peer: !lambda 'return id(phone).get_current_destination();'
+        peer: !lambda 'return peer;'
   on_ringing:
     - script.execute:
         id: ui_call_started
-        peer: !lambda 'return id(phone).get_caller();'
+        peer: !lambda 'return peer;'
   on_dest_ringing:
     - script.execute:
         id: ui_call_dest_ringing
-        peer: !lambda 'return id(phone).get_current_destination();'
+        peer: !lambda 'return peer;'
   on_in_call:
     - script.execute: voip_stop_ringtone
     - script.execute:
         id: ui_call_started
-        peer: !lambda |-
-          auto c = id(phone).get_caller();
-          return c.empty() ? id(phone).get_current_destination() : c;
+        peer: !lambda 'return peer;'
   on_hangup:
     - script.execute: voip_stop_ringtone
     - script.execute:
         id: ui_call_ended
-        peer: !lambda |-
-          auto c = id(phone).get_caller();
-          return c.empty() ? id(phone).get_current_destination() : c;
+        peer: !lambda 'return peer;'
         reason: !lambda 'return reason;'
   on_call_failed:
     - script.execute: voip_stop_ringtone
     - script.execute:
         id: ui_call_ended
-        peer: !lambda 'return id(phone).get_current_destination();'
+        peer: !lambda 'return peer;'
         reason: !lambda 'return reason;'

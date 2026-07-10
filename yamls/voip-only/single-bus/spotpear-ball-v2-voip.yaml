@@ -466,10 +466,10 @@ voip_stack:
   delete_contact_missing_from:
     updates_number: 1
   on_phonebook_update:
-    - lambda: 'id(peer_name) = id(phone).get_current_destination();'
+    - lambda: 'id(peer_name) = destination;'
     - script.execute: update_call_idle_labels
   on_destination_changed:
-    - lambda: 'id(peer_name) = id(phone).get_current_destination();'
+    - lambda: 'id(peer_name) = destination;'
     - script.execute: update_call_idle_labels
     - script.execute: draw_display
 
@@ -1367,7 +1367,8 @@ script:
           }
       - if:
           condition:
-            lambda: 'return id(phone).get_state_str() == "idle";'
+            voip_stack.is_idle:
+              id: phone
           then:
             - script.execute: update_call_idle_labels
             - script.execute: update_idle_labels

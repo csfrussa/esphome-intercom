@@ -592,10 +592,10 @@ voip_stack:
   # Idle screen refresh hook: each merge cycle ends with publish_destination_,
   # so re-render so peer name + contact count reflect the new roster.
   on_phonebook_update:
-    - lambda: id(peer_name) = id(phone).get_current_destination();
+    - lambda: id(peer_name) = destination;
     - script.execute: update_call_idle_labels
   on_destination_changed:
-    - lambda: id(peer_name) = id(phone).get_current_destination();
+    - lambda: id(peer_name) = destination;
     - script.execute: update_call_idle_labels
     - script.execute: draw_display
 
