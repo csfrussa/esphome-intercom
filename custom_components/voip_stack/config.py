@@ -6,6 +6,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_ASSIST_ENDPOINT_ENABLED,
+    CONF_ASSIST_EXTENSION,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -25,6 +27,15 @@ from .const import (
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
+
+
+def entry_assist_config(entry: ConfigEntry | None = None) -> dict:
+    """Return the optional native Assist SIP endpoint configuration."""
+    data = entry.data if entry is not None else {}
+    return {
+        CONF_ASSIST_ENDPOINT_ENABLED: bool(data.get(CONF_ASSIST_ENDPOINT_ENABLED, False)),
+        CONF_ASSIST_EXTENSION: str(data.get(CONF_ASSIST_EXTENSION) or "").strip(),
+    }
 
 
 def entry_transport_config(entry: ConfigEntry | None = None) -> dict:

@@ -144,6 +144,7 @@ def sip_target_audio_profile(
 
 
 def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries) -> list:
+    from .const import CONF_ASSIST_ENDPOINT_ENABLED, CONF_ASSIST_EXTENSION, DOMAIN, VOIP_STACK_ASSIST_SIP_PORT
     from .groups import collect_groups
     from .roster import RosterEntry, merge_roster_overrides
 
@@ -177,6 +178,20 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
     manual_entries = manual_roster_entries(hass)
     entries = merge_roster_overrides(entries, manual_entries)
     entries.extend(registered_entries)
+    assist = hass.data.get(DOMAIN, {}).get("assist_config", {})
+    if assist.get(CONF_ASSIST_ENDPOINT_ENABLED) and assist.get(CONF_ASSIST_EXTENSION):
+        extension = assist[CONF_ASSIST_EXTENSION]
+        port = int(hass.data.get(DOMAIN, {}).get("assist_sip_port", VOIP_STACK_ASSIST_SIP_PORT))
+        entries.append(
+            RosterEntry(
+                id="Assist",
+                name="Voice Assistant",
+                extension=extension,
+                sip_uri=f"sip:assist@127.0.0.1:{port};transport=udp",
+                ha_bridge=True,
+                metadata={"virtual_endpoint": "assist_satellite"},
+            )
+        )
     groups = collect_groups(peers, manual_entries, registered_entries, existing_entries=entries)
     for group in groups.values():
         entries.append(

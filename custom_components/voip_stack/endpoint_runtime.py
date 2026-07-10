@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 
 from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS, HA_TRUNK_AUDIO_FORMATS
+from .call_registry import TERMINAL_STATES
 from .config import debug_mode as _debug_mode
 from .const import (
     CONF_REGISTRAR_ENABLED,
@@ -29,6 +30,7 @@ from .const import (
     CONF_TRUNK_USERNAME,
     DOMAIN,
     HA_SOFTPHONE_DEVICE_ID,
+    VOIP_STACK_ASSIST_BRIDGE_USER,
 )
 from .endpoint_lifecycle import (
     async_stop_sip_endpoint,
@@ -1295,6 +1297,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             caller_entry = _roster_entry_for_target(invite.caller_uri.user, registered_entries)
         caller_is_registered_endpoint = bool(caller_entry is not None and caller_entry.metadata.get("registered"))
         decision = _inbound_route_decision(invite, peers, roster_entries)
+        if decision.action is RouteAction.ASSIST:
+            # The Assist extension is public like every other SIP destination;
+            # the internal native satellite trusts only this fixed B2BUA leg.
+            caller_is_registered_endpoint = True
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
         route_bucket = _pending_routes(hass)
@@ -1305,6 +1311,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if invite.call_id in pending:
             _LOGGER.debug("SIP INVITE retransmit while HA softphone is ringing call_id=%s", invite.call_id)
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        if decision.action is RouteAction.ASSIST and any(
+            session.route_kind == RouteAction.ASSIST.value and session.state not in TERMINAL_STATES
+            for session in registry.sessions.values()
+        ):
+            return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         if decision.action is RouteAction.GROUP:
             group_type = str((decision.entry.metadata or {}).get("group_type") or "") if decision.entry is not None else ""
             if group_type == GROUP_TYPE_CONFERENCE:
@@ -1598,6 +1609,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             RouteAction.DIRECT,
             RouteAction.FORWARD,
             RouteAction.BRIDGE,
+            RouteAction.ASSIST,
         } and (decision.entry is not None or bool(decision.sip_uri))
         if not force_ha_softphone and (bridge_to_trunk or routeable_sip_target):
             peer_target = _peer_for_target(decision.target or invite.target, peers)
@@ -1658,7 +1670,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 bridge_to_softphone = bool(
                     decision.entry is not None and decision.entry.sip_uri and decision.entry.metadata.get("registered")
                 )
-                if bridge_to_trunk or bridge_to_softphone:
+                bridge_to_assist = decision.action is RouteAction.ASSIST
+                if bridge_to_trunk or bridge_to_softphone or bridge_to_assist:
                     sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
                 client = SipCallClient(
@@ -1666,7 +1679,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     local_name=(
                         str(trunk_cfg.get(CONF_TRUNK_USERNAME) or _ha_peer_name(hass))
                         if bridge_to_trunk
-                        else invite.caller or _ha_peer_name(hass)
+                        else VOIP_STACK_ASSIST_BRIDGE_USER if bridge_to_assist else invite.caller or _ha_peer_name(hass)
                     ),
                     local_sip_port=int(cfg["sip_port"]),
                     local_rtp_port=dest_relay_port,
@@ -1677,7 +1690,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or "") if bridge_to_trunk else "",
                     password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if bridge_to_trunk else "",
                     outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if bridge_to_trunk else "",
-                    include_common_codecs=bridge_to_trunk or bridge_to_softphone,
+                    include_common_codecs=bridge_to_trunk or bridge_to_softphone or bridge_to_assist,
                 )
                 if not bridge_to_trunk:
                     _enable_reused_sip_tcp_connection(

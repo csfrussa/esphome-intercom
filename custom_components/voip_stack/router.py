@@ -17,6 +17,7 @@ class RouteAction(StrEnum):
     BRIDGE = "bridge"
     TRUNK = "trunk"
     GROUP = "group"
+    ASSIST = "assist"
     REJECT = "reject"
     BUSY = "busy"
     DECLINE = "decline"
@@ -214,6 +215,8 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
     if entry is not None and not entry.enabled:
         return RouteDecision(RouteAction.REJECT, target=target, status=403, reason=RouteReason.TARGET_DISABLED, entry=entry)
     if entry is not None:
+        if entry.metadata.get("virtual_endpoint") == "assist_satellite":
+            return RouteDecision(RouteAction.ASSIST, target=entry.id, sip_uri=entry.sip_uri, reason=RouteReason.EXPLICIT_ROUTE, source="phonebook", entry=entry)
         if entry.metadata.get("group_type"):
             return RouteDecision(RouteAction.GROUP, target=entry.id, reason=RouteReason.EXPLICIT_ROUTE, source="phonebook", entry=entry)
         if bool(entry.metadata.get("local_ha")):

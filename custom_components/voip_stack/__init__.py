@@ -17,6 +17,7 @@ from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
 
 from .config import (
+    entry_assist_config as _entry_assist_config,
     entry_transport_config as _entry_transport_config,
     entry_trunk_config as _entry_trunk_config,
     transport_config as _get_transport_config,
@@ -24,6 +25,7 @@ from .config import (
     trunk_enabled as _trunk_enabled,
 )
 from .const import (
+    CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
     CONF_TRUNK_AUTH_USERNAME,
@@ -1521,6 +1523,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "rtp_port": VOIP_STACK_RTP_PORT,
     }
     hass.data[DOMAIN][CONF_DEBUG_MODE] = False
+    hass.data[DOMAIN]["assist_config"] = _entry_assist_config(None)
     hass.data[DOMAIN]["trunk_config"] = _entry_trunk_config(None)
     hass.data[DOMAIN]["sip_port"] = VOIP_STACK_SIP_PORT
     await _async_setup_shared(hass, config)
@@ -1530,8 +1533,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up VoIP Stack from a config entry (UI setup)."""
     cfg = _entry_transport_config(entry)
+    assist_cfg = _entry_assist_config(entry)
     trunk_cfg = _entry_trunk_config(entry)
     hass.data.setdefault(DOMAIN, {})["transport_config"] = cfg
+    hass.data[DOMAIN]["assist_config"] = assist_cfg
     hass.data[DOMAIN]["trunk_config"] = trunk_cfg
     hass.data[DOMAIN]["sip_port"] = cfg["sip_port"]
     hass.data[DOMAIN][CONF_DEBUG_MODE] = bool(entry.data.get(CONF_DEBUG_MODE, False))
@@ -1541,6 +1546,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         bool(entry.data.get(CONF_ASSIST_INTENTS, False)),
     )
+    if assist_cfg[CONF_ASSIST_ENDPOINT_ENABLED]:
+        from .assist_companion import async_prepare_assist_companion
+
+        hass.data[DOMAIN]["assist_sip_port"] = await async_prepare_assist_companion(hass, stack_sip_port=cfg["sip_port"])
     if not await _async_start_sip_endpoint(hass):
         raise ConfigEntryError(
             f"Failed to bind SIP port {cfg['sip_port']}. Another SIP "

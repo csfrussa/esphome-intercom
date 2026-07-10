@@ -15,7 +15,10 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
+from .config_validation import extension_conflicts
 from .const import (
+    CONF_ASSIST_ENDPOINT_ENABLED,
+    CONF_ASSIST_EXTENSION,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
     CONF_PHONEBOOK_CONTACTS,
@@ -116,6 +119,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             "rtp_port": existing.get("rtp_port", VOIP_STACK_RTP_PORT),
             "advertise_host": existing.get("advertise_host", ""),
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
+            CONF_ASSIST_ENDPOINT_ENABLED: existing.get(CONF_ASSIST_ENDPOINT_ENABLED, False),
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
             CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
@@ -129,6 +133,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_ASSIST_INTENTS,
                     default=defaults[CONF_ASSIST_INTENTS],
                 ): BooleanSelector(),
+                vol.Required(CONF_ASSIST_ENDPOINT_ENABLED, default=defaults[CONF_ASSIST_ENDPOINT_ENABLED]): BooleanSelector(),
                 vol.Required(CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]): BooleanSelector(),
                 vol.Required(CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]): BooleanSelector(),
                 vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
@@ -147,6 +152,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 self._base_input = dict(user_input)
+                if user_input[CONF_ASSIST_ENDPOINT_ENABLED]:
+                    return await self.async_step_assist()
+                self._base_input[CONF_ASSIST_EXTENSION] = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
                 if user_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
                 data = dict(user_input)
@@ -158,6 +166,34 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self._store_entry(data)
 
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_assist(self, user_input=None):
+        """Configure the optional native Assist SIP extension."""
+        _current_entry, existing = self._current_entry_data()
+        suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
+        schema = vol.Schema(
+            {vol.Required(CONF_ASSIST_EXTENSION, description={"suggested_value": suggested}): TextSelector()}
+        )
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            extension = str(user_input.get(CONF_ASSIST_EXTENSION) or "").strip()
+            if not extension.isdigit() or not 1 <= len(extension) <= 8:
+                errors["base"] = "assist_extension_invalid"
+            elif extension != suggested and extension_conflicts(extension, existing):
+                errors["base"] = "assist_extension_conflict"
+            if not errors:
+                assert self._base_input is not None
+                self._base_input[CONF_ASSIST_EXTENSION] = extension
+                if self._base_input[CONF_TRUNK_ENABLED]:
+                    return await self.async_step_trunk()
+                data = dict(self._base_input)
+                _disabled_trunk_data(data, existing)
+                current_entry, _existing = self._current_entry_data()
+                if current_entry is None:
+                    await self.async_set_unique_id(DOMAIN)
+                    self._abort_if_unique_id_configured()
+                return self._store_entry(data)
+        return self.async_show_form(step_id="assist", data_schema=schema, errors=errors)
 
     async def async_step_trunk(self, user_input=None):
         _current_entry, existing = self._current_entry_data()

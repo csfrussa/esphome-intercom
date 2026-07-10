@@ -473,6 +473,12 @@ Recommended first setup:
   multihomed hosts or routed networks.
 - **Assist intents**: enable if you want Home Assistant Assist phrases such as
   call, answer, decline and hang up.
+- **Include voice assistant**: optionally publishes Home Assistant's native
+  Assist pipeline as a SIP destination. When enabled, the next step asks for
+  the extension; no extension is assumed or reserved by default. Calls may
+  come from ESP endpoints, registered clients, trunks or unregistered SIP
+  callers. Choose the pipeline for the generated VoIP satellite from its
+  **Assistant** select entity in Home Assistant.
 - **Debug mode**: keep disabled for normal use. Enable only while collecting
   SIP/RTP diagnostics.
 - **Trunk enabled**: leave disabled unless you want HA to register to a
@@ -1684,6 +1690,10 @@ The Voice Assistant, Micro Wake Word, and VoIP call path coexist on the same har
   Assistant Assist intents for calling, hangup, answer and decline from the
   satellite that heard the sentence. Maintained full YAMLs also expose an
   optional ESPHome `voice_quiet` action for "shut up" style assistant silence.
+- **Assist by telephone**: enable **Include voice assistant** in the VoIP Stack
+  config flow and assign an extension to call any native Home Assistant Assist
+  pipeline through SIP. The route is independent of the conversation provider,
+  so it works with Codex Assist and other HA conversation agents alike.
 - **Runtime AEC mode switching**: An `AEC Mode` select entity in Home Assistant lets you switch between SR and VOIP AEC modes at runtime without reflashing
 - **Weather at a glance**: Current conditions, temperature, and 5-day forecast updated automatically (touch displays)
 - **Mood-aware responses**: The assistant shows different expressions (happy, neutral, angry) based on the tone of its reply. Requires instructing your LLM to prepend an ASCII emoticon (`:-)` `:-(` `:-|`) to each response based on its tone

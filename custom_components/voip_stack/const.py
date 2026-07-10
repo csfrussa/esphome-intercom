@@ -5,6 +5,8 @@ from pathlib import Path
 
 DOMAIN = "voip_stack"
 CONF_ASSIST_INTENTS = "assist_intents"
+CONF_ASSIST_ENDPOINT_ENABLED = "assist_endpoint_enabled"
+CONF_ASSIST_EXTENSION = "assist_extension"
 CONF_DEBUG_MODE = "debug_mode"
 CONF_REGISTRAR_ENABLED = "sip_registrar_enabled"
 CONF_SIP_ACCOUNTS = "sip_accounts"
@@ -37,3 +39,5 @@ HA_SOFTPHONE_ENDPOINT_ENTITY_ID = "sensor.voip_stack_ha_softphone_voip_endpoint"
 
 VOIP_STACK_SIP_PORT = 5060
 VOIP_STACK_RTP_PORT = 40000
+VOIP_STACK_ASSIST_SIP_PORT = 5065
+VOIP_STACK_ASSIST_BRIDGE_USER = "voip-stack-assist"
