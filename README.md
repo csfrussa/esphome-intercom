@@ -443,17 +443,12 @@ ESP static contacts remain local offline/custom additions. See
 
 #### Option A: Install via HACS (Recommended)
 
-1. In HACS, go to **⋮ → Custom repositories**.
-2. Add `https://github.com/n-IA-hane/esphome-intercom` as **Integration**.
-3. Find "VoIP Stack" and click **Download**.
-4. Restart Home Assistant.
-5. Go to **Settings → Integrations → Add Integration** → search "VoIP Stack" → click **Submit**.
-6. In the config flow, set the SIP and RTP ports only if the defaults do not fit
+1. In HACS, search for **VoIP Stack**.
+2. Open the VoIP Stack integration page and click **Download**.
+3. Restart Home Assistant.
+4. Go to **Settings → Integrations → Add Integration** → search **VoIP Stack** → click **Submit**.
+5. In the config flow, set the SIP and RTP ports only if the defaults do not fit
    your network. Default ports are SIP `5060` and RTP base `40000`.
-
-![HACS custom repository](docs/images/hacs-custom-repository.png)
-
-_Add the repository as a HACS integration repository._
 
 ![HACS download VoIP Stack](docs/images/hacs-download-voip-stack.png)
 
@@ -489,6 +484,12 @@ rings HA immediately; a value from `1` to `10` seconds lets callers dial a
 phonebook `extension` such as `101` before HA falls back to the default target.
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
+
+HACS already includes this repository. You only need **Custom repositories** if
+you intentionally want to test an unreleased development branch. For example,
+while validating `dev`, add `https://github.com/n-IA-hane/esphome-intercom` as
+an **Integration** custom repository in HACS and select the development version
+explicitly. Normal users should install the published HACS entry instead.
 
 #### After Every VoIP Stack Upgrade: Hard Refresh The Card Page
 
