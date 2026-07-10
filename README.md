@@ -119,16 +119,17 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-`2026.7.1-dev` is the current GitHub-only development pre-release. It keeps the
-SIP/VoIP foundation introduced in `2026.7.0` and adds the fully qualified PBX
-group flows, stricter SIP transactions, bounded RTP/audio queues, event-driven
-AFE processing, deterministic runtime-controller dispatch and a hardened HA
-softphone/card path.
+`2026.7.1-dev` builds on stable `2026.7.0` with HA-owned ring groups and
+conference rooms, extension and group settings for HA and registered SIP
+phones, and a richer Lovelace experience for both HA and ESP endpoints. ESP
+mirror cards now combine their keypad and endpoint Options view, with labels
+and controls aligned consistently.
 
-The latest qualification covered real WS3 and Spotpear hardware, HA and ESP
-calls, registered and unknown SIP callers, ring groups, conferences, trunk
-cancel, 8/16/48 kHz media, browser audio and concurrent music + TTS + VoIP
-load. No polling delay was added to the real-time paths.
+Call setup, cancellation, teardown, browser audio and ESP real-time processing
+have also been hardened. The qualification covered real WS3 and Spotpear
+hardware, HA and ESP calls, registered and unknown SIP callers, groups,
+conferences, trunk cancellation, 8/16/48 kHz media and concurrent music, TTS
+and VoIP load.
 
 This pre-release is for manual source deployment and device testing, not for
 installation through HACS. Keep HACS pre-release tracking disabled; the normal
@@ -136,8 +137,8 @@ HACS path remains on stable `2026.7.0`.
 
 Read the release details:
 
-- [2026.7.1-dev pre-release notes](docs/RELEASE_2026_7_1_DEV.md)
-- [What's New](docs/WHATS_NEW.md)
+- [2026.7.1-dev complete release notes](docs/RELEASE_2026_7_1_DEV.md)
+- [Release history](docs/WHATS_NEW.md)
 - [Breaking Changes](docs/BREAKING_CHANGES.md)
 - [Stable 2026.7.0 release notes](docs/RELEASE_2026_7_0.md)
 

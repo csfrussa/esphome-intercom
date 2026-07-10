@@ -1,23 +1,162 @@
-# 2026.7.1-dev: Qualified SIP/VoIP, Real-Time Audio And PBX Hardening
+# 2026.7.1-dev: Group Calls, Conferences And A Stronger VoIP Stack
 
-> [!WARNING]
-> This is a GitHub development pre-release for manual source/device testing,
-> not for installation through HACS. Keep HACS pre-release tracking disabled;
-> the normal HACS path remains on stable `2026.7.0`.
+<!-- Canonical source for the v2026.7.1-dev GitHub release body. -->
 
-This refresh keeps the HA-anchored PBX primitives introduced by the first
-`2026.7.1-dev` snapshot and adds the complete SIP, real-time, frontend and
-hardware qualification pass.
+> [!IMPORTANT]
+> This is a GitHub development pre-release for manual testing, not a HACS
+> release. Keep HACS pre-release tracking disabled; the normal HACS path remains
+> on stable `2026.7.0`.
 
-## Manual Test Installation
+`2026.7.1-dev` contains the changes made after stable `2026.7.0`. It expands
+the Home Assistant phone system with real ring groups and conference rooms,
+makes the Lovelace card more useful for both HA and ESP phones, and hardens the
+call and audio paths for everyday use.
 
-Use the `v2026.7.1-dev` GitHub tag or a fresh `dev` checkout. For the Home
-Assistant integration, manually copy `custom_components/voip_stack` into the
-Home Assistant configuration's `custom_components` directory, restart Home
-Assistant and refresh the browser frontend cache.
+## 🏠 VoIP Stack / Home Assistant
 
-For firmware testing from a checkout, route every maintained project source to
-the four `dev` branches before compiling:
+- ☎️ The existing HA softphone can now publish its own extension, ring-group
+  membership, conference-group membership and conference-ringing preference.
+- 🔄 Changes made from the card or services are reflected through HA's virtual
+  endpoint and republished to the shared phonebook.
+- 🧑‍💼 Registered SIP phones are first-class endpoints. Their accounts can use
+  extensions and join the same ring or conference groups as HA and ESP devices.
+- 🌍 Incoming calls are not limited to callers stored in the phonebook.
+  Reachable and protocol-compatible SIP callers can ring HA or an ESP, subject
+  to normal destination, busy and DND checks.
+- 🧭 Extensions, group contacts, registered phones, ESP endpoints and optional
+  trunk routes all resolve through the same dial plan.
+- 🧹 Endpoint departure, reboot and roster-service timing are handled
+  automatically, so stale contacts and missed phonebook pushes are less likely.
+
+## 🎛️ Lovelace Card
+
+- 🪞 ESP mirror cards keep their original meaning: each card represents one ESP
+  phone and uses that ESP's own call controls and synchronized phonebook.
+- ⌨️ ESP mirror cards now include a keypad for a manual phonebook name, SIP URI,
+  extension or number without overwriting the contact selected on the device.
+- ⚙️ The Options view exposes Auto Answer, DND, extension, ring groups,
+  conference groups and conference ringing when the selected endpoint supports
+  them.
+- 📐 Option labels share one left edge; fields, selectors and checkboxes share a
+  clean right-hand control column.
+- 🏠 HA softphone cards expose the same HA-owned extension and group settings
+  without creating a second routing or call-state engine in the browser.
+- 🔔 Ringtone, DND and terminal call state no longer race normal card refresh or
+  cleanup paths.
+- 🔒 Caller and destination labels are inserted as text, so SIP display strings
+  cannot become card markup.
+
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1-dev/docs/images/esp-mirror-card-keypad-options.png"
+    alt="ESP mirror card with keypad and endpoint options"
+    width="420"
+    style="max-width: 100%; height: auto;"
+  >
+</p>
+
+_ESP mirror card with keypad, Auto Answer, DND, extension and group controls
+expanded._
+
+## 🔔 Ring Groups
+
+Call a group such as `RG Home` and every available member rings together.
+Home Assistant, ESP phones, registered SIP endpoints and manual contacts can all
+participate.
+
+The first member to answer wins. Other early legs are cancelled, and a late
+answer cannot steal or duplicate the established call. Group contacts are
+created from live membership and disappear when no endpoint declares them.
+
+## 🎙️ Conference Groups
+
+Home Assistant can now host SIP conference rooms. Calling a contact such as
+`CG Home` joins that room; members with conference ringing enabled can also be
+invited when the room starts.
+
+The conference focus mixes the active participants, applies additional headroom
+as the room grows and cleans up invited legs and media ports when the owner or
+last participant leaves.
+
+## 📒 Phonebook And Dial Plan
+
+- Group fields accept comma-separated membership, so one phone can belong to
+  more than one room or ring group.
+- The roster advertises directional media capabilities and the fields needed by
+  HA, ESP and registered endpoints.
+- Numeric inbound routing uses the same phonebook extensions instead of a
+  separate static route table.
+- HA refreshes the roster when an ESP's phonebook service appears after reboot,
+  closing the window where discovery could finish before the service was ready.
+- SIP authentication retries rebuild the transaction correctly for stricter
+  PBX and FRITZ!Box implementations.
+
+## 📞 More Predictable Calls
+
+- SIP transactions now match the correct Call-ID, CSeq, branch, dialog tags and
+  peer before changing a call.
+- Retransmissions, decline, cancel, busy, answer, hangup and immediate redial
+  have deterministic ownership and cleanup.
+- A cancel that crosses a successful answer is completed with the proper
+  acknowledgement and teardown instead of leaving a ghost call.
+- Reused SIP/TCP connections serialize outgoing messages and keep pending work
+  bounded.
+- Unsupported hold or codec-changing re-INVITE requests receive `488 Not
+  Acceptable Here` without destroying the call already in progress.
+- Ring-group legs, conference members, RTP ports, registrations and transaction
+  caches all have explicit limits instead of growing without bound.
+
+## 🔊 Audio And ESP Real-Time Performance
+
+- Browser audio has one owner per call and uses stateful codecs, absolute pacing
+  and bounded queues.
+- PCMA 8 kHz, L16 48 kHz and Opus 48 kHz paths are used where the endpoints on
+  that leg support them.
+- ESP audio conversion state and working buffers are prepared outside the
+  per-frame path.
+- The AFE worker is persistent and event-driven. It sleeps on notifications
+  while idle; no periodic delay was added to hide contention.
+- Single-microphone and dual-microphone AFE paths retain their appropriate
+  Espressif processing routes.
+- Music, TTS and bidirectional VoIP were exercised together while monitoring
+  heap, PSRAM and main-loop latency.
+
+## ✅ Validation
+
+- Home Assistant, integration, card and tooling: 281 tests plus 25 subtests.
+- ESP VoIP stack: 55 tests.
+- Audio and AFE: 19 tests.
+- Runtime controller: 6 tests.
+- Virtual call scenarios: 27 passed.
+- Qualification matrix: 2,162 valid combinations.
+- Terminal-state regression: 1,000 seeded repetitions.
+- Real WS3 and Spotpear calls covered HA-to-ESP, ESP-to-HA, ESP-to-ESP,
+  registered SIP endpoints, callers absent from the phonebook, ring groups,
+  conferences, DND, Auto Answer, trunk cancellation and immediate reuse.
+- Both S3 targets completed clean ESPHome 2026.6.5 builds, concurrent OTA
+  deployment and return-to-online checks.
+
+## ⚠️ Boundaries To Know Before Testing
+
+Read [Breaking Changes](BREAKING_CHANGES.md) when updating an earlier
+development snapshot. In particular:
+
+- structured ESP contacts use `ip` and `transport`; richer number, extension
+  and group fields belong to the HA phonebook;
+- the phonebook is an outbound dial plan, not an inbound caller allowlist;
+- full hold/resume renegotiation is not implemented;
+- trunk digit routing consumes RTP `telephone-event`, not SIP INFO bodies;
+- ESP SIP/RTP remains plaintext and belongs on a trusted LAN or VPN, or behind
+  an SBC.
+
+## 🧪 Manual Test Installation
+
+Use the `v2026.7.1-dev` GitHub tag or a fresh `dev` checkout. Manually copy
+`custom_components/voip_stack` into Home Assistant's `custom_components`
+directory, restart Home Assistant and refresh the frontend cache.
+
+For firmware testing, route the maintained project sources to their `dev`
+branches before compiling:
 
 ```bash
 ./scripts/yaml_paths.sh remote \
@@ -28,134 +167,7 @@ the four `dev` branches before compiling:
 ./scripts/yaml_paths.sh check
 ```
 
-Do not enable HACS pre-release tracking for this test. The HACS installation
-path remains the stable `2026.7.0` release.
-
-The installed integration and Lovelace card footer must both report
-`v2026.7.1-dev` after restart/cache refresh.
-
-## Home Assistant PBX And Dial Plan
-
-- Home Assistant publishes its own SIP endpoint identity and remains the
-  softphone, router, bridge, registrar, conference focus and optional trunk
-  client.
-- ESP devices, HA, registered SIP endpoints and manual contacts use the same
-  central phonebook and routing model.
-- Ring groups implement winner-takes-all forking: first answer wins, early
-  losers receive CANCEL and confirmed non-winners are cleaned up.
-- Conference groups use an HA-hosted media focus. Multiple participants can
-  join, optional members can be invited and owner/room teardown is bounded.
-- Extension, ring-group and conference-group membership stays data-driven and
-  propagates through the endpoint/roster surface.
-- Roster capability metadata supports directional audio negotiation instead of
-  forcing one global format.
-
-## SIP And RTP Hardening
-
-- UDP and TCP transactions validate Call-ID, CSeq, method, Via branch, dialog
-  tags and peer ownership.
-- INVITE retransmission, provisional/final timers and required ACK behavior are
-  deterministic.
-- CANCEL versus `200 OK`, repeated `200 OK`, BYE and connection teardown races
-  now preserve SIP dialog rules.
-- Reused SIP/TCP connections have serialized writers and bounded pending work.
-- RTP port reservations, group legs, conference members, queues, transaction
-  caches, nonces and registrations have explicit capacity/ownership limits.
-- Different TX and RX PCM formats can be negotiated and bridged with explicit
-  conversion where supported.
-- Unknown or unregistered callers are accepted when they can reach the listener
-  and pass ordinary destination, busy/DND and SDP checks. The phonebook is not
-  an inbound allowlist.
-- Session-changing re-INVITE, including hold, receives `488 Not Acceptable
-  Here`; the original dialog/media remains usable and can later receive BYE.
-- Trunk digit routing consumes RTP `telephone-event`. SIP INFO is acknowledged
-  but its body is not a digit source.
-
-## HA Softphone, Card And Browser Audio
-
-- The Lovelace card is the UI/audio surface for the HA softphone; it does not
-  duplicate backend routing or call state.
-- Endpoint discovery is single-flight and startup retry is bounded.
-- DND, terminal state, ringtone, cleanup and device-local preferences no longer
-  race stale frontend state.
-- Option rows consistently align labels on the left and fields, selectors and
-  checkboxes on the right in both ESP mirror and HA softphone modes.
-- Caller/destination strings are rendered through safe text nodes.
-- Browser audio has one owner per Call-ID, stateful codecs, absolute pacing and
-  bounded queues/counters.
-- Debug audio capture is opt-in, path-safe, stored in a private directory and
-  retention-limited to 24 files / 64 MiB.
-
-The current ESP mirror surface can keep the manual keypad and the selected
-endpoint's options visible together. The keypad still calls through that ESP's
-own phonebook/`start_call` path; Auto Answer, DND, extension and group controls
-remain ESP-owned entities rather than card-local routing state.
-
-![ESP mirror keypad and options](https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1-dev/docs/images/esp-mirror-card-keypad-options.png)
-
-_Real `v2026.7.1-dev` ESP mirror card with keypad and endpoint options
-expanded._
-
-## ESP VoIP And Real-Time Audio
-
-- SIP/SDP parsing and UTF-8 fields are size-bounded.
-- UDP payload validation prevents advertised frames that exceed the configured
-  datagram budget.
-- The VoIP hot path uses blocking sockets, notifications and real deadlines;
-  it does not add polling sleeps to mask contention.
-- The AFE worker is persistent and event-driven. It parks while idle, drains
-  before detach/reconfigure and avoids per-frame task create/delete.
-- Converter state and working buffers are prepared outside the per-frame path.
-- Single-mic AFE uses the direct ESP-SR feed/fetch path; dual-mic AFE uses the
-  GMF manager/pipeline bridge.
-- With a processor enabled, unavailable output fails closed to silence. The
-  parent AEC switch is an explicit raw-mic bypass on the same microphone
-  surface.
-- Runtime-controller tables and reentrant queues are bounded; derived activity
-  evaluation is order-independent and cyclic definitions are rejected.
-
-## Validation
-
-Automated gates:
-
-- Home Assistant/integration/frontend/tooling: 281 tests plus 25 subtests;
-- ESP VoIP stack: 55 tests;
-- audio/AFE: 19 tests;
-- runtime controller: 6 tests;
-- virtual VoIP scenarios: 27 passed;
-- qualification matrix: 2,162 valid combinations;
-- terminal-state regression: 1,000 seeded repetitions passed;
-- maintained YAML path check: 17/17 passed.
-
-Real endpoints and media:
-
-- HA to/from WS3 and Spotpear, ESP-to-ESP, registered endpoints and HA browser
-  softphone;
-- ring group, conference, DND, auto-answer, trunk cancel and immediate
-  post-hangup reuse;
-- caller identities absent from both registration and phonebook;
-- re-INVITE/hold rejection while preserving the established call;
-- PCMA 8 kHz, L16 48 kHz and Opus 48 kHz where supported by each leg;
-- real incoming/outgoing browser AudioWorklet + WebSocket + RTP calls with zero
-  observed drop/underrun in the final runs;
-- concurrent music, TTS and bidirectional VoIP with heap, PSRAM and main-loop
-  monitoring;
-- clean ESPHome 2026.6.5 builds and concurrent OTA return-to-online for both S3
-  devices.
-
-## Breaking And Security Boundaries
-
-Read [`BREAKING_CHANGES.md`](BREAKING_CHANGES.md) before upgrading custom dev
-YAML or automations. In particular:
-
-- structured ESP contacts use `ip`/`transport`; the HA phonebook owns richer
-  endpoint and dial-plan fields;
-- caller admission is a network/SBC policy, not a hidden phonebook allowlist;
-- full SDP hold/resume renegotiation is not implemented;
-- ESP SIP/RTP is plaintext and belongs on a trusted LAN/VPN or behind an SBC;
-- SIP TLS, SRTP, ICE/TURN, REFER/transfer and advanced session timers remain
-  outside this pre-release profile.
-
-When reporting a regression, include the exact YAML, ESPHome and Home Assistant
-versions, caller/destination path, negotiated TX/RX formats and the relevant HA
-and ESP logs.
+After restart, both the installed integration and the card footer must report
+`v2026.7.1-dev`. When reporting a regression, include the YAML, ESPHome and
+Home Assistant versions, the caller and destination, and the negotiated audio
+formats.

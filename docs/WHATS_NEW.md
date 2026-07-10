@@ -1,66 +1,26 @@
 # What's New
 
-## 2026.7.1-dev: Qualified SIP/VoIP And Real-Time Hardening
+This page is a short release index. The complete notes for each version live in
+the linked versioned document, which is also the canonical GitHub release body.
 
-`2026.7.1-dev` is a GitHub-only development pre-release for manual testing, not
-for installation through HACS. Keep HACS pre-release tracking disabled; the
-normal HACS path remains on stable `2026.7.0`.
+## 2026.7.1-dev: Group Calls, Conferences And A Stronger VoIP Stack
 
-This update completes the qualification pass that followed the initial PBX
-group implementation:
+`2026.7.1-dev` is a manual GitHub pre-release, not a HACS release. It contains
+only changes made after stable `2026.7.0`.
 
-- SIP UDP and TCP transactions now apply stricter Call-ID, CSeq, Via branch,
-  tag and peer matching.
-- INVITE retransmission, non-2xx ACK, CANCEL/200 races, BYE cleanup and reused
-  TCP connections have deterministic ownership and teardown.
-- Ring groups keep one atomic winner and cancel every losing early leg.
-- Conference rooms bound membership and RTP port ownership and clean up
-  auto-invited legs when the initiating owner leaves.
-- The HA softphone, card and browser audio share one backend call model. The
-  frontend no longer creates a parallel route/call state machine.
-- Browser audio uses stateful codecs, absolute pacing and bounded queues. Real
-  incoming and outgoing AudioWorklet/WebSocket/RTP calls completed with zero
-  observed drop or underrun in the final headless qualification.
-- Unknown and unregistered callers can reach HA or an ESP when network policy,
-  destination state and SDP allow it. The phonebook remains the outbound dial
-  plan rather than an inbound allowlist.
-- Unsupported hold or codec-changing re-INVITE receives `488 Not Acceptable
-  Here` without destroying the established dialog or preventing its later BYE.
-- The ESP AFE path is event-driven. Its resident worker sleeps on notifications
-  while idle; no periodic `vTaskDelay` was introduced to hide contention.
-- Runtime-controller derived activities are order-independent, cycles are
-  rejected and reentrant dispatch is drained in bounded main-loop batches.
-- Debug capture is opt-in, path-safe, private (`0700`) and retention-bounded.
+The main additions are HA-owned ring groups and conference rooms, extension and
+group settings for HA and registered SIP endpoints, an expanded ESP mirror
+keypad and Options view, and more predictable SIP, browser-audio and ESP
+real-time behavior.
 
-### ESP Mirror Keypad And Options
+The qualification covered real WS3 and Spotpear hardware, HA and ESP calls,
+registered and unknown SIP callers, groups, conferences, trunk cancellation,
+8/16/48 kHz media and concurrent music, TTS and VoIP load.
 
-The ESP mirror card can expose its manual target keypad and the selected ESP's
-runtime options in one expanded view. Calls still use that ESP's own
-`start_call` action and synchronized phonebook; the card does not create a
-parallel HA-side route. Option labels are aligned on the left, while fields,
-selectors and checkboxes share a clean right-hand control column.
+Read the complete user-facing pre-release note:
 
-![ESP mirror keypad and options](images/esp-mirror-card-keypad-options.png)
-
-_Real `v2026.7.1-dev` card with keypad, Auto Answer, DND, extension, ring-group,
-conference-group and conference-ringing controls expanded._
-
-The final validation covered:
-
-- 281 Home Assistant/integration/frontend tests plus 25 subtests;
-- 55 ESP VoIP stack tests, 19 audio/AFE tests and 6 runtime-controller tests;
-- 2,162 qualification-matrix combinations and 27 virtual call scenarios;
-- real WS3 and Spotpear calls, ring group, conference, registered endpoints,
-  caller identities absent from the phonebook, trunk cancel and re-INVITE;
-- PCMA 8 kHz, L16 48 kHz and Opus 48 kHz legs where each endpoint supports
-  them;
-- concurrent music, TTS and bidirectional VoIP with heap/PSRAM/loop monitoring;
-- clean ESPHome 2026.6.5 builds and concurrent OTA qualification of both S3
-  targets.
-
-Read the complete pre-release notes:
-
-- [`RELEASE_2026_7_1_DEV.md`](RELEASE_2026_7_1_DEV.md)
+- [`2026.7.1-dev` release notes](RELEASE_2026_7_1_DEV.md)
+- [Breaking Changes](BREAKING_CHANGES.md)
 
 ## 2026.7.0: ESPHome Devices Are VoIP Phones Now
 
