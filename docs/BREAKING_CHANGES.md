@@ -1,5 +1,45 @@
 # Breaking changes
 
+## 2026.7.1-dev: Development Contract Updates
+
+The stable `2026.7.0` migration below remains the main breaking change.
+`2026.7.1-dev` additionally makes several previously implicit development
+contracts explicit. Review them before testing an older custom dev YAML,
+automation, SIP client or card fork.
+
+- **Manual pre-release only.** Do not install this GitHub pre-release through
+  HACS or enable HACS pre-release tracking for it. HACS installations should
+  remain on stable `2026.7.0`; test `v2026.7.1-dev` from a source checkout or
+  tag.
+- **ESP contact schema.** Structured ESP `static_contacts` and
+  `voip_stack.add_contact` entries use `name`, optional `ip`, `port`,
+  `rtp_port` and `transport`. `address`, `sip_uri`, `extension`, `number`,
+  groups and media metadata are HA central-phonebook fields.
+- **No inbound phonebook allowlist.** An unknown or unregistered SIP peer with
+  network reachability can call HA or an ESP. Normal destination, busy/DND and
+  SDP checks still apply. Enforce caller admission at a firewall, VLAN, VPN or
+  SBC boundary when required.
+- **No transparent hold renegotiation.** An in-dialog re-INVITE, including
+  ordinary hold or codec replacement, receives `488 Not Acceptable Here`. The
+  original media/dialog remains established and a later BYE still terminates
+  it normally.
+- **DTMF route input.** HA acknowledges SIP INFO as a supported method, but the
+  trunk digit router consumes RTP `telephone-event`; it does not parse INFO
+  bodies as digits.
+- **Processor bypass semantics.** When the configured audio processor is
+  enabled, unavailable processed output fails closed to silence. Disabling the
+  parent AEC switch explicitly publishes converted raw microphone audio on the
+  same public microphone surface.
+- **Bounded reentrant runtime events.** Runtime-controller events/actions
+  created during a drain stay queued for the next main-loop turn. Custom
+  automations must not depend on an unbounded synchronous self-trigger chain.
+- **Plaintext local media boundary.** ESP SIP is UDP/TCP without TLS and RTP is
+  UDP without SRTP. Do not expose an ESP listener directly to an untrusted
+  network.
+
+The full change and validation summary is in
+[`RELEASE_2026_7_1_DEV.md`](RELEASE_2026_7_1_DEV.md).
+
 ## 2026.7.0: ESPHome devices are SIP phones now
 
 This release is the SIP/VoIP migration. It is not a small protocol tweak and it

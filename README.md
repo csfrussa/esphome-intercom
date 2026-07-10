@@ -119,22 +119,46 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-`2026.7.0` is the SIP/VoIP migration release. It replaces the old
-project-specific call-control path with SIP/SDP/RTP call handling, ESP SIP
-endpoints, Home Assistant routing/bridging, local SIP endpoint accounts and
-optional trunk support.
+`2026.7.1-dev` is the current GitHub-only development pre-release. It keeps the
+SIP/VoIP foundation introduced in `2026.7.0` and adds the fully qualified PBX
+group flows, stricter SIP transactions, bounded RTP/audio queues, event-driven
+AFE processing, deterministic runtime-controller dispatch and a hardened HA
+softphone/card path.
+
+The latest qualification covered real WS3 and Spotpear hardware, HA and ESP
+calls, registered and unknown SIP callers, ring groups, conferences, trunk
+cancel, 8/16/48 kHz media, browser audio and concurrent music + TTS + VoIP
+load. No polling delay was added to the real-time paths.
+
+This pre-release is for manual source deployment and device testing, not for
+installation through HACS. Keep HACS pre-release tracking disabled; the normal
+HACS path remains on stable `2026.7.0`.
 
 Read the release details:
 
+- [2026.7.1-dev pre-release notes](docs/RELEASE_2026_7_1_DEV.md)
 - [What's New](docs/WHATS_NEW.md)
-- [Full 2026.7.0 release notes](docs/RELEASE_2026_7_0.md)
 - [Breaking Changes](docs/BREAKING_CHANGES.md)
+- [Stable 2026.7.0 release notes](docs/RELEASE_2026_7_0.md)
 
 ## Breaking Changes
 
-`2026.7.0` is intentionally breaking. ESP devices are SIP phones, Home
-Assistant is a SIP softphone/router/bridge/trunk endpoint, and the old
-project-specific call-control path is not a fallback.
+The `2026.7.0` SIP migration remains the breaking baseline: ESP devices are SIP
+phones, Home Assistant is a SIP softphone/router/bridge/trunk endpoint, and the
+old project-specific call-control path is not a fallback.
+
+Additional `2026.7.1-dev` boundaries matter when upgrading an earlier dev
+snapshot:
+
+- ESP structured contacts use `ip` and `transport`; the richer
+  `address`/`sip_uri` schema belongs to the HA phonebook.
+- The phonebook is an outbound dial plan, not an inbound caller allowlist.
+- In-dialog re-INVITE/hold is rejected with `488` while the established call
+  remains active; full hold/resume renegotiation is not implemented.
+- Trunk digit routing consumes RTP `telephone-event`; SIP INFO bodies are not a
+  digit input.
+- Disabling the parent audio processor switch is an explicit raw-microphone
+  bypass on the same microphone surface.
 
 Read the full migration list before upgrading custom YAMLs or automations:
 [`docs/BREAKING_CHANGES.md`](docs/BREAKING_CHANGES.md).

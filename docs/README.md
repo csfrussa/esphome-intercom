@@ -14,8 +14,9 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   HA-managed central roster examples.
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
-  starts from the current SIP/VoIP breaking migration. The full incoming release
-  note is [RELEASE_2026_7_0.md](RELEASE_2026_7_0.md).
+  starts from the current SIP/VoIP breaking migration. The current manual-only
+  dev pre-release is [RELEASE_2026_7_1_DEV.md](RELEASE_2026_7_1_DEV.md); the
+  stable release note is [RELEASE_2026_7_0.md](RELEASE_2026_7_0.md).
 
 - 📚 **Configuration reference**: [reference.md](reference.md) covers the ESP
   `voip_stack` options, triggers, actions and conditions plus the Home Assistant

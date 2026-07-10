@@ -1,5 +1,54 @@
 # What's New
 
+## 2026.7.1-dev: Qualified SIP/VoIP And Real-Time Hardening
+
+`2026.7.1-dev` is a GitHub-only development pre-release for manual testing, not
+for installation through HACS. Keep HACS pre-release tracking disabled; the
+normal HACS path remains on stable `2026.7.0`.
+
+This update completes the qualification pass that followed the initial PBX
+group implementation:
+
+- SIP UDP and TCP transactions now apply stricter Call-ID, CSeq, Via branch,
+  tag and peer matching.
+- INVITE retransmission, non-2xx ACK, CANCEL/200 races, BYE cleanup and reused
+  TCP connections have deterministic ownership and teardown.
+- Ring groups keep one atomic winner and cancel every losing early leg.
+- Conference rooms bound membership and RTP port ownership and clean up
+  auto-invited legs when the initiating owner leaves.
+- The HA softphone, card and browser audio share one backend call model. The
+  frontend no longer creates a parallel route/call state machine.
+- Browser audio uses stateful codecs, absolute pacing and bounded queues. Real
+  incoming and outgoing AudioWorklet/WebSocket/RTP calls completed with zero
+  observed drop or underrun in the final headless qualification.
+- Unknown and unregistered callers can reach HA or an ESP when network policy,
+  destination state and SDP allow it. The phonebook remains the outbound dial
+  plan rather than an inbound allowlist.
+- Unsupported hold or codec-changing re-INVITE receives `488 Not Acceptable
+  Here` without destroying the established dialog or preventing its later BYE.
+- The ESP AFE path is event-driven. Its resident worker sleeps on notifications
+  while idle; no periodic `vTaskDelay` was introduced to hide contention.
+- Runtime-controller derived activities are order-independent, cycles are
+  rejected and reentrant dispatch is drained in bounded main-loop batches.
+- Debug capture is opt-in, path-safe, private (`0700`) and retention-bounded.
+
+The final validation covered:
+
+- 281 Home Assistant/integration/frontend tests plus 25 subtests;
+- 55 ESP VoIP stack tests, 19 audio/AFE tests and 6 runtime-controller tests;
+- 2,162 qualification-matrix combinations and 27 virtual call scenarios;
+- real WS3 and Spotpear calls, ring group, conference, registered endpoints,
+  caller identities absent from the phonebook, trunk cancel and re-INVITE;
+- PCMA 8 kHz, L16 48 kHz and Opus 48 kHz legs where each endpoint supports
+  them;
+- concurrent music, TTS and bidirectional VoIP with heap/PSRAM/loop monitoring;
+- clean ESPHome 2026.6.5 builds and concurrent OTA qualification of both S3
+  targets.
+
+Read the complete pre-release notes:
+
+- [`RELEASE_2026_7_1_DEV.md`](RELEASE_2026_7_1_DEV.md)
+
 ## 2026.7.0: ESPHome Devices Are VoIP Phones Now
 
 This is the release where the project changes category.
