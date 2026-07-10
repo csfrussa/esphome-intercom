@@ -947,7 +947,8 @@ In `esp_mirror` mode the card follows ESPHome entities. Its contact buttons use
 the ESP's own phonebook cycler, while the keypad view sends a manual target to
 that same ESP `start_call` action without overwriting the selected-contact
 sensor. ESP mirror options manipulate the ESP-exposed DND/group entities when
-they are present.
+they are present. Option rows use one consistent two-column layout, with labels
+on the left and fields, selectors and checkboxes aligned on the right.
 
 ![ESP mirror keypad and options](docs/images/esp-mirror-card-keypad-options.png)
 

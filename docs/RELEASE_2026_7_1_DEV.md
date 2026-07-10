@@ -78,6 +78,8 @@ The installed integration and Lovelace card footer must both report
 - Endpoint discovery is single-flight and startup retry is bounded.
 - DND, terminal state, ringtone, cleanup and device-local preferences no longer
   race stale frontend state.
+- Option rows consistently align labels on the left and fields, selectors and
+  checkboxes on the right in both ESP mirror and HA softphone modes.
 - Caller/destination strings are rendered through safe text nodes.
 - Browser audio has one owner per Call-ID, stateful codecs, absolute pacing and
   bounded queues/counters.

@@ -1515,15 +1515,32 @@ class VoipStackCard extends HTMLElement {
         margin-top: 10px;
         padding: 8px 10px;
         border-top: 1px solid var(--divider-color, #ddd);
+        text-align: left;
       }
       .settings-panel[hidden] { display: none; }
       .auto-answer-row {
-        display: flex; align-items: center; justify-content: center;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
         gap: 8px; margin-top: 8px; font-size: 0.85em; color: var(--secondary-text-color);
       }
       .auto-answer-row[hidden] { display: none; }
-      .auto-answer-row input { cursor: pointer; accent-color: var(--primary-color); }
-      .auto-answer-row label { cursor: pointer; user-select: none; }
+      .auto-answer-row input {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+        margin: 0;
+        cursor: pointer;
+        accent-color: var(--primary-color);
+      }
+      .auto-answer-row label {
+        grid-column: 1;
+        grid-row: 1;
+        justify-self: start;
+        cursor: pointer;
+        user-select: none;
+      }
+      .softphone-groups-panel { width: 100%; }
       .softphone-groups-panel[hidden] { display: none; }
       .softphone-group-row {
         display: grid;
@@ -1534,7 +1551,7 @@ class VoipStackCard extends HTMLElement {
         font-size: 0.85em;
         color: var(--secondary-text-color);
       }
-      .softphone-group-row label { min-width: 0; }
+      .softphone-group-row label { min-width: 0; text-align: left; }
       .softphone-group-row input,
       .softphone-group-row select {
         width: 100%;

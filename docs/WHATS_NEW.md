@@ -37,7 +37,8 @@ group implementation:
 The ESP mirror card can expose its manual target keypad and the selected ESP's
 runtime options in one expanded view. Calls still use that ESP's own
 `start_call` action and synchronized phonebook; the card does not create a
-parallel HA-side route.
+parallel HA-side route. Option labels are aligned on the left, while fields,
+selectors and checkboxes share a clean right-hand control column.
 
 ![ESP mirror keypad and options](images/esp-mirror-card-keypad-options.png)
 
