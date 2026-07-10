@@ -1067,10 +1067,14 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_listener_accepts_in_dialog_reinvite_without_restarting_route(self) -> None:
         sent: list[bytes] = []
+        fmt = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        original_offer = sdp.build_offer(
+            "192.168.1.48", "192.168.1.48", 40000, [fmt]
+        ).encode()
         endpoint = sip_listener.SipUdpEndpoint(
             local_ip="192.168.1.10",
             local_rtp_port=40000,
-            supported_formats=[audio_format.AudioFormat(16000, "s16le", 1, 20)],
+            supported_formats=[fmt],
             on_invite=lambda _: None,  # type: ignore[arg-type]
             send_override=lambda data, _addr: sent.append(data),
         )
@@ -1087,7 +1091,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                     ("CSeq", "1 INVITE"),
                     ("Content-Type", "application/sdp"),
                 ],
-                b"v=0\r\n",
+                original_offer,
             )
         )
         endpoint.active_dialogs["reinvite-call"] = sip_listener._ActiveDialog(
@@ -1104,7 +1108,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 ("CSeq", "2 INVITE"),
                 ("Content-Type", "application/sdp"),
             ],
-            b"v=0\r\n",
+            original_offer,
         )
         await endpoint._handle_datagram(reinvite, addr)
         response = sip.parse_message(sent[-1])
@@ -1112,7 +1116,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.body, b"v=0\r\n")
         self.assertIn("reinvite-call", endpoint.active_dialogs)
 
-        media_change = sip.build_request(
+        compatible_media_change = sip.build_request(
             "INVITE",
             "sip:Casa@192.168.1.10",
             [
@@ -1123,9 +1127,36 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 ("CSeq", "3 INVITE"),
                 ("Content-Type", "application/sdp"),
             ],
-            b"v=0\r\na=sendonly\r\n",
+            sdp.build_offer(
+                "192.168.1.48", "192.168.1.48", 45000, [fmt]
+            ).encode(),
         )
-        await endpoint._handle_datagram(media_change, addr)
+        await endpoint._handle_datagram(compatible_media_change, addr)
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 200)
+        self.assertEqual(
+            endpoint.active_dialogs["reinvite-call"].request.body,
+            compatible_media_change.split(b"\r\n\r\n", 1)[1],
+        )
+
+        incompatible_media_change = sip.build_request(
+            "INVITE",
+            "sip:Casa@192.168.1.10",
+            [
+                ("Via", "SIP/2.0/UDP 192.168.1.48;branch=z9hG4bKincompatible"),
+                ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                ("To", "<sip:Casa@192.168.1.10>;tag=local"),
+                ("Call-ID", "reinvite-call"),
+                ("CSeq", "4 INVITE"),
+                ("Content-Type", "application/sdp"),
+            ],
+            sdp.build_offer(
+                "192.168.1.48",
+                "192.168.1.48",
+                45002,
+                [audio_format.AudioFormat(8000, "s16le", 1, 20)],
+            ).encode(),
+        )
+        await endpoint._handle_datagram(incompatible_media_change, addr)
         self.assertEqual(sip.parse_message(sent[-1]).status_code, 488)
         self.assertIn("reinvite-call", endpoint.active_dialogs)
 

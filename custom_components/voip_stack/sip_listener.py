@@ -575,8 +575,33 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 self._send_response(request, addr, 481, "Call/Transaction Does Not Exist", to_tag=existing_dialog.to_tag)
                 return
             if not retransmit and request.body and request.body != existing_dialog.request.body:
-                self._send_response(request, addr, 488, "Not Acceptable Here", to_tag=existing_dialog.to_tag)
-                return
+                previous_invite = self._parse_invite(
+                    existing_dialog.request, existing_dialog.addr
+                )
+                updated_invite = self._parse_invite(request, addr)
+                same_media = bool(
+                    previous_invite is not None
+                    and updated_invite is not None
+                    and previous_invite.send_format.wire_token()
+                    == updated_invite.send_format.wire_token()
+                    and previous_invite.recv_format.wire_token()
+                    == updated_invite.recv_format.wire_token()
+                )
+                if not same_media:
+                    self._send_response(
+                        request,
+                        addr,
+                        488,
+                        "Not Acceptable Here",
+                        to_tag=existing_dialog.to_tag,
+                    )
+                    return
+                _LOGGER.info(
+                    "SIP in-dialog re-INVITE accepted call_id=%s remote_rtp=%s:%s",
+                    call_id,
+                    updated_invite.remote_rtp_host,
+                    updated_invite.remote_rtp_port,
+                )
             body = existing_dialog.answer_sdp.encode("utf-8") if existing_dialog.answer_sdp else b""
             if self._send_response(request, addr, 200, "OK", body=body, to_tag=existing_dialog.to_tag):
                 if not retransmit:
