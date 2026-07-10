@@ -9,6 +9,7 @@ This is the working list for refreshing README and documentation media for the
 |---|---|---|---|
 | `docs/images/dashboard.gif` | GIF | First visual impression and dashboard call flow | Captured: card scrolls contacts, calls Home, then hangs up |
 | `docs/images/esp-mirror-card.png` | Screenshot | ESP mirror Lovelace mode | Captured: card bound to an ESP endpoint |
+| `docs/images/esp-mirror-card-keypad-options.png` | Screenshot | Expanded ESP mirror keypad and endpoint options | Captured: real `v2026.7.1-dev` card with keypad, Auto Answer, DND, extension and group controls visible together |
 | `docs/images/ha-softphone-card.png` | Screenshot | HA softphone Lovelace mode | Captured: HA card with destination selector |
 | `docs/images/ha-softphone-options.jpg` | Screenshot | HA softphone options panel | Captured: Auto Answer, DND and ringtone controls |
 | `docs/images/ha-softphone-keypad.jpg` | Screenshot | HA softphone keypad/manual dial view | Captured: direct name/extension/number entry |

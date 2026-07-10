@@ -949,6 +949,12 @@ that same ESP `start_call` action without overwriting the selected-contact
 sensor. ESP mirror options manipulate the ESP-exposed DND/group entities when
 they are present.
 
+![ESP mirror keypad and options](docs/images/esp-mirror-card-keypad-options.png)
+
+_Expanded ESP mirror mode: the manual keypad and the selected ESP's Auto
+Answer, DND, extension, ring-group and conference-group controls are visible
+together. The values shown are example endpoint settings._
+
 In `ha_softphone` mode the card has its own destination selector, Auto Answer,
 Do Not Disturb, extension and group controls. It rings only for calls addressed
 to Home Assistant and does not mirror an ESP card state. Only `esp_mirror`

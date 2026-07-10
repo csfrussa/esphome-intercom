@@ -84,6 +84,16 @@ The installed integration and Lovelace card footer must both report
 - Debug audio capture is opt-in, path-safe, stored in a private directory and
   retention-limited to 24 files / 64 MiB.
 
+The current ESP mirror surface can keep the manual keypad and the selected
+endpoint's options visible together. The keypad still calls through that ESP's
+own phonebook/`start_call` path; Auto Answer, DND, extension and group controls
+remain ESP-owned entities rather than card-local routing state.
+
+![ESP mirror keypad and options](https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1-dev/docs/images/esp-mirror-card-keypad-options.png)
+
+_Real `v2026.7.1-dev` ESP mirror card with keypad and endpoint options
+expanded._
+
 ## ESP VoIP And Real-Time Audio
 
 - SIP/SDP parsing and UTF-8 fields are size-bounded.

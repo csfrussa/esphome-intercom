@@ -32,6 +32,18 @@ group implementation:
   rejected and reentrant dispatch is drained in bounded main-loop batches.
 - Debug capture is opt-in, path-safe, private (`0700`) and retention-bounded.
 
+### ESP Mirror Keypad And Options
+
+The ESP mirror card can expose its manual target keypad and the selected ESP's
+runtime options in one expanded view. Calls still use that ESP's own
+`start_call` action and synchronized phonebook; the card does not create a
+parallel HA-side route.
+
+![ESP mirror keypad and options](images/esp-mirror-card-keypad-options.png)
+
+_Real `v2026.7.1-dev` card with keypad, Auto Answer, DND, extension, ring-group,
+conference-group and conference-ringing controls expanded._
+
 The final validation covered:
 
 - 281 Home Assistant/integration/frontend tests plus 25 subtests;
