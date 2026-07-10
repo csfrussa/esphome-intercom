@@ -45,6 +45,7 @@ class VoipStackCard extends HTMLElement {
     // UI transition states only
     this._starting = false;
     this._stopping = false;
+    this._callOperationId = 0;
     this._softphoneSnapshot = null;
     this._activeSessionDeviceId = null;
     this._softphoneDnd = false;
@@ -1291,7 +1292,10 @@ class VoipStackCard extends HTMLElement {
     els.placeholderBtn.hidden = showAnswer || showHangup || showCall;
     els.answerBtn.disabled = buttonDisabled;
     els.declineBtn.disabled = buttonDisabled;
-    els.hangupBtn.disabled = buttonDisabled;
+    // Cancelling an outbound INVITE has priority over the still-pending start
+    // request. In particular, a trunk call may remain in CALLING until SIP
+    // timer B expires, so `_starting` must never lock out Hangup.
+    els.hangupBtn.disabled = this._stopping;
     els.callBtn.disabled = buttonDisabled;
 
     // Status
@@ -2046,6 +2050,7 @@ class VoipStackCard extends HTMLElement {
     }
 
     this._activeDeviceInfo = deviceInfo;
+    const operationId = ++this._callOperationId;
     this._starting = true;
     this._errorMsg = "";
     this._render();
@@ -2062,12 +2067,15 @@ class VoipStackCard extends HTMLElement {
         await this._pressEspButton(this._callButtonEntityId, "Call");
       }
     } catch (err) {
+      if (operationId !== this._callOperationId) return;
       this._showError(err.message || String(err));
       await this._cleanup();
     } finally {
-      this._starting = false;
-      this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
-      this._render();
+      if (operationId === this._callOperationId) {
+        this._starting = false;
+        this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
+        this._render();
+      }
     }
   }
 
@@ -2095,6 +2103,7 @@ class VoipStackCard extends HTMLElement {
       softphone: true,
     };
     this._activeDeviceInfo = sessionInfo;
+    const operationId = ++this._callOperationId;
     this._starting = true;
     this._errorMsg = "";
     this._render();
@@ -2103,17 +2112,20 @@ class VoipStackCard extends HTMLElement {
       const reply = await voipStackEngine.startHaSoftphone(target, sessionInfo, {
         callee,
       });
-      if (reply) {
+      if (reply && operationId === this._callOperationId) {
         this._markSoftphoneMediaOwner(reply.call_id || "");
         this._applySoftphoneSnapshot(reply);
       }
     } catch (err) {
+      if (operationId !== this._callOperationId) return;
       this._showError(err.message || String(err));
       await voipStackEngine.close("start_error");
     } finally {
-      this._starting = false;
-      this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
-      this._render();
+      if (operationId === this._callOperationId) {
+        this._starting = false;
+        this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || {});
+        this._render();
+      }
     }
   }
 
@@ -2187,6 +2199,8 @@ class VoipStackCard extends HTMLElement {
   }
 
   async _hangup() {
+    ++this._callOperationId;
+    this._starting = false;
     this._stopping = true;
     this._errorMsg = "";
     this._render();

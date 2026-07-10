@@ -207,6 +207,18 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("call_id: this._sessionCallId()", softphone_hangup)
         self.assertNotIn("this._sessionDeviceId()", softphone_hangup)
 
+    def test_hangup_preempts_pending_outbound_start(self) -> None:
+        render = _method_body(self.source, "_render")
+        hangup = _method_body(self.source, "async _hangup")
+        start = _method_body(self.source, "async _startHaSoftphoneCall")
+
+        self.assertIn("els.hangupBtn.disabled = this._stopping", render)
+        self.assertNotIn("els.hangupBtn.disabled = buttonDisabled", render)
+        self.assertIn("++this._callOperationId", hangup)
+        self.assertIn("this._starting = false", hangup)
+        self.assertIn("const operationId = ++this._callOperationId", start)
+        self.assertIn("operationId === this._callOperationId", start)
+
     def test_esp_mirror_does_not_render_sip_rtp_counters(self) -> None:
         render = _method_body(self.source, "_render")
         stats_branch = render.split("// Stats line", 1)[1].split("// Error", 1)[0]
