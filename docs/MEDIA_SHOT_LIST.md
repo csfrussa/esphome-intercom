@@ -42,6 +42,7 @@ options or old component names.
 | `docs/images/hacs-download-voip-stack.png` | Screenshot | HACS download step | Captured: VoIP Stack HACS entry and download menu |
 | `docs/images/voip-stack-add-integration.png` | Screenshot | HA Add Integration search | Captured: VoIP Stack entry in Settings -> Integrations |
 | `docs/images/voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
+| `docs/images/voice-assistant-extension.png` | Screenshot | Optional Assist telephone destination setup | Captured: explicit SIP extension and preferred Assist pipeline selection in the real HA config flow |
 | `docs/images/create-account-service.png` | Screenshot | SIP account service form | Captured: Developer Tools -> Actions account creation |
 | `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local SIP account |
 | `docs/images/create-account-notification.png` | Screenshot | Generated account notification | Captured: one-time generated password notification |

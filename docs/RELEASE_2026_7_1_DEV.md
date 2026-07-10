@@ -35,6 +35,18 @@ specific one, and assign an extension. The selected assistant appears in the
 same phonebook used by every other destination; no extension is assumed or
 reserved automatically.
 
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1-dev/docs/images/voice-assistant-extension.png"
+    alt="Voice assistant extension and Assist pipeline configuration"
+    width="590"
+    style="max-width: 100%; height: auto;"
+  >
+</p>
+
+_The optional second setup step keeps the SIP extension explicit and supports
+both HA's preferred Assist pipeline and a specifically selected pipeline._
+
 - 📞 ESP phones, locally registered SIP clients, direct compatible SIP callers
   and external callers arriving through a trunk can call the assistant.
 - 👋 The assistant receives the SIP caller identity as its first turn and can

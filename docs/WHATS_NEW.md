@@ -20,6 +20,11 @@ SIP account calling Assist over Opus, HA and ESP calls, unknown SIP callers,
 groups, conferences, trunk cancellation, 8/16/48 kHz media and concurrent
 music, TTS and VoIP load.
 
+![Voice assistant extension and Assist pipeline configuration](images/voice-assistant-extension.png)
+
+_The optional setup step uses an extension chosen by the user and either HA's
+preferred Assist pipeline or a specific pipeline._
+
 Read the complete user-facing pre-release note:
 
 - [`2026.7.1-dev` release notes](RELEASE_2026_7_1_DEV.md)

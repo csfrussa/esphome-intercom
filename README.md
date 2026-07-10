@@ -491,6 +491,19 @@ Recommended first setup:
 - **Trunk enabled**: leave disabled unless you want HA to register to a
   provider/PBX account for external inbound/outbound calls.
 
+<p align="center">
+  <img
+    src="docs/images/voice-assistant-extension.png"
+    alt="Voice assistant extension and Assist pipeline configuration"
+    width="590"
+    style="max-width: 100%; height: auto;"
+  >
+</p>
+
+_The optional voice-assistant step leaves the extension under your control and
+lets you route telephone calls to HA's preferred pipeline or to a specific
+Assist pipeline._
+
 When trunk is enabled, the next step asks for provider/PBX credentials. The
 DTMF timeout controls incoming external calls: `0` skips DTMF collection and
 rings HA immediately; a value from `1` to `10` seconds lets callers dial a
