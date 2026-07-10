@@ -9,7 +9,7 @@ changes.
 Run the HA integration suite:
 
 ```bash
-cd /home/codex/esphome-intercom
+cd <checkout>/esphome-intercom
 ./.venv/bin/python -m pytest tests -q
 ```
 
@@ -75,8 +75,14 @@ Always restore:
 Useful filters:
 
 ```bash
-ssh hass 'grep -E "SIP RX INVITE|SIP TX INVITE|SIP TX 180|SIP TX 480|SIP route requested|SIP bridge registered|HA softphone state|registered user" /var/log/hass/home-assistant.log | tail -200'
+journalctl -u home-assistant.service --since "10 minutes ago" --no-pager |
+  grep -E "SIP RX INVITE|SIP TX INVITE|SIP TX 180|SIP route requested|SIP bridge registered|HA softphone state|registered user"
 ```
+
+Run that command on a host using the documented systemd service layout. On
+Home Assistant OS, containers or other installations, use **Settings → System
+→ Logs** or the installation's supported log command instead of assuming a
+host name or log-file path.
 
 Look for:
 
@@ -88,11 +94,16 @@ Look for:
 ## Phonebook Inspection
 
 ```bash
-HA_TOKEN="$(cat /home/codex/.secrets/esphome-intercom/ha_token_codex)"
+export HA_URL="https://home-assistant.example"
+read -rsp "Home Assistant long-lived access token: " HA_TOKEN; echo
 curl -fsS -H "Authorization: Bearer $HA_TOKEN" \
-  http://192.168.1.10:8123/api/states/sensor.voip_phonebook |
+  "$HA_URL/api/states/sensor.voip_phonebook" |
   jq -r '.attributes.roster_json' | jq '.contacts[] | {id,name,extension,sip_uri,metadata}'
+unset HA_TOKEN
 ```
+
+Do not commit tokens, private host names, IP addresses or secret-file paths to
+the repository.
 
 Use this after every group/extension/account change. The phonebook is the
 source of truth for dialing.
@@ -124,6 +135,12 @@ The filenames include source/destination call IDs and side labels. Use these
 when a call connects but audio direction, volume or format negotiation is
 unclear.
 
+Captures are opt-in through `debug_mode`. The directory is created with mode
+`0700`, names are sanitized, and pruning keeps at most the newest 24 files and
+64 MiB in total. WAV/JSON data can still contain private conversation audio and
+call metadata: disable debug mode after the test and remove retained artifacts
+according to the deployment's privacy policy.
+
 ## Serial And Device Debug
 
 For ESP debug:
@@ -143,6 +160,10 @@ When testing real devices, cover:
 - registered SIP endpoint to ESP;
 - registered SIP endpoint to HA;
 - HA/card to registered SIP endpoint;
+- unknown, unregistered SIP endpoint to HA;
+- unknown, unregistered SIP endpoint to each ESP;
+- in-dialog hold/re-INVITE receives `488` while the established call and later
+  BYE remain functional;
 - ring group caller cancel before answer;
 - ring group first-answer-wins;
 - conference join/leave;

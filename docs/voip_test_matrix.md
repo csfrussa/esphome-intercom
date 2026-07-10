@@ -9,8 +9,9 @@ agree. Counters alone are not proof of audible bidirectional audio.
 - No ESP firmware compile or OTA before local implementation and host checks.
 - `voip-pcm/1` profile documented and kept in sync with code.
 - No ESP codecs beyond RTP PCM L16/L24.
-- No Digest auth, no `WWW-Authenticate`, no required `Authorization`, no
-  required `REGISTER`.
+- ESP endpoints use no Digest auth, send no `WWW-Authenticate`, and require no
+  `Authorization` or `REGISTER`. HA may authenticate its optional trunk and
+  local registrar accounts; neither mechanism gates all inbound INVITEs.
 - SIP signaling available on UDP and TCP; RTP audio remains UDP in the current
   phone profile.
 - `Via` and `Contact` include correct transport and host:port.
@@ -20,6 +21,8 @@ agree. Counters alone are not proof of audible bidirectional audio.
   explicit SIP transport or route through HA without user-authored `kind`.
 - ESP endpoint declarations never include a separate `sip` protocol column.
   SIP is implicit; the only transport choice is SIP/TCP or SIP/UDP signaling.
+- The phonebook is an outbound dial plan, not an inbound caller allowlist.
+  Unknown/unregistered callers remain valid live-test sources.
 
 ## Local Contract Tests
 
@@ -98,6 +101,18 @@ state.
   and causes inbound calls to receive `486 Busy Here` with DND reason.
 - `voip_stack.forward`: source leg, destination leg, busy destination and
   self-forward rejection all publish terminal/forward events.
+- `voip_stack.route`: resolves an outstanding explicit route request and
+  rejects missing/stale requests deterministically.
+- `voip_stack.export_phonebook`: emits the current canonical roster without
+  mutating it.
+- `voip_stack.set_ha_softphone_settings`: updates extension and group settings,
+  refreshes the roster and leaves unrelated settings intact.
+- `voip_stack.purge_devices`: no-op and removal cases report exactly which
+  unavailable devices were selected.
+- `voip_stack.create_account`, `remove_account`, `rotate_account_password`,
+  `enable_account`, `disable_account`, `list_accounts`, and `export_accounts`:
+  validate credential lifecycle, one-time secret handling, registrar refresh
+  and redacted exports.
 
 ## Live Device Call Matrix
 
@@ -133,6 +148,15 @@ Collect HA logs, ESP logs and sampled entity snapshots.
 - Second caller hits ESP while ESP is in_call: second caller gets busy.
 - Codec-only softphone INVITE without L16/L24 receives `488`.
 - SIP softphone/proxy 401/407 challenge terminates with unsupported-auth reason.
+- Unknown, unregistered SIP peer calls HA by name and extension; routing is not
+  rejected merely because the source is absent from the phonebook.
+- Unknown, unregistered SIP peer calls WS3 and Spotpear directly with compatible
+  SDP; each endpoint rings or returns only its normal busy/DND response.
+- Established HA and ESP calls receive a hold/codec re-INVITE: responder sends
+  `488`, the original RTP/dialog stays usable, and a later BYE cleans up.
+- HA/Baresip legs negotiate Opus at 48 kHz where offered and supported; a
+  separate L16 48 kHz case verifies high-rate PCM without implying that ESP
+  endpoints support compressed codecs.
 
 ## Card Visual Matrix
 

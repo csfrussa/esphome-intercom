@@ -1252,12 +1252,12 @@ _Doorbell path: the ESP calls the HA peer name, and the browser card rings with 
 Full options, actions, conditions, entities, services and automation examples are documented in **[docs/reference.md](docs/reference.md)**.
 
 Quick links:
-- [`voip_stack` component options](docs/reference.md#voip_stack-component)
-- [Event callbacks](docs/reference.md#event-callbacks)
-- [Actions](docs/reference.md#actions) and [conditions](docs/reference.md#conditions)
+- [`voip_stack` component options](docs/reference.md#esp-component-options)
+- [ESP triggers](docs/reference.md#esp-triggers)
+- [ESP actions](docs/reference.md#esp-actions) and [conditions](docs/reference.md#esp-conditions)
 - [`esp_audio_stack`, `esp_aec` and `esp_afe`](https://github.com/n-IA-hane/esphome-audio-stack) component docs
-- [Home Assistant services](docs/reference.md#home-assistant-services)
-- [Automation examples](docs/reference.md#automation-examples) (doorbell routing, night mode, forward, bridge)
+- [Home Assistant services](docs/reference.md#ha-services)
+- [Home Assistant SIP events](docs/reference.md#ha-sip-events)
 
 
 ## Call Flow Diagrams
@@ -1373,7 +1373,7 @@ sequenceDiagram
   instruction/rodata options to recover internal heap; P4 profiles keep a
   smaller validated baseline with L2 cache plus PSRAM XIP and avoid aggressive
   Wi-Fi/LWIP IRAM overrides. See the board packages and
-  [esp_afe README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe#iram-optimization-critical-for-esp32-s3)
+  [esp_afe README](https://github.com/n-IA-hane/esphome-audio-stack/tree/main/esphome/components/esp_afe)
   for details.
 
 Generic full-experience S3 now has two maintained presets. Use
@@ -1872,13 +1872,12 @@ The Home Assistant integration declares its package logger in `manifest.json`, s
 
 Common symptoms and fixes are documented in **[docs/troubleshooting.md](docs/troubleshooting.md)**:
 
-- [Card shows "No devices found"](docs/troubleshooting.md#card-shows-no-devices-found)
-- [No audio from ESP speaker](docs/troubleshooting.md#no-audio-from-esp-speaker)
-- [No audio from browser](docs/troubleshooting.md#no-audio-from-browser)
-- [Echo or feedback](docs/troubleshooting.md#echo-or-feedback)
-- [High latency](docs/troubleshooting.md#high-latency)
-- [ESP shows "Ringing" but browser doesn't connect](docs/troubleshooting.md#esp-shows-ringing-but-browser-doesnt-connect)
-- [ESP doesn't see other devices](docs/troubleshooting.md#esp-doesnt-see-other-devices)
+- [ESP does not ring](docs/troubleshooting.md#esp-does-not-ring)
+- [HA softphone does not ring](docs/troubleshooting.md#ha-softphone-does-not-ring)
+- [Call fails with `media_incompatible`](docs/troubleshooting.md#call-fails-with-media_incompatible)
+- [HA cannot route a name](docs/troubleshooting.md#ha-cannot-route-a-name)
+- [No audio](docs/troubleshooting.md#no-audio)
+- [Card state looks wrong](docs/troubleshooting.md#card-state-looks-wrong)
 
 
 ## Home Assistant Automation

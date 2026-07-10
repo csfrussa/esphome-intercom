@@ -21,7 +21,7 @@ voip_stack:
   transport: udp  # SIP signaling transport only; audio is always RTP/UDP.
   static_contacts:
     - name: Kitchen
-      address: 192.168.1.42
+      ip: 192.168.1.42
       transport: udp
       port: 5060
       rtp_port: 40000
@@ -34,7 +34,7 @@ Runtime actions use the same model:
 on_press:
   - voip_stack.add_contact:
       name: Kitchen
-      address: 192.168.1.42
+      ip: 192.168.1.42
       port: 5060
       transport: udp
 ```
@@ -42,8 +42,8 @@ on_press:
 Rules:
 
 - `name` is required.
-- `address`, `sip_uri`, `extension`, `number`, `port`, `rtp_port`, and
-  `transport` are optional.
+- `ip`, `port`, `rtp_port`, and `transport` are optional on structured ESP
+  static contacts and the ESP `add_contact` action.
 - If `transport` is omitted for a direct address, SIP uses its default
   transport behavior for that context.
 - Name-only entries are logical targets and can be resolved or bridged by HA.
@@ -52,6 +52,11 @@ Rules:
 - HA-managed sync through `sensor.voip_phonebook` is the recommended path.
   Static contacts are local additions for offline/custom installs, not a second
   central roster.
+
+The ESP-local schema is intentionally smaller than the HA central-contact
+schema. Fields such as `address`, `sip_uri`, `extension`, `number`, group
+membership, and media capabilities are authored on HA or discovered from
+endpoint entities, then normalized before HA pushes the roster to ESPs.
 
 ## HA Roster
 

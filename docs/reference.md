@@ -14,25 +14,45 @@ voip_stack:
   rtp_port: 40000
   static_contacts:
     - name: Kitchen
-      address: 192.168.1.42
+      ip: 192.168.1.42
       transport: udp
       port: 5060
       rtp_port: 40000
 ```
 
-Important options:
+### ESP Component Options
 
 | Option | Meaning |
 | --- | --- |
+| `id` | Component ID. Required when an action or entity cannot infer the only `voip_stack` instance. |
 | `transport` | SIP signaling transport: `udp` or `tcp`. SIP is implicit; this is not a protocol-family selector and does not move audio to TCP. RTP audio remains UDP. |
 | `sip_port` | Local SIP listener port. |
 | `rtp_port` | Local RTP media port. |
+| `udp_max_payload` | RTP payload budget, default `1200` bytes. The accepted implementation range is `576..1488`; raise it only for a LAN whose MTU was verified. |
+| `microphone` / `microphone_source` | Optional TX audio source. Use only one. `microphone_source` adds channel/sample-width selection for a wider native microphone. |
+| `speaker` | Optional RX audio sink. Omitting one or both audio directions produces `mic_only`, `speaker_only`, or `control_only` endpoints. |
+| `audio.tx` / `audio.rx` | Primary per-direction PCM contract. Fields are `sample_rate`, `pcm_format`, `channels`, and `frame_ms`; `auto` derives the wired audio surface. |
+| `audio.tx_formats` / `audio.rx_formats` | Up to seven extra explicit formats per direction. TX extras may only change `frame_ms` from `audio.tx`; RX extras may describe other formats the speaker path can accept. |
 | `extension` | Optional internal dial-plan alias published to HA when the endpoint entity surface is exposed. |
 | `ring_groups` | Optional comma-separated PBX ring group memberships. |
 | `conference_groups` | Optional comma-separated conference group memberships. |
 | `conference_ring` | Ring this ESP when another participant starts one of its conference groups. Requires `conference_groups`. |
-| `static_contacts` | Optional local contacts loaded at boot. HA-managed `sensor.voip_phonebook` is recommended for normal installs. |
+| `static_contacts` | Optional local contacts loaded at boot. Structured entries accept `name`, `ip`, `port`, `rtp_port`, and `transport`. HA-managed `sensor.voip_phonebook` is recommended for normal installs. |
+| `use_ha_as_first_contact` | Select the HA peer after the first roster population. |
 | `ha_phonebook_text_sensor_id` | HA-published central roster source. |
+| `delete_contact_missing_from` | Optional stale-contact pruning policy with `updates_number: 1..10`. |
+| `ringing_timeout` / `calling_timeout` | Optional guard timers. |
+| `auto_entities` | Create the common switches and direction-dependent volume/gain entities automatically. Maintained YAMLs normally declare stable entities through packages. |
+| `dc_offset_removal` | Remove DC bias from TX microphone samples. |
+| `buffers_in_psram` | Place VoIP-owned staging buffers in PSRAM. |
+| `task_stacks_in_psram` | Place supported VoIP task stacks in PSRAM. Requires PSRAM and is rejected on the original ESP32. |
+| `network_socket_headroom` | Validation-only reservation for additional lwIP sockets in composite firmware. |
+| `audio_debug` | Verbose PCM-level diagnostics; keep off outside targeted tests. |
+
+### ESP Triggers
+
+| Trigger | Meaning |
+| --- | --- |
 | `on_calling` | Automation hook for outbound INVITE state. |
 | `on_ringing` | Automation hook for inbound INVITE ringing state. |
 | `on_dest_ringing` | Automation hook for remote `180 Ringing`. |
@@ -40,19 +60,29 @@ Important options:
 | `on_outgoing_call` | SIP-aware hook with `call_id`, `caller`, `callee`, `uri`. |
 | `on_bridge_request` | SIP-aware hook when the selected route targets HA/bridge. |
 | `on_in_call` | Automation hook for established SIP call. |
+| `on_idle` | Automation hook when the call FSM returns to idle. |
 | `on_hangup` | Terminal/hangup hook. |
 | `on_call_failed` | Terminal failure hook. |
+| `on_destination_changed` | Selected phonebook destination changed. |
+| `on_phonebook_update` | Local phonebook content changed. |
 
-Runtime actions:
+### ESP Actions
 
-- `voip_stack.start`
-- `voip_stack.stop`
-- `voip_stack.answer_call`
-- `voip_stack.decline_call`
-- `voip_stack.add_contact`
-- `voip_stack.remove_contact`
-- `voip_stack.set_contacts`
-- `voip_stack.set_roster_json`
+- Call control: `voip_stack.start`, `voip_stack.stop`,
+  `voip_stack.call_toggle`, `voip_stack.answer_call`,
+  `voip_stack.decline_call`, and `voip_stack.call` (`target`).
+- Contact navigation: `voip_stack.next_contact`, `voip_stack.prev_contact`,
+  and `voip_stack.set_contact` (`contact`).
+- Local phonebook: `voip_stack.add_contact` (`entry` or structured
+  `name`/`ip`/ports/`transport`), `voip_stack.remove_contact` (`entry`),
+  `voip_stack.set_contacts` (`contacts_csv`), `voip_stack.set_roster_json`
+  (`roster_json`), `voip_stack.flush_contacts`, and
+  `voip_stack.update_contacts`.
+- Routing/identity: `voip_stack.set_remote_endpoint` (`ip`, optional `port` and
+  `rtp_port`) and `voip_stack.set_ha_peer_name` (`name`).
+- Audio/diagnostics: `voip_stack.set_volume` (`volume`),
+  `voip_stack.set_mic_gain_db` (`gain_db`), and
+  `voip_stack.publish_entity_states`.
 
 `voip_stack:` by itself is only the SIP/RTP engine. ESPs that should be
 discovered by HA, mirrored by Lovelace, receive central phonebook sync or expose
@@ -77,19 +107,21 @@ The contact actions mutate only that ESP's local mirror. Use HA
 `voip_stack.add_contact` / `remove_contact` / `set_contacts` for the central
 phonebook.
 
-Static and runtime contacts use the same phonebook contract as HA contacts:
-`name` is required; `address` + `port` or `sip_uri` describes a direct SIP
-endpoint; `extension` is an internal alias; `number` is an external/trunk
-number. Contacts accept `transport: udp|tcp` when one direct endpoint must use
-a different signaling transport from the phone's own `transport`.
+ESP static contacts and the structured `add_contact` action intentionally use a
+small local contract: `name`, optional `ip`, `port`, `rtp_port`, and
+`transport: udp|tcp`. The richer central HA roster additionally supports
+`address`, `sip_uri`, `extension`, `number`, groups, and media metadata. HA
+shapes that central data into the compact roster pushed to each ESP.
 
-Conditions:
+### ESP Conditions
 
 - `voip_stack.is_idle`
 - `voip_stack.is_calling`
 - `voip_stack.is_ringing`
 - `voip_stack.is_in_call`
 - `voip_stack.is_incoming`
+- `voip_stack.destination_is` (`destination`)
+- `voip_stack.is_ha_destination`
 
 ## HA Services
 
@@ -100,15 +132,19 @@ Conditions:
 - `voip_stack.forward`
 - `voip_stack.route`
 - `voip_stack.set_dnd`
+- `voip_stack.set_ha_softphone_settings`
 - `voip_stack.add_contact`
 - `voip_stack.remove_contact`
 - `voip_stack.set_contacts`
 - `voip_stack.clear_contacts`
 - `voip_stack.export_phonebook`
 - `voip_stack.push_phonebook`
+- `voip_stack.purge_devices`
 - `voip_stack.create_account`
 - `voip_stack.remove_account`
 - `voip_stack.rotate_account_password`
+- `voip_stack.enable_account`
+- `voip_stack.disable_account`
 - `voip_stack.list_accounts`
 - `voip_stack.export_accounts`
 
@@ -164,6 +200,8 @@ The setup flow has two layers:
 | `rtp_port` | Base HA RTP UDP port used by HA softphone media and relays. |
 | `advertise_host` | Optional Contact/SDP host override for routed, VPN, LXC, Docker or multihomed installs. |
 | `assist_intents` | Optional Assist intents for call, answer, decline and hangup. |
+| `debug_mode` | Opt-in detailed diagnostics and bounded audio captures. Leave disabled for normal operation. |
+| `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
 
 When `trunk_enabled` is true, the second step adds:

@@ -36,6 +36,20 @@ collect:
 - For local registered SIP endpoints, confirm the REGISTER Contact is present in
   HA logs and the phonebook includes the registered SIP endpoint contact.
 
+## Unknown Or Unregistered Caller Is Rejected
+
+The phonebook is an outbound dial plan, not an inbound caller allowlist. An ESP
+or HA may therefore receive a compatible SIP INVITE from any peer that can
+reach its listener, even when the caller is absent from the phonebook and has
+not registered to HA. The optional HA registrar authenticates `REGISTER`; it
+does not require every inbound caller to own an account.
+
+- Check DND, busy state, Request-URI routing and SDP compatibility before
+  treating an unknown caller as unauthorized.
+- Keep SIP/RTP on a trusted LAN or VPN. Use firewall, VLAN, VPN or an SBC when
+  caller admission policy is required; the ESP profile does not provide
+  SIP/TLS, SRTP or an inbound caller allowlist.
+
 ## Call Fails With `media_incompatible`
 
 The SDP offer/answer did not produce a usable PCM RTP format, or HA could not
@@ -87,6 +101,14 @@ DND and active-call contention should produce `486 Busy Here` or a terminal
 reason of `busy`. Decline should produce `603 Decline` or a configured SIP
 final response.
 
+## Hold Or Re-INVITE Receives `488`
+
+Session-modifying in-dialog INVITE is not supported in the current ESP or HA
+profile. A hold or codec-renegotiation re-INVITE receives `488 Not Acceptable
+Here`; the already established dialog and media selection remain active. A
+later BYE must still end that original call normally. Do not diagnose this as a
+dropped call unless the original dialog or RTP also stops.
+
 ## No Audio
 
 - Confirm RTP ports are reachable in both directions.
@@ -124,8 +146,9 @@ final response.
 ## Inbound Trunk Call Routes To The Wrong Target
 
 - Confirm the provider offers RFC2833/telephone-event DTMF in SDP.
-- If the SDP has no `telephone-event` and the provider does not send SIP INFO,
-  HA cannot read post-answer digits from that provider leg.
+- HA acknowledges SIP INFO as a supported SIP method, but digit routing reads
+  RTP `telephone-event`; INFO bodies are not a DTMF input in this profile. If
+  the SDP has no `telephone-event`, HA cannot read post-answer route digits.
 - Check that the target exists in the central phonebook and has the matching
   `extension` value.
 - Keep the inbound DTMF timeout short, normally 3 seconds. Set it to `0` when you do not want trunk pre-answer/DTMF and want inbound calls to follow the normal dialplan immediately.

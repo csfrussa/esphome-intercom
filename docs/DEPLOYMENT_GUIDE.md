@@ -46,8 +46,8 @@ voip_stack:
   transport: tcp
 ```
 
-Use `phonebook` for manual peers. Use the HA phonebook subscription package when
-HA should be the authority.
+Use `static_contacts` for a small fixed ESP-local dial plan. Use the HA
+phonebook subscription package when HA should be the authority.
 
 Supported audio shapes:
 

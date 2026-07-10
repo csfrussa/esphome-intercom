@@ -14,6 +14,10 @@ Every ESP running `voip_stack` is a SIP user agent:
 - it accepts compatible PCM SDP and rejects incompatible media with SIP status;
 - it can run full-duplex, mic-only, speaker-only or control-only.
 
+Inbound reachability is deliberately independent of roster membership. The
+phonebook is a dial plan, not a caller allowlist: a reachable compatible SIP
+peer can call an ESP even when it is unknown to HA and has no registration.
+
 Home Assistant is more than a card backend:
 
 - HA is its own SIP softphone endpoint;
@@ -79,6 +83,11 @@ For outbound INVITE failures, HA sends the required ACK for non-2xx final
 responses before surfacing the terminal reason. This keeps failed calls SIP
 compliant rather than relying on retry side effects.
 
+The current profile does not renegotiate an established session. ESP and HA
+reject an in-dialog re-INVITE (including hold) with `488 Not Acceptable Here`
+without replacing or tearing down the original dialog. Existing media and a
+later BYE continue to use the original negotiated session.
+
 ## Media
 
 SDP offer/answer negotiates RTP. RTP media is always UDP, even when SIP
@@ -118,6 +127,9 @@ Current non-goals are RTCP, SRTP and SIP/TLS on ESP devices. The supported
 trust boundary is a local LAN/VPN plus Home Assistant and ESPHome API security.
 Codec-rich or encrypted external legs should terminate on Home Assistant, where
 the bridge can convert and route them to lightweight ESP PCM endpoints.
+Because local SIP/RTP is plaintext and inbound calls are not phonebook-gated,
+deployments needing caller admission must enforce it at a firewall, VLAN, VPN
+or SBC boundary.
 
 ## State
 
@@ -184,6 +196,11 @@ HA-router routing:
 - disabled entry: reject;
 - unresolved explicit route hint: reject `route_not_found`.
 
+The source caller need not be registered or present in the phonebook. HA still
+applies the Request-URI dial plan, media checks, DND and busy policy. The local
+registrar authenticates account registration and supplies a current Contact;
+it is not a global INVITE allowlist.
+
 The optional SIP trunk is used only when configured and registered. It never
 registers ESP devices to the provider. ESP devices remain local SIP user agents;
 HA maps provider-side numbers or DTMF extension digits to local SIP targets.
@@ -206,9 +223,13 @@ field. Optional fields include:
 
 - `extension`: local/internal alias;
 - `number`: external/public number used through the optional trunk;
-- `address`, `sip_uri`, `sip_port`, `rtp_port`;
-- `sip_transport`: `udp` or `tcp`;
+- `address`, `sip_uri`, and top-level `port`;
+- `transport`: `udp` or `tcp`, plus `rtp_port` and media metadata;
 - `ha_bridge`: force HA bridge routing.
+
+Imported/discovered endpoint metadata may expose compatibility aliases such as
+`sip_port` and `sip_transport`; user-authored HA service fields are `port` and
+`transport`.
 
 User-facing contacts are data-driven. Name-only contacts route through HA,
 `extension` resolves local/internal targets, `number` resolves external trunk

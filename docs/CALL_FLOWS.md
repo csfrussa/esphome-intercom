@@ -98,6 +98,30 @@ Unexpected log shape:
 - `SIP route requested ...` for ordinary registered endpoint calls. That means
   the call left the canonical dial plan and went into the automation fallback.
 
+## Unknown Or Unregistered Caller
+
+1. Any SIP peer with network reachability sends INVITE to the ESP or HA
+   listener; no phonebook or registration lookup is used as a source allowlist.
+2. The receiver validates the SIP transaction, Request-URI, current busy/DND
+   state and SDP media.
+3. A directly addressed idle ESP rings when media is compatible. HA resolves
+   the destination using the same dial plan used for registered callers.
+4. The call proceeds or receives the normal routing/media/status response.
+
+The HA registrar authenticates REGISTER and publishes the endpoint's current
+Contact. It does not make registered accounts the only callers HA or an ESP can
+receive. Use network policy when an installation needs that restriction.
+
+## Hold Or Other Re-INVITE
+
+1. A call is already established with its original negotiated media.
+2. One peer sends an in-dialog INVITE, for example to signal hold or replace a
+   codec.
+3. The ESP or HA returns `488 Not Acceptable Here`.
+4. The established dialog and RTP selection remain active; no second call
+   state is created.
+5. Either peer can later send BYE and both sides clean up the original call.
+
 ## Registered SIP Endpoint To HA
 
 1. Registered endpoint calls `Casa` or HA's extension.

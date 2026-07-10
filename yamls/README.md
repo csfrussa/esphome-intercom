@@ -9,15 +9,17 @@ Wi-Fi firmware.
 
 1. Download the YAML file for your device
 2. Create a `secrets.yaml` with your WiFi credentials:
+
    ```yaml
    wifi_ssid: "your_network"
    wifi_password: "your_password"
    ```
+
 3. Compile with ESPHome. Public YAMLs point at the GitHub copy of this repository, so components, packages, and assets are fetched automatically. Stable releases point at `main`; opt-in test YAMLs on `dev` point at `dev`.
 
 ## Structure
 
-```
+```text
 yamls/
   voip-only/         VoIP without Voice Assistant or Wake Word
     single-bus/          Devices using esp_audio_stack (mic+speaker on same I2S bus)

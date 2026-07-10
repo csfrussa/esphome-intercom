@@ -17,9 +17,10 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   starts from the current SIP/VoIP breaking migration. The full incoming release
   note is [RELEASE_2026_7_0.md](RELEASE_2026_7_0.md).
 
-- 📚 **Configuration reference**: [reference.md](reference.md) covers every
-  `voip_stack`, `esp_aec` and `esp_afe` option, every action and condition,
-  Home Assistant services, and worked automation examples.
+- 📚 **Configuration reference**: [reference.md](reference.md) covers the ESP
+  `voip_stack` options, triggers, actions and conditions plus the Home Assistant
+  services, setup options, events and state vocabulary. Audio processor details
+  live in the linked `esphome-audio-stack` component references below.
 
 - 🔌 **Wire protocol**: [INTERCOM_PROTOCOL.md](INTERCOM_PROTOCOL.md) is a
   tombstone for the retired proprietary protocol. Current call control is SIP,
@@ -58,9 +59,9 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   internal audio core contract, and the drain protocol for glitch-free config
   changes.
 
-- 🧯 **Troubleshooting**: [troubleshooting.md](troubleshooting.md) lists common
-  symptoms (no devices found, no audio, echo, latency, ringing without connect,
-  phonebook/routing issues) with concrete checks.
+- 🧯 **Troubleshooting**: [troubleshooting.md](troubleshooting.md) covers SIP
+  ringing, media negotiation, phonebook/routing, registration, trunk, audio and
+  card-state failures with concrete checks.
 
 - 🖼️ **Media refresh plan**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists
   screenshots, photos, GIFs and demo scenes that should replace obsolete README

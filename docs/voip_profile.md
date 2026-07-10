@@ -9,8 +9,8 @@ but direct ESP-to-ESP calls must work when a SIP URI is known.
 
 ## Security And Registration
 
-Phase 1 intentionally does not implement SIP authentication or registration on
-ESP devices.
+The ESP profile intentionally does not implement SIP authentication or
+registration.
 
 - ESP does not require `Authorization`.
 - ESP does not send `WWW-Authenticate`.
@@ -19,10 +19,18 @@ ESP devices.
   `auth_required_unsupported` or `proxy_auth_required_unsupported`.
 
 ESP trust is provided by the existing ESPHome/Home Assistant management channel
-for roster delivery. SIP signaling remains unauthenticated on the local network.
+for roster delivery. SIP signaling and RTP media remain unencrypted and
+unauthenticated on the local network.
 
-Home Assistant may register one optional provider/PBX trunk. That registration
-belongs to HA only and does not create SIP accounts for ESP devices.
+Home Assistant may register one optional provider/PBX trunk and may separately
+act as a Digest-authenticating registrar for standard SIP endpoints. Both
+features belong to HA and do not create registrations for ESP devices.
+
+Phonebook membership and HA registration are not inbound caller admission
+rules. Any peer that can reach an ESP or HA SIP listener may send an INVITE;
+normal routing, busy/DND and SDP checks then decide the result. Deploy SIP/RTP
+on a trusted LAN/VPN and enforce stricter admission with network controls or an
+SBC.
 
 ## SIP Core
 
@@ -33,9 +41,9 @@ Required SIP methods:
 - `CANCEL`
 - `BYE`
 - `OPTIONS`
-- `REGISTER` on the HA trunk client only
-- `INFO` is accepted by HA as a SIP method; DTMF routing is based on
-  `telephone-event` RTP
+- `REGISTER` on the HA trunk client and HA local registrar only
+- `INFO` is acknowledged by HA, but its body is not used as a digit source;
+  DTMF routing is based on RTP `telephone-event`
 
 Required responses:
 
@@ -52,6 +60,11 @@ Required responses:
 
 Unsupported methods are rejected explicitly. Unsupported media is rejected with
 `488 Not Acceptable Here`.
+
+Session-modifying in-dialog INVITE, including ordinary hold or codec
+renegotiation, is not supported. ESP and HA answer it with `488` while keeping
+the established dialog and its selected media unchanged; the original dialog
+can still be terminated normally with BYE.
 
 SIP signaling transports:
 
