@@ -174,7 +174,9 @@ Spotpear hardware, a public mobile call reaching Assist through the trunk,
 registered and unknown SIP callers, HA-to-ESP and ESP-to-HA calls, groups,
 conferences, cancellation and teardown races, 8/16/48 kHz media and concurrent
 music, TTS and VoIP load. Browser audio and ESP real-time paths were hardened
-along the way.
+along the way. PCMA handset calls now preserve the correct G.711 speech level,
+so Assist remains audible through the normal phone earpiece without relying on
+speakerphone.
 
 > [!IMPORTANT]
 > `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field

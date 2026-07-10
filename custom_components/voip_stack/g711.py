@@ -41,21 +41,24 @@ def _decode_ulaw_byte(value: int) -> int:
 
 
 def _encode_alaw_sample(sample: int) -> int:
+    # ITU-T G.711 linear PCM input is reduced to 13 significant bits before
+    # segment selection.  Searching ``sample >> 4`` while quantizing the
+    # original 16-bit value shifts every segment up by one and costs roughly
+    # 6 dB on decoded telephone audio.
+    sample >>= 3
     if sample >= 0:
         mask = 0xD5
     else:
         mask = 0x55
         sample = -sample - 1
-    if sample > _CLIP:
-        sample = _CLIP
-    segment = _search(sample >> 4, _ALAW_SEG_END)
+    segment = _search(sample, _ALAW_SEG_END)
     if segment >= 8:
         return 0x7F ^ mask
     encoded = segment << 4
     if segment < 2:
-        encoded |= (sample >> 4) & 0x0F
+        encoded |= (sample >> 1) & 0x0F
     else:
-        encoded |= (sample >> (segment + 3)) & 0x0F
+        encoded |= (sample >> segment) & 0x0F
     return encoded ^ mask
 
 

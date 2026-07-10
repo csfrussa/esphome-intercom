@@ -149,6 +149,9 @@ last participant leaves.
   bursts instead of discarding adjacent speech frames.
 - PCMA 8 kHz, L16 48 kHz and Opus 48 kHz paths are used where the endpoints on
   that leg support them.
+- PCMA/G.711 handset audio now preserves the source speech level instead of
+  losing about 6 dB during A-law encoding, so Assist replies remain audible on
+  a normal phone earpiece without requiring speakerphone.
 - ESP audio conversion state and working buffers are prepared outside the
   per-frame path.
 - The AFE worker is persistent and event-driven. It sleeps on notifications
@@ -160,7 +163,7 @@ last participant leaves.
 
 ## ✅ Validation
 
-- Home Assistant, integration, card and tooling: 294 tests plus 25 subtests.
+- Home Assistant, integration, card and tooling: 296 tests plus 25 subtests.
 - ESP VoIP stack: 55 tests.
 - Audio and AFE: 19 tests.
 - Runtime controller: 6 tests.
