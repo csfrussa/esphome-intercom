@@ -28,7 +28,6 @@ class CallLeg:
     state: str = "idle"
     local_uri: str = ""
     remote_uri: str = ""
-    remote_contact: str = ""
     media: Any | None = None
 
 

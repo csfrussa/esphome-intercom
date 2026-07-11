@@ -66,24 +66,6 @@ class AudioFormat:
 
 
 PREFERRED_FRAME_MS = (10, 16, 20, 32)
-
-
-def _browser_formats(*, channels: tuple[int, ...]) -> tuple[AudioFormat, ...]:
-    formats: list[AudioFormat] = []
-    for rate in sorted(SUPPORTED_SAMPLE_RATES):
-        for frame_ms in sorted(SUPPORTED_FRAME_MS):
-            if (rate * frame_ms) % 1000 != 0:
-                continue
-            for fmt in PcmFormat:
-                for channel_count in channels:
-                    candidate = AudioFormat(rate, fmt, channel_count, frame_ms)
-                    if candidate not in formats:
-                        formats.append(candidate)
-    return tuple(formats)
-
-
-HA_BROWSER_TX_FORMATS = _browser_formats(channels=(1,))
-HA_BROWSER_RX_FORMATS = _browser_formats(channels=(1, 2))
 HA_SIP_PCM_FORMATS = (
     AudioFormat(48000, PcmFormat.S16LE, 2, 20),
     AudioFormat(48000, PcmFormat.S16LE, 1, 20),

@@ -59,7 +59,7 @@ from .media_ports import (
     release_sip_rtp_port_pair as _release_sip_rtp_port_pair,
 )
 from .phonebook_runtime import registered_roster_entries as _registered_roster_entries
-from .router import CallContext, RouteAction, RouteHintSource, RouteReason, route_inbound_trunk, resolve_ha_router
+from .router import CallContext, RouteAction, RouteReason, route_inbound_trunk, resolve_ha_router
 from .session_cleanup import async_cleanup_sip_runtime
 from .sip_bridge import build_invite_client_relay
 from .store import sip_accounts as _sip_accounts
@@ -570,10 +570,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 direction="inbound",
                 origin="trunk",
                 caller=invite.caller,
-                called_did=str(invite.request_uri.user or ""),
-                requested_target=default_target,
                 route_hint=route_hint,
-                route_hint_source=RouteHintSource.DTMF if route_hint else RouteHintSource.NONE,
                 source_host=invite.source_host,
             ),
             roster_entries,
@@ -1619,8 +1616,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         direction="inbound",
                         origin="trunk",
                         caller=invite.caller,
-                        called_did=str(invite.request_uri.user or ""),
-                        requested_target=_ha_peer_name(hass),
                         source_host=invite.source_host,
                     ),
                     roster_entries,

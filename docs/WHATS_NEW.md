@@ -11,8 +11,9 @@ only changes made after stable `2026.7.0`.
 The main additions are telephone access to any native Home Assistant Assist
 pipeline, HA-owned ring groups and conference rooms, extension and group
 settings for HA and registered SIP endpoints, an expanded ESP mirror keypad and
-Options view, and more predictable SIP, browser-audio and ESP real-time
-behavior.
+Options view, a resizable phonebook mode integrated into the same card, and
+more predictable SIP, browser-audio and ESP real-time behavior. Hang Up remains
+available during outbound call setup, including slow or unreachable targets.
 
 The qualification covered real WS3 and Spotpear hardware, a multi-turn Assist
 call from an external mobile number through the configured trunk, a registered

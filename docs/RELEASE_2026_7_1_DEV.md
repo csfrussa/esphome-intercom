@@ -75,6 +75,12 @@ both HA's preferred Assist pipeline and a specifically selected pipeline._
   clean right-hand control column.
 - 🏠 HA softphone cards expose the same HA-owned extension and group settings
   without creating a second routing or call-state engine in the browser.
+- 📒 The main card now has a phonebook mode backed by the canonical HA roster.
+  It sorts contacts alphabetically, uses the available Sections grid area and
+  scrolls only when the roster is longer than that area.
+- ↔️ ESP mirror, HA softphone and phonebook modes support native Home Assistant
+  Sections resizing. Their controls respond to both card width and height, and
+  an omitted `name` or `title` leaves no empty header row.
 - 🔔 Ringtone, DND and terminal call state no longer race normal card refresh or
   cleanup paths.
 - 🔒 Caller and destination labels are inserted as text, so SIP display strings
@@ -131,6 +137,8 @@ last participant leaves.
   peer before changing a call.
 - Retransmissions, decline, cancel, busy, answer, hangup and immediate redial
   have deterministic ownership and cleanup.
+- The Hang Up action remains available while an outbound call is still in
+  `calling`, including unreachable or slow external destinations.
 - A cancel that crosses a successful answer is completed with the proper
   acknowledgement and teardown instead of leaving a ghost call.
 - Reused SIP/TCP connections serialize outgoing messages and keep pending work
@@ -163,8 +171,8 @@ last participant leaves.
 
 ## ✅ Validation
 
-- Home Assistant, integration, card and tooling: 296 tests plus 25 subtests.
-- ESP VoIP stack: 55 tests.
+- Home Assistant, integration, card and tooling: 302 tests plus 25 subtests.
+- ESP VoIP stack: 57 tests.
 - Audio and AFE: 19 tests.
 - Runtime controller: 6 tests.
 - Virtual call scenarios: 27 passed.

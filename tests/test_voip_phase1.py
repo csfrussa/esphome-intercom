@@ -1635,12 +1635,27 @@ class SdpPcmProfileTest(unittest.TestCase):
         )
 
     def test_offer_caps_payloads_to_compact_udp_safe_profile_without_losing_esp_baseline(self) -> None:
+        browser_tx_formats = [
+            audio_format.AudioFormat(rate, fmt, 1, frame_ms)
+            for rate in sorted(audio_format.SUPPORTED_SAMPLE_RATES)
+            for frame_ms in sorted(audio_format.SUPPORTED_FRAME_MS)
+            if (rate * frame_ms) % 1000 == 0
+            for fmt in audio_format.PcmFormat
+        ]
+        browser_rx_formats = [
+            audio_format.AudioFormat(rate, fmt, channels, frame_ms)
+            for rate in sorted(audio_format.SUPPORTED_SAMPLE_RATES)
+            for frame_ms in sorted(audio_format.SUPPORTED_FRAME_MS)
+            if (rate * frame_ms) % 1000 == 0
+            for fmt in audio_format.PcmFormat
+            for channels in (1, 2)
+        ]
         offer = sdp.build_offer_directional(
             "192.168.1.10",
             "192.168.1.10",
             40020,
-            list(audio_format.HA_BROWSER_TX_FORMATS),
-            list(audio_format.HA_BROWSER_RX_FORMATS),
+            browser_tx_formats,
+            browser_rx_formats,
         )
         offered = sdp.offered_pcm_formats(offer)
         self.assertLessEqual(len(offered), 12)
@@ -1966,7 +1981,6 @@ class RouterContractTest(unittest.TestCase):
                 direction="inbound",
                 origin="trunk",
                 route_hint="101",
-                route_hint_source=router.RouteHintSource.DTMF,
             ),
             entries,
             trunk_ready=True,
@@ -1980,7 +1994,6 @@ class RouterContractTest(unittest.TestCase):
                 direction="inbound",
                 origin="trunk",
                 route_hint="3510000000",
-                route_hint_source=router.RouteHintSource.DTMF,
             ),
             entries,
             trunk_ready=True,
@@ -2162,7 +2175,6 @@ class RouterContractTest(unittest.TestCase):
             direction="inbound",
             origin="trunk",
             route_hint="999",
-            route_hint_source=router.RouteHintSource.DTMF,
         )
         decision = router.route_inbound_trunk(ctx, [], trunk_ready=False)
         self.assertEqual(decision.action, router.RouteAction.REJECT)
@@ -2186,7 +2198,6 @@ class RouterContractTest(unittest.TestCase):
             direction="inbound",
             origin="trunk",
             route_hint="200",
-            route_hint_source=router.RouteHintSource.DTMF,
         )
         decision = router.route_inbound_trunk(ctx, entries, trunk_ready=False)
         self.assertEqual(decision.action, router.RouteAction.FORWARD)

@@ -169,6 +169,10 @@ numbers. ESP mirror Options bring Auto Answer, DND, extension, ring groups and
 conference settings into one aligned view while the selected ESP remains the
 real owner of its calls and settings.
 
+The same card can render the shared phonebook. All three modes use Home
+Assistant Sections sizing, adapt their layout to the assigned width and height,
+and omit the header completely when no `name` or `title` is configured.
+
 > [!IMPORTANT]
 > `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field
 > testing. It is intentionally not offered through HACS; the normal HACS path
@@ -1046,17 +1050,20 @@ entity: sensor.voip_phonebook
 title: VoIP Phonebook
 ```
 
-The visual editor can select a different roster sensor, change the title and
-empty-state text, or include disabled contacts. In a Sections dashboard the
-card defaults to 12 columns by 7 rows and can be resized with the normal HA
-layout controls; Masonry dashboards use its declared card-size fallback.
+The visual editor selects phonebook mode and can set an optional title. Manual
+YAML can additionally select another roster sensor, change the empty-state text
+or include disabled contacts. In a Sections dashboard the card defaults to 12
+columns by 7 rows, uses the native eight-row maximum and can be resized with the
+normal HA layout controls; Masonry dashboards use its declared card-size
+fallback.
 
 The card automatically discovers ESPHome devices with the `voip_stack` entity
 surface, starting from the `voip_endpoint` sensor. The visual editor stores the
 HA `device_id`, while manual YAML can use the ESP friendly name, for example
-`device_id: Kitchen Panel`. Header text uses `name:` if configured, otherwise
-the ESP friendly name. With `show_extended_info: true`, the header appends the
-local SIP signaling transport and audio mode.
+`device_id: Kitchen Panel`. Header text is shown only when `name:` is configured;
+without it the content moves up and no empty title row is reserved. With
+`show_extended_info: true`, the header appends the local SIP signaling transport
+and audio mode when a header is present.
 
 `customElements.define` is idempotent so HMR / re-install never throws on second registration. Console chatter is gated behind `localStorage.voip_debug = "1"` (errors and warnings always emit). Peer names, destination and decline reasons render as text nodes - no XSS surface from phonebook data.
 

@@ -20,7 +20,6 @@ class RouteAction(StrEnum):
     ASSIST = "assist"
     REJECT = "reject"
     BUSY = "busy"
-    DECLINE = "decline"
 
 
 class RouteReason(StrEnum):
@@ -32,19 +31,8 @@ class RouteReason(StrEnum):
     TARGET_DISABLED = "target_disabled"
     TARGET_UNREACHABLE = "target_unreachable"
     ROUTE_NOT_FOUND = "route_not_found"
-    DIALPLAN_TIMEOUT = "dialplan_timeout"
     MEDIA_INCOMPATIBLE = "media_incompatible"
     TRUNK_UNAVAILABLE = "trunk_unavailable"
-
-
-class RouteHintSource(StrEnum):
-    NONE = "none"
-    REQUEST_URI = "request_uri"
-    TO_HEADER = "to_header"
-    DTMF = "dtmf"
-    SIP_INFO = "sip_info"
-    AUTOMATION = "automation"
-    MANUAL = "manual"
 
 
 class TargetClass(StrEnum):
@@ -60,10 +48,7 @@ class CallContext:
     direction: Literal["inbound", "outbound", "internal"]
     origin: Literal["esp", "ha_softphone", "ha_router", "trunk", "softphone"]
     caller: str = ""
-    called_did: str = ""
-    requested_target: str = ""
     route_hint: str = ""
-    route_hint_source: RouteHintSource = RouteHintSource.NONE
     source_host: str = ""
 
     @property
