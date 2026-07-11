@@ -1137,12 +1137,6 @@ lvgl:
             pad_all: 0
             scrollable: false
             scrollbar_mode: "off"
-            clickable: true
-            gesture_bubble: false
-            on_swipe_up:
-              - script.execute: show_voip_keypad
-            on_swipe_down:
-              - script.execute: hide_voip_keypad
             widgets:
               - label:
                   id: weather_date_label
@@ -1466,27 +1460,23 @@ lvgl:
                         align: TOP_LEFT
                         x: 22
                         y: 20
-                        text: "VOIP"
+                        text: "Keyboard"
                         text_color: 0x7C83FF
                         text_font: font_ui_medium
+                        clickable: true
+                        gesture_bubble: false
+                        on_click:
+                          - script.execute: show_voip_keypad
                     - obj:
                         id: call_idle_header_rule
                         align: TOP_LEFT
                         x: 22
                         y: 56
-                        width: 76
+                        width: 112
                         height: 3
                         bg_color: 0x7C83FF
                         border_width: 0
                         radius: 2
-                    - label:
-                        id: call_idle_sip_label
-                        align: TOP_RIGHT
-                        x: -22
-                        y: 24
-                        text: "SIP"
-                        text_color: 0xA78BFA
-                        text_font: font_small
                     - label:
                         id: call_idle_destination_label
                         align: TOP_MID
@@ -1518,7 +1508,7 @@ lvgl:
                         align: TOP_MID
                         y: 212
                         width: 290
-                        text: "Swipe destination or use controls"
+                        text: "Swipe to browse or use controls"
                         text_color: 0x667085
                         text_font: font_small
                         text_align: CENTER
@@ -1540,8 +1530,6 @@ lvgl:
                         on_swipe_right:
                           - voip_stack.prev_contact:
                           - script.execute: update_ic_idle_labels
-                        on_swipe_up:
-                          - script.execute: show_voip_keypad
                     - button:
                         id: call_prev_btn
                         align: BOTTOM_LEFT
@@ -1603,48 +1591,43 @@ lvgl:
                   clickable: true
                   gesture_bubble: false
                   hidden: true
-                  on_swipe_down:
-                    - script.execute: hide_voip_keypad
                   widgets:
                     - label:
                         align: TOP_LEFT
                         x: 22
                         y: 20
-                        text: "KEYPAD"
+                        text: "Contacts"
                         text_color: 0x7C83FF
                         text_font: font_ui_medium
+                        clickable: true
+                        gesture_bubble: false
+                        on_click:
+                          - script.execute: hide_voip_keypad
                     - obj:
                         align: TOP_LEFT
                         x: 22
                         y: 56
-                        width: 92
+                        width: 100
                         height: 3
                         bg_color: 0x7C83FF
                         border_width: 0
                         radius: 2
                     - label:
-                        align: TOP_RIGHT
-                        x: -22
-                        y: 24
-                        text: "Swipe down"
-                        text_color: 0x667085
-                        text_font: font_small
-                    - label:
                         id: call_keypad_value_label
                         align: TOP_MID
-                        y: 70
+                        y: 68
                         width: 300
                         text: "Enter extension or number"
                         text_color: 0xFFFFFF
-                        text_font: font_ui_medium
+                        text_font: font_small
                         text_align: CENTER
                         long_mode: DOT
                     - buttonmatrix:
                         id: call_keypad_matrix
                         align: TOP_MID
-                        y: 112
+                        y: 100
                         width: 300
-                        height: 210
+                        height: 252
                         bg_opa: TRANSP
                         border_width: 0
                         pad_row: 8
@@ -1716,9 +1699,9 @@ lvgl:
                         widgets:
                           - label:
                               align: CENTER
-                              text: "CALL"
+                              text: "\U000F03F2"
                               text_color: 0xFFFFFF
-                              text_font: font_ui_medium
+                              text_font: font_action_icon
                     - button:
                         align: BOTTOM_RIGHT
                         x: -22
@@ -2074,10 +2057,15 @@ lvgl:
                         border_width: 0
                         scrollable: false
                         scrollbar_mode: "off"
+                        clickable: true
                         on_click:
+                          - logger.log:
+                              level: INFO
+                              tag: va_input
+                              format: "touch: idle avatar"
                           - runtime_controller.event:
                               id: runtime
-                              event: wake_word
+                              event: manual_voice_toggle
                         widgets:
                           - animimg:
                               id: idle_animation
@@ -2146,10 +2134,6 @@ lvgl:
                   pad_all: 0
                   scrollable: false
                   hidden: true
-                  on_click:
-                    - runtime_controller.event:
-                        id: runtime
-                        event: wake_word
                   widgets:
                     - label:
                         align: TOP_MID
@@ -2161,6 +2145,15 @@ lvgl:
                         align: BOTTOM_MID
                         y: -10
                         src: img_listening
+                        clickable: true
+                        on_click:
+                          - logger.log:
+                              level: INFO
+                              tag: va_input
+                              format: "touch: listening avatar"
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
 
               # --- VA THINKING group ---
               - obj:
@@ -2172,10 +2165,6 @@ lvgl:
                   pad_all: 0
                   scrollable: false
                   hidden: true
-                  on_click:
-                    - runtime_controller.event:
-                        id: runtime
-                        event: wake_word
                   widgets:
                     - label:
                         id: thinking_text_label
@@ -2197,6 +2186,15 @@ lvgl:
                         align: BOTTOM_MID
                         y: -10
                         src: img_thinking
+                        clickable: true
+                        on_click:
+                          - logger.log:
+                              level: INFO
+                              tag: va_input
+                              format: "touch: thinking avatar"
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
 
               # --- VA REPLYING group ---
               - obj:
@@ -2209,10 +2207,6 @@ lvgl:
                   scrollable: false
                   scrollbar_mode: "off"
                   hidden: true
-                  on_click:
-                    - runtime_controller.event:
-                        id: runtime
-                        event: wake_word
                   widgets:
                     - label:
                         id: replying_text_label
@@ -2229,6 +2223,15 @@ lvgl:
                         align: BOTTOM_MID
                         y: -10
                         src: mood_neutral
+                        clickable: true
+                        on_click:
+                          - logger.log:
+                              level: INFO
+                              tag: va_input
+                              format: "touch: replying avatar"
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
 
               # --- VA ERROR group ---
               - obj:
@@ -2240,10 +2243,6 @@ lvgl:
                   pad_all: 0
                   scrollable: false
                   hidden: true
-                  on_click:
-                    - runtime_controller.event:
-                        id: runtime
-                        event: wake_word
                   widgets:
                     - label:
                         align: TOP_MID
@@ -2255,6 +2254,15 @@ lvgl:
                         align: BOTTOM_MID
                         y: -10
                         src: img_error
+                        clickable: true
+                        on_click:
+                          - logger.log:
+                              level: INFO
+                              tag: va_input
+                              format: "touch: error avatar"
+                          - runtime_controller.event:
+                              id: runtime
+                              event: manual_voice_toggle
 
               # --- VA MUTED group ---
               - obj:
@@ -3131,7 +3139,6 @@ script:
           lv_obj_set_width(id(call_idle_peer_label), layout[RIGHT_TEXT_W]);
           lv_obj_align(id(call_idle_header_label), LV_ALIGN_TOP_LEFT, layout[CALL_HEADER_X], layout[CALL_HEADER_Y]);
           lv_obj_align(id(call_idle_header_rule), LV_ALIGN_TOP_LEFT, layout[CALL_HEADER_X], layout[CALL_RULE_Y]);
-          lv_obj_align(id(call_idle_sip_label), LV_ALIGN_TOP_RIGHT, -layout[CALL_HEADER_X], layout[CALL_HEADER_Y] + 4);
           lv_obj_align(id(call_idle_destination_label), LV_ALIGN_TOP_MID, 0, layout[CALL_STATUS_Y]);
           lv_obj_align(id(call_idle_peer_label), LV_ALIGN_TOP_MID, 0, layout[CALL_PEER_Y]);
           lv_obj_align(id(call_idle_contacts_label), LV_ALIGN_TOP_MID, 0, layout[CALL_CONTACTS_Y]);
@@ -3146,6 +3153,12 @@ script:
           lv_obj_set_size(id(call_next_btn), layout[CALL_BUTTON_SIDE_W], layout[CALL_BUTTON_SIDE_H]);
           lv_obj_set_width(id(call_keypad_value_label), layout[RIGHT_TEXT_W]);
           lv_obj_set_width(id(call_keypad_matrix)->obj, layout[RIGHT_INNER_W]);
+          // Fill the space down to the command row while retaining a small
+          // visual gap. This follows the computed VoIP tile height instead of
+          // assuming one landscape panel resolution.
+          int keypad_h = layout[VOIP_H] - 192;
+          if (keypad_h < 128) keypad_h = 128;
+          lv_obj_set_height(id(call_keypad_matrix)->obj, keypad_h);
           lv_obj_set_width(id(call_ringing_in_peer_label), layout[RIGHT_TEXT_W]);
           lv_obj_set_width(id(call_ringing_out_peer_label), layout[RIGHT_TEXT_W]);
           lv_obj_set_width(id(call_in_call_peer_label), layout[RIGHT_TEXT_W]);
@@ -3414,6 +3427,7 @@ script:
             return;
           }
           int phase = id(voice_assistant_phase);
+          const int state = id(ui_state);
           if (phase == ${voice_assist_not_ready_phase_id}) {
             if (active_scr != id(no_ha_page)->obj)
               lv_disp_load_scr(id(no_ha_page)->obj);
@@ -3445,8 +3459,6 @@ script:
                            0xB91C1C, 0x44251D, "DND on", "DND");
 
           // === Update VA container (bottom half) ===
-          bool va_idle = (phase == ${voice_assist_idle_phase_id});
-
           // Hide all VA groups
           set_hidden(id(va_idle_group), true);
           set_hidden(id(va_listening_group), true);
@@ -3454,21 +3466,22 @@ script:
           set_hidden(id(va_replying_group), true);
           set_hidden(id(va_error_group), true);
           set_hidden(id(va_muted_group), true);
-
-          if (va_idle) {
-            set_hidden(id(va_idle_group), false);
-          } else if (phase == ${voice_assist_listening_phase_id}) {
+          // Runtime state is authoritative; the local phase only drives
+          // device-specific animation timing below.
+          if (state == ${ui_state_mww_recent} || state == ${ui_state_va_listening}) {
             set_hidden(id(va_listening_group), false);
-          } else if (phase == ${voice_assist_thinking_phase_id}) {
+          } else if (state == ${ui_state_va_thinking}) {
             set_label(id(thinking_text_label), id(text_request).state.c_str());
             set_hidden(id(va_thinking_group), false);
-          } else if (phase == ${voice_assist_replying_phase_id}) {
+          } else if (state == ${ui_state_va_replying} || state == ${ui_state_media}) {
             set_label(id(replying_text_label), id(text_response).state.c_str());
             set_hidden(id(va_replying_group), false);
-          } else if (phase == ${voice_assist_error_phase_id}) {
+          } else if (state == ${ui_state_va_error}) {
             set_hidden(id(va_error_group), false);
-          } else if (phase == ${voice_assist_muted_phase_id}) {
+          } else if (state == ${ui_state_both_muted} || state == ${ui_state_mic_muted}) {
             set_hidden(id(va_muted_group), false);
+          } else {
+            set_hidden(id(va_idle_group), false);
           }
 
           // === Update VoIP tile (top right) ===
@@ -3523,12 +3536,12 @@ script:
             }
           }
 
-          const char *va_page = va_idle ? "idle" :
-              (phase == ${voice_assist_listening_phase_id}) ? "listening" :
-              (phase == ${voice_assist_thinking_phase_id}) ? "thinking" :
-              (phase == ${voice_assist_replying_phase_id}) ? "replying" :
-              (phase == ${voice_assist_error_phase_id}) ? "error" :
-              (phase == ${voice_assist_muted_phase_id}) ? "muted" : "unknown";
+          const char *va_page =
+              (state == ${ui_state_mww_recent} || state == ${ui_state_va_listening}) ? "listening" :
+              (state == ${ui_state_va_thinking}) ? "thinking" :
+              (state == ${ui_state_va_replying} || state == ${ui_state_media}) ? "replying" :
+              (state == ${ui_state_va_error}) ? "error" :
+              (state == ${ui_state_both_muted} || state == ${ui_state_mic_muted}) ? "muted" : "idle";
           const char *call_page = id(call_ended_active) ? "call_ended" :
               (call_state == "ringing") ? "ringing_in" :
               (call_state == "calling" || call_state == "remote_ringing") ? "ringing_out" :
@@ -3887,9 +3900,13 @@ binary_sensor:
                     id: runtime
                     event: timer_stopped
               else:
+                - logger.log:
+                    level: INFO
+                    tag: va_input
+                    format: "hardware button: short press"
                 - runtime_controller.event:
                     id: runtime
-                    event: wake_word
+                    event: manual_voice_toggle
       # Long press: toggle mute
       - timing:
           - ON for 1s to 3s

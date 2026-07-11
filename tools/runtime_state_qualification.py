@@ -240,6 +240,7 @@ class HAWebSocket:
         self.states: dict[str, dict[str, Any]] = {}
         self.state_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.transition_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.transition_seq: dict[str, int] = {}
 
     async def __aenter__(self) -> "HAWebSocket":
         self.ws = await connect(self.url, max_size=4 * 1024 * 1024)
@@ -270,7 +271,16 @@ class HAWebSocket:
             if message.get("type") == "event":
                 event = message.get("event", {})
                 if event.get("event_type") == "esphome.runtime_transition":
-                    await self.transition_events.put(event.get("data", {}))
+                    data = event.get("data", {})
+                    try:
+                        payload = json.loads(data.get("snapshot", "{}"))
+                        seq = int(payload.get("s", payload.get("seq", -1)))
+                        node = str(data.get("node", ""))
+                        if node and seq >= 0:
+                            self.transition_seq[node] = max(seq, self.transition_seq.get(node, -1))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        pass
+                    await self.transition_events.put(data)
                     continue
                 if event.get("event_type") != "state_changed":
                     continue
@@ -392,18 +402,20 @@ def validate_light(ha: HAWebSocket, device: Device, expected_led: int, label: st
 
 async def inject_event(ha: HAWebSocket, device: Device, event: str) -> list[dict[str, Any]]:
     before = parse_snapshot(ha.states.get(device.snapshot_entity)) or {"seq": -1}
+    before_seq = max(int(before["seq"]), ha.transition_seq.get(device.node_name, -1))
     await ha.service("esphome", f"{device.service_prefix}_runtime_event", {"event": event})
-    return await wait_for_snapshot(ha, device, int(before["seq"]))
+    return await wait_for_snapshot(ha, device, before_seq)
 
 
 async def set_activity(ha: HAWebSocket, device: Device, activity: str, active: bool) -> list[dict[str, Any]]:
     before = parse_snapshot(ha.states.get(device.snapshot_entity)) or {"seq": -1}
+    before_seq = max(int(before["seq"]), ha.transition_seq.get(device.node_name, -1))
     await ha.service(
         "esphome",
         f"{device.service_prefix}_runtime_set_activity",
         {"activity": activity, "active": active},
     )
-    return await wait_for_snapshot(ha, device, int(before["seq"]))
+    return await wait_for_snapshot(ha, device, before_seq)
 
 
 async def baseline(ha: HAWebSocket, device: Device) -> dict[str, Any]:

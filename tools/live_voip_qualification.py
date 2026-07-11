@@ -74,11 +74,19 @@ class EspDevice:
     port: int = 6053
     password: str = ""
     ha_state_entity: str = ""
+    runtime_entity: str = ""
 
 
 DEFAULT_ESPS = {
-    "ws3": EspDevice("ws3", "Waveshare S3 Audio", "192.168.1.47", ha_state_entity="sensor.cucina_waveshare_s3_audio_voip_state"),
-    "spotpear": EspDevice("spotpear", "Spotpear Ball v2", "192.168.1.31", ha_state_entity="sensor.casa_spotpear_ball_v2_voip_state"),
+    "p4": EspDevice("p4", "Waveshare P4 Touch", "192.168.1.45",
+                    ha_state_entity="sensor.waveshare_p4_touch_voip_state",
+                    runtime_entity="sensor.waveshare_p4_touch_runtime_snapshot"),
+    "ws3": EspDevice("ws3", "Waveshare S3 Audio", "192.168.1.47",
+                     ha_state_entity="sensor.cucina_waveshare_s3_audio_voip_state",
+                     runtime_entity="sensor.cucina_waveshare_s3_audio_runtime_snapshot"),
+    "spotpear": EspDevice("spotpear", "Spotpear Ball v2", "192.168.1.31",
+                          ha_state_entity="sensor.casa_spotpear_ball_v2_voip_state",
+                          runtime_entity="sensor.casa_spotpear_ball_v2_runtime_snapshot"),
 }
 
 
@@ -416,6 +424,24 @@ async def wait_esp_voip_state(ctx: LiveContext, wanted: set[str], *, timeout: fl
         raise err
 
 
+async def wait_runtime(ctx: LiveContext, predicate: Callable[[dict[str, Any]], bool], description: str,
+                       *, timeout: float = 8.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        state = await ctx.ha.state(ctx.esp.spec.runtime_entity)
+        try:
+            raw = json.loads(state.get("state") or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        aliases = {"u": "ui", "d": "duck", "r": "ring"}
+        last = {aliases.get(key, key): value for key, value in raw.items()}
+        if predicate(last):
+            return last
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"runtime expected {description}; last={last}")
+
+
 async def set_baseline(ctx: LiveContext) -> dict[str, Any]:
     original = {
         "extension": str(ctx.esp.values.get("voip_extension") or ""),
@@ -470,6 +496,32 @@ async def scenario_ha_to_esp_extension_answer_hangup(ctx: LiveContext) -> None:
     await ctx.ha.service("voip_stack", "hangup", {})
     await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     ctx.capture("ha_to_esp_extension_answer_hangup")
+
+
+async def scenario_ha_to_esp_auto_answer(ctx: LiveContext) -> None:
+    """Exercise both real incoming-call contracts and restore the option."""
+    await ctx.cleanup()
+    await ctx.esp.switch("auto_answer", False)
+    await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
+    await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
+    await wait_runtime(ctx, lambda value: value.get("ui") == 11 and value.get("ring") == 1,
+                       "ringing UI with active local ringtone")
+    await asyncio.sleep(1.0)
+    await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=2)
+    await ctx.esp.button("call")
+    await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
+    await ctx.ha.service("voip_stack", "hangup", {})
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
+
+    await ctx.esp.switch("auto_answer", True)
+    await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
+    await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
+    await wait_runtime(ctx, lambda value: value.get("ui") == 13 and value.get("duck") == 1
+                       and value.get("ring") == 0,
+                       "in-call UI, ducking retained and ringtone stopped")
+    await ctx.ha.service("voip_stack", "hangup", {})
+    await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
+    ctx.capture("ha_to_esp_auto_answer")
 
 
 async def scenario_ha_to_esp_dnd(ctx: LiveContext) -> None:
@@ -570,6 +622,13 @@ async def scenario_esp_to_trunk_cancel(ctx: LiveContext) -> None:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "ha_to_esp_auto_answer": Scenario(
+        "ha_to_esp_auto_answer",
+        "HA calls ESP with auto-answer off and on; ringtone and teardown are verified",
+        frozenset({"ha", "esp", "auto_answer", "ringtone", "extension"}),
+        frozenset({"manual_ringing", "ringtone_active", "automatic_in_call", "ringtone_stopped", "cleanup_idle"}),
+        scenario_ha_to_esp_auto_answer,
+    ),
     "ha_to_esp_extension_answer_hangup": Scenario(
         "ha_to_esp_extension_answer_hangup",
         "HA calls ESP by dynamic extension; ESP answers; HA hangs up",

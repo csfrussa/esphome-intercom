@@ -3,6 +3,9 @@
 # Include this only when the device runs a busy full runtime graph and MWW must
 # keep scheduling precedence over low-priority UI/media work.
 
+substitutions:
+  mww_task_priority: "8"
+
 script:
   - id: !extend boost_mww_priority
     then:
@@ -13,5 +16,5 @@ script:
       - lambda: |-
           TaskHandle_t mww_task = xTaskGetHandle("mww");
           if (mww_task) {
-            vTaskPrioritySet(mww_task, 8);
+            vTaskPrioritySet(mww_task, ${mww_task_priority});
           }

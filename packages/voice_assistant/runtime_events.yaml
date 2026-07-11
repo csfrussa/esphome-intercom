@@ -25,23 +25,20 @@ voice_assistant:
         id: ui_stt_ended
         text: !lambda 'return x;'
   on_intent_progress:
-    - if:
-        condition:
-          lambda: 'return !x.empty();'
-        then:
-          # Populate text/mood before committing the responding policy. Display
-          # adapters must never render an empty neutral response frame first.
-          - script.execute:
-              id: ui_tts_started
-              text: !lambda 'return x;'
-          - runtime_controller.event:
-              id: runtime
-              event: va_responding
+    # ESPHome exposes the streaming TTS media URL here. It is transport state,
+    # not assistant response text, so it must never reach display adapters.
+    - logger.log:
+        level: DEBUG
+        tag: va
+        format: "VA: intent_progress"
   on_tts_start:
     - logger.log:
         level: INFO
         tag: va
         format: "VA: tts_start"
+    # ESPHome's on_tts_start payload is the assistant response text. Populate
+    # text/mood before committing the responding state so renderers never see
+    # an empty or transport-URL response frame.
     - script.execute:
         id: ui_tts_started
         text: !lambda 'return x;'
