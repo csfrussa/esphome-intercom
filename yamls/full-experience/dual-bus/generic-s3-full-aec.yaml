@@ -108,6 +108,20 @@ packages:
   speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
   flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
+# This dual-bus reference build keeps background audio at full level while
+# Voice Assistant and VoIP are active. The runtime state still records the
+# policy transition, but the mixer applies no attenuation.
+runtime_controller:
+  policies:
+    audio_policy:
+      values:
+        duck:
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_mixer_input
+                decibel_reduction: 0
+                duration: 0ms
+
 # =============================================================================
 # BOARD AND MEMORY
 # =============================================================================

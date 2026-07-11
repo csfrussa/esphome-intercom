@@ -7,20 +7,20 @@
 #   - script `ui_va_barge_start`: device-specific response-text cleanup hook
 # =============================================================================
 
+script:
+  # One implementation serves both locally recognized speech and the HA API.
+  # Only announcement audio is stopped, leaving Sendspin/background media intact.
+  - id: voice_quiet_internal
+    mode: restart
+    then:
+      - script.execute: ui_va_barge_start
+      - media_player.stop:
+          id: speaker_media_player
+          announcement: true
+      - voice_assistant.stop:
+
 api:
   actions:
-    # Silence the current VA session without starting a new one.
-    #
-    # This is intentionally narrower than a media stop: only the announcement
-    # pipeline is stopped, so Sendspin/background media can continue underneath.
     - action: voice_quiet
       then:
-        - logger.log:
-            level: INFO
-            tag: va
-            format: "VA: quiet requested"
-        - script.execute: ui_va_barge_start
-        - media_player.stop:
-            id: speaker_media_player
-            announcement: true
-        - voice_assistant.stop:
+        - script.execute: voice_quiet_internal

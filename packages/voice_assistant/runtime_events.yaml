@@ -24,6 +24,26 @@ voice_assistant:
     - script.execute:
         id: ui_stt_ended
         text: !lambda 'return x;'
+    # Commands that silence the current satellite must not be delegated to the
+    # selected conversation agent. Agents differ in local-intent handling and
+    # may otherwise answer the phrase instead of stopping their announcement.
+    - if:
+        condition:
+          lambda: |-
+            std::string command = x;
+            std::transform(command.begin(), command.end(), command.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            while (!command.empty() && std::isspace(static_cast<unsigned char>(command.front())))
+              command.erase(command.begin());
+            while (!command.empty() && (std::isspace(static_cast<unsigned char>(command.back())) ||
+                   command.back() == '.' || command.back() == '!' || command.back() == '?'))
+              command.pop_back();
+            return command == "stai zitta" || command == "sta zitta" ||
+                   command == "zitta" || command == "zitto" || command == "taci" ||
+                   command == "basta" || command == "annulla" ||
+                   command == "ferma la risposta" || command == "smetti di parlare";
+        then:
+          - script.execute: voice_quiet_internal
   on_intent_progress:
     # ESPHome exposes the streaming TTS media URL here. It is transport state,
     # not assistant response text, so it must never reach display adapters.
