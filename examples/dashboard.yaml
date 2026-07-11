@@ -81,6 +81,9 @@ sections:
         mode: phonebook
         title: VoIP Phonebook
         entity: sensor.voip_phonebook
+        grid_options:
+          columns: 12
+          rows: 10
 
 cards: []
 # theme: <your_dashboard_theme>
