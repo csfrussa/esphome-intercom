@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
+PHONEBOOK_CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-phonebook-card.js"
 
 
 def _method_body(source: str, method_name: str) -> str:
@@ -218,6 +219,32 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._starting = false", hangup)
         self.assertIn("const operationId = ++this._callOperationId", start)
         self.assertIn("operationId === this._callOperationId", start)
+
+    def test_phonebook_card_uses_native_ha_card_contracts(self) -> None:
+        source = PHONEBOOK_CARD.read_text()
+        self.assertIn("static getConfigForm()", source)
+        self.assertIn("static getStubConfig()", source)
+        self.assertIn("getGridOptions()", source)
+        self.assertIn("getCardSize()", source)
+        self.assertIn('columns: 12, rows: 7, min_columns: 4, min_rows: 3', source)
+        self.assertIn('customElements.define("voip-phonebook-card"', source)
+        self.assertIn('type: "voip-phonebook-card"', source)
+
+    def test_phonebook_card_is_scrollable_safe_and_roster_driven(self) -> None:
+        source = PHONEBOOK_CARD.read_text()
+        self.assertIn('overflow-y: auto', source)
+        self.assertIn('attributes?.roster_json', source)
+        self.assertIn('localeCompare', source)
+        self.assertIn('contact.enabled !== false', source)
+        self.assertIn('link.href = `tel:', source)
+        self.assertIn('name.textContent = this._name(contact)', source)
+        self.assertNotIn("innerHTML", source)
+
+    def test_main_voip_module_loads_phonebook_card_with_same_cache_version(self) -> None:
+        self.assertIn(
+            'import(`./voip-phonebook-card.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`)',
+            self.source,
+        )
 
     def test_esp_mirror_does_not_render_sip_rtp_counters(self) -> None:
         render = _method_body(self.source, "_render")

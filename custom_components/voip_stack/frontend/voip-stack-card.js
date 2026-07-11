@@ -21,6 +21,7 @@ const VOIP_STACK_MODULE_VERSION = (() => {
   }
 })();
 const VOIP_STACK_CARD_VERSION = VOIP_STACK_MODULE_VERSION.replace(/-\d+$/, "") || "dev";
+await import(`./voip-phonebook-card.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
 const { voipStackEngine } = await import(`./voip-stack-engine.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
 const HA_SOFTPHONE_DEVICE_ID = "__voip_stack_ha_softphone__";
 

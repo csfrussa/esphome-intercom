@@ -1033,6 +1033,23 @@ _The HA softphone card owns HA-only controls such as Auto Answer, DND and browse
 
 _The keypad view lets the HA softphone call a phonebook name, extension, SIP URI or external number without editing the roster first._
 
+#### Phonebook card
+
+The same frontend module also provides a native, resizable phonebook card. It
+reads the canonical roster, sorts enabled contacts alphabetically and keeps
+the contact list scrollable inside the height assigned by a Sections view.
+
+```yaml
+type: custom:voip-phonebook-card
+entity: sensor.voip_phonebook
+title: VoIP Phonebook
+```
+
+The visual editor can select a different roster sensor, change the title and
+empty-state text, or include disabled contacts. In a Sections dashboard the
+card defaults to 12 columns by 7 rows and can be resized with the normal HA
+layout controls; Masonry dashboards use its declared card-size fallback.
+
 The card automatically discovers ESPHome devices with the `voip_stack` entity
 surface, starting from the `voip_endpoint` sensor. The visual editor stores the
 HA `device_id`, while manual YAML can use the ESP friendly name, for example

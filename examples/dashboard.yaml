@@ -74,32 +74,12 @@ sections:
                   mute: true
               - number.<second_esp>_mic_gain
 
-  # Live view of the canonical VoIP roster, alphabetically sorted. A contact
-  # may expose a name only, an extension, a number, or both.
+  # Native, resizable and internally scrollable view of the canonical roster.
   - type: grid
     cards:
-      - type: markdown
+      - type: custom:voip-phonebook-card
         title: VoIP Phonebook
-        content: |-
-          {% set raw = state_attr('sensor.voip_phonebook', 'roster_json') %}
-          {% set roster = raw | from_json if raw else {'contacts': []} %}
-          {% set contacts = roster.get('contacts', []) | sort(attribute='name', case_sensitive=false) %}
-
-          {% if contacts | count == 0 %}
-          _No contacts available._
-          {% else %}
-          {% for contact in contacts if contact.get('enabled', true) %}
-          {% set name = contact.get('name') or contact.get('id') or 'Unnamed' %}
-          {% set extension = contact.get('extension', '') %}
-          {% set number = contact.get('number', '') %}
-
-          <ha-icon icon="{{ 'mdi:phone-classic' if number else 'mdi:account-voice' }}"></ha-icon> **{{ name }}**
-
-          {% if extension %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Extension: `{{ extension }}`<br>
-          {% endif %}{% if number %}&nbsp;&nbsp;&nbsp;&nbsp;↳ Number: [{{ number }}](tel:{{ number | replace(' ', '') }})<br>
-          {% endif %}
-          {% endfor %}
-          {% endif %}
+        entity: sensor.voip_phonebook
 
 cards: []
 # theme: <your_dashboard_theme>
