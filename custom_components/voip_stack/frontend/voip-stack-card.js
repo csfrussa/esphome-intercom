@@ -1438,7 +1438,10 @@ class VoipStackCard extends HTMLElement {
         min-height: 0;
         overflow-x: hidden;
         overflow-y: auto;
-        overscroll-behavior: contain;
+        /* Let wheel/touchpad scrolling chain back to the HA dashboard when
+         * this card has no remaining vertical overflow. Interactive controls
+         * still receive their normal pointer/click events. */
+        overscroll-behavior-y: auto;
         background: var(--voip-stack-card-surface);
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
