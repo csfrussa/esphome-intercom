@@ -107,6 +107,7 @@ class VoipPhonebookView extends HTMLElement {
       :host { display: block; height: 100%; min-height: 0; }
       ha-card {
         box-sizing: border-box;
+        container-type: size;
         display: flex;
         flex-direction: column;
         height: 100%;
@@ -120,6 +121,7 @@ class VoipPhonebookView extends HTMLElement {
         font-weight: 500;
         line-height: 1.25;
       }
+      .header[hidden] { display: none; }
       .list {
         flex: 1 1 auto;
         min-height: 0;
@@ -128,7 +130,7 @@ class VoipPhonebookView extends HTMLElement {
         padding: 4px 18px 16px;
         scrollbar-gutter: stable;
       }
-      .contact { padding: 8px 0; }
+      .contact { padding: clamp(4px, 1.5cqh, 8px) 0; }
       .contact + .contact { border-top: 1px solid var(--divider-color); }
       .contact-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .contact-heading ha-icon { --mdc-icon-size: 22px; flex: 0 0 auto; }
@@ -148,15 +150,18 @@ class VoipPhonebookView extends HTMLElement {
     `;
 
     const card = document.createElement("ha-card");
-    const title = document.createElement("div");
-    title.className = "header";
-    title.textContent = this._config.title || "VoIP Phonebook";
-    card.appendChild(title);
+    const configuredTitle = String(this._config.title || "").trim();
+    if (configuredTitle) {
+      const title = document.createElement("div");
+      title.className = "header";
+      title.textContent = configuredTitle;
+      card.appendChild(title);
+    }
 
     const list = document.createElement("div");
     list.className = "list";
     list.setAttribute("role", "list");
-    list.setAttribute("aria-label", this._config.title || "VoIP Phonebook");
+    list.setAttribute("aria-label", configuredTitle || "VoIP phonebook");
     list.tabIndex = 0;
     const contacts = this._contacts();
     if (!contacts.length) {

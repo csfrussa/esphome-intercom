@@ -960,7 +960,8 @@ class VoipStackCard extends HTMLElement {
   }
 
   _formatHeaderTitle(baseName) {
-    const name = baseName || "VoIP Stack";
+    const name = String(baseName || "").trim();
+    if (!name) return "";
     if (!this.config?.show_extended_info) return name;
     const transport = this._getOwnTransport();
     const mode = this._audioModeLabel(this._getOwnAudioMode());
@@ -1156,8 +1157,8 @@ class VoipStackCard extends HTMLElement {
       this._renderPhonebook();
       return;
     }
-    const customName = this.config?.name || "";
-    const name = customName || "VoIP Stack";
+    const customName = String(this.config?.name || "").trim();
+    const name = customName;
     const deviceId = this._getConfigDeviceId();
 
     if (!deviceId) {
@@ -1191,11 +1192,12 @@ class VoipStackCard extends HTMLElement {
       );
       espDeviceName = device?.name;
     }
-    const displayName = customName || espDeviceName || name;
+    const displayName = customName;
     espDeviceName = espDeviceName || displayName;
 
     if (!this._isHaSoftphoneMode() && this._isEspUnavailable()) {
       els.headerName.textContent = this._formatHeaderTitle(displayName);
+      els.header.hidden = !displayName;
       els.destRow.hidden = true;
       els.offlinePanel.hidden = false;
       els.answerBtn.hidden = true;
@@ -1274,6 +1276,7 @@ class VoipStackCard extends HTMLElement {
     this._syncRingtoneRequest(espState);
 
     els.headerName.textContent = this._formatHeaderTitle(displayName);
+    els.header.hidden = !displayName;
 
     // ESP cards mirror the ESP contact cycler. The optional keypad keeps its
     // own manual buffer and calls the ESPHome start_call service directly.
@@ -1378,6 +1381,7 @@ class VoipStackCard extends HTMLElement {
       this._skeletonMode = "unconfigured";
     }
     this._els.headerName.textContent = name;
+    this._els.header.hidden = !name;
   }
 
   // Static-skeleton builders. Construct DOM once via createElement +
@@ -1401,6 +1405,7 @@ class VoipStackCard extends HTMLElement {
       }
       .card {
         box-sizing: border-box;
+        container-type: size;
         height: 100%;
         min-height: 0;
         overflow-x: hidden;
@@ -1409,13 +1414,14 @@ class VoipStackCard extends HTMLElement {
         background: var(--voip-stack-card-surface);
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
-        padding: 16px;
+        padding: clamp(10px, 2.5cqh, 16px);
       }
-      .header { font-size: 1.2em; font-weight: 500; margin-bottom: 16px; color: var(--primary-text-color); }
+      .header { font-size: 1.2em; font-weight: 500; margin-bottom: clamp(8px, 2.5cqh, 16px); color: var(--primary-text-color); }
+      .header[hidden] { display: none; }
 
       .destination-row {
         display: flex; align-items: center; justify-content: center;
-        gap: 12px; margin-bottom: 16px;
+        gap: 12px; margin-bottom: clamp(8px, 2.5cqh, 16px);
       }
       .destination-row[hidden] { display: none; }
       .nav-btn {
@@ -1485,22 +1491,22 @@ class VoipStackCard extends HTMLElement {
       .keypad-key:hover { background: var(--voip-control-hover-surface); }
       .keypad-key:disabled { opacity: 0.5; cursor: not-allowed; }
 
-      .button-container { display: flex; justify-content: center; gap: 20px; margin-bottom: 16px; }
+      .button-container { display: flex; justify-content: center; gap: clamp(10px, 3cqh, 20px); margin-bottom: clamp(8px, 2.5cqh, 16px); }
       .offline-panel {
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 8px; min-height: 132px; margin-bottom: 14px;
+        gap: 8px; min-height: clamp(76px, 24cqh, 132px); margin-bottom: clamp(8px, 2cqh, 14px);
         color: var(--error-color, #f44336);
       }
       .offline-panel[hidden] { display: none; }
-      .offline-icon ha-icon { --mdc-icon-size: 64px; }
+      .offline-icon ha-icon { --mdc-icon-size: clamp(36px, 10cqh, 64px); }
       .offline-title { font-size: 1.1em; font-weight: 600; color: var(--primary-text-color); }
       .voip-button {
-        width: 100px; height: 100px; border-radius: 50%; border: none; cursor: pointer;
+        width: clamp(56px, 18cqh, 100px); height: clamp(56px, 18cqh, 100px); border-radius: 50%; border: none; cursor: pointer;
         font-size: 1em; font-weight: bold; transition: all 0.2s ease;
         display: flex; align-items: center; justify-content: center;
       }
       .voip-button[hidden] { display: none; }
-      .voip-button.small { width: 80px; height: 80px; font-size: 0.9em; }
+      .voip-button.small { width: clamp(50px, 15cqh, 80px); height: clamp(50px, 15cqh, 80px); font-size: 0.9em; }
       .voip-button.call { background: #4caf50; color: white; }
       .voip-button.answer { background: #4caf50; color: white; animation: ring-pulse 1s infinite; }
       .voip-button.decline { background: #f44336; color: white; animation: ring-pulse 1s infinite; }
@@ -1876,7 +1882,7 @@ class VoipStackCard extends HTMLElement {
     root.appendChild(card);
 
     this._els = {
-      headerName,
+      header, headerName,
       destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
       keypadPanel, keypadInput, keypadKeys,
       answerBtn, declineBtn, hangupBtn, callBtn, placeholderBtn,
@@ -1908,6 +1914,7 @@ class VoipStackCard extends HTMLElement {
         padding: 16px;
       }
       .header { font-size: 1.2em; font-weight: 500; margin-bottom: 16px; color: var(--primary-text-color); }
+      .header[hidden] { display: none; }
       .unconfigured { text-align: center; color: var(--secondary-text-color); padding: 20px; font-style: italic; }
       .version { font-size: 0.65em; color: #999; text-align: right; margin-top: 8px; }
     `;
@@ -1934,7 +1941,7 @@ class VoipStackCard extends HTMLElement {
 
     root.appendChild(card);
 
-    this._els = { headerName };
+    this._els = { header, headerName };
   }
 
   _renderPhonebook() {
@@ -1947,7 +1954,7 @@ class VoipStackCard extends HTMLElement {
     }
     const phonebookConfig = {
       entity: this.config?.entity || "sensor.voip_phonebook",
-      title: this.config?.title || this.config?.name || "VoIP Phonebook",
+      title: String(this.config?.title || this.config?.name || "").trim(),
       empty_text: this.config?.empty_text || "No contacts available.",
       show_disabled: !!this.config?.show_disabled,
     };
@@ -2593,7 +2600,7 @@ class VoipStackCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { name: "VoIP Stack" };
+    return {};
   }
 }
 
@@ -2761,7 +2768,7 @@ class VoipStackCardEditor extends HTMLElement {
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.id = "name-input";
-    nameInput.placeholder = "VoIP Stack";
+    nameInput.placeholder = "No title";
     nameGroup.appendChild(nameInput);
     wrap.appendChild(nameGroup);
 
@@ -2832,7 +2839,7 @@ class VoipStackCardEditor extends HTMLElement {
     }
 
     els.nameLabel.textContent = phonebookMode ? "Title (optional)" : "Card Name (optional)";
-    els.nameInput.placeholder = phonebookMode ? "VoIP Phonebook" : "VoIP Stack";
+    els.nameInput.placeholder = "No title";
     els.nameInput.value = phonebookMode ? (this._config.title || this._config.name || "") : (this._config.name || "");
     els.extendedInfoGroup.classList.toggle("hidden", phonebookMode);
     els.extendedInfoInput.checked = !!this._config.show_extended_info;
