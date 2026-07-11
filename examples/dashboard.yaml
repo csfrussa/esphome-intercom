@@ -83,7 +83,7 @@ sections:
         entity: sensor.voip_phonebook
         grid_options:
           columns: 12
-          rows: 10
+          rows: 8
 
 cards: []
 # theme: <your_dashboard_theme>

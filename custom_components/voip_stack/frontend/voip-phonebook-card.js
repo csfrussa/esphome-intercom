@@ -7,6 +7,27 @@ class VoipPhonebookView extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._lastRoster = null;
+    this._resizeObserver = new ResizeObserver(() => this._measure());
+  }
+
+  connectedCallback() { this._observe(); }
+  disconnectedCallback() { this._resizeObserver.disconnect(); }
+
+  _observe() {
+    const card = this.shadowRoot?.querySelector("ha-card");
+    if (card) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver.observe(card);
+      this._measure();
+    }
+  }
+
+  _measure() {
+    const card = this.shadowRoot?.querySelector("ha-card");
+    if (!card) return;
+    card.classList.toggle("narrow", card.clientWidth < 420);
+    card.classList.toggle("wide", card.clientWidth >= 560);
+    card.classList.toggle("short", card.clientHeight < 300);
   }
 
   static _assertConfig(config) {
@@ -107,7 +128,6 @@ class VoipPhonebookView extends HTMLElement {
       :host { display: block; height: 100%; min-height: 0; }
       ha-card {
         box-sizing: border-box;
-        container-type: size;
         display: flex;
         flex-direction: column;
         height: 100%;
@@ -130,7 +150,7 @@ class VoipPhonebookView extends HTMLElement {
         padding: 4px 18px 16px;
         scrollbar-gutter: stable;
       }
-      .contact { padding: clamp(4px, 1.5cqh, 8px) 0; }
+      .contact { padding: 8px 0; }
       .contact + .contact { border-top: 1px solid var(--divider-color); }
       .contact-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .contact-heading ha-icon { --mdc-icon-size: 22px; flex: 0 0 auto; }
@@ -147,6 +167,18 @@ class VoipPhonebookView extends HTMLElement {
       a { color: var(--primary-color); text-decoration: none; }
       a:hover { text-decoration: underline; }
       .empty { color: var(--secondary-text-color); font-style: italic; padding: 12px 0; }
+      ha-card.wide .list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-content: start;
+        column-gap: 24px;
+      }
+      ha-card.wide .contact:nth-child(2) { border-top: 0; }
+      ha-card.short .header { padding: 10px 14px 6px; font-size: 1.1rem; }
+      ha-card.short .list { padding: 2px 14px 10px; }
+      ha-card.short .contact { padding: 4px 0; }
+      ha-card.short .details { margin-top: 2px; }
+      ha-card.narrow .details { margin-left: 26px; }
     `;
 
     const card = document.createElement("ha-card");
@@ -174,6 +206,7 @@ class VoipPhonebookView extends HTMLElement {
     }
     card.appendChild(list);
     this.shadowRoot.append(style, card);
+    this._observe();
   }
 }
 

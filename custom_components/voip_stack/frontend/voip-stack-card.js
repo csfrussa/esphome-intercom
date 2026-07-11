@@ -117,14 +117,17 @@ class VoipStackCard extends HTMLElement {
     this._els = null;
     this._skeletonMode = null;  // 'main' | 'unconfigured' | null
     this._engineListener = () => this._render();
+    this._resizeObserver = new ResizeObserver(() => this._measureLayout());
   }
 
   connectedCallback() {
     if (this._hass) this._subscribeBusEvents();
     voipStackEngine.addEventListener("state", this._engineListener);
+    this._observeLayout();
   }
 
   disconnectedCallback() {
+    this._resizeObserver.disconnect();
     if (this._unsubCallEvents) {
       this._unsubCallEvents();
       this._unsubCallEvents = null;
@@ -1382,6 +1385,30 @@ class VoipStackCard extends HTMLElement {
     }
     this._els.headerName.textContent = name;
     this._els.header.hidden = !name;
+    this._observeLayout();
+  }
+
+  _observeLayout() {
+    const card = this.shadowRoot?.querySelector("ha-card");
+    if (!card) return;
+    this._resizeObserver.disconnect();
+    this._resizeObserver.observe(card);
+    this._measureLayout();
+  }
+
+  _measureLayout() {
+    const card = this.shadowRoot?.querySelector("ha-card");
+    if (!card) return;
+    const width = card.clientWidth;
+    const height = card.clientHeight;
+    const buttonSize = Math.max(58, Math.min(136, Math.round((height - 100) * 0.36), Math.round(width * 0.32)));
+    const spacing = Math.max(4, Math.min(16, Math.round(Math.min(width / 24, height / 28))));
+    card.style.setProperty("--voip-button-size", `${buttonSize}px`);
+    card.style.setProperty("--voip-small-button-size", `${Math.max(52, Math.round(buttonSize * 0.8))}px`);
+    card.style.setProperty("--voip-fluid-space", `${spacing}px`);
+    card.classList.toggle("layout-narrow", width < 350);
+    card.classList.toggle("layout-compact", height < 360);
+    card.classList.toggle("layout-short", height < 285);
   }
 
   // Static-skeleton builders. Construct DOM once via createElement +
@@ -1405,7 +1432,8 @@ class VoipStackCard extends HTMLElement {
       }
       .card {
         box-sizing: border-box;
-        container-type: size;
+        display: flex;
+        flex-direction: column;
         height: 100%;
         min-height: 0;
         overflow-x: hidden;
@@ -1414,14 +1442,14 @@ class VoipStackCard extends HTMLElement {
         background: var(--voip-stack-card-surface);
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
-        padding: clamp(10px, 2.5cqh, 16px);
+        padding: var(--voip-fluid-space, 16px);
       }
-      .header { font-size: 1.2em; font-weight: 500; margin-bottom: clamp(8px, 2.5cqh, 16px); color: var(--primary-text-color); }
+      .header { font-size: 1.2em; font-weight: 500; margin-bottom: var(--voip-fluid-space, 16px); color: var(--primary-text-color); }
       .header[hidden] { display: none; }
 
       .destination-row {
         display: flex; align-items: center; justify-content: center;
-        gap: 12px; margin-bottom: clamp(8px, 2.5cqh, 16px);
+        gap: 12px; margin-bottom: var(--voip-fluid-space, 16px);
       }
       .destination-row[hidden] { display: none; }
       .nav-btn {
@@ -1491,22 +1519,30 @@ class VoipStackCard extends HTMLElement {
       .keypad-key:hover { background: var(--voip-control-hover-surface); }
       .keypad-key:disabled { opacity: 0.5; cursor: not-allowed; }
 
-      .button-container { display: flex; justify-content: center; gap: clamp(10px, 3cqh, 20px); margin-bottom: clamp(8px, 2.5cqh, 16px); }
+      .button-container {
+        display: flex;
+        flex: 1 1 auto;
+        min-height: var(--voip-button-size, 100px);
+        align-items: center;
+        justify-content: center;
+        gap: max(8px, var(--voip-fluid-space, 16px));
+        margin-bottom: var(--voip-fluid-space, 16px);
+      }
       .offline-panel {
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 8px; min-height: clamp(76px, 24cqh, 132px); margin-bottom: clamp(8px, 2cqh, 14px);
+        gap: 8px; min-height: 132px; margin-bottom: 14px;
         color: var(--error-color, #f44336);
       }
       .offline-panel[hidden] { display: none; }
-      .offline-icon ha-icon { --mdc-icon-size: clamp(36px, 10cqh, 64px); }
+      .offline-icon ha-icon { --mdc-icon-size: 64px; }
       .offline-title { font-size: 1.1em; font-weight: 600; color: var(--primary-text-color); }
       .voip-button {
-        width: clamp(56px, 18cqh, 100px); height: clamp(56px, 18cqh, 100px); border-radius: 50%; border: none; cursor: pointer;
+        width: var(--voip-button-size, 100px); height: var(--voip-button-size, 100px); border-radius: 50%; border: none; cursor: pointer;
         font-size: 1em; font-weight: bold; transition: all 0.2s ease;
         display: flex; align-items: center; justify-content: center;
       }
       .voip-button[hidden] { display: none; }
-      .voip-button.small { width: clamp(50px, 15cqh, 80px); height: clamp(50px, 15cqh, 80px); font-size: 0.9em; }
+      .voip-button.small { width: var(--voip-small-button-size, 80px); height: var(--voip-small-button-size, 80px); font-size: 0.9em; }
       .voip-button.call { background: #4caf50; color: white; }
       .voip-button.answer { background: #4caf50; color: white; animation: ring-pulse 1s infinite; }
       .voip-button.decline { background: #f44336; color: white; animation: ring-pulse 1s infinite; }
@@ -1593,6 +1629,26 @@ class VoipStackCard extends HTMLElement {
         min-width: 0;
         font-size: 0.95em;
       }
+      .card.layout-compact { padding: 10px 12px; }
+      .layout-compact .header { margin-bottom: 8px; }
+      .layout-compact .destination-row { margin-bottom: 8px; }
+      .layout-compact .destination-value { padding: 4px 0; }
+      .layout-compact .button-container { gap: 12px; margin-bottom: 8px; }
+      .layout-compact .offline-panel { min-height: 82px; margin-bottom: 8px; }
+      .layout-compact .offline-icon ha-icon { --mdc-icon-size: 42px; }
+      .layout-compact .runtime-controls { margin-top: 6px; }
+      .layout-compact .settings-btn { margin-top: 6px; padding: 4px 10px; }
+      .layout-compact .stats, .layout-compact .error, .layout-compact .version { margin-top: 4px; }
+      .card.layout-short { padding: 8px 10px; }
+      .layout-short .header { font-size: 1.05em; margin-bottom: 4px; }
+      .layout-short .destination-row { margin-bottom: 4px; }
+      .layout-short .destination-label { display: none; }
+      .layout-short .button-container { margin-bottom: 4px; }
+      .layout-short .voip-button { font-size: .85em; }
+      .layout-short .offline-panel { min-height: 64px; gap: 3px; margin-bottom: 4px; }
+      .layout-short .offline-icon ha-icon { --mdc-icon-size: 32px; }
+      .layout-short .runtime-controls { margin-top: 4px; }
+      .layout-narrow .button-container { gap: 8px; }
       .version { font-size: 0.65em; color: #999; text-align: right; margin-top: 8px; }
     `;
     root.appendChild(style);
@@ -1894,6 +1950,7 @@ class VoipStackCard extends HTMLElement {
     };
 
     this._attachEventHandlers();
+    this._observeLayout();
   }
 
   _buildSkeletonUnconfigured() {
@@ -1942,6 +1999,7 @@ class VoipStackCard extends HTMLElement {
     root.appendChild(card);
 
     this._els = { header, headerName };
+    this._observeLayout();
   }
 
   _renderPhonebook() {
@@ -2589,8 +2647,8 @@ class VoipStackCard extends HTMLElement {
 
   getGridOptions() {
     return this._isPhonebookMode()
-      ? { columns: 12, rows: 7, min_columns: 4, min_rows: 3, max_rows: 10 }
-      : { columns: 12, rows: 7, min_columns: 6, min_rows: 4, max_rows: 10 };
+      ? { columns: 12, rows: 7, min_columns: 4, min_rows: 3, max_rows: 8 }
+      : { columns: 12, rows: 7, min_columns: 6, min_rows: 4, max_rows: 8 };
   }
 
   getCardSize() { return 7; }
