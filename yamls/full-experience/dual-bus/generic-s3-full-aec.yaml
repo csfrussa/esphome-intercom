@@ -108,20 +108,6 @@ packages:
   speaker_power: !include ../../../packages/esp_audio_stack/speaker_power_output.yaml
   flac_codecs_psram: !include ../../../packages/audio/flac_codecs_psram.yaml
 
-# This dual-bus reference build keeps background audio at full level while
-# Voice Assistant and VoIP are active. The runtime state still records the
-# policy transition, but the mixer applies no attenuation.
-runtime_controller:
-  policies:
-    audio_policy:
-      values:
-        duck:
-          then:
-            - mixer_speaker.apply_ducking:
-                id: media_mixer_input
-                decibel_reduction: 0
-                duration: 0ms
-
 # =============================================================================
 # BOARD AND MEMORY
 # =============================================================================
@@ -264,8 +250,7 @@ esp_audio_stack:
   mic_channel: right
   rx_slot_mode: stereo
   processor_id: aec_processor
-  aec_reference: ring_buffer
-  aec_reference_buffer_ms: 80
+  aec_reference: previous_frame
   buffers_in_psram: true
   aec_ref_ring_in_psram: true
   audio_task_stack_in_psram: true
@@ -276,7 +261,7 @@ esp_aec:
   id: aec_processor
   sample_rate: 16000
   filter_length: 4
-  mode: sr_low_cost
+  mode: fd_high_perf
 
 # Microphone: publishes AEC-clean PCM frames to VA, wake word and VoIP
 
@@ -417,9 +402,9 @@ select:
     id: aec_mode_select
     icon: mdi:tune-vertical
     options:
-      - "sr_low_cost"
-      - "sr_high_perf"
-    initial_option: "sr_low_cost"
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
     optimistic: false
     restore_value: true
     set_action:

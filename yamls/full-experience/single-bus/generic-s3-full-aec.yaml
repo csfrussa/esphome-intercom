@@ -234,7 +234,7 @@ esp_aec:
   id: aec_processor
   sample_rate: 16000
   filter_length: 4
-  mode: sr_low_cost
+  mode: fd_high_perf
 
 microphone:
   - platform: esp_audio_stack
@@ -361,12 +361,11 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # Full AEC light profile: stay on SR modes to preserve MWW spectral features
-    # while avoiding the heavier esp_afe pipeline.
+    # Keep runtime switching within the full-duplex AEC engine.
     options:
-      - "sr_low_cost"
-      - "sr_high_perf"
-    initial_option: "sr_low_cost"
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
     # Non-optimistic: HA reflects the live component mode, not the value the
     # user clicked. If the switch is rejected (e.g. internal RAM fragmented)
     # or the component falls back to the previous mode, the select shows the

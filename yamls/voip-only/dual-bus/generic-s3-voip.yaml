@@ -222,7 +222,7 @@ esp_aec:
   id: aec_processor
   sample_rate: 16000
   filter_length: 8
-  mode: voip_high_perf
+  mode: fd_high_perf
 
 microphone:
   - platform: esp_audio_stack
@@ -301,15 +301,11 @@ select:
     name: AEC Mode
     id: aec_mode_select
     icon: mdi:tune-vertical
-    # VoIP-only standard: stay inside the dios_ssp_aec engine. The two
-    # VOIP modes share the same engine, so a runtime switch never triggers
-    # an esp_aec3 FFT alloc and avoids the silent calloc-fail bug observed
-    # at filter_length>4 on cross-engine transitions. SR modes are not
-    # offered here because no MWW is present in this configuration.
+    # Keep runtime switching within the full-duplex AEC engine.
     options:
-      - "voip_low_cost"
-      - "voip_high_perf"
-    initial_option: "voip_high_perf"
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
     optimistic: false
     restore_value: true
     set_action:
