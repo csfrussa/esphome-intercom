@@ -25,6 +25,28 @@ await import(`./voip-phonebook-card.js?v=${encodeURIComponent(VOIP_STACK_MODULE_
 const { voipStackEngine } = await import(`./voip-stack-engine.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
 const HA_SOFTPHONE_DEVICE_ID = "__voip_stack_ha_softphone__";
 
+function installWheelScrollHandoff(scroller) {
+  scroller.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || !event.deltaY) return;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? window.innerHeight
+        : 1;
+    const delta = event.deltaY * scale;
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const available = delta > 0 ? maxScroll - scroller.scrollTop : scroller.scrollTop;
+    const requested = Math.abs(delta);
+    if (requested <= available + 0.5) return;
+
+    const consumed = Math.max(0, available);
+    scroller.scrollTop = delta > 0 ? maxScroll : 0;
+    const remainder = Math.max(0, requested - consumed) * Math.sign(delta);
+    if (remainder) window.scrollBy(0, remainder);
+    event.preventDefault();
+  }, { passive: false });
+}
+
 // Lazy gate for verbose logs. Errors and warnings always emit.
 // Enable in the browser console with localStorage.voip_debug = "1".
 const _ic_dbg = (() => {
@@ -761,17 +783,29 @@ class VoipStackCard extends HTMLElement {
       this._voipStateEntityId ||
       configuredDevice?.entities?.voip_state;
     if (stateEntityId) {
-      const state = (this._hass.states[stateEntityId]?.state || "").toLowerCase();
-      return state === "unavailable";
+      const entity = this._hass.states[stateEntityId];
+      if (!entity) return true;
+      const state = String(entity.state || "").toLowerCase();
+      return state === "unknown" || state === "unavailable";
     }
 
     const endpointEntityId = configuredDevice?.entities?.voip_endpoint;
     if (endpointEntityId) {
-      const state = (this._hass.states[endpointEntityId]?.state || "").toLowerCase();
-      return state === "unavailable";
+      const entity = this._hass.states[endpointEntityId];
+      if (!entity) return true;
+      const state = String(entity.state || "").toLowerCase();
+      return state === "unknown" || state === "unavailable";
     }
 
-    return false;
+    // Only fall back to endpoint discovery when no stable HA entity binding is
+    // available. A bound state entity always wins so reconnects render on the
+    // next hass update without waiting for list_devices to refresh.
+    return !!(
+      this._getConfigDeviceId() &&
+      !configuredDevice &&
+      !this._availableDevicesLoading &&
+      this._availableDevices.length > 0
+    );
   }
 
   // Get caller name from entity
@@ -1062,18 +1096,23 @@ class VoipStackCard extends HTMLElement {
 
       // Fallback: entity registry
       try {
-        const registry = await this._hass.connection.sendMessagePromise({
-          type: "config/entity_registry/list",
+        const registryResult = await this._hass.callWS({
+          type: "config/entity_registry/list_for_display",
         });
+        const registry = Array.isArray(registryResult)
+          ? registryResult
+          : registryResult?.entities;
         if (
-          !registry ||
+          !Array.isArray(registry) ||
           this._isHaSoftphoneMode() ||
           expectedSelector !== this._getConfigSelector()
         ) return;
 
         for (const entity of registry) {
-          if (entity.device_id !== targetDeviceId) continue;
-          const id = entity.entity_id;
+          const registryDeviceId = entity.di || entity.device_id;
+          if (registryDeviceId !== targetDeviceId) continue;
+          const id = entity.ei || entity.entity_id;
+          if (!id) continue;
           if (id.includes("voip_state")) this._voipStateEntityId = id;
           else if (id.includes("voip_transport")) this._transportEntityId = id;
           else if (id.includes("caller")) this._callerEntityId = id;
@@ -1658,6 +1697,7 @@ class VoipStackCard extends HTMLElement {
 
     const card = document.createElement("ha-card");
     card.className = "card";
+    installWheelScrollHandoff(card);
 
     const header = document.createElement("div");
     header.className = "header";
@@ -1982,6 +2022,7 @@ class VoipStackCard extends HTMLElement {
 
     const card = document.createElement("ha-card");
     card.className = "card";
+    installWheelScrollHandoff(card);
 
     const header = document.createElement("div");
     header.className = "header";

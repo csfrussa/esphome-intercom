@@ -1,5 +1,27 @@
 const DEFAULT_ENTITY = "sensor.voip_phonebook";
 
+function installWheelScrollHandoff(scroller) {
+  scroller.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || !event.deltaY) return;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? window.innerHeight
+        : 1;
+    const delta = event.deltaY * scale;
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const available = delta > 0 ? maxScroll - scroller.scrollTop : scroller.scrollTop;
+    const requested = Math.abs(delta);
+    if (requested <= available + 0.5) return;
+
+    const consumed = Math.max(0, available);
+    scroller.scrollTop = delta > 0 ? maxScroll : 0;
+    const remainder = Math.max(0, requested - consumed) * Math.sign(delta);
+    if (remainder) window.scrollBy(0, remainder);
+    event.preventDefault();
+  }, { passive: false });
+}
+
 class VoipPhonebookView extends HTMLElement {
   constructor() {
     super();
@@ -193,6 +215,7 @@ class VoipPhonebookView extends HTMLElement {
 
     const list = document.createElement("div");
     list.className = "list";
+    installWheelScrollHandoff(list);
     list.setAttribute("role", "list");
     list.setAttribute("aria-label", configuredTitle || "VoIP phonebook");
     list.tabIndex = 0;
