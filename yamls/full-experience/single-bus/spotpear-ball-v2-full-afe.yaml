@@ -27,9 +27,7 @@
 # =============================================================================
 
 substitutions:
-  runtime_controller_debug: "true"
-  runtime_probe_phase_expr: "id(voice_assistant_phase)"
-  runtime_probe_mode_expr: "id(current_mode)"
+  runtime_controller_debug: "false"
   # Hardware-shared identity: all Spotpear Ball v2 firmware variants (voip / full-afe
   # / full-afe) share `spotpear-ball-v2` so a flash swap reuses the same HA device entity
   # and the same .esphome/build cache.
@@ -2526,7 +2524,6 @@ script:
             lv_obj_add_flag(id(top_battery_label), LV_OBJ_FLAG_HIDDEN);
           }
 
-      - script.execute: runtime_publish_snapshot
 
       # Update dynamic labels when on idle page
       - if:

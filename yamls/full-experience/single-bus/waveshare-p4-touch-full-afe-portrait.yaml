@@ -47,9 +47,7 @@
 # =============================================================================
 
 substitutions:
-  runtime_probe_phase_expr: "id(voice_assistant_phase)"
-  runtime_probe_mode_expr: "id(current_mode)"
-  runtime_controller_debug: "true"
+  runtime_controller_debug: "false"
   name: waveshare-p4-touch
   friendly_name: Waveshare P4 Touch
   mic_id: mic_afe

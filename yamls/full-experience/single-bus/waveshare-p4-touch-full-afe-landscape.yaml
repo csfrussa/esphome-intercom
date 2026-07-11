@@ -47,9 +47,7 @@
 # =============================================================================
 
 substitutions:
-  runtime_controller_debug: "true"
-  runtime_probe_phase_expr: "id(voice_assistant_phase)"
-  runtime_probe_mode_expr: "id(current_mode)"
+  runtime_controller_debug: "false"
   name: waveshare-p4-touch
   friendly_name: Waveshare P4 Touch
   mic_id: mic_afe
@@ -395,7 +393,9 @@ esp_audio_stack:
       mic_selected: 0x0F
       gain_db: 30.0
       ref_channel: 1
-      ref_gain_db: 0.0
+      # Keep the electrical playback reference close to the microphone PGA so
+      # the AEC receives enough far-end energy to converge reliably.
+      ref_gain_db: 24.0
     output:
       type: es8311
       address: 0x18
@@ -1140,13 +1140,13 @@ lvgl:
             widgets:
               - label:
                   id: weather_date_label
-                  align: TOP_LEFT
-                  x: 24
+                  align: TOP_MID
                   y: 20
-                  width: 250
+                  width: 320
                   text: ""
                   text_color: 0x9AA4B2
                   text_font: font_ui_medium
+                  text_align: CENTER
                   long_mode: DOT
               - label:
                   id: weather_icon_label
@@ -1457,8 +1457,7 @@ lvgl:
                   widgets:
                     - label:
                         id: call_idle_header_label
-                        align: TOP_LEFT
-                        x: 22
+                        align: TOP_MID
                         y: 20
                         text: "Keyboard"
                         text_color: 0x7C83FF
@@ -1469,8 +1468,7 @@ lvgl:
                           - script.execute: show_voip_keypad
                     - obj:
                         id: call_idle_header_rule
-                        align: TOP_LEFT
-                        x: 22
+                        align: TOP_MID
                         y: 56
                         width: 112
                         height: 3
@@ -1593,8 +1591,8 @@ lvgl:
                   hidden: true
                   widgets:
                     - label:
-                        align: TOP_LEFT
-                        x: 22
+                        id: call_keypad_header_label
+                        align: TOP_MID
                         y: 20
                         text: "Contacts"
                         text_color: 0x7C83FF
@@ -1604,8 +1602,8 @@ lvgl:
                         on_click:
                           - script.execute: hide_voip_keypad
                     - obj:
-                        align: TOP_LEFT
-                        x: 22
+                        id: call_keypad_header_rule
+                        align: TOP_MID
                         y: 56
                         width: 100
                         height: 3
@@ -1615,7 +1613,7 @@ lvgl:
                     - label:
                         id: call_keypad_value_label
                         align: TOP_MID
-                        y: 68
+                        y: 74
                         width: 300
                         text: "Enter extension or number"
                         text_color: 0xFFFFFF
@@ -2059,10 +2057,6 @@ lvgl:
                         scrollbar_mode: "off"
                         clickable: true
                         on_click:
-                          - logger.log:
-                              level: INFO
-                              tag: va_input
-                              format: "touch: idle avatar"
                           - runtime_controller.event:
                               id: runtime
                               event: manual_voice_toggle
@@ -2147,10 +2141,6 @@ lvgl:
                         src: img_listening
                         clickable: true
                         on_click:
-                          - logger.log:
-                              level: INFO
-                              tag: va_input
-                              format: "touch: listening avatar"
                           - runtime_controller.event:
                               id: runtime
                               event: manual_voice_toggle
@@ -2188,10 +2178,6 @@ lvgl:
                         src: img_thinking
                         clickable: true
                         on_click:
-                          - logger.log:
-                              level: INFO
-                              tag: va_input
-                              format: "touch: thinking avatar"
                           - runtime_controller.event:
                               id: runtime
                               event: manual_voice_toggle
@@ -2225,10 +2211,6 @@ lvgl:
                         src: mood_neutral
                         clickable: true
                         on_click:
-                          - logger.log:
-                              level: INFO
-                              tag: va_input
-                              format: "touch: replying avatar"
                           - runtime_controller.event:
                               id: runtime
                               event: manual_voice_toggle
@@ -2256,10 +2238,6 @@ lvgl:
                         src: img_error
                         clickable: true
                         on_click:
-                          - logger.log:
-                              level: INFO
-                              tag: va_input
-                              format: "touch: error avatar"
                           - runtime_controller.event:
                               id: runtime
                               event: manual_voice_toggle
@@ -3087,7 +3065,7 @@ script:
 
           lv_obj_set_pos(id(weather_tile), layout[WEATHER_X], y0);
           lv_obj_set_size(id(weather_tile), layout[WEATHER_W], layout[PANEL_H]);
-          lv_obj_set_pos(id(weather_date_label), layout[WEATHER_PAD], layout[WEATHER_HEADER_Y]);
+          lv_obj_align(id(weather_date_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_HEADER_Y]);
           lv_obj_align(id(weather_icon_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_ICON_Y]);
           lv_obj_align(id(weather_temp_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_TEMP_Y]);
           lv_obj_align(id(weather_condition_label), LV_ALIGN_TOP_MID, 0, layout[WEATHER_CONDITION_Y]);
@@ -3137,8 +3115,10 @@ script:
             lv_obj_set_size(group, layout[RIGHT_W], layout[VOIP_H]);
           }
           lv_obj_set_width(id(call_idle_peer_label), layout[RIGHT_TEXT_W]);
-          lv_obj_align(id(call_idle_header_label), LV_ALIGN_TOP_LEFT, layout[CALL_HEADER_X], layout[CALL_HEADER_Y]);
-          lv_obj_align(id(call_idle_header_rule), LV_ALIGN_TOP_LEFT, layout[CALL_HEADER_X], layout[CALL_RULE_Y]);
+          lv_obj_align(id(call_idle_header_label), LV_ALIGN_TOP_MID, 0, layout[CALL_HEADER_Y]);
+          lv_obj_align(id(call_idle_header_rule), LV_ALIGN_TOP_MID, 0, layout[CALL_RULE_Y]);
+          lv_obj_align(id(call_keypad_header_label), LV_ALIGN_TOP_MID, 0, layout[CALL_HEADER_Y]);
+          lv_obj_align(id(call_keypad_header_rule), LV_ALIGN_TOP_MID, 0, layout[CALL_RULE_Y]);
           lv_obj_align(id(call_idle_destination_label), LV_ALIGN_TOP_MID, 0, layout[CALL_STATUS_Y]);
           lv_obj_align(id(call_idle_peer_label), LV_ALIGN_TOP_MID, 0, layout[CALL_PEER_Y]);
           lv_obj_align(id(call_idle_contacts_label), LV_ALIGN_TOP_MID, 0, layout[CALL_CONTACTS_Y]);
@@ -3549,7 +3529,6 @@ script:
               id(voip_keypad_visible) ? "keypad" : "contacts";
           id(runtime_rendered_page) = std::string("main:") + va_page + ":" + call_page;
 
-      - script.execute: runtime_publish_snapshot
 
       # Animation lifecycle
       - if:
@@ -3900,10 +3879,6 @@ binary_sensor:
                     id: runtime
                     event: timer_stopped
               else:
-                - logger.log:
-                    level: INFO
-                    tag: va_input
-                    format: "hardware button: short press"
                 - runtime_controller.event:
                     id: runtime
                     event: manual_voice_toggle
