@@ -47,6 +47,28 @@ globals:
     type: int
     restore_value: false
     initial_value: "0"
+  - id: runtime_activity_mask
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: runtime_sequence
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: runtime_rendered_page
+    type: std::string
+    restore_value: false
+    initial_value: '"unrendered"'
+  # Display adapter telemetry: 0=none/idle, 1=neutral, 2=happy,
+  # 3=angry, 4=Sendspin artwork. Non-display devices remain at 0.
+  - id: runtime_visual_source
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: runtime_response_text_ready
+    type: bool
+    restore_value: false
+    initial_value: "false"
   - id: g_applied_led
     type: int
     restore_value: false

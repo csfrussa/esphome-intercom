@@ -1,0 +1,59 @@
+# Event-driven runtime-controller observability for full Voice Assistant + VoIP
+# devices. The controller invokes output_script after each committed reduction;
+# no interval or realtime audio-loop work is introduced.
+
+substitutions:
+  runtime_probe_phase_expr: "-1"
+  runtime_probe_mode_expr: "-1"
+
+runtime_controller:
+  output_script: runtime_publish_snapshot
+  state_outputs:
+    activity_mask: runtime_activity_mask
+    sequence: runtime_sequence
+
+text_sensor:
+  - platform: template
+    id: runtime_snapshot
+    name: Runtime Snapshot
+    icon: mdi:state-machine
+    entity_category: diagnostic
+    update_interval: never
+
+script:
+  - id: runtime_publish_snapshot
+    mode: restart
+    then:
+      - lambda: |-
+          const char *media = esphome::media_player::media_player_state_to_string(
+              id(speaker_media_player).state);
+          char snapshot[255];
+          const int written = snprintf(snapshot, sizeof(snapshot),
+                   "{\"s\":%lu,\"a\":\"%08lx\",\"u\":%d,\"l\":%d,"
+                   "\"d\":%d,\"v\":%d,\"m\":\"%s\",\"p\":\"%s\","
+                   "\"w\":%d,\"r\":%d,\"g\":\"%s\",\"h\":%d,\"o\":%d,"
+                   "\"x\":%d,\"t\":%d}",
+                   static_cast<unsigned long>(id(runtime_sequence)),
+                   static_cast<unsigned long>(id(runtime_activity_mask)),
+                   id(ui_state), id(g_applied_led), id(g_ducking_active), id(g_va_state),
+                   media, id(phone).get_state_str(), id(mww).is_running() ? 1 : 0,
+                   id(g_voip_ringtone_active) ? 1 : 0, id(runtime_rendered_page).c_str(),
+                   static_cast<int>(${runtime_probe_phase_expr}),
+                   static_cast<int>(${runtime_probe_mode_expr}),
+                   id(runtime_visual_source), id(runtime_response_text_ready) ? 1 : 0);
+          if (written < 0 || static_cast<size_t>(written) >= sizeof(snapshot)) {
+            ESP_LOGE("runtime_probe", "Snapshot truncated: required=%d capacity=%u",
+                     written, static_cast<unsigned>(sizeof(snapshot)));
+            snprintf(snapshot, sizeof(snapshot), "{\"s\":%lu,\"e\":\"truncated\"}",
+                     static_cast<unsigned long>(id(runtime_sequence)));
+          }
+          ESP_LOGI("runtime_probe", "TRANSITION %s", snapshot);
+          id(runtime_snapshot).publish_state(snapshot);
+      # A text sensor is useful as the latest human-readable snapshot, but HA
+      # may coalesce synchronous state publications. Events preserve every
+      # committed reduction and are therefore the authoritative test trace.
+      - homeassistant.event:
+          event: esphome.runtime_transition
+          data:
+            node: !lambda 'return App.get_name();'
+            snapshot: !lambda 'return id(runtime_snapshot).state;'

@@ -70,6 +70,15 @@ api:
         - runtime_controller.event:
             id: runtime
             event: !lambda 'return event;'
+    - action: runtime_set_activity
+      variables:
+        activity: string
+        active: bool
+      then:
+        - runtime_controller.set_activity:
+            id: runtime
+            activity: !lambda 'return activity;'
+            active: !lambda 'return active;'
     - action: runtime_dump
       variables:
         reason: string

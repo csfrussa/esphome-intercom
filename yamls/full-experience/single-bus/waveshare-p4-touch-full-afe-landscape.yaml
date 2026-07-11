@@ -47,6 +47,9 @@
 # =============================================================================
 
 substitutions:
+  runtime_controller_debug: "true"
+  runtime_probe_phase_expr: "id(voice_assistant_phase)"
+  runtime_probe_mode_expr: "id(current_mode)"
   name: waveshare-p4-touch
   friendly_name: Waveshare P4 Touch
   mic_id: mic_afe
@@ -576,17 +579,13 @@ media_player:
           event: media_paused
       - script.execute: backlight_timer
     on_idle:
-      - if:
-          condition:
-            lambda: 'return id(g_voip_ringtone_media_suppressed) && id(g_voip_ringtone_restore_media);'
-          then:
-            - runtime_controller.event:
-                id: runtime
-                event: announcement_idle
-          else:
-            - runtime_controller.event:
-                id: runtime
-                event: media_idle
+      # media_idle is the reducer's canonical terminal event for both normal
+      # media and announcements (including the VoIP ringtone). The obsolete
+      # announcement_idle name is not part of the runtime-controller contract
+      # and could leave the cached Sendspin media activity stuck on screen.
+      - runtime_controller.event:
+          id: runtime
+          event: media_idle
       - delay: 200ms
       - script.execute: backlight_timer
 
@@ -1138,6 +1137,12 @@ lvgl:
             pad_all: 0
             scrollable: false
             scrollbar_mode: "off"
+            clickable: true
+            gesture_bubble: false
+            on_swipe_up:
+              - script.execute: show_voip_keypad
+            on_swipe_down:
+              - script.execute: hide_voip_keypad
             widgets:
               - label:
                   id: weather_date_label
@@ -1535,6 +1540,8 @@ lvgl:
                         on_swipe_right:
                           - voip_stack.prev_contact:
                           - script.execute: update_ic_idle_labels
+                        on_swipe_up:
+                          - script.execute: show_voip_keypad
                     - button:
                         id: call_prev_btn
                         align: BOTTOM_LEFT
@@ -1585,6 +1592,152 @@ lvgl:
                               text: "\U000F0142"
                               text_color: 0xE5E7EB
                               text_font: font_action_icon
+              - obj:
+                  id: call_keypad_group
+                  width: 1
+                  height: 1
+                  bg_color: 0x111320
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  clickable: true
+                  gesture_bubble: false
+                  hidden: true
+                  on_swipe_down:
+                    - script.execute: hide_voip_keypad
+                  widgets:
+                    - label:
+                        align: TOP_LEFT
+                        x: 22
+                        y: 20
+                        text: "KEYPAD"
+                        text_color: 0x7C83FF
+                        text_font: font_ui_medium
+                    - obj:
+                        align: TOP_LEFT
+                        x: 22
+                        y: 56
+                        width: 92
+                        height: 3
+                        bg_color: 0x7C83FF
+                        border_width: 0
+                        radius: 2
+                    - label:
+                        align: TOP_RIGHT
+                        x: -22
+                        y: 24
+                        text: "Swipe down"
+                        text_color: 0x667085
+                        text_font: font_small
+                    - label:
+                        id: call_keypad_value_label
+                        align: TOP_MID
+                        y: 70
+                        width: 300
+                        text: "Enter extension or number"
+                        text_color: 0xFFFFFF
+                        text_font: font_ui_medium
+                        text_align: CENTER
+                        long_mode: DOT
+                    - buttonmatrix:
+                        id: call_keypad_matrix
+                        align: TOP_MID
+                        y: 112
+                        width: 300
+                        height: 210
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_row: 8
+                        pad_column: 8
+                        gesture_bubble: true
+                        items:
+                          bg_color: 0x252A38
+                          text_color: 0xFFFFFF
+                          text_font: font_ui_medium
+                          radius: 8
+                        rows:
+                          - buttons:
+                              - text: "1"
+                              - text: "2"
+                              - text: "3"
+                          - buttons:
+                              - text: "4"
+                              - text: "5"
+                              - text: "6"
+                          - buttons:
+                              - text: "7"
+                              - text: "8"
+                              - text: "9"
+                          - buttons:
+                              - text: "*"
+                              - text: "0"
+                              - text: "#"
+                        on_click:
+                          - lambda: |-
+                              static constexpr char KEYS[] = "123456789*0#";
+                              if (x >= 12 || id(voip_dial_buffer).size() >= 32) return;
+                              id(voip_dial_buffer).push_back(KEYS[x]);
+                              lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).c_str());
+                    - button:
+                        align: BOTTOM_LEFT
+                        x: 22
+                        y: -24
+                        width: 82
+                        height: 58
+                        bg_color: 0x252A38
+                        radius: 8
+                        on_click:
+                          - lambda: |-
+                              id(voip_dial_buffer).clear();
+                              lv_label_set_text(id(call_keypad_value_label), "Enter extension or number");
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "CLEAR"
+                              text_color: 0xE5E7EB
+                              text_font: font_small
+                    - button:
+                        align: BOTTOM_MID
+                        y: -24
+                        width: 112
+                        height: 58
+                        bg_color: 0x22C55E
+                        radius: 8
+                        on_click:
+                          - if:
+                              condition:
+                                lambda: return !id(voip_dial_buffer).empty();
+                              then:
+                                - voip_stack.call:
+                                    target: !lambda 'return id(voip_dial_buffer);'
+                                - lambda: |-
+                                    id(voip_dial_buffer).clear();
+                                    lv_label_set_text(id(call_keypad_value_label), "Enter extension or number");
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "CALL"
+                              text_color: 0xFFFFFF
+                              text_font: font_ui_medium
+                    - button:
+                        align: BOTTOM_RIGHT
+                        x: -22
+                        y: -24
+                        width: 82
+                        height: 58
+                        bg_color: 0x252A38
+                        radius: 8
+                        on_click:
+                          - lambda: |-
+                              if (!id(voip_dial_buffer).empty()) id(voip_dial_buffer).pop_back();
+                              lv_label_set_text(id(call_keypad_value_label), id(voip_dial_buffer).empty()
+                                  ? "Enter extension or number" : id(voip_dial_buffer).c_str());
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "DEL"
+                              text_color: 0xE5E7EB
+                              text_font: font_ui_medium
               - obj:
                   id: call_ringing_in_group
                   width: 1
@@ -2629,6 +2782,16 @@ globals:
     restore_value: false
     initial_value: "false"
 
+  - id: voip_keypad_visible
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  - id: voip_dial_buffer
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+
   # Forecast arrays (5-day)
   - id: forecast_condition
     type: std::array<std::string, 5>
@@ -2670,8 +2833,68 @@ script:
   - id: apply_media_artwork
     then:
       - lambda: |-
-          lv_img_set_src(id(mood_bg), id(mood_neutral));
-          lv_obj_invalidate(id(mood_bg));
+          // The Sendspin artwork extension performs the single final image
+          // selection; avoid an observable neutral intermediate frame.
+
+  - id: show_voip_keypad
+    mode: single
+    then:
+      - lambda: |-
+          if (!id(phone).is_idle() || id(voip_keypad_visible)) return;
+          id(voip_keypad_visible) = true;
+          const int height = id(main_layout)[11];
+          lv_obj_clear_flag(id(call_idle_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_clear_flag(id(call_keypad_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_y(id(call_idle_group), 0);
+          lv_obj_set_y(id(call_keypad_group), height);
+          lv_anim_t contacts;
+          lv_anim_init(&contacts);
+          lv_anim_set_var(&contacts, id(call_idle_group));
+          lv_anim_set_values(&contacts, 0, -height);
+          lv_anim_set_duration(&contacts, 220);
+          lv_anim_set_exec_cb(&contacts, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&contacts);
+          lv_anim_t keypad;
+          lv_anim_init(&keypad);
+          lv_anim_set_var(&keypad, id(call_keypad_group));
+          lv_anim_set_values(&keypad, height, 0);
+          lv_anim_set_duration(&keypad, 220);
+          lv_anim_set_exec_cb(&keypad, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&keypad);
+
+  - id: hide_voip_keypad
+    mode: single
+    then:
+      - lambda: |-
+          if (!id(voip_keypad_visible)) return;
+          id(voip_keypad_visible) = false;
+          const int height = id(main_layout)[11];
+          lv_obj_clear_flag(id(call_idle_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_clear_flag(id(call_keypad_group), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_y(id(call_idle_group), -height);
+          lv_obj_set_y(id(call_keypad_group), 0);
+          lv_anim_t contacts;
+          lv_anim_init(&contacts);
+          lv_anim_set_var(&contacts, id(call_idle_group));
+          lv_anim_set_values(&contacts, -height, 0);
+          lv_anim_set_duration(&contacts, 220);
+          lv_anim_set_exec_cb(&contacts, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&contacts);
+          lv_anim_t keypad;
+          lv_anim_init(&keypad);
+          lv_anim_set_var(&keypad, id(call_keypad_group));
+          lv_anim_set_values(&keypad, 0, height);
+          lv_anim_set_duration(&keypad, 220);
+          lv_anim_set_exec_cb(&keypad, [](void *obj, int32_t y) {
+            lv_obj_set_y(static_cast<lv_obj_t *>(obj), y);
+          });
+          lv_anim_start(&keypad);
 
   # Main dashboard layout is derived once from the active LVGL resolution during
   # init and stored in main_layout[]. Main dashboard containers start neutral;
@@ -2900,7 +3123,7 @@ script:
 
           lv_obj_set_pos(id(voip_tile), layout[RIGHT_X], y0);
           lv_obj_set_size(id(voip_tile), layout[RIGHT_W], layout[VOIP_H]);
-          lv_obj_t *voip_groups[] = {id(call_idle_group), id(call_ringing_in_group), id(call_ringing_out_group),
+          lv_obj_t *voip_groups[] = {id(call_idle_group), id(call_keypad_group), id(call_ringing_in_group), id(call_ringing_out_group),
                                          id(call_in_call_group), id(call_ended_group)};
           for (auto *group : voip_groups) {
             lv_obj_set_size(group, layout[RIGHT_W], layout[VOIP_H]);
@@ -2921,6 +3144,8 @@ script:
           lv_obj_set_size(id(call_button_widget), layout[CALL_BUTTON_CALL_W], layout[CALL_BUTTON_CALL_H]);
           lv_obj_align(id(call_next_btn), LV_ALIGN_BOTTOM_RIGHT, -layout[CALL_HEADER_X], -30);
           lv_obj_set_size(id(call_next_btn), layout[CALL_BUTTON_SIDE_W], layout[CALL_BUTTON_SIDE_H]);
+          lv_obj_set_width(id(call_keypad_value_label), layout[RIGHT_TEXT_W]);
+          lv_obj_set_width(id(call_keypad_matrix)->obj, layout[RIGHT_INNER_W]);
           lv_obj_set_width(id(call_ringing_in_peer_label), layout[RIGHT_TEXT_W]);
           lv_obj_set_width(id(call_ringing_out_peer_label), layout[RIGHT_TEXT_W]);
           lv_obj_set_width(id(call_in_call_peer_label), layout[RIGHT_TEXT_W]);
@@ -2957,7 +3182,7 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // VoIP idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).is_idle()) {
             id(peer_name) = id(phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
@@ -3023,7 +3248,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(phone).get_state_str() == "idle";
+                     && id(phone).is_idle();
           then:
             - script.execute: update_ic_idle_labels
       - script.execute: draw_display
@@ -3052,6 +3277,9 @@ script:
           if (lv_img_get_src(id(mood_bg)) != mood)
             lv_img_set_src(id(mood_bg), mood);
           id(text_response).publish_state(t);
+          id(runtime_visual_source) = mood == id(mood_happy) ? 2 :
+                                      mood == id(mood_angry) ? 3 : 1;
+          id(runtime_response_text_ready) = !t.empty();
       - globals.set:
           id: voice_assistant_phase
           value: '${voice_assist_replying_phase_id}'
@@ -3244,9 +3472,21 @@ script:
           }
 
           // === Update VoIP tile (top right) ===
-          auto call_state = id(phone).get_state_str();
+          std::string call_state = id(phone).get_state_str();
+
+          // Telephone state always wins over the optional idle keypad. Cancel
+          // any in-flight card animation so ringing/calling cannot inherit an
+          // off-screen position.
+          if (call_state != "idle" && !call_state.empty()) {
+            id(voip_keypad_visible) = false;
+            lv_anim_del(id(call_idle_group), nullptr);
+            lv_anim_del(id(call_keypad_group), nullptr);
+            lv_obj_set_y(id(call_idle_group), 0);
+            lv_obj_set_y(id(call_keypad_group), id(main_layout)[11]);
+          }
 
           set_hidden(id(call_idle_group), true);
+          set_hidden(id(call_keypad_group), true);
           set_hidden(id(call_ringing_in_group), true);
           set_hidden(id(call_ringing_out_group), true);
           set_hidden(id(call_in_call_group), true);
@@ -3273,8 +3513,30 @@ script:
             char buf[32];
             snprintf(buf, sizeof(buf), "Contacts: %d", count);
             set_label(id(call_idle_contacts_label), buf);
-            set_hidden(id(call_idle_group), false);
+            if (id(voip_keypad_visible)) {
+              lv_obj_set_y(id(call_keypad_group), 0);
+              set_hidden(id(call_keypad_group), false);
+            } else {
+              lv_obj_set_y(id(call_idle_group), 0);
+              lv_obj_set_y(id(call_keypad_group), id(main_layout)[11]);
+              set_hidden(id(call_idle_group), false);
+            }
           }
+
+          const char *va_page = va_idle ? "idle" :
+              (phase == ${voice_assist_listening_phase_id}) ? "listening" :
+              (phase == ${voice_assist_thinking_phase_id}) ? "thinking" :
+              (phase == ${voice_assist_replying_phase_id}) ? "replying" :
+              (phase == ${voice_assist_error_phase_id}) ? "error" :
+              (phase == ${voice_assist_muted_phase_id}) ? "muted" : "unknown";
+          const char *call_page = id(call_ended_active) ? "call_ended" :
+              (call_state == "ringing") ? "ringing_in" :
+              (call_state == "calling" || call_state == "remote_ringing") ? "ringing_out" :
+              (call_state == "in_call" || call_state == "connecting") ? "in_call" :
+              id(voip_keypad_visible) ? "keypad" : "contacts";
+          id(runtime_rendered_page) = std::string("main:") + va_page + ":" + call_page;
+
+      - script.execute: runtime_publish_snapshot
 
       # Animation lifecycle
       - if:
@@ -3774,10 +4036,9 @@ select:
     set_action:
       - if:
           condition:
-            lambda: 'return id(init_in_progress);'
+            lambda: |-
+              return !id(init_in_progress) && x != id(afe_processor).get_mode_name();
           then:
-            - logger.log: "AEC mode select: skipping during boot"
-          else:
             - if:
                 condition:
                   or:

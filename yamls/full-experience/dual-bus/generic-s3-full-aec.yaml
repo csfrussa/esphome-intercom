@@ -411,9 +411,14 @@ select:
     set_action:
       - if:
           condition:
-            lambda: 'return id(init_in_progress);'
+            lambda: |-
+              return id(init_in_progress) ||
+                     x == id(aec_processor).get_mode_name();
           then:
-            - logger.log: "AEC mode select: skipping during boot"
+            - logger.log:
+                level: DEBUG
+                format: "AEC mode select: keeping current mode %s"
+                args: ['x.c_str()']
           else:
             - if:
                 condition:

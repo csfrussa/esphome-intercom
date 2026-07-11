@@ -27,6 +27,9 @@
 # =============================================================================
 
 substitutions:
+  runtime_controller_debug: "true"
+  runtime_probe_phase_expr: "id(voice_assistant_phase)"
+  runtime_probe_mode_expr: "id(current_mode)"
   # Hardware-shared identity: all Spotpear Ball v2 firmware variants (voip / full-afe
   # / full-afe) share `spotpear-ball-v2` so a flash swap reuses the same HA device entity
   # and the same .esphome/build cache.
@@ -491,17 +494,9 @@ media_player:
           event: media_paused
       - script.execute: backlight_timer
     on_idle:
-      - if:
-          condition:
-            lambda: 'return id(g_voip_ringtone_media_suppressed) && id(g_voip_ringtone_restore_media);'
-          then:
-            - runtime_controller.event:
-                id: runtime
-                event: announcement_idle
-          else:
-            - runtime_controller.event:
-                id: runtime
-                event: media_idle
+      - runtime_controller.event:
+          id: runtime
+          event: media_idle
       - delay: 200ms
       - script.execute: backlight_timer
 
@@ -2052,8 +2047,8 @@ script:
   - id: apply_media_artwork
     then:
       - lambda: |-
-          lv_img_set_src(id(mood_bg), id(mood_neutral));
-          lv_obj_invalidate(id(mood_bg));
+          // The Sendspin artwork extension selects either the decoded cover or
+          // mood_neutral atomically. Do not invalidate a neutral intermediate.
 
   - id: clear_replying_text
     then:
@@ -2097,7 +2092,7 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // VoIP idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).is_idle()) {
             id(peer_name) = id(phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
@@ -2137,6 +2132,13 @@ script:
               }
               break;
             case ${ui_state_idle}:
+              // A decoded Sendspin cover remains valid in the image cache after
+              // playback ends. It must not remain bound to the replying widget
+              // once idle owns the display.
+              lv_img_set_src(id(mood_bg), id(mood_neutral));
+              lv_obj_invalidate(id(mood_bg));
+              id(runtime_visual_source) = 1;
+              id(runtime_response_text_ready) = false;
               if (id(mute).state) {
                 id(voice_assistant_phase) = ${voice_assist_muted_phase_id};
               } else {
@@ -2164,7 +2166,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(phone).get_state_str() == "idle";
+                     && id(phone).is_idle();
           then:
             - script.execute: update_call_idle_labels
       - script.execute: draw_display
@@ -2192,6 +2194,9 @@ script:
           }
           lv_img_set_src(id(mood_bg), mood);
           id(text_response).publish_state(t);
+          id(runtime_visual_source) = mood == id(mood_happy) ? 2 :
+                                      mood == id(mood_angry) ? 3 : 1;
+          id(runtime_response_text_ready) = !t.empty();
       - globals.set:
           id: voice_assistant_phase
           value: '${voice_assist_replying_phase_id}'
@@ -2478,6 +2483,7 @@ script:
           else if (target == id(call_in_call_page)->obj) page_name = "call_in_call";
           else if (target == id(call_ended_page)->obj) page_name = "call_ended";
           else if (target == id(timer_finished_page)->obj) page_name = "timer_finished";
+          id(runtime_rendered_page) = page_name;
 
           // Skip page load if already showing (avoids redundant SPI transfer)
           bool page_changed = (target != lv_disp_get_scr_act(nullptr));
@@ -2506,6 +2512,10 @@ script:
           id(nav_anim) = 0;
           id(nav_anim_ms) = 0;
 
+          // Publish after LVGL has selected the actual screen, not only when
+          // the reducer selected its intended policy state.
+          id(runtime_rendered_page) = page_name;
+
           // Hide top layer status bar on replying/thinking pages (text overlap)
           bool show_status = (target != id(replying_page)->obj && target != id(thinking_page)->obj);
           if (show_status) {
@@ -2515,6 +2525,8 @@ script:
             lv_obj_add_flag(id(top_clock_label), LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(id(top_battery_label), LV_OBJ_FLAG_HIDDEN);
           }
+
+      - script.execute: runtime_publish_snapshot
 
       # Update dynamic labels when on idle page
       - if:
@@ -2544,7 +2556,7 @@ script:
       - if:
           condition:
             lambda: |-
-              return id(current_mode) == 1 && id(phone).get_state_str() == "idle"
+              return id(current_mode) == 1 && id(phone).is_idle()
                      && !id(init_in_progress);
           then:
             - script.execute: update_call_idle_labels
@@ -2884,7 +2896,7 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                      lambda: return id(current_mode) == 1 && id(phone).is_idle();
                     then:
                       - voip_stack.call_toggle:
                     else:
@@ -2918,7 +2930,7 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                      lambda: return id(current_mode) == 1 && id(phone).is_idle();
                     then:
                       - voip_stack.next_contact:
       # Long press (3s): switch VA <-> VoIP
@@ -2927,7 +2939,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                lambda: return id(current_mode) == 1 && id(phone).is_idle();
               then:
                 - script.execute: switch_to_va
               else:
@@ -3208,10 +3220,9 @@ select:
     set_action:
       - if:
           condition:
-            lambda: 'return id(init_in_progress);'
+            lambda: |-
+              return !id(init_in_progress) && x != id(afe_processor).get_mode_name();
           then:
-            - logger.log: "AEC mode select: skipping during boot"
-          else:
             - if:
                 condition:
                   or:

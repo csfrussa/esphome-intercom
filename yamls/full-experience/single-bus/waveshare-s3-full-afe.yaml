@@ -43,6 +43,7 @@
 # =============================================================================
 
 substitutions:
+  runtime_controller_debug: "true"
   # Hardware-shared identity: all Waveshare S3 firmware variants share the same
   # name so HA reuses the device entity and ESPHome reuses the build cache.
   name: waveshare-s3
@@ -585,10 +586,9 @@ select:
     set_action:
       - if:
           condition:
-            lambda: 'return id(init_in_progress);'
+            lambda: |-
+              return !id(init_in_progress) && x != id(afe_processor).get_mode_name();
           then:
-            - logger.log: "AEC mode select: skipping during boot"
-          else:
             - if:
                 condition:
                   or:

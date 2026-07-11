@@ -2280,7 +2280,7 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // VoIP idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).is_idle()) {
             id(peer_name) = id(phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
@@ -2347,7 +2347,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(phone).get_state_str() == "idle";
+                     && id(phone).is_idle();
           then:
             - script.execute: update_call_idle_labels
       - script.execute: draw_display
@@ -2727,7 +2727,7 @@ script:
       - if:
           condition:
             lambda: |-
-              return id(current_mode) == 1 && id(phone).get_state_str() == "idle"
+              return id(current_mode) == 1 && id(phone).is_idle()
                      && !id(init_in_progress);
           then:
             - script.execute: update_call_idle_labels
@@ -3067,7 +3067,7 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                      lambda: return id(current_mode) == 1 && id(phone).is_idle();
                     then:
                       - voip_stack.call_toggle:
                     else:
@@ -3101,7 +3101,7 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                      lambda: return id(current_mode) == 1 && id(phone).is_idle();
                     then:
                       - voip_stack.next_contact:
       # Long press (3s): switch VA <-> VoIP
@@ -3110,7 +3110,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return id(current_mode) == 1 && id(phone).get_state_str() == "idle";
+                lambda: return id(current_mode) == 1 && id(phone).is_idle();
               then:
                 - script.execute: switch_to_va
               else:

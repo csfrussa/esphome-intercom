@@ -67,7 +67,9 @@ script:
       - lambda: |-
           if (id(sendspin_cover_art).is_loaded()) {
             lv_img_set_src(id(mood_bg), id(sendspin_cover_art));
+            id(runtime_visual_source) = 4;
           } else {
             lv_img_set_src(id(mood_bg), id(mood_neutral));
+            id(runtime_visual_source) = 1;
           }
           lv_obj_invalidate(id(mood_bg));

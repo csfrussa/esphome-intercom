@@ -47,6 +47,9 @@
 # =============================================================================
 
 substitutions:
+  runtime_probe_phase_expr: "id(voice_assistant_phase)"
+  runtime_probe_mode_expr: "id(current_mode)"
+  runtime_controller_debug: "true"
   name: waveshare-p4-touch
   friendly_name: Waveshare P4 Touch
   mic_id: mic_afe
@@ -570,17 +573,9 @@ media_player:
           event: media_paused
       - script.execute: backlight_timer
     on_idle:
-      - if:
-          condition:
-            lambda: 'return id(g_voip_ringtone_media_suppressed) && id(g_voip_ringtone_restore_media);'
-          then:
-            - runtime_controller.event:
-                id: runtime
-                event: announcement_idle
-          else:
-            - runtime_controller.event:
-                id: runtime
-                event: media_idle
+      - runtime_controller.event:
+          id: runtime
+          event: media_idle
       - delay: 200ms
       - script.execute: backlight_timer
 
@@ -2357,8 +2352,8 @@ script:
   - id: apply_media_artwork
     then:
       - lambda: |-
-          lv_img_set_src(id(mood_bg), id(mood_neutral));
-          lv_obj_invalidate(id(mood_bg));
+          // The Sendspin artwork extension performs the single final image
+          // selection; avoid an observable neutral intermediate frame.
 
   # Display cleanup after VA ends
   - id: !extend ui_va_end
@@ -2382,7 +2377,7 @@ script:
       - lambda: |-
           int state = id(ui_state);
           // VoIP idle: restore previous mode after call ends.
-          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).get_state_str() == "idle") {
+          if (state == ${ui_state_idle} && id(current_mode) == 1 && id(phone).is_idle()) {
             id(peer_name) = id(phone).get_current_destination();
             if (id(previous_mode) == 0) {
               id(current_mode) = 0;
@@ -2448,7 +2443,7 @@ script:
           condition:
             lambda: |-
               return id(ui_state) == ${ui_state_idle} && id(current_mode) == 1
-                     && id(phone).get_state_str() == "idle";
+                     && id(phone).is_idle();
           then:
             - script.execute: update_call_idle_labels
       - script.execute: draw_display
@@ -2475,8 +2470,11 @@ script:
             }
           }
           if (lv_img_get_src(id(mood_bg)) != mood)
-            lv_img_set_src(id(mood_bg), mood);
+          lv_img_set_src(id(mood_bg), mood);
           id(text_response).publish_state(t);
+          id(runtime_visual_source) = mood == id(mood_happy) ? 2 :
+                                      mood == id(mood_angry) ? 3 : 1;
+          id(runtime_response_text_ready) = !t.empty();
       - globals.set:
           id: voice_assistant_phase
           value: '${voice_assist_replying_phase_id}'
@@ -3200,10 +3198,9 @@ select:
     set_action:
       - if:
           condition:
-            lambda: 'return id(init_in_progress);'
+            lambda: |-
+              return !id(init_in_progress) && x != id(afe_processor).get_mode_name();
           then:
-            - logger.log: "AEC mode select: skipping during boot"
-          else:
             - if:
                 condition:
                   or:

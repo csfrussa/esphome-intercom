@@ -29,6 +29,11 @@ voice_assistant:
         condition:
           lambda: 'return !x.empty();'
         then:
+          # Populate text/mood before committing the responding policy. Display
+          # adapters must never render an empty neutral response frame first.
+          - script.execute:
+              id: ui_tts_started
+              text: !lambda 'return x;'
           - runtime_controller.event:
               id: runtime
               event: va_responding
@@ -37,12 +42,12 @@ voice_assistant:
         level: INFO
         tag: va
         format: "VA: tts_start"
-    - runtime_controller.event:
-        id: runtime
-        event: va_responding
     - script.execute:
         id: ui_tts_started
         text: !lambda 'return x;'
+    - runtime_controller.event:
+        id: runtime
+        event: va_responding
   on_tts_end:
     - logger.log:
         level: INFO

@@ -19,7 +19,10 @@ script:
       text: string
     then: []
   - id: ui_va_end
-    then: []
+    then:
+      - globals.set:
+          id: runtime_response_text_ready
+          value: "false"
   - id: ui_va_barge_start
     then: []
   - id: ui_call_started
