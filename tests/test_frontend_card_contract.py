@@ -255,6 +255,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("min_rows: 4", grid)
         self.assertIn("min_columns: 4", grid)
         self.assertIn("min_rows: 3", grid)
+        self.assertEqual(grid.count("max_rows: 10"), 2)
         self.assertGreaterEqual(self.source.count('document.createElement("ha-card")'), 2)
         self.assertNotIn('const card = document.createElement("div")', self.source)
         self.assertIn("overflow-y: auto", self.source)

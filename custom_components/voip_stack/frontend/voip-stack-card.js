@@ -2582,8 +2582,8 @@ class VoipStackCard extends HTMLElement {
 
   getGridOptions() {
     return this._isPhonebookMode()
-      ? { columns: 12, rows: 7, min_columns: 4, min_rows: 3 }
-      : { columns: 12, rows: 7, min_columns: 6, min_rows: 4 };
+      ? { columns: 12, rows: 7, min_columns: 4, min_rows: 3, max_rows: 10 }
+      : { columns: 12, rows: 7, min_columns: 6, min_rows: 4, max_rows: 10 };
   }
 
   getCardSize() { return 7; }
