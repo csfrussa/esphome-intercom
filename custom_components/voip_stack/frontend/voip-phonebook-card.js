@@ -140,6 +140,7 @@ class VoipPhonebookView extends HTMLElement {
         font-size: 1.35rem;
         font-weight: 500;
         line-height: 1.25;
+        text-align: center;
       }
       .header[hidden] { display: none; }
       .list {

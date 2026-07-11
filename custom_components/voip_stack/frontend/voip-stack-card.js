@@ -1447,7 +1447,7 @@ class VoipStackCard extends HTMLElement {
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
         padding: var(--voip-fluid-space, 16px);
       }
-      .header { font-size: 1.2em; font-weight: 500; margin-bottom: var(--voip-fluid-space, 16px); color: var(--primary-text-color); }
+      .header { font-size: 1.2em; font-weight: 500; margin-bottom: var(--voip-fluid-space, 16px); color: var(--primary-text-color); text-align: center; }
       .header[hidden] { display: none; }
 
       .destination-row {
@@ -1973,7 +1973,7 @@ class VoipStackCard extends HTMLElement {
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
         padding: 16px;
       }
-      .header { font-size: 1.2em; font-weight: 500; margin-bottom: 16px; color: var(--primary-text-color); }
+      .header { font-size: 1.2em; font-weight: 500; margin-bottom: 16px; color: var(--primary-text-color); text-align: center; }
       .header[hidden] { display: none; }
       .unconfigured { text-align: center; color: var(--secondary-text-color); padding: 20px; font-style: italic; }
       .version { font-size: 0.65em; color: #999; text-align: right; margin-top: 8px; }
