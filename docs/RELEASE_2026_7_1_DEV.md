@@ -155,6 +155,31 @@ last participant leaves.
 - Ring-group legs, conference members, RTP ports, registrations and transaction
   caches all have explicit limits instead of growing without bound.
 
+## 🔢 Use Phone Keys In Home Assistant Automations
+
+During a call bridged by Home Assistant, every DTMF key now fires one
+`voip_stack.dtmf` event. This makes practical actions such as **press 1 to open
+the gate** possible while the conversation and audio continue normally.
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: voip_stack.dtmf
+    event_data:
+      source: Cordless
+      digit: "1"
+actions:
+  - action: cover.open_cover
+    target:
+      entity_id: cover.gate
+```
+
+Events include caller, callee, source leg, digit, both call IDs and transport,
+so automations can be restricted to the intended phone and active call. This is
+not a second dial plan: initial extension collection remains separate and an
+in-call key never transfers a call by itself. Detection is entirely HA-side;
+no parser or additional real-time work is added to ESP firmware.
+
 ## 🔊 Audio And ESP Real-Time Performance
 
 - Browser audio has one owner per call and uses stateful codecs, absolute pacing
@@ -179,7 +204,7 @@ last participant leaves.
 - Home Assistant, integration, card and tooling: 305 tests plus 25 subtests.
 - ESP VoIP stack: 57 tests.
 - Audio and AFE: 19 tests.
-- Runtime controller: 6 tests.
+- Runtime controller: 11 tests.
 - Virtual call scenarios: 27 passed.
 - Qualification matrix: 2,162 valid combinations.
 - Terminal-state regression: 1,000 seeded repetitions.
