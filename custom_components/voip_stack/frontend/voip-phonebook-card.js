@@ -168,10 +168,10 @@ class VoipPhonebookCard extends HTMLElement {
       .details > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 2px 0; }
       .arrow { color: var(--secondary-text-color); }
       code {
-        border-radius: 4px;
-        background: var(--code-editor-background-color, rgba(127,127,127,.16));
         color: var(--primary-text-color);
-        padding: 1px 5px;
+        background: transparent;
+        padding: 0;
+        font-family: inherit;
       }
       a { color: var(--primary-color); text-decoration: none; }
       a:hover { text-decoration: underline; }

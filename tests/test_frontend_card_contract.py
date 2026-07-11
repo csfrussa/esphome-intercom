@@ -239,12 +239,29 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('link.href = `tel:', source)
         self.assertIn('name.textContent = this._name(contact)', source)
         self.assertNotIn("innerHTML", source)
+        self.assertIn("background: transparent", source)
+        self.assertNotIn("code-editor-background-color", source)
 
     def test_main_voip_module_loads_phonebook_card_with_same_cache_version(self) -> None:
         self.assertIn(
             'import(`./voip-phonebook-card.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`)',
             self.source,
         )
+
+    def test_phone_cards_support_native_sections_resizing(self) -> None:
+        grid = _method_body(self.source, "getGridOptions")
+        self.assertIn("columns: 12", grid)
+        self.assertIn("rows: 7", grid)
+        self.assertIn("min_columns: 6", grid)
+        self.assertIn("min_rows: 4", grid)
+        self.assertGreaterEqual(self.source.count('document.createElement("ha-card")'), 2)
+        self.assertNotIn('const card = document.createElement("div")', self.source)
+        self.assertIn("overflow-y: auto", self.source)
+        self.assertIn("height: 100%", self.source)
+
+    def test_phone_card_masonry_size_matches_default_sections_height(self) -> None:
+        size = _method_body(self.source, "getCardSize")
+        self.assertIn("return 7", size)
 
     def test_esp_mirror_does_not_render_sip_rtp_counters(self) -> None:
         render = _method_body(self.source, "_render")

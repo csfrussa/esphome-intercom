@@ -1377,11 +1377,19 @@ class VoipStackCard extends HTMLElement {
     style.textContent = `
       :host {
         display: block;
+        height: 100%;
+        min-height: 0;
         --voip-stack-card-surface: var(--ha-card-background, var(--card-background-color, white));
         --voip-control-surface: transparent;
         --voip-control-hover-surface: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
       }
       .card {
+        box-sizing: border-box;
+        height: 100%;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
         background: var(--voip-stack-card-surface);
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
@@ -1567,7 +1575,7 @@ class VoipStackCard extends HTMLElement {
     `;
     root.appendChild(style);
 
-    const card = document.createElement("div");
+    const card = document.createElement("ha-card");
     card.className = "card";
 
     const header = document.createElement("div");
@@ -1872,8 +1880,12 @@ class VoipStackCard extends HTMLElement {
 
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; }
+      :host { display: block; height: 100%; min-height: 0; }
       .card {
+        box-sizing: border-box;
+        height: 100%;
+        min-height: 0;
+        overflow: auto;
         background: var(--ha-card-background, var(--card-background-color, white));
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
@@ -1885,7 +1897,7 @@ class VoipStackCard extends HTMLElement {
     `;
     root.appendChild(style);
 
-    const card = document.createElement("div");
+    const card = document.createElement("ha-card");
     card.className = "card";
 
     const header = document.createElement("div");
@@ -2530,7 +2542,11 @@ class VoipStackCard extends HTMLElement {
     if (this._els?.err) this._els.err.textContent = this._errorMsg;
   }
 
-  getCardSize() { return 3; }
+  getGridOptions() {
+    return { columns: 12, rows: 7, min_columns: 6, min_rows: 4 };
+  }
+
+  getCardSize() { return 7; }
 
   static getConfigElement() {
     return document.createElement("voip-stack-card-editor");
