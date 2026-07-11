@@ -440,6 +440,10 @@ class VoipStackCard extends HTMLElement {
       this._activeSessionDeviceId = null;
       this._markSoftphoneMediaOwner("");
     }
+    if (this._isPhonebookMode()) {
+      this._render();
+      return;
+    }
     this._softphoneTargetDeviceId =
       this._loadSoftphoneTargetPreference() ||
       this._softphoneTargetDeviceId;
@@ -477,6 +481,10 @@ class VoipStackCard extends HTMLElement {
   set hass(hass) {
     const oldHass = this._hass;
     this._hass = hass;
+    if (this._isPhonebookMode()) {
+      this._render();
+      return;
+    }
     voipStackEngine.configure(hass);
 
     // Devices populate the destination cycler.
@@ -673,6 +681,10 @@ class VoipStackCard extends HTMLElement {
 
   _isHaSoftphoneMode() {
     return (this.config?.mode || this.config?.card_mode || "esp_mirror") === "ha_softphone";
+  }
+
+  _isPhonebookMode() {
+    return (this.config?.mode || this.config?.card_mode || "esp_mirror") === "phonebook";
   }
 
   _autoAnswerStorageId() {
@@ -1140,6 +1152,10 @@ class VoipStackCard extends HTMLElement {
   }
 
   _render() {
+    if (this._isPhonebookMode()) {
+      this._renderPhonebook();
+      return;
+    }
     const customName = this.config?.name || "";
     const name = customName || "VoIP Stack";
     const deviceId = this._getConfigDeviceId();
@@ -1921,6 +1937,28 @@ class VoipStackCard extends HTMLElement {
     this._els = { headerName };
   }
 
+  _renderPhonebook() {
+    if (this._skeletonMode !== "phonebook") {
+      this.shadowRoot.replaceChildren();
+      const view = document.createElement("voip-stack-phonebook-view");
+      this.shadowRoot.appendChild(view);
+      this._phonebookView = view;
+      this._skeletonMode = "phonebook";
+    }
+    const phonebookConfig = {
+      entity: this.config?.entity || "sensor.voip_phonebook",
+      title: this.config?.title || this.config?.name || "VoIP Phonebook",
+      empty_text: this.config?.empty_text || "No contacts available.",
+      show_disabled: !!this.config?.show_disabled,
+    };
+    const configKey = JSON.stringify(phonebookConfig);
+    if (configKey !== this._phonebookConfigKey) {
+      this._phonebookView.setConfig(phonebookConfig);
+      this._phonebookConfigKey = configKey;
+    }
+    if (this._hass) this._phonebookView.hass = this._hass;
+  }
+
   _attachEventHandlers() {
     const els = this._els;
     if (!els) return;
@@ -2543,7 +2581,9 @@ class VoipStackCard extends HTMLElement {
   }
 
   getGridOptions() {
-    return { columns: 12, rows: 7, min_columns: 6, min_rows: 4 };
+    return this._isPhonebookMode()
+      ? { columns: 12, rows: 7, min_columns: 4, min_rows: 3 }
+      : { columns: 12, rows: 7, min_columns: 6, min_rows: 4 };
   }
 
   getCardSize() { return 7; }
@@ -2688,8 +2728,10 @@ class VoipStackCardEditor extends HTMLElement {
     const softphoneOpt = document.createElement("option");
     softphoneOpt.value = "ha_softphone";
     softphoneOpt.textContent = "Home Assistant softphone";
-    modeSelect.appendChild(mirrorOpt);
-    modeSelect.appendChild(softphoneOpt);
+    const phonebookOpt = document.createElement("option");
+    phonebookOpt.value = "phonebook";
+    phonebookOpt.textContent = "VoIP phonebook";
+    modeSelect.append(mirrorOpt, softphoneOpt, phonebookOpt);
     modeGroup.appendChild(modeSelect);
     const modeInfo = document.createElement("div");
     modeInfo.className = "info";
@@ -2738,13 +2780,13 @@ class VoipStackCardEditor extends HTMLElement {
 
     modeSelect.onchange = (e) => this._modeChanged(e.target.value);
     select.onchange = (e) => this._valueChanged("device_id", e.target.value);
-    nameInput.onchange = (e) => this._valueChanged("name", e.target.value);
+    nameInput.onchange = (e) => this._nameChanged(e.target.value);
     extendedInfoInput.onchange = (e) => this._boolChanged("show_extended_info", e.target.checked);
 
     this._els = {
       modeSelect, modeInfo,
       deviceGroup, select, deviceInfo,
-      nameInput, extendedInfoInput,
+      nameGroup, nameLabel, nameInput, extendedInfoGroup, extendedInfoInput,
     };
   }
 
@@ -2753,11 +2795,14 @@ class VoipStackCardEditor extends HTMLElement {
     const els = this._els;
     const mode = this._config.mode || this._config.card_mode || "esp_mirror";
     const softphoneMode = mode === "ha_softphone";
-    els.modeSelect.value = softphoneMode ? "ha_softphone" : "esp_mirror";
-    els.modeInfo.textContent = softphoneMode
-      ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
-      : "ESP mirror card: mirrors one ESP endpoint and presses that ESP's own call, answer and hangup controls.";
-    els.deviceGroup.classList.toggle("hidden", softphoneMode);
+    const phonebookMode = mode === "phonebook";
+    els.modeSelect.value = phonebookMode ? "phonebook" : softphoneMode ? "ha_softphone" : "esp_mirror";
+    els.modeInfo.textContent = phonebookMode
+      ? "Scrollable view of the shared VoIP phonebook."
+      : softphoneMode
+        ? "One Home Assistant endpoint: this card rings only for HA softphone calls and can call any ESP endpoint."
+        : "ESP mirror card: mirrors one ESP endpoint and presses that ESP's own call, answer and hangup controls.";
+    els.deviceGroup.classList.toggle("hidden", softphoneMode || phonebookMode);
 
     // Rebuild the select option list safely: replaceChildren + per-row
     // createElement; option.value/textContent setters reject HTML injection.
@@ -2786,8 +2831,16 @@ class VoipStackCardEditor extends HTMLElement {
         : (softphoneMode ? "Home Assistant softphone does not belong to an ESP." : "Required for ESP mirror mode.");
     }
 
-    els.nameInput.value = this._config.name || "";
+    els.nameLabel.textContent = phonebookMode ? "Title (optional)" : "Card Name (optional)";
+    els.nameInput.placeholder = phonebookMode ? "VoIP Phonebook" : "VoIP Stack";
+    els.nameInput.value = phonebookMode ? (this._config.title || this._config.name || "") : (this._config.name || "");
+    els.extendedInfoGroup.classList.toggle("hidden", phonebookMode);
     els.extendedInfoInput.checked = !!this._config.show_extended_info;
+  }
+
+  _nameChanged(value) {
+    const key = (this._config.mode || this._config.card_mode) === "phonebook" ? "title" : "name";
+    this._valueChanged(key, value);
   }
 
   _valueChanged(key, value) {
@@ -2799,11 +2852,12 @@ class VoipStackCardEditor extends HTMLElement {
 
   _modeChanged(value) {
     const newConfig = { ...this._config };
-    if (value === "ha_softphone") {
-      newConfig.mode = "ha_softphone";
+    if (value === "ha_softphone" || value === "phonebook") {
+      newConfig.mode = value;
       delete newConfig.device_id;
       delete newConfig.entity_id;
       delete newConfig.target_device_id;
+      if (value === "phonebook") delete newConfig.show_extended_info;
     } else {
       newConfig.mode = "esp_mirror";
       delete newConfig.card_mode;

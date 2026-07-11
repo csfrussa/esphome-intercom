@@ -77,7 +77,8 @@ sections:
   # Native, resizable and internally scrollable view of the canonical roster.
   - type: grid
     cards:
-      - type: custom:voip-phonebook-card
+      - type: custom:voip-stack-card
+        mode: phonebook
         title: VoIP Phonebook
         entity: sensor.voip_phonebook
 

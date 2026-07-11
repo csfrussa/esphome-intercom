@@ -220,15 +220,14 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("const operationId = ++this._callOperationId", start)
         self.assertIn("operationId === this._callOperationId", start)
 
-    def test_phonebook_card_uses_native_ha_card_contracts(self) -> None:
+    def test_phonebook_is_an_internal_main_card_mode(self) -> None:
         source = PHONEBOOK_CARD.read_text()
-        self.assertIn("static getConfigForm()", source)
-        self.assertIn("static getStubConfig()", source)
-        self.assertIn("getGridOptions()", source)
-        self.assertIn("getCardSize()", source)
-        self.assertIn('columns: 12, rows: 7, min_columns: 4, min_rows: 3', source)
-        self.assertIn('customElements.define("voip-phonebook-card"', source)
-        self.assertIn('type: "voip-phonebook-card"', source)
+        self.assertIn('customElements.define("voip-stack-phonebook-view"', source)
+        self.assertNotIn('customElements.define("voip-phonebook-card"', source)
+        self.assertNotIn('type: "voip-phonebook-card"', source)
+        self.assertIn('phonebookOpt.value = "phonebook"', self.source)
+        self.assertIn('this._isPhonebookMode()', self.source)
+        self.assertIn('document.createElement("voip-stack-phonebook-view")', self.source)
 
     def test_phonebook_card_is_scrollable_safe_and_roster_driven(self) -> None:
         source = PHONEBOOK_CARD.read_text()
@@ -254,6 +253,8 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("rows: 7", grid)
         self.assertIn("min_columns: 6", grid)
         self.assertIn("min_rows: 4", grid)
+        self.assertIn("min_columns: 4", grid)
+        self.assertIn("min_rows: 3", grid)
         self.assertGreaterEqual(self.source.count('document.createElement("ha-card")'), 2)
         self.assertNotIn('const card = document.createElement("div")', self.source)
         self.assertIn("overflow-y: auto", self.source)

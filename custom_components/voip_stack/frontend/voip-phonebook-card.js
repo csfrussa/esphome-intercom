@@ -1,35 +1,12 @@
 const DEFAULT_ENTITY = "sensor.voip_phonebook";
 
-class VoipPhonebookCard extends HTMLElement {
+class VoipPhonebookView extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._config = {};
     this._hass = null;
     this._lastRoster = null;
-  }
-
-  static getStubConfig() {
-    return { entity: DEFAULT_ENTITY, title: "VoIP Phonebook" };
-  }
-
-  static getConfigForm() {
-    const labels = {
-      entity: "Phonebook entity",
-      title: "Title",
-      empty_text: "Empty phonebook text",
-      show_disabled: "Show disabled contacts",
-    };
-    return {
-      schema: [
-        { name: "entity", required: true, selector: { entity: { filter: { domain: "sensor" } } } },
-        { name: "title", selector: { text: {} } },
-        { name: "empty_text", selector: { text: {} } },
-        { name: "show_disabled", selector: { boolean: {} } },
-      ],
-      computeLabel: (schema) => labels[schema.name],
-      assertConfig: (config) => VoipPhonebookCard._assertConfig(config),
-    };
   }
 
   static _assertConfig(config) {
@@ -39,16 +16,8 @@ class VoipPhonebookCard extends HTMLElement {
     }
   }
 
-  getGridOptions() {
-    return { columns: 12, rows: 7, min_columns: 4, min_rows: 3 };
-  }
-
-  getCardSize() {
-    return 6;
-  }
-
   setConfig(config) {
-    VoipPhonebookCard._assertConfig(config);
+    VoipPhonebookView._assertConfig(config);
     this._config = { entity: DEFAULT_ENTITY, title: "VoIP Phonebook", ...config };
     this._lastRoster = null;
     this._render();
@@ -203,20 +172,6 @@ class VoipPhonebookCard extends HTMLElement {
   }
 }
 
-if (!customElements.get("voip-phonebook-card")) {
-  customElements.define("voip-phonebook-card", VoipPhonebookCard);
-}
-
-window.customCards = window.customCards || [];
-if (!window.customCards.some((card) => card.type === "voip-phonebook-card")) {
-  window.customCards.push({
-    type: "voip-phonebook-card",
-    name: "VoIP Phonebook",
-    description: "Scrollable live view of the VoIP Stack roster.",
-    preview: true,
-    documentationURL: "https://github.com/n-IA-hane/esphome-intercom#lovelace-card",
-    getEntitySuggestion: (_hass, entityId) => entityId === DEFAULT_ENTITY
-      ? { config: { type: "custom:voip-phonebook-card", entity: entityId } }
-      : null,
-  });
+if (!customElements.get("voip-stack-phonebook-view")) {
+  customElements.define("voip-stack-phonebook-view", VoipPhonebookView);
 }

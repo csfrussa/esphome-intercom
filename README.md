@@ -1040,7 +1040,8 @@ reads the canonical roster, sorts enabled contacts alphabetically and keeps
 the contact list scrollable inside the height assigned by a Sections view.
 
 ```yaml
-type: custom:voip-phonebook-card
+type: custom:voip-stack-card
+mode: phonebook
 entity: sensor.voip_phonebook
 title: VoIP Phonebook
 ```
