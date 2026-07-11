@@ -26,6 +26,7 @@ SIP_CALL_STATE_EVENT = "voip_stack.call_state"
 SIP_INCOMING_CALL_EVENT = "voip_stack.incoming_call"
 SIP_ROUTE_REQUEST_EVENT = "voip_stack.route_request"
 SIP_CALL_ENDED_EVENT = "voip_stack.call_ended"
+SIP_DTMF_EVENT = "voip_stack.dtmf"
 HA_SOFTPHONE_STORE_KEY = f"{DOMAIN}_ha_softphone"
 HA_SOFTPHONE_STORE_VERSION = 1
 

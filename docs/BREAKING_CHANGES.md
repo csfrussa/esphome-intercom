@@ -24,7 +24,7 @@ automation, SIP client or card fork.
   original media/dialog remains established and a later BYE still terminates
   it normally.
 - **DTMF route input.** The trunk digit router accepts RTP `telephone-event`
-  and standard SIP INFO DTMF. It does not decode acoustic in-band tones from
+  and compatible legacy SIP INFO DTMF. It does not decode acoustic in-band tones from
   the call audio.
 - **Processor bypass semantics.** When the configured audio processor is
   enabled, unavailable processed output fails closed to silence. Disabling the

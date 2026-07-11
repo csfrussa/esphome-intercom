@@ -244,6 +244,10 @@ the answered leg as `route_not_found`.
 - `voip_stack.incoming_call`: inbound call or route request.
 - `voip_stack.route_request`: HA dial-plan lookup request.
 - `voip_stack.call_ended`: terminal `ended`, `missed`, or `failed`.
+- `voip_stack.dtmf`: one DTMF key observed during an established HA-bridged
+  call. Initial trunk digit routing remains a separate pre-answer path.
+  This is implemented only in the HA backend and adds no DTMF processing to
+  ESP firmware.
 - `voip_stack.call_event`: aggregate SIP call event for frontend and automations.
 
 The payload includes the canonical SIP fields when available: `state`,
@@ -252,6 +256,14 @@ The payload includes the canonical SIP fields when available: `state`,
 `sip_status_code`, `terminal_reason`, selected media formats, and RTP counters.
 The HA softphone snapshot also exposes `sip_trunk` when a trunk client exists,
 including registration status, last SIP status and last trunk SIP event.
+
+The in-call DTMF payload contains `call_id`, `dest_call_id`, `caller`,
+`callee`, `source`, `source_leg`, `side`, `digit` and `transport`. `digit` is
+one string value from `0-9`, `*`, `#` or `A-D`; a multi-key sequence produces
+one event per key. `transport` is `rtp_event` for negotiated RFC 4733 named
+events or `sip_info` for the widely deployed legacy SIP INFO representation.
+HA can observe this only when VoIP Stack is a signaling/media participant in
+the call; direct ESP-to-ESP or third-party peer-to-peer calls bypass HA.
 
 ## SIP State Values
 

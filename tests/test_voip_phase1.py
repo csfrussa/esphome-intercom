@@ -1310,7 +1310,9 @@ class SdpPcmProfileTest(unittest.TestCase):
                 audio_format.AudioFormat(16000, "s16le", 1, 20),
             ],
         )
-        self.assertNotIn("a=fmtp:", offer)
+        self.assertNotIn("a=fmtp:96", offer)
+        self.assertIn("telephone-event/8000", offer)
+        self.assertIn("a=fmtp:97 0-16", offer)
         self.assertIn("a=maxptime:10", offer)
         selected = sdp.negotiate(
             offer,
@@ -1720,6 +1722,31 @@ class RtpProfileTest(unittest.TestCase):
         raw[0] = 0
         with self.assertRaises(rtp.RtpError):
             rtp.parse_packet(bytes(raw))
+
+    def test_rfc4733_decoder_emits_one_event_per_press(self) -> None:
+        decoder = dtmf.RtpDtmfDecoder(101)
+
+        def event(sequence: int, timestamp: int, code: int, *, ssrc: int = 0x1234, ended: bool = False) -> bytes:
+            return rtp.build_packet(
+                rtp.RtpPacket(
+                    payload_type=101,
+                    sequence=sequence,
+                    timestamp=timestamp,
+                    ssrc=ssrc,
+                    payload=bytes((code, 0x80 if ended else 0x00, 0, 160)),
+                )
+            )
+
+        self.assertEqual(decoder.decode(event(1, 1000, 1)), "1")
+        self.assertEqual(decoder.decode(event(2, 1000, 1, ended=True)), "")
+        self.assertEqual(decoder.decode(event(3, 2000, 10)), "*")
+        self.assertEqual(decoder.decode(event(4, 3000, 12)), "A")
+        self.assertEqual(decoder.decode(event(5, 4000, 2, ssrc=0x9999)), "")
+
+    def test_legacy_sip_info_accepts_digit_and_event_code_forms(self) -> None:
+        self.assertEqual(dtmf.parse_sip_info_digit("application/dtmf-relay", b"Signal=1\r\nDuration=160"), "1")
+        self.assertEqual(dtmf.parse_sip_info_digit("application/dtmf-relay", b"Signal=10\r\nDuration=160"), "*")
+        self.assertEqual(dtmf.parse_sip_info_digit("application/dtmf", b"#"), "#")
 
     def test_relay_follows_same_ssrc_nat_port_rebind(self) -> None:
         class FakeTransport:
@@ -3360,11 +3387,13 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             lambda: destination,
             local_addr=(local, destination_port),
         )
+        dtmf_events: list[tuple[str, str, str]] = []
         relay = sip_rtp_bridge.SipRtpRelay(
-            left=sip_rtp_bridge.RtpPeer(local, 0, 96, audio),
-            right=sip_rtp_bridge.RtpPeer(local, destination_port, 96, audio),
+            left=sip_rtp_bridge.RtpPeer(local, 0, 96, audio, dtmf_payload_type=101),
+            right=sip_rtp_bridge.RtpPeer(local, destination_port, 96, audio, dtmf_payload_type=101),
             left_port=relay_left_port,
             right_port=relay_right_port,
+            on_dtmf=lambda side, digit, transport: dtmf_events.append((side, digit, transport)),
         )
 
         def frame(*, sequence: int, ssrc: int) -> bytes:
@@ -3386,7 +3415,22 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rtp.parse_packet(forwarded).payload_type, 96)
             self.assertEqual(relay.left.port, browser_port)
 
-            destination_transport.sendto(frame(sequence=2, ssrc=202), (local, relay_right_port))
+            dtmf_packet = rtp.build_packet(
+                rtp.RtpPacket(
+                    payload_type=101,
+                    sequence=2,
+                    timestamp=audio.nominal_frame_samples,
+                    ssrc=101,
+                    payload=bytes((1, 0x80, 0x01, 0x40)),
+                )
+            )
+            browser_transport.sendto(dtmf_packet, (local, relay_left_port))
+            browser_transport.sendto(dtmf_packet, (local, relay_left_port))
+            await asyncio.sleep(0.05)
+            self.assertEqual(dtmf_events, [("left", "1", "rtp_event")])
+            self.assertTrue(destination.queue.empty())
+
+            destination_transport.sendto(frame(sequence=3, ssrc=202), (local, relay_right_port))
             returned, _ = await asyncio.wait_for(browser.queue.get(), timeout=1.0)
             self.assertEqual(rtp.parse_packet(returned).payload_type, 96)
             self.assertGreaterEqual(relay.forwarded, 2)

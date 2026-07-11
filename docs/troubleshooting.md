@@ -146,9 +146,8 @@ dropped call unless the original dialog or RTP also stops.
 ## Inbound Trunk Call Routes To The Wrong Target
 
 - Confirm the provider offers RFC2833/telephone-event DTMF in SDP.
-- HA acknowledges SIP INFO as a supported SIP method, but digit routing reads
-  RTP `telephone-event`; INFO bodies are not a DTMF input in this profile. If
-  the SDP has no `telephone-event`, HA cannot read post-answer route digits.
+- Prefer negotiated RTP `telephone-event`. The widely deployed legacy SIP INFO
+  DTMF representation is also accepted; acoustic in-band tones are not.
 - Check that the target exists in the central phonebook and has the matching
   `extension` value.
 - Keep the inbound DTMF timeout short, normally 3 seconds. Set it to `0` when you do not want trunk pre-answer/DTMF and want inbound calls to follow the normal dialplan immediately.

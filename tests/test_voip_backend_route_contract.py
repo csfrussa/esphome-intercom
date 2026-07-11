@@ -53,6 +53,16 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_set_ha_softphone_call_state(", self.source)
         self.assertIn("CallState.RINGING.value", self.source)
 
+    def test_mid_call_dtmf_is_an_event_not_a_second_dialplan(self) -> None:
+        websocket_source = WEBSOCKET_API.read_text()
+        self.assertIn('SIP_DTMF_EVENT = "voip_stack.dtmf"', websocket_source)
+        self.assertIn("def _attach_dtmf_event_bridge(", self.source)
+        self.assertIn('"source_leg": "caller" if source_is_caller else "callee"', self.source)
+        self.assertIn('client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")', self.source)
+        self.assertIn('callback("left", digit, "sip_info")', self.source)
+        self.assertEqual(self.source.count("_attach_dtmf_event_bridge("), 4)
+        self.assertNotIn("dtmf_sequence", self.source)
+
     def test_ha_softphone_busy_is_scoped_to_answer_ha_route(self) -> None:
         start = self.source.index("async def _on_invite(invite:")
         source = self.source[start:]

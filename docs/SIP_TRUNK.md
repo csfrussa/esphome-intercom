@@ -75,11 +75,9 @@ resolved against the live phonebook extensions: HA collects within the timeout,
 tries the final digit buffer, and fails loudly if that explicit buffer cannot
 be resolved.
 
-HA acknowledges SIP INFO as a supported SIP method, but the current digit
-router does not consume DTMF from INFO bodies. If a provider/PBX does not
-advertise RTP `telephone-event` in the SDP offer, HA has no supported digit
-channel to inspect. In that case the call follows the "no route hint" path and
-rings HA/default.
+The route collector prefers negotiated RTP `telephone-event` and also accepts
+the widely deployed legacy SIP INFO DTMF representation. Acoustic in-band
+tones are not decoded.
 
 ## Media
 

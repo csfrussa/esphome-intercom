@@ -26,21 +26,64 @@ _EVENT_DIGITS = {
     9: "9",
     10: "*",
     11: "#",
+    12: "A",
+    13: "B",
+    14: "C",
+    15: "D",
 }
-_INFO_SIGNAL_RE = re.compile(r"(?:^|\r?\n)\s*Signal\s*=\s*([0-9*#A-D])\s*(?:\r?\n|$)", re.IGNORECASE)
+_INFO_SIGNAL_RE = re.compile(r"(?:^|\r?\n)\s*Signal\s*=\s*([0-9]{1,2}|[*#A-D])\s*(?:\r?\n|$)", re.IGNORECASE)
+_INFO_EVENT_CODES = {"10": "*", "11": "#", "12": "A", "13": "B", "14": "C", "15": "D"}
 
 
 def parse_sip_info_digit(content_type: str, body: bytes) -> str:
-    """Parse one RFC 2833-style digit carried by SIP INFO."""
+    """Parse one legacy DTMF digit carried by an in-dialog SIP INFO."""
     media_type = str(content_type or "").split(";", 1)[0].strip().lower()
     text = body.decode("ascii", errors="ignore").strip()
     if media_type == "application/dtmf-relay":
         match = _INFO_SIGNAL_RE.search(text)
-        return match.group(1).upper() if match else ""
+        if not match:
+            return ""
+        signal = match.group(1).upper()
+        return _INFO_EVENT_CODES.get(signal, signal if signal in "0123456789*#ABCD" else "")
     if media_type == "application/dtmf" and text:
         digit = text[0].upper()
         return digit if digit in "0123456789*#ABCD" else ""
     return ""
+
+
+class RtpDtmfDecoder:
+    """Decode one event per RFC 4733 DTMF press from a negotiated RTP PT."""
+
+    def __init__(self, payload_type: int) -> None:
+        self.payload_type = int(payload_type)
+        self.ssrc: int | None = None
+        self._seen_events: set[tuple[int, int]] = set()
+
+    def decode(self, data: bytes, *, expected_ssrc: int | None = None) -> str:
+        try:
+            packet = parse_packet(data)
+        except ValueError:
+            return ""
+        if packet.payload_type != self.payload_type or len(packet.payload) < 4:
+            return ""
+        if expected_ssrc is not None and packet.ssrc != expected_ssrc:
+            return ""
+        if self.ssrc is None:
+            self.ssrc = packet.ssrc
+        elif packet.ssrc != self.ssrc:
+            return ""
+        event = packet.payload[0]
+        digit = _EVENT_DIGITS.get(event, "")
+        if not digit:
+            return ""
+        key = (packet.timestamp, event)
+        if key in self._seen_events:
+            return ""
+        self._seen_events.add(key)
+        if len(self._seen_events) > 256:
+            self._seen_events.clear()
+            self._seen_events.add(key)
+        return digit
 
 
 async def collect_info_digits(
@@ -97,36 +140,20 @@ class _DtmfProtocol(asyncio.DatagramProtocol):
         self.payload_type = int(payload_type)
         self.on_digit = on_digit
         self.remote_host = str(remote_host or "")
-        self._ssrc: int | None = None
-        self._seen_events: set[tuple[int, int]] = set()
+        self._decoder = RtpDtmfDecoder(self.payload_type)
 
     def datagram_received(self, data: bytes, addr) -> None:
         if self.remote_host and str(addr[0]) != self.remote_host:
             return
-        try:
-            packet = parse_packet(data)
-        except ValueError:
-            return
-        if packet.payload_type != self.payload_type or len(packet.payload) < 4:
-            return
-        event = packet.payload[0]
-        ended = bool(packet.payload[1] & 0x80)
-        digit = _EVENT_DIGITS.get(event)
+        digit = self._decoder.decode(data)
         if not digit:
             return
-        if self._ssrc is None:
-            self._ssrc = packet.ssrc
-        elif packet.ssrc != self._ssrc:
-            return
-        key = (packet.timestamp, event)
-        if key in self._seen_events:
-            return
-        self._seen_events.add(key)
+        packet = parse_packet(data)
         _LOGGER.debug(
             "SIP trunk DTMF RX digit=%s seq=%s end=%s from=%s:%s",
             digit,
             packet.sequence,
-            ended,
+            bool(packet.payload[1] & 0x80),
             addr[0],
             addr[1],
         )

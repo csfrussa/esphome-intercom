@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 
+from . import sdp as sip_sdp
 from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_TX_FORMATS, HA_TRUNK_AUDIO_FORMATS
 from .call_registry import TERMINAL_STATES
 from .config import debug_mode as _debug_mode
@@ -63,7 +64,13 @@ from .router import CallContext, RouteAction, RouteReason, route_inbound_trunk, 
 from .session_cleanup import async_cleanup_sip_runtime
 from .sip_bridge import build_invite_client_relay
 from .store import sip_accounts as _sip_accounts
-from .websocket_api import _fire_call_event, _ha_softphone_dnd, _set_ha_softphone_call_state, _set_sip_bridge_call_state
+from .websocket_api import (
+    SIP_DTMF_EVENT,
+    _fire_call_event,
+    _ha_softphone_dnd,
+    _set_ha_softphone_call_state,
+    _set_sip_bridge_call_state,
+)
 
 if TYPE_CHECKING:
     from .peer import Peer
@@ -74,6 +81,45 @@ SIP_ROUTE_DECISION_TIMEOUT = 1.5
 RING_GROUP_TIMEOUT_S = 30.0
 MAX_RING_GROUP_ATTEMPTS = 16
 MAX_TRUNK_INFO_DIGITS = 16
+
+
+def _attach_dtmf_event_bridge(
+    hass: HomeAssistant,
+    relay,
+    *,
+    call_id: str,
+    dest_call_id: str,
+    caller: str,
+    callee: str,
+    client=None,
+) -> None:
+    """Publish one HA event for each negotiated in-dialog DTMF press."""
+
+    def _emit(side: str, digit: str, transport: str) -> None:
+        source_is_caller = side == "left"
+        hass.bus.async_fire(
+            SIP_DTMF_EVENT,
+            {
+                "call_id": call_id,
+                "dest_call_id": dest_call_id,
+                "caller": caller,
+                "callee": callee,
+                "source": caller if source_is_caller else callee,
+                "source_leg": "caller" if source_is_caller else "callee",
+                "side": side,
+                "digit": digit,
+                "transport": transport,
+            },
+        )
+
+    relay.on_dtmf = _emit
+    if client is not None:
+        client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")
+
+
+def _invite_dtmf_format(invite):
+    formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
+    return formats[0] if formats else None
 
 
 def _unique_group_members(value) -> list[str]:
@@ -117,7 +163,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     )
     from .dtmf import DtmfCollector, collect_info_digits, parse_sip_info_digit
     from .sdp import build_answer_directional
-    from . import sdp as sip_sdp
     from .sip import parse_sip_uri
     from .sip_client import SIP_TIMER_B, SipCallClient
     from .sip_endpoint import SipEndpointManager
@@ -161,7 +206,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         call_id = request.header("Call-ID")
         queue = hass.data.setdefault(DOMAIN, {}).setdefault("trunk_info_queues", {}).get(call_id)
         if queue is None:
-            _LOGGER.info("SIP INFO DTMF arrived outside routing window call_id=%s digit=%s", call_id, digit)
+            relay = _call_registry(hass).relays.get(call_id)
+            callback = getattr(relay, "on_dtmf", None)
+            if callback is not None:
+                callback("left", digit, "sip_info")
+                _LOGGER.info("SIP in-call INFO DTMF RX call_id=%s digit=%s transport=%s", call_id, digit, transport)
+                return
+            _LOGGER.info("SIP INFO DTMF arrived outside active call call_id=%s digit=%s", call_id, digit)
             return
         if queue.full():
             _LOGGER.warning("SIP INFO DTMF queue full call_id=%s; digit ignored", call_id)
@@ -794,6 +845,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 debug_capture=_debug_mode(hass),
                 on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
             )
+            _attach_dtmf_event_bridge(
+                hass,
+                relay,
+                call_id=invite.call_id,
+                dest_call_id=client.dialog_ids.call_id,
+                caller=invite.caller,
+                callee=destination,
+                client=client,
+            )
             await relay.start()
         except Exception as err:
             _LOGGER.warning("SIP trunk RTP bridge unavailable: %s", err)
@@ -1177,6 +1237,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     debug_capture=_debug_mode(hass),
                     on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
                 )
+                _attach_dtmf_event_bridge(
+                    hass,
+                    relay,
+                    call_id=invite.call_id,
+                    dest_call_id=client.dialog_ids.call_id,
+                    caller=invite.caller,
+                    callee=str(winner.member or invite.target),
+                    client=client,
+                )
                 await relay.start()
             except Exception as err:
                 _LOGGER.warning("SIP ring group media bridge unavailable: %s", err)
@@ -1225,6 +1294,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 source_relay_port,
                 invite.send_format,
                 invite.recv_format,
+                dtmf=_invite_dtmf_format(invite),
             )
             _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
             _set_sip_bridge_call_state(
@@ -2048,6 +2118,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             debug_capture=_debug_mode(hass),
                             on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
                         )
+                        _attach_dtmf_event_bridge(
+                            hass,
+                            relay,
+                            call_id=invite.call_id,
+                            dest_call_id=client.dialog_ids.call_id,
+                            caller=invite.caller,
+                            callee=(
+                                decision.entry.display_name
+                                if decision.entry is not None
+                                else decision.target or invite.target
+                            ),
+                            client=client,
+                        )
                         await relay.start()
                     except Exception as err:
                         _LOGGER.warning("SIP RTP bridge media conversion unavailable: %s", err)
@@ -2082,6 +2165,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         source_relay_port,
                         invite.send_format,
                         invite.recv_format,
+                        dtmf=_invite_dtmf_format(invite),
                     )
                     _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
                     _set_sip_bridge_call_state(

@@ -204,3 +204,30 @@ Fields:
 
 Use this only for the automation fallback path. Known roster targets should be
 handled by the central dial plan without waiting for this service.
+
+## In-call DTMF Automation Event
+
+During an established call bridged by HA, each negotiated RFC 4733
+`telephone-event` key or compatible in-dialog SIP INFO key fires
+`voip_stack.dtmf`. This does not invoke the initial trunk extension router and
+does not transfer the active call.
+Detection and event publication are HA-backend features; they add no DTMF
+parser, callback or media-loop work to ESP endpoints.
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: voip_stack.dtmf
+    event_data:
+      source: Cordless
+      digit: "1"
+actions:
+  - action: lock.unlock
+    target:
+      entity_id: lock.gate
+```
+
+The event carries one key at a time plus both call IDs, caller, callee,
+`source`, `source_leg`, diagnostic `side`, and the transport (`rtp_event` or
+`sip_info`). It is available only for calls that pass through VoIP Stack in
+HA; direct peer-to-peer ESP calls remain invisible to HA.

@@ -145,8 +145,13 @@ last participant leaves.
   bounded.
 - Unsupported hold or codec-changing re-INVITE requests receive `488 Not
   Acceptable Here` without destroying the call already in progress.
-- Incoming digit routing accepts both RTP `telephone-event` and standard SIP
-  INFO DTMF, including four-digit trunk destinations entered at human speed.
+- Incoming digit routing accepts both standard RTP `telephone-event` and the
+  widely deployed legacy SIP INFO DTMF representation, including four-digit
+  trunk destinations entered at human speed.
+- During an established HA-bridged call, each RFC 4733 or compatible SIP INFO
+  DTMF key is also exposed as `voip_stack.dtmf` for automations. This event
+  path is separate from pre-answer extension routing and never transfers the
+  call by itself.
 - Ring-group legs, conference members, RTP ports, registrations and transaction
   caches all have explicit limits instead of growing without bound.
 
@@ -171,7 +176,7 @@ last participant leaves.
 
 ## ✅ Validation
 
-- Home Assistant, integration, card and tooling: 302 tests plus 25 subtests.
+- Home Assistant, integration, card and tooling: 305 tests plus 25 subtests.
 - ESP VoIP stack: 57 tests.
 - Audio and AFE: 19 tests.
 - Runtime controller: 6 tests.
@@ -197,8 +202,8 @@ development snapshot. In particular:
   and group fields belong to the HA phonebook;
 - the phonebook is an outbound dial plan, not an inbound caller allowlist;
 - full hold/resume renegotiation is not implemented;
-- trunk digit routing accepts RTP `telephone-event` and SIP INFO DTMF; acoustic
-  in-band DTMF tones are not decoded;
+- trunk digit routing accepts standard RTP `telephone-event` and compatible
+  legacy SIP INFO DTMF; acoustic in-band DTMF tones are not decoded;
 - ESP SIP/RTP remains plaintext and belongs on a trusted LAN or VPN, or behind
   an SBC.
 

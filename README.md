@@ -200,8 +200,8 @@ snapshot:
 - A hold or media-changing in-dialog re-INVITE is rejected with `488` while the
   established call remains active. HA may acknowledge an unchanged session
   refresh without rerouting; full hold/resume renegotiation is not implemented.
-- Trunk digit routing accepts RTP `telephone-event` and standard SIP INFO DTMF;
-  acoustic in-band tones are not decoded.
+- Trunk digit routing accepts standard RTP `telephone-event` and compatible
+  legacy SIP INFO DTMF; acoustic in-band tones are not decoded.
 - Disabling the parent audio processor switch is an explicit raw-microphone
   bypass on the same microphone surface.
 

@@ -125,7 +125,7 @@ reframes between the formats. If conversion is not possible, the bridge fails
 with `media_incompatible`.
 
 Inbound provider trunk calls are also two-leg calls. HA answers the trunk leg to
-receive DTMF routing digits through RTP `telephone-event` or standard SIP INFO,
+receive DTMF routing digits through RTP `telephone-event` or compatible legacy SIP INFO,
 then originates a normal SIP call to HA softphone or a local phonebook target
 and bridges RTP with the same relay.
 

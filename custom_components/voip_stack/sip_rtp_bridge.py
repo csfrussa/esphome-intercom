@@ -21,6 +21,7 @@ from .debug_capture import (
     safe_capture_name,
     wav_pcm_payload,
 )
+from .dtmf import RtpDtmfDecoder
 from .sdp import RtpPcmFormat, audio_format_to_rtp
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 
@@ -39,6 +40,7 @@ class RtpPeer:
     send_payload_type: int | None = None
     send_audio_format: AudioFormat | None = None
     send_rtp_format: RtpPcmFormat | None = None
+    dtmf_payload_type: int | None = None
     rx_ssrc: int | None = None
     sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
     timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
@@ -94,6 +96,7 @@ class SipRtpRelay:
         debug_capture: bool = False,
         capture_name: str = "",
         on_release: Callable[[tuple[int, int]], None] | None = None,
+        on_dtmf: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.left = left
         self.right = right
@@ -102,6 +105,7 @@ class SipRtpRelay:
         self.left_transport: asyncio.DatagramTransport | None = None
         self.right_transport: asyncio.DatagramTransport | None = None
         self._on_release = on_release
+        self.on_dtmf = on_dtmf
         self._released = False
         self.forwarded = 0
         self.dropped = 0
@@ -119,6 +123,10 @@ class SipRtpRelay:
         self.right_decoder = RtpPayloadDecoder(right.inbound_rtp_format)
         self.left_encoder = RtpPayloadEncoder(left.outbound_rtp_format)
         self.right_encoder = RtpPayloadEncoder(right.outbound_rtp_format)
+        self._dtmf_decoders = {
+            "left": RtpDtmfDecoder(left.dtmf_payload_type) if left.dtmf_payload_type is not None else None,
+            "right": RtpDtmfDecoder(right.dtmf_payload_type) if right.dtmf_payload_type is not None else None,
+        }
         self._capture_buffers: dict[str, bytearray] = {}
         self._capture_paths: dict[str, Path] = {}
         self._capture_formats: dict[str, AudioFormat] = {}
@@ -262,6 +270,19 @@ class SipRtpRelay:
         if addr[0] != source.host:
             self.dropped += 1
             _LOGGER.debug("RTP relay rejected packet from unexpected %s:%s", addr[0], addr[1])
+            return
+        dtmf_decoder = self._dtmf_decoders[side]
+        if dtmf_decoder is not None and (digit := dtmf_decoder.decode(data, expected_ssrc=source.rx_ssrc)):
+            if source.rx_ssrc is None:
+                source.rx_ssrc = dtmf_decoder.ssrc
+                source.port = int(addr[1])
+            elif int(addr[1]) != int(source.port):
+                source.port = int(addr[1])
+            if self.on_dtmf is not None:
+                try:
+                    self.on_dtmf(side, digit, "rtp_event")
+                except Exception as err:  # noqa: BLE001 - event consumers cannot break RTP.
+                    _LOGGER.warning("RTP relay DTMF callback failed: %s", err)
             return
         try:
             packet = rtp.parse_packet(data)

@@ -184,6 +184,7 @@ class SipDialog:
     send_format: sdp.RtpPcmFormat
     recv_format: sdp.RtpPcmFormat
     remote_target_uri: str = ""
+    dtmf_payload_type: int | None = None
 
     @property
     def selected_format(self) -> sdp.RtpPcmFormat:
@@ -252,6 +253,7 @@ class SipCallClient:
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue(maxsize=128)
         self.dialog_ids = sip.SipDialogIds(call_id=sip.make_call_id("ha"), local_tag=sip.make_tag())
         self.dialog: SipDialog | None = None
+        self.on_info_dtmf: Callable[[str], None] | None = None
         self._invite_cseq = self.dialog_ids.cseq
         self._pending_target = ""
         self._pending_remote_host = ""
@@ -849,6 +851,15 @@ class SipCallClient:
                 )
                 continue
             if msg.method in {"INFO", "OPTIONS"}:
+                if msg.method == "INFO":
+                    from .dtmf import parse_sip_info_digit
+
+                    digit = parse_sip_info_digit(msg.header("Content-Type"), msg.body)
+                    if digit and self.on_info_dtmf is not None:
+                        try:
+                            self.on_info_dtmf(digit)
+                        except Exception as err:  # noqa: BLE001 - event consumers cannot break the SIP dialog.
+                            _LOGGER.warning("SIP INFO DTMF callback failed: %s", err)
                 self._send_response_to_request(msg, addr[0], addr[1], 200, "OK")
                 continue
             self._send_response_to_request(msg, addr[0], addr[1], 405, "Method Not Allowed")
@@ -903,6 +914,7 @@ class SipCallClient:
             self._send_bye_request(remote_host, int(remote_sip_port), remote_target_uri, local_uri, remote_uri)
             return False
         parsed = sdp.parse_sdp(msg.body)
+        dtmf_formats = sdp.offered_dtmf_formats(msg.body)
         self.dialog_ids.remote_tag = sip.extract_tag(msg.header("To"))
         self.dialog = SipDialog(
             target=target,
@@ -917,6 +929,7 @@ class SipCallClient:
             send_format=selected.send,
             recv_format=selected.recv,
             remote_target_uri=remote_target_uri,
+            dtmf_payload_type=dtmf_formats[0].payload_type if dtmf_formats else None,
         )
         _LOGGER.info(
             "SIP 200 OK media selected call_id=%s tx=%s rx=%s answer=[%s]",

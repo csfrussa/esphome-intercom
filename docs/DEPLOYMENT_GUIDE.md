@@ -88,7 +88,7 @@ asks for provider transport, server, credentials, optional outbound proxy,
 default inbound target and optional DTMF digit collection.
 
 Inbound provider calls are answered by HA so it can collect DTMF digits through
-RTP `telephone-event` or standard SIP INFO. Normal mobile dialers can use
+RTP `telephone-event` or compatible legacy SIP INFO. Normal mobile dialers can use
 post-dial pauses, for example a contact that dials the provider number, waits,
 and sends `100`. If no digits arrive, HA rings the configured default target or
 HA softphone. If digits arrive, HA resolves them through central phonebook

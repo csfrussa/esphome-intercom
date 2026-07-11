@@ -11,7 +11,7 @@ class SdpError(ValueError):
     """Malformed or unsupported SDP."""
 
 
-MAX_RTP_OFFER_FORMATS = 12
+MAX_RTP_OFFER_FORMATS = 11
 _PREFERRED_RTP_AUDIO_KEYS = {
     (48000, PcmFormat.S16LE, 1, 10): 0,
     (32000, PcmFormat.S16LE, 1, 16): 1,
@@ -254,7 +254,10 @@ def build_offer_directional(
         rtp_formats.append(audio_format_to_rtp(fmt, next_payload))
         used_payloads.add(next_payload)
         next_payload += 1
-    payloads = " ".join(str(fmt.payload_type) for fmt in rtp_formats)
+    while next_payload in used_payloads:
+        next_payload += 1
+    dtmf_payload_type = next_payload
+    payloads = " ".join([*(str(fmt.payload_type) for fmt in rtp_formats), str(dtmf_payload_type)])
     lines = [
         "v=0",
         f"o=- 0 0 IN IP4 {origin_ip}",
@@ -267,6 +270,8 @@ def build_offer_directional(
         lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
         if fmt.encoding == "OPUS":
             lines.append(f"a=fmtp:{fmt.payload_type} stereo=1;sprop-stereo=1;maxaveragebitrate=28000")
+    lines.append(f"a=rtpmap:{dtmf_payload_type} telephone-event/8000")
+    lines.append(f"a=fmtp:{dtmf_payload_type} 0-16")
     lines.append(f"a=ptime:{rtp_formats[0].frame_ms}")
     lines.append(f"a=maxptime:{rtp_formats[0].frame_ms}")
     lines.append("a=sendrecv")
