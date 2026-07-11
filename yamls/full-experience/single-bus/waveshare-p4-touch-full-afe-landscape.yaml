@@ -369,11 +369,10 @@ light:
 
 esp_audio_stack:
   id: audio_stack
-  # Concurrent TLS streams (music + TTS + VoIP) are tight on internal RAM.
-  # Move the audio task's own stack to PSRAM (matches waveshare-s3-full-afe).
-  # The task is not CPU-bound (per-frame work lives in GMF AFE manager tasks), so
-  # PSRAM stack latency is acceptable.
-  audio_task_stack_in_psram: true
+  # Keep the realtime I2S/AFE bridge stack internal on P4. Sendspin, display and
+  # XIP already exercise PSRAM/cache heavily; an external task stack can make a
+  # processed AFE frame miss its 64 ms publication slot.
+  audio_task_stack_in_psram: false
   i2s_lrclk_pin: ${i2s_lrclk_pin}
   i2s_bclk_pin: ${i2s_bclk_pin}
   i2s_mclk_pin: ${i2s_mclk_pin}
@@ -384,7 +383,7 @@ esp_audio_stack:
   processor_id: afe_processor
   audio_effects:
     rate_cvt_complexity: 3
-    rate_cvt_perf_type: memory
+    rate_cvt_perf_type: speed
   codec:
     i2c_id: internal_i2c
     input:
@@ -410,6 +409,12 @@ esp_audio_stack:
 
 esp_afe:
   id: afe_processor
+  # Keep the asynchronous AFE producer immediately below the audio consumer
+  # (priority 19). At the default priority 5, display/Sendspin work can delay a
+  # complete 64 ms fetch frame and the realtime consumer must publish silence.
+  task_priority: 18
+  feed_task_priority: 18
+  fetch_task_priority: 18
   type: fd
   mode: high_perf
   mic_num: 2
@@ -449,6 +454,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    buffer_duration: 128ms
 
   # 3-source mixer: media (duckable) + TTS (never ducked) + VoIP
   - platform: mixer

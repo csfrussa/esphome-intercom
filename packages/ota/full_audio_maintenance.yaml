@@ -8,7 +8,6 @@
 #   - audio_stack
 #   - VoIP
 #   - mww
-#   - sendspin_hub
 #   - speaker_media_player
 #   - script: start_mww_when_ready
 # =============================================================================
@@ -24,11 +23,6 @@ ota:
       - globals.set:
           id: g_ota_in_progress
           value: "true"
-      # Sendspin currently exposes disconnect as a C++ method, not an ESPHome
-      # YAML action. Keep this one-line lambda so OTA can close the stream before
-      # flash erase/write work starts.
-      - lambda: |-
-          id(sendspin_hub).disconnect_from_server(sendspin::SendspinGoodbyeReason::SHUTDOWN);
       - media_player.stop:
           id: speaker_media_player
           announcement: true
