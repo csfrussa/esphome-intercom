@@ -18,29 +18,33 @@ sections:
         mode: esp_mirror
         show_protocol: true
         show_extended_info: true
-      - type: vertical-stack
-        cards:
-          - type: entities
-            show_header_toggle: false
-            entities:
-              - number.<first_esp>_master_volume
-              - type: custom:mini-media-player
-                entity: media_player.<first_esp>
-                group: true
-                artwork: none
-                volume_stateless: false
-                hide:
-                  icon: true
-                  info: true
-                  power: true
-                  source: true
-                  sound_mode: true
-                  controls: true
-                  progress: true
-                  runtime: true
-                  volume_level: true
-                  mute: true
-              - number.<first_esp>_mic_gain
+        grid_options:
+          columns: 12
+          rows: 5
+      - type: entities
+        show_header_toggle: false
+        grid_options:
+          columns: 12
+          rows: 3
+        entities:
+          - number.<first_esp>_master_volume
+          - type: custom:mini-media-player
+            entity: media_player.<first_esp>
+            group: true
+            artwork: none
+            volume_stateless: false
+            hide:
+              icon: true
+              info: true
+              power: true
+              source: true
+              sound_mode: true
+              controls: true
+              progress: true
+              runtime: true
+              volume_level: true
+              mute: true
+          - number.<first_esp>_mic_gain
 
   - type: grid
     cards:
@@ -50,29 +54,33 @@ sections:
         mode: esp_mirror
         show_protocol: true
         show_extended_info: true
-      - type: vertical-stack
-        cards:
-          - type: entities
-            show_header_toggle: false
-            entities:
-              - number.<second_esp>_master_volume
-              - type: custom:mini-media-player
-                entity: media_player.<second_esp>
-                group: true
-                artwork: none
-                volume_stateless: false
-                hide:
-                  icon: true
-                  info: true
-                  power: true
-                  source: true
-                  sound_mode: true
-                  controls: true
-                  progress: true
-                  runtime: true
-                  volume_level: true
-                  mute: true
-              - number.<second_esp>_mic_gain
+        grid_options:
+          columns: 12
+          rows: 5
+      - type: entities
+        show_header_toggle: false
+        grid_options:
+          columns: 12
+          rows: 3
+        entities:
+          - number.<second_esp>_master_volume
+          - type: custom:mini-media-player
+            entity: media_player.<second_esp>
+            group: true
+            artwork: none
+            volume_stateless: false
+            hide:
+              icon: true
+              info: true
+              power: true
+              source: true
+              sound_mode: true
+              controls: true
+              progress: true
+              runtime: true
+              volume_level: true
+              mute: true
+          - number.<second_esp>_mic_gain
 
   # Native, resizable and internally scrollable view of the canonical roster.
   - type: grid
