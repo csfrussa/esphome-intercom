@@ -1334,7 +1334,11 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     local_rtp_port = _allocate_sip_rtp_port(hass)
     client = SipCallClient(
         local_ip=local_ip,
-        local_name=_ha_peer_name(hass),
+        local_name=(
+            str(trunk_cfg.get(CONF_TRUNK_USERNAME) or _ha_peer_name(hass))
+            if use_trunk
+            else _ha_peer_name(hass)
+        ),
         local_sip_port=int(cfg["sip_port"]),
         local_rtp_port=local_rtp_port,
         supported_send_formats=sip_send_formats,

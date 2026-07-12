@@ -3024,6 +3024,65 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("next_retransmit = loop.time() + retransmit_interval", auth_branch)
         self.assertNotIn("retry_headers = list(headers)", auth_branch)
 
+    async def test_proxy_auth_retry_uses_trunk_identity(self) -> None:
+        class FakeTransport:
+            def __init__(self) -> None:
+                self.sent: list[tuple[bytes, tuple[str, int]]] = []
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                self.sent.append((data, addr))
+
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="17770000000",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+            username="17770000000",
+            auth_username="17770000000",
+            password="secret",
+        )
+        transport = FakeTransport()
+        client.transport = transport  # type: ignore[assignment]
+        response_count = 0
+
+        async def read_response(_timeout: float):
+            nonlocal response_count
+            response_count += 1
+            status, reason = (407, "Proxy Authentication Required") if response_count == 1 else (180, "Ringing")
+            headers = [
+                ("Via", f"SIP/2.0/UDP 192.168.1.10:5060;branch={client.dialog_ids.branch}"),
+                ("From", f"<sip:17770000000@192.168.1.10:5060>;tag={client.dialog_ids.local_tag}"),
+                ("To", "<sip:+15551234567@sip.example>;tag=provider"),
+                ("Call-ID", client.dialog_ids.call_id),
+                ("CSeq", f"{client._invite_cseq} INVITE"),
+            ]
+            if status == 407:
+                headers.append(("Proxy-Authenticate", 'Digest realm="sip.example", nonce="nonce", qop="auth"'))
+            return sip.parse_message(sip.build_response(status, reason, headers)), ("192.0.2.10", 5060)
+
+        client._read_response = read_response  # type: ignore[method-assign]
+        result = await client.invite(
+            target="+15551234567",
+            remote_host="192.0.2.10",
+            remote_sip_port=5060,
+            request_uri="sip:+15551234567@sip.example:5060;transport=udp",
+        )
+
+        self.assertEqual(result, "ringing")
+        messages = [sip.parse_message(raw) for raw, _addr in transport.sent]
+        invites = [message for message in messages if message.method == "INVITE"]
+        self.assertEqual(len(invites), 2)
+        self.assertEqual(invites[0].header("From"), invites[1].header("From"))
+        self.assertTrue(invites[0].header("From").startswith("<sip:17770000000@192.168.1.10:5060"))
+        self.assertTrue(invites[0].header("Contact").startswith("<sip:17770000000@192.168.1.10:5060"))
+        self.assertEqual(invites[0].header("X-Voip-Stack-Caller-Name"), "17770000000")
+        self.assertEqual(invites[1].header("X-Voip-Stack-Caller-Name"), "17770000000")
+        self.assertFalse(invites[0].header("Proxy-Authorization"))
+        self.assertIn('username="17770000000"', invites[1].header("Proxy-Authorization"))
+        self.assertIn('uri="sip:+15551234567@sip.example:5060;transport=udp"', invites[1].header("Proxy-Authorization"))
+        self.assertNotEqual(invites[0].header("Via"), invites[1].header("Via"))
+        self.assertEqual(sip.parse_cseq(invites[1].header("CSeq")).number, sip.parse_cseq(invites[0].header("CSeq")).number + 1)
+
     async def test_invite_treats_183_session_progress_as_ringing(self) -> None:
         sent: list[bytes] = []
         responses: asyncio.Queue[bytes] = asyncio.Queue()
