@@ -43,11 +43,6 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   explains how HA resolves names, extensions, groups, registered SIP endpoints
   and trunk numbers.
 
-- 🤖 **Programmable dial-plan plan**:
-  [AUTOMATION_DIALPLAN_PLAN_2026_7_2.md](AUTOMATION_DIALPLAN_PLAN_2026_7_2.md)
-  defines the proposed HA event entities, per-call SIP variables, timeout
-  decisions and automation-driven forwarding work for `2026.7.2`.
-
 - 📞 **Call flows**: [CALL_FLOWS.md](CALL_FLOWS.md) explains the expected
   signaling/media path for ESP, HA, registered endpoint, group and trunk calls.
 

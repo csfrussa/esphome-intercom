@@ -55,14 +55,3 @@ being kept separate from the transaction fix: digest nonce-count replay
 protection, NAT-aware registered Contact routing and optional multiple Contact
 bindings per account. They are not claimed as completed until implemented and
 qualified.
-
-## 🧭 Planned: Programmable Home Assistant Dial Plan
-
-Research and API design are underway for automation-driven call routing,
-calling/ringing timeout hooks and forwarding an existing unanswered call. The
-phonebook remains the default dial plan; automations will override individual
-calls through versioned events and explicit actions rather than a parallel call
-engine.
-
-See the [2026.7.2 programmable dial-plan plan](AUTOMATION_DIALPLAN_PLAN_2026_7_2.md).
-Items in that plan are not release claims until implemented and qualified.
