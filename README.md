@@ -122,6 +122,19 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
+### `2026.7.2` In Development
+
+The next release starts with stricter outbound trunk identity handling and a
+standard SIP cancellation lifecycle shared by the HA softphone, bridges, ring
+groups and conference invitations. Hang Up remains available while a call is
+connecting, sends a real CANCEL to the remote endpoint and cannot be undone by
+a late ringing response.
+
+- 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
+- 🚀 [Published `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)
+
+### `2026.7.1`
+
 ### 🗣️ Your Home Assistant Voice Assistant Now Has A Phone Extension
 
 `2026.7.1` can publish any native Home Assistant Assist pipeline as a
