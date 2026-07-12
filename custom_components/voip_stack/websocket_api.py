@@ -13,6 +13,11 @@ from homeassistant.core import HomeAssistant, callback
 from .call_registry import CallRegistry
 from .const import (
     CONF_DEBUG_MODE,
+    CONF_HA_SOFTPHONE_CONFERENCE_GROUP,
+    CONF_HA_SOFTPHONE_CONFERENCE_RING,
+    CONF_HA_SOFTPHONE_DND,
+    CONF_HA_SOFTPHONE_EXTENSION,
+    CONF_HA_SOFTPHONE_RING_GROUP,
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
@@ -29,6 +34,14 @@ SIP_CALL_ENDED_EVENT = "voip_stack.call_ended"
 SIP_DTMF_EVENT = "voip_stack.dtmf"
 HA_SOFTPHONE_STORE_KEY = f"{DOMAIN}_ha_softphone"
 HA_SOFTPHONE_STORE_VERSION = 1
+
+_HA_SOFTPHONE_OPTION_KEYS = (
+    CONF_HA_SOFTPHONE_DND,
+    CONF_HA_SOFTPHONE_EXTENSION,
+    CONF_HA_SOFTPHONE_RING_GROUP,
+    CONF_HA_SOFTPHONE_CONFERENCE_GROUP,
+    CONF_HA_SOFTPHONE_CONFERENCE_RING,
+)
 
 WS_TYPE_LIST = f"{DOMAIN}/list_devices"
 WS_TYPE_RESOLVE_DEVICE = f"{DOMAIN}/resolve_device"
@@ -265,31 +278,81 @@ async def _async_shutdown_all(hass: HomeAssistant) -> None:
         store.pop(key, None)
 
 
-async def _async_load_ha_softphone_store(hass: HomeAssistant) -> None:
+async def _async_load_ha_softphone_store(
+    hass: HomeAssistant, config_entry: object | None = None
+) -> None:
     from homeassistant.helpers.storage import Store
 
     store = Store(hass, HA_SOFTPHONE_STORE_VERSION, HA_SOFTPHONE_STORE_KEY)
     data = await store.async_load() or {}
     runtime = _ha_softphone_store(hass)
     runtime["storage"] = store
-    runtime["dnd"] = bool(data.get("dnd", runtime.get("dnd", False)))
-    runtime["extension"] = _clean_endpoint_field(data.get("extension", runtime.get("extension", "")))
     stored_groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
+    persisted = {
+        CONF_HA_SOFTPHONE_DND: bool(data.get("dnd", runtime.get("dnd", False))),
+        CONF_HA_SOFTPHONE_EXTENSION: _clean_endpoint_field(
+            data.get("extension", runtime.get("extension", ""))
+        ),
+        CONF_HA_SOFTPHONE_RING_GROUP: _clean_group_name(
+            stored_groups.get("ring_group")
+        ),
+        CONF_HA_SOFTPHONE_CONFERENCE_GROUP: _clean_group_name(
+            stored_groups.get("conference_group")
+        ),
+        CONF_HA_SOFTPHONE_CONFERENCE_RING: bool(
+            stored_groups.get("conference_ring", False)
+        ),
+    }
+    if config_entry is not None:
+        options = dict(getattr(config_entry, "options", {}) or {})
+        runtime["config_entry_id"] = str(getattr(config_entry, "entry_id", ""))
+        if any(key in options for key in _HA_SOFTPHONE_OPTION_KEYS):
+            persisted.update({key: options[key] for key in _HA_SOFTPHONE_OPTION_KEYS if key in options})
+        else:
+            # One-time migration from the legacy Store. ConfigEntry.options is
+            # the canonical HA persistence surface for mutable preferences.
+            hass.config_entries.async_update_entry(
+                config_entry,
+                options={**options, **persisted},
+            )
+    runtime["dnd"] = bool(persisted[CONF_HA_SOFTPHONE_DND])
+    runtime["extension"] = _clean_endpoint_field(
+        persisted[CONF_HA_SOFTPHONE_EXTENSION]
+    )
     runtime["groups"] = {
-        "ring_group": _clean_group_name(stored_groups.get("ring_group")),
-        "conference_group": _clean_group_name(stored_groups.get("conference_group")),
-        "conference_ring": bool(stored_groups.get("conference_ring", False)),
+        "ring_group": _clean_group_name(persisted[CONF_HA_SOFTPHONE_RING_GROUP]),
+        "conference_group": _clean_group_name(
+            persisted[CONF_HA_SOFTPHONE_CONFERENCE_GROUP]
+        ),
+        "conference_ring": bool(
+            persisted[CONF_HA_SOFTPHONE_CONFERENCE_RING]
+        ),
     }
 
 
 async def _async_save_ha_softphone_store(hass: HomeAssistant) -> None:
     runtime = _ha_softphone_store(hass)
+    groups = _ha_softphone_groups(hass)
+    persisted = {
+        CONF_HA_SOFTPHONE_DND: bool(runtime.get("dnd", False)),
+        CONF_HA_SOFTPHONE_EXTENSION: _ha_softphone_extension(hass),
+        CONF_HA_SOFTPHONE_RING_GROUP: groups["ring_group"],
+        CONF_HA_SOFTPHONE_CONFERENCE_GROUP: groups["conference_group"],
+        CONF_HA_SOFTPHONE_CONFERENCE_RING: groups["conference_ring"],
+    }
+    entry_id = str(runtime.get("config_entry_id") or "")
+    entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
+    if entry is not None:
+        hass.config_entries.async_update_entry(
+            entry,
+            options={**entry.options, **persisted},
+        )
     store = runtime.get("storage")
     if store is not None:
         await store.async_save({
-            "dnd": bool(runtime.get("dnd", False)),
-            "extension": _ha_softphone_extension(hass),
-            "groups": _ha_softphone_groups(hass),
+            "dnd": persisted[CONF_HA_SOFTPHONE_DND],
+            "extension": persisted[CONF_HA_SOFTPHONE_EXTENSION],
+            "groups": groups,
         })
 
 

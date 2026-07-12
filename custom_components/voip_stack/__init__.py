@@ -1568,6 +1568,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][CONF_DEBUG_MODE] = bool(entry.data.get(CONF_DEBUG_MODE, False))
     hass.data[DOMAIN]["manual_roster_entries"] = _manual_roster_entries(hass)
     await _async_setup_shared(hass)
+    await _async_load_ha_softphone_store(hass, entry)
     await _async_apply_assist_intents(
         hass,
         bool(entry.data.get(CONF_ASSIST_INTENTS, False)),

@@ -18,6 +18,10 @@ call and audio paths for everyday use.
   membership, conference-group membership and conference-ringing preference.
 - 🔄 Changes made from the card or services are reflected through HA's virtual
   endpoint and republished to the shared phonebook.
+- 💾 HA softphone extension, DND and group settings are persisted in the
+  integration config entry. The card writes through the softphone service and
+  reads the canonical snapshot back; the values survive integration reloads
+  and full Home Assistant restarts.
 - 🧑‍💼 Registered SIP phones are first-class endpoints. Their accounts can use
   extensions and join the same ring or conference groups as HA and ESP devices.
 - 🌍 Incoming calls are not limited to callers stored in the phonebook.

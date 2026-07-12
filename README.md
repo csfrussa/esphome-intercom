@@ -178,6 +178,10 @@ returns, preserves readable native selectors across light and dark themes, and
 shows the endpoint that actually answered a ring group instead of leaving the
 group name as the connected peer.
 
+HA softphone extension, DND and group choices set from the card are stored in
+the integration config entry and restored after a Home Assistant restart. The
+card remains a view/controller of that canonical softphone state.
+
 Waveshare P4 Touch now includes an on-device Contacts/Keyboard phone view and a
 single runtime state policy for Assist, media, calls, timers, LEDs and ducking.
 Its audio path was qualified with Sendspin, TTS and VoIP active together; the

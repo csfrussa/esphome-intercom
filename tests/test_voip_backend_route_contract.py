@@ -342,6 +342,22 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("[:32]", websocket)
         self.assertIn('for raw in str(value or "").split(",")', websocket)
 
+    def test_ha_softphone_settings_persist_in_config_entry_options(self) -> None:
+        websocket = WEBSOCKET_API.read_text()
+        self.assertIn("_HA_SOFTPHONE_OPTION_KEYS", websocket)
+        self.assertIn('runtime["config_entry_id"]', websocket)
+        self.assertIn("hass.config_entries.async_update_entry(", websocket)
+        self.assertIn("options={**entry.options, **persisted}", websocket)
+        self.assertIn("One-time migration from the legacy Store", websocket)
+
+        init_py = INIT.read_text()
+        setup = init_py[
+            init_py.index("async def async_setup_entry(") : init_py.index(
+                "async def async_unload_entry("
+            )
+        ]
+        self.assertIn("await _async_load_ha_softphone_store(hass, entry)", setup)
+
     def test_config_flow_has_no_softphone_group_or_ring_fallback_policy(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
         strings = STRINGS_JSON.read_text()
