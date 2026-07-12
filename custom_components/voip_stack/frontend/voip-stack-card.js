@@ -1301,6 +1301,7 @@ class VoipStackCard extends HTMLElement {
         }
         break;
       case "calling":
+      case "connecting":
       case "remote_ringing":
         statusText = espState.toLowerCase() === "remote_ringing"
           ? `${destination} is ringing...`
@@ -1329,7 +1330,12 @@ class VoipStackCard extends HTMLElement {
         showCall = true;
     }
 
-    if (this._starting) statusText = "Connecting...";
+    if (this._starting) {
+      statusText = "Connecting...";
+      showCall = false;
+      showAnswer = false;
+      showHangup = true;
+    }
     if (this._stopping) statusText = "Ending call...";
     this._syncRingtoneRequest(espState);
 

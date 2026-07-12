@@ -215,6 +215,8 @@ class FrontendCardContractTest(unittest.TestCase):
 
         self.assertIn("els.hangupBtn.disabled = this._stopping", render)
         self.assertNotIn("els.hangupBtn.disabled = buttonDisabled", render)
+        self.assertIn('case "connecting":', render)
+        self.assertIn("showHangup = true", render.split("if (this._starting)", 1)[1])
         self.assertIn("++this._callOperationId", hangup)
         self.assertIn("this._starting = false", hangup)
         self.assertIn("const operationId = ++this._callOperationId", start)

@@ -466,7 +466,7 @@ class VoipStackEngine extends EventTarget {
       callee: context.callee || target.name || "",
       call_id: context.call_id || "",
     });
-    if (!["calling", "remote_ringing", "ringing", "in_call"].includes(String(reply?.state || "").toLowerCase())) {
+    if (!["calling", "connecting", "remote_ringing", "ringing", "in_call"].includes(String(reply?.state || "").toLowerCase())) {
       this._setState("IDLE");
       return reply;
     }
