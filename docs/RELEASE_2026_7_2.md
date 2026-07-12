@@ -22,6 +22,9 @@ version is published from `main`.
 
 - The Lovelace card keeps Hang Up available throughout `calling`, `connecting`
   and remote ringing, including while the original start request is pending.
+- The terminal call result remains available in HA state for diagnostics, but
+  the card presents it for five seconds and then returns to Ready. Later option
+  or roster updates do not resurrect an old hangup reason.
 - Outbound INVITE transactions now have one signaling owner shared by HA
   softphone, bridges, ring groups and conference invitations.
 - Cancellation follows the SIP transaction lifecycle: if no provisional
@@ -52,4 +55,3 @@ being kept separate from the transaction fix: digest nonce-count replay
 protection, NAT-aware registered Contact routing and optional multiple Contact
 bindings per account. They are not claimed as completed until implemented and
 qualified.
-

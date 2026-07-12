@@ -131,6 +131,7 @@ class VoipStackCard extends HTMLElement {
     // reason text sensor. HA softphone cards render terminal data directly
     // from the backend snapshot pushed on the event bus.
     this._lastEndInfo = null;          // {peer, reason, until_ms} | null
+    this._lastSoftphoneTerminalKey = "";
     this._lastEndClearTimer = null;
     this._unsubCallEvents = null;
 
@@ -324,8 +325,22 @@ class VoipStackCard extends HTMLElement {
     this._activeSessionDeviceId = snapshot.session_device_id || HA_SOFTPHONE_DEVICE_ID;
     const activePhoneState = ["calling", "remote_ringing", "ringing", "in_call", "connecting", "terminating"].includes(snapshot.state);
     if (activePhoneState) {
+      this._lastSoftphoneTerminalKey = "";
       this._clearEndReason(false);
     } else {
+      const terminalReason = String(snapshot.terminal_reason || "").trim();
+      const terminalKey = terminalReason
+        ? `${snapshot.call_id || "no-call"}|${snapshot.state}|${terminalReason}`
+        : "";
+      if (terminalKey && terminalKey !== this._lastSoftphoneTerminalKey) {
+        this._lastSoftphoneTerminalKey = terminalKey;
+        this._captureEndReason(
+          snapshot.state,
+          terminalReason,
+          String(snapshot.origin || "").toLowerCase(),
+          snapshot.dialed_target || snapshot.peer_name || snapshot.callee || snapshot.caller || "",
+        );
+      }
       this._cleanupAfterTerminalSession();
     }
     if (
@@ -1279,12 +1294,10 @@ class VoipStackCard extends HTMLElement {
           statusReason = "Incoming calls to Home Assistant are declined.";
           statusClass = "idle";
           showCall = true;
-        } else if (this._isHaSoftphoneMode() && this._softphoneSnapshot?.terminal_reason) {
-          const reason = this._softphoneSnapshot.terminal_reason;
-          const terminalTarget = this._softphoneSnapshot.dialed_target || this._softphoneSnapshot.peer_name;
-          const peerLabel = terminalTarget ? ` with ${terminalTarget}` : "";
+        } else if (this._isHaSoftphoneMode() && this._lastEndInfo) {
+          const peerLabel = this._lastEndInfo.peer ? ` with ${this._lastEndInfo.peer}` : "";
           statusText = `Call${peerLabel} ended.`;
-          statusReason = `Reason: ${this._formatKnownReason(reason) || reason}`;
+          statusReason = `Reason: ${this._formatEndReason(this._lastEndInfo)}`;
           statusClass = "idle";
           showCall = true;
         } else if (!this._isHaSoftphoneMode() && this._lastEndInfo) {

@@ -111,17 +111,18 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('this._captureEndReason("terminal", reason, data.origin || "remote", peer)', body)
 
     def test_ha_softphone_terminal_label_prefers_dialed_target(self) -> None:
-        render = _method_body(self.source, "_render")
-        terminal_branch = render.split("this._softphoneSnapshot?.terminal_reason", 1)[1].split("} else if", 1)[0]
-        self.assertIn("this._softphoneSnapshot.dialed_target || this._softphoneSnapshot.peer_name", terminal_branch)
-        self.assertIn("terminalTarget", terminal_branch)
+        apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
+        self.assertIn(
+            "snapshot.dialed_target || snapshot.peer_name || snapshot.callee",
+            apply_snapshot,
+        )
 
     def test_ha_softphone_dnd_status_outweighs_terminal_history(self) -> None:
         render = _method_body(self.source, "_render")
         idle_branch = render.split('case "idle":', 1)[1].split('case "calling":', 1)[0]
         self.assertLess(
             idle_branch.index("this._softphoneDnd"),
-            idle_branch.index("this._softphoneSnapshot?.terminal_reason"),
+            idle_branch.index("this._lastEndInfo"),
         )
         self.assertIn('statusText = "Do Not Disturb"', idle_branch)
         self.assertIn("Incoming calls to Home Assistant are declined.", idle_branch)
@@ -221,6 +222,15 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._starting = false", hangup)
         self.assertIn("const operationId = ++this._callOperationId", start)
         self.assertIn("operationId === this._callOperationId", start)
+
+    def test_ha_terminal_reason_is_transient_and_deduplicated(self) -> None:
+        apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
+        render = _method_body(self.source, "_render")
+
+        self.assertIn("this._lastSoftphoneTerminalKey", apply_snapshot)
+        self.assertIn("this._captureEndReason(", apply_snapshot)
+        self.assertIn("this._isHaSoftphoneMode() && this._lastEndInfo", render)
+        self.assertNotIn("this._softphoneSnapshot?.terminal_reason", render)
 
     def test_phonebook_is_an_internal_main_card_mode(self) -> None:
         source = PHONEBOOK_CARD.read_text()
