@@ -57,8 +57,8 @@ both HA's preferred Assist pipeline and a specifically selected pipeline._
   caller hangs up. Conversation context is retained between turns.
 - 🧩 VoIP Stack runs the selected native HA pipeline, so its existing STT,
   conversation agent, TTS, language and voice settings remain authoritative.
-  Piper, Wyoming, cloud providers, Codex Assist and other HA agents use the same
-  route without provider-specific code.
+  Piper, Wyoming, cloud providers and local HA agents use the same route without
+  provider-specific code.
 - 🏠 No separate Home Assistant VoIP integration, second SIP port or generated
   Assist satellite is required.
 

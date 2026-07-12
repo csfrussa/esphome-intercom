@@ -133,9 +133,8 @@ trunk.
 The assistant receives the SIP caller identity and can greet first. It listens
 through the pipeline's existing STT provider, answers through its configured
 TTS voice and returns to listening in the same open call for a natural
-multi-turn conversation. The extension is not tied to one AI provider: OpenAI
-Conversation, Codex Assist, local agents and other compatible HA conversation
-integrations all use the same route.
+multi-turn conversation. The extension is not tied to one AI provider: cloud
+and local Home Assistant conversation agents use the same route.
 
 <p align="center">
   <img
@@ -1785,8 +1784,8 @@ The Voice Assistant, Micro Wake Word, and VoIP call path coexist on the same har
   identity, speaks first, listens through its configured STT provider, replies
   through its configured TTS provider and keeps the conversation open until the
   SIP caller hangs up. The route is independent of the conversation provider,
-  so it works with Codex Assist and other HA conversation agents alike without
-  Home Assistant's separate VoIP integration or another SIP port.
+  so compatible HA conversation agents work without Home Assistant's separate
+  VoIP integration or another SIP port.
 - **Runtime AEC mode switching**: An `AEC Mode` select entity in Home Assistant lets you switch between SR and VOIP AEC modes at runtime without reflashing
 - **Weather at a glance**: Current conditions, temperature, and 5-day forecast updated automatically (touch displays)
 - **Mood-aware responses**: The assistant shows different expressions (happy, neutral, angry) based on the tone of its reply. Requires instructing your LLM to prepend an ASCII emoticon (`:-)` `:-(` `:-|`) to each response based on its tone
