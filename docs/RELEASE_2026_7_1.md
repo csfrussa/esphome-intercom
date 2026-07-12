@@ -163,7 +163,12 @@ last participant leaves.
 - Ring-group legs, conference members, RTP ports, registrations and transaction
   caches all have explicit limits instead of growing without bound.
 
-## 🔢 Use Phone Keys In Home Assistant Automations
+## 🧪 Experimental: Use Phone Keys In Home Assistant Automations
+
+> [!CAUTION]
+> In-call DTMF automation events are experimental in `2026.7.1`. Validate the
+> caller/source filters and the target action in a safe environment before
+> using phone keys for gates, locks or other security-sensitive controls.
 
 During a call bridged by Home Assistant, every DTMF key now fires one
 `voip_stack.dtmf` event. This makes practical actions such as **press 1 to open

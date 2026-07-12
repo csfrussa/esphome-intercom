@@ -244,7 +244,7 @@ the answered leg as `route_not_found`.
 - `voip_stack.incoming_call`: inbound call or route request.
 - `voip_stack.route_request`: HA dial-plan lookup request.
 - `voip_stack.call_ended`: terminal `ended`, `missed`, or `failed`.
-- `voip_stack.dtmf`: one DTMF key observed during an established HA-bridged
+- `voip_stack.dtmf` (**experimental in 2026.7.1**): one DTMF key observed during an established HA-bridged
   call. Initial trunk digit routing remains a separate pre-answer path.
   This is implemented only in the HA backend and adds no DTMF processing to
   ESP firmware.

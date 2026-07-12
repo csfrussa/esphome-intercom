@@ -205,7 +205,11 @@ Fields:
 Use this only for the automation fallback path. Known roster targets should be
 handled by the central dial plan without waiting for this service.
 
-## In-call DTMF Automation Event
+## Experimental: In-call DTMF Automation Event
+
+This event surface is experimental in `2026.7.1`. Automations that operate
+gates, locks or other security-sensitive devices must validate the expected
+caller/source and digit rather than matching the digit alone.
 
 During an established call bridged by HA, each negotiated RFC 4733
 `telephone-event` key or compatible in-dialog SIP INFO key fires

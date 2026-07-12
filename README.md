@@ -223,9 +223,9 @@ Additional `2026.7.1` boundaries matter when upgrading an earlier version:
   refresh without rerouting; full hold/resume renegotiation is not implemented.
 - Trunk digit routing accepts standard RTP `telephone-event` and compatible
   legacy SIP INFO DTMF; acoustic in-band tones are not decoded.
-- Established calls bridged by HA expose one `voip_stack.dtmf` event per key
-  for automations such as door opening. This is HA-only and adds no DTMF work
-  to ESP firmware.
+- **Experimental:** established calls bridged by HA expose one
+  `voip_stack.dtmf` event per key for automations such as door opening. This is
+  HA-only and adds no DTMF work to ESP firmware.
 - Disabling the parent audio processor switch is an explicit raw-microphone
   bypass on the same microphone surface.
 - Maintained generic software-AEC profiles now use the previous speaker frame
