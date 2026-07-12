@@ -234,7 +234,7 @@ no parser or additional real-time work is added to ESP firmware.
 
 ## ✅ Validation
 
-- Automated release run: 308 integration/card/tooling tests plus 26 subtests,
+- Automated release run: 309 integration/card/tooling tests plus 26 subtests,
   57 ESP VoIP tests, 19 audio-stack tests and 12 runtime-controller tests. The
   deterministic qualification matrix and seeded terminal-state regression
   remain part of the release check.

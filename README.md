@@ -244,7 +244,7 @@ Read the full migration list before upgrading custom YAMLs or automations:
 
 Minimum versions for this release:
 
-- **ESPHome**: `2026.6.4` or newer within the current stable `2026.6.x` line.
+- **ESPHome**: `2026.6.5` or newer within the current stable `2026.6.x` line.
   The maintained YAMLs are validated on the latest published ESPHome package.
 - **Home Assistant Core**: `2026.7.x` or newer for the bundled
   `voip_stack` integration and Lovelace card.
@@ -674,7 +674,7 @@ If `network.async_get_announce_addresses(hass)` returns empty, the integration l
 
 Add the external component to your ESPHome device configuration:
 
-Minimum ESPHome version: **2026.6.4**. Older ESPHome releases are not supported
+Minimum ESPHome version: **2026.6.5**. Older ESPHome releases are not supported
 by the maintained full voice YAMLs.
 
 ```yaml
@@ -1529,11 +1529,10 @@ slot, so 8 MB or 16 MB flash is recommended. The example GPIOs are placeholders:
 on ESP32-S3R8/S3R8V, GPIO33/35/36/37 are PSRAM pins, so move
 BCLK/LRCLK/DIN/LED to board-safe pins before flashing.
 
-The P4 YAMLs are still hardware-specific targets. The landscape profile has
-been field-tested with ESPHome 2026.6.4, ESP-Hosted 2.12.9, phonebook sync and
-VoIP calls, but audio playback still needs follow-up tuning for occasional
-glitches. The stable release reference devices remain the ESP32-S3 targets
-above.
+The P4 YAMLs are hardware-specific targets. The landscape profile has been
+field-tested with ESPHome 2026.6.5, ESP-Hosted 2.12.9, phonebook sync, Sendspin,
+Assist/TTS and concurrent VoIP calls. The generic ESP32-S3 profiles remain the
+portable reference for custom hardware.
 
 #### Waveshare P4 Touch C6 firmware requirement
 
@@ -1938,21 +1937,12 @@ This prevents the adaptive filter from drifting during silence, which would othe
 Running a display alongside Voice Assistant, Micro Wake Word, AEC/AFE, media
 playback and VoIP on one ESP is challenging due to RAM and CPU constraints.
 `spotpear-ball-v2-full-afe.yaml` is the compact LVGL reference. The P4 LVGL
-YAMLs use the same state model on a larger MIPI panel and now have a cleaner
-runtime profile, but remain hardware-specific targets because hosted Wi-Fi,
-MIPI/LVGL/PPA and SDIO traffic make their tuning different from normal S3
-boards.
+YAMLs use the same runtime state model on a larger MIPI panel. All maintained
+display profiles use declarative LVGL widgets and layouts; there is no legacy
+C++ page-rendering path.
 
-| Before (ili9xxx manual) | After (LVGL) |
-|---|---|
-| 14 C++ page lambdas | Declarative YAML widgets |
-| 26 `component.update` calls | Automatic dirty-region refresh |
-| `animate_display` script (40 lines) | `animimg` widget (built-in) |
-| `text_pagination_timer` script | `long_mode: SCROLL_CIRCULAR` |
-| Precomputed geometry (chord widths, x/y metrics) | LVGL layout engine |
-| Manual ping-pong frame logic | Duplicated frame list in `animimg src:` |
-
-Key benefits: lower CPU (dirty-region only), no `component.update` contention, native animation (`animimg`), mood-based backgrounds via `lv_img_set_src()`, and automatic text scrolling (`SCROLL_CIRCULAR`).
+LVGL provides dirty-region refresh, native `animimg` animation, mood-based
+backgrounds and automatic text scrolling.
 
 Timer overlays use `top_layer` with `LV_OBJ_FLAG_HIDDEN`, visible on any page. Media files are auto-resampled by the `platform: resampler` speaker in the mixer pipeline.
 
