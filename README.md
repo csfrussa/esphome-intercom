@@ -1777,8 +1777,7 @@ Pick `esp_afe` if you actually need NS, AGC or Speech Enhancement, or if you wan
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/p4-intercom-assistant.jpg" width="260"/><br/><b>P4 VoIP panel</b></td>
-    <td align="center"><img src="docs/images/p4-audio-settings.jpg" width="260"/><br/><b>P4 audio settings</b></td>
+    <td align="center"><img src="docs/images/p4-touch-overview.jpg" width="640" style="max-width: 100%; height: auto;"/><br/><b>P4 weather, Voice Assistant and VoIP keypad</b></td>
     <td align="center"><img src="docs/images/ducking-barge-in.gif" width="260"/><br/><b>Ducking and barge-in</b></td>
   </tr>
 </table>

@@ -58,8 +58,7 @@ options or old component names.
 | `docs/images/assistant-happy.jpg` | Photo | Mood-aware positive answer | Captured from Spotpear Ball v2 |
 | `docs/images/assistant-neutral.jpg` | Photo | Mood-aware neutral answer | Captured from Spotpear Ball v2 |
 | `docs/images/assistant-angry.jpg` | Photo | Mood-aware negative answer | Captured from Spotpear Ball v2 |
-| `docs/images/p4-intercom-assistant.jpg` | Photo | P4 intercom and assistant panel | Captured from Waveshare P4 Touch |
-| `docs/images/p4-audio-settings.jpg` | Photo | P4 runtime audio settings | Captured from Waveshare P4 Touch |
+| `docs/images/p4-touch-overview.jpg` | Photo | P4 weather, Voice Assistant and VoIP keypad | Updated Waveshare P4 Touch overview |
 | `docs/images/ducking-barge-in.gif` | GIF | Music, wake word, ducking, barge-in | Captured from Spotpear Ball v2 |
 
 ## Still missing
