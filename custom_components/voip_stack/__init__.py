@@ -547,6 +547,8 @@ async def _track_outbound_sip_client(
     """Keep an outbound SIP client alive and complete early-dialog INVITEs."""
     registry = _call_registry(hass)
     if result not in {"ringing", "in_call"}:
+        if registry.sip_clients.get(client.dialog_ids.call_id) is client:
+            registry.detach_client(client.dialog_ids.call_id)
         await client.close()
         return
 
@@ -1027,6 +1029,12 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         )
         return
     client, watcher = registry.detach_client(call_id) if call_id else (None, None)
+    if client is not None and watcher is None and client.dialog is None:
+        # The initial INVITE coroutine owns response processing. Ask it to
+        # defer CANCEL until RFC 3261 permits it, rather than racing a second
+        # reader against the same SIP transaction.
+        client.request_cancel()
+        client = None
     relay = relays.pop(call_id, None) if call_id else None
     media_session = media_sessions.pop(call_id, None) if call_id else None
     _release_media_reservation(media_session)
@@ -1371,6 +1379,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         last_sip_event="INVITE",
         sip_uri=route_uri,
     )
+    registry = _call_registry(hass)
+    registry.sip_clients[client.dialog_ids.call_id] = client
     result = await client.invite(
         target=uri.user,
         remote_host=uri.host,
@@ -1378,6 +1388,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         request_uri=str(uri),
         timeout=SIP_TIMER_B if use_trunk else 8.0,
     )
+    if registry.sip_clients.get(client.dialog_ids.call_id) is not client:
+        await client.close()
+        return
     if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.metadata.get("registered"):
         await _mark_sip_account_unreachable(hass, route.entry.id)
     public_result = _sip_public_state(result)

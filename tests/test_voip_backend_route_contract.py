@@ -224,9 +224,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn(
             'bucket["trunk_closed_calls"].discard(invite.call_id)', bridge_path
         )
-        self.assertIn("client.bye_or_cancel()", bridge_path)
         self.assertIn(
-            "await _close_client_and_release(client, bridge_ports)", bridge_path
+            "await _close_client_and_release(client, bridge_ports, bye=True)", bridge_path
         )
         self.assertIn(
             'return SipInviteResult(\n                        487,\n                        "Request Terminated"',

@@ -409,6 +409,7 @@ class SipProfileTest(unittest.TestCase):
         client._pending_remote_host = "192.168.1.30"
         client._pending_remote_sip_port = 5060
         client._invite_transaction_active = True
+        client._received_provisional = True
 
         client.cancel()
 
@@ -2772,6 +2773,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         client._pending_local_uri = "sip:HA@127.0.0.1:5060"
         client._pending_remote_uri = "sip:ESP@127.0.0.2:5060"
         client._invite_transaction_active = True
+        client._received_provisional = True
         call_id = client.dialog_ids.call_id
         client.queue.put_nowait(
             (
@@ -2831,6 +2833,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         client._pending_local_uri = "sip:HA@127.0.0.1:5060"
         client._pending_remote_uri = "sip:ESP@127.0.0.2:5060"
         client._invite_transaction_active = True
+        client._received_provisional = True
         call_id = client.dialog_ids.call_id
         rtp_fmt = sdp.audio_format_to_rtp(audio_format.AudioFormat(16000, "s16le", 1, 20), 96)
         answer = sdp.build_answer("127.0.0.2", "127.0.0.2", 42000, rtp_fmt).encode()
@@ -3082,6 +3085,116 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('uri="sip:+15551234567@sip.example:5060;transport=udp"', invites[1].header("Proxy-Authorization"))
         self.assertNotEqual(invites[0].header("Via"), invites[1].header("Via"))
         self.assertEqual(sip.parse_cseq(invites[1].header("CSeq")).number, sip.parse_cseq(invites[0].header("CSeq")).number + 1)
+
+    async def test_pending_cancel_waits_for_provisional_then_terminates_invite(self) -> None:
+        class FakeTransport:
+            def __init__(self) -> None:
+                self.sent: list[tuple[bytes, tuple[str, int]]] = []
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                self.sent.append((data, addr))
+
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="420",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+        )
+        transport = FakeTransport()
+        client.transport = transport  # type: ignore[assignment]
+        response_count = 0
+
+        async def read_response(_timeout: float):
+            nonlocal response_count
+            response_count += 1
+            if response_count == 1:
+                self.assertTrue(client.request_cancel())
+                status, reason, method = 100, "Trying", "INVITE"
+            elif response_count == 2:
+                status, reason, method = 200, "OK", "CANCEL"
+            else:
+                status, reason, method = 487, "Request Terminated", "INVITE"
+            headers = [
+                ("Via", f"SIP/2.0/UDP 192.168.1.10:5060;branch={client.dialog_ids.branch}"),
+                ("From", f"<sip:420@192.168.1.10:5060>;tag={client.dialog_ids.local_tag}"),
+                ("To", "<sip:3519968203@sip.example>;tag=provider"),
+                ("Call-ID", client.dialog_ids.call_id),
+                ("CSeq", f"{client._invite_cseq} {method}"),
+            ]
+            return sip.parse_message(sip.build_response(status, reason, headers)), ("192.0.2.10", 5060)
+
+        client._read_response = read_response  # type: ignore[method-assign]
+        result = await client.invite(
+            target="3519968203",
+            remote_host="192.0.2.10",
+            remote_sip_port=5060,
+            request_uri="sip:3519968203@sip.example:5060;transport=udp",
+        )
+
+        self.assertEqual(result, "cancelled")
+        messages = [sip.parse_message(raw) for raw, _addr in transport.sent]
+        self.assertEqual([message.method for message in messages], ["INVITE", "CANCEL", "ACK"])
+        invite, cancel, ack = messages
+        self.assertEqual(sip.parse_cseq(cancel.header("CSeq")).number, sip.parse_cseq(invite.header("CSeq")).number)
+        self.assertEqual(sip.parse_cseq(ack.header("CSeq")).number, sip.parse_cseq(invite.header("CSeq")).number)
+        self.assertEqual(sip.parse_via(cancel.header("Via")).branch, sip.parse_via(invite.header("Via")).branch)
+        self.assertEqual(sip.parse_via(ack.header("Via")).branch, sip.parse_via(invite.header("Via")).branch)
+
+    async def test_invite_transaction_survives_owner_task_cancellation(self) -> None:
+        class FakeTransport:
+            def __init__(self) -> None:
+                self.sent: list[tuple[bytes, tuple[str, int]]] = []
+
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                self.sent.append((data, addr))
+
+        client = sip_client.SipCallClient(
+            local_ip="192.168.1.10",
+            local_name="HA",
+            local_sip_port=5060,
+            local_rtp_port=41000,
+        )
+        transport = FakeTransport()
+        client.transport = transport  # type: ignore[assignment]
+        responses: asyncio.Queue[tuple[int, str, str]] = asyncio.Queue()
+
+        async def read_response(_timeout: float):
+            status, reason, method = await responses.get()
+            headers = [
+                ("Via", f"SIP/2.0/UDP 192.168.1.10:5060;branch={client.dialog_ids.branch}"),
+                ("From", f"<sip:HA@192.168.1.10:5060>;tag={client.dialog_ids.local_tag}"),
+                ("To", "<sip:ESP@192.0.2.10>;tag=remote"),
+                ("Call-ID", client.dialog_ids.call_id),
+                ("CSeq", f"{client._invite_cseq} {method}"),
+            ]
+            return sip.parse_message(sip.build_response(status, reason, headers)), ("192.0.2.10", 5060)
+
+        client._read_response = read_response  # type: ignore[method-assign]
+        owner = asyncio.create_task(
+            client.invite(
+                target="ESP",
+                remote_host="192.0.2.10",
+                remote_sip_port=5060,
+                request_uri="sip:ESP@192.0.2.10:5060;transport=udp",
+            )
+        )
+        while not transport.sent:
+            await asyncio.sleep(0)
+        owner.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await owner
+        self.assertIsNotNone(client._invite_task)
+        assert client._invite_task is not None
+        self.assertFalse(client._invite_task.done())
+
+        responses.put_nowait((100, "Trying", "INVITE"))
+        responses.put_nowait((200, "OK", "CANCEL"))
+        responses.put_nowait((487, "Request Terminated", "INVITE"))
+        self.assertEqual(await client._invite_task, "cancelled")
+        self.assertEqual(
+            [sip.parse_message(raw).method for raw, _addr in transport.sent],
+            ["INVITE", "CANCEL", "ACK"],
+        )
 
     async def test_invite_treats_183_session_progress_as_ringing(self) -> None:
         sent: list[bytes] = []

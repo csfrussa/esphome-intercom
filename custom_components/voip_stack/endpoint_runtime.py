@@ -475,11 +475,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             ports.release()
 
     async def _close_outbound_leg(attempt: OutboundLeg, *, cancel: bool = False, bye_or_cancel: bool = False) -> None:
+        if cancel:
+            async def _finish_cancel() -> None:
+                try:
+                    with contextlib.suppress(Exception):
+                        await attempt.client.terminate(timeout=RING_GROUP_TIMEOUT_S)
+                    await attempt.client.close()
+                finally:
+                    attempt.ports.release()
+
+            create_runtime_task(hass, _finish_cancel())
+            return
         try:
-            if cancel:
-                with contextlib.suppress(Exception):
-                    attempt.client.bye_or_cancel()
-            elif bye_or_cancel:
+            if bye_or_cancel:
                 with contextlib.suppress(Exception):
                     await attempt.client.terminate()
             await attempt.client.close()
@@ -1461,8 +1469,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 await manager.leave_call(client.dialog_ids.call_id, reason=terminal_reason)
             except asyncio.CancelledError:
-                with contextlib.suppress(Exception):
-                    client.bye_or_cancel()
                 raise
             except Exception as err:
                 _LOGGER.debug("SIP conference member invite failed member=%s: %s", attempt.member, err)
@@ -2041,9 +2047,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         "SIP bridge invite completed after caller cancelled call_id=%s; closing outbound leg",
                         invite.call_id,
                     )
-                    with contextlib.suppress(Exception):
-                        client.bye_or_cancel()
-                    await _close_client_and_release(client, bridge_ports)
+                    await _close_client_and_release(client, bridge_ports, bye=True)
                     return SipInviteResult(
                         487,
                         "Request Terminated",
