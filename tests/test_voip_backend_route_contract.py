@@ -694,6 +694,25 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("if future is not None and future.done():", hangup)
         self.assertIn("_pending_routes(hass).pop(call_id, None)", hangup)
 
+    def test_ring_group_ha_winner_publishes_connected_party_to_esp_mirrors(self) -> None:
+        ring_group = self.source[
+            self.source.index("async def _run_ring_group_call(") : self.source.index(
+                "async def _ring_conference_members("
+            )
+        ]
+        ha_winner = ring_group[
+            ring_group.index("if ha_winner:") : ring_group.index(
+                "if not isinstance(winner, OutboundLeg):"
+            )
+        ]
+        self.assertIn("connected_party = _ha_peer_name(hass)", ha_winner)
+        self.assertIn("_set_sip_bridge_call_state(", ha_winner)
+        self.assertIn("callee=entry.display_name", ha_winner)
+        self.assertIn("peer_name=connected_party", ha_winner)
+        self.assertIn("dialed_target=entry.display_name", ha_winner)
+        self.assertIn("connected_party=connected_party", ha_winner)
+        self.assertIn("answered_by=connected_party", ha_winner)
+
     def test_ring_group_external_winner_publishes_connected_party(self) -> None:
         ring_group = self.source[
             self.source.index("async def _run_ring_group_call(") : self.source.index(

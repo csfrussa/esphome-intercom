@@ -80,6 +80,7 @@ class VoipStackCard extends HTMLElement {
     this._mirrorKeypadOpen = false;
     this._mirrorManualTarget = "";
     this._lastKnownMirrorDestination = "";
+    this._mirroredConnectedPeer = "";
     this._softphoneStateLoaded = false;
     this._softphoneStateLoading = false;
 
@@ -234,7 +235,19 @@ class VoipStackCard extends HTMLElement {
     const data = event?.data || {};
     if (!this._eventConcernsThisCard(data)) return;
     const state = String(data.state || data.sip_state || "").toLowerCase();
+    if (state === "in_call" || state === "answering") {
+      this._mirroredConnectedPeer = String(
+        data.connected_party || data.answered_by || data.peer_name || "",
+      ).trim();
+      this._render();
+      return;
+    }
+    if (["calling", "remote_ringing", "ringing", "incoming", "connecting"].includes(state)) {
+      this._mirroredConnectedPeer = "";
+      return;
+    }
     if (!["idle", "busy", "declined", "cancelled", "media_incompatible", "transport_unreachable", "auth_required_unsupported", "error"].includes(state)) return;
+    this._mirroredConnectedPeer = "";
     const reason = data.terminal_reason || data.reason || state;
     const peer = data.target || data.dialed_target || data.peer_name || data.callee || "";
     this._captureEndReason("terminal", reason, data.origin || "remote", peer);
@@ -1303,7 +1316,10 @@ class VoipStackCard extends HTMLElement {
         break;
       case "in_call":
       case "answering":
-        statusText = `In Call: ${caller || destination || "Active"}`;
+        statusText = `In Call: ${
+          (!this._isHaSoftphoneMode() && this._mirroredConnectedPeer) ||
+          caller || destination || "Active"
+        }`;
         statusClass = "in_call";
         showHangup = true;
         break;

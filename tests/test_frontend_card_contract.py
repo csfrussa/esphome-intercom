@@ -416,6 +416,20 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('els.keypadBtn.setAttribute("aria-expanded"', source)
         self.assertIn('els.settingsBtn.setAttribute("aria-expanded"', source)
 
+    def test_ring_group_mirror_replaces_group_with_answering_endpoint(self) -> None:
+        source = CARD.read_text()
+        handler = _method_body(source, "_onMirroredBridgeStateEvent")
+        self.assertIn('state === "in_call" || state === "answering"', handler)
+        self.assertIn(
+            "data.connected_party || data.answered_by || data.peer_name",
+            handler,
+        )
+        self.assertIn('this._mirroredConnectedPeer = ""', handler)
+        self.assertIn(
+            "(!this._isHaSoftphoneMode() && this._mirroredConnectedPeer)",
+            source,
+        )
+
     def test_editor_only_lists_esps_and_cleans_retry_timer(self) -> None:
         editor = self.source[self.source.index("class VoipStackCardEditor") :]
         self.assertIn("const mirrorDevices = this._devices.filter(d => !d.softphone)", editor)

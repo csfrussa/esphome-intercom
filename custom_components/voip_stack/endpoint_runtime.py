@@ -1158,6 +1158,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 return
             if ha_winner:
                 _pending_routes(hass).pop(invite.call_id, None)
+                connected_party = _ha_peer_name(hass)
                 local_rtp_port = _allocate_sip_rtp_port(hass)
                 answer = build_answer_directional(
                     local_ip,
@@ -1197,6 +1198,27 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     route_kind=GROUP_TYPE_RING,
                     sip_status_code=200,
                     last_sip_event="SIP_RESPONSE",
+                )
+                # Mirror the same established-call contract used when a SIP
+                # endpoint wins: retain the group as dialed target and expose
+                # the HA softphone as the party that actually answered.
+                _set_sip_bridge_call_state(
+                    hass,
+                    CallState.IN_CALL.value,
+                    caller=invite.caller,
+                    callee=entry.display_name,
+                    peer_name=connected_party,
+                    call_id=invite.call_id,
+                    dialed_target=entry.display_name,
+                    connected_party=connected_party,
+                    answered_by=connected_party,
+                    selected_tx_format=invite.send_format.audio_format.wire_token(),
+                    selected_rx_format=invite.recv_format.audio_format.wire_token(),
+                    selected_tx_rtp_format=invite.send_format.wire_token(),
+                    selected_rx_rtp_format=invite.recv_format.wire_token(),
+                    sip_status_code=200,
+                    last_sip_event="SIP_RESPONSE",
+                    route_kind=GROUP_TYPE_RING,
                 )
                 return
             _pending_routes(hass).pop(invite.call_id, None)
