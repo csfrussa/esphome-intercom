@@ -184,6 +184,18 @@ Its audio path was qualified with Sendspin, TTS and VoIP active together; the
 same state-transition probes cover WS3 and Spotpear without adding production
 polling or fixed delays to their real-time paths.
 
+<p align="center">
+  <img
+    src="docs/images/esp-mirror-card-keypad-options.png"
+    alt="ESP mirror card with keypad and endpoint options expanded"
+    width="420"
+    style="max-width: 100%; height: auto;"
+  >
+</p>
+
+_ESP mirror keypad and endpoint Options shown together, including Auto Answer,
+DND, extension and group controls._
+
 > [!IMPORTANT]
 > `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field
 > testing. It is intentionally not offered through HACS; the normal HACS path
