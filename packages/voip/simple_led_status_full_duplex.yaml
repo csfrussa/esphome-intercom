@@ -86,13 +86,25 @@ script:
                                   condition:
                                     voip_stack.is_calling:
                                   then:
-                                    - light.turn_on:
-                                        id: status_led
-                                        red: 100%
-                                        green: 50%
-                                        blue: 0%
-                                        brightness: 100%
-                                        effect: Calling
+                                    - if:
+                                        condition:
+                                          voip_stack.is_remote_ringing:
+                                        then:
+                                          - light.turn_on:
+                                              id: status_led
+                                              red: 100%
+                                              green: 50%
+                                              blue: 0%
+                                              brightness: 100%
+                                              effect: Ringing
+                                        else:
+                                          - light.turn_on:
+                                              id: status_led
+                                              red: 100%
+                                              green: 50%
+                                              blue: 0%
+                                              brightness: 100%
+                                              effect: Calling
                                   else:
                                     - if:
                                         condition:

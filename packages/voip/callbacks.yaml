@@ -27,6 +27,7 @@ voip_stack:
   # device YAML flips the label from "Calling X..." to "X is ringing..."
   # in `ui_call_dest_ringing` (defined per-device).
   on_dest_ringing:
+    - script.execute: update_status
     - script.execute:
         id: ui_call_dest_ringing
         peer: !lambda 'return peer;'
