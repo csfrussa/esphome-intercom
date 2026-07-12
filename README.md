@@ -124,7 +124,7 @@ LVGL button, automation, service call or Lovelace card.
 
 ### 🗣️ Your Home Assistant Voice Assistant Now Has A Phone Extension
 
-`2026.7.1-dev` can publish any native Home Assistant Assist pipeline as a
+`2026.7.1` can publish any native Home Assistant Assist pipeline as a
 normal destination in the shared phonebook. Choose an extension, use HA's
 preferred assistant or select a specific pipeline, then call it from an ESP
 intercom, a registered SIP phone or an external number arriving through your
@@ -200,14 +200,9 @@ polling or fixed delays to their real-time paths.
 _ESP mirror keypad and endpoint Options shown together, including Auto Answer,
 DND, extension and group controls._
 
-> [!IMPORTANT]
-> `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field
-> testing. It is intentionally not offered through HACS; the normal HACS path
-> remains on stable `2026.7.0`.
-
 Explore the release:
 
-- 🚀 [Complete `2026.7.1-dev` release notes](docs/RELEASE_2026_7_1_DEV.md)
+- 🚀 [Complete `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)
 - 🧭 [Release history](docs/WHATS_NEW.md)
 - ⚠️ [Breaking Changes](docs/BREAKING_CHANGES.md)
 - 📦 [Stable `2026.7.0` release notes](docs/RELEASE_2026_7_0.md)
@@ -218,8 +213,7 @@ The `2026.7.0` SIP migration remains the breaking baseline: ESP devices are SIP
 phones, Home Assistant is a SIP softphone/router/bridge/trunk endpoint, and the
 old project-specific call-control path is not a fallback.
 
-Additional `2026.7.1-dev` boundaries matter when upgrading an earlier dev
-snapshot:
+Additional `2026.7.1` boundaries matter when upgrading an earlier version:
 
 - ESP structured contacts use `ip` and `transport`; the richer
   `address`/`sip_uri` schema belongs to the HA phonebook.
@@ -575,9 +569,8 @@ phonebook `extension` such as `101` before HA falls back to the default target.
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
 HACS already includes this repository, so normal installations do not need a
-Custom Repository entry. Development pre-releases such as `v2026.7.1-dev` are
-not distributed through HACS and must be tested manually from their GitHub tag
-or a fresh `dev` checkout, following the corresponding release note.
+Custom Repository entry. Install or upgrade the stable integration through
+HACS, then restart Home Assistant when prompted.
 
 #### After Every VoIP Stack Upgrade: Hard Refresh The Card Page
 

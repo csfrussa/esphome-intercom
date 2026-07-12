@@ -1,16 +1,12 @@
 # Breaking changes
 
-## 2026.7.1-dev: Development Contract Updates
+## 2026.7.1: Contract Updates
 
 The stable `2026.7.0` migration below remains the main breaking change.
-`2026.7.1-dev` additionally makes several previously implicit development
-contracts explicit. Review them before testing an older custom dev YAML,
+`2026.7.1` additionally makes several previously implicit
+contracts explicit. Review them before upgrading an older custom YAML,
 automation, SIP client or card fork.
 
-- **Manual pre-release only.** Do not install this GitHub pre-release through
-  HACS or enable HACS pre-release tracking for it. HACS installations should
-  remain on stable `2026.7.0`; test `v2026.7.1-dev` from a source checkout or
-  tag.
 - **ESP contact schema.** Structured ESP `static_contacts` and
   `voip_stack.add_contact` entries use `name`, optional `ip`, `port`,
   `rtp_port` and `transport`. `address`, `sip_uri`, `extension`, `number`,
@@ -44,7 +40,7 @@ automation, SIP client or card fork.
   network.
 
 The full change and validation summary is in
-[`RELEASE_2026_7_1_DEV.md`](RELEASE_2026_7_1_DEV.md).
+[`RELEASE_2026_7_1.md`](RELEASE_2026_7_1.md).
 
 ## 2026.7.0: ESPHome devices are SIP phones now
 

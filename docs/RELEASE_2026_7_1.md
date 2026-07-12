@@ -1,13 +1,8 @@
-# 2026.7.1-dev: Assist By Phone, Groups And A Stronger VoIP Stack
+# 2026.7.1: Assist By Phone, Groups And A Stronger VoIP Stack
 
-<!-- Canonical source for the v2026.7.1-dev GitHub release body. -->
+<!-- Canonical source for the v2026.7.1 GitHub release body. -->
 
-> [!IMPORTANT]
-> This is a GitHub development pre-release for manual testing, not a HACS
-> release. Keep HACS pre-release tracking disabled; the normal HACS path remains
-> on stable `2026.7.0`.
-
-`2026.7.1-dev` contains the changes made after stable `2026.7.0`. It expands
+`2026.7.1` contains the changes made after stable `2026.7.0`. It expands
 the Home Assistant phone system with real ring groups and conference rooms,
 makes the Lovelace card more useful for both HA and ESP phones, and hardens the
 call and audio paths for everyday use.
@@ -41,7 +36,7 @@ reserved automatically.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1-dev/docs/images/voice-assistant-extension.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1/docs/images/voice-assistant-extension.png"
     alt="Voice assistant extension and Assist pipeline configuration"
     width="590"
     style="max-width: 100%; height: auto;"
@@ -99,7 +94,7 @@ both HA's preferred Assist pipeline and a specifically selected pipeline._
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1-dev/docs/images/esp-mirror-card-keypad-options.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.7.1/docs/images/esp-mirror-card-keypad-options.png"
     alt="ESP mirror card with keypad and endpoint options"
     width="420"
     style="max-width: 100%; height: auto;"
@@ -252,7 +247,7 @@ no parser or additional real-time work is added to ESP firmware.
 ## ⚠️ Boundaries To Know Before Testing
 
 Read [Breaking Changes](BREAKING_CHANGES.md) when updating an earlier
-development snapshot. In particular:
+version. In particular:
 
 - structured ESP contacts use `ip` and `transport`; richer number, extension
   and group fields belong to the HA phonebook;
@@ -263,25 +258,26 @@ development snapshot. In particular:
 - ESP SIP/RTP remains plaintext and belongs on a trusted LAN or VPN, or behind
   an SBC.
 
-## 🧪 Manual Test Installation
+## 📦 Installation And Upgrade
 
-Use the `v2026.7.1-dev` GitHub tag or a fresh `dev` checkout. Manually copy
+Install or upgrade VoIP Stack through HACS, then restart Home Assistant when
+prompted. Source installations can use the `v2026.7.1` GitHub tag and copy
 `custom_components/voip_stack` into Home Assistant's `custom_components`
-directory, restart Home Assistant and refresh the frontend cache.
+directory.
 
-For firmware testing, route the maintained project sources to their `dev`
+For firmware builds, route the maintained project sources to their stable
 branches before compiling:
 
 ```bash
 ./scripts/yaml_paths.sh remote \
-  --intercom dev \
-  --voip dev \
-  --audio dev \
-  --runtime dev
+  --intercom main \
+  --voip main \
+  --audio main \
+  --runtime main
 ./scripts/yaml_paths.sh check
 ```
 
 After restart, both the installed integration and the card footer must report
-`v2026.7.1-dev`. When reporting a regression, include the YAML, ESPHome and
+`v2026.7.1`. When reporting a regression, include the YAML, ESPHome and
 Home Assistant versions, the caller and destination, and the negotiated audio
 formats.

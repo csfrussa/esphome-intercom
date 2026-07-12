@@ -3,10 +3,9 @@
 This page is a short release index. The complete notes for each version live in
 the linked versioned document, which is also the canonical GitHub release body.
 
-## 2026.7.1-dev: Assist By Phone, Groups And A Stronger VoIP Stack
+## 2026.7.1: Assist By Phone, Groups And A Stronger VoIP Stack
 
-`2026.7.1-dev` is a manual GitHub pre-release, not a HACS release. It contains
-only changes made after stable `2026.7.0`.
+`2026.7.1` contains only changes made after stable `2026.7.0`.
 
 The main additions are telephone access to any native Home Assistant Assist
 pipeline, HA-owned ring groups and conference rooms, extension and group
@@ -29,9 +28,9 @@ music, TTS and VoIP load.
 _The optional setup step uses an extension chosen by the user and either HA's
 preferred Assist pipeline or a specific pipeline._
 
-Read the complete user-facing pre-release note:
+Read the complete user-facing release note:
 
-- [`2026.7.1-dev` release notes](RELEASE_2026_7_1_DEV.md)
+- [`2026.7.1` release notes](RELEASE_2026_7_1.md)
 - [Breaking Changes](BREAKING_CHANGES.md)
 
 ## 2026.7.0: ESPHome Devices Are VoIP Phones Now
