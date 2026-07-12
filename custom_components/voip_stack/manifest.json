@@ -1,15 +1,15 @@
 {
   "domain": "voip_stack",
   "name": "VoIP Stack",
+  "after_dependencies": ["conversation", "esphome", "stt", "tts"],
   "codeowners": ["@n-IA-hane"],
   "config_flow": true,
   "dependencies": ["assist_pipeline", "http", "lovelace", "network", "zeroconf"],
-  "after_dependencies": ["conversation", "esphome", "stt", "tts"],
   "documentation": "https://github.com/n-IA-hane/esphome-intercom",
   "integration_type": "service",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/n-IA-hane/esphome-intercom/issues",
   "loggers": ["custom_components.voip_stack"],
   "requirements": ["numpy>=2.0.0"],
-  "version": "2026.7.1-dev"
+  "version": "2026.7.1"
 }
