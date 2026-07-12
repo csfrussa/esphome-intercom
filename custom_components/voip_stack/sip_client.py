@@ -1111,6 +1111,8 @@ class SipCallClient:
             )
             return False
         self._cancel_requested = True
+        if self._received_provisional:
+            return self._send_cancel()
         return True
 
     def _send_cancel(self) -> bool:
@@ -1144,12 +1146,10 @@ class SipCallClient:
 
     def cancel(self) -> bool:
         """Cancel now, or defer until the INVITE receives a provisional response."""
-        if not self.request_cancel():
-            return False
-        if not self._received_provisional:
+        sent_or_deferred = self.request_cancel()
+        if sent_or_deferred and not self._received_provisional:
             _LOGGER.info("SIP CANCEL deferred until provisional call_id=%s", self.dialog_ids.call_id)
-            return True
-        return self._send_cancel()
+        return sent_or_deferred
 
     def bye_or_cancel(self) -> None:
         if self.dialog is not None:
