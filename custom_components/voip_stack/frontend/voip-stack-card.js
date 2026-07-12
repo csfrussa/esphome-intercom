@@ -1532,8 +1532,15 @@ class VoipStackCard extends HTMLElement {
         border-radius: 4px; background: var(--voip-control-surface);
         background-color: var(--voip-control-surface);
         color: var(--primary-text-color); font-size: 0.95em;
-        color-scheme: light dark;
         box-shadow: none;
+      }
+      /* Native select popups are painted outside the shadow/card surface.
+       * Chromium can otherwise combine the OS white popup with HA's dark-theme
+       * white text. Keep the closed control themed, but give popup rows a
+       * matched system foreground/background pair. */
+      .destination-select option {
+        color: CanvasText;
+        background-color: Canvas;
       }
       .destination-select[hidden] { display: none; }
       .destination-label {

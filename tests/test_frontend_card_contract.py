@@ -430,6 +430,12 @@ class FrontendCardContractTest(unittest.TestCase):
             source,
         )
 
+    def test_softphone_native_contact_popup_keeps_readable_system_contrast(self) -> None:
+        source = CARD.read_text()
+        self.assertIn(".destination-select option {", source)
+        self.assertIn("color: CanvasText;", source)
+        self.assertIn("background-color: Canvas;", source)
+
     def test_editor_only_lists_esps_and_cleans_retry_timer(self) -> None:
         editor = self.source[self.source.index("class VoipStackCardEditor") :]
         self.assertIn("const mirrorDevices = this._devices.filter(d => !d.softphone)", editor)
