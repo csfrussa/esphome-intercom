@@ -83,6 +83,13 @@ both HA's preferred Assist pipeline and a specifically selected pipeline._
   an omitted `name` or `title` leaves no empty header row.
 - 🔔 Ringtone, DND and terminal call state no longer race normal card refresh or
   cleanup paths.
+- 🔌 ESP mirror availability follows the bound Home Assistant entity live. A
+  card becomes unavailable when its ESP leaves and recovers when it returns,
+  without a dashboard refresh or polling timer.
+- 🖱️ Internal card scrolling hands the remaining wheel/trackpad movement back
+  to the dashboard at the card boundary.
+- 🎨 Native contact selectors remain readable on both light and dark themes,
+  including the operating-system popup rows.
 - 🔒 Caller and destination labels are inserted as text, so SIP display strings
   cannot become card markup.
 
@@ -106,7 +113,9 @@ participate.
 
 The first member to answer wins. Other early legs are cancelled, and a late
 answer cannot steal or duplicate the established call. Group contacts are
-created from live membership and disappear when no endpoint declares them.
+created from live membership and disappear when no endpoint declares them. The
+card keeps the group name while dialing/ringing, then shows the actual endpoint
+that answered, including the Home Assistant softphone.
 
 ## 🎙️ Conference Groups
 
@@ -192,31 +201,49 @@ no parser or additional real-time work is added to ESP firmware.
   a normal phone earpiece without requiring speakerphone.
 - ESP audio conversion state and working buffers are prepared outside the
   per-frame path.
+- Generic software-AEC presets use a previous-frame reference by default. The
+  optional ring-buffer reference is aligned to microphone-consumer sessions so
+  a new call cannot begin against stale playback audio.
 - The AFE worker is persistent and event-driven. It sleeps on notifications
   while idle; no periodic delay was added to hide contention.
 - Single-microphone and dual-microphone AFE paths retain their appropriate
   Espressif processing routes.
-- Music, TTS and bidirectional VoIP were exercised together while monitoring
-  heap, PSRAM and main-loop latency.
+- On Waveshare P4, the real-time I2S/AFE bridge stays in internal RAM and the
+  calibrated AEC path remains active under Sendspin and VoIP load. Music, TTS
+  and bidirectional VoIP were exercised together while monitoring heap, PSRAM
+  and main-loop latency.
+
+## 🖥️ Device Runtime And P4 Touch
+
+- P4's phone panel now switches explicitly between **Contacts** and a local
+  numeric **Keyboard**, avoiding gesture conflicts with the surrounding LVGL
+  page.
+- Assist, media, timer, ringtone, call, LED and ducking decisions converge
+  through the shared runtime controller. Device callbacks report facts; they do
+  not maintain a parallel display state machine.
+- Transition probes record every committed state rather than only the final
+  snapshot. Qualification rejects intermediate neutral/media screens between
+  Assist thinking and replying, stale Sendspin artwork after stop, and restored
+  ducking while a call is active.
+- Production profiles keep verbose probes disabled; diagnostics are opt-in and
+  add no delay to the real-time loop.
 
 ## ✅ Validation
 
-- Home Assistant, integration, card and tooling: 305 tests plus 25 subtests.
-- ESP VoIP stack: 57 tests.
-- Audio and AFE: 19 tests.
-- Runtime controller: 11 tests.
-- Virtual call scenarios: 27 passed.
-- Qualification matrix: 2,162 valid combinations.
-- Terminal-state regression: 1,000 seeded repetitions.
-- Real WS3 and Spotpear calls covered HA-to-ESP, ESP-to-HA, ESP-to-ESP,
+- Automated release run: 308 integration/card/tooling tests plus 26 subtests,
+  57 ESP VoIP tests, 19 audio-stack tests and 12 runtime-controller tests. The
+  deterministic qualification matrix and seeded terminal-state regression
+  remain part of the release check.
+- Real WS3, Spotpear and Waveshare P4 calls covered HA-to-ESP, ESP-to-HA, ESP-to-ESP,
   registered SIP endpoints, callers absent from the phonebook, ring groups,
   conferences, DND, Auto Answer, trunk cancellation and immediate reuse.
 - Assist validation covered a local HA-registered SIP account over Opus 48 kHz
   and an external mobile caller over trunk PCMA 8 kHz. The external call kept
   one conversation across three spoken turns, including a Home Assistant
   control request, with zero RTP drops or media errors.
-- Both S3 targets completed clean ESPHome 2026.6.5 builds, concurrent OTA
-  deployment and return-to-online checks.
+- WS3, Spotpear, P4 and generic/native profiles completed clean ESPHome 2026.6.5
+  builds and return-to-online checks. P4 additionally ran concurrent Sendspin,
+  Assist/TTS and VoIP state/audio qualification.
 
 ## ⚠️ Boundaries To Know Before Testing
 

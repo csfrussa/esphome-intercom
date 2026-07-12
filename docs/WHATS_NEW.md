@@ -12,10 +12,13 @@ The main additions are telephone access to any native Home Assistant Assist
 pipeline, HA-owned ring groups and conference rooms, extension and group
 settings for HA and registered SIP endpoints, an expanded ESP mirror keypad and
 Options view, a resizable phonebook mode integrated into the same card, and
-more predictable SIP, browser-audio and ESP real-time behavior. Hang Up remains
-available during outbound call setup, including slow or unreachable targets.
+more predictable SIP, browser-audio and ESP real-time behavior. The final
+release pass also stabilizes P4 audio and Assist UI transitions under concurrent
+media, aligns software-AEC presets, and makes cards recover dynamically when an
+ESP disconnects and returns. Hang Up remains available during outbound call
+setup, including slow or unreachable targets.
 
-The qualification covered real WS3 and Spotpear hardware, a multi-turn Assist
+The qualification covered real WS3, Spotpear and Waveshare P4 hardware, a multi-turn Assist
 call from an external mobile number through the configured trunk, a registered
 SIP account calling Assist over Opus, HA and ESP calls, unknown SIP callers,
 groups, conferences, trunk cancellation, 8/16/48 kHz media and concurrent

@@ -30,6 +30,12 @@ automation, SIP client or card fork.
   enabled, unavailable processed output fails closed to silence. Disabling the
   parent AEC switch explicitly publishes converted raw microphone audio on the
   same public microphone surface.
+- **Software-AEC reference lifecycle.** Maintained generic single- and dual-bus
+  profiles now default to `aec_reference: previous_frame`. The optional
+  `ring_buffer` mode remains supported, but its reference is session-scoped: it
+  is cleared when the first microphone consumer starts and when the last one
+  stops, and it is not filled while no microphone consumer exists. Custom code
+  must not treat old speaker samples as a reference for a later call.
 - **Bounded reentrant runtime events.** Runtime-controller events/actions
   created during a drain stay queued for the next main-loop turn. Custom
   automations must not depend on an unbounded synchronous self-trigger chain.

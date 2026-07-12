@@ -173,6 +173,18 @@ The same card can render the shared phonebook. All three modes use Home
 Assistant Sections sizing, adapt their layout to the assigned width and height,
 and omit the header completely when no `name` or `title` is configured.
 
+The release-candidate polish pass also keeps dashboard scrolling natural at a
+card boundary, updates an ESP mirror live when its device disconnects or
+returns, preserves readable native selectors across light and dark themes, and
+shows the endpoint that actually answered a ring group instead of leaving the
+group name as the connected peer.
+
+Waveshare P4 Touch now includes an on-device Contacts/Keyboard phone view and a
+single runtime state policy for Assist, media, calls, timers, LEDs and ducking.
+Its audio path was qualified with Sendspin, TTS and VoIP active together; the
+same state-transition probes cover WS3 and Spotpear without adding production
+polling or fixed delays to their real-time paths.
+
 > [!IMPORTANT]
 > `2026.7.1-dev` is a manual GitHub pre-release for source deployment and field
 > testing. It is intentionally not offered through HACS; the normal HACS path
@@ -207,6 +219,10 @@ snapshot:
   to ESP firmware.
 - Disabling the parent audio processor switch is an explicit raw-microphone
   bypass on the same microphone surface.
+- Maintained generic software-AEC profiles now use the previous speaker frame
+  as their reference. Custom profiles that deliberately select the ring-buffer
+  reference retain that option, but should not rely on stale reference audio
+  surviving across microphone-consumer sessions.
 
 Read the full migration list before upgrading custom YAMLs or automations:
 [`docs/BREAKING_CHANGES.md`](docs/BREAKING_CHANGES.md).
