@@ -42,15 +42,50 @@ version is published from `main`.
   transaction owner. Losing legs finish their standard teardown in the
   background without delaying the winning call.
 
+## 🧭 Home Assistant Automations Can Override The Dial Plan
+
+- The phonebook remains the complete default dial plan. With no matching
+  automation, calls behave exactly as before.
+- A native `event.voip_stack_call` entity exposes incoming/outgoing calls,
+  ringing, answer/connection, terminal results, explicit timeout requests and
+  in-call DTMF in Home Assistant's entity and automation UI.
+- Every HA-owned call carries a stable Call-ID, monotonic state sequence and
+  bounded route history. Optional state/sequence guards reject stale automation
+  runs instead of redirecting a call that has already changed.
+- `voip_stack.forward` can move the same pending or ringing call to an ESP,
+  registered SIP phone, ring group or Assist. Re-forwarding while the remote
+  phone rings sends standards-based CANCEL before starting the replacement leg.
+- `voip_stack.set_deadline` emits a calling/ringing timeout occurrence without
+  hiding any route action. A second automation may forward an unanswered HA
+  call to Assist, while an answered or otherwise changed call invalidates its
+  old deadline automatically.
+- Failed routes support `resume`, `terminate` and `busy`. Resume returns a
+  pre-answered trunk caller to the normal HA ringing path using the same RTP
+  reservation instead of leaving silent media behind.
+- Direct ESP-to-ESP calls remain media-direct and observable-only; automation
+  routing is offered only when HA actually owns the call.
+
+See the [Automation Dial Plan guide](AUTOMATION_DIALPLAN.md) for copyable
+conditional-forward and unanswered-call-to-Assist examples.
+
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 315 tests and 26 subtests passing.
+- Full backend and frontend test suite: 324 tests and 34 subtests passing.
 - Python/Ruff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
 - Call state remained idle after cancellation and the remote leg stopped
   ringing; every state for the same call ID remained `outgoing` through
   teardown.
+- Real Wildix `426` to HA trunk `427` calls covered: unchanged default HA
+  ringing, immediate automation forward to Assist, four spaced SIP INFO digits
+  selecting Assist, caller BYE during route selection, failed-route resume,
+  explicit and stale deadlines, ring-group forwarding and a second forward
+  while a registered bareSIP phone was ringing.
+- The multi-hop test observed a real SIP CANCEL at the replaced bareSIP phone;
+  the surviving call kept its source Call-ID and recorded both route-history
+  entries. In-call SIP INFO toward Assist emitted one canonical `dtmf`
+  occurrence while the initial extension digits remained isolated.
 
 ## Known Follow-Up Areas
 

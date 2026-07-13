@@ -187,10 +187,12 @@ except itself.
 
 If trunk is not registered, HA rejects with `trunk_unavailable`.
 
-## Route Requested Fallback
+## Route Decision Fallback
 
-`route_requested` is the automation escape hatch, not the normal path for
-known roster targets.
+The legacy `voip_stack.route_request` event is the automation escape hatch, not
+the normal path for known roster targets. Its native event-entity occurrence is
+`incoming_call` with canonical state `connecting`; `route_requested` is not a
+public call state.
 
 It is expected when:
 

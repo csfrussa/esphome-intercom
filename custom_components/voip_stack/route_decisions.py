@@ -26,12 +26,36 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
     ).strip()
     if action in {"forward", "bridge"} and not destination:
         raise ServiceValidationError(f"{action} requires destination, target, or call")
-    route = call_registry(hass).pending_routes.get(call_id)
+    registry = call_registry(hass)
+    route = registry.pending_routes.get(call_id)
     if route is None:
         raise ServiceValidationError(f"no pending SIP route for call_id {call_id}")
+    context = registry.event_context(call_id)
+    expected_state = str(data.get("expected_state") or "").strip().lower()
+    expected_sequence = int(data.get("expected_sequence") or 0)
+    if expected_state and (context is None or context.state != expected_state):
+        actual = context.state if context is not None else "ended"
+        raise ServiceValidationError(
+            f"call_id {call_id} is {actual}, expected {expected_state}"
+        )
+    if expected_sequence and (
+        context is None or context.sequence != expected_sequence
+    ):
+        actual = context.sequence if context is not None else 0
+        raise ServiceValidationError(
+            f"call_id {call_id} sequence is {actual}, expected {expected_sequence}"
+        )
+    if action in {"forward", "bridge"} and context is not None and len(context.route_history) >= 8:
+        raise ServiceValidationError(f"call_id {call_id} exceeded 8 routing hops")
     future = route.get("future")
     if future is None or future.done():
         raise ServiceValidationError(f"SIP route for call_id {call_id} is no longer decidable")
+    registry.record_route(
+        call_id,
+        action=action,
+        destination=destination,
+        source="automation",
+    )
     future.set_result(
         {
             "action": action,

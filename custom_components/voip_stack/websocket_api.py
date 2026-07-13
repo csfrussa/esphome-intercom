@@ -11,6 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .call_registry import CallRegistry
+from .endpoint_lifecycle import call_registry
 from .const import (
     CONF_DEBUG_MODE,
     CONF_HA_SOFTPHONE_CONFERENCE_GROUP,
@@ -172,28 +173,87 @@ def _json_event_value(value: Any) -> Any:
     return None
 
 
-def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -> None:
+def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -> dict[str, Any]:
     event = _json_event_value(payload) or {}
-    event["scope"] = scope
+    event["scope"] = event.get("scope") or scope
+    event.setdefault("origin", event["scope"])
+    event.setdefault("direction", "")
+    event.setdefault("caller", "")
+    event.setdefault("callee", "")
+    event.setdefault("dialed_target", event.get("target") or event.get("callee") or "")
+    event.setdefault("route_kind", "")
     event["state"] = _sip_public_state(str(event.get("state") or ""))
     event["sip_state"] = event["state"]
     reason = event.get("reason") or event.get("terminal_reason")
     event["type"] = _call_event_type(event["state"], str(reason) if reason is not None else None)
+    call_id = str(event.get("call_id") or "").strip()
+    registry = call_registry(hass)
+    event["automation_control"] = (
+        "routable"
+        if call_id in registry.pending_invites
+        else "ha_anchored"
+        if call_id and (
+            registry.event_context(call_id) is not None
+            or registry.resolve_session_id(call_id) in registry.sessions
+        )
+        else "observed"
+    )
+    event.update(registry.event_fields(call_id, event["state"]))
     hass.bus.async_fire(CALL_EVENT, event)
     hass.bus.async_fire(SIP_CALL_STATE_EVENT, event)
-    if event["state"] == "route_requested":
+    if event.get("route_request") or event["state"] == "route_requested":
         hass.bus.async_fire(SIP_ROUTE_REQUEST_EVENT, event)
-    if event.get("direction") == "incoming" and event["state"] in (
-        "route_requested",
-        CallState.RINGING.value,
+    if event.get("direction") == "incoming" and (
+        event.get("route_request")
+        or event["state"]
+        in (
+            "route_requested",
+            CallState.CONNECTING.value,
+            CallState.RINGING.value,
+        )
     ):
         hass.bus.async_fire(SIP_INCOMING_CALL_EVENT, event)
     if event["type"] in {"ended", "missed", "failed"}:
         hass.bus.async_fire(SIP_CALL_ENDED_EVENT, event)
+    return event
 
 
 def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone", {"dnd": False})
+
+
+def _release_ha_softphone_claim(hass: HomeAssistant, call_id: str) -> bool:
+    """Release HA's ringing ownership when the same call is routed elsewhere."""
+    store = _ha_softphone_store(hass)
+    if str(store.get("call_id") or "") != str(call_id or ""):
+        return False
+    for key in (
+        "session_device_id",
+        "caller",
+        "callee",
+        "local_name",
+        "peer_name",
+        "dialed_target",
+        "connected_party",
+        "answered_by",
+        "direction",
+        "role",
+        "call_id",
+        "target_device_id",
+        "selected_tx_format",
+        "selected_rx_format",
+        "selected_tx_rtp_format",
+        "selected_rx_rtp_format",
+        "audio_mode",
+        "route_kind",
+        "sip_uri",
+        "media_debug",
+    ):
+        store.pop(key, None)
+    store["state"] = CallState.IDLE.value
+    store["sip_state"] = CallState.IDLE.value
+    store["terminal_reason"] = ""
+    return True
 
 
 def _ha_softphone_groups(hass: HomeAssistant) -> dict[str, Any]:

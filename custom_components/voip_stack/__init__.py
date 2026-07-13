@@ -85,7 +85,7 @@ from .websocket_api import (
     _set_sip_bridge_call_state,
 )
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.EVENT, Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -613,17 +613,6 @@ async def _track_outbound_sip_client(
                 last_sip_event=client.last_sip_event or "SIP_RESPONSE",
                 sip_uri=sip_uri,
             )
-        terminal_reason = "" if public_final in {CallState.RINGING.value, CallState.IN_CALL.value} else _sip_terminal_reason(final, public_final)
-        payload = {
-            "state": public_final,
-            "scope": "sip",
-            "call_id": client.dialog_ids.call_id,
-            "target": target,
-            "terminal_reason": terminal_reason,
-        }
-        if sip_uri:
-            payload["sip_uri"] = sip_uri
-        _fire_call_event(hass, payload, "sip")
         if final not in {"ringing", "in_call"}:
             registry.detach_client(client.dialog_ids.call_id)
             registry.finish_and_pop(client.dialog_ids.call_id, reason=terminal_reason, state=public_final)
@@ -737,6 +726,13 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     call_id = str(call.data.get("call_id") or "").strip()
     if not call_id:
         call_id = _single_pending_route_call_id(hass)
+    bucket = hass.data.setdefault(DOMAIN, {})
+    forward_task = bucket.get("forward_tasks", {}).get(call_id)
+    forward_claimed = call_id in bucket.get("forward_claims", set())
+    if forward_claimed or (forward_task is not None and not forward_task.done()):
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(f"call_id {call_id} is being forwarded")
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
         return
@@ -864,6 +860,10 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
             app_reason = reason or TerminalReason.DECLINED.value
     if not call_id:
         call_id = _single_pending_route_call_id(hass)
+    forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
+    if forward_task is not None and not forward_task.done():
+        forward_task.cancel()
+        await asyncio.gather(forward_task, return_exceptions=True)
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(
             hass,
@@ -935,6 +935,10 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     call_id = str(call.data.get("call_id") or "").strip()
     if not call_id:
         call_id = _single_pending_route_call_id(hass)
+    forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
+    if forward_task is not None and not forward_task.done():
+        forward_task.cancel()
+        await asyncio.gather(forward_task, return_exceptions=True)
     if call_id and call_id in _pending_routes(hass):
         future = _pending_routes(hass)[call_id].get("future")
         if future is not None and future.done():
@@ -1008,17 +1012,6 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
             reason=TerminalReason.LOCAL_HANGUP.value,
             origin="self",
             last_sip_event="SIP_BYE",
-        )
-        _fire_call_event(
-            hass,
-            {
-                "state": CallState.IDLE.value,
-                "scope": "sip_bridge",
-                "call_id": bridge_source_call_id,
-                "dest_call_id": bridge_dest_call_id,
-                "terminal_reason": TerminalReason.LOCAL_HANGUP.value,
-            },
-            "sip",
         )
         _LOGGER.info(
             "SIP bridge hangup call_id=%s dest_call_id=%s client=%s server_bye=%s",
@@ -1105,20 +1098,10 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         reason=TerminalReason.LOCAL_HANGUP.value,
         origin="self",
         last_sip_event="SIP_BYE" if (client is not None or relay is not None or server_bye) else "SIP_HANGUP",
+        pending_closed=pending_closed,
     )
     if call_id:
         registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
-    _fire_call_event(
-        hass,
-        {
-            "state": CallState.IDLE.value,
-            "scope": "sip",
-            "call_id": call_id,
-            "pending_closed": pending_closed,
-            "terminal_reason": TerminalReason.LOCAL_HANGUP.value,
-        },
-        "sip",
-    )
     _LOGGER.info(
         "SIP hangup call_id=%s client=%s relay=%s pending_closed=%d server_bye=%s",
         call_id,
@@ -1299,17 +1282,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 selected_rx_format="16000:s16le:1:20",
                 selected_tx_rtp_format="pt=96:L16/16000/1/20ms",
                 selected_rx_rtp_format="pt=96:L16/16000/1/20ms",
-            )
-            _fire_call_event(
-                hass,
-                {
-                    "state": CallState.IN_CALL.value,
-                    "scope": "conference",
-                    "call_id": call_id,
-                    "room": room_name,
-                    "target": target,
-                },
-                "sip",
+                scope="conference",
+                room=room_name,
+                target=target,
             )
             ring_members = hass.data.setdefault(DOMAIN, {}).get("async_ring_conference_members")
             if ring_members is not None:
@@ -1450,19 +1425,6 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             last_sip_event=client.last_sip_event or "SIP_RESPONSE",
             sip_uri=route_uri,
         )
-    terminal_reason = "" if public_result in {CallState.RINGING.value, CallState.IN_CALL.value} else _sip_terminal_reason(result, public_result)
-    _fire_call_event(
-        hass,
-        {
-            "state": public_result,
-            "scope": "sip",
-            "call_id": client.dialog_ids.call_id,
-            "target": target,
-            "sip_uri": route_uri,
-            "terminal_reason": terminal_reason,
-        },
-        "sip",
-    )
     _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route_uri, result)
 
 
@@ -1478,7 +1440,39 @@ async def _handle_sip_forward_service(call: ServiceCall) -> None:
         data["action"] = "forward"
         _set_pending_route_decision(call.hass, data)
         return
+    if call_id:
+        from homeassistant.exceptions import ServiceValidationError
+
+        callback = call.hass.data.get(DOMAIN, {}).get("async_forward_call")
+        if callback is None:
+            raise ServiceValidationError("SIP endpoint is not running")
+        destination = str(
+            call.data.get("destination")
+            or call.data.get("target")
+            or call.data.get("call")
+            or ""
+        ).strip()
+        await callback(
+            call_id=call_id,
+            destination=destination,
+            on_failure=str(call.data.get("on_failure") or "resume"),
+            expected_state=str(call.data.get("expected_state") or ""),
+            expected_sequence=int(call.data.get("expected_sequence") or 0),
+        )
+        return
     await _handle_sip_call_target_service(call, force_ha_bridge=True)
+
+
+async def _handle_sip_set_deadline_service(call: ServiceCall) -> None:
+    from .call_deadlines import async_set_call_deadline
+
+    await async_set_call_deadline(call.hass, dict(call.data))
+
+
+async def _handle_sip_cancel_deadline_service(call: ServiceCall) -> None:
+    from .call_deadlines import cancel_call_deadline
+
+    cancel_call_deadline(call.hass, str(call.data.get("call_id") or ""))
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:
@@ -1503,6 +1497,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "call": _handle_sip_call_target_service,
             "forward": _handle_sip_forward_service,
             "route": _handle_sip_route_service,
+            "set_deadline": _handle_sip_set_deadline_service,
+            "cancel_deadline": _handle_sip_cancel_deadline_service,
             **account_handlers,
         },
     )

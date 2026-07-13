@@ -69,6 +69,41 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         },
         extra=vol.PREVENT_EXTRA,
     )
+    sip_forward_schema = vol.Schema(
+        {
+            **target_fields,
+            vol.Optional("source"): cv.string,
+            vol.Optional("source_device_id"): cv.string,
+            vol.Optional("source_name"): cv.string,
+            vol.Optional("call_id", default=""): cv.string,
+            vol.Optional("destination"): cv.string,
+            vol.Optional("target"): cv.string,
+            vol.Optional("call"): cv.string,
+            vol.Optional("ha_bridge", default=False): cv.boolean,
+            vol.Optional("on_failure", default="resume"): vol.In(
+                ["resume", "terminate", "busy"]
+            ),
+            vol.Optional("expected_state", default=""): cv.string,
+            vol.Optional("expected_sequence", default=0): vol.Coerce(int),
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    sip_deadline_schema = vol.Schema(
+        {
+            vol.Required("call_id"): cv.string,
+            vol.Required("phase"): vol.In(["calling", "ringing"]),
+            vol.Required("timeout"): vol.All(
+                vol.Coerce(float), vol.Range(min=0.1, max=3600)
+            ),
+            vol.Optional("expected_state", default=""): cv.string,
+            vol.Optional("expected_sequence", default=0): vol.Coerce(int),
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    sip_cancel_deadline_schema = vol.Schema(
+        {vol.Required("call_id"): cv.string},
+        extra=vol.PREVENT_EXTRA,
+    )
     sip_route_schema = vol.Schema(
         {
             vol.Required("call_id"): cv.string,
@@ -81,6 +116,8 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("status", default=0): vol.Coerce(int),
             vol.Optional("reason", default=""): cv.string,
             vol.Optional("decline_reason", default=""): cv.string,
+            vol.Optional("expected_state", default=""): cv.string,
+            vol.Optional("expected_sequence", default=0): vol.Coerce(int),
         },
         extra=vol.PREVENT_EXTRA,
     )
@@ -146,8 +183,17 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     hass.services.async_register(DOMAIN, "decline", handler_for("decline"), schema=sip_decline_schema)
     hass.services.async_register(DOMAIN, "hangup", handler_for("hangup"), schema=sip_hangup_schema)
     hass.services.async_register(DOMAIN, "call", handler_for("call"), schema=sip_call_schema)
-    hass.services.async_register(DOMAIN, "forward", handler_for("forward"), schema=sip_call_schema)
+    hass.services.async_register(DOMAIN, "forward", handler_for("forward"), schema=sip_forward_schema)
     hass.services.async_register(DOMAIN, "route", handler_for("route"), schema=sip_route_schema)
+    hass.services.async_register(
+        DOMAIN, "set_deadline", handler_for("set_deadline"), schema=sip_deadline_schema
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "cancel_deadline",
+        handler_for("cancel_deadline"),
+        schema=sip_cancel_deadline_schema,
+    )
     hass.services.async_register(DOMAIN, "add_contact", handler_for("add_contact"), schema=phonebook_add_schema)
     hass.services.async_register(DOMAIN, "remove_contact", handler_for("remove_contact"), schema=phonebook_remove_schema)
     hass.services.async_register(DOMAIN, "set_contacts", handler_for("set_contacts"), schema=phonebook_set_schema)

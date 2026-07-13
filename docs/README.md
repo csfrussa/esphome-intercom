@@ -49,6 +49,10 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 - 🧰 **HA services**: [SERVICES.md](SERVICES.md) documents every
   `voip_stack.*` service and the expected side effects.
 
+- 🧭 **Automation dial plan**: [AUTOMATION_DIALPLAN.md](AUTOMATION_DIALPLAN.md)
+  shows conditional forwarding, explicit ringing deadlines and unanswered-call
+  fallback to Assist without changing the default phonebook route.
+
 - 👥 **Groups**: [GROUPS.md](GROUPS.md) documents ring group and conference
   group semantics, including `conference_ring`.
 

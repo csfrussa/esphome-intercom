@@ -112,7 +112,7 @@ call:
 
 forward:
   name: SIP Forward
-  description: Route a standards-SIP call through Home Assistant's SIP dial plan and bridge. With Call ID, forwards a pending inbound SIP route.
+  description: Route a standards-SIP call through Home Assistant's dial plan. With Call ID, move the existing HA-owned call; without it, originate a new bridged call.
   fields:
     call_id:
       name: Call ID
@@ -136,6 +136,88 @@ forward:
       name: Call
       description: Alias for target, useful in scripts and automations.
       required: false
+      selector:
+        text:
+    on_failure:
+      name: On failure
+      description: Resume the original HA ringing call, terminate it, or return busy if the new destination fails.
+      required: false
+      default: resume
+      selector:
+        select:
+          options:
+            - resume
+            - terminate
+            - busy
+    expected_state:
+      name: Expected state
+      description: Optional stale-automation guard. The forward is rejected if the call has already changed state.
+      required: false
+      selector:
+        text:
+    expected_sequence:
+      name: Expected sequence
+      description: Optional stale-automation guard copied from the call event.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+
+set_deadline:
+  name: Set SIP Call Deadline
+  description: Arm an explicit calling or ringing deadline. Expiry emits an automation event but never changes routing by itself.
+  fields:
+    call_id:
+      name: Call ID
+      required: true
+      selector:
+        text:
+    phase:
+      name: Phase
+      required: true
+      selector:
+        select:
+          options:
+            - calling
+            - ringing
+    timeout:
+      name: Timeout
+      description: Seconds before the timeout-requested event is emitted if the call has not changed state.
+      required: true
+      selector:
+        number:
+          min: 0.1
+          max: 3600
+          step: 0.1
+          unit_of_measurement: s
+          mode: box
+    expected_state:
+      name: Expected state
+      description: Optional stale-automation guard copied from the call event.
+      required: false
+      selector:
+        text:
+    expected_sequence:
+      name: Expected sequence
+      description: Optional stale-automation guard copied from the call event.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+
+cancel_deadline:
+  name: Cancel SIP Call Deadline
+  description: Cancel a previously armed deadline without changing the call.
+  fields:
+    call_id:
+      name: Call ID
+      required: true
       selector:
         text:
 

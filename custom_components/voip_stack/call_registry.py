@@ -43,6 +43,16 @@ class CallSession:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class CallEventContext:
+    """Small bounded automation-facing history for one logical call."""
+
+    sequence: int = 0
+    state: str = ""
+    previous_state: str = ""
+    route_history: list[dict[str, Any]] = field(default_factory=list)
+
+
 class CallRegistry:
     """Small session index shared by softphone, router and trunk handlers."""
 
@@ -57,6 +67,58 @@ class CallRegistry:
         self.client_watchers: dict[str, Any] = {}
         self.relays: dict[str, Any] = {}
         self.bridge_clients: dict[str, str] = {}
+        self.event_contexts: dict[str, CallEventContext] = {}
+
+    def event_fields(self, call_id: str, state: str) -> dict[str, Any]:
+        """Return stable automation fields, advancing only on a state change."""
+        call_id = str(call_id or "").strip()
+        state = str(state or "").strip()
+        if not call_id:
+            return {"schema_version": 1, "sequence": 0, "previous_state": "", "route_history": []}
+        context = self.event_contexts.get(call_id)
+        if context is None:
+            if len(self.event_contexts) >= 256:
+                self.event_contexts.pop(next(iter(self.event_contexts)))
+            context = CallEventContext()
+            self.event_contexts[call_id] = context
+        if state and state != context.state:
+            context.previous_state = context.state
+            context.state = state
+            context.sequence += 1
+        return {
+            "schema_version": 1,
+            "sequence": context.sequence,
+            "previous_state": context.previous_state,
+            "route_history": [dict(item) for item in context.route_history],
+        }
+
+    def event_context(self, call_id: str) -> CallEventContext | None:
+        """Return the current automation event context for a call or leg."""
+        return self.event_contexts.get(self.resolve_session_id(str(call_id or "").strip()))
+
+    def record_route(
+        self,
+        call_id: str,
+        *,
+        action: str,
+        destination: str = "",
+        source: str = "automation",
+    ) -> list[dict[str, Any]]:
+        """Append one bounded routing decision to the call history."""
+        call_id = self.resolve_session_id(str(call_id or "").strip())
+        context = self.event_contexts.get(call_id)
+        if context is None:
+            self.event_fields(call_id, "")
+            context = self.event_contexts[call_id]
+        context.route_history.append(
+            {
+                "action": str(action or "").strip(),
+                "destination": str(destination or "").strip(),
+                "source": str(source or "automation").strip(),
+            }
+        )
+        del context.route_history[:-8]
+        return [dict(item) for item in context.route_history]
 
     def upsert(
         self,
@@ -100,6 +162,16 @@ class CallRegistry:
         leg.state = state or leg.state
         leg.sip_call_id = sip_call_id or leg.sip_call_id
         self.leg_index[leg_id] = call_id
+        return leg
+
+    def remove_leg(self, call_id: str, leg_id: str) -> CallLeg | None:
+        """Remove one destination leg without ending its source call."""
+        session_id = self.resolve_session_id(call_id)
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        leg = session.legs.pop(leg_id, None)
+        self.leg_index.pop(leg_id, None)
         return leg
 
     def resolve_session_id(self, call_id: str) -> str:
@@ -206,6 +278,7 @@ class CallRegistry:
         self.client_watchers.clear()
         self.relays.clear()
         self.bridge_clients.clear()
+        self.event_contexts.clear()
 
     def active_count(self, *, include_ha_softphone: bool = True) -> int:
         count = 0

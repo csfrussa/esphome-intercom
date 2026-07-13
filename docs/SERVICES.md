@@ -28,8 +28,9 @@ Optional:
 
 ### `voip_stack.forward`
 
-With `call_id`, applies a forward decision to a pending inbound
-`route_requested` call.
+With `call_id`, moves an HA-owned pending, ringing or remotely ringing call to
+another dial-plan destination. Repeated forwarding cancels the previous
+ringing SIP leg before starting the replacement.
 
 Without `call_id`, originates a HA-anchored call using the same central dial
 plan as `voip_stack.call`.
@@ -37,6 +38,14 @@ plan as `voip_stack.call`.
 Important rule: forwarding to a registered SIP endpoint keeps that endpoint's
 current registration Contact as the destination. It must not rewrite to
 `sip:<target>@<ha-ip>`.
+
+Optional stale-decision guards:
+
+- `expected_state`: state copied from `event.voip_stack_call`.
+- `expected_sequence`: sequence copied from the same occurrence.
+- `on_failure`: `resume` (default), `terminate`, or `busy`.
+
+See [Automation Dial Plan](AUTOMATION_DIALPLAN.md) for complete examples.
 
 ### `voip_stack.answer`
 
@@ -190,6 +199,18 @@ Emit configured accounts without passwords.
 
 ## Automation Route Service
 
+### `voip_stack.set_deadline` / `voip_stack.cancel_deadline`
+
+Arm or cancel an explicit per-call `calling` or `ringing` deadline. Expiry
+publishes `calling_timeout_requested` or `ringing_timeout_requested` only when
+the call is still in the same state and sequence. A deadline never changes the
+route itself.
+
+Fields for `set_deadline`:
+
+- `call_id`, `phase`, `timeout`.
+- optional `expected_state` and `expected_sequence` stale-decision guards.
+
 ### `voip_stack.route`
 
 Apply a decision to a pending inbound SIP route request.
@@ -204,6 +225,13 @@ Fields:
 
 Use this only for the automation fallback path. Known roster targets should be
 handled by the central dial plan without waiting for this service.
+
+## Native Call Event Entity
+
+`event.voip_stack_call` is the browsable automation surface for call lifecycle,
+routing deadlines and in-call DTMF. Its state is the last occurrence timestamp;
+the occurrence type and call envelope are attributes. The legacy event-bus
+events remain available for compatibility.
 
 ## Experimental: In-call DTMF Automation Event
 

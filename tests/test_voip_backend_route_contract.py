@@ -60,7 +60,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"source_leg": "caller" if source_is_caller else "callee"', self.source)
         self.assertIn('client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")', self.source)
         self.assertIn('callback("left", digit, "sip_info")', self.source)
-        self.assertEqual(self.source.count("_attach_dtmf_event_bridge("), 4)
+        # Definition plus four established bridge paths and both automation
+        # forward paths (single target and ring group). Every HA-anchored
+        # media bridge keeps in-call DTMF.
+        self.assertEqual(self.source.count("_attach_dtmf_event_bridge("), 6)
         self.assertNotIn("dtmf_sequence", self.source)
 
     def test_ha_softphone_busy_is_scoped_to_answer_ha_route(self) -> None:
@@ -139,7 +142,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
         self.assertIn("else:", registered_branch)
         route_requested_branch = registered_branch[registered_branch.index("else:") :]
-        self.assertIn('"route_requested"', route_requested_branch)
+        self.assertIn("CallState.CONNECTING.value", route_requested_branch)
+        self.assertIn("route_request=True", route_requested_branch)
         self.assertIn(
             "await asyncio.wait_for(future, timeout=SIP_ROUTE_DECISION_TIMEOUT)",
             route_requested_branch,
@@ -213,9 +217,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
 
     def test_bridge_invite_does_not_register_after_caller_cancel(self) -> None:
+        start = self.source.index("async def _on_invite(invite:")
+        generic_bridge = self.source.index(
+            "result = await client.invite(",
+            self.source.index("decision_uri", start),
+        )
         bridge_path = self.source[
-            self.source.index("result = await client.invite(") : self.source.index(
-                'if result not in {"ringing", "in_call"}:'
+            generic_bridge : self.source.index(
+                'if result not in {"ringing", "in_call"}:', generic_bridge
             )
         ]
         self.assertIn(
@@ -848,7 +857,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("terminate_client=True", bridge_branch)
         self.assertIn("caller=event_caller", bridge_branch)
         self.assertIn("callee=event_callee", bridge_branch)
-        self.assertIn('"target": event_callee', bridge_branch)
+        self.assertIn("target=event_callee", bridge_branch)
 
     def test_config_entry_reload_restores_runtime_event_listeners(self) -> None:
         init_py = INIT.read_text()
@@ -864,6 +873,56 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
         self.assertIn("_register_esp_state_event_bridge(hass)", initialized)
         self.assertIn("_register_phonebook_service_event_sync(hass)", initialized)
+
+    def test_trunk_dtmf_window_cannot_be_extended_by_automation_future(self) -> None:
+        runner = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") :
+            self.source.index("async def _async_forward_existing_call(")
+        ]
+        self.assertIn(
+            "if not any(task in pending for task in collector_tasks):",
+            runner,
+        )
+        self.assertIn(
+            "task for task in pending if task is not route_future",
+            runner,
+        )
+
+    def test_preanswered_forward_failure_resumes_ha_ringing(self) -> None:
+        forward = self.source[
+            self.source.index("async def _async_forward_existing_call(") :
+            self.source.index("async def _run_ring_group_call(")
+        ]
+        self.assertIn("or call_id in registry.preanswered", forward)
+        restore = forward[
+            forward.index("async def _restore_or_terminate(") :
+            forward.index("async def _run_forward(")
+        ]
+        self.assertIn("if ha_claimed:", restore)
+        self.assertIn("CallState.RINGING.value", restore)
+        self.assertIn('last_sip_event="ROUTE_RESUME"', restore)
+
+    def test_in_dialog_dtmf_uses_the_canonical_call_envelope(self) -> None:
+        bridge = self.source[
+            self.source.index("def _publish_dtmf_event(") :
+            self.source.index("def _invite_dtmf_format(")
+        ]
+        for field in (
+            '"schema_version": 1',
+            '"event_type": "dtmf"',
+            '"automation_control": "ha_anchored"',
+            "registry.event_fields(call_id, state)",
+        ):
+            self.assertIn(field, bridge)
+
+    def test_route_request_publishes_a_canonical_connecting_state(self) -> None:
+        route_branch = self.source[
+            self.source.index('if caller_is_registered_endpoint:') :
+            self.source.index('route_action = str(route_decision.get("action")')
+        ]
+        self.assertIn("CallState.CONNECTING.value", route_branch)
+        self.assertIn("route_request=True", route_branch)
+        self.assertNotIn('"route_requested",\n                caller=', route_branch)
 
 
 if __name__ == "__main__":

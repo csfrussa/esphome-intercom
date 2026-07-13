@@ -128,7 +128,9 @@ The next release starts with stricter outbound trunk identity handling and a
 standard SIP cancellation lifecycle shared by the HA softphone, bridges, ring
 groups and conference invitations. Hang Up remains available while a call is
 connecting, sends a real CANCEL to the remote endpoint and cannot be undone by
-a late ringing response.
+a late ringing response. A native call event entity plus guarded forwarding and
+explicit deadlines also let Home Assistant automations override the phonebook
+route for selected calls without changing the default dial plan.
 
 - 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
 - 🚀 [Published `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)

@@ -238,7 +238,9 @@ the answered leg as `route_not_found`.
 
 ## HA SIP Events
 
-`voip_stack` fires Home Assistant bus events for automations:
+`event.voip_stack_call` is the preferred native automation surface. It exposes
+the call lifecycle, routing deadlines and DTMF through a browsable HA event
+entity. `voip_stack` also keeps these bus events for compatibility:
 
 - `voip_stack.call_state`: every SIP phone/bridge state update.
 - `voip_stack.incoming_call`: inbound call or route request.
@@ -251,13 +253,15 @@ the answered leg as `route_not_found`.
 - `voip_stack.call_event`: aggregate SIP call event for frontend and automations.
 
 The payload includes the canonical SIP fields when available: `state`,
-`sip_state`, `type`, `call_id`, `caller`, `callee`, `peer_name`, `direction`,
+`sip_state`, `type`, `call_id`, `sequence`, `previous_state`, `route_history`,
+`automation_control`, `caller`, `callee`, `peer_name`, `direction`,
 `local_name`, `target`, `sip_uri`, `route_kind`, `sip_transport`,
 `sip_status_code`, `terminal_reason`, selected media formats, and RTP counters.
 The HA softphone snapshot also exposes `sip_trunk` when a trunk client exists,
 including registration status, last SIP status and last trunk SIP event.
 
-The in-call DTMF payload contains `call_id`, `dest_call_id`, `caller`,
+The in-call DTMF payload uses the same call envelope and contains `call_id`,
+`dest_call_id`, `caller`,
 `callee`, `source`, `source_leg`, `side`, `digit` and `transport`. `digit` is
 one string value from `0-9`, `*`, `#` or `A-D`; a multi-key sequence produces
 one event per key. `transport` is `rtp_event` for negotiated RFC 4733 named
