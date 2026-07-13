@@ -45,6 +45,14 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("card", body.lower())
         self.assertNotIn("frontend", body.lower())
 
+    def test_hangup_preserves_canonical_outbound_direction(self) -> None:
+        body = _function_body(self.source, "_handle_sip_hangup_service")
+        direction = body.split("direction = str(", 1)[1].split("\n    )", 1)[0]
+        self.assertLess(
+            direction.index('softphone_store.get("direction")'),
+            direction.index('("incoming" if active_session is not None else "")'),
+        )
+
     def test_bridge_hangup_does_not_publish_ha_softphone_session(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
         bridge_branch = body.split("if bridge_handled:", 1)[1].split("return", 1)[0]

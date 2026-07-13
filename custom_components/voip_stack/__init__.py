@@ -989,9 +989,9 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         or ""
     )
     direction = str(
-        ("incoming" if active_session is not None else "")
-        or softphone_store.get("direction")
+        softphone_store.get("direction")
         or softphone_store.get("last_terminal_direction")
+        or ("incoming" if active_session is not None else "")
         or ""
     )
     bridge_handled, bridge_source_call_id, bridge_dest_call_id, bridge_client, bridge_server_bye = await _terminate_sip_bridge(hass, call_id)

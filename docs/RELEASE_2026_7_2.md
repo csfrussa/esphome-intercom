@@ -33,6 +33,9 @@ version is published from `main`.
 - The remote endpoint receives a real CANCEL and terminates the INVITE with
   `487 Request Terminated`; HA acknowledges it and remains idle instead of
   returning to remote ringing because of a late provisional response.
+- The terminal event now preserves the call's canonical direction. An outbound
+  call no longer changes from `outgoing` to `incoming` when HA hangs up while
+  its session is still present in the call registry.
 - If a successful `200 OK` crosses the cancellation, HA acknowledges the dialog
   and ends it with BYE, preventing ghost calls.
 - Cancelling a ring-group or conference dialing task no longer destroys the SIP
@@ -41,12 +44,13 @@ version is published from `main`.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 297 tests passing.
+- Full backend and frontend test suite: 315 tests and 26 subtests passing.
 - Python/Ruff checks clean.
-- Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, local
-  hangup, CANCEL, `487 Request Terminated`, ACK.
+- Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
+  Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
 - Call state remained idle after cancellation and the remote leg stopped
-  ringing.
+  ringing; every state for the same call ID remained `outgoing` through
+  teardown.
 
 ## Known Follow-Up Areas
 
