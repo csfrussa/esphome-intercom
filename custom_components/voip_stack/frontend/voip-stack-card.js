@@ -86,7 +86,6 @@ class VoipStackCard extends HTMLElement {
 
     this._cleanupTask = null;
     this._audioAttachTask = null;
-    this._ownedSoftphoneCallId = "";
 
     // Device info
     this._activeDeviceInfo = null;
@@ -277,18 +276,24 @@ class VoipStackCard extends HTMLElement {
   _ownsSoftphoneMedia(snapshot = this._softphoneSnapshot || {}) {
     if (!this._isHaSoftphoneMode()) return false;
     const callId = String(snapshot.call_id || this._sessionCallId() || "");
-    return !!callId && callId === this._ownedSoftphoneCallId;
+    return voipStackEngine.ownsSoftphoneSession(callId);
   }
 
   _markSoftphoneMediaOwner(callId) {
-    this._ownedSoftphoneCallId = String(callId || "");
+    if (callId) voipStackEngine.claimSoftphoneSession(callId);
+    else voipStackEngine.releaseSoftphoneSession();
   }
 
-  _cleanupAfterTerminalSession() {
+  _cleanupAfterTerminalSession(snapshot = {}) {
     this._autoAnswering = false;
     this._starting = false;
     this._stopping = false;
-    this._markSoftphoneMediaOwner("");
+    const terminalCallId = String(snapshot.call_id || "");
+    const ownedCallId = String(voipStackEngine.softphoneCallId || "");
+    // A delayed initial-state read from a card that HA is replacing must not
+    // tear down a newer call owned by the page-level engine.
+    if (ownedCallId && terminalCallId !== ownedCallId) return;
+    voipStackEngine.releaseSoftphoneSession(terminalCallId);
     if (!voipStackEngine.active || this._cleanupTask) return;
     this._cleanupTask = voipStackEngine.close("terminal")
       .catch((err) => console.warn("voip-stack-card: softphone cleanup failed", err))
@@ -362,7 +367,7 @@ class VoipStackCard extends HTMLElement {
           snapshot.dialed_target || snapshot.peer_name || snapshot.callee || snapshot.caller || "",
         );
       }
-      this._cleanupAfterTerminalSession();
+      this._cleanupAfterTerminalSession(snapshot);
     }
     if (
       snapshot.state === "ringing" &&
@@ -515,7 +520,6 @@ class VoipStackCard extends HTMLElement {
       this._softphoneStateLoaded = false;
       this._softphoneSnapshot = null;
       this._activeSessionDeviceId = null;
-      this._markSoftphoneMediaOwner("");
     }
     if (this._isPhonebookMode()) {
       this._render();
@@ -1386,6 +1390,11 @@ class VoipStackCard extends HTMLElement {
     // ESP cards mirror the ESP contact cycler. The optional keypad keeps its
     // own manual buffer and calls the ESPHome start_call service directly.
     const softphoneMode = this._isHaSoftphoneMode();
+    const videoVisible = softphoneMode && espState.toLowerCase() === "in_call" && voipStackEngine.videoVisible;
+    els.card.classList.toggle("video-active", videoVisible);
+    els.videoCanvas.hidden = !videoVisible;
+    els.videoShade.hidden = !videoVisible;
+    voipStackEngine.setVideoCanvas(els.videoCanvas);
     const keypadOpen = this._keypadOpen();
     els.destRow.hidden = !showCall || keypadOpen;
     els.destValue.textContent = this._contactCyclerDestination(destination);
@@ -1548,7 +1557,29 @@ class VoipStackCard extends HTMLElement {
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
         padding: var(--voip-fluid-space, 16px);
+        position: relative;
+        isolation: isolate;
       }
+      .card > :not(.video-canvas):not(.video-shade) { position: relative; z-index: 2; }
+      .video-canvas {
+        position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%;
+        object-fit: cover; background: #000; border-radius: inherit; pointer-events: none;
+      }
+      .video-canvas[hidden], .video-shade[hidden] { display: none; }
+      .video-shade {
+        position: absolute; inset: 0; z-index: 1; pointer-events: none;
+        border-radius: inherit;
+        background: linear-gradient(to bottom, rgba(0,0,0,.42), rgba(0,0,0,.08) 42%, rgba(0,0,0,.60));
+      }
+      .card.video-active { overflow: hidden; background: #000; }
+      .video-active .header,
+      .video-active .destination-label,
+      .video-active .destination-value,
+      .video-active .status,
+      .video-active .status-reason,
+      .video-active .stats,
+      .video-active .version { color: white; text-shadow: 0 1px 3px rgba(0,0,0,.9); }
+      .video-active .button-container { align-items: flex-end; padding-bottom: 8px; }
       .header { font-size: 1.2em; font-weight: 500; margin-bottom: var(--voip-fluid-space, 16px); color: var(--primary-text-color); text-align: center; }
       .header[hidden] { display: none; }
 
@@ -1768,6 +1799,16 @@ class VoipStackCard extends HTMLElement {
     const card = document.createElement("ha-card");
     card.className = "card";
     installWheelScrollHandoff(card);
+
+    const videoCanvas = document.createElement("canvas");
+    videoCanvas.className = "video-canvas";
+    videoCanvas.hidden = true;
+    videoCanvas.setAttribute("aria-label", "Remote SIP video");
+    const videoShade = document.createElement("div");
+    videoShade.className = "video-shade";
+    videoShade.hidden = true;
+    card.appendChild(videoCanvas);
+    card.appendChild(videoShade);
 
     const header = document.createElement("div");
     header.className = "header";
@@ -2051,6 +2092,7 @@ class VoipStackCard extends HTMLElement {
     root.appendChild(card);
 
     this._els = {
+      card, videoCanvas, videoShade,
       header, headerName,
       destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
       keypadPanel, keypadInput, keypadKeys,
@@ -2459,8 +2501,9 @@ class VoipStackCard extends HTMLElement {
     }
 
     if (wasSoftphone) {
+      const callId = this._sessionCallId();
       await voipStackEngine.close("hangup");
-      this._markSoftphoneMediaOwner("");
+      voipStackEngine.releaseSoftphoneSession(callId);
       await this._loadSoftphoneState();
     }
 
@@ -2710,7 +2753,12 @@ class VoipStackCard extends HTMLElement {
         type: "voip_stack/ha_softphone_state",
       });
       if (!this._isHaSoftphoneMode() || this._hass?.connection !== connection) return;
-      this._applySoftphoneSnapshot(result || { state: "idle" });
+      const snapshot = result || { state: "idle" };
+      this._applySoftphoneSnapshot(snapshot);
+      // The WebSocket subscription can publish its initial state before HA
+      // recreates this card. A direct state load must therefore drive the same
+      // media attachment path, especially after an in-call page reload.
+      this._ensureHaSoftphoneAudioPath(snapshot);
       this._softphoneStateLoaded = true;
     } catch (err) {
       if (!this._isUnknownCommandError(err)) console.warn("voip: failed loading HA softphone state", err);

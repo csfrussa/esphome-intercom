@@ -204,6 +204,7 @@ The setup flow has two layers:
 | `assist_extension` | Explicit 1-8 digit extension for the Assist destination. No extension is assumed or reserved. |
 | `assist_pipeline` | HA pipeline ID, or `preferred` to resolve HA's preferred pipeline. The pipeline's existing STT, conversation agent, TTS, language and voice settings are used. |
 | `debug_mode` | Opt-in detailed diagnostics and bounded audio captures. Leave disabled for normal operation. |
+| `experimental_sip_video` | Experimental and disabled by default. Allows the HA softphone to negotiate direct H.264 RTP video with standard SIP phones and door stations. Requires HTTPS and a WebCodecs-capable browser. ESP endpoints remain audio-only. |
 | `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
 

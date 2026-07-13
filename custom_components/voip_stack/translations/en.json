@@ -11,6 +11,7 @@
         "assist_intents": "Enable Assist intents",
         "assist_endpoint_enabled": "Include voice assistant",
           "debug_mode": "Enable SIP/RTP debug mode",
+          "experimental_sip_video": "Enable experimental SIP video for the Home Assistant softphone",
           "sip_registrar_enabled": "Enable local SIP accounts",
           "trunk_enabled": "Enable optional SIP trunk"
         },
@@ -21,6 +22,7 @@
         "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live VoIP phonebook.",
         "assist_endpoint_enabled": "Add a SIP extension backed directly by a Home Assistant Assist pipeline. No separate VoIP integration or SIP listener is required.",
           "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
+          "experimental_sip_video": "Experimental. Let the Home Assistant softphone negotiate direct H.264 SIP video with standard SIP phones and door stations. ESP audio endpoints remain audio-only. Requires HTTPS and a WebCodecs-capable browser.",
           "sip_registrar_enabled": "Accept REGISTER from local SIP endpoints such as VoIP phones, Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
           "trunk_enabled": "Show provider/PBX trunk settings. When disabled, no trunk registration, external route or DTMF collector starts."
         }

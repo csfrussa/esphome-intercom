@@ -59,6 +59,7 @@ from .fsm import (
 from .media_ports import (
     RtpPortReservation,
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
+    bind_sip_rtp_socket,
     release_media_reservation as _release_media_reservation,
     release_sip_rtp_port_pair as _release_sip_rtp_port_pair,
 )
@@ -205,7 +206,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _terminate_sip_bridge,
     )
     from .dtmf import DtmfCollector, collect_info_digits, parse_sip_info_digit
-    from .sdp import build_answer_directional
+    from .sdp import build_answer_directional, local_direction_for_remote
     from .sip import parse_sip_uri
     from .sip_client import SIP_TIMER_B, SipCallClient
     from .sip_endpoint import SipEndpointManager
@@ -604,6 +605,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 sip_uri=sip_uri,
                 sip_status_code=180,
                 last_sip_event="INVITE",
+                video_offered=invite.video_format is not None,
+                video_format=(invite.video_format.wire_token() if invite.video_format else ""),
             )
 
         hass.loop.call_soon(_publish_ringing_if_current)
@@ -1564,6 +1567,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             invite.send_format,
                             invite.recv_format,
                             dtmf=_invite_dtmf_format(invite),
+                            remote_sdp=invite.remote_sdp,
                         )
                         _sip_send_final_response(
                             hass, call_id, 200, "OK", answer_sdp=answer
@@ -1633,6 +1637,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             source_relay_port,
                             invite.send_format,
                             invite.recv_format,
+                            remote_sdp=invite.remote_sdp,
                         )
                         _sip_send_final_response(
                             hass,
@@ -1801,6 +1806,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         invite.send_format,
                         invite.recv_format,
                         dtmf=_invite_dtmf_format(invite),
+                        remote_sdp=invite.remote_sdp,
                     )
                     _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer)
                 registry.upsert(
@@ -2125,6 +2131,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     local_rtp_port,
                     invite.send_format,
                     invite.recv_format,
+                    remote_sdp=invite.remote_sdp,
                 )
                 registry.pending_invites.pop(invite.call_id, None)
                 registry.softphone_media[invite.call_id] = {
@@ -2278,6 +2285,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 invite.send_format,
                 invite.recv_format,
                 dtmf=_invite_dtmf_format(invite),
+                remote_sdp=invite.remote_sdp,
             )
             _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
             _set_sip_bridge_call_state(
@@ -2602,6 +2610,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 assist_rtp_port,
                 invite.send_format,
                 invite.recv_format,
+                remote_sdp=invite.remote_sdp,
             )
             return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
         if decision.action is RouteAction.GROUP:
@@ -2717,6 +2726,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     invite.send_format,
                     invite.recv_format,
                     dtmf=dtmf_format,
+                    remote_sdp=invite.remote_sdp,
                 )
                 _set_sip_bridge_call_state(
                     hass,
@@ -3185,6 +3195,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         invite.send_format,
                         invite.recv_format,
                         dtmf=_invite_dtmf_format(invite),
+                        remote_sdp=invite.remote_sdp,
                     )
                     _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
                     _set_sip_bridge_call_state(
@@ -3312,17 +3323,38 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 sip_uri=decision.sip_uri,
             )
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
-        local_rtp_port = _allocate_sip_rtp_port(hass)
+        media_reservation = None
+        local_video_rtp_port = 0
+        video_rtp_socket = None
+        if invite.video_format is not None:
+            media_reservation = RtpPortReservation.allocate(hass)
+            local_rtp_port, local_video_rtp_port = media_reservation.ports
+            try:
+                video_rtp_socket = bind_sip_rtp_socket(local_video_rtp_port)
+            except OSError as err:
+                _LOGGER.warning("SIP video socket unavailable, answering audio-only: %s", err)
+                media_reservation.release()
+                media_reservation = None
+                local_rtp_port = _allocate_sip_rtp_port(hass)
+                local_video_rtp_port = 0
+        else:
+            local_rtp_port = _allocate_sip_rtp_port(hass)
         answer = build_answer_directional(
             local_ip,
             local_ip,
             local_rtp_port,
             invite.send_format,
             invite.recv_format,
+            remote_sdp=invite.remote_sdp,
+            video_port=local_video_rtp_port,
+            video_format=invite.video_format,
         )
         registry.softphone_media[invite.call_id] = {
             "invite": invite,
             "local_rtp_port": local_rtp_port,
+            "local_video_rtp_port": local_video_rtp_port,
+            "video_rtp_socket": video_rtp_socket,
+            "rtp_reservation": media_reservation,
         }
         registry.upsert(
             invite.call_id,
@@ -3346,6 +3378,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
             selected_tx_rtp_format=invite.send_format.wire_token(),
             selected_rx_rtp_format=invite.recv_format.wire_token(),
+            video_active=bool(invite.video_format is not None and local_video_rtp_port),
+            video_format=(invite.video_format.wire_token() if invite.video_format else ""),
+            video_direction=(
+                local_direction_for_remote(invite.video_format.direction)
+                if invite.video_format is not None and local_video_rtp_port
+                else "inactive"
+            ),
             audio_mode="full_duplex",
             route_kind=decision.action.value,
             sip_uri=decision.sip_uri,
@@ -3477,6 +3516,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         on_info=_on_info,
         udp_enabled=True,
         tcp_enabled=True,
+        enable_video=bool(cfg.get("experimental_sip_video", False)),
     )
     if not await endpoint.start():
         return False

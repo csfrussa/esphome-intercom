@@ -38,6 +38,9 @@ class RtpPortReservation:
 
 def release_media_reservation(item) -> None:
     """Release an owned RTP reservation stored in runtime dict metadata."""
+    video_socket = (item or {}).pop("video_rtp_socket", None) if isinstance(item, dict) else None
+    if video_socket is not None and hasattr(video_socket, "close"):
+        video_socket.close()
     reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
     if reservation is not None and hasattr(reservation, "release"):
         reservation.release()
@@ -54,6 +57,20 @@ def rtp_port_available(port: int) -> bool:
         return False
     finally:
         sock.close()
+
+
+def bind_sip_rtp_socket(port: int) -> socket.socket:
+    """Bind RTP before signaling so an immediate video IDR is retained."""
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+        sock.setblocking(False)
+        sock.bind(("0.0.0.0", int(port)))
+        return sock
+    except BaseException:
+        sock.close()
+        raise
 
 
 def allocate_sip_rtp_port(hass: HomeAssistant, *, step: int = 2) -> int:

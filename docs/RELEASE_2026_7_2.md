@@ -80,10 +80,50 @@ version is published from `main`.
 See the [Automation Dial Plan guide](AUTOMATION_DIALPLAN.md) for copyable
 conditional-forward and unanswered-call-to-Assist examples.
 
+## 🎥 Experimental SIP Video For The HA Softphone
+
+- An opt-in, disabled-by-default path lets the HA softphone negotiate direct
+  H.264 video with standard SIP phones and door stations. ESPHome endpoints
+  remain audio-only.
+- SDP negotiation supports H.264 Baseline and Constrained Baseline over
+  RTP/AVP, RFC 6184 packetization mode 1 and independent send/receive
+  directions. Unsupported video is rejected without breaking compatible
+  audio.
+- Incoming RTP supports single NAL units, STAP-A and FU-A. Damaged or oversized
+  access units are bounded and discarded before they reach the browser.
+- The first experimental profile negotiates one video stream and preserves the
+  offer's media-section order. Unsupported extra video sections are rejected
+  explicitly instead of being associated with the wrong SDP transport.
+- The authenticated card path uses WebCodecs for low-latency browser decode and
+  camera encode. There is no server-side transcoding or intermediate video
+  file.
+- Camera denial or an encoder limitation cannot hide a valid incoming video
+  stream. A decoder limitation cannot tear down a valid outgoing stream, and
+  audio call control remains independent from video startup.
+- The card renders received video behind the live call controls and preserves
+  ownership across page reloads while the call is ringing or already active.
+- Live qualification covered incoming and outgoing H.264 calls with bareSIP,
+  `sendrecv`, `sendonly` and `recvonly` directions, bidirectional PCMA audio,
+  non-black decoded video, page reloads during remote ringing and an active
+  dialog, and clean teardown. Registered SIP and real Wildix trunk audio-only
+  calls were repeated after video was enabled.
+- A live receive-only test exposed and fixed concurrent duplicate browser
+  attaches. Video setup is now single-flight per call, so a second state update
+  cannot replace the decoder after the peer's initial H.264 key frame.
+- Runtime video counters no longer masquerade as call lifecycle occurrences,
+  so a long video session cannot retrigger `answered` or `connected`
+  automations every few seconds.
+
+This remains an experimental HA-softphone feature, not a general video PBX.
+There is no ESP video, SRTP, ICE/STUN/TURN, RTCP feedback, transcoding,
+recording, group/conference video relay or established-dialog renegotiation.
+Read the complete [Experimental SIP Video profile](EXPERIMENTAL_SIP_VIDEO.md)
+before enabling it.
+
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 340 tests and 35 subtests passing.
-- Python/Ruff checks clean.
+- Full backend and frontend test suite: 361 tests and 35 subtests passing.
+- Python compilation, JavaScript syntax and repository diff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
 - Call state remained idle after cancellation and the remote leg stopped

@@ -24,6 +24,7 @@ from .const import (
     CONF_ASSIST_INTENTS,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_DEBUG_MODE,
+    CONF_EXPERIMENTAL_VIDEO,
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -129,6 +130,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
             CONF_ASSIST_ENDPOINT_ENABLED: existing.get(CONF_ASSIST_ENDPOINT_ENABLED, False),
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
+            CONF_EXPERIMENTAL_VIDEO: existing.get(CONF_EXPERIMENTAL_VIDEO, False),
             CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
         }
@@ -143,6 +145,10 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 ): BooleanSelector(),
                 vol.Required(CONF_ASSIST_ENDPOINT_ENABLED, default=defaults[CONF_ASSIST_ENDPOINT_ENABLED]): BooleanSelector(),
                 vol.Required(CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]): BooleanSelector(),
+                vol.Required(
+                    CONF_EXPERIMENTAL_VIDEO,
+                    default=defaults[CONF_EXPERIMENTAL_VIDEO],
+                ): BooleanSelector(),
                 vol.Required(CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]): BooleanSelector(),
                 vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
             }
@@ -314,6 +320,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
+                        CONF_EXPERIMENTAL_VIDEO: bool(existing.get(CONF_EXPERIMENTAL_VIDEO, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
                     }
                 )
@@ -333,6 +340,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
+                        CONF_EXPERIMENTAL_VIDEO: bool(existing.get(CONF_EXPERIMENTAL_VIDEO, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
                     }
                 )

@@ -185,6 +185,11 @@ class SipDialog:
     recv_format: sdp.RtpPcmFormat
     remote_target_uri: str = ""
     dtmf_payload_type: int | None = None
+    video_format: sdp.RtpH264Format | None = None
+    remote_video_rtp_host: str = ""
+    remote_video_rtp_port: int = 0
+    local_video_rtp_port: int = 0
+    local_video_direction: str = "inactive"
 
     @property
     def selected_format(self) -> sdp.RtpPcmFormat:
@@ -228,6 +233,10 @@ class SipCallClient:
         password: str = "",
         outbound_proxy: str = "",
         include_common_codecs: bool = False,
+        local_video_rtp_port: int = 0,
+        video_format: sdp.RtpH264Format | None = None,
+        media_reservation=None,
+        video_rtp_socket: socket.socket | None = None,
     ) -> None:
         self.local_ip = local_ip
         self.local_name = local_name
@@ -242,6 +251,10 @@ class SipCallClient:
         self.password = password
         self.outbound_proxy = outbound_proxy
         self.include_common_codecs = bool(include_common_codecs)
+        self.local_video_rtp_port = int(local_video_rtp_port or 0)
+        self.video_format = video_format if self.local_video_rtp_port > 0 else None
+        self.media_reservation = media_reservation
+        self.video_rtp_socket = video_rtp_socket
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: _SipClientProtocol | None = None
         self.reader: asyncio.StreamReader | None = None
@@ -313,6 +326,14 @@ class SipCallClient:
             self._tcp_reuse_close = None
         self._tcp_reuse_send = None
         self._tcp_reuse_responses = None
+        reservation = self.media_reservation
+        self.media_reservation = None
+        video_socket = self.video_rtp_socket
+        self.video_rtp_socket = None
+        if video_socket is not None:
+            video_socket.close()
+        if reservation is not None and hasattr(reservation, "release"):
+            reservation.release()
 
     def use_reused_tcp_connection(
         self,
@@ -627,6 +648,8 @@ class SipCallClient:
             self.supported_send_formats,
             self.supported_recv_formats,
             include_common_codecs=self.include_common_codecs,
+            video_port=self.local_video_rtp_port,
+            video_format=self.video_format,
         ).encode()
         headers = sip.dialog_headers(
             request_uri=request_uri,
@@ -962,6 +985,12 @@ class SipCallClient:
             self._send_bye_request(remote_host, int(remote_sip_port), remote_target_uri, local_uri, remote_uri)
             return False
         parsed = sdp.parse_sdp(msg.body)
+        video_answer = (
+            sdp.negotiate_h264_answer(msg.body, self.video_format)
+            if self.video_format is not None
+            else None
+        )
+        remote_video = sdp.parse_video_sdp(msg.body) if video_answer is not None else None
         dtmf_formats = sdp.offered_dtmf_formats(msg.body)
         self.dialog_ids.remote_tag = sip.extract_tag(msg.header("To"))
         self.dialog = SipDialog(
@@ -978,6 +1007,15 @@ class SipCallClient:
             recv_format=selected.recv,
             remote_target_uri=remote_target_uri,
             dtmf_payload_type=dtmf_formats[0].payload_type if dtmf_formats else None,
+            video_format=video_answer,
+            remote_video_rtp_host=(str(remote_video["connection_ip"]) if remote_video else ""),
+            remote_video_rtp_port=(int(remote_video["media_port"]) if remote_video else 0),
+            local_video_rtp_port=(self.local_video_rtp_port if video_answer is not None else 0),
+            local_video_direction=(
+                sdp.local_direction_for_remote(video_answer.direction)
+                if video_answer is not None
+                else "inactive"
+            ),
         )
         _LOGGER.info(
             "SIP 200 OK media selected call_id=%s tx=%s rx=%s answer=[%s]",

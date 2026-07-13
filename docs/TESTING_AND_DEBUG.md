@@ -45,6 +45,37 @@ Expected route evidence:
 - no `SIP route requested` for registered endpoint calls to normal roster
   targets.
 
+## Experimental SIP Video Matrix
+
+Enable video only on the HA softphone and use a standard SIP peer that can
+offer H.264 Baseline with RFC 6184 packetization mode 1. Cover at least:
+
+- incoming audio-only call after video has been enabled;
+- outgoing audio-only call after video has been enabled;
+- incoming H.264 `sendrecv` with non-black browser canvas and outbound camera
+  access units;
+- outgoing H.264 `sendrecv`, including dashboard reloads during ringing and
+  after media has connected;
+- remote `sendonly`, proving receive-only video does not request a camera;
+- remote `recvonly`, proving a decoder failure cannot stop camera transmit;
+- incompatible video rejected with `m=video 0` while compatible audio remains;
+- camera permission denied while incoming video and browser audio remain live;
+- clean local and remote hangup with the video RTP port and browser owner
+  released.
+
+The Playwright probe records runtime evidence rather than relying on a source
+string check:
+
+```bash
+export HA_URL="https://home-assistant.example/dashboard/voip"
+export PLAYWRIGHT_STORAGE_STATE="$HOME/.cache/ha-playwright-state.json"
+python tools/experimental_sip_video_browser_probe.py \
+  --out /tmp/voip-video-result.json
+```
+
+See [Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) for an outgoing probe,
+the current codec profile and deliberate limitations.
+
 ## Service Matrix
 
 Exercise all public services with temporary data:

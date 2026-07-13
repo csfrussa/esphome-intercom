@@ -28,7 +28,10 @@ def main() -> int:
          "custom_components/voip_stack/__init__.py",
          "custom_components/voip_stack/sip_client.py",
          "custom_components/voip_stack/sip_listener.py",
+         "custom_components/voip_stack/video_rtp.py",
+         "custom_components/voip_stack/video_ws_view.py",
          "custom_components/voip_stack/websocket_api.py",
+         "tools/experimental_sip_video_browser_probe.py",
          "tests/support/qualification_matrix.py"])
     run([py, "tests/test_voip_phase1.py"])
     run([py, "tests/test_device_resolver_sip.py"])
@@ -38,6 +41,8 @@ def main() -> int:
     run([py, "tests/test_runtime_controller_target_model.py"])
     run([py, "tests/support/qualification_matrix.py", "--validate", "--summary"])
     run(["node", "--check", "custom_components/voip_stack/frontend/voip-stack-card.js"])
+    run(["node", "--check", "custom_components/voip_stack/frontend/voip-stack-engine.js"])
+    run(["node", "--check", "custom_components/voip_stack/frontend/voip-stack-video.js"])
     run(["git", "diff", "--check"])
 
     if args.compile_profiles:

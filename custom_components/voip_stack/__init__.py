@@ -29,6 +29,7 @@ from .const import (
     CONF_ASSIST_PIPELINE,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_EXPERIMENTAL_VIDEO,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_TRUNK_DTMF_ENABLED,
     CONF_TRUNK_DTMF_TIMEOUT_MS,
@@ -63,7 +64,9 @@ from .fsm import (
     sip_terminal_reason as _sip_terminal_reason,
 )
 from .media_ports import (
+    RtpPortReservation,
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
+    bind_sip_rtp_socket,
     release_media_reservation as _release_media_reservation,
 )
 from .session_cleanup import async_cleanup_sip_runtime
@@ -620,6 +623,13 @@ async def _track_outbound_sip_client(
                 selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
                 selected_tx_rtp_format=client.dialog.send_format.wire_token(),
                 selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
+                video_active=client.dialog.video_format is not None,
+                video_format=(
+                    client.dialog.video_format.wire_token()
+                    if client.dialog.video_format is not None
+                    else ""
+                ),
+                video_direction=client.dialog.local_video_direction,
                 sip_status_code=200,
                 last_sip_event="SIP_RESPONSE",
                 sip_uri=sip_uri,
@@ -811,28 +821,53 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         return
 
     preanswered = registry.preanswered.pop(call_id, None)
+    from .sdp import build_answer_directional, local_direction_for_remote
+
     local_rtp_port = int((preanswered or {}).get("local_rtp_port") or 0)
+    local_video_rtp_port = 0
+    video_rtp_socket = None
+    media_reservation = (preanswered or {}).get("rtp_reservation")
     if local_rtp_port:
         _LOGGER.info("SIP answered pre-answered trunk call_id=%s", call_id)
     else:
         local_ip = await _ha_advertise_host(hass)
-        from .sdp import build_answer_directional
-        local_rtp_port = _allocate_sip_rtp_port(hass)
+        if invite.video_format is not None:
+            media_reservation = RtpPortReservation.allocate(hass)
+            local_rtp_port, local_video_rtp_port = media_reservation.ports
+            try:
+                video_rtp_socket = bind_sip_rtp_socket(local_video_rtp_port)
+            except OSError as err:
+                _LOGGER.warning("SIP video socket unavailable, answering audio-only: %s", err)
+                media_reservation.release()
+                media_reservation = None
+                local_rtp_port = _allocate_sip_rtp_port(hass)
+                local_video_rtp_port = 0
+        else:
+            local_rtp_port = _allocate_sip_rtp_port(hass)
         answer = build_answer_directional(
             local_ip,
             local_ip,
             local_rtp_port,
             invite.send_format,
             invite.recv_format,
+            remote_sdp=invite.remote_sdp,
+            video_port=local_video_rtp_port,
+            video_format=invite.video_format,
         )
         if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
+            if video_rtp_socket is not None:
+                video_rtp_socket.close()
+            if media_reservation is not None and hasattr(media_reservation, "release"):
+                media_reservation.release()
             _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
             return
 
     registry.softphone_media[call_id] = {
         "invite": invite,
         "local_rtp_port": local_rtp_port,
-        "rtp_reservation": (preanswered or {}).get("rtp_reservation"),
+        "local_video_rtp_port": local_video_rtp_port,
+        "video_rtp_socket": video_rtp_socket,
+        "rtp_reservation": media_reservation,
     }
     registry.upsert(
         call_id,
@@ -860,6 +895,13 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         selected_rx_format=invite.recv_format.audio_format.wire_token(),
         selected_tx_rtp_format=invite.send_format.wire_token(),
         selected_rx_rtp_format=invite.recv_format.wire_token(),
+        video_active=bool(invite.video_format is not None and local_video_rtp_port),
+        video_format=(invite.video_format.wire_token() if invite.video_format else ""),
+        video_direction=(
+            local_direction_for_remote(invite.video_format.direction)
+            if invite.video_format is not None and local_video_rtp_port
+            else "inactive"
+        ),
     )
 
 
@@ -1346,7 +1388,37 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     if use_trunk or use_registered_contact_codecs:
         sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
         sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
-    local_rtp_port = _allocate_sip_rtp_port(hass)
+    entry_metadata = dict(route.entry.metadata or {}) if route.entry is not None else {}
+    native_audio_endpoint = bool(
+        entry_metadata.get("local_ha")
+        or entry_metadata.get("virtual_endpoint")
+        or entry_metadata.get("group_type")
+        or (
+            "audio_mode" in entry_metadata
+            and ("tx_formats" in entry_metadata or "rx_formats" in entry_metadata)
+        )
+    )
+    # SIP video is HA/browser-owned.  Native ESP audio endpoints deliberately
+    # stay outside this path, while direct SIP URIs, trunk calls, registered
+    # clients and manually configured standard SIP contacts may negotiate it.
+    video_enabled = bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)) and not native_audio_endpoint
+    video_reservation = RtpPortReservation.allocate(hass) if video_enabled else None
+    video_rtp_socket = None
+    if video_reservation is not None:
+        local_rtp_port, local_video_rtp_port = video_reservation.ports
+        try:
+            video_rtp_socket = bind_sip_rtp_socket(local_video_rtp_port)
+        except OSError as err:
+            _LOGGER.warning("SIP video socket unavailable, originating audio-only: %s", err)
+            video_reservation.release()
+            video_reservation = None
+            local_rtp_port = _allocate_sip_rtp_port(hass)
+            local_video_rtp_port = 0
+    else:
+        local_rtp_port = _allocate_sip_rtp_port(hass)
+        local_video_rtp_port = 0
+    from .sdp import DEFAULT_H264_FORMAT
+
     client = SipCallClient(
         local_ip=local_ip,
         local_name=(
@@ -1363,7 +1435,11 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         username=str(trunk_cfg.get(CONF_TRUNK_USERNAME) or ""),
         password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if use_trunk else "",
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
-        include_common_codecs=use_trunk or use_registered_contact_codecs,
+        include_common_codecs=use_trunk or use_registered_contact_codecs or video_enabled,
+        local_video_rtp_port=local_video_rtp_port,
+        video_format=DEFAULT_H264_FORMAT if video_enabled else None,
+        media_reservation=video_reservation,
+        video_rtp_socket=video_rtp_socket,
     )
     if not use_trunk:
         _enable_reused_sip_tcp_connection(
@@ -1436,6 +1512,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
             selected_tx_rtp_format=client.dialog.send_format.wire_token(),
             selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
+            video_active=client.dialog.video_format is not None,
+            video_format=(client.dialog.video_format.wire_token() if client.dialog.video_format else ""),
+            video_direction=client.dialog.local_video_direction,
             sip_status_code=200,
             last_sip_event="SIP_RESPONSE",
             sip_uri=route_uri,
@@ -1583,6 +1662,8 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
     async_register_websocket_api(hass)
     from .audio_ws_view import async_register_audio_ws_view
     async_register_audio_ws_view(hass)
+    from .video_ws_view import async_register_video_ws_view
+    async_register_video_ws_view(hass)
     await _async_register_services(hass)
     _register_esp_state_event_bridge(hass)
     _register_phonebook_service_event_sync(hass)

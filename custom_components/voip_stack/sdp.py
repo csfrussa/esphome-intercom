@@ -80,6 +80,28 @@ class RtpPcmDirection:
         return self.send
 
 
+@dataclass(frozen=True, slots=True)
+class RtpH264Format:
+    """One RFC 6184 H.264 RTP media format."""
+
+    payload_type: int = 102
+    profile_level_id: str = "42e01f"
+    packetization_mode: int = 1
+    direction: str = "sendrecv"
+    sprop_parameter_sets: str = ""
+
+    def wire_token(self) -> str:
+        return (
+            f"pt={self.payload_type}:H264/90000;"
+            f"profile-level-id={self.profile_level_id};"
+            f"packetization-mode={self.packetization_mode};"
+            f"direction={self.direction}"
+        )
+
+
+DEFAULT_H264_FORMAT = RtpH264Format()
+
+
 def audio_format_to_rtp(fmt: AudioFormat, payload_type: int) -> RtpPcmFormat:
     if not 96 <= int(payload_type) <= 127:
         raise SdpError("phase-1 PCM uses dynamic RTP payload types 96-127")
@@ -240,6 +262,9 @@ def build_offer_directional(
     recv_formats: list[AudioFormat],
     *,
     include_common_codecs: bool = False,
+    video_port: int = 0,
+    video_format: RtpH264Format | None = None,
+    video_direction: str = "sendrecv",
 ) -> str:
     common_formats = _common_ptime_formats(send_formats or [], recv_formats or [])
     formats = rtp_offer_formats(common_formats)
@@ -275,6 +300,8 @@ def build_offer_directional(
     lines.append(f"a=ptime:{rtp_formats[0].frame_ms}")
     lines.append(f"a=maxptime:{rtp_formats[0].frame_ms}")
     lines.append("a=sendrecv")
+    if video_format is not None and int(video_port) > 0:
+        lines.extend(_video_media_lines(int(video_port), video_format, direction=video_direction))
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -389,6 +416,286 @@ def parse_sdp(sdp: str | bytes) -> dict:
     }
 
 
+def _parse_media_sections(sdp_body: str | bytes) -> tuple[str, str, list[dict]]:
+    """Parse enough SDP structure to negotiate independent media sections."""
+
+    if isinstance(sdp_body, bytes):
+        sdp_body = sdp_body.decode("utf-8", errors="strict")
+    session_connection = ""
+    session_direction = "sendrecv"
+    current: dict | None = None
+    sections: list[dict] = []
+    for raw in sdp_body.replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("m="):
+            parts = line[2:].split()
+            if len(parts) < 4:
+                raise SdpError(f"bad media line: {line}")
+            try:
+                port = int(parts[1])
+            except ValueError as err:
+                raise SdpError(f"bad media port: {line}") from err
+            if not 0 <= port <= 65535:
+                raise SdpError(f"bad media port: {port}")
+            current = {
+                "media": parts[0].lower(),
+                "port": port,
+                "transport": parts[2].upper(),
+                "formats": parts[3:],
+                "connection_ip": "",
+                "connection_seen": False,
+                "connection_supported": True,
+                "rtpmap": {},
+                "fmtp": {},
+                "direction": session_direction,
+            }
+            sections.append(current)
+            continue
+        if line.startswith("c="):
+            if current is None:
+                if not line.startswith("c=IN IP4 "):
+                    raise SdpError(f"unsupported SDP connection: {line}")
+                address = line.removeprefix("c=IN IP4 ").strip()
+                session_connection = address
+            else:
+                current["connection_seen"] = True
+                if line.startswith("c=IN IP4 "):
+                    current["connection_ip"] = line.removeprefix("c=IN IP4 ").strip()
+                else:
+                    # A media-level connection applies only to that media
+                    # section.  Preserve a usable IPv4 audio section even if
+                    # an additional video/data section advertises IP6 or an
+                    # address family this deliberately small SIP profile does
+                    # not implement.  The unsupported section is rejected in
+                    # the answer instead of poisoning the entire audio call.
+                    current["connection_ip"] = ""
+                    current["connection_supported"] = False
+            continue
+        if line in {"a=sendrecv", "a=sendonly", "a=recvonly", "a=inactive"}:
+            direction = line[2:]
+            if current is None:
+                session_direction = direction
+            else:
+                current["direction"] = direction
+            continue
+        if current is None:
+            continue
+        try:
+            if line.startswith("a=rtpmap:"):
+                left, spec = line.removeprefix("a=rtpmap:").split(None, 1)
+                current["rtpmap"][int(left)] = spec.strip()
+            elif line.startswith("a=fmtp:"):
+                left, spec = line.removeprefix("a=fmtp:").split(None, 1)
+                current["fmtp"][int(left)] = spec.strip()
+        except ValueError as err:
+            raise SdpError(f"bad SDP media attribute: {line}") from err
+    for section in sections:
+        if not section["connection_seen"]:
+            section["connection_ip"] = session_connection
+    return session_connection, session_direction, sections
+
+
+def parse_video_sdp(sdp_body: str | bytes) -> dict | None:
+    """Return the first video media section when it matches this profile."""
+
+    _session_connection, _session_direction, sections = _parse_media_sections(sdp_body)
+    for section in sections:
+        if section["media"] != "video":
+            continue
+        # This deliberately small profile owns one video stream. Do not skip
+        # an unsupported first m=video and accidentally answer a later format
+        # in the first section's position.
+        if (
+            section["port"] == 0
+            or section["transport"] != "RTP/AVP"
+            or not section["connection_supported"]
+        ):
+            return None
+        if not section["connection_ip"]:
+            raise SdpError("SDP video section has no connection address")
+        payload_order: list[int] = []
+        try:
+            payload_order = [int(item) for item in section["formats"]]
+        except ValueError as err:
+            raise SdpError("bad video payload list") from err
+        if not payload_order or any(not 0 <= item <= 127 for item in payload_order):
+            raise SdpError("bad video payload list")
+        return {
+            "connection_ip": section["connection_ip"],
+            "media_port": section["port"],
+            "payload_order": payload_order,
+            "rtpmap": dict(section["rtpmap"]),
+            "fmtp": dict(section["fmtp"]),
+            "direction": section["direction"],
+        }
+    return None
+
+
+def _fmtp_parameters(value: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in str(value or "").split(";"):
+        key, separator, raw_value = item.strip().partition("=")
+        if key:
+            out[key.lower()] = raw_value.strip() if separator else ""
+    return out
+
+
+def offered_h264_formats(sdp_body: str | bytes) -> list[RtpH264Format]:
+    """List compatible H.264 formats from an active video section."""
+
+    parsed = parse_video_sdp(sdp_body)
+    if parsed is None:
+        return []
+    out: list[RtpH264Format] = []
+    for payload_type in parsed["payload_order"]:
+        if not 96 <= int(payload_type) <= 127:
+            continue
+        mapping = str(parsed["rtpmap"].get(payload_type) or "").upper()
+        if mapping != "H264/90000":
+            continue
+        parameters = _fmtp_parameters(parsed["fmtp"].get(payload_type, ""))
+        try:
+            packetization_mode = int(parameters.get("packetization-mode", "0") or 0)
+        except ValueError:
+            continue
+        if packetization_mode != 1:
+            continue
+        profile = parameters.get("profile-level-id", DEFAULT_H264_FORMAT.profile_level_id).lower()
+        if len(profile) != 6:
+            continue
+        try:
+            profile_bytes = bytes.fromhex(profile)
+        except ValueError:
+            continue
+        # The experimental profile deliberately avoids server-side
+        # transcoding. WebCodecs and common door stations interoperate most
+        # reliably on Baseline / Constrained Baseline (profile_idc 66).
+        if not profile_bytes or profile_bytes[0] != 0x42:
+            continue
+        out.append(
+            RtpH264Format(
+                payload_type=payload_type,
+                profile_level_id=profile,
+                packetization_mode=packetization_mode,
+                direction=str(parsed["direction"] or "sendrecv"),
+                sprop_parameter_sets=parameters.get("sprop-parameter-sets", ""),
+            )
+        )
+    return out
+
+
+def negotiate_h264(remote_sdp: str | bytes) -> RtpH264Format | None:
+    """Select the first supported H.264 mode-1 format from the offer/answer."""
+
+    offered = offered_h264_formats(remote_sdp)
+    return offered[0] if offered else None
+
+
+def negotiate_h264_answer(
+    remote_sdp: str | bytes,
+    offered: RtpH264Format,
+) -> RtpH264Format | None:
+    """Accept an H.264 answer only when it selects our offered payload type."""
+
+    selected = negotiate_h264(remote_sdp)
+    if selected is None or selected.payload_type != offered.payload_type:
+        return None
+    return selected
+
+
+def local_direction_for_remote(remote_direction: str) -> str:
+    """Return the RFC 3264 answer/local direction for a remote direction."""
+
+    return {
+        "sendonly": "recvonly",
+        "recvonly": "sendonly",
+        "inactive": "inactive",
+    }.get(str(remote_direction or "sendrecv").lower(), "sendrecv")
+
+
+def _video_media_lines(
+    media_port: int,
+    selected: RtpH264Format,
+    *,
+    direction: str,
+) -> list[str]:
+    payload_type = int(selected.payload_type)
+    lines = [
+        f"m=video {int(media_port)} RTP/AVP {payload_type}",
+        f"a=rtpmap:{payload_type} H264/90000",
+        (
+            f"a=fmtp:{payload_type} profile-level-id={selected.profile_level_id};"
+            f"packetization-mode={selected.packetization_mode};level-asymmetry-allowed=1"
+        ),
+        f"a={direction}",
+    ]
+    return lines
+
+
+def _rejected_media_line(section: dict) -> str:
+    formats = " ".join(str(item) for item in section.get("formats") or ["0"])
+    return f"m={section['media']} 0 {section['transport']} {formats}"
+
+
+def _answer_with_offered_media_order(
+    *,
+    origin_ip: str,
+    media_ip: str,
+    audio_lines: list[str],
+    remote_sdp: str | bytes,
+    video_port: int,
+    video_format: RtpH264Format | None,
+) -> str:
+    _session_connection, _session_direction, sections = _parse_media_sections(remote_sdp)
+    lines = [
+        "v=0",
+        f"o=- 0 0 IN IP4 {origin_ip}",
+        "s=VoIP Stack",
+        f"c=IN IP4 {media_ip}",
+        "t=0 0",
+    ]
+    used_audio = False
+    used_video = False
+    for section in sections:
+        if (
+            section["media"] == "audio"
+            and not used_audio
+            and section["port"] > 0
+            and section["transport"] == "RTP/AVP"
+            and section["connection_supported"]
+        ):
+            lines.extend(audio_lines)
+            used_audio = True
+            continue
+        if section["media"] == "video" and not used_video:
+            offered_payloads = {str(item) for item in section.get("formats") or []}
+            if (
+                video_format is not None
+                and int(video_port) > 0
+                and section["port"] > 0
+                and section["transport"] == "RTP/AVP"
+                and section["connection_supported"]
+                and str(video_format.payload_type) in offered_payloads
+            ):
+                lines.extend(
+                    _video_media_lines(
+                        int(video_port),
+                        video_format,
+                        direction=local_direction_for_remote(video_format.direction),
+                    )
+                )
+            else:
+                lines.append(_rejected_media_line(section))
+            used_video = True
+            continue
+        lines.append(_rejected_media_line(section))
+    if not used_audio:
+        lines.extend(audio_lines)
+    return "\r\n".join(lines) + "\r\n"
+
+
 def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
     parsed = parse_sdp(sdp)
     out: list[RtpPcmFormat] = []
@@ -499,6 +806,9 @@ def build_answer_directional(
     recv: RtpPcmFormat,
     *,
     dtmf: RtpDtmfFormat | None = None,
+    remote_sdp: str | bytes | None = None,
+    video_port: int = 0,
+    video_format: RtpH264Format | None = None,
 ) -> str:
     if send.frame_ms != recv.frame_ms:
         raise SdpError("SDP answer requires a common TX/RX RTP packet time")
@@ -513,22 +823,38 @@ def build_answer_directional(
     if dtmf is not None and str(dtmf.payload_type) not in payload_values:
         payload_values.append(str(dtmf.payload_type))
     payloads = " ".join(payload_values)
+    audio_lines = [f"m=audio {int(media_port)} RTP/AVP {payloads}"]
+    for fmt in selected:
+        audio_lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
+    if dtmf is not None:
+        audio_lines.append(f"a=rtpmap:{dtmf.payload_type} telephone-event/{dtmf.sample_rate}")
+        audio_lines.append(f"a=fmtp:{dtmf.payload_type} 0-16")
+    audio_lines.extend([
+        f"a=ptime:{selected[0].frame_ms}",
+        f"a=maxptime:{selected[0].frame_ms}",
+        "a=sendrecv",
+    ])
+    if remote_sdp is not None:
+        _connection, _direction, sections = _parse_media_sections(remote_sdp)
+        # RFC 3264 answers retain the offer's media-section count and order.
+        # The legacy single-audio fast path is valid only for exactly one
+        # audio section; every extra audio/video/data section must be answered
+        # explicitly, with port zero when this profile does not select it.
+        if len(sections) != 1 or sections[0]["media"] != "audio":
+            return _answer_with_offered_media_order(
+                origin_ip=origin_ip,
+                media_ip=media_ip,
+                audio_lines=audio_lines,
+                remote_sdp=remote_sdp,
+                video_port=video_port,
+                video_format=video_format,
+            )
     lines = [
         "v=0",
         f"o=- 0 0 IN IP4 {origin_ip}",
         "s=VoIP Stack",
         f"c=IN IP4 {media_ip}",
         "t=0 0",
-        f"m=audio {int(media_port)} RTP/AVP {payloads}",
+        *audio_lines,
     ]
-    for fmt in selected:
-        lines.append(f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}")
-    if dtmf is not None:
-        lines.append(f"a=rtpmap:{dtmf.payload_type} telephone-event/{dtmf.sample_rate}")
-        lines.append(f"a=fmtp:{dtmf.payload_type} 0-16")
-    lines.extend([
-        f"a=ptime:{selected[0].frame_ms}",
-        f"a=maxptime:{selected[0].frame_ms}",
-        "a=sendrecv",
-    ])
     return "\r\n".join(lines) + "\r\n"

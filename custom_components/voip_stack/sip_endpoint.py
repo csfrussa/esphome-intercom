@@ -52,6 +52,7 @@ class SipEndpointManager:
         on_info: InfoHandler | None = None,
         udp_enabled: bool = True,
         tcp_enabled: bool = True,
+        enable_video: bool = False,
     ) -> None:
         self.host = host
         self.port = int(port)
@@ -66,6 +67,7 @@ class SipEndpointManager:
         self.on_info = on_info
         self.udp_enabled = bool(udp_enabled)
         self.tcp_enabled = bool(tcp_enabled)
+        self.enable_video = bool(enable_video)
         self.udp_server: SipUdpServer | None = None
         self.tcp_server: SipTcpServer | None = None
 
@@ -94,6 +96,7 @@ class SipEndpointManager:
                 on_terminated=self.on_terminated,
                 on_register=self.on_register,
                 on_info=self.on_info,
+                enable_video=self.enable_video,
             )
             if not await udp.start():
                 return False
@@ -111,6 +114,7 @@ class SipEndpointManager:
                 on_terminated=self.on_terminated,
                 on_register=self.on_register,
                 on_info=self.on_info,
+                enable_video=self.enable_video,
             )
             if not await tcp.start():
                 if udp is not None:

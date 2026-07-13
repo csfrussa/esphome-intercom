@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 
 from .call_registry import CallRegistry
 from .const import DOMAIN
+from .media_ports import release_media_reservation
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,6 +101,11 @@ async def async_stop_sip_endpoint(hass: HomeAssistant) -> None:
         *(_stop_relay(relay) for relay in relays),
         *(_stop_client(client) for client in clients),
     )
+    # Inbound HA-softphone calls own their audio/video reservation through
+    # registry metadata rather than SipCallClient. Release it explicitly on a
+    # config-entry reload before clear_runtime drops the ownership record.
+    for media in [*registry.softphone_media.values(), *registry.preanswered.values()]:
+        release_media_reservation(media)
     if endpoint is not None:
         try:
             await endpoint.stop()

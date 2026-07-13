@@ -11,7 +11,10 @@ const MODULE_VERSION = (() => {
 })();
 const { RINGTONE_REPEAT_MS, playVoipRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
+const { VoipStackVideo } =
+  await import(`./voip-stack-video.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
+const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
 const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
@@ -47,10 +50,23 @@ class VoipStackEngine extends EventTarget {
     this._connectPromise = null;
     this._sessionAttachKey = "";
     this._sessionAttachPromise = null;
+    // Media ownership belongs to the page-level engine, not to one Lovelace
+    // element. Home Assistant may recreate a card while an outbound call is
+    // ringing; the replacement must still be able to attach that call's media.
+    try {
+      this._ownedSoftphoneCallId = sessionStorage.getItem(SOFTPHONE_MEDIA_SESSION_KEY) || "";
+    } catch (_) {
+      this._ownedSoftphoneCallId = "";
+    }
     this._ringtoneRequests = new Map();
     this._ringtoneContext = null;
     this._ringtoneTimer = null;
     this._audioFrameBuffer = null;
+    this._video = new VoipStackVideo();
+    this._videoAttachGeneration = 0;
+    this._videoAttachPromise = null;
+    this._videoAttachCallId = "";
+    this._video.addEventListener("state", () => this._emit());
 
     window.addEventListener("pagehide", () => {
       this._ringtoneRequests.clear();
@@ -61,6 +77,7 @@ class VoipStackEngine extends EventTarget {
 
   configure(hass) {
     this._hass = hass;
+    this._video.configure(hass);
     const conn = hass?.connection || null;
     if (!conn || conn === this._busConnection) return;
     if (this._busUnsub) {
@@ -104,13 +121,56 @@ class VoipStackEngine extends EventTarget {
     return this._callId;
   }
 
+  claimSoftphoneSession(callId) {
+    this._ownedSoftphoneCallId = String(callId || "");
+    try {
+      if (this._ownedSoftphoneCallId) {
+        sessionStorage.setItem(SOFTPHONE_MEDIA_SESSION_KEY, this._ownedSoftphoneCallId);
+      } else {
+        sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY);
+      }
+    } catch (_) {}
+  }
+
+  ownsSoftphoneSession(callId) {
+    const wanted = String(callId || "");
+    return !!wanted && wanted === this._ownedSoftphoneCallId;
+  }
+
+  get softphoneCallId() {
+    return this._ownedSoftphoneCallId;
+  }
+
+  releaseSoftphoneSession(callId = "") {
+    const wanted = String(callId || "");
+    if (!wanted || wanted === this._ownedSoftphoneCallId) {
+      this._ownedSoftphoneCallId = "";
+      try { sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY); } catch (_) {}
+    }
+  }
+
   get stats() {
-    return { ...this._stats };
+    return { ...this._stats, video: this._video.stats };
+  }
+
+  get videoActive() {
+    return this._video.active;
+  }
+
+  get videoVisible() {
+    return this._video.visible;
+  }
+
+  setVideoCanvas(canvas) {
+    this._video.setCanvas(canvas);
   }
 
   statsText() {
     if (!this.active) return "";
-    return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | TxDrop: ${this._stats.tx_dropped || 0} | Buf: ${this._stats.buffered_frames} | Und: ${this._stats.underruns || 0}`;
+    const video = this._video.active
+      ? ` | Video TX: ${this._video.stats.sent} RX: ${this._video.stats.received} Drop: ${this._video.stats.dropped}`
+      : "";
+    return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | TxDrop: ${this._stats.tx_dropped || 0} | Buf: ${this._stats.buffered_frames} | Und: ${this._stats.underruns || 0}${video}`;
   }
 
   _emit() {
@@ -503,6 +563,7 @@ class VoipStackEngine extends EventTarget {
       this._setState("IDLE");
       return reply;
     }
+    this.claimSoftphoneSession(reply?.call_id || "");
     const state = String(reply.state || "calling").toLowerCase();
     if (state === "in_call") {
       const mediaInfo = {
@@ -550,6 +611,7 @@ class VoipStackEngine extends EventTarget {
       this._ws.readyState === WebSocket.OPEN
     ) {
       this._setState("IN_CALL");
+      void this._ensureVideo(statePayload);
       return;
     }
     this._resetStats();
@@ -561,6 +623,56 @@ class VoipStackEngine extends EventTarget {
     )) return;
     if (this._sessionAttachKey !== attachKey) return;
     this._setState("IN_CALL");
+    // Video is optional and directionally independent from the audio call.
+    // In particular, a real browser may leave getUserMedia pending while it
+    // asks for camera permission. Never make audio attachment or call control
+    // wait for that prompt.
+    void this._ensureVideo(statePayload);
+  }
+
+  async _ensureVideo(statePayload) {
+    const wantedCallId = String(statePayload?.call_id || "");
+    if (!statePayload?.video_active) {
+      this._videoAttachGeneration++;
+      this._videoAttachPromise = null;
+      this._videoAttachCallId = "";
+      await this._video.close();
+      return;
+    }
+
+    if (this._video.active && this._video.callId === wantedCallId) return;
+    if (this._videoAttachPromise && this._videoAttachCallId === wantedCallId) {
+      await this._videoAttachPromise;
+      return;
+    }
+
+    const generation = ++this._videoAttachGeneration;
+    this._videoAttachCallId = wantedCallId;
+    const attach = (async () => {
+      try {
+        await this._video.start(statePayload);
+        if (
+          generation !== this._videoAttachGeneration ||
+          !wantedCallId ||
+          this._callId !== wantedCallId
+        ) {
+          if (this._video.callId === wantedCallId) await this._video.close();
+        }
+      } catch (err) {
+        if (generation !== this._videoAttachGeneration) return;
+        console.warn("voip-stack-engine: optional SIP video setup failed", err);
+        this.dispatchEvent(new CustomEvent("video-error", { detail: err?.message || String(err) }));
+      }
+    })();
+    this._videoAttachPromise = attach;
+    try {
+      await attach;
+    } finally {
+      if (this._videoAttachPromise === attach) {
+        this._videoAttachPromise = null;
+        this._videoAttachCallId = "";
+      }
+    }
   }
 
   _resetStats() {
@@ -568,6 +680,9 @@ class VoipStackEngine extends EventTarget {
   }
 
   async close(_reason = "", preserveAttach = false) {
+    this._videoAttachGeneration++;
+    this._videoAttachPromise = null;
+    this._videoAttachCallId = "";
     if (!preserveAttach) this._sessionAttachKey = "";
     const ws = this._ws;
     this._ws = null;
@@ -575,6 +690,7 @@ class VoipStackEngine extends EventTarget {
       try { ws.close(); } catch (_) {}
     }
     this._callId = "";
+    await this._video.close();
     await this._cleanupAudio("close");
   }
 

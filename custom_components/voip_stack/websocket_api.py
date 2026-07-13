@@ -325,6 +325,7 @@ async def _async_shutdown_all(hass: HomeAssistant) -> None:
             future.cancel()
     bucket.pop("sip_bridge_state", None)
     bucket.pop("audio_ws_owners", None)
+    bucket.pop("video_ws_owners", None)
     store = _ha_softphone_store(hass)
     store.update(
         {
@@ -332,6 +333,10 @@ async def _async_shutdown_all(hass: HomeAssistant) -> None:
             "sip_state": CallState.IDLE.value,
             "terminal_reason": TerminalReason.LOCAL_HANGUP.value,
             "last_sip_event": "shutdown",
+            "video_active": False,
+            "video_offered": False,
+            "video_format": "",
+            "video_direction": "inactive",
         }
     )
     for key in (
@@ -434,6 +439,16 @@ _MEDIA_COUNTER_KEYS = (
     "rtp_rx_packets",
     "rtp_tx_bytes",
     "rtp_rx_bytes",
+    "video_rtp_tx_packets",
+    "video_rtp_rx_packets",
+    "video_rtp_tx_bytes",
+    "video_rtp_rx_bytes",
+    "video_rtp_dropped_packets",
+    "video_access_units_tx",
+    "video_access_units_rx",
+    "video_drop_addr",
+    "video_drop_payload_type",
+    "video_drop_error",
 )
 
 
@@ -622,6 +637,10 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "selected_tx_rtp_format": store.get("selected_tx_rtp_format", ""),
         "selected_rx_rtp_format": store.get("selected_rx_rtp_format", ""),
         "audio_mode": store.get("audio_mode", ""),
+        "video_active": bool(store.get("video_active", False)),
+        "video_offered": bool(store.get("video_offered", False)),
+        "video_format": store.get("video_format", ""),
+        "video_direction": store.get("video_direction", "inactive"),
         "sip_transport": store.get("sip_transport", "udp+tcp"),
         "sip_status_code": last_status,
         "terminal_reason": store.get("terminal_reason", ""),
@@ -750,6 +769,10 @@ def _set_ha_softphone_call_state(
             "selected_tx_rtp_format",
             "selected_rx_rtp_format",
             "audio_mode",
+            "video_active",
+            "video_offered",
+            "video_format",
+            "video_direction",
             "route_kind",
             "sip_uri",
             "media_debug",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import socket
 import sys
 import types
 import unittest
@@ -136,6 +137,19 @@ class MediaPortPoolTest(unittest.TestCase):
             self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set(reservation.ports))
             media_ports.release_media_reservation(item)
             media_ports.release_media_reservation(item)
+            self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set())
+
+    def test_bound_video_socket_is_nonblocking_and_closed_with_reservation(self) -> None:
+        hass = FakeHass()
+        with patch.object(media_ports, "rtp_port_available", return_value=True):
+            reservation = media_ports.RtpPortReservation.allocate(hass)
+            sock = media_ports.bind_sip_rtp_socket(0)
+            self.assertFalse(sock.getblocking())
+            self.assertGreaterEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF), 1024 * 1024)
+            item = {"rtp_reservation": reservation, "video_rtp_socket": sock}
+            media_ports.release_media_reservation(item)
+            self.assertEqual(sock.fileno(), -1)
+            self.assertNotIn("video_rtp_socket", item)
             self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set())
 
 

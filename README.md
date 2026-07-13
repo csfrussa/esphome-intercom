@@ -135,6 +135,14 @@ normal trunk path explicit, while a common no-answer forward is one state
 trigger plus one `voip_stack.forward` action; the backend infers the active call
 safely.
 
+An opt-in experimental path also lets the Home Assistant softphone negotiate
+direct H.264 SIP video with standard SIP phones and door stations. The card
+renders incoming video behind its call controls and can return the browser
+camera when the negotiated direction permits it. Audio remains independent and
+ESPHome endpoints remain audio-only. See the
+[experimental SIP video profile](docs/EXPERIMENTAL_SIP_VIDEO.md) for browser,
+codec, security and qualification boundaries.
+
 - 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
 - 🚀 [Published `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)
 

@@ -73,6 +73,13 @@ SIP signaling transports:
 
 RTP audio remains UDP in the current profile, even when SIP signaling is TCP.
 
+The HA softphone has an optional experimental video extension to this profile.
+It does not change the ESP media contract and is disabled by default. When
+enabled, standard SIP endpoints may negotiate H.264 over RTP/AVP using RFC 6184
+packetization mode 1. See
+[Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) for the exact capability
+and security boundaries.
+
 ## SDP And RTP
 
 ESP media is PCM-only.
@@ -92,6 +99,9 @@ ESP must convert at the RTP boundary:
 Compressed codecs are not implemented on ESP. If a SIP softphone offers only
 compressed codecs such as PCMU, PCMA, Opus, Speex, GSM or G.722, ESP returns
 `488 Not Acceptable Here`.
+
+ESP devices never advertise or decode video. The optional HA softphone video
+path is not routed into an ESP, ring group, conference room or Assist pipeline.
 
 ## Roster
 

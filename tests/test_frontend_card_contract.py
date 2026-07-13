@@ -469,6 +469,47 @@ class FrontendCardContractTest(unittest.TestCase):
             editor,
         )
 
+    def test_softphone_media_ownership_survives_card_recreation_in_same_tab(self) -> None:
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        self.assertIn('const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call"', engine)
+        self.assertIn("sessionStorage.getItem(SOFTPHONE_MEDIA_SESSION_KEY)", engine)
+        self.assertIn("sessionStorage.setItem(SOFTPHONE_MEDIA_SESSION_KEY", engine)
+        self.assertIn("sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY)", engine)
+        self.assertIn("ownsSoftphoneSession(callId)", engine)
+        self.assertIn("releaseSoftphoneSession(callId = \"\")", engine)
+        self.assertIn("_cleanupAfterTerminalSession(snapshot)", self.source)
+        state_loader = self.source.split("async _loadSoftphoneState()", 1)[1].split(
+            "_cycleSoftphoneTarget(", 1
+        )[0]
+        self.assertIn("this._ensureHaSoftphoneAudioPath(snapshot)", state_loader)
+
+    def test_experimental_video_keeps_send_and_receive_paths_independent(self) -> None:
+        video = (
+            ROOT
+            / "custom_components"
+            / "voip_stack"
+            / "frontend"
+            / "voip-stack-video.js"
+        ).read_text()
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        self.assertIn("window.isSecureContext", video)
+        self.assertIn("MAX_PENDING_DECODE_BYTES", video)
+        self.assertIn("this._canReceive = true", video)
+        self.assertIn("this._canSend = true", video)
+        self.assertIn("if (!usablePaths)", video)
+        self.assertIn("partial media support", video)
+        self.assertIn("async _cleanupSender()", video)
+        self.assertIn("_cleanupReceiver()", video)
+        self.assertIn("this._generation", video)
+        self.assertIn("SIP video session was superseded", video)
+        self.assertIn("get videoVisible()", engine)
+        self.assertIn("voipStackEngine.videoVisible", self.source)
+        self.assertIn("void this._ensureVideo(statePayload)", engine)
+        self.assertIn("this._videoAttachGeneration", engine)
+        self.assertIn("this._videoAttachPromise", engine)
+        self.assertIn("this._videoAttachCallId === wantedCallId", engine)
+        self.assertIn("this._video.callId === wantedCallId", engine)
+
 
 if __name__ == "__main__":
     unittest.main()

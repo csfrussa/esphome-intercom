@@ -279,6 +279,17 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
             async def close(self, *, reason: str) -> None:
                 calls.append(f"conference_{reason}")
 
+        class Reservation:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def release(self) -> None:
+                calls.append(f"release_{self.name}")
+
+        class VideoSocket:
+            def close(self) -> None:
+                calls.append("video_socket_close")
+
         class Endpoint:
             def snapshot(self):
                 return types.SimpleNamespace(pending_call_ids=("pending",), active_call_ids=("active",))
@@ -297,6 +308,13 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         registry.relays["call"] = Relay()
         registry.sip_clients["call"] = Client()
         registry.client_watchers["call"] = watcher
+        registry.softphone_media["inbound"] = {
+            "rtp_reservation": Reservation("inbound"),
+            "video_rtp_socket": VideoSocket(),
+        }
+        registry.preanswered["preanswered"] = {
+            "rtp_reservation": Reservation("preanswered"),
+        }
         registry.upsert("call", state="in_call")
         hass.data[const.DOMAIN]["conference_manager"] = Manager()
         hass.data[const.DOMAIN]["sip_endpoint"] = Endpoint()
@@ -311,6 +329,9 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("relay_stop", calls)
         self.assertIn("client_terminate", calls)
         self.assertIn("client_close", calls)
+        self.assertIn("video_socket_close", calls)
+        self.assertIn("release_inbound", calls)
+        self.assertIn("release_preanswered", calls)
         self.assertEqual(calls[-1], "endpoint_stop")
         self.assertFalse(registry.sessions)
         self.assertFalse(registry.relays)
@@ -353,7 +374,17 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
             caller="Kitchen",
             call_id="call-1",
             cseq="1 INVITE",
-            remote_sdp=b"",
+            remote_sdp=(
+                b"v=0\r\n"
+                b"c=IN IP4 127.0.0.1\r\n"
+                b"t=0 0\r\n"
+                b"m=audio 45678 RTP/AVP 96\r\n"
+                b"a=rtpmap:96 L16/16000/1\r\n"
+                b"a=ptime:20\r\n"
+                b"m=video 45680 RTP/AVP 102\r\n"
+                b"a=rtpmap:102 H264/90000\r\n"
+                b"a=fmtp:102 profile-level-id=42e01f;packetization-mode=1\r\n"
+            ),
             send_format=fmt,
             recv_format=fmt,
             remote_rtp_host="127.0.0.1",
@@ -363,6 +394,7 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         result = await manager.join(invite, entry, ring_ha=True)
         self.assertEqual(result.status, 200)
         self.assertIn("m=audio", result.answer_sdp)
+        self.assertIn("m=video 0 RTP/AVP 102", result.answer_sdp)
 
         queue = manager.join_ha_softphone("Conference")
         self.assertIsNotNone(queue)
