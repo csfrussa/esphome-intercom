@@ -1,10 +1,16 @@
-# 2026.7.2: Work In Progress
+# 2026.7.2-dev: Automation-Native Routing And Experimental SIP Video
 
-<!-- Canonical incremental source for the future v2026.7.2 release body. -->
+<!-- Canonical source for the v2026.7.2-dev GitHub pre-release body. -->
 
-`2026.7.2` collects changes made after stable `2026.7.1`. This document is
-updated as work lands on `dev`; features listed here are not released until the
-version is published from `main`.
+> [!IMPORTANT]
+> This is a GitHub development pre-release for manual testing. It is not
+> offered through HACS; the normal HACS installation remains on stable
+> `2026.7.1`.
+
+`2026.7.2-dev` collects changes made after stable `2026.7.1`. It introduces
+automation-native call routing and an opt-in experimental H.264 video path for
+the Home Assistant softphone. Install it only when you intend to test the
+current `dev` integration and report regressions.
 
 ## 📞 More Reliable Outbound Trunk Calls
 
