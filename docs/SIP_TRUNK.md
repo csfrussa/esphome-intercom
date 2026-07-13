@@ -27,7 +27,9 @@ details:
 - REGISTER expiration
 - optional outbound proxy
 - inbound default target
-- optional DTMF routing
+- incoming routing mode: Direct or DTMF extension selection
+- optional experimental automation routing override
+- DTMF timeout and optional terminator
 
 ## Outbound Routing
 
@@ -45,9 +47,18 @@ as routing errors. There is no proprietary intercom compatibility route.
 
 ## Inbound Routing
 
-Provider inbound calls arrive at HA's SIP endpoint. HA answers the trunk leg
-with SDP so it can receive RFC2833/telephone-event DTMF digits from normal
-mobile dialers and SIP softphones.
+Provider inbound calls arrive at HA's SIP endpoint and use the shared phonebook
+as their default dial plan. **Inbound default target** accepts HA, a phonebook
+name, extension, group, registered SIP phone, Assist extension, SIP URI or a
+routable number.
+
+Choose one routing mode in the config flow:
+
+- **Direct to default destination** skips DTMF collection and immediately
+  resolves the configured target through the phonebook.
+- **DTMF extension selection** answers the trunk leg with SDP, collects
+  negotiated telephone-event or SIP INFO digits, and resolves explicit digits
+  as phonebook extensions.
 
 DTMF digits resolve against the central phonebook `extension` field:
 
@@ -78,6 +89,27 @@ be resolved.
 The route collector prefers negotiated RTP `telephone-event` and also accepts
 the widely deployed legacy SIP INFO DTMF representation. Acoustic in-band
 tones are not decoded.
+
+## Experimental Automation Override
+
+**Allow experimental automation routing overrides** is a separate switch and
+is disabled by default. Enabling it adds one bounded `route_requested` decision
+point:
+
+- Direct mode exposes it before the default target.
+- DTMF mode exposes it only after the digit window produced no digits.
+- Explicit DTMF digits always retain priority and never enter the automation
+  path.
+
+If no matching automation acts within 1.5 seconds, the original phonebook route
+continues. This makes time, presence and other HA state useful for contextual
+routing without replacing the normal dial plan. See
+[Automation Dial Plan](AUTOMATION_DIALPLAN.md) for native UI-compatible
+examples.
+
+Version 1 entries migrate without changing their route. Existing DTMF-enabled
+entries with a non-zero timeout become DTMF mode; other entries become Direct
+mode. Automation routing stays off until explicitly enabled.
 
 ## Media
 

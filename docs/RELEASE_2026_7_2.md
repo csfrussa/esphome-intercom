@@ -46,6 +46,13 @@ version is published from `main`.
 
 - The phonebook remains the complete default dial plan. With no matching
   automation, calls behave exactly as before.
+- Trunk inbound routing now has explicit Direct and DTMF modes. Direct follows
+  the configured default target without pre-answer; DTMF gives explicit
+  phonebook extensions priority and uses the default target only when no digits
+  arrive.
+- Experimental automation routing is a separate, disabled-by-default option.
+  It may override the Direct decision or the no-digits DTMF fallback, but never
+  an explicit DTMF extension.
 - A native `event.voip_stack_call` entity exposes incoming/outgoing calls,
   ringing, answer/connection, terminal results, explicit timeout requests and
   in-call DTMF in Home Assistant's entity and automation UI.
@@ -75,7 +82,7 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 333 tests and 35 subtests passing.
+- Full backend and frontend test suite: 340 tests and 35 subtests passing.
 - Python/Ruff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
@@ -98,6 +105,12 @@ conditional-forward and unanswered-call-to-Assist examples.
   SIP caller, no-ID forward inference and the real 30-second trunk-to-Assist
   automation. The HA card releases to `idle/forwarded` while the same source
   call continues to Assist.
+- A separate real-trunk inbound matrix covered nine routing contracts: Direct
+  default with no decision delay, Direct timeout fallback, Direct native event
+  override, DTMF no-digits default, DTMF no-digits override, explicit Assist
+  extension, invalid extension rejection, native state `for:` forwarding and
+  caller cancellation during digit collection. Every case captured the full
+  WebSocket transition sequence and restored the original HA configuration.
 
 ## Known Follow-Up Areas
 

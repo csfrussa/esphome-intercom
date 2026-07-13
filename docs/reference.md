@@ -225,9 +225,10 @@ When `trunk_enabled` is true, the second step adds:
 | `trunk_password` | Digest auth password. |
 | `trunk_register_expires` | REGISTER expiration in seconds. |
 | `trunk_outbound_proxy` | Optional proxy host or `sip:host:port` used as signaling next hop. |
-| `trunk_inbound_default_target` | Local target used when no DTMF extension arrives. Default `HA`. |
-| `trunk_dtmf_enabled` | Enable inbound RFC2833/telephone-event and SIP INFO DTMF collection. Acoustic in-band tones are not decoded. |
-| `trunk_dtmf_timeout_ms` | Digit collection window. The setup UI shows seconds; internally this is stored in milliseconds. Default 3 s, maximum 10 s. `0` skips DTMF/pre-answer and uses the normal inbound dialplan. |
+| `trunk_inbound_default_target` | Canonical phonebook target used by Direct mode or by the DTMF no-digits fallback. Default `HA`. |
+| `trunk_inbound_mode` | `direct` resolves the default target immediately; `dtmf` pre-answers and collects an explicit phonebook extension. |
+| `automation_routing_enabled` | Experimental, disabled by default. Exposes a bounded automation decision before Direct routing or the DTMF no-digits fallback. Explicit digits are never overridden. |
+| `trunk_dtmf_timeout_ms` | DTMF-mode digit window. The setup UI shows seconds; internally this is stored in milliseconds. Default 3 s, maximum 10 s. |
 | `trunk_dtmf_terminator` | Optional terminator digit such as `#`. Empty means timeout or exact phonebook extension match decides. |
 
 Ambiguous DTMF digit prefixes are resolved at runtime against the live
@@ -235,6 +236,10 @@ phonebook `extension` fields. HA collects within the timeout and tries the
 final buffer. If no digits arrive, HA uses `trunk_inbound_default_target`. If
 explicit digits arrive and do not resolve, HA logs the digits and terminates
 the answered leg as `route_not_found`.
+
+Version 1 config entries migrate without changing their effective behavior:
+an enabled non-zero DTMF configuration becomes `dtmf`, other configurations
+become `direct`, and automation routing remains disabled until selected.
 
 ## HA SIP Events
 

@@ -133,6 +133,7 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             callee=destination or getattr(invite, "target", ""),
             peer_name=getattr(invite, "caller", ""),
             call_id=call_id,
+            direction="incoming",
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
             selected_tx_rtp_format=invite.send_format.wire_token(),

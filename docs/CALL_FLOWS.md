@@ -187,23 +187,74 @@ except itself.
 
 If trunk is not registered, HA rejects with `trunk_unavailable`.
 
-## Route Decision Fallback
+## Trunk Inbound: Direct Mode
 
-The legacy `voip_stack.route_request` event is the automation escape hatch, not
-the normal path for known roster targets. Its native event-entity occurrence is
-`incoming_call` with canonical state `connecting`; `route_requested` is not a
-public call state.
+1. A provider or PBX sends an INVITE to the registered HA trunk account.
+2. HA replaces the provider Request-URI with the configured inbound default
+   target.
+3. With automation routing disabled, HA resolves that target immediately
+   through the phonebook.
+4. The result can ring HA, bridge to an ESP or registered phone, join a ring or
+   conference group, or start the configured Assist destination.
+5. HA negotiates and bridges the source and destination media legs when the
+   route needs a bridge.
 
-It is expected when:
+There is no DTMF collection and no pre-answer delay in Direct mode.
 
-- inbound trunk handling needs an automation decision;
-- an unknown external SIP caller reaches HA and the route is not immediately
-  known;
-- tests intentionally exercise `voip_stack.route`.
+## Trunk Inbound: DTMF Mode
 
-It is not expected for:
+1. HA answers the trunk leg with its negotiated audio and telephone-event
+   formats.
+2. HA collects RTP telephone-event and SIP INFO digits for the configured
+   timeout.
+3. Explicit digits are resolved only as canonical phonebook extensions.
+4. A valid extension routes to its entry. An unknown explicit extension ends
+   as `route_not_found`; it never falls back to another destination.
+5. If the caller enters no digits, HA follows the configured default target.
+
+The initial extension digits are route selection, not established-call DTMF
+events. Once a bridged call is connected, later negotiated keys are published
+as individual `dtmf` occurrences without interrupting media.
+
+## Optional Automation Decision
+
+Automation routing is an experimental, independently configurable override.
+It is disabled by default.
+
+When enabled, HA publishes one `route_requested` occurrence and waits up to
+1.5 seconds for a decision:
+
+- before the default route in Direct mode;
+- before the no-digits fallback in DTMF mode.
+
+Explicit DTMF extensions never enter this decision path. If no automation
+acts, the original phonebook decision continues. A forward action moves the
+same logical source call and does not create a second inbound call.
+
+The legacy `voip_stack.route_request` bus event remains for compatibility. The
+normal public surface is the `route_requested` type on
+`event.voip_stack_call`, consumed through Home Assistant's native
+`event.received` trigger.
+
+The decision point is not expected for:
 
 - registered endpoint calling another roster target;
 - HA/card calling a roster target;
 - ESP calling a known roster target;
-- `forward` to a registered account.
+- an explicit DTMF extension;
+- any inbound call while automation routing is disabled.
+
+## Unanswered HA Forward
+
+1. The default route places the HA-owned logical call in `ringing`.
+2. `sensor.voip_stack_call_state` publishes the same state and Call-ID as the
+   softphone/card stream.
+3. A native HA state trigger may wait with `for:`, for example 30 seconds.
+4. `voip_stack.forward` resolves the only forwardable call and claims a new
+   routing revision.
+5. HA releases the softphone, publishes its terminal `forwarded` transition,
+   and attaches the replacement destination to the still-open source call.
+6. On route failure, `on_failure: resume` restores HA ringing exactly once.
+
+Callbacks from the previous revision cannot resurrect the released HA ringing
+state. The card only renders these authoritative backend transitions.

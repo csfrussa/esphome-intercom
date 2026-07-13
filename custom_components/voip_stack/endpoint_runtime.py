@@ -17,6 +17,7 @@ from .audio_format import HA_SIP_PCM_FORMATS, HA_SIP_PCM_RX_FORMATS, HA_SIP_PCM_
 from .call_registry import TERMINAL_STATES
 from .config import debug_mode as _debug_mode
 from .const import (
+    CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_ASSIST_PIPELINE,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -24,6 +25,7 @@ from .const import (
     CONF_TRUNK_DTMF_TERMINATOR,
     CONF_TRUNK_DTMF_TIMEOUT_MS,
     CONF_TRUNK_INBOUND_DEFAULT_TARGET,
+    CONF_TRUNK_INBOUND_MODE,
     CONF_TRUNK_OUTBOUND_PROXY,
     CONF_TRUNK_PASSWORD,
     CONF_TRUNK_PORT,
@@ -32,6 +34,7 @@ from .const import (
     CONF_TRUNK_USERNAME,
     DOMAIN,
     HA_SOFTPHONE_DEVICE_ID,
+    TRUNK_INBOUND_MODE_DTMF,
 )
 from .endpoint_lifecycle import (
     async_stop_sip_endpoint,
@@ -428,6 +431,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             peer_name=destination_name,
             call_id=invite.call_id,
             dest_call_id=assist_leg_id,
+            direction="incoming",
             route_kind=RouteAction.ASSIST.value,
             selected_tx_format=invite.send_format.audio_format.wire_token(),
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
@@ -607,13 +611,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     def _inbound_route_decision(invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]):
         # Once an INVITE reached HA, HA is the router. ESP-origin direct-vs-HA
         # decisions are made before dialing by the ESP phonebook mirror.
-        return _ha_router_decision(invite.target, entries)
+        # ``HA`` is the stable config-flow alias; the phonebook entry carries
+        # the user-selected HA peer name (for example ``Casa``). Resolve the
+        # alias before consulting the canonical phonebook dial plan.
+        target = _ha_peer_name(hass) if _is_ha_target(invite.target) else invite.target
+        return _ha_router_decision(target, entries)
 
     async def _run_trunk_inbound_route(
         invite: SipInvite,
         *,
         bridge_ports: RtpPortReservation,
-        route_future: asyncio.Future | None = None,
     ) -> None:
         source_relay_port, dest_relay_port = bridge_ports.ports
         bucket = hass.data.setdefault(DOMAIN, {})
@@ -664,19 +671,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     timeout,
                 )
             pending = set(collector_tasks)
-            if route_future is not None:
-                pending.add(route_future)
             try:
-                while pending and not digits and not automation_decision:
+                while pending and not digits:
                     done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
-                        if task is route_future:
-                            decision_data = task.result() if not task.cancelled() else {}
-                            action = str((decision_data or {}).get("action") or "default").strip().lower()
-                            if action != "default":
-                                automation_decision = dict(decision_data or {})
-                                break
-                            continue
                         try:
                             candidate_digits, candidate_destination = task.result()
                         except Exception as err:
@@ -685,26 +683,69 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         if candidate_digits:
                             digits, destination = candidate_digits, candidate_destination
                             break
-                    # Once every DTMF collector has completed, only an
-                    # optional automation decision may remain pending. Do not
-                    # let that future extend the configured DTMF window: the
-                    # normal trunk route must resume immediately.
-                    if not any(task in pending for task in collector_tasks):
-                        break
             finally:
-                remaining_collectors = [
-                    task for task in pending if task is not route_future
-                ]
+                remaining_collectors = list(pending)
                 for task in remaining_collectors:
                     task.cancel()
                 await asyncio.gather(
                     *remaining_collectors, return_exceptions=True
                 )
-        route = _pending_routes(hass).pop(invite.call_id, None)
-        if route is not None:
-            future = route.get("future")
-            if future is not None and not future.done():
-                future.cancel()
+        # A source BYE must win before any no-digits automation window is
+        # opened. Otherwise a cancelled pre-answer call can emit one stale
+        # route_requested occurrence when its DTMF timer expires.
+        if invite.call_id in bucket.get("trunk_closed_calls", set()):
+            bucket["trunk_closed_calls"].discard(invite.call_id)
+            bucket.setdefault("trunk_info_queues", {}).pop(invite.call_id, None)
+            _LOGGER.info(
+                "SIP trunk inbound call_id=%s closed during DTMF collection",
+                invite.call_id,
+            )
+            bridge_ports.release()
+            return
+
+        # Explicit digits always select the canonical phonebook route. Only
+        # the no-digits fallback may be overridden by an automation.
+        if not digits and trunk_cfg.get(CONF_AUTOMATION_ROUTING_ENABLED):
+            future = asyncio.get_running_loop().create_future()
+            expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT
+            _pending_routes(hass)[invite.call_id] = {
+                "future": future,
+                "invite": invite,
+                "created_at": time.time(),
+                "expires_at": expires_at,
+            }
+            default_target = str(
+                trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"
+            ).strip() or "HA"
+            _set_sip_bridge_call_state(
+                hass,
+                CallState.CONNECTING.value,
+                caller=invite.caller,
+                callee=default_target,
+                peer_name=invite.caller,
+                call_id=invite.call_id,
+                direction="incoming",
+                scope="sip_trunk",
+                phase="route_decision",
+                route_request=True,
+                default_destination=default_target,
+                expires_at=expires_at,
+                decision_timeout_ms=int(SIP_ROUTE_DECISION_TIMEOUT * 1000),
+                source_host=invite.source_host,
+            )
+            try:
+                decision_data = await asyncio.wait_for(
+                    future, timeout=SIP_ROUTE_DECISION_TIMEOUT
+                )
+                action = str(
+                    (decision_data or {}).get("action") or "default"
+                ).strip().lower()
+                if action != "default":
+                    automation_decision = dict(decision_data or {})
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                _pending_routes(hass).pop(invite.call_id, None)
         bucket.setdefault("trunk_info_queues", {}).pop(invite.call_id, None)
 
         if invite.call_id in bucket.get("trunk_closed_calls", set()):
@@ -781,6 +822,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 callee=route_hint or default_target,
                 peer_name=invite.caller,
                 call_id=invite.call_id,
+                direction="incoming",
                 reason="route_not_found",
                 terminal_reason="route_not_found",
                 origin="self",
@@ -823,6 +865,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     caller=invite.caller,
                     callee=destination,
                     call_id=invite.call_id,
+                    direction="incoming",
                     reason=str(err),
                     terminal_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
                     origin="self",
@@ -1186,38 +1229,47 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             if session is not None:
                 session.metadata["automation_resume_ha"] = ha_claimed
-                claimed = registry.transition(
-                    call_id,
-                    state=CallState.CONNECTING.value,
-                    owner="router",
-                    callee=destination,
-                    route_kind=decision.action.value,
-                    expected_revision=session.revision,
-                    expected_owner=session.owner,
-                    automation_resume_ha=ha_claimed,
+                route_already_claimed = bool(
+                    session.state == CallState.CONNECTING.value
+                    and session.owner == "router"
+                    and session.callee == destination
                 )
-                if claimed is None:
-                    raise ServiceValidationError(
-                        f"call_id {call_id} changed while forwarding ownership was claimed"
+                if not route_already_claimed:
+                    claimed = registry.transition(
+                        call_id,
+                        state=CallState.CONNECTING.value,
+                        owner="router",
+                        callee=destination,
+                        route_kind=decision.action.value,
+                        expected_revision=session.revision,
+                        expected_owner=session.owner,
+                        automation_resume_ha=ha_claimed,
                     )
+                    if claimed is None:
+                        raise ServiceValidationError(
+                            f"call_id {call_id} changed while forwarding ownership was claimed"
+                        )
+            else:
+                route_already_claimed = False
             _release_ha_softphone_claim(
                 hass,
                 call_id,
                 destination=destination,
             )
-            _set_sip_bridge_call_state(
-                hass,
-                CallState.CONNECTING.value,
-                caller=invite.caller,
-                callee=destination,
-                peer_name=destination,
-                call_id=call_id,
-                direction="incoming",
-                route_source="automation",
-                route_kind=decision.action.value,
-                event_type="forwarding",
-                last_sip_event="ROUTE_FORWARD",
-            )
+            if not route_already_claimed:
+                _set_sip_bridge_call_state(
+                    hass,
+                    CallState.CONNECTING.value,
+                    caller=invite.caller,
+                    callee=destination,
+                    peer_name=destination,
+                    call_id=call_id,
+                    direction="incoming",
+                    route_source="automation",
+                    route_kind=decision.action.value,
+                    event_type="forwarding",
+                    last_sip_event="ROUTE_FORWARD",
+                )
         except Exception:
             forward_claims.discard(call_id)
             raise
@@ -2604,28 +2656,25 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if _is_trunk_invite(invite):
             trunk_cfg = _get_trunk_config(hass)
             dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
-            dtmf_preanswer = bool(trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED) and dtmf_timeout_ms > 0)
+            dtmf_preanswer = bool(
+                trunk_cfg.get(CONF_TRUNK_INBOUND_MODE) == TRUNK_INBOUND_MODE_DTMF
+                and trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED)
+                and dtmf_timeout_ms > 0
+            )
             if not dtmf_preanswer:
                 _LOGGER.info(
                     "SIP trunk inbound skips DTMF pre-answer call_id=%s caller=%s",
                     invite.call_id,
                     invite.caller or invite.source_host,
                 )
-                invite = replace(invite, target=_ha_peer_name(hass))
-                decision = route_inbound_trunk(
-                    CallContext(
-                        call_id=invite.call_id,
-                        direction="inbound",
-                        origin="trunk",
-                        caller=invite.caller,
-                        source_host=invite.source_host,
-                    ),
-                    roster_entries,
-                    trunk_ready=False,
-                )
-                # Continue into the normal route-decision path so HA
-                # automations can still forward/bridge/decline the call
-                # before the default HA softphone ringing response.
+                default_target = str(
+                    trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"
+                ).strip() or "HA"
+                invite = replace(invite, target=default_target)
+                decision = _inbound_route_decision(invite, peers, roster_entries)
+                # Continue through the normal dialplan. The optional route
+                # window below is opened only when automation overrides are
+                # explicitly enabled.
                 source_relay_port = 0
                 dest_relay_port = 0
             else:
@@ -2657,15 +2706,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     ),
                     route_kind="trunk",
                 )
-                route_future = asyncio.get_running_loop().create_future()
                 expires_at = time.time() + (float(dtmf_timeout_ms) / 1000.0)
-                route_bucket[invite.call_id] = {
-                    "future": route_future,
-                    "invite": invite,
-                    "decision": decision,
-                    "created_at": time.time(),
-                    "expires_at": expires_at,
-                }
                 dtmf_format = None
                 dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
                 dtmf_format = dtmf_formats[0] if dtmf_formats else None
@@ -2704,7 +2745,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     _run_trunk_inbound_route(
                         invite,
                         bridge_ports=bridge_ports,
-                        route_future=route_future,
                     )
                 )
                 return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
@@ -2713,9 +2753,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         route_status = 0
         route_reason = ""
         route_decline_reason = ""
-        if caller_is_registered_endpoint:
+        automation_routing_enabled = bool(
+            _get_trunk_config(hass).get(CONF_AUTOMATION_ROUTING_ENABLED, False)
+        )
+        if caller_is_registered_endpoint or not automation_routing_enabled:
             _LOGGER.debug(
-                "SIP registered endpoint uses central dialplan caller=%s target=%s route=%s uri=%s",
+                "SIP caller uses central dialplan without automation window caller=%s target=%s route=%s uri=%s",
                 invite.caller or invite.source_host,
                 invite.target,
                 decision.action.value,
@@ -2825,6 +2868,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 decision.sip_uri or "-",
             )
 
+        resolved_callee = str(
+            (
+                decision.entry.display_name
+                if decision.entry is not None
+                else decision.target
+            )
+            or invite.target
+        ).strip()
+
         force_ha_softphone = route_action == "answer_ha"
         trunk_cfg = _get_trunk_config(hass)
         trunk = hass.data.get(DOMAIN, {}).get("sip_trunk")
@@ -2903,6 +2955,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     callee=invite.target,
                     peer_name=invite.caller,
                     call_id=invite.call_id,
+                    direction="incoming",
                     reason=TerminalReason.BUSY.value,
                     origin="self",
                     sip_status_code=486,
@@ -2983,10 +3036,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         hass,
                         public_state,
                         caller=invite.caller,
-                        callee=invite.target,
-                        peer_name=invite.target,
+                        callee=resolved_callee,
+                        peer_name=resolved_callee,
                         call_id=invite.call_id,
                         dest_call_id=client.dialog_ids.call_id,
+                        direction="incoming",
                         reason=terminal_reason,
                         terminal_reason=terminal_reason,
                         origin="remote",
@@ -3007,7 +3061,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     client=client,
                     state=CallState.CONNECTING.value,
                     caller=invite.caller,
-                    callee=invite.target,
+                    callee=resolved_callee,
                     route_kind=decision.action.value,
                     source_state=CallState.CONNECTING.value,
                     dest_state=result,
@@ -3018,6 +3072,21 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     client.dialog_ids.call_id,
                     decision_uri.user,
                 )
+                if result == "ringing":
+                    _set_sip_bridge_call_state(
+                        hass,
+                        CallState.REMOTE_RINGING.value,
+                        caller=invite.caller,
+                        callee=resolved_callee,
+                        peer_name=resolved_callee,
+                        call_id=invite.call_id,
+                        dest_call_id=client.dialog_ids.call_id,
+                        direction="incoming",
+                        route_kind=decision.action.value,
+                        sip_uri=str(decision_uri),
+                        sip_status_code=180,
+                        last_sip_event="SIP_RESPONSE",
+                    )
 
                 async def _finish_bridge(initial_result: str) -> None:
                     final = initial_result
@@ -3044,10 +3113,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             hass,
                             public_state,
                             caller=invite.caller,
-                            callee=invite.target,
-                            peer_name=invite.target,
+                            callee=resolved_callee,
+                            peer_name=resolved_callee,
                             call_id=invite.call_id,
                             dest_call_id=client.dialog_ids.call_id,
+                            direction="incoming",
                             reason=terminal_reason,
                             terminal_reason=terminal_reason,
                             origin="remote",
@@ -3105,7 +3175,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         state=CallState.IN_CALL.value,
                         owner="bridge",
                         caller=invite.caller,
-                        callee=invite.target,
+                        callee=resolved_callee,
                         route_kind=decision.action.value,
                     )
                     answer = build_answer_directional(
@@ -3121,10 +3191,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         hass,
                         CallState.IN_CALL.value,
                         caller=invite.caller,
-                        callee=invite.target,
-                        peer_name=invite.target,
+                        callee=resolved_callee,
+                        peer_name=resolved_callee,
                         call_id=invite.call_id,
                         dest_call_id=client.dialog_ids.call_id,
+                        direction="incoming",
                         selected_tx_format=invite.send_format.audio_format.wire_token(),
                         selected_rx_format=invite.recv_format.audio_format.wire_token(),
                         selected_tx_rtp_format=invite.send_format.wire_token(),
@@ -3161,10 +3232,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             hass,
                             _sip_public_state(terminal),
                             caller=invite.caller,
-                            callee=invite.target,
-                            peer_name=invite.target,
+                            callee=resolved_callee,
+                            peer_name=resolved_callee,
                             call_id=source_call_id or invite.call_id,
                             dest_call_id=dest_call_id,
+                            direction="incoming",
                             reason=terminal_reason,
                             terminal_reason=terminal_reason,
                             origin="remote",
@@ -3233,7 +3305,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     last_sip_event="SIP_RESPONSE",
                 )
                 return SipInviteResult(486, "Busy Here", to_tag="", decline_reason="dnd")
-            _defer_invite_to_ha_softphone(invite, route_kind=decision.action.value, sip_uri=decision.sip_uri)
+            _defer_invite_to_ha_softphone(
+                invite,
+                route_kind=decision.action.value,
+                callee=resolved_callee,
+                sip_uri=decision.sip_uri,
+            )
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
         local_rtp_port = _allocate_sip_rtp_port(hass)
         answer = build_answer_directional(
@@ -3252,7 +3329,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             state=CallState.IN_CALL.value,
             owner="ha_softphone",
             caller=invite.caller,
-            callee=invite.target,
+            callee=resolved_callee,
             route_kind=decision.action.value,
         )
         registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.IN_CALL.value)
@@ -3261,7 +3338,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             CallState.IN_CALL.value,
             session_device_id=HA_SOFTPHONE_DEVICE_ID,
             caller=invite.caller,
-            callee=invite.target,
+            callee=resolved_callee,
             peer_name=invite.caller,
             direction="incoming",
             call_id=invite.call_id,
@@ -3314,7 +3391,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if source_call_id:
             call_id = source_call_id
         event_caller = invite.caller if invite is not None else (session.caller if session is not None else "")
-        event_callee = invite.target if invite is not None else (session.callee if session is not None else "")
+        event_callee = (
+            session.callee
+            if session is not None and session.callee
+            else invite.target
+            if invite is not None
+            else ""
+        )
         softphone_store = bucket.get("ha_softphone", {})
         softphone_call_id = str(softphone_store.get("call_id") or "")
         terminal_reason = reason or "remote_hangup"

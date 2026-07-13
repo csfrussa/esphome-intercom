@@ -9,6 +9,7 @@ from .const import (
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_EXTENSION,
     CONF_ASSIST_PIPELINE,
+    CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -18,6 +19,7 @@ from .const import (
     CONF_TRUNK_ENABLED,
     CONF_TRUNK_EXPIRES,
     CONF_TRUNK_INBOUND_DEFAULT_TARGET,
+    CONF_TRUNK_INBOUND_MODE,
     CONF_TRUNK_OUTBOUND_PROXY,
     CONF_TRUNK_PASSWORD,
     CONF_TRUNK_PORT,
@@ -25,6 +27,8 @@ from .const import (
     CONF_TRUNK_TRANSPORT,
     CONF_TRUNK_USERNAME,
     DOMAIN,
+    TRUNK_INBOUND_MODE_DIRECT,
+    TRUNK_INBOUND_MODE_DTMF,
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
@@ -55,6 +59,11 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
     raw_dtmf_value = data.get(CONF_TRUNK_DTMF_TIMEOUT_MS)
     raw_dtmf_timeout = 3000 if raw_dtmf_value in (None, "") else int(raw_dtmf_value)
     dtmf_timeout_ms = raw_dtmf_timeout * 1000 if 0 <= raw_dtmf_timeout <= 10 else raw_dtmf_timeout
+    legacy_dtmf = bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)) and dtmf_timeout_ms > 0
+    inbound_mode = str(data.get(CONF_TRUNK_INBOUND_MODE) or "").strip().lower()
+    if inbound_mode not in {TRUNK_INBOUND_MODE_DIRECT, TRUNK_INBOUND_MODE_DTMF}:
+        inbound_mode = TRUNK_INBOUND_MODE_DTMF if legacy_dtmf else TRUNK_INBOUND_MODE_DIRECT
+    dtmf_enabled = inbound_mode == TRUNK_INBOUND_MODE_DTMF and dtmf_timeout_ms > 0
     return {
         CONF_TRUNK_ENABLED: bool(data.get(CONF_TRUNK_ENABLED, False)),
         CONF_TRUNK_TRANSPORT: str(data.get(CONF_TRUNK_TRANSPORT) or "udp").strip().lower(),
@@ -67,7 +76,9 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
         CONF_TRUNK_EXPIRES: int(data.get(CONF_TRUNK_EXPIRES) or 300),
         CONF_TRUNK_OUTBOUND_PROXY: str(data.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip(),
         CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA",
-        CONF_TRUNK_DTMF_ENABLED: bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)),
+        CONF_TRUNK_INBOUND_MODE: inbound_mode,
+        CONF_AUTOMATION_ROUTING_ENABLED: bool(data.get(CONF_AUTOMATION_ROUTING_ENABLED, False)),
+        CONF_TRUNK_DTMF_ENABLED: dtmf_enabled,
         CONF_TRUNK_DTMF_TIMEOUT_MS: max(0, min(10000, dtmf_timeout_ms)),
         CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
     }

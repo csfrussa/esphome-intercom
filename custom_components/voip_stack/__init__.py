@@ -29,6 +29,10 @@ from .const import (
     CONF_ASSIST_PIPELINE,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
+    CONF_AUTOMATION_ROUTING_ENABLED,
+    CONF_TRUNK_DTMF_ENABLED,
+    CONF_TRUNK_DTMF_TIMEOUT_MS,
+    CONF_TRUNK_INBOUND_MODE,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_OUTBOUND_PROXY,
     CONF_TRUNK_PASSWORD,
@@ -42,6 +46,8 @@ from .const import (
     HA_SOFTPHONE_ENDPOINT_ENTITY_ID,
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
+    TRUNK_INBOUND_MODE_DIRECT,
+    TRUNK_INBOUND_MODE_DTMF,
 )
 from .device_resolver import get_resolver, parse_voip_endpoint
 from .endpoint_lifecycle import call_registry as _call_registry, create_runtime_task
@@ -88,6 +94,26 @@ from .websocket_api import (
 
 PLATFORMS: list[Platform] = [Platform.EVENT, Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate inbound routing options without changing existing behavior."""
+    if config_entry.version >= 2:
+        return True
+    data = dict(config_entry.data)
+    raw_timeout = data.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)
+    timeout_ms = int(raw_timeout or 0)
+    if 0 <= timeout_ms <= 10:
+        timeout_ms *= 1000
+    legacy_dtmf = bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)) and timeout_ms > 0
+    mode = TRUNK_INBOUND_MODE_DTMF if legacy_dtmf else TRUNK_INBOUND_MODE_DIRECT
+    data[CONF_TRUNK_INBOUND_MODE] = mode
+    data[CONF_AUTOMATION_ROUTING_ENABLED] = False
+    data[CONF_TRUNK_DTMF_ENABLED] = legacy_dtmf
+    data[CONF_TRUNK_DTMF_TIMEOUT_MS] = timeout_ms
+    hass.config_entries.async_update_entry(config_entry, data=data, version=2)
+    _LOGGER.info("Migrated VoIP Stack inbound routing mode to %s", mode)
+    return True
 
 
 _LOGGER = logging.getLogger(__name__)

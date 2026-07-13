@@ -129,9 +129,11 @@ standard SIP cancellation lifecycle shared by the HA softphone, bridges, ring
 groups and conference invitations. Hang Up remains available while a call is
 connecting, sends a real CANCEL to the remote endpoint and cannot be undone by
 a late ringing response. Native call event and durable call-state entities let
-Home Assistant automations override selected phonebook routes without changing
-the default dial plan. A common no-answer forward is one state trigger plus one
-`voip_stack.forward` action; the backend infers the active call safely.
+Home Assistant automations optionally override selected phonebook routes
+without changing the default dial plan. Direct and DTMF inbound modes make the
+normal trunk path explicit, while a common no-answer forward is one state
+trigger plus one `voip_stack.forward` action; the backend infers the active call
+safely.
 
 - 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
 - 🚀 [Published `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)
@@ -578,9 +580,23 @@ Recommended first setup:
   provider/PBX account for external inbound/outbound calls.
 
 When trunk is enabled, the next step asks for provider/PBX credentials. The
-DTMF timeout controls incoming external calls: `0` skips DTMF collection and
-rings HA immediately; a value from `1` to `10` seconds lets callers dial a
-phonebook `extension` such as `101` before HA falls back to the default target.
+same step separates normal routing from optional automation overrides:
+
+- **Inbound default target** is a phonebook name, HA, extension, group,
+  registered SIP phone, Assist extension, SIP URI or routable number.
+- **Direct to default destination** skips DTMF collection and resolves that
+  target immediately.
+- **DTMF extension selection** answers the trunk call and collects negotiated
+  telephone-event or SIP INFO digits for 1 to 10 seconds. A valid extension
+  selects its phonebook entry; no digits use the default target; an unknown
+  explicit extension ends as `route_not_found`.
+- **Allow experimental automation routing overrides** is independent and off
+  by default. It allows an automation to replace the Direct decision or the
+  no-digits DTMF fallback. Explicit DTMF digits always keep priority.
+
+Existing entries migrate transparently: previous DTMF-enabled configurations
+retain DTMF mode, other configurations become Direct, and automation routing
+remains disabled until explicitly enabled.
 
 The integration automatically registers the Lovelace card, no manual frontend setup needed.
 
@@ -1315,10 +1331,33 @@ Home Assistant can optionally register a provider/PBX trunk. ESP devices do not
 register to that trunk: they call names or numbers through HA, and HA owns the
 external SIP leg, codec negotiation, RTP bridge and terminal reason propagation.
 
-Inbound trunk calls with no explicit route hint ring the HA softphone/default
-target. Explicit DTMF digits are resolved as phonebook extensions; unresolved
-DTMF/SIP route hints terminate the leg with a route error instead of silently
-falling back.
+#### Standard inbound dial plan
+
+The phonebook is always the canonical default dial plan. In Direct mode an
+incoming trunk call immediately follows the configured default target. In DTMF
+mode explicit digits select a phonebook extension; no digits fall back to the
+configured target. An unknown explicit extension terminates the leg with a
+route error instead of silently ringing somewhere else.
+
+The default target may be the HA softphone, an ESP, a registered SIP phone, a
+ring or conference group, an Assist extension, a SIP URI or another routable
+phonebook destination. No automation is required for this path.
+
+#### Automation Dial Plan (Experimental)
+
+When explicitly enabled, automations can override only the bounded decision
+points exposed by the backend. Direct mode offers the decision before its
+default target; DTMF mode offers it only when the caller entered no digits. If
+no automation acts within 1.5 seconds, the normal phonebook route continues.
+
+After HA starts ringing, a separate state-trigger automation can forward the
+same unanswered call to Assist or another phonebook destination. The backend
+keeps the source call alive, releases the old owner and handles SIP CANCEL for
+any replaced ringing leg. The card remains a pure view of that backend state.
+
+See [Automation Dial Plan](docs/AUTOMATION_DIALPLAN.md) for complete native
+`event.received` and state `for:` examples with no Call-ID or Jinja in ordinary
+single-call use.
 
 ## Call Routing
 

@@ -68,7 +68,7 @@ async def async_setup_entry(
 
 
 class HaSoftphoneCallStateSensor(SensorEntity):
-    """Durable, automation-friendly state of the HA SIP softphone."""
+    """Durable state of the current HA-controlled logical SIP call."""
 
     _attr_has_entity_name = False
     _attr_should_poll = False
@@ -81,32 +81,69 @@ class HaSoftphoneCallStateSensor(SensorEntity):
         self.entity_id = HA_SOFTPHONE_CALL_STATE_ENTITY_ID
         self._attr_native_value = "idle"
         self._attr_extra_state_attributes: dict[str, object] = {}
+        self._active_call_id = ""
+        self._revision = -1
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title or "VoIP Stack",
         )
 
     async def async_added_to_hass(self) -> None:
-        from .websocket_api import HA_SOFTPHONE_STATE_EVENT, _ha_softphone_state
+        from .websocket_api import CALL_EVENT, _ha_softphone_state
 
         await super().async_added_to_hass()
         self._apply_snapshot(_ha_softphone_state(self.hass))
-        self.async_on_remove(
-            self.hass.bus.async_listen(
-                HA_SOFTPHONE_STATE_EVENT,
-                self._async_state_event,
-            )
-        )
+        self.async_on_remove(self.hass.bus.async_listen(CALL_EVENT, self._async_state_event))
 
     @callback
     def _async_state_event(self, event: Event) -> None:
+        snapshot = dict(event.data)
+        scope = str(snapshot.get("scope") or "")
+        control = str(snapshot.get("automation_control") or "")
+        call_id = str(snapshot.get("call_id") or "").strip()
+        if (
+            scope != "session"
+            and control not in {"routable", "ha_anchored"}
+            and call_id != self._active_call_id
+        ):
+            return
+        incoming_revision = int(snapshot.get("revision") or snapshot.get("sequence") or 0)
+        if (
+            call_id
+            and self._active_call_id
+            and call_id != self._active_call_id
+            and self._attr_native_value != "idle"
+        ):
+            return
+        if call_id == self._active_call_id and incoming_revision < self._revision:
+            return
         self.async_set_context(event.context)
-        self._apply_snapshot(dict(event.data))
+        self._apply_snapshot(snapshot)
         self.async_write_ha_state()
 
     @callback
     def _apply_snapshot(self, snapshot: dict[str, object]) -> None:
-        self._attr_native_value = str(snapshot.get("state") or "idle")
+        state = str(snapshot.get("state") or "idle")
+        terminal_reason = str(snapshot.get("terminal_reason") or snapshot.get("reason") or "")
+        call_id = str(snapshot.get("call_id") or "").strip()
+        revision = int(snapshot.get("revision") or snapshot.get("sequence") or 0)
+        terminal = state in {
+            "idle",
+            "busy",
+            "declined",
+            "cancelled",
+            "media_incompatible",
+            "transport_unreachable",
+            "auth_required_unsupported",
+            "error",
+        }
+        self._attr_native_value = "idle" if terminal else state
+        if call_id:
+            self._active_call_id = call_id
+            self._revision = revision
+        if terminal and terminal_reason != "forwarded":
+            self._active_call_id = ""
+            self._revision = -1
         self._attr_extra_state_attributes = {
             key: snapshot.get(key, "")
             for key in (

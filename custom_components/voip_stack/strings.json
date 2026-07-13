@@ -39,7 +39,7 @@
     },
     "trunk": {
         "title": "Optional SIP Trunk",
-        "description": "Register Home Assistant to one provider/PBX trunk for external outbound calls and inbound DTMF routing.",
+        "description": "Register Home Assistant to one provider/PBX trunk. Incoming calls use the central phonebook and may optionally expose a short decision point to experimental automations.",
         "data": {
           "trunk_transport": "Trunk SIP transport",
           "trunk_server": "Trunk server",
@@ -51,7 +51,8 @@
           "trunk_register_expires": "REGISTER expires",
           "trunk_outbound_proxy": "Outbound proxy",
           "trunk_inbound_default_target": "Inbound default target",
-          "trunk_dtmf_enabled": "Enable inbound DTMF routing",
+          "trunk_inbound_mode": "Incoming routing",
+          "automation_routing_enabled": "Allow experimental automation routing overrides",
           "trunk_dtmf_timeout_ms": "DTMF timeout (seconds)",
           "trunk_dtmf_terminator": "DTMF terminator"
         },
@@ -65,9 +66,10 @@
           "trunk_password": "Digest auth password.",
           "trunk_register_expires": "REGISTER expiration in seconds.",
           "trunk_outbound_proxy": "Optional proxy host or sip:host:port used as signaling next hop.",
-          "trunk_inbound_default_target": "Local phonebook target used when no DTMF extension resolves. Use HA for the HA softphone.",
-          "trunk_dtmf_enabled": "Collect RFC2833/telephone-event digits after answering inbound trunk calls and route them through phonebook extensions.",
-          "trunk_dtmf_timeout_ms": "Digit collection window after pre-answer. Default is 3 seconds, maximum is 10 seconds. Set 0 to skip DTMF/pre-answer and let the normal inbound dialplan decide; without an automation override, the HA softphone rings directly.",
+          "trunk_inbound_default_target": "Phonebook name, SIP URI, extension or number used when direct routing is selected, or when DTMF mode receives no digits and no automation overrides the call.",
+          "trunk_inbound_mode": "Direct routes immediately to the default target. DTMF answers first and lets explicit digits select a phonebook extension.",
+          "automation_routing_enabled": "Experimental. Allows a matching Home Assistant automation to override direct routing or the no-digits DTMF fallback. Explicit DTMF digits always keep priority.",
+          "trunk_dtmf_timeout_ms": "Digit collection window used only in DTMF mode. Default is 3 seconds, maximum is 10 seconds.",
           "trunk_dtmf_terminator": "Optional terminator digit such as #. Empty means timeout or exact phonebook extension match decides."
         }
       }
@@ -83,6 +85,14 @@
     "abort": {
       "reconfigure_successful": "VoIP Stack reconfigured successfully.",
       "already_configured": "VoIP Stack is already configured."
+    }
+  },
+  "selector": {
+    "trunk_inbound_mode": {
+      "options": {
+        "direct": "Direct to default destination",
+        "dtmf": "DTMF extension selection"
+      }
     }
   },
   "entity": {

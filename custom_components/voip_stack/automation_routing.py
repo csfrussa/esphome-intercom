@@ -32,7 +32,7 @@ def automation_event_type(payload: dict[str, Any]) -> str:
         return explicit
     state = str(payload.get("state") or "").strip().lower()
     legacy_type = str(payload.get("type") or "").strip().lower()
-    if state == "route_requested":
+    if payload.get("route_request") or state == "route_requested":
         return "route_requested"
     if state == "calling":
         return "outgoing_call"

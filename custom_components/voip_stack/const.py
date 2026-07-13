@@ -28,9 +28,13 @@ CONF_TRUNK_PASSWORD = "trunk_password"
 CONF_TRUNK_EXPIRES = "trunk_register_expires"
 CONF_TRUNK_OUTBOUND_PROXY = "trunk_outbound_proxy"
 CONF_TRUNK_INBOUND_DEFAULT_TARGET = "trunk_inbound_default_target"
+CONF_TRUNK_INBOUND_MODE = "trunk_inbound_mode"
+CONF_AUTOMATION_ROUTING_ENABLED = "automation_routing_enabled"
 CONF_TRUNK_DTMF_ENABLED = "trunk_dtmf_enabled"
 CONF_TRUNK_DTMF_TIMEOUT_MS = "trunk_dtmf_timeout_ms"
 CONF_TRUNK_DTMF_TERMINATOR = "trunk_dtmf_terminator"
+TRUNK_INBOUND_MODE_DIRECT = "direct"
+TRUNK_INBOUND_MODE_DTMF = "dtmf"
 
 # Version from manifest.json
 _MANIFEST = Path(__file__).parent / "manifest.json"

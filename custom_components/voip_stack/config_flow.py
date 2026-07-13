@@ -22,6 +22,7 @@ from .const import (
     CONF_ASSIST_EXTENSION,
     CONF_ASSIST_PIPELINE,
     CONF_ASSIST_INTENTS,
+    CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_DEBUG_MODE,
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
@@ -33,6 +34,7 @@ from .const import (
     CONF_TRUNK_ENABLED,
     CONF_TRUNK_EXPIRES,
     CONF_TRUNK_INBOUND_DEFAULT_TARGET,
+    CONF_TRUNK_INBOUND_MODE,
     CONF_TRUNK_OUTBOUND_PROXY,
     CONF_TRUNK_PASSWORD,
     CONF_TRUNK_PORT,
@@ -40,6 +42,8 @@ from .const import (
     CONF_TRUNK_TRANSPORT,
     CONF_TRUNK_USERNAME,
     DOMAIN,
+    TRUNK_INBOUND_MODE_DIRECT,
+    TRUNK_INBOUND_MODE_DTMF,
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
@@ -69,6 +73,8 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
             CONF_TRUNK_EXPIRES: existing.get(CONF_TRUNK_EXPIRES, 300),
             CONF_TRUNK_OUTBOUND_PROXY: existing.get(CONF_TRUNK_OUTBOUND_PROXY, ""),
             CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"),
+            CONF_TRUNK_INBOUND_MODE: existing.get(CONF_TRUNK_INBOUND_MODE, TRUNK_INBOUND_MODE_DIRECT),
+            CONF_AUTOMATION_ROUTING_ENABLED: existing.get(CONF_AUTOMATION_ROUTING_ENABLED, False),
             CONF_TRUNK_DTMF_ENABLED: existing.get(CONF_TRUNK_DTMF_ENABLED, False),
             CONF_TRUNK_DTMF_TIMEOUT_MS: int(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)),
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
@@ -82,7 +88,7 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
 class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VoIP Stack."""
 
-    VERSION = 1
+    VERSION = 2
     _base_input: dict | None = None
 
     def _current_entry(self) -> ConfigEntry | None:
@@ -211,6 +217,12 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_trunk(self, user_input=None):
         _current_entry, existing = self._current_entry_data()
+        legacy_timeout = _dtmf_timeout_seconds(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000))
+        legacy_mode = (
+            TRUNK_INBOUND_MODE_DTMF
+            if existing.get(CONF_TRUNK_DTMF_ENABLED, True) and legacy_timeout > 0
+            else TRUNK_INBOUND_MODE_DIRECT
+        )
         defaults = {
             CONF_TRUNK_TRANSPORT: existing.get(CONF_TRUNK_TRANSPORT, "udp"),
             CONF_TRUNK_SERVER: existing.get(CONF_TRUNK_SERVER, ""),
@@ -222,8 +234,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_TRUNK_EXPIRES: existing.get(CONF_TRUNK_EXPIRES, 300),
             CONF_TRUNK_OUTBOUND_PROXY: existing.get(CONF_TRUNK_OUTBOUND_PROXY, ""),
             CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"),
-            CONF_TRUNK_DTMF_ENABLED: existing.get(CONF_TRUNK_DTMF_ENABLED, True),
-            CONF_TRUNK_DTMF_TIMEOUT_MS: _dtmf_timeout_seconds(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)),
+            CONF_TRUNK_INBOUND_MODE: existing.get(CONF_TRUNK_INBOUND_MODE, legacy_mode),
+            CONF_AUTOMATION_ROUTING_ENABLED: existing.get(CONF_AUTOMATION_ROUTING_ENABLED, False),
+            CONF_TRUNK_DTMF_TIMEOUT_MS: legacy_timeout,
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
         }
         schema = vol.Schema(
@@ -245,7 +258,13 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_TRUNK_INBOUND_DEFAULT_TARGET,
                     default=defaults[CONF_TRUNK_INBOUND_DEFAULT_TARGET],
                 ): TextSelector(),
-                vol.Required(CONF_TRUNK_DTMF_ENABLED, default=defaults[CONF_TRUNK_DTMF_ENABLED]): BooleanSelector(),
+                vol.Required(CONF_TRUNK_INBOUND_MODE, default=defaults[CONF_TRUNK_INBOUND_MODE]): SelectSelector(
+                    SelectSelectorConfig(options=[TRUNK_INBOUND_MODE_DIRECT, TRUNK_INBOUND_MODE_DTMF], translation_key="trunk_inbound_mode")
+                ),
+                vol.Required(
+                    CONF_AUTOMATION_ROUTING_ENABLED,
+                    default=defaults[CONF_AUTOMATION_ROUTING_ENABLED],
+                ): BooleanSelector(),
                 vol.Required(CONF_TRUNK_DTMF_TIMEOUT_MS, default=defaults[CONF_TRUNK_DTMF_TIMEOUT_MS]): NumberSelector(
                     NumberSelectorConfig(min=0, max=10, step=1, mode="box")
                 ),
@@ -257,6 +276,11 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             for k in (CONF_TRUNK_PORT, CONF_TRUNK_EXPIRES, CONF_TRUNK_DTMF_TIMEOUT_MS):
                 user_input[k] = int(user_input[k])
             user_input[CONF_TRUNK_DTMF_TIMEOUT_MS] = max(0, min(10, user_input[CONF_TRUNK_DTMF_TIMEOUT_MS])) * 1000
+            inbound_mode = str(user_input.get(CONF_TRUNK_INBOUND_MODE) or TRUNK_INBOUND_MODE_DIRECT)
+            user_input[CONF_TRUNK_DTMF_ENABLED] = (
+                inbound_mode == TRUNK_INBOUND_MODE_DTMF
+                and user_input[CONF_TRUNK_DTMF_TIMEOUT_MS] > 0
+            )
             for k in (
                 CONF_TRUNK_SERVER,
                 CONF_TRUNK_DOMAIN,
