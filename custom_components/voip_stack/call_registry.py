@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 
 LegRole = Literal["caller", "callee", "trunk", "ha_softphone", "esp", "softphone", "router", "assist"]
+CallOwner = Literal["", "ha_softphone", "router", "bridge", "assist", "terminal"]
 TERMINAL_STATES = {
     "idle",
     "busy",
@@ -34,7 +35,10 @@ class CallLeg:
 @dataclass(slots=True)
 class CallSession:
     id: str
+    revision: int = 0
     state: str = "new"
+    owner: CallOwner = ""
+    outcome: str = ""
     caller: str = ""
     callee: str = ""
     route_kind: str = ""
@@ -74,7 +78,14 @@ class CallRegistry:
         call_id = str(call_id or "").strip()
         state = str(state or "").strip()
         if not call_id:
-            return {"schema_version": 1, "sequence": 0, "previous_state": "", "route_history": []}
+            return {
+                "schema_version": 1,
+                "sequence": 0,
+                "revision": 0,
+                "owner": "",
+                "previous_state": "",
+                "route_history": [],
+            }
         context = self.event_contexts.get(call_id)
         if context is None:
             if len(self.event_contexts) >= 256:
@@ -85,9 +96,12 @@ class CallRegistry:
             context.previous_state = context.state
             context.state = state
             context.sequence += 1
+        session = self.sessions.get(self.resolve_session_id(call_id))
         return {
             "schema_version": 1,
             "sequence": context.sequence,
+            "revision": session.revision if session is not None else 0,
+            "owner": session.owner if session is not None else "",
             "previous_state": context.previous_state,
             "route_history": [dict(item) for item in context.route_history],
         }
@@ -118,6 +132,9 @@ class CallRegistry:
             }
         )
         del context.route_history[:-8]
+        session = self.sessions.get(call_id)
+        if session is not None:
+            session.revision += 1
         return [dict(item) for item in context.route_history]
 
     def upsert(
@@ -129,19 +146,90 @@ class CallRegistry:
         callee: str = "",
         route_kind: str = "",
         terminal_reason: str = "",
+        owner: CallOwner = "",
         **metadata: Any,
     ) -> CallSession:
         session = self.sessions.get(call_id)
         if session is None:
             session = CallSession(id=call_id)
             self.sessions[call_id] = session
-        session.state = state or session.state
-        session.caller = caller or session.caller
-        session.callee = callee or session.callee
-        session.route_kind = route_kind or session.route_kind
-        session.terminal_reason = terminal_reason or session.terminal_reason
-        session.metadata.update({key: value for key, value in metadata.items() if value not in (None, "")})
+        changed = False
+        for attribute, value in (
+            ("state", state),
+            ("owner", owner),
+            ("caller", caller),
+            ("callee", callee),
+            ("route_kind", route_kind),
+            ("terminal_reason", terminal_reason),
+        ):
+            if value and getattr(session, attribute) != value:
+                setattr(session, attribute, value)
+                changed = True
+        clean_metadata = {
+            key: value for key, value in metadata.items() if value not in (None, "")
+        }
+        if any(session.metadata.get(key) != value for key, value in clean_metadata.items()):
+            session.metadata.update(clean_metadata)
+            changed = True
+        if changed:
+            session.revision += 1
         return session
+
+    def transition(
+        self,
+        call_id: str,
+        *,
+        state: str = "",
+        owner: CallOwner | None = None,
+        outcome: str | None = None,
+        caller: str = "",
+        callee: str = "",
+        route_kind: str = "",
+        expected_revision: int | None = None,
+        expected_owner: CallOwner | None = None,
+        **metadata: Any,
+    ) -> CallSession | None:
+        """Apply one guarded control mutation and advance its revision once."""
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        if expected_revision is not None and session.revision != int(expected_revision):
+            return None
+        if expected_owner is not None and session.owner != expected_owner:
+            return None
+        if state:
+            session.state = state
+        if owner is not None:
+            session.owner = owner
+        if outcome is not None:
+            session.outcome = outcome
+        if caller:
+            session.caller = caller
+        if callee:
+            session.callee = callee
+        if route_kind:
+            session.route_kind = route_kind
+        session.metadata.update(
+            {key: value for key, value in metadata.items() if value not in (None, "")}
+        )
+        session.revision += 1
+        return session
+
+    def is_current(
+        self,
+        call_id: str,
+        *,
+        revision: int,
+        owner: CallOwner | None = None,
+    ) -> bool:
+        """Return whether an asynchronous callback still owns this revision."""
+        session = self.sessions.get(self.resolve_session_id(str(call_id or "").strip()))
+        return bool(
+            session is not None
+            and session.revision == int(revision)
+            and (owner is None or session.owner == owner)
+        )
 
     def add_leg(
         self,
@@ -155,13 +243,21 @@ class CallRegistry:
     ) -> CallLeg:
         session = self.upsert(call_id, state=state or "active", **metadata)
         leg = session.legs.get(leg_id)
+        changed = False
         if leg is None:
             leg = CallLeg(leg_id=leg_id, role=role, sip_call_id=sip_call_id or leg_id)
             session.legs[leg_id] = leg
+            changed = True
+        next_state = state or leg.state
+        next_sip_call_id = sip_call_id or leg.sip_call_id
+        if leg.role != role or leg.state != next_state or leg.sip_call_id != next_sip_call_id:
+            changed = True
         leg.role = role
-        leg.state = state or leg.state
-        leg.sip_call_id = sip_call_id or leg.sip_call_id
+        leg.state = next_state
+        leg.sip_call_id = next_sip_call_id
         self.leg_index[leg_id] = call_id
+        if changed:
+            session.revision += 1
         return leg
 
     def remove_leg(self, call_id: str, leg_id: str) -> CallLeg | None:
@@ -172,6 +268,8 @@ class CallRegistry:
             return None
         leg = session.legs.pop(leg_id, None)
         self.leg_index.pop(leg_id, None)
+        if leg is not None:
+            session.revision += 1
         return leg
 
     def resolve_session_id(self, call_id: str) -> str:
@@ -184,6 +282,9 @@ class CallRegistry:
             return None
         session.state = state
         session.terminal_reason = reason or session.terminal_reason
+        session.owner = "terminal"
+        session.outcome = reason or session.outcome
+        session.revision += 1
         return session
 
     def pop(self, call_id: str) -> CallSession | None:
@@ -193,6 +294,17 @@ class CallRegistry:
             for leg_id in list(session.legs):
                 self.leg_index.pop(leg_id, None)
         self.leg_index.pop(call_id, None)
+        self.event_contexts.pop(session_id, None)
+        self.pending_invites.pop(session_id, None)
+        route = self.pending_routes.pop(session_id, None)
+        if route is not None:
+            future = route.get("future")
+            if (
+                future is not None
+                and hasattr(future, "done")
+                and not future.done()
+            ):
+                future.cancel()
         return session
 
     def bridge_for(self, call_id: str) -> tuple[str, str]:
@@ -259,6 +371,7 @@ class CallRegistry:
         session = self.upsert(
             source_call_id,
             state=state,
+            owner="bridge",
             caller=caller,
             callee=callee,
             route_kind=route_kind,

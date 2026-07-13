@@ -6,10 +6,13 @@ from typing import Any
 
 
 AUTOMATION_EVENT_TYPES = [
+    "route_requested",
     "incoming_call",
     "outgoing_call",
     "calling",
     "ringing",
+    "remote_ringing",
+    "forwarding",
     "calling_timeout_requested",
     "ringing_timeout_requested",
     "answered",
@@ -30,12 +33,14 @@ def automation_event_type(payload: dict[str, Any]) -> str:
     state = str(payload.get("state") or "").strip().lower()
     legacy_type = str(payload.get("type") or "").strip().lower()
     if state == "route_requested":
-        return "incoming_call" if payload.get("direction") == "incoming" else "calling"
+        return "route_requested"
     if state == "calling":
         return "outgoing_call"
     if state == "connecting":
-        return "incoming_call" if payload.get("direction") == "incoming" else "calling"
-    if state in {"ringing", "remote_ringing"}:
+        return "state_changed" if payload.get("direction") == "incoming" else "calling"
+    if state == "remote_ringing":
+        return "remote_ringing"
+    if state == "ringing":
         return "ringing"
     if state == "in_call":
         return "connected" if payload.get("direction") == "outgoing" else "answered"
@@ -58,3 +63,22 @@ def deadline_is_current(
         str(current_state or "") == str(armed_state or "")
         and int(current_sequence) == int(armed_sequence)
     )
+
+
+def resolve_forward_call_id(
+    requested_call_id: str,
+    pending_routes: object,
+    pending_invites: object,
+) -> str:
+    """Resolve the only forwardable call without exposing IDs to normal automations."""
+    requested = str(requested_call_id or "").strip()
+    if requested:
+        return requested
+    candidates = sorted(set(pending_routes) | set(pending_invites))
+    if not candidates:
+        raise ValueError("No forwardable SIP call is active")
+    if len(candidates) > 1:
+        raise ValueError(
+            "More than one forwardable SIP call is active; provide call_id"
+        )
+    return candidates[0]

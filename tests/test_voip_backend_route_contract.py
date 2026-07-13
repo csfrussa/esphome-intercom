@@ -856,7 +856,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
                 "def _ha_softphone_groups("
             )
         ]
-        self.assertIn("_publish_ha_softphone_state(hass)", release)
+        self.assertIn("_set_ha_softphone_call_state(", release)
+        self.assertIn("TerminalReason.FORWARDED.value", release)
 
     def test_trunk_without_dtmf_preanswer_does_not_allocate_relay_ports(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]

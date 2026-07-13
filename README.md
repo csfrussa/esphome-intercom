@@ -128,9 +128,10 @@ The next release starts with stricter outbound trunk identity handling and a
 standard SIP cancellation lifecycle shared by the HA softphone, bridges, ring
 groups and conference invitations. Hang Up remains available while a call is
 connecting, sends a real CANCEL to the remote endpoint and cannot be undone by
-a late ringing response. A native call event entity plus guarded forwarding and
-explicit deadlines also let Home Assistant automations override the phonebook
-route for selected calls without changing the default dial plan.
+a late ringing response. Native call event and durable call-state entities let
+Home Assistant automations override selected phonebook routes without changing
+the default dial plan. A common no-answer forward is one state trigger plus one
+`voip_stack.forward` action; the backend infers the active call safely.
 
 - 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
 - 🚀 [Published `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)
@@ -514,7 +515,7 @@ ESP static contacts remain local offline/custom additions. See
 - **HA Services** - `voip_stack.call`, `answer`, `decline`, `hangup`,
   `forward`, `route`, `set_dnd`, contact services, local SIP account services
   and `purge_devices`.
-- **Call Forwarding** - Forward active or ringing calls to another device via automation.
+- **Call Forwarding** - Redirect an HA-owned ringing call with one automation action; Call-ID and revision guards remain optional advanced controls.
 - **Ringtone on incoming calls** - Devices play a looping ringtone while ringing.
 - **Volume Control** - Adjustable Master Volume and microphone gain.
 - **Phonebook** - HA publishes `sensor.voip_phonebook`; ESP packages subscribe to it and locally shape endpoint rows into direct SIP or HA-routed calls. YAML automations can still call the native `voip_stack` actions/services.

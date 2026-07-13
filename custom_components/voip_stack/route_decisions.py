@@ -56,6 +56,17 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
         destination=destination,
         source="automation",
     )
+    if action in {"forward", "bridge"}:
+        session = registry.sessions.get(registry.resolve_session_id(call_id))
+        if session is not None:
+            registry.transition(
+                call_id,
+                state=CallState.CONNECTING.value,
+                owner="router",
+                callee=destination,
+                expected_revision=session.revision,
+                expected_owner=session.owner,
+            )
     future.set_result(
         {
             "action": action,
@@ -128,6 +139,7 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_mode="full_duplex",
             sip_status_code=180,
+            event_type="forwarding",
             last_sip_event="SIP_RESPONSE",
         )
     _LOGGER.info(

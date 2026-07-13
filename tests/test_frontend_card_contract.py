@@ -234,6 +234,15 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._isHaSoftphoneMode() && this._lastEndInfo", render)
         self.assertNotIn("this._softphoneSnapshot?.terminal_reason", render)
 
+    def test_ha_softphone_rejects_older_snapshots_for_the_same_call(self) -> None:
+        normalise = _method_body(self.source, "_normaliseSoftphoneSnapshot")
+        apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
+
+        self.assertIn("revision: Number(payload.revision || 0)", normalise)
+        self.assertIn("current?.call_id === snapshot.call_id", apply_snapshot)
+        self.assertIn("Number(current.revision || 0) > snapshot.revision", apply_snapshot)
+        self.assertIn("return false", apply_snapshot)
+
     def test_phonebook_is_an_internal_main_card_mode(self) -> None:
         source = PHONEBOOK_CARD.read_text()
         self.assertIn('customElements.define("voip-stack-phonebook-view"', source)

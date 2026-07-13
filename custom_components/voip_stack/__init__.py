@@ -557,6 +557,7 @@ async def _track_outbound_sip_client(
     registry.upsert(
         client.dialog_ids.call_id,
         state=CallState.REMOTE_RINGING.value if result == "ringing" else CallState.IN_CALL.value,
+        owner="ha_softphone",
         caller=_ha_peer_name(hass),
         callee=target,
         route_kind="direct",
@@ -752,6 +753,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         registry.upsert(
             call_id,
             state=CallState.IN_CALL.value,
+            owner="ha_softphone",
             caller=room_name,
             callee=_ha_peer_name(hass),
             route_kind="conference",
@@ -809,6 +811,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     registry.upsert(
         call_id,
         state=CallState.IN_CALL.value,
+        owner="ha_softphone",
         caller=invite.caller,
         callee=invite.target,
         route_kind="ha_softphone",
@@ -1263,6 +1266,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             registry.upsert(
                 call_id,
                 state=CallState.IN_CALL.value,
+                owner="ha_softphone",
                 caller=_ha_peer_name(hass),
                 callee=room_name,
                 route_kind="conference",
@@ -1436,33 +1440,49 @@ async def _handle_sip_route_service(call: ServiceCall) -> None:
 
 async def _handle_sip_forward_service(call: ServiceCall) -> None:
     """Forward a SIP call through HA's dial plan/B2BUA path."""
-    call_id = str(call.data.get("call_id") or "").strip()
+    from homeassistant.exceptions import ServiceValidationError
+
+    from .automation_routing import resolve_forward_call_id
+
+    data = dict(call.data)
+    registry = _call_registry(call.hass)
+    try:
+        call_id = resolve_forward_call_id(
+            str(data.get("call_id") or ""),
+            registry.pending_routes,
+            registry.pending_invites,
+        )
+    except ValueError as err:
+        raise ServiceValidationError(str(err)) from err
+    if not data.get("call_id"):
+        context = registry.event_context(call_id)
+        data["call_id"] = call_id
+        if context is not None:
+            data.setdefault("expected_state", context.state)
+            data.setdefault("expected_sequence", context.sequence)
     if call_id and call_id in _pending_routes(call.hass):
-        data = dict(call.data)
         data["action"] = "forward"
         _set_pending_route_decision(call.hass, data)
         return
     if call_id:
-        from homeassistant.exceptions import ServiceValidationError
-
         callback = call.hass.data.get(DOMAIN, {}).get("async_forward_call")
         if callback is None:
             raise ServiceValidationError("SIP endpoint is not running")
         destination = str(
-            call.data.get("destination")
-            or call.data.get("target")
-            or call.data.get("call")
+            data.get("destination")
+            or data.get("target")
+            or data.get("call")
             or ""
         ).strip()
         await callback(
             call_id=call_id,
             destination=destination,
-            on_failure=str(call.data.get("on_failure") or "resume"),
-            expected_state=str(call.data.get("expected_state") or ""),
-            expected_sequence=int(call.data.get("expected_sequence") or 0),
+            on_failure=str(data.get("on_failure") or "resume"),
+            expected_state=str(data.get("expected_state") or ""),
+            expected_sequence=int(data.get("expected_sequence") or 0),
         )
         return
-    await _handle_sip_call_target_service(call, force_ha_bridge=True)
+    raise ServiceValidationError(f"call_id {call_id} is not forwardable")
 
 
 async def _handle_sip_set_deadline_service(call: ServiceCall) -> None:

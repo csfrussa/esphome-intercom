@@ -195,9 +195,16 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
     event["type"] = _call_event_type(event["state"], str(reason) if reason is not None else None)
     call_id = str(event.get("call_id") or "").strip()
     registry = call_registry(hass)
+    forwardable_state = event["state"] in {
+        "route_requested",
+        CallState.CONNECTING.value,
+        CallState.RINGING.value,
+        CallState.REMOTE_RINGING.value,
+    }
     event["automation_control"] = (
         "routable"
-        if call_id in registry.pending_invites
+        if forwardable_state
+        and (call_id in registry.pending_invites or call_id in registry.pending_routes)
         else "ha_anchored"
         if call_id and (
             registry.event_context(call_id) is not None
@@ -229,38 +236,31 @@ def _ha_softphone_store(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("ha_softphone", {"dnd": False})
 
 
-def _release_ha_softphone_claim(hass: HomeAssistant, call_id: str) -> bool:
+def _release_ha_softphone_claim(
+    hass: HomeAssistant,
+    call_id: str,
+    *,
+    destination: str = "",
+) -> bool:
     """Release HA's ringing ownership when the same call is routed elsewhere."""
     store = _ha_softphone_store(hass)
     if str(store.get("call_id") or "") != str(call_id or ""):
         return False
-    for key in (
-        "session_device_id",
-        "caller",
-        "callee",
-        "local_name",
-        "peer_name",
-        "dialed_target",
-        "connected_party",
-        "answered_by",
-        "direction",
-        "role",
-        "call_id",
-        "target_device_id",
-        "selected_tx_format",
-        "selected_rx_format",
-        "selected_tx_rtp_format",
-        "selected_rx_rtp_format",
-        "audio_mode",
-        "route_kind",
-        "sip_uri",
-        "media_debug",
-    ):
-        store.pop(key, None)
-    store["state"] = CallState.IDLE.value
-    store["sip_state"] = CallState.IDLE.value
-    store["terminal_reason"] = ""
-    _publish_ha_softphone_state(hass)
+    _set_ha_softphone_call_state(
+        hass,
+        CallState.CANCELLED.value,
+        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        caller=str(store.get("caller") or ""),
+        callee=str(store.get("callee") or ""),
+        peer_name=str(store.get("peer_name") or ""),
+        direction=str(store.get("direction") or "incoming"),
+        call_id=call_id,
+        reason=TerminalReason.FORWARDED.value,
+        terminal_reason=TerminalReason.FORWARDED.value,
+        dialed_target=destination,
+        origin="automation",
+        last_sip_event="ROUTE_FORWARD",
+    )
     return True
 
 
@@ -570,6 +570,9 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     dialed_target = store.get("dialed_target", "") or store.get("last_terminal_dialed_target", "")
     direction = store.get("direction", "") or store.get("last_terminal_direction", "")
     call_id = store.get("call_id", "") or store.get("last_terminal_call_id", "")
+    registry = call_registry(hass)
+    session = registry.sessions.get(registry.resolve_session_id(str(call_id or "")))
+    event_context = registry.event_context(str(call_id or ""))
     phone = sip_phone_state(
         state=store.get("state", CallState.IDLE.value),
         call_id=call_id,
@@ -610,6 +613,9 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "direction": direction,
         "role": store.get("role", ""),
         "call_id": call_id,
+        "sequence": event_context.sequence if event_context is not None else 0,
+        "revision": session.revision if session is not None else 0,
+        "owner": session.owner if session is not None else "",
         "target_device_id": store.get("target_device_id", ""),
         "selected_tx_format": store.get("selected_tx_format", ""),
         "selected_rx_format": store.get("selected_rx_format", ""),

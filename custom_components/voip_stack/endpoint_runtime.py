@@ -403,6 +403,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         registry.upsert(
             invite.call_id,
             state=CallState.IN_CALL.value,
+            owner="assist",
             caller=caller_name,
             callee=destination_name,
             route_kind=RouteAction.ASSIST.value,
@@ -558,16 +559,30 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     ) -> None:
         registry = _call_registry(hass)
         registry.pending_invites[invite.call_id] = invite
-        registry.upsert(
+        session = registry.upsert(
             invite.call_id,
             state=CallState.RINGING.value,
             caller=invite.caller,
             callee=callee or invite.target,
             route_kind=route_kind,
+            owner="ha_softphone",
         )
         registry.add_leg(invite.call_id, invite.call_id, role="ha_softphone", state=CallState.RINGING.value)
-        hass.loop.call_soon(
-            lambda: _set_ha_softphone_call_state(
+        expected_revision = session.revision
+
+        def _publish_ringing_if_current() -> None:
+            if not registry.is_current(
+                invite.call_id,
+                revision=expected_revision,
+                owner="ha_softphone",
+            ):
+                _LOGGER.debug(
+                    "Ignoring stale HA ringing callback for call %s revision %s",
+                    invite.call_id,
+                    expected_revision,
+                )
+                return
+            _set_ha_softphone_call_state(
                 hass,
                 CallState.RINGING.value,
                 session_device_id=HA_SOFTPHONE_DEVICE_ID,
@@ -586,7 +601,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 sip_status_code=180,
                 last_sip_event="INVITE",
             )
-        )
+
+        hass.loop.call_soon(_publish_ringing_if_current)
 
     def _inbound_route_decision(invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]):
         # Once an INVITE reached HA, HA is the router. ESP-origin direct-vs-HA
@@ -825,6 +841,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.upsert(
                 invite.call_id,
                 state=CallState.RINGING.value,
+                owner="ha_softphone",
                 caller=invite.caller,
                 callee=_ha_peer_name(hass),
                 route_kind="trunk",
@@ -1160,7 +1177,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             # ownership so ``on_failure: resume`` can enter normal ringing
             # instead of leaving the answered caller on silent RTP.
             ha_claimed = (
-                _release_ha_softphone_claim(hass, call_id)
+                bool(session is not None and session.owner == "ha_softphone")
                 or call_id in registry.preanswered
                 or bool(
                     session is not None
@@ -1169,8 +1186,25 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             if session is not None:
                 session.metadata["automation_resume_ha"] = ha_claimed
-            if session is not None:
-                session.state = CallState.CONNECTING.value
+                claimed = registry.transition(
+                    call_id,
+                    state=CallState.CONNECTING.value,
+                    owner="router",
+                    callee=destination,
+                    route_kind=decision.action.value,
+                    expected_revision=session.revision,
+                    expected_owner=session.owner,
+                    automation_resume_ha=ha_claimed,
+                )
+                if claimed is None:
+                    raise ServiceValidationError(
+                        f"call_id {call_id} changed while forwarding ownership was claimed"
+                    )
+            _release_ha_softphone_claim(
+                hass,
+                call_id,
+                destination=destination,
+            )
             _set_sip_bridge_call_state(
                 hass,
                 CallState.CONNECTING.value,
@@ -1181,6 +1215,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 direction="incoming",
                 route_source="automation",
                 route_kind=decision.action.value,
+                event_type="forwarding",
                 last_sip_event="ROUTE_FORWARD",
             )
         except Exception:
@@ -1193,9 +1228,20 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 "trunk_closed_calls", set()
             ):
                 if session is not None:
-                    session.state = CallState.RINGING.value
-                    session.callee = original_callee
-                    session.route_kind = original_route_kind
+                    current = registry.sessions.get(registry.resolve_session_id(call_id))
+                    if current is None or current.owner not in {"router", "bridge", "assist"}:
+                        return
+                    resumed = registry.transition(
+                        call_id,
+                        state=CallState.RINGING.value,
+                        owner="ha_softphone",
+                        callee=original_callee,
+                        route_kind=original_route_kind,
+                        expected_revision=current.revision,
+                        expected_owner=current.owner,
+                    )
+                    if resumed is None:
+                        return
                 if ha_claimed:
                     _set_ha_softphone_call_state(
                         hass,
@@ -1236,6 +1282,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if on_failure == "busy"
                 else CallState.TRANSPORT_UNREACHABLE.value
             )
+            current = registry.sessions.get(registry.resolve_session_id(call_id))
+            if current is not None:
+                registry.transition(
+                    call_id,
+                    state=terminal_state,
+                    owner="terminal",
+                    outcome=reason,
+                    expected_revision=current.revision,
+                    expected_owner=current.owner,
+                )
             _set_sip_bridge_call_state(
                 hass,
                 terminal_state,
@@ -1437,12 +1493,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     try:
                         await relay.start()
                     except Exception:
-                        registry.discard_bridge_session(
-                            call_id,
-                            dest_call_id,
-                            reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
-                            state=CallState.MEDIA_INCOMPATIBLE.value,
-                        )
+                        registry.bridge_clients.pop(call_id, None)
+                        registry.sip_clients.pop(dest_call_id, None)
+                        registry.client_watchers.pop(dest_call_id, None)
+                        registry.remove_leg(call_id, dest_call_id)
                         await _close_outbound_leg(winner, bye_or_cancel=True)
                         raise
                     reservation.detach()
@@ -1496,6 +1550,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     return
 
                 if decision.action is RouteAction.ASSIST:
+                    current = registry.sessions.get(registry.resolve_session_id(call_id))
+                    if current is not None:
+                        claimed_assist = registry.transition(
+                            call_id,
+                            state=CallState.CONNECTING.value,
+                            owner="assist",
+                            callee=destination,
+                            expected_revision=current.revision,
+                            expected_owner=current.owner,
+                        )
+                        if claimed_assist is None:
+                            raise RuntimeError("Assist route ownership changed")
                     await _start_local_assist_bridge(
                         invite,
                         reservation=reservation,
@@ -1525,6 +1591,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                     registry.pending_invites.pop(call_id, None)
                     registry.preanswered.pop(call_id, None)
+                    current = registry.sessions.get(registry.resolve_session_id(call_id))
+                    if current is not None:
+                        registry.transition(
+                            call_id,
+                            state=CallState.IN_CALL.value,
+                            owner="assist",
+                            callee=destination,
+                            expected_revision=current.revision,
+                            expected_owner=current.owner,
+                        )
                     return
 
                 bridge_to_trunk = decision.action is RouteAction.TRUNK
@@ -1678,6 +1754,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.upsert(
                     call_id,
                     state=CallState.IN_CALL.value,
+                    owner="bridge",
                     caller=invite.caller,
                     callee=destination,
                     route_kind=decision.action.value,
@@ -2005,6 +2082,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.upsert(
                     invite.call_id,
                     state=CallState.IN_CALL.value,
+                    owner="ha_softphone",
                     caller=invite.caller,
                     callee=entry.display_name,
                     route_kind=GROUP_TYPE_RING,
@@ -2136,6 +2214,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.upsert(
                 invite.call_id,
                 state=CallState.IN_CALL.value,
+                owner="ha_softphone",
                 caller=invite.caller,
                 callee=dialed_target,
                 route_kind=GROUP_TYPE_RING,
@@ -2346,6 +2425,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         registry.upsert(
             call_id,
             state=CallState.RINGING.value,
+            owner="ha_softphone",
             caller=_ha_peer_name(hass),
             callee=group_name,
             route_kind=GROUP_TYPE_RING,
@@ -2482,6 +2562,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     registry.upsert(
                         invite.call_id,
                         state=CallState.IN_CALL.value,
+                        owner="bridge",
                         caller=invite.caller,
                         callee=invite.target,
                         route_kind=GROUP_TYPE_CONFERENCE,
@@ -2508,6 +2589,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.upsert(
                     invite.call_id,
                     state=CallState.RINGING.value,
+                    owner="router",
                     caller=invite.caller,
                     callee=invite.target,
                     route_kind=GROUP_TYPE_RING,
@@ -2568,6 +2650,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.upsert(
                     invite.call_id,
                     state=CallState.CONNECTING.value,
+                    owner="router",
                     caller=invite.caller,
                     callee=str(
                         trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"
@@ -3020,6 +3103,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     registry.upsert(
                         invite.call_id,
                         state=CallState.IN_CALL.value,
+                        owner="bridge",
                         caller=invite.caller,
                         callee=invite.target,
                         route_kind=decision.action.value,
@@ -3166,6 +3250,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         registry.upsert(
             invite.call_id,
             state=CallState.IN_CALL.value,
+            owner="ha_softphone",
             caller=invite.caller,
             callee=invite.target,
             route_kind=decision.action.value,

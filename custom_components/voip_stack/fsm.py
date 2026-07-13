@@ -27,6 +27,7 @@ class TerminalReason(StrEnum):
     REMOTE_HANGUP = "remote_hangup"
     DECLINED = "declined"
     CANCELLED = "cancelled"
+    FORWARDED = "forwarded"
     TIMEOUT = "timeout"
     BUSY = "busy"
     TRANSPORT_UNREACHABLE = "transport_unreachable"

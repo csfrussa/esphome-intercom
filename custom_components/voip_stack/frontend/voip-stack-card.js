@@ -238,7 +238,7 @@ class VoipStackCard extends HTMLElement {
 
   _onSoftphoneState(state) {
     if (!this._isHaSoftphoneMode() || !state) return;
-    this._applySoftphoneSnapshot(state);
+    if (!this._applySoftphoneSnapshot(state)) return;
     this._ensureHaSoftphoneAudioPath(state);
     this._render();
   }
@@ -314,6 +314,7 @@ class VoipStackCard extends HTMLElement {
       callee: payload.callee || "",
       peer_name: peerName,
       call_id: payload.call_id || "",
+      revision: Number(payload.revision || 0),
       selected_tx_format: payload.selected_tx_format || payload.tx_format || "",
       selected_rx_format: payload.selected_rx_format || payload.rx_format || "",
       audio_mode: payload.audio_mode || "",
@@ -325,6 +326,15 @@ class VoipStackCard extends HTMLElement {
 
   _applySoftphoneSnapshot(payload = {}) {
     const snapshot = this._normaliseSoftphoneSnapshot(payload);
+    const current = this._softphoneSnapshot;
+    if (
+      snapshot.call_id &&
+      current?.call_id === snapshot.call_id &&
+      snapshot.revision > 0 &&
+      Number(current.revision || 0) > snapshot.revision
+    ) {
+      return false;
+    }
     this._softphoneSnapshot = snapshot;
     this._softphoneDnd = !!snapshot.dnd;
     this._softphoneExtension = snapshot.extension;
@@ -365,6 +375,7 @@ class VoipStackCard extends HTMLElement {
       this._tryAutoAnswer();
     }
     this._maybeAnswerFromUrl();
+    return true;
   }
 
   _ensureHaSoftphoneAudioPath(snapshot = {}) {
@@ -464,6 +475,7 @@ class VoipStackCard extends HTMLElement {
       "timeout",
       "busy",
       "cancelled",
+      "forwarded",
       "media_incompatible",
       "transport_unreachable",
       "auth_required_unsupported",
@@ -482,6 +494,7 @@ class VoipStackCard extends HTMLElement {
       case "timeout": return "Timeout";
       case "busy": return "Busy";
       case "cancelled": return "Cancelled";
+      case "forwarded": return "Forwarded";
       case "media_incompatible": return "Media incompatible";
       case "transport_unreachable": return "Unreachable";
       case "auth_required_unsupported": return "Authentication unsupported";
@@ -697,6 +710,7 @@ class VoipStackCard extends HTMLElement {
         this._render();
       }
     }
+    return true;
   }
 
   _shouldAnswerFromUrl() {

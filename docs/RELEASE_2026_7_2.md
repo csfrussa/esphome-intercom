@@ -49,20 +49,21 @@ version is published from `main`.
 - A native `event.voip_stack_call` entity exposes incoming/outgoing calls,
   ringing, answer/connection, terminal results, explicit timeout requests and
   in-call DTMF in Home Assistant's entity and automation UI.
-- Every HA-owned call carries a stable Call-ID, monotonic state sequence and
-  bounded route history. Optional state/sequence guards reject stale automation
-  runs instead of redirecting a call that has already changed.
+- `sensor.voip_stack_call_state` exposes the durable HA phone state. A native
+  state trigger with `for:` can implement no-answer routing without templates,
+  helper timers or a second automation.
+- Every HA-owned call carries a stable Call-ID, one logical owner, monotonic
+  control revision, state sequence and bounded route history. Ownership and
+  destination changes advance the revision even when the visible state name
+  does not change.
 - `voip_stack.forward` can move the same pending or ringing call to an ESP,
   registered SIP phone, ring group or Assist. Re-forwarding while the remote
   phone rings sends standards-based CANCEL before starting the replacement leg.
-- `voip_stack.set_deadline` emits a calling/ringing timeout occurrence without
-  hiding any route action. A second automation may forward an unanswered HA
-  call to Assist, while an answered or otherwise changed call invalidates its
-  old deadline automatically.
-- A single automation can instead use Home Assistant's native
-  `wait_for_trigger` with the stable Call-ID, then call `voip_stack.forward`
-  only on timeout. The guide includes the exact 30-second fallback qualified
-  against a real trunk call and Assist pipeline.
+- When exactly one call is forwardable, `voip_stack.forward` infers it and its
+  concurrency guards. The normal 30-second HA-to-Assist fallback is now one
+  state trigger and one action, with no user-facing Call-ID or Jinja plumbing.
+- Explicit deadlines and Call-ID/state/sequence guards remain available for
+  advanced multi-call and multi-stage policies.
 - Failed routes support `resume`, `terminate` and `busy`. Resume returns a
   pre-answered trunk caller to the normal HA ringing path using the same RTP
   reservation instead of leaving silent media behind.
@@ -74,7 +75,7 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 324 tests and 34 subtests passing.
+- Full backend and frontend test suite: 333 tests and 35 subtests passing.
 - Python/Ruff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
@@ -94,7 +95,9 @@ conditional-forward and unanswered-call-to-Assist examples.
   without reinterpreting SIP scope or routing in the frontend. A live matrix
   covered ringing without refresh, refresh during ringing, answer, decline,
   auto-answer, failed-route resume, two simultaneous dashboards, a registered
-  SIP caller and the real 30-second trunk-to-Assist automation.
+  SIP caller, no-ID forward inference and the real 30-second trunk-to-Assist
+  automation. The HA card releases to `idle/forwarded` while the same source
+  call continues to Assist.
 
 ## Known Follow-Up Areas
 

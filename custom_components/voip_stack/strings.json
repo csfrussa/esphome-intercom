@@ -84,5 +84,17 @@
       "reconfigure_successful": "VoIP Stack reconfigured successfully.",
       "already_configured": "VoIP Stack is already configured."
     }
+  },
+  "entity": {
+    "event": {
+      "voip_stack_call_event": {
+        "name": "VoIP Stack Call"
+      }
+    },
+    "sensor": {
+      "voip_stack_ha_softphone_call_state": {
+        "name": "VoIP Stack Call State"
+      }
+    }
   }
 }

@@ -112,29 +112,17 @@ call:
 
 forward:
   name: SIP Forward
-  description: Route a standards-SIP call through Home Assistant's dial plan. With Call ID, move the existing HA-owned call; without it, originate a new bridged call.
+  description: Route an active HA-owned SIP call to another dial-plan destination. Call ID is inferred when exactly one call is forwardable.
   fields:
     call_id:
       name: Call ID
-      description: Pending SIP Call-ID from voip_stack.route_request. If omitted, Home Assistant originates a new bridged call.
+      description: Optional pending SIP Call-ID. Omit it when exactly one call is forwardable.
       required: false
       selector:
         text:
     destination:
       name: Destination
       description: Contact ID/name, number, user@host, or sip:user@host URI.
-      required: false
-      selector:
-        text:
-    target:
-      name: Target
-      description: Contact ID/name, number, user@host, or sip:user@host URI.
-      required: false
-      selector:
-        text:
-    call:
-      name: Call
-      description: Alias for target, useful in scripts and automations.
       required: false
       selector:
         text:

@@ -82,15 +82,141 @@ class CallRegistryEventContextTest(unittest.TestCase):
             registry.event_context("source"),
         )
 
+    def test_revision_advances_for_owner_and_destination_without_state_change(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert(
+            "call-1", state="connecting", callee="Home Assistant", owner="ha_softphone"
+        )
+        initial = session.revision
+
+        redirected = registry.transition(
+            "call-1",
+            state="connecting",
+            owner="router",
+            callee="Assist",
+            expected_revision=initial,
+            expected_owner="ha_softphone",
+        )
+
+        self.assertIsNotNone(redirected)
+        self.assertEqual(redirected.revision, initial + 1)
+        self.assertEqual(redirected.owner, "router")
+        self.assertEqual(redirected.callee, "Assist")
+        fields = registry.event_fields("call-1", "connecting")
+        self.assertEqual(fields["revision"], redirected.revision)
+        self.assertEqual(fields["owner"], "router")
+
+    def test_stale_revision_or_owner_cannot_mutate_session(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="ringing", owner="ha_softphone")
+
+        self.assertIsNone(
+            registry.transition(
+                "call-1",
+                owner="router",
+                expected_revision=session.revision + 1,
+                expected_owner="ha_softphone",
+            )
+        )
+        self.assertIsNone(
+            registry.transition(
+                "call-1",
+                owner="router",
+                expected_revision=session.revision,
+                expected_owner="bridge",
+            )
+        )
+        self.assertEqual(session.owner, "ha_softphone")
+
+    def test_queued_ringing_callback_cannot_resurrect_released_ha_owner(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="ringing", owner="ha_softphone")
+        queued_revision = session.revision
+        published: list[str] = []
+
+        def queued_ringing_callback() -> None:
+            if registry.is_current(
+                "call-1", revision=queued_revision, owner="ha_softphone"
+            ):
+                published.append("ringing")
+
+        registry.transition(
+            "call-1",
+            state="connecting",
+            owner="router",
+            expected_revision=queued_revision,
+            expected_owner="ha_softphone",
+        )
+        queued_ringing_callback()
+
+        self.assertEqual(published, [])
+        self.assertEqual(registry.sessions["call-1"].owner, "router")
+
+    def test_failed_route_resumes_ha_owner_exactly_once(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="connecting", owner="router")
+
+        resumed = registry.transition(
+            "call-1",
+            state="ringing",
+            owner="ha_softphone",
+            expected_revision=session.revision,
+            expected_owner="router",
+        )
+        duplicate = registry.transition(
+            "call-1",
+            state="ringing",
+            owner="ha_softphone",
+            expected_revision=session.revision - 1,
+            expected_owner="router",
+        )
+
+        self.assertIsNotNone(resumed)
+        self.assertIsNone(duplicate)
+        self.assertEqual(session.owner, "ha_softphone")
+
+    def test_leg_add_replace_remove_and_finish_advance_control_revision(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="connecting", owner="router")
+        initial = session.revision
+        registry.add_leg("call-1", "leg-1", role="callee", state="ringing")
+        after_add = session.revision
+        registry.add_leg("call-1", "leg-1", role="callee", state="in_call")
+        after_replace = session.revision
+        registry.remove_leg("call-1", "leg-1")
+        after_remove = session.revision
+        registry.finish("call-1", reason="remote_hangup")
+
+        self.assertGreater(after_add, initial)
+        self.assertGreater(after_replace, after_add)
+        self.assertGreater(after_remove, after_replace)
+        self.assertGreater(session.revision, after_remove)
+        self.assertEqual(session.owner, "terminal")
+        self.assertEqual(session.outcome, "remote_hangup")
+
+    def test_terminal_pop_removes_event_context_and_pending_indexes(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert("call-1", state="ringing", owner="ha_softphone")
+        registry.event_fields("call-1", "ringing")
+        registry.pending_invites["call-1"] = object()
+        registry.pending_routes["call-1"] = {"future": object()}
+
+        registry.finish_and_pop("call-1", reason="remote_hangup")
+
+        self.assertNotIn("call-1", registry.event_contexts)
+        self.assertNotIn("call-1", registry.pending_invites)
+        self.assertNotIn("call-1", registry.pending_routes)
+
 
 class AutomationEventTypeTest(unittest.TestCase):
     def test_maps_routing_and_call_lifecycle_to_native_event_types(self) -> None:
         cases = (
-            ({"state": "route_requested", "direction": "incoming"}, "incoming_call"),
-            ({"state": "connecting", "direction": "incoming"}, "incoming_call"),
+            ({"state": "route_requested", "direction": "incoming"}, "route_requested"),
+            ({"state": "connecting", "direction": "incoming"}, "state_changed"),
+            ({"state": "connecting", "direction": "incoming", "event_type": "forwarding"}, "forwarding"),
             ({"state": "connecting", "direction": "outgoing"}, "calling"),
             ({"state": "calling", "direction": "outgoing"}, "outgoing_call"),
-            ({"state": "remote_ringing"}, "ringing"),
+            ({"state": "remote_ringing"}, "remote_ringing"),
             ({"state": "in_call"}, "answered"),
             ({"state": "in_call", "direction": "outgoing"}, "connected"),
             ({"state": "idle", "type": "ended"}, "ended"),
@@ -118,6 +244,24 @@ class AutomationEventTypeTest(unittest.TestCase):
                 "ringing", 5, armed_state="ringing", armed_sequence=3
             )
         )
+
+    def test_forward_call_id_is_inferred_only_when_unambiguous(self) -> None:
+        self.assertEqual(
+            automation_routing.resolve_forward_call_id("", {"call-1": {}}, {}),
+            "call-1",
+        )
+        self.assertEqual(
+            automation_routing.resolve_forward_call_id(
+                "chosen", {"call-1": {}}, {"call-2": object()}
+            ),
+            "chosen",
+        )
+        with self.assertRaisesRegex(ValueError, "No forwardable"):
+            automation_routing.resolve_forward_call_id("", {}, {})
+        with self.assertRaisesRegex(ValueError, "More than one"):
+            automation_routing.resolve_forward_call_id(
+                "", {"call-1": {}}, {"call-2": object()}
+            )
 
 
 if __name__ == "__main__":
