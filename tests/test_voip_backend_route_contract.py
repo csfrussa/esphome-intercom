@@ -815,6 +815,49 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("_fire_call_event", dnd_service)
         self.assertNotIn("_fire_call_event", settings_service)
 
+    def test_softphone_state_has_a_dedicated_authoritative_stream(self) -> None:
+        websocket = WEBSOCKET_API.read_text()
+        self.assertIn(
+            'HA_SOFTPHONE_STATE_EVENT = "voip_stack.ha_softphone_state"',
+            websocket,
+        )
+        self.assertIn(
+            'WS_TYPE_SUBSCRIBE_HA_SOFTPHONE = f"{DOMAIN}/subscribe_ha_softphone_state"',
+            websocket,
+        )
+        self.assertIn("def _publish_ha_softphone_state(", websocket)
+        self.assertIn("def websocket_subscribe_ha_softphone_state(", websocket)
+        fire_event = websocket[
+            websocket.index("def _fire_call_event(") : websocket.index(
+                "def _ha_softphone_store("
+            )
+        ]
+        self.assertIn('event["scope"] = scope', fire_event)
+        self.assertNotIn('event.get("scope") or scope', fire_event)
+
+        terminal = websocket[
+            websocket.index("def _set_ha_softphone_call_state(") : websocket.index(
+                "def _set_sip_bridge_call_state("
+            )
+        ]
+        self.assertIn("if terminal and state != CallState.IDLE.value:", terminal)
+        self.assertIn('store["state"] = CallState.IDLE.value', terminal)
+        self.assertLess(
+            terminal.index("_fire_call_event(hass, payload, \"session\")"),
+            terminal.index("if terminal and state != CallState.IDLE.value:"),
+        )
+        self.assertLess(
+            terminal.index("if terminal and state != CallState.IDLE.value:"),
+            terminal.index("_publish_ha_softphone_state(hass)"),
+        )
+
+        release = websocket[
+            websocket.index("def _release_ha_softphone_claim(") : websocket.index(
+                "def _ha_softphone_groups("
+            )
+        ]
+        self.assertIn("_publish_ha_softphone_state(hass)", release)
+
     def test_trunk_without_dtmf_preanswer_does_not_allocate_relay_ports(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
         trunk_branch = on_invite[

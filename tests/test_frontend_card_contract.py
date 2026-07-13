@@ -94,12 +94,14 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('"esp_mirror"', body)
         self.assertNotIn('"hybrid"', body)
 
-    def test_call_events_are_rendered_through_softphone_session_mirror(self) -> None:
+    def test_ha_softphone_uses_its_authoritative_state_stream(self) -> None:
         call_event = _method_body(self.source, "_onCallEvent")
-        self.assertIn('scope === "session"', call_event)
-        self.assertIn("this._onSessionStateEvent(event)", call_event)
         self.assertIn('scope === "sip_bridge"', call_event)
         self.assertIn("this._onMirroredBridgeStateEvent(event)", call_event)
+        self.assertNotIn('scope === "session"', call_event)
+        softphone = _method_body(self.source, "_onSoftphoneState")
+        self.assertIn("this._applySoftphoneSnapshot(state)", softphone)
+        self.assertNotIn("_eventConcernsThisCard", softphone)
         self.assertNotIn("_onSipStateEvent", self.source)
 
     def test_esp_mirror_terminal_bridge_event_uses_dialed_target_and_reason(self) -> None:
@@ -291,9 +293,9 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("rtp_rx_packets", self.source)
 
     def test_ha_softphone_in_call_state_attaches_browser_audio(self) -> None:
-        body = _method_body(self.source, "_onSessionStateEvent")
-        self.assertIn("this._applySoftphoneSnapshot(data)", body)
-        self.assertIn("this._ensureHaSoftphoneAudioPath(data)", body)
+        body = _method_body(self.source, "_onSoftphoneState")
+        self.assertIn("this._applySoftphoneSnapshot(state)", body)
+        self.assertIn("this._ensureHaSoftphoneAudioPath(state)", body)
 
     def test_terminal_ha_softphone_event_always_closes_engine(self) -> None:
         cleanup = _method_body(self.source, "_cleanupAfterTerminalSession")

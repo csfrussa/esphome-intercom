@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
 import voluptuous as vol
 
@@ -25,9 +25,13 @@ from .const import (
 )
 from .fsm import CallState, TerminalReason, sip_phone_state, sip_public_state as _sip_public_state
 
+if TYPE_CHECKING:
+    from homeassistant.core import Event
+
 _LOGGER = logging.getLogger(__name__)
 
 CALL_EVENT = "voip_stack.call_event"
+HA_SOFTPHONE_STATE_EVENT = "voip_stack.ha_softphone_state"
 SIP_CALL_STATE_EVENT = "voip_stack.call_state"
 SIP_INCOMING_CALL_EVENT = "voip_stack.incoming_call"
 SIP_ROUTE_REQUEST_EVENT = "voip_stack.route_request"
@@ -49,6 +53,7 @@ WS_TYPE_RESOLVE_DEVICE = f"{DOMAIN}/resolve_device"
 WS_TYPE_HA_SOFTPHONE_START = f"{DOMAIN}/ha_softphone_start"
 WS_TYPE_HA_SOFTPHONE_STATE = f"{DOMAIN}/ha_softphone_state"
 WS_TYPE_SUBSCRIBE_CALL_EVENTS = f"{DOMAIN}/subscribe_call_events"
+WS_TYPE_SUBSCRIBE_HA_SOFTPHONE = f"{DOMAIN}/subscribe_ha_softphone_state"
 
 
 def _clean_group_token(value: object) -> str:
@@ -175,7 +180,9 @@ def _json_event_value(value: Any) -> Any:
 
 def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -> dict[str, Any]:
     event = _json_event_value(payload) or {}
-    event["scope"] = event.get("scope") or scope
+    # Scope identifies the state owner publishing this occurrence. Transport
+    # provenance belongs in origin/source and must not replace the owner.
+    event["scope"] = scope
     event.setdefault("origin", event["scope"])
     event.setdefault("direction", "")
     event.setdefault("caller", "")
@@ -253,6 +260,7 @@ def _release_ha_softphone_claim(hass: HomeAssistant, call_id: str) -> bool:
     store["state"] = CallState.IDLE.value
     store["sip_state"] = CallState.IDLE.value
     store["terminal_reason"] = ""
+    _publish_ha_softphone_state(hass)
     return True
 
 
@@ -296,6 +304,7 @@ async def async_set_ha_softphone_settings(
     if endpoint_sensor is not None:
         await endpoint_sensor.async_update()
     state = _ha_softphone_state(hass)
+    _publish_ha_softphone_state(hass, state)
     return state
 
 
@@ -631,6 +640,16 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     }
 
 
+def _publish_ha_softphone_state(
+    hass: HomeAssistant, state: dict[str, Any] | None = None
+) -> None:
+    """Publish one complete authoritative HA softphone snapshot."""
+    hass.bus.async_fire(
+        HA_SOFTPHONE_STATE_EVENT,
+        dict(state) if state is not None else _ha_softphone_state(hass),
+    )
+
+
 def _set_ha_softphone_call_state(
     hass: HomeAssistant,
     state: str,
@@ -774,6 +793,13 @@ def _set_ha_softphone_call_state(
         extra.get("last_sip_event", store.get("last_sip_event", "")),
     )
     _fire_call_event(hass, payload, "session")
+    # Non-idle terminal states are lifecycle events, not durable phone states.
+    # Keep the reason/last-call metadata for the card's short result message,
+    # but expose the HA endpoint as immediately ready for another call.
+    if terminal and state != CallState.IDLE.value:
+        store["state"] = CallState.IDLE.value
+        store["sip_state"] = CallState.IDLE.value
+    _publish_ha_softphone_state(hass)
 
 
 def _set_sip_bridge_call_state(
@@ -851,6 +877,7 @@ async def _get_voip_devices(hass: HomeAssistant) -> list[dict[str, Any]]:
 
 def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_subscribe_call_events)
+    websocket_api.async_register_command(hass, websocket_subscribe_ha_softphone_state)
     websocket_api.async_register_command(hass, websocket_ha_softphone_start)
     websocket_api.async_register_command(hass, websocket_ha_softphone_state)
     websocket_api.async_register_command(hass, websocket_list_devices)
@@ -871,6 +898,28 @@ def websocket_subscribe_call_events(
         connection.send_event(msg_id, {"event_type": CALL_EVENT, "data": event.data})
 
     connection.subscriptions[msg_id] = hass.bus.async_listen(CALL_EVENT, forward_call_event)
+    connection.send_result(msg_id)
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): WS_TYPE_SUBSCRIBE_HA_SOFTPHONE}
+)
+@callback
+def websocket_subscribe_ha_softphone_state(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: Dict[str, Any],
+) -> None:
+    """Stream authoritative HA softphone snapshots."""
+    msg_id = msg["id"]
+
+    @callback
+    def forward_state(event: Event) -> None:
+        connection.send_event(msg_id, event.data)
+
+    connection.subscriptions[msg_id] = hass.bus.async_listen(
+        HA_SOFTPHONE_STATE_EVENT, forward_state
+    )
     connection.send_result(msg_id)
 
 

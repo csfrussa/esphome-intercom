@@ -64,13 +64,14 @@ phone is unreachable. `terminate` ends it; `busy` ends it with a busy result.
 
 ## Forward Unanswered HA Calls To Assist
 
-Timeouts are explicit and event-only. Arming one never forwards or terminates a
-call by itself. The first automation starts a 30-second deadline whenever the
-HA softphone begins ringing:
+The normal Home Assistant `wait_for_trigger` action is enough when the whole
+policy belongs in one automation. This example waits up to 30 seconds for the
+same call to answer or end, then forwards only if the wait timed out:
 
 ```yaml
-alias: VoIP - Arm HA ringing timeout
+alias: VoIP - HA unanswered to Assist
 mode: parallel
+max: 10
 triggers:
   - trigger: state
     entity_id: event.voip_stack_call
@@ -79,44 +80,58 @@ conditions:
     value_template: >-
       {{ trigger.to_state.attributes.event_type == 'ringing'
          and trigger.to_state.attributes.direction == 'incoming'
+         and trigger.to_state.attributes.callee in ['Casa', 'Home Assistant', '427']
          and trigger.to_state.attributes.automation_control in ['routable', 'ha_anchored'] }}
 actions:
-  - action: voip_stack.set_deadline
-    data:
-      call_id: "{{ trigger.to_state.attributes.call_id }}"
-      phase: ringing
-      timeout: 30
-      expected_state: "{{ trigger.to_state.attributes.state }}"
-      expected_sequence: "{{ trigger.to_state.attributes.sequence }}"
-```
-
-The second automation moves the same still-active call to the configured Assist
-extension. If the call answered, ended or changed route during those 30
-seconds, the deadline becomes stale and emits nothing.
-
-```yaml
-alias: VoIP - Unanswered HA call to Assist
-mode: parallel
-triggers:
-  - trigger: state
-    entity_id: event.voip_stack_call
-conditions:
-  - condition: template
-    value_template: >-
-      {{ trigger.to_state.attributes.event_type == 'ringing_timeout_requested' }}
-actions:
-  - action: voip_stack.forward
-    data:
-      call_id: "{{ trigger.to_state.attributes.call_id }}"
-      destination: "1666"
-      expected_state: "{{ trigger.to_state.attributes.armed_state }}"
-      expected_sequence: "{{ trigger.to_state.attributes.armed_sequence }}"
-      on_failure: resume
+  - variables:
+      voip_call_id: "{{ trigger.to_state.attributes.call_id }}"
+      voip_state: "{{ trigger.to_state.attributes.state }}"
+      voip_sequence: "{{ trigger.to_state.attributes.sequence }}"
+  - wait_for_trigger:
+      - trigger: event
+        event_type: voip_stack.call_event
+        event_data:
+          call_id: "{{ voip_call_id }}"
+          type: answered
+      - trigger: event
+        event_type: voip_stack.call_event
+        event_data:
+          call_id: "{{ voip_call_id }}"
+          type: ended
+      - trigger: event
+        event_type: voip_stack.call_event
+        event_data:
+          call_id: "{{ voip_call_id }}"
+          type: missed
+      - trigger: event
+        event_type: voip_stack.call_event
+        event_data:
+          call_id: "{{ voip_call_id }}"
+          type: failed
+    timeout: "00:00:30"
+    continue_on_timeout: true
+  - if:
+      - condition: template
+        value_template: "{{ not wait.completed }}"
+    then:
+      - action: voip_stack.forward
+        data:
+          call_id: "{{ voip_call_id }}"
+          destination: "1666"
+          expected_state: "{{ voip_state }}"
+          expected_sequence: "{{ voip_sequence }}"
+          on_failure: resume
 ```
 
 Replace `1666` with the Assist extension configured in VoIP Stack. Assist is a
 normal phonebook destination; the automation does not need a separate media or
-SIP path.
+SIP path. Replace the `callee` values with the name or extension of your HA
+softphone.
+
+For policies shared by several automations, `voip_stack.set_deadline` remains
+available. It emits an explicit `ringing_timeout_requested` occurrence only if
+the Call-ID, state and sequence are still current; another automation may then
+choose the route.
 
 ## Routing Boundaries
 

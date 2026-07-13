@@ -81,6 +81,7 @@ from .websocket_api import (
     _async_save_ha_softphone_store,
     async_set_ha_softphone_settings,
     _ha_softphone_store,
+    _publish_ha_softphone_state,
     _set_ha_softphone_call_state,
     _set_sip_bridge_call_state,
 )
@@ -1169,6 +1170,7 @@ async def _handle_set_dnd_service(call: ServiceCall) -> None:
     store = _ha_softphone_store(hass)
     store["dnd"] = enabled
     await _async_save_ha_softphone_store(hass)
+    _publish_ha_softphone_state(hass)
     _LOGGER.info("HA softphone DND set to %s via service", enabled)
 
 

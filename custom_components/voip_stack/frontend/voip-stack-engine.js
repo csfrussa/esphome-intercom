@@ -1,6 +1,7 @@
 const HA_SOFTPHONE_DEVICE_ID = "__voip_stack_ha_softphone__";
 const WS_AUDIO = 1;
 const WS_SUBSCRIBE_CALL_EVENTS = "voip_stack/subscribe_call_events";
+const WS_SUBSCRIBE_HA_SOFTPHONE = "voip_stack/subscribe_ha_softphone_state";
 const MODULE_VERSION = (() => {
   try {
     return new URL(import.meta.url).searchParams.get("v") || "dev";
@@ -37,8 +38,11 @@ class VoipStackEngine extends EventTarget {
     this._stats = { sent: 0, received: 0, tx_dropped: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
     this._busConnection = null;
     this._busUnsub = null;
+    this._softphoneBusUnsub = null;
     this._callSubscribers = new Set();
+    this._softphoneSubscribers = new Set();
     this._lastEvents = new Map();
+    this._lastSoftphoneState = null;
     this._controlWaiter = null;
     this._connectPromise = null;
     this._sessionAttachKey = "";
@@ -63,6 +67,10 @@ class VoipStackEngine extends EventTarget {
       this._busUnsub();
       this._busUnsub = null;
     }
+    if (this._softphoneBusUnsub) {
+      this._softphoneBusUnsub();
+      this._softphoneBusUnsub = null;
+    }
     this._busConnection = conn;
     conn.subscribeMessage((event) => this._onBusEvent(event), { type: WS_SUBSCRIBE_CALL_EVENTS })
       .then((unsub) => {
@@ -73,6 +81,15 @@ class VoipStackEngine extends EventTarget {
         if (this._busConnection === conn) this._busConnection = null;
         console.warn("voip-stack-engine: call_event subscription failed", err);
       });
+    conn.subscribeMessage(
+      (event) => this._onSoftphoneState(event),
+      { type: WS_SUBSCRIBE_HA_SOFTPHONE },
+    ).then((unsub) => {
+      if (this._busConnection === conn) this._softphoneBusUnsub = unsub;
+      else unsub();
+    }).catch((err) => {
+      console.warn("voip-stack-engine: HA softphone subscription failed", err);
+    });
   }
 
   get active() {
@@ -141,6 +158,22 @@ class VoipStackEngine extends EventTarget {
       try { cb(event); } catch (err) { console.error("voip-stack-engine replay", err); }
     }
     return () => this._callSubscribers.delete(cb);
+  }
+
+  _onSoftphoneState(state) {
+    if (!state) return;
+    this._lastSoftphoneState = state;
+    for (const cb of this._softphoneSubscribers) {
+      try { cb(state); } catch (err) { console.error("voip-stack-engine softphone subscriber", err); }
+    }
+  }
+
+  subscribeSoftphoneState(cb) {
+    this._softphoneSubscribers.add(cb);
+    if (this._lastSoftphoneState) {
+      try { cb(this._lastSoftphoneState); } catch (err) { console.error("voip-stack-engine softphone replay", err); }
+    }
+    return () => this._softphoneSubscribers.delete(cb);
   }
 
   setRingtoneRequest(key, active, enabled) {

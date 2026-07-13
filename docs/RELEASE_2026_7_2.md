@@ -59,6 +59,10 @@ version is published from `main`.
   hiding any route action. A second automation may forward an unanswered HA
   call to Assist, while an answered or otherwise changed call invalidates its
   old deadline automatically.
+- A single automation can instead use Home Assistant's native
+  `wait_for_trigger` with the stable Call-ID, then call `voip_stack.forward`
+  only on timeout. The guide includes the exact 30-second fallback qualified
+  against a real trunk call and Assist pipeline.
 - Failed routes support `resume`, `terminate` and `busy`. Resume returns a
   pre-answered trunk caller to the normal HA ringing path using the same RTP
   reservation instead of leaving silent media behind.
@@ -86,6 +90,11 @@ conditional-forward and unanswered-call-to-Assist examples.
   the surviving call kept its source Call-ID and recorded both route-history
   entries. In-call SIP INFO toward Assist emitted one canonical `dtmf`
   occurrence while the initial extension digits remained isolated.
+- The HA softphone card now consumes one complete authoritative state stream,
+  without reinterpreting SIP scope or routing in the frontend. A live matrix
+  covered ringing without refresh, refresh during ringing, answer, decline,
+  auto-answer, failed-route resume, two simultaneous dashboards, a registered
+  SIP caller and the real 30-second trunk-to-Assist automation.
 
 ## Known Follow-Up Areas
 

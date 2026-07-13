@@ -134,6 +134,7 @@ class VoipStackCard extends HTMLElement {
     this._lastSoftphoneTerminalKey = "";
     this._lastEndClearTimer = null;
     this._unsubCallEvents = null;
+    this._unsubSoftphoneState = null;
 
     // Static skeleton: built once per mode, then mutated via textContent/
     // hidden/className. Eliminates innerHTML interpolation of untrusted
@@ -156,6 +157,10 @@ class VoipStackCard extends HTMLElement {
       this._unsubCallEvents();
       this._unsubCallEvents = null;
     }
+    if (this._unsubSoftphoneState) {
+      this._unsubSoftphoneState();
+      this._unsubSoftphoneState = null;
+    }
     if (this._lastEndClearTimer) {
       clearTimeout(this._lastEndClearTimer);
       this._lastEndClearTimer = null;
@@ -177,8 +182,17 @@ class VoipStackCard extends HTMLElement {
   }
 
   async _subscribeBusEvents() {
-    if (this._unsubCallEvents) return;
-    this._unsubCallEvents = voipStackEngine.subscribeCallEvents((e) => this._onCallEvent(e));
+    if (this._isHaSoftphoneMode()) {
+      if (!this._unsubSoftphoneState) {
+        this._unsubSoftphoneState = voipStackEngine.subscribeSoftphoneState(
+          (state) => this._onSoftphoneState(state),
+        );
+      }
+      return;
+    }
+    if (!this._unsubCallEvents) {
+      this._unsubCallEvents = voipStackEngine.subscribeCallEvents((e) => this._onCallEvent(e));
+    }
   }
 
   _eventConcernsThisCard(payload) {
@@ -217,18 +231,15 @@ class VoipStackCard extends HTMLElement {
 
   _onCallEvent(event) {
     const scope = (event?.data?.scope || "").toLowerCase();
-    if (this._isHaSoftphoneMode() && scope === "session") {
-      this._onSessionStateEvent(event);
-    } else if (!this._isHaSoftphoneMode() && scope === "sip_bridge") {
+    if (!this._isHaSoftphoneMode() && scope === "sip_bridge") {
       this._onMirroredBridgeStateEvent(event);
     }
   }
 
-  _onSessionStateEvent(event) {
-    const data = event?.data;
-    if (!this._eventConcernsThisCard(data)) return;
-    this._applySoftphoneSnapshot(data);
-    this._ensureHaSoftphoneAudioPath(data);
+  _onSoftphoneState(state) {
+    if (!this._isHaSoftphoneMode() || !state) return;
+    this._applySoftphoneSnapshot(state);
+    this._ensureHaSoftphoneAudioPath(state);
     this._render();
   }
 
@@ -557,7 +568,10 @@ class VoipStackCard extends HTMLElement {
     }
 
     // Subscribe to HA bus events once we have a hass.connection
-    if (hass && !this._unsubCallEvents && hass.connection) {
+    if (
+      hass && hass.connection &&
+      (this._isHaSoftphoneMode() ? !this._unsubSoftphoneState : !this._unsubCallEvents)
+    ) {
       this._subscribeBusEvents();
     }
 
