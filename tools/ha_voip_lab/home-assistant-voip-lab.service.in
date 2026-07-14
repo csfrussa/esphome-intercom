@@ -1,0 +1,16 @@
+[Unit]
+Description=Home Assistant VoIP Stack development lab
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@LAB_USER@
+Group=@LAB_GROUP@
+WorkingDirectory=@LAB_ROOT@
+ExecStart=@LAB_ROOT@/.venv/bin/hass -c @LAB_ROOT@/config
+Restart=no
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
