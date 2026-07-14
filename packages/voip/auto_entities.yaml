@@ -1,5 +1,20 @@
-# Auto-create the standard voip_stack entities for minimal native-audio
-# profiles. The component only emits entities that match the configured audio
-# direction: mic_gain for mic paths, master_volume for speaker paths.
-voip_stack:
-  auto_entities: true
+# Optional standard ESPHome entity platforms for a full-duplex VoIP endpoint.
+# Keep these outside the core component: upstream ESPHome does not permit a
+# component to AUTO_LOAD primary entity platforms.
+switch:
+  - platform: voip_stack
+    voip_stack_id: phone
+    auto_answer:
+      name: Auto Answer
+      restore_mode: RESTORE_DEFAULT_ON
+    dnd:
+      name: Do Not Disturb
+      restore_mode: RESTORE_DEFAULT_OFF
+
+number:
+  - platform: voip_stack
+    voip_stack_id: phone
+    master_volume:
+      name: Master Volume
+    mic_gain:
+      name: Mic Gain

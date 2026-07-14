@@ -1,5 +1,15 @@
 # Breaking changes
 
+## 2026.7.2-dev: Optional ESPHome entities are explicit platforms
+
+The ESPHome `voip_stack` core no longer accepts `auto_entities`. ESPHome's
+upstream contribution rules prohibit using `AUTO_LOAD` for primary entity
+platforms such as `switch`, `number`, `button`, `text` and `text_sensor`.
+Declare the required `platform: voip_stack` entities explicitly, or include
+`packages/voip/auto_entities.yaml` in maintained full-duplex configurations.
+Configurations that do not need those entities now compile without declaring
+empty platform sections.
+
 ## 2026.7.1: Contract Updates
 
 The stable `2026.7.0` migration below remains the main breaking change.

@@ -12,6 +12,18 @@ automation-native call routing and an opt-in experimental SIP video path for
 the Home Assistant softphone. Install it only when you intend to test the
 current `dev` integration and report regressions.
 
+## 🧩 Native ESPHome Platform Boundaries
+
+- The ESPHome VoIP core no longer auto-loads primary entity platforms. Button,
+  number, switch, text and text-sensor support is compiled only when explicitly
+  configured, following ESPHome's upstream component rules.
+- Minimal VoIP YAML now compiles without empty `text:` or `text_sensor:` blocks.
+  Maintained full-experience YAML keeps the same controls through explicit
+  native `platform: voip_stack` entities.
+- Both a platform-free ESP32-S3 fixture and a fixture containing every optional
+  entity platform are compiled as regression tests. The full P4 landscape
+  configuration is also compiled against the same component source.
+
 ## 📞 More Reliable Outbound Trunk Calls
 
 - Home Assistant now uses the configured trunk username as the SIP `From` and

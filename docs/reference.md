@@ -42,7 +42,6 @@ voip_stack:
 | `ha_phonebook_text_sensor_id` | HA-published central roster source. |
 | `delete_contact_missing_from` | Optional stale-contact pruning policy with `updates_number: 1..10`. |
 | `ringing_timeout` / `calling_timeout` | Optional guard timers. |
-| `auto_entities` | Create the common switches and direction-dependent volume/gain entities automatically. Maintained YAMLs normally declare stable entities through packages. |
 | `dc_offset_removal` | Remove DC bias from TX microphone samples. |
 | `buffers_in_psram` | Place VoIP-owned staging buffers in PSRAM. |
 | `task_stacks_in_psram` | Place supported VoIP task stacks in PSRAM. Requires PSRAM and is rejected on the original ESP32. |
