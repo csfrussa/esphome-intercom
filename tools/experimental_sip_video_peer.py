@@ -358,6 +358,7 @@ async def _relay_video(
     counters: dict[str, int],
     *,
     send_enabled: bool,
+    capture_destination: tuple[str, int] | None = None,
 ) -> None:
     """Forward generated RTP and count media returned by the HA browser.
 
@@ -383,6 +384,8 @@ async def _relay_video(
             counters["video_rx_packets"] += 1
             counters["video_rx_bytes"] += len(raw)
             counters["video_rx_last_sequence"] = packet.sequence
+            if capture_destination is not None:
+                await loop.sock_sendto(sock, raw, capture_destination)
             continue
         if not send_enabled:
             continue
@@ -450,6 +453,39 @@ async def _start_video_sender(
     )
 
 
+async def _start_video_receiver(
+    *, codec: str, local_ip: str, local_port: int, output: str,
+):
+    """Record the browser's returned RTP stream without sharing its SIP socket."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required to record returned video")
+    profile = VIDEO_PROFILES[codec]
+    sdp_lines = [
+        "v=0",
+        f"o=- 0 0 IN IP4 {local_ip}",
+        "s=VoIP Stack camera capture",
+        f"c=IN IP4 {local_ip}",
+        "t=0 0",
+        f"m=video {local_port} RTP/AVP {profile['payload_type']}",
+        f"a=rtpmap:{profile['payload_type']} {profile['rtpmap']}",
+    ]
+    if profile["fmtp"]:
+        sdp_lines.append(f"a=fmtp:{profile['payload_type']} {profile['fmtp']}")
+    sdp_lines.extend(("a=recvonly", ""))
+    sdp_text = "\n".join(sdp_lines)
+    return await asyncio.create_subprocess_exec(
+        ffmpeg,
+        "-hide_banner", "-loglevel", "warning", "-nostdin",
+        "-protocol_whitelist", "pipe,udp,rtp",
+        "-f", "sdp", "-i", "pipe:0",
+        "-an", "-c:v", "copy", "-y", output,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    ), sdp_text
+
+
 async def async_main(args: argparse.Namespace) -> int:
     local_ip = args.local_ip or _local_ip(args.host, args.port)
     sip_socket = _reserve_udp_socket(local_ip)
@@ -509,6 +545,7 @@ async def async_main(args: argparse.Namespace) -> int:
         "video_rtcp_packet_types": [],
     }
     video_process = None
+    video_receiver_process = None
     audio_process = None
     tasks: list[asyncio.Task] = []
     stopped = asyncio.Event()
@@ -517,6 +554,8 @@ async def async_main(args: argparse.Namespace) -> int:
     bye_sent = False
     remote_to = ""
     started = time.monotonic()
+    audio_stderr: list[str] = []
+    video_receiver_stderr: list[str] = []
     try:
         await loop.sock_sendto(sip_socket, invite, (args.host, args.port))
         response = None
@@ -584,7 +623,6 @@ async def async_main(args: argparse.Namespace) -> int:
         )
         await loop.sock_sendto(sip_socket, ack, (args.host, args.port))
         audio_destination = (str(answer_audio["connection_ip"]), int(answer_audio["media_port"]))
-        audio_stderr: list[str] = []
         if args.video_file:
             audio_process = await _start_audio_sender(args.video_file, args.duration)
             tasks = [
@@ -598,6 +636,25 @@ async def async_main(args: argparse.Namespace) -> int:
                 asyncio.create_task(_receive_audio(audio_socket, stopped, result)),
             ]
         if parsed_video is not None and video_socket is not None and rtcp_socket is not None:
+            capture_destination = None
+            if args.video_rx_file:
+                capture_probe = _reserve_udp_socket(local_ip)
+                capture_port = int(capture_probe.getsockname()[1])
+                capture_probe.close()
+                video_receiver_process, capture_sdp = await _start_video_receiver(
+                    codec=args.codec,
+                    local_ip=local_ip,
+                    local_port=capture_port,
+                    output=args.video_rx_file,
+                )
+                assert video_receiver_process.stdin is not None
+                video_receiver_process.stdin.write(capture_sdp.encode())
+                await video_receiver_process.stdin.drain()
+                video_receiver_process.stdin.close()
+                capture_destination = (local_ip, capture_port)
+                tasks.append(asyncio.create_task(
+                    _drain_stderr(video_receiver_process, video_receiver_stderr)
+                ))
             tasks.append(asyncio.create_task(_receive_rtcp(rtcp_socket, stopped, result)))
             tasks.append(
                 asyncio.create_task(
@@ -607,6 +664,7 @@ async def async_main(args: argparse.Namespace) -> int:
                         stopped,
                         result,
                         send_enabled=args.direction in {"sendonly", "sendrecv"},
+                        capture_destination=capture_destination,
                     )
                 )
             )
@@ -738,6 +796,18 @@ async def async_main(args: argparse.Namespace) -> int:
                 await audio_process.wait()
         if audio_process is not None:
             result["audio_sender_returncode"] = audio_process.returncode
+        if video_receiver_process is not None and video_receiver_process.returncode is None:
+            video_receiver_process.terminate()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(video_receiver_process.wait(), 2.0)
+            if video_receiver_process.returncode is None:
+                video_receiver_process.kill()
+                await video_receiver_process.wait()
+        if video_receiver_process is not None:
+            result["video_receiver_returncode"] = video_receiver_process.returncode
+            result["video_rx_file"] = args.video_rx_file
+            if video_receiver_stderr:
+                result["video_receiver_stderr_tail"] = video_receiver_stderr
         if audio_stderr:
             result["audio_sender_stderr_tail"] = list(audio_stderr)
         if "video_stderr" in locals() and video_stderr:
@@ -782,6 +852,10 @@ def main() -> int:
     )
     parser.add_argument("--duration", type=float, default=15.0)
     parser.add_argument("--video-file", default="")
+    parser.add_argument(
+        "--video-rx-file", default="",
+        help="record video returned by the HA browser to this media file",
+    )
     parser.add_argument("--out", default="/tmp/experimental_sip_video_peer.json")
     args = parser.parse_args()
     try:

@@ -835,9 +835,13 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     local_video_rtp_port = 0
     video_rtp_socket = None
     media_reservation = (preanswered or {}).get("rtp_reservation")
+    # Negotiate the browser-camera direction whenever the integration allows
+    # it.  The per-browser Send Camera choice controls capture/transmission in
+    # the frontend; coupling SDP to that transient choice makes an incoming
+    # answer irreversibly recvonly before the browser media path can attach.
     camera_send_enabled = bool(
         _get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)
-    ) and bool(call.data.get("send_video", False))
+    )
     video_direction = (
         constrained_video_direction(
             invite.video_format.direction,
@@ -1445,9 +1449,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         local_video_rtp_port = 0
     from .sdp import DEFAULT_VIDEO_FORMATS, browser_video_send_supported
 
-    camera_send_enabled = bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False)) and bool(
-        call.data.get("send_video", False)
-    )
+    # Offer the permitted direction independently from the browser-local
+    # camera toggle.  The frontend still owns permission and actual capture.
+    camera_send_enabled = bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False))
     offered_video_formats = (
         tuple(item for item in DEFAULT_VIDEO_FORMATS if browser_video_send_supported(item))
         if camera_send_enabled
