@@ -13,53 +13,67 @@ live calls, and yes, we appear to be getting rather close to a real native
 Home Assistant video phone. This is still a development build, so install it
 when you actually want to test the new toys and tell us what breaks.
 
-## 🧩 Native ESPHome Platform Boundaries
+## 🎥 Experimental SIP Video For The HA Softphone
 
-- The ESPHome VoIP core no longer auto-loads primary entity platforms. Button,
-  number, switch, text and text-sensor support is compiled only when explicitly
-  configured, following ESPHome's upstream component rules.
-- Minimal VoIP YAML now compiles without empty `text:` or `text_sensor:` blocks.
-  Maintained full-experience YAML keeps the same controls through explicit
-  native `platform: voip_stack` entities.
-- Both a platform-free ESP32-S3 fixture and a fixture containing every optional
-  entity platform are compiled as regression tests. The full P4 landscape
-  configuration is also compiled against the same component source.
+Yes, apparently we are close to a real native Home Assistant video phone. Soon
+you may be able to remain safely inside your sealed fortress of misanthropy and
+despair while checking exactly how ugly the person ringing your doorbell is.
 
-## 📞 More Reliable Outbound Trunk Calls
+The results so far are encouraging. I do not own a SIP video door station yet
+(I told you I am poor), so qualification currently uses standard SIP clients
+sending webcam, generated video and real media streams. It is behaving well in
+the lab; now I need real door-station tests from users, so please tell me what
+works, what stutters and what catches fire.
 
-- Home Assistant now uses the configured trunk username as the SIP `From` and
-  `Contact` identity for outbound trunk calls, while the friendly softphone name
-  remains separate in the card and HA state.
-- Digest authentication still uses the independently configurable auth
-  username. This supports providers where the address-of-record and digest
-  identity differ.
-- The authenticated retry keeps the correct Request-URI, Call-ID, incremented
-  CSeq and fresh Via branch. The change was validated with a real `407 Proxy
-  Authentication Required` trunk exchange.
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/dev/docs/images/ha-sip-video-call.gif"
+    alt="Live SIP video call in the Home Assistant softphone"
+    width="800"
+  />
+</p>
 
-## ☎️ Hang Up Means Hang Up
+_A real SIP call feeding video into the HA softphone card. The video stays the
+main character; identity, duration and hang-up move into the bottom bar._
 
-- The Lovelace card keeps Hang Up available throughout `calling`, `connecting`
-  and remote ringing, including while the original start request is pending.
-- The terminal call result remains available in HA state for diagnostics, but
-  the card presents it for five seconds and then returns to Ready. Later option
-  or roster updates do not resurrect an old hangup reason.
-- Outbound INVITE transactions now have one signaling owner shared by HA
-  softphone, bridges, ring groups and conference invitations.
-- Cancellation follows the SIP transaction lifecycle: if no provisional
-  response has arrived, CANCEL is deferred; after `100`, `180` or `183`, it is
-  sent immediately with the original Call-ID, CSeq and Via branch.
-- The remote endpoint receives a real CANCEL and terminates the INVITE with
-  `487 Request Terminated`; HA acknowledges it and remains idle instead of
-  returning to remote ringing because of a late provisional response.
-- The terminal event now preserves the call's canonical direction. An outbound
-  call no longer changes from `outgoing` to `incoming` when HA hangs up while
-  its session is still present in the call registry.
-- If a successful `200 OK` crosses the cancellation, HA acknowledges the dialog
-  and ends it with BYE, preventing ghost calls.
-- Cancelling a ring-group or conference dialing task no longer destroys the SIP
-  transaction owner. Losing legs finish their standard teardown in the
-  background without delaying the winning call.
+- The disabled-by-default HA softphone video profile now negotiates H.264, VP8
+  and JPEG directly with standard SIP phones and door stations. ESPHome
+  endpoints remain audio-only.
+- H.264 Baseline and Constrained Baseline, VP8 and RFC 2435 JPEG use bounded
+  RTP reorder and depacketization before the authenticated card WebSocket.
+  H.264 and VP8 can also carry the browser camera when both the global option
+  and that browser's **Send Camera** choice are enabled.
+- A second independent opt-in can use Home Assistant's existing FFmpeg binary
+  to receive H.263, H.263-1998 or H.265 and stream VP8 to the browser. It is
+  receive-only, limited to one process and one thread, and never saves an
+  intermediate file. Direct H.264, VP8 and JPEG do not start FFmpeg.
+- AVP remains the compatible default. When a peer offers AVPF, compound RTCP
+  receiver reports and negotiated PLI/FIR requests help a newly attached or
+  reloaded card recover at a key frame. HA-owned standard SIP bridges can
+  relay matching-profile, exact-codec RTP and RTCP without decoding or
+  re-encoding the stream.
+- Audio, receive video and camera transmit have independent failure domains.
+  Camera denial, an unavailable codec or a failed optional transcode leaves the
+  compatible audio call and other usable media directions alive.
+- Received video fills the card behind the call identity. The call state,
+  duration and hang-up action become a responsive full-width bottom bar;
+  codec diagnostics remain hidden unless debug mode is enabled.
+- Video ownership survives dashboard reloads during ringing or an active call.
+  H.264 parameter sets are retained for the replacement decoder, catch-up is
+  bounded, and the old browser WebSocket is released before the new one owns
+  the media.
+- Live qualification covered direct H.264, VP8 and JPEG, FFmpeg receive for
+  H.263, H.263-1998 and H.265, H.264 and VP8 bidirectional camera media,
+  audio-only fallback, camera denial, local and remote hangup, caller CANCEL,
+  repeated calls and compact through tall Home Assistant card sizes.
+- Post-call diagnostics assert that sessions, dialogs, RTP sockets, browser
+  owners, cleanup tasks and the optional transcode slot all return to zero.
+
+This remains an experimental HA-softphone feature, not a general video PBX.
+There is no ESP, Assist, ring-group or conference video, cross-codec endpoint
+transcoding, SRTP, ICE/STUN/TURN, recording or established-dialog renegotiation.
+Read the complete [Experimental SIP Video profile](EXPERIMENTAL_SIP_VIDEO.md)
+before enabling it.
 
 ## 🧭 Home Assistant Automations Can Override The Dial Plan
 
@@ -127,67 +141,53 @@ helper timer or Jinja plumbing is required for the normal single-call case.
 See the [Automation Dial Plan guide](AUTOMATION_DIALPLAN.md) for copyable
 conditional-forward and unanswered-call-to-Assist examples.
 
-## 🎥 Experimental SIP Video For The HA Softphone
+## 🧩 Native ESPHome Platform Boundaries
 
-Yes, apparently we are close to a real native Home Assistant video phone. Soon
-you may be able to remain safely inside your sealed fortress of misanthropy and
-despair while checking exactly how ugly the person ringing your doorbell is.
+- The ESPHome VoIP core no longer auto-loads primary entity platforms. Button,
+  number, switch, text and text-sensor support is compiled only when explicitly
+  configured, following ESPHome's upstream component rules.
+- Minimal VoIP YAML now compiles without empty `text:` or `text_sensor:` blocks.
+  Maintained full-experience YAML keeps the same controls through explicit
+  native `platform: voip_stack` entities.
+- Both a platform-free ESP32-S3 fixture and a fixture containing every optional
+  entity platform are compiled as regression tests. The full P4 landscape
+  configuration is also compiled against the same component source.
 
-The results so far are encouraging. I do not own a SIP video door station yet
-(I told you I am poor), so qualification currently uses standard SIP clients
-sending webcam, generated video and real media streams. It is behaving well in
-the lab; now I need real door-station tests from users, so please tell me what
-works, what stutters and what catches fire.
+## 📞 More Reliable Outbound Trunk Calls
 
-<p align="center">
-  <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/dev/docs/images/ha-sip-video-call.gif"
-    alt="Live SIP video call in the Home Assistant softphone"
-    width="800"
-  />
-</p>
+- Home Assistant now uses the configured trunk username as the SIP `From` and
+  `Contact` identity for outbound trunk calls, while the friendly softphone name
+  remains separate in the card and HA state.
+- Digest authentication still uses the independently configurable auth
+  username. This supports providers where the address-of-record and digest
+  identity differ.
+- The authenticated retry keeps the correct Request-URI, Call-ID, incremented
+  CSeq and fresh Via branch. The change was validated with a real `407 Proxy
+  Authentication Required` trunk exchange.
 
-_A real SIP call feeding video into the HA softphone card. The video stays the
-main character; identity, duration and hang-up move into the bottom bar._
+## ☎️ Hang Up Means Hang Up
 
-- The disabled-by-default HA softphone video profile now negotiates H.264, VP8
-  and JPEG directly with standard SIP phones and door stations. ESPHome
-  endpoints remain audio-only.
-- H.264 Baseline and Constrained Baseline, VP8 and RFC 2435 JPEG use bounded
-  RTP reorder and depacketization before the authenticated card WebSocket.
-  H.264 and VP8 can also carry the browser camera when both the global option
-  and that browser's **Send Camera** choice are enabled.
-- A second independent opt-in can use Home Assistant's existing FFmpeg binary
-  to receive H.263, H.263-1998 or H.265 and stream VP8 to the browser. It is
-  receive-only, limited to one process and one thread, and never saves an
-  intermediate file. Direct H.264, VP8 and JPEG do not start FFmpeg.
-- AVP remains the compatible default. When a peer offers AVPF, compound RTCP
-  receiver reports and negotiated PLI/FIR requests help a newly attached or
-  reloaded card recover at a key frame. HA-owned standard SIP bridges can
-  relay matching-profile, exact-codec RTP and RTCP without decoding or
-  re-encoding the stream.
-- Audio, receive video and camera transmit have independent failure domains.
-  Camera denial, an unavailable codec or a failed optional transcode leaves the
-  compatible audio call and other usable media directions alive.
-- Received video fills the card behind the call identity. The call state,
-  duration and hang-up action become a responsive full-width bottom bar;
-  codec diagnostics remain hidden unless debug mode is enabled.
-- Video ownership survives dashboard reloads during ringing or an active call.
-  H.264 parameter sets are retained for the replacement decoder, catch-up is
-  bounded, and the old browser WebSocket is released before the new one owns
-  the media.
-- Live qualification covered direct H.264, VP8 and JPEG, FFmpeg receive for
-  H.263, H.263-1998 and H.265, H.264 and VP8 bidirectional camera media,
-  audio-only fallback, camera denial, local and remote hangup, caller CANCEL,
-  repeated calls and compact through tall Home Assistant card sizes.
-- Post-call diagnostics assert that sessions, dialogs, RTP sockets, browser
-  owners, cleanup tasks and the optional transcode slot all return to zero.
-
-This remains an experimental HA-softphone feature, not a general video PBX.
-There is no ESP, Assist, ring-group or conference video, cross-codec endpoint
-transcoding, SRTP, ICE/STUN/TURN, recording or established-dialog renegotiation.
-Read the complete [Experimental SIP Video profile](EXPERIMENTAL_SIP_VIDEO.md)
-before enabling it.
+- The Lovelace card keeps Hang Up available throughout `calling`, `connecting`
+  and remote ringing, including while the original start request is pending.
+- The terminal call result remains available in HA state for diagnostics, but
+  the card presents it for five seconds and then returns to Ready. Later option
+  or roster updates do not resurrect an old hangup reason.
+- Outbound INVITE transactions now have one signaling owner shared by HA
+  softphone, bridges, ring groups and conference invitations.
+- Cancellation follows the SIP transaction lifecycle: if no provisional
+  response has arrived, CANCEL is deferred; after `100`, `180` or `183`, it is
+  sent immediately with the original Call-ID, CSeq and Via branch.
+- The remote endpoint receives a real CANCEL and terminates the INVITE with
+  `487 Request Terminated`; HA acknowledges it and remains idle instead of
+  returning to remote ringing because of a late provisional response.
+- The terminal event now preserves the call's canonical direction. An outbound
+  call no longer changes from `outgoing` to `incoming` when HA hangs up while
+  its session is still present in the call registry.
+- If a successful `200 OK` crosses the cancellation, HA acknowledges the dialog
+  and ends it with BYE, preventing ghost calls.
+- Cancelling a ring-group or conference dialing task no longer destroys the SIP
+  transaction owner. Losing legs finish their standard teardown in the
+  background without delaying the winning call.
 
 ## 🧪 Qualification So Far
 
