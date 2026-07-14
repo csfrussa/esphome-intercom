@@ -22,9 +22,21 @@
         "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live VoIP phonebook.",
         "assist_endpoint_enabled": "Add a SIP extension backed directly by a Home Assistant Assist pipeline. No separate VoIP integration or SIP listener is required.",
           "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
-          "experimental_sip_video": "Experimental. Let the Home Assistant softphone negotiate direct H.264 SIP video with standard SIP phones and door stations. ESP audio endpoints remain audio-only. Requires HTTPS and a WebCodecs-capable browser.",
+          "experimental_sip_video": "Experimental. Let the Home Assistant softphone negotiate SIP video with standard phones and door stations. H.264, VP8 and JPEG use a direct browser path. ESP audio endpoints remain audio-only. Requires HTTPS and a compatible browser.",
           "sip_registrar_enabled": "Accept REGISTER from local SIP endpoints such as VoIP phones, Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
           "trunk_enabled": "Show provider/PBX trunk settings. When disabled, no trunk registration, external route or DTMF collector starts."
+        }
+      },
+      "video": {
+        "title": "Experimental SIP video",
+        "description": "Video is optional and applies only to the Home Assistant softphone and standard SIP endpoints. ESP endpoints remain audio-only.",
+        "data": {
+          "video_transcoding_enabled": "Enable video transcoding",
+          "video_camera_send_enabled": "Allow browser camera transmission"
+        },
+        "data_description": {
+          "video_transcoding_enabled": "Allow the HA softphone to use the available FFmpeg binary for receive-only H.263, H.263-1998 or H.265 video. Direct H.264, VP8 and JPEG never use it. Failure leaves the audio call running.",
+          "video_camera_send_enabled": "Expose a Send Camera choice in the card. Each browser keeps its own choice and permission. Receiving video never requires camera access."
         }
       },
     "assist": {

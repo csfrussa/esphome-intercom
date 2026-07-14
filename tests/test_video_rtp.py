@@ -37,6 +37,7 @@ def _load(name: str):
 
 rtp = _load("rtp")
 video_rtp = _load("video_rtp")
+video_rtcp = _load("video_rtcp")
 audio_format = _load("audio_format")
 sdp = _load("sdp")
 
@@ -93,6 +94,17 @@ class H264RtpTest(unittest.TestCase):
         result = depacketizer.push(rtp.RtpPacket(102, 3, 2, 5, b"\x65\xaa", marker=True))
         assert result is not None
         self.assertEqual(video_rtp.split_annex_b(result.data), [sps, pps, b"\x65\xaa"])
+        self.assertEqual(depacketizer.parameter_sets, (sps, pps))
+
+        replacement = video_rtp.H264Depacketizer(list(depacketizer.parameter_sets))
+        resumed = replacement.push(
+            rtp.RtpPacket(102, 100, 3, 9, b"\x65\xbb", marker=True)
+        )
+        assert resumed is not None
+        self.assertEqual(
+            video_rtp.split_annex_b(resumed.data),
+            [sps, pps, b"\x65\xbb"],
+        )
 
     def test_sequence_gap_discards_entire_access_unit(self) -> None:
         access_unit = video_rtp.ANNEX_B_START_CODE + b"\x65" + b"x" * 1000
@@ -131,6 +143,115 @@ class H264RtpTest(unittest.TestCase):
                 ssrc=0,
                 max_payload=2,
             )
+
+
+class VideoTransportTest(unittest.TestCase):
+    def test_reorder_waits_for_gap_then_emits_in_order(self) -> None:
+        reorder = video_rtp.RtpReorderBuffer(max_delay=0.020)
+        self.assertEqual(reorder.push(10, "10", 1.000), ["10"])
+        self.assertEqual(reorder.push(12, "12", 1.001), [])
+        self.assertAlmostEqual(reorder.next_deadline, 1.021)
+        self.assertEqual(reorder.push(11, "11", 1.010), ["11", "12"])
+        self.assertEqual(reorder.lost, 0)
+
+    def test_reorder_skips_gap_only_after_deadline(self) -> None:
+        reorder = video_rtp.RtpReorderBuffer(max_delay=0.020)
+        self.assertEqual(reorder.push(65535, "a", 1.0), ["a"])
+        self.assertEqual(reorder.push(1, "c", 1.001), [])
+        self.assertEqual(reorder.flush(1.020), [])
+        self.assertEqual(reorder.flush(1.022), ["c"])
+        self.assertEqual(reorder.lost, 1)
+        self.assertEqual(reorder.push(1, "duplicate", 1.023), [])
+        self.assertEqual(reorder.late, 1)
+
+    def test_vp8_round_trip(self) -> None:
+        frame = b"\x00\x9d\x01\x2a" + bytes(range(251)) * 9
+        packets = video_rtp.packetize_vp8(
+            frame,
+            payload_type=103,
+            sequence=65000,
+            timestamp=123456,
+            ssrc=42,
+            max_payload=180,
+        )
+        depacketizer = video_rtp.Vp8Depacketizer()
+        access_unit = None
+        for packet in packets:
+            access_unit = depacketizer.push(packet) or access_unit
+        self.assertIsNotNone(access_unit)
+        assert access_unit is not None
+        self.assertEqual(access_unit.data, frame)
+        self.assertTrue(access_unit.key_frame)
+        self.assertEqual(access_unit.encoding, "VP8")
+
+    def test_vp8_sequence_gap_discards_corrupt_frame(self) -> None:
+        frame = b"\x00\x9d\x01\x2a" + bytes(range(251)) * 5
+        packets = video_rtp.packetize_vp8(
+            frame,
+            payload_type=103,
+            sequence=100,
+            timestamp=123456,
+            ssrc=42,
+            max_payload=120,
+        )
+        self.assertGreater(len(packets), 3)
+        depacketizer = video_rtp.Vp8Depacketizer()
+        result = None
+        for packet in [packets[0], *packets[2:]]:
+            result = depacketizer.push(packet) or result
+        self.assertIsNone(result)
+        self.assertEqual(depacketizer.sequence_gaps, 1)
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+    def test_rfc2435_jpeg_fragments_become_jfif(self) -> None:
+        scan = b"\x11\x22\xff\x00\x33\x44"
+        header = b"\x00\x00\x00\x00\x00\x32\x28\x1e"
+        depacketizer = video_rtp.JpegDepacketizer()
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(26, 1, 9000, 7, header + scan[:3]))
+        )
+        result = depacketizer.push(
+            rtp.RtpPacket(
+                26,
+                2,
+                9000,
+                7,
+                b"\x00\x00\x00\x03\x00\x32\x28\x1e" + scan[3:],
+                marker=True,
+            )
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertTrue(result.data.startswith(b"\xff\xd8\xff\xe0"))
+        self.assertTrue(result.data.endswith(scan + b"\xff\xd9"))
+        self.assertEqual(result.encoding, "JPEG")
+        self.assertTrue(result.key_frame)
+
+    def test_rfc2435_jpeg_rejects_fragment_gap(self) -> None:
+        depacketizer = video_rtp.JpegDepacketizer()
+        first = b"\x00\x00\x00\x00\x00\x32\x28\x1eabc"
+        second = b"\x00\x00\x00\x04\x00\x32\x28\x1edef"
+        self.assertIsNone(depacketizer.push(rtp.RtpPacket(26, 1, 9, 1, first)))
+        self.assertIsNone(depacketizer.push(rtp.RtpPacket(26, 2, 9, 1, second, marker=True)))
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+    def test_rtcp_feedback_and_report_round_trip(self) -> None:
+        pli = video_rtcp.build_pli(1, 2)
+        fir = video_rtcp.build_fir(1, 2, 7)
+        report = video_rtcp.build_receiver_compound(
+            1,
+            2,
+            fraction_lost=3,
+            cumulative_lost=4,
+            highest_sequence=0x10002,
+            jitter=90,
+            feedback=pli + fir,
+        )
+        parsed = video_rtcp.parse_compound(report)
+        self.assertEqual(
+            [(item.packet_type, item.fmt) for item in parsed],
+            [(201, 1), (202, 1), (206, 1), (206, 4)],
+        )
 
 
 class H264SdpTest(unittest.TestCase):
@@ -213,7 +334,7 @@ class H264SdpTest(unittest.TestCase):
         self.assertIn("m=video 40002 RTP/AVP 103", answer)
         self.assertIn("a=recvonly", answer)
 
-    def test_rejects_packetization_zero_and_non_baseline_profile(self) -> None:
+    def test_accepts_packetization_zero_and_standard_profiles(self) -> None:
         offer = (
             "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
             "m=video 41002 RTP/AVP 102 103\r\n"
@@ -222,7 +343,135 @@ class H264SdpTest(unittest.TestCase):
             "a=rtpmap:103 H264/90000\r\n"
             "a=fmtp:103 profile-level-id=64001f;packetization-mode=1\r\n"
         )
-        self.assertEqual(sdp.offered_h264_formats(offer), [])
+        formats = sdp.offered_h264_formats(offer)
+        self.assertEqual([item.packetization_mode for item in formats], [0, 1])
+        self.assertEqual([item.profile_level_id for item in formats], ["42e01f", "64001f"])
+
+    def test_generic_video_formats_and_feedback(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVPF 103 26 104\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp-fb:103 nack pli\r\n"
+            "a=rtpmap:104 H265/90000\r\n"
+        )
+        formats = sdp.offered_video_formats(offer)
+        self.assertEqual([item.encoding for item in formats], ["VP8", "JPEG", "H265"])
+        self.assertEqual(formats[0].rtcp_feedback, ("nack pli",))
+        self.assertEqual(formats[0].transport_profile, "RTP/AVPF")
+        self.assertEqual(sdp.negotiate_video(offer).encoding, "VP8")
+
+    def test_avp_ignores_avpf_feedback_attributes(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp-fb:103 nack pli\r\n"
+        )
+        formats = sdp.offered_video_formats(offer)
+        self.assertEqual(len(formats), 1)
+        self.assertEqual(formats[0].transport_profile, "RTP/AVP")
+        self.assertEqual(formats[0].rtcp_feedback, ())
+
+    def test_rtcp_mux_video_is_rejected_without_affecting_audio(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+            "m=video 41002 RTP/AVPF 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\na=rtcp-mux\r\n"
+        )
+        self.assertEqual(sdp.offered_video_formats(offer), [])
+        self.assertIsNotNone(
+            sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
+        )
+
+    def test_answer_preserves_avpf_profile_and_feedback(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+            "m=video 41002 RTP/AVPF 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp-fb:103 nack pli\r\na=sendonly\r\n"
+        )
+        audio = sdp.negotiate_directional(
+            offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS
+        )
+        video = sdp.negotiate_video(offer)
+        assert audio is not None and video is not None
+        answer = sdp.build_answer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            audio.send,
+            audio.recv,
+            remote_sdp=offer,
+            video_port=40002,
+            video_format=video,
+        )
+        self.assertIn("m=video 40002 RTP/AVPF 103", answer)
+        self.assertIn("a=rtcp-fb:103 nack pli", answer)
+
+    def test_h263p_uses_the_standard_rtpmap_token_in_answers(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+            "m=video 41002 RTP/AVP 105\r\n"
+            "a=rtpmap:105 H263-1998/90000\r\n"
+            "a=sendonly\r\n"
+        )
+        audio = sdp.negotiate_directional(
+            offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS
+        )
+        video = sdp.negotiate_video(offer, accepted_encodings=("H263P",))
+        assert audio is not None and video is not None
+        answer = sdp.build_answer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            audio.send,
+            audio.recv,
+            remote_sdp=offer,
+            video_port=40002,
+            video_format=video,
+        )
+        self.assertIn("a=rtpmap:105 H263-1998/90000", answer)
+        parsed = sdp.offered_video_formats(answer)
+        self.assertEqual([item.encoding for item in parsed], ["H263P"])
+
+    def test_camera_send_prefers_packetizable_codec_from_same_offer(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 102 103\r\n"
+            "a=rtpmap:102 H264/90000\r\n"
+            "a=fmtp:102 profile-level-id=42e01f;packetization-mode=0\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=sendrecv\r\n"
+        )
+        self.assertEqual(sdp.negotiate_video(offer).encoding, "H264")
+        selected = sdp.negotiate_video(offer, prefer_browser_send=True)
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.encoding, "VP8")
+
+    def test_direct_browser_codec_precedes_optional_transcoding(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 104 102\r\n"
+            "a=rtpmap:104 H265/90000\r\n"
+            "a=rtpmap:102 H264/90000\r\n"
+            "a=fmtp:102 profile-level-id=42e01f;packetization-mode=1\r\n"
+            "a=sendonly\r\n"
+        )
+        selected = sdp.negotiate_video(
+            offer,
+            accepted_encodings=("H264", "H265"),
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.encoding, "H264")
 
     def test_rejects_static_h264_payload_type(self) -> None:
         offer = (
@@ -289,6 +538,33 @@ class H264SdpTest(unittest.TestCase):
             "a=fmtp:103 packetization-mode=1;profile-level-id=42e01f\r\n"
         )
         self.assertIsNone(sdp.negotiate_h264_answer(answer, sdp.DEFAULT_H264_FORMAT))
+
+    def test_answer_cannot_change_h264_packetization_or_profile_family(self) -> None:
+        def answer(fmtp: str) -> str:
+            return (
+                "v=0\r\nc=IN IP4 192.168.1.48\r\nt=0 0\r\n"
+                "m=video 19728 RTP/AVP 102\r\n"
+                "a=rtpmap:102 H264/90000\r\n"
+                f"a=fmtp:102 {fmtp}\r\n"
+            )
+
+        offered = sdp.DEFAULT_H264_FORMAT
+        self.assertIsNone(
+            sdp.negotiate_video_answer(
+                answer("packetization-mode=0;profile-level-id=42e01f"), offered
+            )
+        )
+        self.assertIsNone(
+            sdp.negotiate_video_answer(
+                answer("packetization-mode=1;profile-level-id=64001f"), offered
+            )
+        )
+        selected = sdp.negotiate_video_answer(
+            answer("packetization-mode=1;profile-level-id=42e015"), offered
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.profile_level_id, "42e015")
 
     def test_unsupported_media_level_connection_does_not_break_audio(self) -> None:
         offer = (

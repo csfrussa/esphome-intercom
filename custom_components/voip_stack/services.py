@@ -28,6 +28,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("source_device_id"): cv.string,
             vol.Optional("source_name"): cv.string,
             vol.Optional("call_id", default=""): cv.string,
+            vol.Optional("send_video", default=False): cv.boolean,
         },
         extra=vol.PREVENT_EXTRA,
     )
@@ -66,6 +67,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("target"): cv.string,
             vol.Optional("call"): cv.string,
             vol.Optional("ha_bridge", default=False): cv.boolean,
+            vol.Optional("send_video", default=False): cv.boolean,
         },
         extra=vol.PREVENT_EXTRA,
     )

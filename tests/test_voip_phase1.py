@@ -68,6 +68,21 @@ class SipUriTest(unittest.TestCase):
         with self.assertRaises(sip.SipError):
             sip.parse_sip_uri("sip:test@192.168.1.10\r\nX-Injected: yes")
 
+    def test_endpoint_identity_includes_signaling_port(self) -> None:
+        self.assertTrue(sip.sip_endpoints_equal("192.0.2.10", 5060, "192.0.2.10", 5060))
+        self.assertFalse(sip.sip_endpoints_equal("192.0.2.10", 5062, "192.0.2.10", 5060))
+        self.assertTrue(sip.sip_endpoints_equal("[2001:db8::1]", 5060, "2001:db8::1", 5060))
+
+    def test_local_listener_match_requires_host_and_port(self) -> None:
+        local = sip.parse_sip_uri("sip:HA@127.0.0.1:15060")
+        sibling = sip.parse_sip_uri("sip:Phone@127.0.0.1:15102")
+        kwargs = {
+            "listener_hosts": ("localhost", "127.0.0.1", "::1"),
+            "listener_port": 15060,
+        }
+        self.assertTrue(sip.sip_uri_targets_listener(local, **kwargs))
+        self.assertFalse(sip.sip_uri_targets_listener(sibling, **kwargs))
+
     def test_message_builder_rejects_header_injection(self) -> None:
         with self.assertRaises(sip.SipError):
             sip.build_request(
@@ -1160,6 +1175,66 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         await endpoint._handle_datagram(incompatible_media_change, addr)
         self.assertEqual(sip.parse_message(sent[-1]).status_code, 488)
         self.assertIn("reinvite-call", endpoint.active_dialogs)
+
+    async def test_listener_rejects_in_dialog_video_transport_change(self) -> None:
+        sent: list[bytes] = []
+        fmt = audio_format.AudioFormat(16000, "s16le", 1, 20)
+
+        def offer(video_port: int) -> bytes:
+            return sdp.build_offer_directional(
+                "192.168.1.48",
+                "192.168.1.48",
+                40000,
+                [fmt],
+                [fmt],
+                video_port=video_port,
+                video_format=sdp.DEFAULT_H264_FORMAT,
+            ).encode()
+
+        def request(body: bytes, *, cseq: int, branch: str) -> bytes:
+            return sip.build_request(
+                "INVITE",
+                "sip:Casa@192.168.1.10",
+                [
+                    ("Via", f"SIP/2.0/UDP 192.168.1.48;branch={branch}"),
+                    ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                    ("To", "<sip:Casa@192.168.1.10>;tag=local"),
+                    ("Call-ID", "video-reinvite-call"),
+                    ("CSeq", f"{cseq} INVITE"),
+                    ("Content-Type", "application/sdp"),
+                ],
+                body,
+            )
+
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40000,
+            supported_formats=[fmt],
+            on_invite=lambda _: None,  # type: ignore[arg-type]
+            send_override=lambda data, _addr: sent.append(data),
+            enable_video=True,
+        )
+        addr = ("192.168.1.48", 5060)
+        original = sip.parse_message(
+            request(offer(41002), cseq=1, branch="z9hG4bKvideo-initial")
+        )
+        endpoint.active_dialogs["video-reinvite-call"] = sip_listener._ActiveDialog(
+            original,
+            addr,
+            "local",
+            2,
+            "UDP",
+            answer_sdp="v=0\r\n",
+        )
+
+        changed = request(offer(41004), cseq=2, branch="z9hG4bKvideo-change")
+        await endpoint._handle_datagram(changed, addr)
+
+        self.assertEqual(sip.parse_message(sent[-1]).status_code, 488)
+        self.assertEqual(
+            endpoint.active_dialogs["video-reinvite-call"].request.body,
+            original.body,
+        )
 
     async def test_listener_delivers_in_dialog_sip_info_dtmf(self) -> None:
         sent: list[bytes] = []

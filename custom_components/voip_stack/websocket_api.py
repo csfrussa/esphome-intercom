@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Dict
 
 import voluptuous as vol
@@ -19,6 +20,8 @@ from .const import (
     CONF_HA_SOFTPHONE_DND,
     CONF_HA_SOFTPHONE_EXTENSION,
     CONF_HA_SOFTPHONE_RING_GROUP,
+    CONF_VIDEO_CAMERA_SEND,
+    CONF_VIDEO_TRANSCODING,
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
@@ -565,7 +568,9 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
     runtime = _sip_runtime_snapshot(hass)
-    debug_mode = bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
+    bucket = hass.data.get(DOMAIN, {})
+    debug_mode = bool(bucket.get(CONF_DEBUG_MODE, False))
+    transport_config = bucket.get("transport_config", {})
     active_softphone = store.get("state") in {
         CallState.CALLING.value,
         CallState.REMOTE_RINGING.value,
@@ -586,6 +591,19 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     direction = store.get("direction", "") or store.get("last_terminal_direction", "")
     call_id = store.get("call_id", "") or store.get("last_terminal_call_id", "")
     registry = call_registry(hass)
+    media_debug = dict(store.get("media_debug") or {}) if debug_mode else {}
+    if debug_mode:
+        active_transcoder = bucket.get("video_transcoder_active")
+        media_debug.update(
+            {
+                "call_registry": registry.snapshot(),
+                "audio_ws_owner_call_ids": sorted(bucket.get("audio_ws_owners", {})),
+                "video_ws_owner_call_ids": sorted(bucket.get("video_ws_owners", {})),
+                "video_transcoder_call_id": str(
+                    getattr(active_transcoder, "call_id", "") or ""
+                ),
+            }
+        )
     session = registry.sessions.get(registry.resolve_session_id(str(call_id or "")))
     event_context = registry.event_context(str(call_id or ""))
     phone = sip_phone_state(
@@ -641,6 +659,13 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "video_offered": bool(store.get("video_offered", False)),
         "video_format": store.get("video_format", ""),
         "video_direction": store.get("video_direction", "inactive"),
+        "video_camera_send_enabled": bool(
+            transport_config.get(CONF_VIDEO_CAMERA_SEND, False)
+        ),
+        "video_transcoding_enabled": bool(
+            transport_config.get(CONF_VIDEO_TRANSCODING, False)
+        ),
+        "connected_at": float(store.get("connected_at", 0.0) or 0.0),
         "sip_transport": store.get("sip_transport", "udp+tcp"),
         "sip_status_code": last_status,
         "terminal_reason": store.get("terminal_reason", ""),
@@ -661,7 +686,7 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "sip_client_dialogs": runtime["sip_client_dialogs"],
         "sip_trunk": runtime["sip_trunk"],
         "debug_mode": debug_mode,
-        "media_debug": dict(store.get("media_debug") or {}) if debug_mode else {},
+        "media_debug": media_debug,
     }
 
 
@@ -712,6 +737,11 @@ def _set_ha_softphone_call_state(
     previous_call_id = str(store.get("call_id") or "")
     next_call_id = str(canonical.get("call_id") or "")
     previous_state = str(store.get("state") or "").strip().lower()
+    if state == CallState.IN_CALL.value:
+        if next_call_id != previous_call_id or previous_state != CallState.IN_CALL.value:
+            extra.setdefault("connected_at", time.time())
+        elif store.get("connected_at"):
+            extra.setdefault("connected_at", store["connected_at"])
     if (
         previous_call_id
         and next_call_id
@@ -773,6 +803,7 @@ def _set_ha_softphone_call_state(
             "video_offered",
             "video_format",
             "video_direction",
+            "connected_at",
             "route_kind",
             "sip_uri",
             "media_debug",
@@ -959,6 +990,7 @@ def websocket_subscribe_ha_softphone_state(
         vol.Optional("target_name", default=""): str,
         vol.Optional("callee", default=""): str,
         vol.Optional("call_id", default=""): str,
+        vol.Optional("send_video", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -972,7 +1004,16 @@ async def websocket_ha_softphone_start(
         connection.send_error(msg["id"], "target_required", "SIP target is required")
         return
     try:
-        await hass.services.async_call(DOMAIN, "call", {"target": selector, "call": selector}, blocking=True)
+        await hass.services.async_call(
+            DOMAIN,
+            "call",
+            {
+                "target": selector,
+                "call": selector,
+                "send_video": bool(msg.get("send_video", False)),
+            },
+            blocking=True,
+        )
     except Exception as err:
         connection.send_error(msg["id"], "sip_call_failed", str(err))
         return

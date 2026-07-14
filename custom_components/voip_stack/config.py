@@ -11,6 +11,8 @@ from .const import (
     CONF_ASSIST_PIPELINE,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_EXPERIMENTAL_VIDEO,
+    CONF_VIDEO_CAMERA_SEND,
+    CONF_VIDEO_TRANSCODING,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DOMAIN,
@@ -53,6 +55,8 @@ def entry_transport_config(entry: ConfigEntry | None = None) -> dict:
         "rtp_port": int(data.get("rtp_port", VOIP_STACK_RTP_PORT)),
         "advertise_host": (data.get("advertise_host") or "").strip(),
         CONF_EXPERIMENTAL_VIDEO: bool(data.get(CONF_EXPERIMENTAL_VIDEO, False)),
+        CONF_VIDEO_TRANSCODING: bool(data.get(CONF_VIDEO_TRANSCODING, False)),
+        CONF_VIDEO_CAMERA_SEND: bool(data.get(CONF_VIDEO_CAMERA_SEND, False)),
     }
 
 

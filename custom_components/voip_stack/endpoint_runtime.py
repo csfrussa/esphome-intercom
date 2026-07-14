@@ -19,7 +19,10 @@ from .config import debug_mode as _debug_mode
 from .const import (
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_ASSIST_PIPELINE,
+    CONF_EXPERIMENTAL_VIDEO,
     CONF_REGISTRAR_ENABLED,
+    CONF_VIDEO_CAMERA_SEND,
+    CONF_VIDEO_TRANSCODING,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_DTMF_ENABLED,
     CONF_TRUNK_DTMF_TERMINATOR,
@@ -206,11 +209,21 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _terminate_sip_bridge,
     )
     from .dtmf import DtmfCollector, collect_info_digits, parse_sip_info_digit
-    from .sdp import build_answer_directional, local_direction_for_remote
-    from .sip import parse_sip_uri
+    from .sdp import (
+        build_answer_directional,
+        constrained_video_direction,
+        video_formats_passthrough_compatible,
+    )
+    from .sip import parse_sip_uri, sip_endpoints_equal, sip_uri_targets_listener
     from .sip_client import SIP_TIMER_B, SipCallClient
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
+    from .sip_video_relay import (
+        SipVideoRtpRelay,
+        VideoRtpPeer,
+        remote_can_receive,
+        remote_can_send,
+    )
     from .sip_registrar import SipRegistrar
     from .conference import MAX_CONFERENCE_LEGS, conference_manager
     from .groups import GROUP_TYPE_CONFERENCE, GROUP_TYPE_RING
@@ -2954,9 +2967,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             decision_uri = bridge_uri or (parse_sip_uri(decision.sip_uri) if decision.sip_uri else None)
             if (
                 peer_target is not None
-                and peer_target.host
-                and invite.source_host
-                and peer_target.host == invite.source_host
+                and sip_endpoints_equal(
+                    peer_target.host,
+                    peer_target.sip_port,
+                    invite.source_host,
+                    invite.source_port,
+                    default_port=int(cfg["sip_port"]),
+                )
             ):
                 _set_sip_bridge_call_state(
                     hass,
@@ -2972,7 +2989,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     last_sip_event="SIP_RESPONSE",
                 )
                 return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
-            if decision_uri is not None and decision_uri.host != local_ip:
+            points_to_local_listener = sip_uri_targets_listener(
+                decision_uri,
+                listener_hosts=(local_ip, "127.0.0.1", "localhost", "::1"),
+                listener_port=int(cfg["sip_port"]),
+                default_port=int(cfg["sip_port"]),
+            )
+            if decision_uri is not None and not points_to_local_listener:
                 try:
                     bridge_ports = RtpPortReservation.allocate(hass)
                 except RuntimeError as err:
@@ -2993,6 +3016,54 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if bridge_to_trunk or bridge_to_softphone:
                     sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
+                video_bridge_ports = None
+                video_relay = None
+                if bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)) and invite.video_format is not None:
+                    sockets = []
+                    try:
+                        video_bridge_ports = RtpPortReservation.allocate(hass)
+                        source_video_port, dest_video_port = video_bridge_ports.ports
+                        sockets = [
+                            bind_sip_rtp_socket(source_video_port),
+                            bind_sip_rtp_socket(dest_video_port),
+                            bind_sip_rtp_socket(source_video_port + 1),
+                            bind_sip_rtp_socket(dest_video_port + 1),
+                        ]
+                        video_relay = SipVideoRtpRelay(
+                            left=VideoRtpPeer(
+                                host=str(invite.remote_video_rtp_host),
+                                port=int(invite.remote_video_rtp_port),
+                                rtcp_port=int(
+                                    invite.remote_video_rtcp_port
+                                    or int(invite.remote_video_rtp_port) + 1
+                                ),
+                                video_format=invite.video_format,
+                            ),
+                            right=VideoRtpPeer(
+                                host=str(decision_uri.host),
+                                port=0,
+                                rtcp_port=0,
+                                video_format=invite.video_format,
+                            ),
+                            left_port=source_video_port,
+                            right_port=dest_video_port,
+                            left_socket=sockets[0],
+                            right_socket=sockets[1],
+                            left_rtcp_socket=sockets[2],
+                            right_rtcp_socket=sockets[3],
+                            on_release=lambda ports: _release_sip_rtp_port_pair(hass, ports),
+                        )
+                    except (OSError, RuntimeError) as err:
+                        for sock in sockets:
+                            sock.close()
+                        if video_bridge_ports is not None:
+                            video_bridge_ports.release()
+                        video_bridge_ports = None
+                        video_relay = None
+                        _LOGGER.warning(
+                            "SIP video relay ports unavailable; bridge remains audio-only: %s",
+                            err,
+                        )
                 client = SipCallClient(
                     local_ip=local_ip,
                     local_name=(
@@ -3010,6 +3081,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     password=str(trunk_cfg.get(CONF_TRUNK_PASSWORD) or "") if bridge_to_trunk else "",
                     outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if bridge_to_trunk else "",
                     include_common_codecs=bridge_to_trunk or bridge_to_softphone,
+                    local_video_rtp_port=(video_bridge_ports.ports[1] if video_bridge_ports else 0),
+                    video_formats=((invite.video_format,) if video_bridge_ports else ()),
+                    video_direction=(invite.video_format.direction if video_bridge_ports else "inactive"),
+                    generic_video_relay=bool(video_bridge_ports),
                 )
                 if not bridge_to_trunk:
                     _enable_reused_sip_tcp_connection(
@@ -3033,6 +3108,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         invite.call_id,
                     )
                     await _close_client_and_release(client, bridge_ports, bye=True)
+                    if video_relay is not None:
+                        await video_relay.stop()
                     return SipInviteResult(
                         487,
                         "Request Terminated",
@@ -3042,6 +3119,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if result not in {"ringing", "in_call"}:
                     status_code, sip_reason, terminal_reason, public_state = _sip_failure_response(result)
                     await _close_client_and_release(client, bridge_ports)
+                    if video_relay is not None:
+                        await video_relay.stop()
                     _set_sip_bridge_call_state(
                         hass,
                         public_state,
@@ -3099,6 +3178,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
 
                 async def _finish_bridge(initial_result: str) -> None:
+                    nonlocal video_relay
                     final = initial_result
                     if final == "ringing":
                         final = await client.wait_for_final()
@@ -3119,6 +3199,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                         registry.client_watchers.pop(client.dialog_ids.call_id, None)
                         await _close_client_and_release(client, bridge_ports)
+                        if video_relay is not None:
+                            await video_relay.stop()
                         _set_sip_bridge_call_state(
                             hass,
                             public_state,
@@ -3137,6 +3219,40 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             sip_uri=str(decision_uri),
                         )
                         return
+                    selected_video = None
+                    selected_video_direction = "inactive"
+                    if video_relay is not None:
+                        remote_video = client.dialog.video_format
+                        if (
+                            remote_video is not None
+                            and client.dialog.remote_video_rtp_port > 0
+                            and video_formats_passthrough_compatible(
+                                invite.video_format,
+                                remote_video,
+                            )
+                        ):
+                            video_relay.right.host = str(client.dialog.remote_video_rtp_host)
+                            video_relay.right.port = int(client.dialog.remote_video_rtp_port)
+                            video_relay.right.rtcp_port = int(
+                                client.dialog.remote_video_rtcp_port
+                                or int(client.dialog.remote_video_rtp_port) + 1
+                            )
+                            video_relay.right.video_format = remote_video
+                            selected_video = invite.video_format
+                            selected_video_direction = constrained_video_direction(
+                                invite.video_format.direction,
+                                allow_send=remote_can_send(remote_video),
+                                allow_receive=remote_can_receive(remote_video),
+                            )
+                        else:
+                            _LOGGER.info(
+                                "SIP bridge video rejected: destination did not accept an exact codec call_id=%s source=%s destination=%s",
+                                invite.call_id,
+                                invite.video_format.wire_token() if invite.video_format else "none",
+                                remote_video.wire_token() if remote_video else "none",
+                            )
+                            await video_relay.stop()
+                            video_relay = None
                     try:
                         relay = build_invite_client_relay(
                             invite=invite,
@@ -3159,6 +3275,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             ),
                             client=client,
                         )
+                        if video_relay is not None:
+                            if video_bridge_ports is not None:
+                                video_bridge_ports.detach()
+                            relay.attach_video_relay(video_relay)
                         await relay.start()
                     except Exception as err:
                         _LOGGER.warning("SIP RTP bridge media conversion unavailable: %s", err)
@@ -3177,6 +3297,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                         registry.client_watchers.pop(client.dialog_ids.call_id, None)
                         await _close_client_and_release(client, bridge_ports)
+                        if video_relay is not None:
+                            await video_relay.stop()
+                            video_relay = None
                         return
                     bridge_ports.detach()
                     registry.relays[invite.call_id] = relay
@@ -3196,6 +3319,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         invite.recv_format,
                         dtmf=_invite_dtmf_format(invite),
                         remote_sdp=invite.remote_sdp,
+                        video_port=(video_relay.left_port if video_relay is not None else 0),
+                        video_format=selected_video,
+                        video_direction=selected_video_direction,
                     )
                     _sip_send_final_response(hass, invite.call_id, 200, "OK", answer_sdp=answer)
                     _set_sip_bridge_call_state(
@@ -3215,6 +3341,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         last_sip_event="SIP_RESPONSE",
                         route_kind=decision.action.value,
                         sip_uri=str(decision_uri),
+                        video_active=bool(video_relay is not None),
+                        video_format=(selected_video.wire_token() if selected_video else ""),
                     )
                     try:
                         terminal = await client.wait_for_dialog_termination()
@@ -3339,6 +3467,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 local_video_rtp_port = 0
         else:
             local_rtp_port = _allocate_sip_rtp_port(hass)
+        video_direction = (
+            constrained_video_direction(
+                invite.video_format.direction,
+                # An automation-side answer has no browser permission or
+                # per-card camera choice attached to it.  It may receive
+                # video, but only the explicit answer/call actions carrying
+                # send_video are allowed to advertise a camera direction.
+                allow_send=False,
+            )
+            if invite.video_format is not None
+            else "inactive"
+        )
         answer = build_answer_directional(
             local_ip,
             local_ip,
@@ -3348,11 +3488,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
             video_format=invite.video_format,
+            video_direction=video_direction,
         )
         registry.softphone_media[invite.call_id] = {
             "invite": invite,
             "local_rtp_port": local_rtp_port,
             "local_video_rtp_port": local_video_rtp_port,
+            "video_direction": video_direction,
             "video_rtp_socket": video_rtp_socket,
             "rtp_reservation": media_reservation,
         }
@@ -3378,10 +3520,14 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             selected_rx_format=invite.recv_format.audio_format.wire_token(),
             selected_tx_rtp_format=invite.send_format.wire_token(),
             selected_rx_rtp_format=invite.recv_format.wire_token(),
-            video_active=bool(invite.video_format is not None and local_video_rtp_port),
+            video_active=bool(
+                invite.video_format is not None
+                and local_video_rtp_port
+                and video_direction != "inactive"
+            ),
             video_format=(invite.video_format.wire_token() if invite.video_format else ""),
             video_direction=(
-                local_direction_for_remote(invite.video_format.direction)
+                video_direction
                 if invite.video_format is not None and local_video_rtp_port
                 else "inactive"
             ),
@@ -3516,7 +3662,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         on_info=_on_info,
         udp_enabled=True,
         tcp_enabled=True,
-        enable_video=bool(cfg.get("experimental_sip_video", False)),
+        enable_video=bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)),
+        enable_video_transcoding=bool(cfg.get(CONF_VIDEO_TRANSCODING, False)),
+        prefer_browser_video_send=bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False)),
     )
     if not await endpoint.start():
         return False

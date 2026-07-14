@@ -43,6 +43,13 @@ answer:
       required: false
       selector:
         text:
+    send_video:
+      name: Send browser camera
+      description: Send this browser's camera when experimental SIP video and camera transmission are enabled.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 decline:
   name: Decline SIP Call
@@ -105,6 +112,13 @@ call:
     ha_bridge:
       name: Bridge Via HA
       description: Force HA as the SIP destination even if the contact has a direct endpoint.
+      required: false
+      default: false
+      selector:
+        boolean:
+    send_video:
+      name: Send browser camera
+      description: Offer this browser's camera for this call when experimental camera transmission is enabled.
       required: false
       default: false
       selector:

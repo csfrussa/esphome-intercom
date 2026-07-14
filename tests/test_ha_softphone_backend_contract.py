@@ -86,6 +86,15 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("pending_transactions", busy_expr)
         self.assertNotIn("active_dialogs", busy_expr)
 
+    def test_debug_snapshot_exposes_live_cleanup_ownership(self) -> None:
+        ws = (ROOT / "custom_components" / "voip_stack" / "websocket_api.py").read_text()
+        state_body = _function_body(ws, "_ha_softphone_state")
+        self.assertIn('"call_registry": registry.snapshot()', state_body)
+        self.assertIn('"audio_ws_owner_call_ids"', state_body)
+        self.assertIn('"video_ws_owner_call_ids"', state_body)
+        self.assertIn('"video_transcoder_call_id"', state_body)
+        self.assertIn("if debug_mode:", state_body)
+
     def test_missing_roster_formats_do_not_force_implicit_16k_default(self) -> None:
         endpoint_routing = ENDPOINT_ROUTING.read_text()
         body = _function_body(endpoint_routing, "roster_entry_formats")
@@ -158,6 +167,17 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         snapshot = ring_start.index("peers = await _async_build_peer_snapshot(hass)")
         self.assertLess(publish, snapshot)
         self.assertIn("PEER_SNAPSHOT_FAILED", ring_start)
+
+    def test_initial_outbound_state_precedes_final_response_watcher(self) -> None:
+        """A queued 200 OK must not be overwritten by the earlier 180 result."""
+
+        outbound = _function_body(self.source, "_handle_sip_call_target_service")
+        initial_result = outbound.index(
+            'if public_result == CallState.REMOTE_RINGING.value or result == "ringing":'
+        )
+        watcher = outbound.index("await _track_outbound_sip_client(")
+        self.assertLess(initial_result, watcher)
+        self.assertIn("fast peer can place 180 and 200", outbound)
 
     def test_ha_originated_ring_group_exposes_browser_audio_through_existing_relay(self) -> None:
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()

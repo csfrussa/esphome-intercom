@@ -187,7 +187,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         start = self.source.index("routeable_sip_target =")
         bridge_path = self.source[
             start : self.source.index(
-                "if decision_uri is not None and decision_uri.host != local_ip", start
+                "points_to_local_listener = sip_uri_targets_listener(", start
             )
         ]
         self.assertIn(
@@ -795,7 +795,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             self.assertIn(f'"{field}",', terminal)
 
     def test_esp_origin_forward_to_same_source_host_is_rejected(self) -> None:
-        self.assertIn("peer_target.host == invite.source_host", self.source)
+        self.assertIn("and sip_endpoints_equal(", self.source)
+        self.assertIn("invite.source_host,", self.source)
+        self.assertIn("invite.source_port,", self.source)
         self.assertIn('SipInviteResult(486, "Busy Here"', self.source)
         self.assertIn("decline_reason=TerminalReason.BUSY.value", self.source)
 

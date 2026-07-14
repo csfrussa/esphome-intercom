@@ -25,6 +25,8 @@ from .const import (
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_DEBUG_MODE,
     CONF_EXPERIMENTAL_VIDEO,
+    CONF_VIDEO_CAMERA_SEND,
+    CONF_VIDEO_TRANSCODING,
     CONF_PHONEBOOK_CONTACTS,
     CONF_REGISTRAR_ENABLED,
     CONF_TRUNK_AUTH_USERNAME,
@@ -166,6 +168,10 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 self._base_input = dict(user_input)
+                if user_input[CONF_EXPERIMENTAL_VIDEO]:
+                    return await self.async_step_video()
+                self._base_input[CONF_VIDEO_TRANSCODING] = False
+                self._base_input[CONF_VIDEO_CAMERA_SEND] = False
                 if user_input[CONF_ASSIST_ENDPOINT_ENABLED]:
                     return await self.async_step_assist()
                 self._base_input[CONF_ASSIST_EXTENSION] = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
@@ -181,6 +187,41 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self._store_entry(data)
 
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_video(self, user_input=None):
+        """Configure optional browser video features without affecting audio."""
+
+        _current_entry, existing = self._current_entry_data()
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_VIDEO_TRANSCODING,
+                    default=bool(existing.get(CONF_VIDEO_TRANSCODING, False)),
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_VIDEO_CAMERA_SEND,
+                    default=bool(existing.get(CONF_VIDEO_CAMERA_SEND, False)),
+                ): BooleanSelector(),
+            }
+        )
+        if user_input is not None:
+            assert self._base_input is not None
+            self._base_input[CONF_VIDEO_TRANSCODING] = bool(user_input[CONF_VIDEO_TRANSCODING])
+            self._base_input[CONF_VIDEO_CAMERA_SEND] = bool(user_input[CONF_VIDEO_CAMERA_SEND])
+            if self._base_input[CONF_ASSIST_ENDPOINT_ENABLED]:
+                return await self.async_step_assist()
+            self._base_input[CONF_ASSIST_EXTENSION] = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
+            self._base_input[CONF_ASSIST_PIPELINE] = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
+            if self._base_input[CONF_TRUNK_ENABLED]:
+                return await self.async_step_trunk()
+            data = dict(self._base_input)
+            _disabled_trunk_data(data, existing)
+            current_entry, _existing = self._current_entry_data()
+            if current_entry is None:
+                await self.async_set_unique_id(DOMAIN)
+                self._abort_if_unique_id_configured()
+            return self._store_entry(data)
+        return self.async_show_form(step_id="video", data_schema=schema)
 
     async def async_step_assist(self, user_input=None):
         """Configure the optional local Assist pipeline extension."""
@@ -321,6 +362,8 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
                         CONF_EXPERIMENTAL_VIDEO: bool(existing.get(CONF_EXPERIMENTAL_VIDEO, False)),
+                        CONF_VIDEO_TRANSCODING: bool(existing.get(CONF_VIDEO_TRANSCODING, False)),
+                        CONF_VIDEO_CAMERA_SEND: bool(existing.get(CONF_VIDEO_CAMERA_SEND, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
                     }
                 )
@@ -341,6 +384,8 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
                         CONF_EXPERIMENTAL_VIDEO: bool(existing.get(CONF_EXPERIMENTAL_VIDEO, False)),
+                        CONF_VIDEO_TRANSCODING: bool(existing.get(CONF_VIDEO_TRANSCODING, False)),
+                        CONF_VIDEO_CAMERA_SEND: bool(existing.get(CONF_VIDEO_CAMERA_SEND, False)),
                         CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
                     }
                 )

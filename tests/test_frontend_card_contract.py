@@ -504,11 +504,31 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("SIP video session was superseded", video)
         self.assertIn("get videoVisible()", engine)
         self.assertIn("voipStackEngine.videoVisible", self.source)
+        self.assertIn("ha-card.card.video-active > .button-container", self.source)
         self.assertIn("void this._ensureVideo(statePayload)", engine)
         self.assertIn("this._videoAttachGeneration", engine)
         self.assertIn("this._videoAttachPromise", engine)
         self.assertIn("this._videoAttachCallId === wantedCallId", engine)
-        self.assertIn("this._video.callId === wantedCallId", engine)
+        self.assertIn("video.callId === wantedCallId", engine)
+        self.assertIn("import(`./voip-stack-video.js", engine)
+        self.assertNotIn('from "./voip-stack-video.js"', engine)
+
+    def test_experimental_video_layout_is_bounded_and_responsive(self) -> None:
+        self.assertIn(".card.video-active { overflow: hidden;", self.source)
+        self.assertIn("ha-card.card.video-active > .button-container", self.source)
+        self.assertIn("bottom: 0;", self.source)
+        self.assertIn("width: 100%;", self.source)
+        self.assertIn(".video-active .voip-button.hangup {", self.source)
+        self.assertIn("box-sizing: border-box;", self.source)
+        self.assertIn("overflow: hidden;", self.source)
+        self.assertIn(".video-active .hangup-copy {", self.source)
+        self.assertIn("flex: 1 1 auto;", self.source)
+        self.assertIn("min-width: 0;", self.source)
+        self.assertIn(".video-active .hangup-peer {", self.source)
+        self.assertIn("text-overflow: ellipsis;", self.source)
+        self.assertIn(".video-active .stats.video-debug {", self.source)
+        self.assertIn("position: relative;", self.source)
+        self.assertIn("max-height: min(22%, 92px);", self.source)
 
 
 if __name__ == "__main__":

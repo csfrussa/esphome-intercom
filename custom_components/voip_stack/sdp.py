@@ -81,25 +81,104 @@ class RtpPcmDirection:
 
 
 @dataclass(frozen=True, slots=True)
-class RtpH264Format:
-    """One RFC 6184 H.264 RTP media format."""
+class RtpVideoFormat:
+    """One negotiated RTP video format.
+
+    The H.264 fields remain first-class because RFC 6184 needs them during
+    packetization.  Other codecs keep their complete normalized ``fmtp`` so
+    an exact relay never invents or discards endpoint parameters.
+    """
 
     payload_type: int = 102
     profile_level_id: str = "42e01f"
     packetization_mode: int = 1
     direction: str = "sendrecv"
     sprop_parameter_sets: str = ""
+    encoding: str = "H264"
+    clock_rate: int = 90000
+    transport_profile: str = "RTP/AVP"
+    fmtp: str = ""
+    rtcp_feedback: tuple[str, ...] = ()
 
     def wire_token(self) -> str:
+        token = f"pt={self.payload_type}:{self.encoding}/{self.clock_rate}"
+        if self.encoding == "H264":
+            token += (
+                f";profile-level-id={self.profile_level_id};"
+                f"packetization-mode={self.packetization_mode}"
+            )
+        elif self.fmtp:
+            token += f";fmtp={self.fmtp}"
         return (
-            f"pt={self.payload_type}:H264/90000;"
-            f"profile-level-id={self.profile_level_id};"
-            f"packetization-mode={self.packetization_mode};"
+            f"{token};rtp-profile={self.transport_profile};"
             f"direction={self.direction}"
         )
 
+    @property
+    def browser_codec(self) -> str:
+        if self.encoding == "H264":
+            return f"avc1.{self.profile_level_id.upper()}"
+        return {
+            "VP8": "vp8",
+            "VP9": "vp09.00.10.08",
+            "AV1": "av01.0.04M.08",
+            "JPEG": "jpeg",
+        }.get(self.encoding, "")
+
+
+# Kept as a public compatibility alias for integrations and tests that used
+# the experimental H.264-only type before the video format model was widened.
+RtpH264Format = RtpVideoFormat
+
 
 DEFAULT_H264_FORMAT = RtpH264Format()
+DEFAULT_VIDEO_FORMATS = (
+    DEFAULT_H264_FORMAT,
+    RtpVideoFormat(payload_type=103, encoding="VP8"),
+    RtpVideoFormat(payload_type=26, encoding="JPEG"),
+)
+
+
+def browser_video_send_supported(video_format: RtpVideoFormat | None) -> bool:
+    """Return whether the browser bridge can packetize this negotiated codec."""
+
+    if video_format is None:
+        return False
+    return video_format.encoding == "VP8" or (
+        video_format.encoding == "H264" and video_format.packetization_mode == 1
+    )
+
+
+def browser_video_receive_supported(video_format: RtpVideoFormat | None) -> bool:
+    """Return whether the direct browser bridge can render this codec."""
+
+    return bool(video_format is not None and video_format.encoding in {"H264", "VP8", "JPEG"})
+
+
+def video_formats_passthrough_compatible(
+    source: RtpVideoFormat | None,
+    destination: RtpVideoFormat | None,
+) -> bool:
+    """Return whether encoded RTP payloads may be relayed without transcoding.
+
+    Payload type and direction are leg-local and therefore intentionally not
+    compared.  H.264 packetization and profile bytes are bitstream contracts;
+    forwarding a stream across a different contract can produce a call that
+    negotiates successfully but cannot be decoded by the destination.
+    """
+
+    if source is None or destination is None:
+        return False
+    if source.encoding != destination.encoding or source.clock_rate != destination.clock_rate:
+        return False
+    if source.transport_profile != destination.transport_profile:
+        return False
+    if source.encoding == "H264":
+        return bool(
+            source.packetization_mode == destination.packetization_mode
+            and source.profile_level_id.lower() == destination.profile_level_id.lower()
+        )
+    return _fmtp_parameters(source.fmtp) == _fmtp_parameters(destination.fmtp)
 
 
 def audio_format_to_rtp(fmt: AudioFormat, payload_type: int) -> RtpPcmFormat:
@@ -264,6 +343,7 @@ def build_offer_directional(
     include_common_codecs: bool = False,
     video_port: int = 0,
     video_format: RtpH264Format | None = None,
+    video_formats: tuple[RtpVideoFormat, ...] | list[RtpVideoFormat] | None = None,
     video_direction: str = "sendrecv",
 ) -> str:
     common_formats = _common_ptime_formats(send_formats or [], recv_formats or [])
@@ -300,8 +380,9 @@ def build_offer_directional(
     lines.append(f"a=ptime:{rtp_formats[0].frame_ms}")
     lines.append(f"a=maxptime:{rtp_formats[0].frame_ms}")
     lines.append("a=sendrecv")
-    if video_format is not None and int(video_port) > 0:
-        lines.extend(_video_media_lines(int(video_port), video_format, direction=video_direction))
+    offered_video = tuple(video_formats or (() if video_format is None else (video_format,)))
+    if offered_video and int(video_port) > 0:
+        lines.extend(_video_media_lines_many(int(video_port), offered_video, direction=video_direction))
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -449,6 +530,9 @@ def _parse_media_sections(sdp_body: str | bytes) -> tuple[str, str, list[dict]]:
                 "connection_supported": True,
                 "rtpmap": {},
                 "fmtp": {},
+                "rtcp_feedback": {},
+                "rtcp_port": 0,
+                "rtcp_mux": False,
                 "direction": session_direction,
             }
             sections.append(current)
@@ -489,6 +573,14 @@ def _parse_media_sections(sdp_body: str | bytes) -> tuple[str, str, list[dict]]:
             elif line.startswith("a=fmtp:"):
                 left, spec = line.removeprefix("a=fmtp:").split(None, 1)
                 current["fmtp"][int(left)] = spec.strip()
+            elif line.startswith("a=rtcp-fb:"):
+                left, spec = line.removeprefix("a=rtcp-fb:").split(None, 1)
+                key: int | str = "*" if left == "*" else int(left)
+                current["rtcp_feedback"].setdefault(key, []).append(spec.strip().lower())
+            elif line.startswith("a=rtcp:"):
+                current["rtcp_port"] = int(line.removeprefix("a=rtcp:").split(None, 1)[0])
+            elif line == "a=rtcp-mux":
+                current["rtcp_mux"] = True
         except ValueError as err:
             raise SdpError(f"bad SDP media attribute: {line}") from err
     for section in sections:
@@ -509,7 +601,7 @@ def parse_video_sdp(sdp_body: str | bytes) -> dict | None:
         # in the first section's position.
         if (
             section["port"] == 0
-            or section["transport"] != "RTP/AVP"
+            or section["transport"] not in {"RTP/AVP", "RTP/AVPF"}
             or not section["connection_supported"]
         ):
             return None
@@ -525,9 +617,13 @@ def parse_video_sdp(sdp_body: str | bytes) -> dict | None:
         return {
             "connection_ip": section["connection_ip"],
             "media_port": section["port"],
+            "transport_profile": section["transport"],
             "payload_order": payload_order,
             "rtpmap": dict(section["rtpmap"]),
             "fmtp": dict(section["fmtp"]),
+            "rtcp_feedback": dict(section["rtcp_feedback"]),
+            "rtcp_port": int(section["rtcp_port"] or 0),
+            "rtcp_mux": bool(section["rtcp_mux"]),
             "direction": section["direction"],
         }
     return None
@@ -542,48 +638,132 @@ def _fmtp_parameters(value: str) -> dict[str, str]:
     return out
 
 
-def offered_h264_formats(sdp_body: str | bytes) -> list[RtpH264Format]:
-    """List compatible H.264 formats from an active video section."""
+_STATIC_VIDEO_RTPMAP = {
+    26: "JPEG/90000",
+    34: "H263/90000",
+}
+_VIDEO_ENCODING_ALIASES = {
+    "H264": "H264",
+    "H265": "H265",
+    "HEVC": "H265",
+    "VP8": "VP8",
+    "VP9": "VP9",
+    "AV1": "AV1",
+    "JPEG": "JPEG",
+    "MJPEG": "JPEG",
+    "H263": "H263",
+    "H263-1998": "H263P",
+    "H263-2000": "H263P",
+}
+
+
+def offered_video_formats(sdp_body: str | bytes) -> list[RtpVideoFormat]:
+    """List normalized formats from the first active AVP/AVPF video section."""
 
     parsed = parse_video_sdp(sdp_body)
-    if parsed is None:
+    if parsed is None or parsed["rtcp_mux"]:
         return []
-    out: list[RtpH264Format] = []
+    out: list[RtpVideoFormat] = []
     for payload_type in parsed["payload_order"]:
-        if not 96 <= int(payload_type) <= 127:
+        mapping = str(
+            parsed["rtpmap"].get(payload_type)
+            or _STATIC_VIDEO_RTPMAP.get(int(payload_type))
+            or ""
+        )
+        if not mapping:
             continue
-        mapping = str(parsed["rtpmap"].get(payload_type) or "").upper()
-        if mapping != "H264/90000":
+        bits = mapping.upper().split("/")
+        if len(bits) < 2:
+            continue
+        encoding = _VIDEO_ENCODING_ALIASES.get(bits[0])
+        if encoding is None:
+            continue
+        try:
+            clock_rate = int(bits[1])
+        except ValueError:
+            continue
+        if clock_rate <= 0 or (int(payload_type) < 96 and int(payload_type) not in _STATIC_VIDEO_RTPMAP):
             continue
         parameters = _fmtp_parameters(parsed["fmtp"].get(payload_type, ""))
-        try:
-            packetization_mode = int(parameters.get("packetization-mode", "0") or 0)
-        except ValueError:
-            continue
-        if packetization_mode != 1:
-            continue
         profile = parameters.get("profile-level-id", DEFAULT_H264_FORMAT.profile_level_id).lower()
-        if len(profile) != 6:
-            continue
-        try:
-            profile_bytes = bytes.fromhex(profile)
-        except ValueError:
-            continue
-        # The experimental profile deliberately avoids server-side
-        # transcoding. WebCodecs and common door stations interoperate most
-        # reliably on Baseline / Constrained Baseline (profile_idc 66).
-        if not profile_bytes or profile_bytes[0] != 0x42:
-            continue
+        packetization_mode = 1
+        sprop_parameter_sets = ""
+        if encoding == "H264":
+            try:
+                packetization_mode = int(parameters.get("packetization-mode", "0") or 0)
+            except ValueError:
+                continue
+            if packetization_mode not in {0, 1} or len(profile) != 6:
+                continue
+            try:
+                profile_idc = bytes.fromhex(profile)[0]
+            except (ValueError, IndexError):
+                continue
+            if profile_idc not in {0x42, 0x4D, 0x64}:
+                continue
+            sprop_parameter_sets = parameters.get("sprop-parameter-sets", "")
+        feedback = tuple(
+            dict.fromkeys(
+                [
+                    *parsed["rtcp_feedback"].get("*", []),
+                    *parsed["rtcp_feedback"].get(payload_type, []),
+                ]
+            )
+        )
         out.append(
-            RtpH264Format(
+            RtpVideoFormat(
                 payload_type=payload_type,
                 profile_level_id=profile,
                 packetization_mode=packetization_mode,
                 direction=str(parsed["direction"] or "sendrecv"),
-                sprop_parameter_sets=parameters.get("sprop-parameter-sets", ""),
+                sprop_parameter_sets=sprop_parameter_sets,
+                encoding=encoding,
+                clock_rate=clock_rate,
+                transport_profile=str(parsed["transport_profile"]),
+                fmtp=str(parsed["fmtp"].get(payload_type, "")).strip(),
+                rtcp_feedback=(
+                    feedback
+                    if str(parsed["transport_profile"]) == "RTP/AVPF"
+                    else ()
+                ),
             )
         )
     return out
+
+
+def offered_h264_formats(sdp_body: str | bytes) -> list[RtpH264Format]:
+    """Compatibility wrapper returning only RFC 6184 formats."""
+
+    return [fmt for fmt in offered_video_formats(sdp_body) if fmt.encoding == "H264"]
+
+
+def negotiate_video(
+    remote_sdp: str | bytes,
+    *,
+    accepted_encodings: tuple[str, ...] = ("H264", "VP8", "JPEG"),
+    prefer_browser_send: bool = False,
+) -> RtpVideoFormat | None:
+    """Select the best remote format accepted by the configured media path.
+
+    Preserve the endpoint's order within each capability class, but prefer a
+    codec the browser can consume directly over one that needs the optional
+    FFmpeg bridge.  When camera transmission is requested, prefer the smaller
+    subset that the browser can also packetize.
+    """
+
+    accepted = {item.upper() for item in accepted_encodings}
+    compatible = [fmt for fmt in offered_video_formats(remote_sdp) if fmt.encoding in accepted]
+    if prefer_browser_send:
+        selected = next(
+            (fmt for fmt in compatible if browser_video_send_supported(fmt)),
+            None,
+        )
+        if selected is not None:
+            return selected
+    return next(
+        (fmt for fmt in compatible if browser_video_receive_supported(fmt)),
+        None,
+    ) or next(iter(compatible), None)
 
 
 def negotiate_h264(remote_sdp: str | bytes) -> RtpH264Format | None:
@@ -600,9 +780,49 @@ def negotiate_h264_answer(
     """Accept an H.264 answer only when it selects our offered payload type."""
 
     selected = negotiate_h264(remote_sdp)
-    if selected is None or selected.payload_type != offered.payload_type:
+    if (
+        selected is None
+        or selected.payload_type != offered.payload_type
+        or selected.transport_profile != offered.transport_profile
+        or selected.packetization_mode != offered.packetization_mode
+        or selected.profile_level_id[:4].lower()
+        != offered.profile_level_id[:4].lower()
+    ):
         return None
     return selected
+
+
+def negotiate_video_answer(
+    remote_sdp: str | bytes,
+    offered: RtpVideoFormat | tuple[RtpVideoFormat, ...],
+) -> RtpVideoFormat | None:
+    """Accept only a payload/codec pair present in our outbound offer."""
+
+    offered_formats = (offered,) if isinstance(offered, RtpVideoFormat) else tuple(offered)
+    by_payload = {int(item.payload_type): item for item in offered_formats}
+    for selected in offered_video_formats(remote_sdp):
+        candidate = by_payload.get(int(selected.payload_type))
+        if (
+            candidate is None
+            or candidate.encoding != selected.encoding
+            or candidate.transport_profile != selected.transport_profile
+        ):
+            continue
+        if candidate.encoding == "H264":
+            # RFC 6184 makes packetization-mode and the profile/constraint
+            # bytes part of the media contract. A peer may answer with a
+            # different level when level asymmetry is enabled, but silently
+            # switching profile family or packetization mode would make the
+            # browser/relay consume a bitstream it did not offer.
+            if candidate.packetization_mode != selected.packetization_mode:
+                continue
+            if (
+                candidate.profile_level_id[:4].lower()
+                != selected.profile_level_id[:4].lower()
+            ):
+                continue
+        return selected
+    return None
 
 
 def local_direction_for_remote(remote_direction: str) -> str:
@@ -615,22 +835,95 @@ def local_direction_for_remote(remote_direction: str) -> str:
     }.get(str(remote_direction or "sendrecv").lower(), "sendrecv")
 
 
+def constrained_video_direction(
+    remote_direction: str,
+    *,
+    allow_send: bool,
+    allow_receive: bool = True,
+) -> str:
+    """Intersect RFC 3264 direction with local camera/decoder capabilities."""
+
+    remote = str(remote_direction or "sendrecv").lower()
+    can_send = bool(allow_send and remote in {"sendrecv", "recvonly"})
+    can_receive = bool(allow_receive and remote in {"sendrecv", "sendonly"})
+    if can_send and can_receive:
+        return "sendrecv"
+    if can_send:
+        return "sendonly"
+    if can_receive:
+        return "recvonly"
+    return "inactive"
+
+
 def _video_media_lines(
     media_port: int,
-    selected: RtpH264Format,
+    selected: RtpVideoFormat,
     *,
     direction: str,
 ) -> list[str]:
     payload_type = int(selected.payload_type)
+    rtp_encoding = {"H263P": "H263-1998"}.get(
+        selected.encoding, selected.encoding
+    )
     lines = [
-        f"m=video {int(media_port)} RTP/AVP {payload_type}",
-        f"a=rtpmap:{payload_type} H264/90000",
-        (
+        f"m=video {int(media_port)} {selected.transport_profile} {payload_type}",
+        f"a=rtpmap:{payload_type} {rtp_encoding}/{selected.clock_rate}",
+    ]
+    if selected.encoding == "H264":
+        lines.append(
             f"a=fmtp:{payload_type} profile-level-id={selected.profile_level_id};"
             f"packetization-mode={selected.packetization_mode};level-asymmetry-allowed=1"
-        ),
-        f"a={direction}",
-    ]
+        )
+    elif selected.fmtp:
+        lines.append(f"a=fmtp:{payload_type} {selected.fmtp}")
+    if selected.transport_profile == "RTP/AVPF":
+        for feedback in selected.rtcp_feedback:
+            lines.append(f"a=rtcp-fb:{payload_type} {feedback}")
+    lines.append(f"a=rtcp:{int(media_port) + 1}")
+    lines.append(f"a={direction}")
+    return lines
+
+
+def _video_media_lines_many(
+    media_port: int,
+    selected: tuple[RtpVideoFormat, ...] | list[RtpVideoFormat],
+    *,
+    direction: str,
+) -> list[str]:
+    """Build one offer m-line containing all supported video payloads."""
+
+    formats = tuple(selected)
+    if not formats:
+        raise SdpError("video offer requires at least one format")
+    profiles = {item.transport_profile for item in formats}
+    if len(profiles) != 1:
+        raise SdpError("one video media section cannot mix RTP profiles")
+    profile = profiles.pop()
+    if profile not in {"RTP/AVP", "RTP/AVPF"}:
+        raise SdpError("unsupported video RTP profile")
+    payloads = " ".join(str(item.payload_type) for item in formats)
+    lines = [f"m=video {int(media_port)} {profile} {payloads}"]
+    for item in formats:
+        payload_type = int(item.payload_type)
+        rtp_encoding = {"H263P": "H263-1998"}.get(item.encoding, item.encoding)
+        lines.append(f"a=rtpmap:{payload_type} {rtp_encoding}/{item.clock_rate}")
+        if item.encoding == "H264":
+            lines.append(
+                f"a=fmtp:{payload_type} profile-level-id={item.profile_level_id};"
+                f"packetization-mode={item.packetization_mode};level-asymmetry-allowed=1"
+            )
+        elif item.fmtp:
+            lines.append(f"a=fmtp:{payload_type} {item.fmtp}")
+        if profile == "RTP/AVPF":
+            feedback = item.rtcp_feedback or (
+                ("nack pli", "ccm fir")
+                if item.encoding in {"H264", "VP8"}
+                else ()
+            )
+            for value in feedback:
+                lines.append(f"a=rtcp-fb:{payload_type} {value}")
+    lines.append(f"a=rtcp:{int(media_port) + 1}")
+    lines.append(f"a={direction}")
     return lines
 
 
@@ -647,6 +940,7 @@ def _answer_with_offered_media_order(
     remote_sdp: str | bytes,
     video_port: int,
     video_format: RtpH264Format | None,
+    video_direction: str | None = None,
 ) -> str:
     _session_connection, _session_direction, sections = _parse_media_sections(remote_sdp)
     lines = [
@@ -675,7 +969,7 @@ def _answer_with_offered_media_order(
                 video_format is not None
                 and int(video_port) > 0
                 and section["port"] > 0
-                and section["transport"] == "RTP/AVP"
+                and section["transport"] in {"RTP/AVP", "RTP/AVPF"}
                 and section["connection_supported"]
                 and str(video_format.payload_type) in offered_payloads
             ):
@@ -683,7 +977,7 @@ def _answer_with_offered_media_order(
                     _video_media_lines(
                         int(video_port),
                         video_format,
-                        direction=local_direction_for_remote(video_format.direction),
+                        direction=video_direction or local_direction_for_remote(video_format.direction),
                     )
                 )
             else:
@@ -809,6 +1103,7 @@ def build_answer_directional(
     remote_sdp: str | bytes | None = None,
     video_port: int = 0,
     video_format: RtpH264Format | None = None,
+    video_direction: str | None = None,
 ) -> str:
     if send.frame_ms != recv.frame_ms:
         raise SdpError("SDP answer requires a common TX/RX RTP packet time")
@@ -848,6 +1143,7 @@ def build_answer_directional(
                 remote_sdp=remote_sdp,
                 video_port=video_port,
                 video_format=video_format,
+                video_direction=video_direction,
             )
     lines = [
         "v=0",

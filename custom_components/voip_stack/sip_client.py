@@ -185,9 +185,11 @@ class SipDialog:
     recv_format: sdp.RtpPcmFormat
     remote_target_uri: str = ""
     dtmf_payload_type: int | None = None
-    video_format: sdp.RtpH264Format | None = None
+    video_format: sdp.RtpVideoFormat | None = None
     remote_video_rtp_host: str = ""
     remote_video_rtp_port: int = 0
+    remote_video_rtcp_port: int = 0
+    remote_video_rtcp_mux: bool = False
     local_video_rtp_port: int = 0
     local_video_direction: str = "inactive"
 
@@ -234,7 +236,10 @@ class SipCallClient:
         outbound_proxy: str = "",
         include_common_codecs: bool = False,
         local_video_rtp_port: int = 0,
-        video_format: sdp.RtpH264Format | None = None,
+        video_format: sdp.RtpVideoFormat | None = None,
+        video_formats: tuple[sdp.RtpVideoFormat, ...] | list[sdp.RtpVideoFormat] | None = None,
+        video_direction: str = "sendrecv",
+        generic_video_relay: bool = False,
         media_reservation=None,
         video_rtp_socket: socket.socket | None = None,
     ) -> None:
@@ -252,7 +257,11 @@ class SipCallClient:
         self.outbound_proxy = outbound_proxy
         self.include_common_codecs = bool(include_common_codecs)
         self.local_video_rtp_port = int(local_video_rtp_port or 0)
-        self.video_format = video_format if self.local_video_rtp_port > 0 else None
+        requested_video = tuple(video_formats or (() if video_format is None else (video_format,)))
+        self.video_formats = requested_video if self.local_video_rtp_port > 0 else ()
+        self.video_format = self.video_formats[0] if self.video_formats else None
+        self.video_direction = str(video_direction or "sendrecv")
+        self.generic_video_relay = bool(generic_video_relay)
         self.media_reservation = media_reservation
         self.video_rtp_socket = video_rtp_socket
         self.transport: asyncio.DatagramTransport | None = None
@@ -650,6 +659,8 @@ class SipCallClient:
             include_common_codecs=self.include_common_codecs,
             video_port=self.local_video_rtp_port,
             video_format=self.video_format,
+            video_formats=self.video_formats,
+            video_direction=self.video_direction,
         ).encode()
         headers = sip.dialog_headers(
             request_uri=request_uri,
@@ -986,8 +997,8 @@ class SipCallClient:
             return False
         parsed = sdp.parse_sdp(msg.body)
         video_answer = (
-            sdp.negotiate_h264_answer(msg.body, self.video_format)
-            if self.video_format is not None
+            sdp.negotiate_video_answer(msg.body, self.video_formats)
+            if self.video_formats
             else None
         )
         remote_video = sdp.parse_video_sdp(msg.body) if video_answer is not None else None
@@ -1010,9 +1021,25 @@ class SipCallClient:
             video_format=video_answer,
             remote_video_rtp_host=(str(remote_video["connection_ip"]) if remote_video else ""),
             remote_video_rtp_port=(int(remote_video["media_port"]) if remote_video else 0),
+            remote_video_rtcp_port=(
+                int(remote_video["rtcp_port"] or int(remote_video["media_port"]) + 1)
+                if remote_video
+                else 0
+            ),
+            remote_video_rtcp_mux=(bool(remote_video["rtcp_mux"]) if remote_video else False),
             local_video_rtp_port=(self.local_video_rtp_port if video_answer is not None else 0),
             local_video_direction=(
-                sdp.local_direction_for_remote(video_answer.direction)
+                sdp.constrained_video_direction(
+                    video_answer.direction,
+                    allow_send=(
+                        self.video_direction in {"sendonly", "sendrecv"}
+                        and (
+                            self.generic_video_relay
+                            or sdp.browser_video_send_supported(video_answer)
+                        )
+                    ),
+                    allow_receive=self.video_direction in {"recvonly", "sendrecv"},
+                )
                 if video_answer is not None
                 else "inactive"
             ),

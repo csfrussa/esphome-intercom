@@ -67,6 +67,7 @@ class CallRegistry:
         self.pending_invites: dict[str, Any] = {}
         self.preanswered: dict[str, dict[str, Any]] = {}
         self.softphone_media: dict[str, dict[str, Any]] = {}
+        self.video_parameter_sets: dict[str, tuple[bytes, ...]] = {}
         self.sip_clients: dict[str, Any] = {}
         self.client_watchers: dict[str, Any] = {}
         self.relays: dict[str, Any] = {}
@@ -296,6 +297,8 @@ class CallRegistry:
         self.leg_index.pop(call_id, None)
         self.event_contexts.pop(session_id, None)
         self.pending_invites.pop(session_id, None)
+        self.video_parameter_sets.pop(session_id, None)
+        self.video_parameter_sets.pop(call_id, None)
         route = self.pending_routes.pop(session_id, None)
         if route is not None:
             future = route.get("future")
@@ -387,6 +390,7 @@ class CallRegistry:
         self.pending_invites.clear()
         self.preanswered.clear()
         self.softphone_media.clear()
+        self.video_parameter_sets.clear()
         self.sip_clients.clear()
         self.client_watchers.clear()
         self.relays.clear()

@@ -9,6 +9,7 @@ ordinary SIP/2.0 messages.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ipaddress
 import re
 from secrets import token_hex
 from typing import Iterable
@@ -52,6 +53,55 @@ _SINGLETON_HEADERS = frozenset({"call-id", "cseq", "from", "to"})
 
 class SipError(ValueError):
     """Malformed or unsupported SIP message."""
+
+
+def normalize_sip_host(value: str) -> str:
+    """Return a comparison-safe SIP host without resolving DNS names."""
+
+    host = str(value or "").strip().lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    try:
+        return ipaddress.ip_address(host).compressed
+    except ValueError:
+        return host.rstrip(".")
+
+
+def sip_hosts_equal(left: str, right: str) -> bool:
+    """Compare SIP hosts without conflating different signaling sockets."""
+
+    left_host = normalize_sip_host(left)
+    right_host = normalize_sip_host(right)
+    return bool(left_host and right_host and left_host == right_host)
+
+
+def sip_endpoints_equal(
+    left_host: str,
+    left_port: int | None,
+    right_host: str,
+    right_port: int | None,
+    *,
+    default_port: int = 5060,
+) -> bool:
+    """Return whether two SIP contacts identify the same signaling socket."""
+
+    return sip_hosts_equal(left_host, right_host) and int(left_port or default_port) == int(
+        right_port or default_port
+    )
+
+
+def sip_uri_targets_listener(
+    uri: "SipUri | None",
+    *,
+    listener_hosts: Iterable[str],
+    listener_port: int,
+    default_port: int = 5060,
+) -> bool:
+    """Return whether a SIP URI points to this exact local listener."""
+
+    if uri is None or int(uri.port or default_port) != int(listener_port):
+        return False
+    return any(sip_hosts_equal(uri.host, host) for host in listener_hosts)
 
 
 def is_sip_token(value: str) -> bool:

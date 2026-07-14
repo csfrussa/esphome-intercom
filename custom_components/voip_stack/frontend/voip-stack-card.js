@@ -132,6 +132,7 @@ class VoipStackCard extends HTMLElement {
     this._lastEndInfo = null;          // {peer, reason, until_ms} | null
     this._lastSoftphoneTerminalKey = "";
     this._lastEndClearTimer = null;
+    this._videoDurationTimer = null;
     this._unsubCallEvents = null;
     this._unsubSoftphoneState = null;
 
@@ -163,6 +164,10 @@ class VoipStackCard extends HTMLElement {
     if (this._lastEndClearTimer) {
       clearTimeout(this._lastEndClearTimer);
       this._lastEndClearTimer = null;
+    }
+    if (this._videoDurationTimer) {
+      clearInterval(this._videoDurationTimer);
+      this._videoDurationTimer = null;
     }
     if (this._availableDevicesRetryTimer) {
       clearTimeout(this._availableDevicesRetryTimer);
@@ -323,6 +328,9 @@ class VoipStackCard extends HTMLElement {
       selected_tx_format: payload.selected_tx_format || payload.tx_format || "",
       selected_rx_format: payload.selected_rx_format || payload.rx_format || "",
       audio_mode: payload.audio_mode || "",
+      connected_at: Number(payload.connected_at || 0),
+      debug_mode: !!payload.debug_mode,
+      video_camera_send_enabled: !!payload.video_camera_send_enabled,
       terminal_reason: payload.terminal_reason || payload.reason || "",
       extension: String(payload.extension || "").trim(),
       groups: payload.groups && typeof payload.groups === "object" ? payload.groups : {},
@@ -419,6 +427,27 @@ class VoipStackCard extends HTMLElement {
       this._lastEndClearTimer = null;
       this._render();
     }, 5000);
+  }
+
+  _syncVideoDurationTimer(active) {
+    if (active && !this._videoDurationTimer) {
+      this._videoDurationTimer = setInterval(() => this._render(), 1000);
+    } else if (!active && this._videoDurationTimer) {
+      clearInterval(this._videoDurationTimer);
+      this._videoDurationTimer = null;
+    }
+  }
+
+  _formatVideoCallDuration() {
+    const connectedAt = Number(this._softphoneSnapshot?.connected_at || 0);
+    if (!connectedAt) return "00:00";
+    const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - connectedAt));
+    const hours = Math.floor(elapsed / 3600);
+    const minutes = Math.floor((elapsed % 3600) / 60);
+    const seconds = elapsed % 60;
+    const mm = String(minutes).padStart(2, "0");
+    const ss = String(seconds).padStart(2, "0");
+    return hours ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
   _clearEndReason(doRender = true) {
@@ -1395,6 +1424,11 @@ class VoipStackCard extends HTMLElement {
     els.videoCanvas.hidden = !videoVisible;
     els.videoShade.hidden = !videoVisible;
     voipStackEngine.setVideoCanvas(els.videoCanvas);
+    this._syncVideoDurationTimer(videoVisible);
+    if (els.hangupPeer) {
+      els.hangupPeer.textContent = caller || destination || "Active call";
+      els.hangupDuration.textContent = this._formatVideoCallDuration();
+    }
     const keypadOpen = this._keypadOpen();
     els.destRow.hidden = !showCall || keypadOpen;
     els.destValue.textContent = this._contactCyclerDestination(destination);
@@ -1460,6 +1494,11 @@ class VoipStackCard extends HTMLElement {
       els.ringtoneRow.hidden = !(showSettingsPanel && this._isHaSoftphoneMode());
       els.ringtoneCheckbox.checked = !!this._ringtoneEnabled;
     }
+    if (els.videoCameraRow) {
+      const cameraAvailable = softphoneMode && !!this._softphoneSnapshot?.video_camera_send_enabled;
+      els.videoCameraRow.hidden = !(showSettingsPanel && cameraAvailable);
+      els.videoCameraCheckbox.checked = voipStackEngine.videoCameraEnabled;
+    }
     if (els.dndRow) {
       const dndAvailable = softphoneMode || !!this._dndSwitchEntityId;
       els.dndRow.hidden = !(showSettingsPanel && dndAvailable);
@@ -1479,7 +1518,9 @@ class VoipStackCard extends HTMLElement {
     }
 
     // Stats line
-    if (this._isHaSoftphoneMode() && this._hasBrowserAudioPath()) {
+    const debugMode = !!this._softphoneSnapshot?.debug_mode;
+    els.stats.classList.toggle("video-debug", videoVisible && debugMode);
+    if (this._isHaSoftphoneMode() && this._hasBrowserAudioPath() && debugMode) {
       els.stats.textContent = voipStackEngine.statsText();
     } else {
       els.stats.textContent = "";
@@ -1579,7 +1620,24 @@ class VoipStackCard extends HTMLElement {
       .video-active .status-reason,
       .video-active .stats,
       .video-active .version { color: white; text-shadow: 0 1px 3px rgba(0,0,0,.9); }
-      .video-active .button-container { align-items: flex-end; padding-bottom: 8px; }
+      ha-card.card.video-active > .button-container {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        min-height: 66px;
+        height: 66px;
+        margin: 0;
+        padding: 0;
+        align-items: stretch;
+      }
+      .video-active .destination-row,
+      .video-active .status,
+      .video-active .status-reason,
+      .video-active .runtime-controls,
+      .video-active .settings-panel,
+      .video-active .version { display: none; }
       .header { font-size: 1.2em; font-weight: 500; margin-bottom: var(--voip-fluid-space, 16px); color: var(--primary-text-color); text-align: center; }
       .header[hidden] { display: none; }
 
@@ -1690,6 +1748,57 @@ class VoipStackCard extends HTMLElement {
       .voip-button.answer { background: #4caf50; color: white; animation: ring-pulse 1s infinite; }
       .voip-button.decline { background: #f44336; color: white; animation: ring-pulse 1s infinite; }
       .voip-button.hangup { background: #f44336; color: white; }
+      .hangup-icon, .hangup-copy, .hangup-duration { display: none; }
+      .video-active .voip-button.hangup {
+        box-sizing: border-box;
+        width: 100%;
+        height: 66px;
+        min-height: 66px;
+        border-radius: 0;
+        padding: 0 18px;
+        gap: 12px;
+        justify-content: flex-start;
+        overflow: hidden;
+        background: linear-gradient(90deg, rgba(122, 5, 5, .80), rgba(230, 35, 35, .72));
+        -webkit-backdrop-filter: blur(12px) saturate(1.2);
+        backdrop-filter: blur(12px) saturate(1.2);
+        box-shadow: 0 -1px 0 rgba(255,255,255,.18), 0 -8px 30px rgba(0,0,0,.24);
+      }
+      .video-active .hangup-label { display: none; }
+      .video-active .hangup-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .video-active .hangup-icon ha-icon { --mdc-icon-size: 28px; }
+      .video-active .hangup-copy {
+        display: flex;
+        flex: 1 1 auto;
+        min-width: 0;
+        flex-direction: column;
+        align-items: flex-start;
+        text-align: left;
+        font-weight: 500;
+        line-height: 1.15;
+      }
+      .video-active .hangup-state { font-size: .82rem; opacity: .82; }
+      .video-active .hangup-peer {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: .98rem;
+      }
+      .video-active .hangup-duration {
+        display: block;
+        flex: 0 0 auto;
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+        font-size: 1rem;
+        letter-spacing: .03em;
+      }
       .voip-button:disabled { opacity: 0.5; cursor: not-allowed; animation: none; }
       @keyframes ring-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 
@@ -1705,6 +1814,26 @@ class VoipStackCard extends HTMLElement {
       @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
       .stats { font-size: 0.75em; color: #666; margin-top: 8px; text-align: center; }
+      .video-active .stats { display: none; }
+      .video-active .stats.video-debug {
+        display: block;
+        position: relative;
+        align-self: stretch;
+        margin: 0;
+        padding: 5px 7px;
+        border-radius: 5px;
+        background: rgba(0,0,0,.52);
+        color: #fff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: .66rem;
+        line-height: 1.25;
+        max-height: min(22%, 92px);
+        overflow: auto;
+        scrollbar-width: thin;
+        text-align: left;
+        word-break: break-word;
+        text-shadow: none;
+      }
       .error { color: #f44336; font-size: 0.85em; text-align: center; margin-top: 8px; }
       .settings-btn {
         display: block;
@@ -1912,7 +2041,31 @@ class VoipStackCard extends HTMLElement {
     const hangupBtn = document.createElement("button");
     hangupBtn.type = "button";
     hangupBtn.className = "voip-button hangup";
-    hangupBtn.textContent = "Hangup";
+    hangupBtn.setAttribute("aria-label", "Hang up call");
+    const hangupLabel = document.createElement("span");
+    hangupLabel.className = "hangup-label";
+    hangupLabel.textContent = "Hangup";
+    const hangupIcon = document.createElement("span");
+    hangupIcon.className = "hangup-icon";
+    const hangupHaIcon = document.createElement("ha-icon");
+    hangupHaIcon.setAttribute("icon", "mdi:phone-hangup");
+    hangupIcon.appendChild(hangupHaIcon);
+    const hangupCopy = document.createElement("span");
+    hangupCopy.className = "hangup-copy";
+    const hangupState = document.createElement("span");
+    hangupState.className = "hangup-state";
+    hangupState.textContent = "In call";
+    const hangupPeer = document.createElement("span");
+    hangupPeer.className = "hangup-peer";
+    hangupCopy.appendChild(hangupState);
+    hangupCopy.appendChild(hangupPeer);
+    const hangupDuration = document.createElement("span");
+    hangupDuration.className = "hangup-duration";
+    hangupDuration.textContent = "00:00";
+    hangupBtn.appendChild(hangupLabel);
+    hangupBtn.appendChild(hangupIcon);
+    hangupBtn.appendChild(hangupCopy);
+    hangupBtn.appendChild(hangupDuration);
     const callBtn = document.createElement("button");
     callBtn.type = "button";
     callBtn.className = "voip-button call";
@@ -2009,6 +2162,19 @@ class VoipStackCard extends HTMLElement {
     ringtoneRow.appendChild(ringtoneLabel);
     settingsPanel.appendChild(ringtoneRow);
 
+    const videoCameraRow = document.createElement("div");
+    videoCameraRow.className = "auto-answer-row";
+    videoCameraRow.hidden = true;
+    const videoCameraCheckbox = document.createElement("input");
+    videoCameraCheckbox.type = "checkbox";
+    videoCameraCheckbox.id = "ha-softphone-video-camera-cb";
+    const videoCameraLabel = document.createElement("label");
+    videoCameraLabel.htmlFor = "ha-softphone-video-camera-cb";
+    videoCameraLabel.textContent = "Send Camera";
+    videoCameraRow.appendChild(videoCameraCheckbox);
+    videoCameraRow.appendChild(videoCameraLabel);
+    settingsPanel.appendChild(videoCameraRow);
+
     const softphoneGroupsPanel = document.createElement("div");
     softphoneGroupsPanel.className = "softphone-groups-panel";
     softphoneGroupsPanel.hidden = true;
@@ -2096,10 +2262,10 @@ class VoipStackCard extends HTMLElement {
       header, headerName,
       destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
       keypadPanel, keypadInput, keypadKeys,
-      answerBtn, declineBtn, hangupBtn, callBtn, placeholderBtn,
+      answerBtn, declineBtn, hangupBtn, hangupPeer, hangupDuration, callBtn, placeholderBtn,
       statusIndicator, statusText, statusReason,
       runtimeControls, keypadBtn, settingsBtn, settingsPanel,
-      autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox,
+      autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox, videoCameraRow, videoCameraCheckbox,
       softphoneGroupsPanel, extensionRow, extensionInput, ringGroupInput, ringGroupOptions, conferenceGroupInput, conferenceGroupOptions, conferenceRingRow, conferenceRingCheckbox,
       stats, err,
     };
@@ -2194,6 +2360,9 @@ class VoipStackCard extends HTMLElement {
     els.autoAnswerCheckbox.onchange = () => this._toggleAutoAnswer();
     if (els.dndCheckbox) els.dndCheckbox.onchange = () => this._toggleDnd();
     if (els.ringtoneCheckbox) els.ringtoneCheckbox.onchange = () => this._toggleRingtone();
+    if (els.videoCameraCheckbox) {
+      els.videoCameraCheckbox.onchange = (event) => this._toggleVideoCamera(event.target.checked);
+    }
     if (els.extensionInput) {
       els.extensionInput.onchange = (event) => this._setExtensionSetting(event.target.value);
       els.extensionInput.onkeydown = (event) => {
@@ -2383,6 +2552,10 @@ class VoipStackCard extends HTMLElement {
     try {
       const reply = await voipStackEngine.startHaSoftphone(target, sessionInfo, {
         callee,
+        sendVideo: Boolean(
+          this._softphoneSnapshot?.video_camera_send_enabled &&
+          voipStackEngine.videoCameraEnabled
+        ),
       });
       if (reply && operationId === this._callOperationId) {
         this._markSoftphoneMediaOwner(reply.call_id || "");
@@ -2424,6 +2597,10 @@ class VoipStackCard extends HTMLElement {
         this._markSoftphoneMediaOwner(callId);
         await this._hass.callService("voip_stack", "answer", {
           call_id: this._sessionCallId(),
+          send_video: Boolean(
+            this._softphoneSnapshot?.video_camera_send_enabled &&
+            voipStackEngine.videoCameraEnabled
+          ),
         });
         return;
       }
@@ -2602,6 +2779,17 @@ class VoipStackCard extends HTMLElement {
     }
     if (this._ringtoneEnabled) voipStackEngine.unlockRingtone();
     this._syncRingtoneRequest(this._getEspState());
+    this._render();
+  }
+
+  async _toggleVideoCamera(enabled) {
+    this._settingsOpen = true;
+    this._render();
+    try {
+      await voipStackEngine.setVideoCameraEnabled(Boolean(enabled));
+    } catch (err) {
+      this._showError(err.message || String(err));
+    }
     this._render();
   }
 

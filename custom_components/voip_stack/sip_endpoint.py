@@ -53,6 +53,8 @@ class SipEndpointManager:
         udp_enabled: bool = True,
         tcp_enabled: bool = True,
         enable_video: bool = False,
+        enable_video_transcoding: bool = False,
+        prefer_browser_video_send: bool = False,
     ) -> None:
         self.host = host
         self.port = int(port)
@@ -68,6 +70,8 @@ class SipEndpointManager:
         self.udp_enabled = bool(udp_enabled)
         self.tcp_enabled = bool(tcp_enabled)
         self.enable_video = bool(enable_video)
+        self.enable_video_transcoding = bool(enable_video_transcoding)
+        self.prefer_browser_video_send = bool(prefer_browser_video_send)
         self.udp_server: SipUdpServer | None = None
         self.tcp_server: SipTcpServer | None = None
 
@@ -97,6 +101,8 @@ class SipEndpointManager:
                 on_register=self.on_register,
                 on_info=self.on_info,
                 enable_video=self.enable_video,
+                enable_video_transcoding=self.enable_video_transcoding,
+                prefer_browser_video_send=self.prefer_browser_video_send,
             )
             if not await udp.start():
                 return False
@@ -115,6 +121,8 @@ class SipEndpointManager:
                 on_register=self.on_register,
                 on_info=self.on_info,
                 enable_video=self.enable_video,
+                enable_video_transcoding=self.enable_video_transcoding,
+                prefer_browser_video_send=self.prefer_browser_video_send,
             )
             if not await tcp.start():
                 if udp is not None:

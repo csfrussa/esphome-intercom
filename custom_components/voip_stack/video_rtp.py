@@ -1,8 +1,10 @@
-"""RFC 6184 H.264 RTP packetization for the experimental HA video phone."""
+"""Bounded RTP video packetization for the experimental HA video phone."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import struct
+from typing import Generic, TypeVar
 
 from . import rtp
 
@@ -12,6 +14,10 @@ DEFAULT_MAX_RTP_PAYLOAD = 1200
 MAX_ACCESS_UNIT_BYTES = 4 * 1024 * 1024
 MAX_NAL_UNIT_BYTES = 2 * 1024 * 1024
 MAX_ACCESS_UNIT_NALS = 512
+DEFAULT_REORDER_DELAY = 0.020
+DEFAULT_REORDER_PACKETS = 128
+
+_T = TypeVar("_T")
 
 
 class H264RtpError(ValueError):
@@ -25,6 +31,100 @@ class H264AccessUnit:
     data: bytes
     timestamp: int
     key_frame: bool
+
+
+@dataclass(frozen=True, slots=True)
+class VideoAccessUnit:
+    """One codec access unit ready for the browser or a transcoder."""
+
+    data: bytes
+    timestamp: int
+    key_frame: bool
+    encoding: str
+
+
+class RtpReorderBuffer(Generic[_T]):
+    """Small RFC 3550 sequence reorder window with a bounded gap wait.
+
+    The caller supplies monotonic time.  A missing packet delays later packets
+    for at most ``max_delay``; after that the gap is counted and media moves on.
+    No periodic polling task is required because ``next_deadline`` can be used
+    as the timeout of the next queue read.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_delay: float = DEFAULT_REORDER_DELAY,
+        max_packets: int = DEFAULT_REORDER_PACKETS,
+    ) -> None:
+        self.max_delay = max(0.0, float(max_delay))
+        self.max_packets = max(2, int(max_packets))
+        self.expected: int | None = None
+        self._pending: dict[int, tuple[_T, float]] = {}
+        self.duplicates = 0
+        self.late = 0
+        self.lost = 0
+        self.reordered = 0
+        self.max_depth = 0
+
+    @staticmethod
+    def _ahead(sequence: int, expected: int) -> int:
+        return (int(sequence) - int(expected)) & 0xFFFF
+
+    @property
+    def next_deadline(self) -> float | None:
+        if self.expected is None or not self._pending or self.expected in self._pending:
+            return None
+        return min(arrival for _item, arrival in self._pending.values()) + self.max_delay
+
+    def push(self, sequence: int, item: _T, now: float) -> list[_T]:
+        sequence &= 0xFFFF
+        now = float(now)
+        if self.expected is None:
+            self.expected = sequence
+        delta = self._ahead(sequence, self.expected)
+        if delta >= 0x8000:
+            self.late += 1
+            return []
+        if sequence in self._pending:
+            self.duplicates += 1
+            return []
+        if delta:
+            self.reordered += 1
+        self._pending[sequence] = (item, now)
+        self.max_depth = max(self.max_depth, len(self._pending))
+        return self._drain(now, force=len(self._pending) > self.max_packets)
+
+    def flush(self, now: float, *, force: bool = False) -> list[_T]:
+        return self._drain(float(now), force=force)
+
+    def _drain(self, now: float, *, force: bool) -> list[_T]:
+        out: list[_T] = []
+        while self.expected is not None and self._pending:
+            current = self._pending.pop(self.expected, None)
+            if current is not None:
+                out.append(current[0])
+                self.expected = rtp.next_sequence(self.expected)
+                continue
+            oldest = min(arrival for _item, arrival in self._pending.values())
+            if not force and now - oldest < self.max_delay:
+                break
+            nearest = min(
+                self._pending,
+                key=lambda candidate: self._ahead(candidate, self.expected or 0),
+            )
+            skipped = self._ahead(nearest, self.expected)
+            if skipped >= 0x8000:
+                break
+            self.lost += skipped
+            self.expected = nearest
+            force = len(self._pending) > self.max_packets
+        return out
+
+    def reset(self) -> None:
+        self.expected = None
+        self._pending.clear()
 
 
 def split_annex_b(data: bytes) -> list[bytes]:
@@ -104,6 +204,17 @@ class H264Depacketizer:
         self._nals.clear()
         self._fu = None
         self._damaged = False
+
+    @property
+    def parameter_sets(self) -> tuple[bytes, ...]:
+        """Return the latest complete decoder bootstrap state.
+
+        A browser may reconnect while the SIP dialog and RTP sender continue.
+        Persisting these two small NAL units at call scope lets the replacement
+        decoder join the next IDR without waiting for a peer to repeat SPS/PPS.
+        """
+
+        return tuple(item for item in (self._sps, self._pps) if item is not None)
 
     def push(self, packet: rtp.RtpPacket) -> H264AccessUnit | None:
         """Consume one packet and return an access unit on its marker."""
@@ -231,6 +342,297 @@ class H264Depacketizer:
             self.dropped_access_units += 1
             return None
         return H264AccessUnit(data=data, timestamp=timestamp, key_frame=key_frame)
+
+
+class Vp8Depacketizer:
+    """Reassemble the VP8 payload descriptor defined by RFC 7741."""
+
+    def __init__(self) -> None:
+        self._timestamp: int | None = None
+        self._expected_sequence: int | None = None
+        self._parts: list[bytes] = []
+        self._started = False
+        self._key_frame = False
+        self._damaged = False
+        self.dropped_access_units = 0
+        self.sequence_gaps = 0
+
+    @staticmethod
+    def _payload(payload: bytes) -> tuple[bytes, bool, int]:
+        if not payload:
+            raise ValueError("empty VP8 RTP payload")
+        first = payload[0]
+        extended = bool(first & 0x80)
+        start = bool(first & 0x10)
+        partition = first & 0x0F
+        offset = 1
+        if extended:
+            if offset >= len(payload):
+                raise ValueError("truncated VP8 extension")
+            extension = payload[offset]
+            offset += 1
+            if extension & 0x80:  # PictureID
+                if offset >= len(payload):
+                    raise ValueError("truncated VP8 PictureID")
+                wide = bool(payload[offset] & 0x80)
+                offset += 2 if wide else 1
+            if extension & 0x40:  # TL0PICIDX
+                offset += 1
+            if extension & 0x20 or extension & 0x10:  # TID / KEYIDX share a byte
+                offset += 1
+        if offset > len(payload):
+            raise ValueError("truncated VP8 payload descriptor")
+        return payload[offset:], start, partition
+
+    def push(self, packet: rtp.RtpPacket) -> VideoAccessUnit | None:
+        if self._timestamp is not None and packet.timestamp != self._timestamp:
+            if self._parts:
+                self.dropped_access_units += 1
+            self._parts = []
+            self._started = False
+            self._damaged = False
+            self._expected_sequence = None
+        self._timestamp = packet.timestamp
+        if self._expected_sequence is not None and packet.sequence != self._expected_sequence:
+            self.sequence_gaps += 1
+            self._damaged = True
+        self._expected_sequence = rtp.next_sequence(packet.sequence)
+        try:
+            payload, start, partition = self._payload(packet.payload)
+        except ValueError:
+            self._parts = []
+            self._started = False
+            self._damaged = False
+            self._expected_sequence = None
+            self.dropped_access_units += 1
+            return None
+        if start and partition == 0:
+            self._parts = []
+            self._started = True
+            self._key_frame = bool(payload) and not bool(payload[0] & 0x01)
+        if not self._started or not payload:
+            if packet.marker:
+                self.dropped_access_units += 1
+            return None
+        self._parts.append(payload)
+        if sum(map(len, self._parts)) > MAX_ACCESS_UNIT_BYTES:
+            self._parts = []
+            self._started = False
+            self._damaged = False
+            self._expected_sequence = None
+            self.dropped_access_units += 1
+            return None
+        if not packet.marker:
+            return None
+        damaged = self._damaged
+        data = b"".join(self._parts)
+        timestamp = int(self._timestamp)
+        key_frame = self._key_frame
+        self._parts = []
+        self._started = False
+        self._damaged = False
+        self._timestamp = None
+        self._expected_sequence = None
+        if damaged:
+            self.dropped_access_units += 1
+            return None
+        return VideoAccessUnit(data, timestamp, key_frame, "VP8")
+
+
+# Standard 8-bit JPEG tables from RFC 2435 appendices A and B.  Keeping the
+# RTP/JPEG reconstruction here avoids a native decoder dependency: the browser
+# receives an ordinary JFIF frame and decodes it with its image pipeline.
+_JPEG_BASE_QUANTIZERS = bytes.fromhex(
+    "100b0c0e0c0a100e0d0e1211101318281a181616183123251d283a333d3c3933"
+    "383740485c4e404457453738506d51575f626768673e4d71797064785c656763"
+    "1112121815182f1a1a2f63423842636363636363636363636363636363636363"
+    "6363636363636363636363636363636363636363636363636363636363636363"
+)
+_JPEG_STANDARD_DHT = bytes.fromhex(
+    "ffc401a20000010501010101010100000000000000000102030405060708090a0b"
+    "0100030101010101010101010000000000000102030405060708090a0b10000201"
+    "0303020403050504040000017d010203000411051221314106135161072271143281"
+    "91a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738"
+    "393a434445464748494a535455565758595a636465666768696a737475767778797a"
+    "838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8"
+    "b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2"
+    "f3f4f5f6f7f8f9fa1100020102040403040705040400010277000102031104052131"
+    "061241510761711322328108144291a1b1c109233352f0156272d10a162434e125f1"
+    "1718191a262728292a35363738393a434445464748494a535455565758595a636465"
+    "666768696a737475767778797a82838485868788898a92939495969798999aa2a3a4"
+    "a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9"
+    "dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9fa"
+)
+
+
+def _jpeg_quantizers(quality: int) -> bytes:
+    if not 1 <= int(quality) <= 99:
+        raise ValueError("reserved RFC 2435 JPEG quality")
+    scale = 5000 // int(quality) if int(quality) < 50 else 200 - int(quality) * 2
+    return bytes(max(1, min(255, (value * scale + 50) // 100)) for value in _JPEG_BASE_QUANTIZERS)
+
+
+def _jpeg_interchange_header(
+    *, jpeg_type: int, width_blocks: int, height_blocks: int, quantizers: bytes, dri: int
+) -> bytes:
+    if jpeg_type not in {0, 1} or not width_blocks or not height_blocks:
+        raise ValueError("unsupported RFC 2435 JPEG geometry/type")
+    if len(quantizers) not in {64, 128}:
+        raise ValueError("unsupported RFC 2435 quantization tables")
+    width = int(width_blocks) << 3
+    height = int(height_blocks) << 3
+    out = bytearray(b"\xff\xd8")
+    out.extend(b"\xff\xe0\x00\x10JFIF\x00\x01\x02\x00\x00\x01\x00\x01\x00\x00")
+    out.extend(b"\xff\xdb")
+    out.extend(struct.pack("!H", 2 + (len(quantizers) // 64) * 65))
+    for table_id, offset in enumerate(range(0, len(quantizers), 64)):
+        out.append(table_id)
+        out.extend(quantizers[offset : offset + 64])
+    if dri:
+        out.extend(b"\xff\xdd\x00\x04")
+        out.extend(struct.pack("!H", int(dri)))
+    out.extend(b"\xff\xc0\x00\x11\x08")
+    out.extend(struct.pack("!HH", height, width))
+    out.extend(
+        bytes(
+            (
+                3,
+                1, 0x22 if jpeg_type else 0x21, 0,
+                2, 0x11, 1 if len(quantizers) >= 128 else 0,
+                3, 0x11, 1 if len(quantizers) >= 128 else 0,
+            )
+        )
+    )
+    out.extend(_JPEG_STANDARD_DHT)
+    out.extend(b"\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00\x3f\x00")
+    return bytes(out)
+
+
+class JpegDepacketizer:
+    """Reassemble RFC 2435 fragments into complete baseline JFIF frames."""
+
+    def __init__(self) -> None:
+        self._timestamp: int | None = None
+        self._header = b""
+        self._scan = bytearray()
+        self._dynamic_quantizers: dict[int, bytes] = {}
+        self.dropped_access_units = 0
+
+    def _drop(self) -> None:
+        self._timestamp = None
+        self._header = b""
+        self._scan.clear()
+        self.dropped_access_units += 1
+
+    def push(self, packet: rtp.RtpPacket) -> VideoAccessUnit | None:
+        payload = packet.payload
+        if len(payload) < 8:
+            self._drop()
+            return None
+        offset = int.from_bytes(payload[1:4], "big")
+        jpeg_type = int(payload[4])
+        quality = int(payload[5])
+        width = int(payload[6])
+        height = int(payload[7])
+        cursor = 8
+        dri = 0
+        if jpeg_type & 0x40:
+            if len(payload) < cursor + 4:
+                self._drop()
+                return None
+            dri = int.from_bytes(payload[cursor : cursor + 2], "big")
+            cursor += 4
+            jpeg_type &= ~0x40
+        if jpeg_type not in {0, 1}:
+            self._drop()
+            return None
+        if offset == 0:
+            try:
+                if quality >= 128:
+                    if len(payload) < cursor + 4:
+                        raise ValueError("missing RFC 2435 quantization header")
+                    precision = payload[cursor + 1]
+                    table_len = int.from_bytes(payload[cursor + 2 : cursor + 4], "big")
+                    cursor += 4
+                    if precision or table_len not in {0, 64, 128}:
+                        raise ValueError("unsupported RFC 2435 quantization header")
+                    if table_len:
+                        if len(payload) < cursor + table_len:
+                            raise ValueError("truncated RFC 2435 quantization tables")
+                        quantizers = bytes(payload[cursor : cursor + table_len])
+                        cursor += table_len
+                        if quality < 255:
+                            self._dynamic_quantizers[quality] = quantizers
+                    else:
+                        quantizers = self._dynamic_quantizers.get(quality, b"")
+                        if not quantizers:
+                            raise ValueError("unknown RFC 2435 quantization tables")
+                else:
+                    quantizers = _jpeg_quantizers(quality)
+                self._header = _jpeg_interchange_header(
+                    jpeg_type=jpeg_type,
+                    width_blocks=width,
+                    height_blocks=height,
+                    quantizers=quantizers,
+                    dri=dri,
+                )
+            except ValueError:
+                self._drop()
+                return None
+            self._timestamp = packet.timestamp
+            self._scan.clear()
+        elif self._timestamp != packet.timestamp or offset != len(self._scan):
+            self._drop()
+            return None
+        frame_data = payload[cursor:]
+        if offset != len(self._scan) or len(self._scan) + len(frame_data) > MAX_ACCESS_UNIT_BYTES:
+            self._drop()
+            return None
+        self._scan.extend(frame_data)
+        if not packet.marker:
+            return None
+        if self._timestamp != packet.timestamp or not self._header or not self._scan:
+            self._drop()
+            return None
+        data = self._header + bytes(self._scan) + b"\xff\xd9"
+        timestamp = int(packet.timestamp)
+        self._timestamp = None
+        self._header = b""
+        self._scan.clear()
+        return VideoAccessUnit(data, timestamp, True, "JPEG")
+
+
+def packetize_vp8(
+    access_unit: bytes,
+    *,
+    payload_type: int,
+    sequence: int,
+    timestamp: int,
+    ssrc: int,
+    max_payload: int = DEFAULT_MAX_RTP_PAYLOAD,
+) -> list[rtp.RtpPacket]:
+    """Packetize a VP8 frame using the minimal one-byte payload descriptor."""
+
+    if not access_unit or max_payload < 2:
+        raise ValueError("invalid VP8 access unit or payload limit")
+    chunk_size = int(max_payload) - 1
+    out: list[rtp.RtpPacket] = []
+    current = int(sequence) & 0xFFFF
+    for offset in range(0, len(access_unit), chunk_size):
+        end = min(len(access_unit), offset + chunk_size)
+        descriptor = 0x10 if offset == 0 else 0x00
+        out.append(
+            rtp.RtpPacket(
+                payload_type=int(payload_type),
+                sequence=current,
+                timestamp=int(timestamp) & 0xFFFFFFFF,
+                ssrc=int(ssrc) & 0xFFFFFFFF,
+                payload=bytes((descriptor,)) + access_unit[offset:end],
+                marker=end == len(access_unit),
+            )
+        )
+        current = rtp.next_sequence(current)
+    return out
 
 
 def packetize_annex_b(

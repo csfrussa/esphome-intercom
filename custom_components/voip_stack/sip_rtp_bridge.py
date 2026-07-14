@@ -107,6 +107,7 @@ class SipRtpRelay:
         self._on_release = on_release
         self.on_dtmf = on_dtmf
         self._released = False
+        self.video_relay: Any | None = None
         self.forwarded = 0
         self.dropped = 0
         self.left_rx_packets = 0
@@ -210,6 +211,15 @@ class SipRtpRelay:
                 left_sock.close()
             if right_sock is not None:
                 right_sock.close()
+            if self.video_relay is not None:
+                await self.video_relay.stop()
+                self.video_relay = None
+            raise
+        try:
+            if self.video_relay is not None:
+                await self.video_relay.start()
+        except BaseException:
+            await self.stop()
             raise
         _LOGGER.info(
             "SIP RTP relay listening left=%s right=%s left=%s->%s right=%s->%s",
@@ -246,6 +256,9 @@ class SipRtpRelay:
             self.left_tx_packets,
             self.right_tx_packets,
         )
+        if self.video_relay is not None:
+            await self.video_relay.stop()
+            self.video_relay = None
         if self.left_transport is not None:
             self.left_transport.close()
             self.left_transport = None
@@ -259,6 +272,13 @@ class SipRtpRelay:
             if self._on_release is not None and not self._released:
                 self._released = True
                 self._on_release((self.left_port, self.right_port))
+
+    def attach_video_relay(self, relay: Any) -> None:
+        """Attach one call-owned video relay to the audio relay lifecycle."""
+
+        if self.video_relay is not None and self.video_relay is not relay:
+            raise RuntimeError("video relay already attached")
+        self.video_relay = relay
 
     def handle_packet(self, side: str, data: bytes, addr) -> None:
         source = self.left if side == "left" else self.right
@@ -350,7 +370,7 @@ class SipRtpRelay:
         dest.timestamp = timestamp
 
     def snapshot(self) -> dict[str, Any]:
-        return {
+        snapshot = {
             "left_port": self.left_port,
             "right_port": self.right_port,
             "left_peer": f"{self.left.host}:{self.left.port}",
@@ -370,3 +390,6 @@ class SipRtpRelay:
             "right_rx_format": self.right.audio_format.wire_token(),
             "right_tx_format": self.right.outbound_audio_format.wire_token(),
         }
+        if self.video_relay is not None:
+            snapshot["video"] = self.video_relay.snapshot()
+        return snapshot

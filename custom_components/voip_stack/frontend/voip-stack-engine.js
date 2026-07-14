@@ -11,10 +11,9 @@ const MODULE_VERSION = (() => {
 })();
 const { RINGTONE_REPEAT_MS, playVoipRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
-const { VoipStackVideo } =
-  await import(`./voip-stack-video.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
 const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call";
+const VIDEO_CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
 const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
@@ -62,11 +61,12 @@ class VoipStackEngine extends EventTarget {
     this._ringtoneContext = null;
     this._ringtoneTimer = null;
     this._audioFrameBuffer = null;
-    this._video = new VoipStackVideo();
+    this._video = null;
+    this._videoLoadPromise = null;
+    this._videoCanvas = null;
     this._videoAttachGeneration = 0;
     this._videoAttachPromise = null;
     this._videoAttachCallId = "";
-    this._video.addEventListener("state", () => this._emit());
 
     window.addEventListener("pagehide", () => {
       this._ringtoneRequests.clear();
@@ -77,7 +77,7 @@ class VoipStackEngine extends EventTarget {
 
   configure(hass) {
     this._hass = hass;
-    this._video.configure(hass);
+    if (this._video) this._video.configure(hass);
     const conn = hass?.connection || null;
     if (!conn || conn === this._busConnection) return;
     if (this._busUnsub) {
@@ -150,25 +150,58 @@ class VoipStackEngine extends EventTarget {
   }
 
   get stats() {
-    return { ...this._stats, video: this._video.stats };
+    return { ...this._stats, video: this._video?.stats || {} };
   }
 
   get videoActive() {
-    return this._video.active;
+    return Boolean(this._video?.active);
   }
 
   get videoVisible() {
-    return this._video.visible;
+    return Boolean(this._video?.visible);
   }
 
   setVideoCanvas(canvas) {
-    this._video.setCanvas(canvas);
+    this._videoCanvas = canvas || null;
+    if (this._video) this._video.setCanvas(this._videoCanvas);
+  }
+
+  get videoCanSend() {
+    return Boolean(this._video?.canSend);
+  }
+
+  get videoCameraEnabled() {
+    if (this._video) return Boolean(this._video.cameraEnabled);
+    try { return localStorage.getItem(VIDEO_CAMERA_STORAGE_KEY) === "true"; }
+    catch (_) { return false; }
+  }
+
+  async setVideoCameraEnabled(enabled) {
+    const video = await this._loadVideo();
+    await video.setCameraEnabled(enabled);
+  }
+
+  async _loadVideo() {
+    if (this._video) return this._video;
+    if (!this._videoLoadPromise) {
+      this._videoLoadPromise = import(`./voip-stack-video.js?v=${encodeURIComponent(MODULE_VERSION)}`)
+        .then(({ VoipStackVideo }) => {
+          const video = new VoipStackVideo();
+          if (this._hass) video.configure(this._hass);
+          video.setCanvas(this._videoCanvas);
+          video.addEventListener("state", () => this._emit());
+          this._video = video;
+          return video;
+        })
+        .finally(() => { this._videoLoadPromise = null; });
+    }
+    return this._videoLoadPromise;
   }
 
   statsText() {
     if (!this.active) return "";
-    const video = this._video.active
-      ? ` | Video TX: ${this._video.stats.sent} RX: ${this._video.stats.received} Drop: ${this._video.stats.dropped}`
+    const video = this._video?.active
+      ? ` | Video TX: ${this._video.stats.sent} RX: ${this._video.stats.received} Render: ${this._video.stats.rendered || 0} Drop: ${this._video.stats.dropped} Gap: ${Math.round(this._video.stats.max_frame_gap_ms || 0)}ms Src: ${Math.round(this._video.stats.max_source_gap_ms || 0)}ms Arr: ${Math.round(this._video.stats.max_arrival_gap_ms || 0)}ms Playout: ${Math.round(this._video.stats.playout_ms || 0)}ms`
       : "";
     return `Sent: ${this._stats.sent} | Recv: ${this._stats.received} | TxDrop: ${this._stats.tx_dropped || 0} | Buf: ${this._stats.buffered_frames} | Und: ${this._stats.underruns || 0}${video}`;
   }
@@ -558,6 +591,7 @@ class VoipStackEngine extends EventTarget {
       target_name: context.callee || target.name || "",
       callee: context.callee || target.name || "",
       call_id: context.call_id || "",
+      send_video: Boolean(context.sendVideo),
     });
     if (!["calling", "connecting", "remote_ringing", "ringing", "in_call"].includes(String(reply?.state || "").toLowerCase())) {
       this._setState("IDLE");
@@ -636,11 +670,13 @@ class VoipStackEngine extends EventTarget {
       this._videoAttachGeneration++;
       this._videoAttachPromise = null;
       this._videoAttachCallId = "";
-      await this._video.close();
+      if (this._video) await this._video.close();
       return;
     }
 
-    if (this._video.active && this._video.callId === wantedCallId) return;
+    const video = await this._loadVideo();
+
+    if (video.active && video.callId === wantedCallId) return;
     if (this._videoAttachPromise && this._videoAttachCallId === wantedCallId) {
       await this._videoAttachPromise;
       return;
@@ -650,13 +686,13 @@ class VoipStackEngine extends EventTarget {
     this._videoAttachCallId = wantedCallId;
     const attach = (async () => {
       try {
-        await this._video.start(statePayload);
+        await video.start(statePayload);
         if (
           generation !== this._videoAttachGeneration ||
           !wantedCallId ||
           this._callId !== wantedCallId
         ) {
-          if (this._video.callId === wantedCallId) await this._video.close();
+          if (video.callId === wantedCallId) await video.close();
         }
       } catch (err) {
         if (generation !== this._videoAttachGeneration) return;
@@ -690,7 +726,7 @@ class VoipStackEngine extends EventTarget {
       try { ws.close(); } catch (_) {}
     }
     this._callId = "";
-    await this._video.close();
+    if (this._video) await this._video.close();
     await this._cleanupAudio("close");
   }
 

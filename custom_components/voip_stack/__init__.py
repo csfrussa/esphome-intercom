@@ -30,6 +30,7 @@ from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
     CONF_EXPERIMENTAL_VIDEO,
+    CONF_VIDEO_CAMERA_SEND,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_TRUNK_DTMF_ENABLED,
     CONF_TRUNK_DTMF_TIMEOUT_MS,
@@ -623,7 +624,10 @@ async def _track_outbound_sip_client(
                 selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
                 selected_tx_rtp_format=client.dialog.send_format.wire_token(),
                 selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
-                video_active=client.dialog.video_format is not None,
+                video_active=bool(
+                    client.dialog.video_format is not None
+                    and client.dialog.local_video_direction != "inactive"
+                ),
                 video_format=(
                     client.dialog.video_format.wire_token()
                     if client.dialog.video_format is not None
@@ -821,12 +825,28 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         return
 
     preanswered = registry.preanswered.pop(call_id, None)
-    from .sdp import build_answer_directional, local_direction_for_remote
+    from .sdp import (
+        browser_video_send_supported,
+        build_answer_directional,
+        constrained_video_direction,
+    )
 
     local_rtp_port = int((preanswered or {}).get("local_rtp_port") or 0)
     local_video_rtp_port = 0
     video_rtp_socket = None
     media_reservation = (preanswered or {}).get("rtp_reservation")
+    camera_send_enabled = bool(
+        _get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)
+    ) and bool(call.data.get("send_video", False))
+    video_direction = (
+        constrained_video_direction(
+            invite.video_format.direction,
+            allow_send=camera_send_enabled
+            and browser_video_send_supported(invite.video_format),
+        )
+        if invite.video_format is not None
+        else "inactive"
+    )
     if local_rtp_port:
         _LOGGER.info("SIP answered pre-answered trunk call_id=%s", call_id)
     else:
@@ -853,6 +873,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
             video_format=invite.video_format,
+            video_direction=video_direction,
         )
         if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
             if video_rtp_socket is not None:
@@ -866,6 +887,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         "invite": invite,
         "local_rtp_port": local_rtp_port,
         "local_video_rtp_port": local_video_rtp_port,
+        "video_direction": video_direction,
         "video_rtp_socket": video_rtp_socket,
         "rtp_reservation": media_reservation,
     }
@@ -895,10 +917,14 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         selected_rx_format=invite.recv_format.audio_format.wire_token(),
         selected_tx_rtp_format=invite.send_format.wire_token(),
         selected_rx_rtp_format=invite.recv_format.wire_token(),
-        video_active=bool(invite.video_format is not None and local_video_rtp_port),
+        video_active=bool(
+            invite.video_format is not None
+            and local_video_rtp_port
+            and video_direction != "inactive"
+        ),
         video_format=(invite.video_format.wire_token() if invite.video_format else ""),
         video_direction=(
-            local_direction_for_remote(invite.video_format.direction)
+            video_direction
             if invite.video_format is not None and local_video_rtp_port
             else "inactive"
         ),
@@ -1417,7 +1443,16 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     else:
         local_rtp_port = _allocate_sip_rtp_port(hass)
         local_video_rtp_port = 0
-    from .sdp import DEFAULT_H264_FORMAT
+    from .sdp import DEFAULT_VIDEO_FORMATS, browser_video_send_supported
+
+    camera_send_enabled = bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False)) and bool(
+        call.data.get("send_video", False)
+    )
+    offered_video_formats = (
+        tuple(item for item in DEFAULT_VIDEO_FORMATS if browser_video_send_supported(item))
+        if camera_send_enabled
+        else DEFAULT_VIDEO_FORMATS
+    )
 
     client = SipCallClient(
         local_ip=local_ip,
@@ -1437,7 +1472,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         outbound_proxy=str(trunk_cfg.get(CONF_TRUNK_OUTBOUND_PROXY) or "") if use_trunk else "",
         include_common_codecs=use_trunk or use_registered_contact_codecs or video_enabled,
         local_video_rtp_port=local_video_rtp_port,
-        video_format=DEFAULT_H264_FORMAT if video_enabled else None,
+        video_formats=offered_video_formats if video_enabled else (),
+        video_direction=("sendrecv" if camera_send_enabled else "recvonly"),
         media_reservation=video_reservation,
         video_rtp_socket=video_rtp_socket,
     )
@@ -1477,13 +1513,12 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     if result == TerminalReason.TRANSPORT_UNREACHABLE.value and route.entry is not None and route.entry.metadata.get("registered"):
         await _mark_sip_account_unreachable(hass, route.entry.id)
     public_result = _sip_public_state(result)
-    await _track_outbound_sip_client(
-        hass,
-        client=client,
-        result=result,
-        target=target,
-        sip_uri=route_uri,
-    )
+    # Publish the first result before starting the detached final-response
+    # watcher. A fast peer can place 180 and 200 on the socket back-to-back:
+    # if the watcher runs first it publishes IN_CALL, then this coroutine used
+    # to regress the same call to REMOTE_RINGING from the earlier 180 result.
+    # Keeping the signaling order here makes the backend snapshot monotonic;
+    # the card remains a plain mirror of that authoritative state.
     if public_result == CallState.REMOTE_RINGING.value or result == "ringing":
         _set_ha_softphone_call_state(
             hass,
@@ -1512,7 +1547,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
             selected_tx_rtp_format=client.dialog.send_format.wire_token(),
             selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
-            video_active=client.dialog.video_format is not None,
+            video_active=bool(
+                client.dialog.video_format is not None
+                and client.dialog.local_video_direction != "inactive"
+            ),
             video_format=(client.dialog.video_format.wire_token() if client.dialog.video_format else ""),
             video_direction=client.dialog.local_video_direction,
             sip_status_code=200,
@@ -1536,6 +1574,13 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             last_sip_event=client.last_sip_event or "SIP_RESPONSE",
             sip_uri=route_uri,
         )
+    await _track_outbound_sip_client(
+        hass,
+        client=client,
+        result=result,
+        target=target,
+        sip_uri=route_uri,
+    )
     _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route_uri, result)
 
 
@@ -1653,6 +1698,10 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
         # unload, so restore just those idempotent subscriptions here.
         _register_esp_state_event_bridge(hass)
         _register_phonebook_service_event_sync(hass)
+        if _get_transport_config(hass).get(CONF_EXPERIMENTAL_VIDEO, False):
+            from .video_ws_view import async_register_video_ws_view
+
+            async_register_video_ws_view(hass)
         return
 
     hass.data.setdefault(DOMAIN, {})
@@ -1662,8 +1711,10 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
     async_register_websocket_api(hass)
     from .audio_ws_view import async_register_audio_ws_view
     async_register_audio_ws_view(hass)
-    from .video_ws_view import async_register_video_ws_view
-    async_register_video_ws_view(hass)
+    if _get_transport_config(hass).get(CONF_EXPERIMENTAL_VIDEO, False):
+        from .video_ws_view import async_register_video_ws_view
+
+        async_register_video_ws_view(hass)
     await _async_register_services(hass)
     _register_esp_state_event_bridge(hass)
     _register_phonebook_service_event_sync(hass)

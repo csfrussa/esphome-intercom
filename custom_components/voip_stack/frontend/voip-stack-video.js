@@ -3,6 +3,11 @@ const VIDEO_HEADER_BYTES = 6;
 const MAX_VIDEO_WS_BUFFER = 2 * 1024 * 1024;
 const MAX_PENDING_DECODE_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING_DECODE_FRAMES = 60;
+const VIDEO_PLAYOUT_MIN_MS = 80;
+const VIDEO_PLAYOUT_MAX_MS = 200;
+const MAX_DECODED_FRAME_QUEUE = 12;
+const DECODED_FRAME_CATCHUP_TARGET = 3;
+const CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 
 export class VoipStackVideo extends EventTarget {
   constructor() {
@@ -19,6 +24,15 @@ export class VoipStackVideo extends EventTarget {
     this._cameraStream = null;
     this._cameraReader = null;
     this._encodeTask = null;
+    this._encoding = "H264";
+    this._clockRate = 90000;
+    this._negotiated = null;
+    this._cameraAllowed = false;
+    try {
+      this._cameraEnabled = localStorage.getItem(CAMERA_STORAGE_KEY) === "true";
+    } catch (_) {
+      this._cameraEnabled = false;
+    }
     this._rtpTimestampBase = null;
     this._rtpTimestampLast = null;
     this._rtpTimestampTicks = 0;
@@ -26,7 +40,37 @@ export class VoipStackVideo extends EventTarget {
     this._pendingDecode = [];
     this._pendingDecodeBytes = 0;
     this._generation = 0;
-    this._stats = { received: 0, sent: 0, dropped: 0, decode_errors: 0 };
+    this._frameQueue = [];
+    this._renderHandle = 0;
+    this._playoutBaseWall = null;
+    this._playoutBaseTimestamp = null;
+    this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
+    this._lastRenderedAt = 0;
+    this._lastRenderedTimestamp = null;
+    this._lastDecodedAt = 0;
+    this._lastDecodedTimestamp = null;
+    this._stats = this._emptyStats();
+  }
+
+  _emptyStats() {
+    return {
+      received: 0,
+      sent: 0,
+      rendered: 0,
+      dropped: 0,
+      dropped_decode_backpressure: 0,
+      dropped_timestamp_regression: 0,
+      dropped_frame_queue: 0,
+      dropped_render_coalesce: 0,
+      dropped_pending_decode: 0,
+      decode_errors: 0,
+      max_frame_gap_ms: 0,
+      max_arrival_gap_ms: 0,
+      max_source_gap_ms: 0,
+      render_gaps_over_100_ms: 0,
+      render_gaps_over_250_ms: 0,
+      playout_ms: VIDEO_PLAYOUT_MIN_MS,
+    };
   }
 
   configure(hass) {
@@ -49,6 +93,31 @@ export class VoipStackVideo extends EventTarget {
     return { ...this._stats };
   }
 
+  get canSend() {
+    return this._cameraAllowed;
+  }
+
+  get cameraEnabled() {
+    return this._cameraEnabled;
+  }
+
+  async setCameraEnabled(enabled) {
+    this._cameraEnabled = Boolean(enabled);
+    try { localStorage.setItem(CAMERA_STORAGE_KEY, String(this._cameraEnabled)); } catch (_) {}
+    if (!this._cameraEnabled) {
+      await this._cleanupSender();
+      this._emit();
+      return;
+    }
+    if (!this._active || !this._cameraAllowed || !this._negotiated || this._encoder) return;
+    const generation = this._generation;
+    await this._setupEncoder(String(this._negotiated.codec || "avc1.42E01F"), generation);
+    if (generation === this._generation) {
+      this._canSend = true;
+      this._emit();
+    }
+  }
+
   setCanvas(canvas) {
     this._canvas = canvas || null;
   }
@@ -60,6 +129,9 @@ export class VoipStackVideo extends EventTarget {
         visible: this.visible,
         can_receive: this._canReceive,
         can_send: this._canSend,
+        camera_available: this._cameraAllowed,
+        camera_enabled: this._cameraEnabled,
+        encoding: this._encoding,
         call_id: this._callId,
         stats: this.stats,
       },
@@ -86,7 +158,7 @@ export class VoipStackVideo extends EventTarget {
     }
     const generation = ++this._generation;
     this._callId = callId;
-    this._stats = { received: 0, sent: 0, dropped: 0, decode_errors: 0 };
+    this._stats = this._emptyStats();
     const ws = new WebSocket(await this._wsUrl(callId));
     ws.binaryType = "arraybuffer";
     this._ws = ws;
@@ -108,7 +180,9 @@ export class VoipStackVideo extends EventTarget {
         }
         return;
       }
-      if (!this._decoder || this._decoder.state !== "configured") {
+      if (this._encoding === "JPEG" && this._canReceive) {
+        this._decodeMessage(event.data);
+      } else if (!this._decoder || this._decoder.state !== "configured") {
         this._bufferDecodeMessage(event.data);
       } else {
         this._decodeMessage(event.data);
@@ -139,6 +213,9 @@ export class VoipStackVideo extends EventTarget {
         )),
       ]);
       if (!this._isCurrent(generation, ws, callId)) return false;
+      this._negotiated = negotiated;
+      this._encoding = String(negotiated?.encoding || "H264").toUpperCase();
+      this._clockRate = Math.max(1, Number(negotiated?.clock_rate || 90000));
       await this._setupCodecs(negotiated, generation);
       if (!this._isCurrent(generation, ws, callId)) return false;
       this._active = true;
@@ -160,36 +237,48 @@ export class VoipStackVideo extends EventTarget {
     let usablePaths = 0;
     if (negotiated?.can_receive) {
       try {
-        if (typeof VideoDecoder === "undefined") {
-          throw new Error("WebCodecs VideoDecoder is unavailable");
+        if (this._encoding === "JPEG") {
+          if (typeof createImageBitmap !== "function") {
+            throw new Error("browser cannot decode JPEG video frames");
+          }
+          this._canReceive = true;
+          this._active = true;
+          usablePaths++;
+          this._flushPendingDecode();
+          this._emit();
+        } else {
+          if (typeof VideoDecoder === "undefined") {
+            throw new Error("WebCodecs VideoDecoder is unavailable");
+          }
+          const decoderConfig = await this._supportedConfig(VideoDecoder, {
+            codec,
+            optimizeForLatency: true,
+          });
+          if (generation !== this._generation) throw new Error("SIP video session was superseded");
+          const support = await VideoDecoder.isConfigSupported(decoderConfig);
+          if (generation !== this._generation) throw new Error("SIP video session was superseded");
+          if (!support?.supported) throw new Error(`browser cannot decode ${codec}`);
+          this._decoder = new VideoDecoder({
+            output: (frame) => this._queueDecodedFrame(frame),
+            error: () => {
+              this._stats.decode_errors++;
+              this._emit();
+            },
+          });
+          this._decoder.configure(support.config || decoderConfig);
+          this._canReceive = true;
+          this._active = true;
+          usablePaths++;
+          this._flushPendingDecode();
+          this._emit();
         }
-        const decoderConfig = await this._supportedConfig(VideoDecoder, {
-          codec,
-          optimizeForLatency: true,
-        });
-        if (generation !== this._generation) throw new Error("SIP video session was superseded");
-        const support = await VideoDecoder.isConfigSupported(decoderConfig);
-        if (generation !== this._generation) throw new Error("SIP video session was superseded");
-        if (!support?.supported) throw new Error(`browser cannot decode ${codec}`);
-        this._decoder = new VideoDecoder({
-          output: (frame) => this._drawFrame(frame),
-          error: () => {
-            this._stats.decode_errors++;
-            this._emit();
-          },
-        });
-        this._decoder.configure(support.config || decoderConfig);
-        this._canReceive = true;
-        this._active = true;
-        usablePaths++;
-        this._flushPendingDecode();
-        this._emit();
       } catch (err) {
         if (generation === this._generation) this._cleanupReceiver();
         failures.push(`receive: ${err?.message || String(err)}`);
       }
     }
-    if (negotiated?.can_send) {
+    this._cameraAllowed = Boolean(negotiated?.can_send);
+    if (this._cameraAllowed && this._cameraEnabled) {
       const setupSender = async () => {
         try {
           await this._setupEncoder(codec, generation);
@@ -217,6 +306,10 @@ export class VoipStackVideo extends EventTarget {
         if (failure) failures.push(failure);
         else usablePaths++;
       }
+    } else if (this._cameraAllowed) {
+      // A send-only dialog may wait for an explicit user camera choice. Keep
+      // the authenticated media attachment alive without prompting on load.
+      usablePaths++;
     }
     if (!usablePaths) {
       throw new Error(failures.join("; ") || "No negotiated SIP video direction is usable");
@@ -245,9 +338,13 @@ export class VoipStackVideo extends EventTarget {
       },
       audio: false,
     });
-    if (generation !== this._generation) {
+    if (generation !== this._generation || !this._cameraEnabled) {
       stream.getTracks().forEach((item) => item.stop());
-      throw new Error("SIP video session was superseded");
+      throw new Error(
+        generation !== this._generation
+          ? "SIP video session was superseded"
+          : "Browser camera transmission was disabled"
+      );
     }
     this._cameraStream = stream;
     const track = stream.getVideoTracks()[0];
@@ -263,7 +360,7 @@ export class VoipStackVideo extends EventTarget {
       framerate,
       bitrate: 600000,
       latencyMode: "realtime",
-      avc: { format: "annexb" },
+      ...(this._encoding === "H264" ? { avc: { format: "annexb" } } : {}),
     });
     if (generation !== this._generation) throw new Error("SIP video session was superseded");
     const support = await VideoEncoder.isConfigSupported(encoderConfig);
@@ -335,7 +432,7 @@ export class VoipStackVideo extends EventTarget {
     const view = new DataView(frame.buffer);
     frame[0] = VIDEO_ACCESS_UNIT;
     frame[1] = chunk.type === "key" ? 1 : 0;
-    const rtpTimestamp = Math.round(Number(chunk.timestamp || 0) * 90000 / 1000000) >>> 0;
+    const rtpTimestamp = Math.round(Number(chunk.timestamp || 0) * this._clockRate / 1000000) >>> 0;
     view.setUint32(2, rtpTimestamp, false);
     frame.set(payload, VIDEO_HEADER_BYTES);
     ws.send(frame);
@@ -344,11 +441,16 @@ export class VoipStackVideo extends EventTarget {
   }
 
   _decodeMessage(buffer) {
+    if (this._encoding === "JPEG") {
+      this._decodeJpegMessage(buffer);
+      return;
+    }
     if (!this._decoder || this._decoder.state !== "configured") return;
     const bytes = new Uint8Array(buffer);
     if (bytes.byteLength <= VIDEO_HEADER_BYTES || bytes[0] !== VIDEO_ACCESS_UNIT) return;
     if (this._decoder.decodeQueueSize > 3 && !(bytes[1] & 1)) {
       this._stats.dropped++;
+      this._stats.dropped_decode_backpressure++;
       return;
     }
     const rtpTimestamp = new DataView(buffer).getUint32(2, false);
@@ -364,6 +466,32 @@ export class VoipStackVideo extends EventTarget {
     } catch (_) {
       this._stats.decode_errors++;
     }
+  }
+
+  _decodeJpegMessage(buffer) {
+    const bytes = new Uint8Array(buffer);
+    if (bytes.byteLength <= VIDEO_HEADER_BYTES || bytes[0] !== VIDEO_ACCESS_UNIT) return;
+    const rtpTimestamp = new DataView(buffer).getUint32(2, false);
+    const timestamp = this._unwrapRtpTimestamp(rtpTimestamp);
+    const generation = this._generation;
+    const payload = bytes.slice(VIDEO_HEADER_BYTES);
+    void createImageBitmap(new Blob([payload], { type: "image/jpeg" })).then((bitmap) => {
+      if (generation !== this._generation || !this._active) {
+        bitmap.close();
+        return;
+      }
+      this._stats.received++;
+      this._queueDecodedFrame({
+        bitmap,
+        timestamp,
+        displayWidth: bitmap.width,
+        displayHeight: bitmap.height,
+        close: () => bitmap.close(),
+      });
+      if ((this._stats.received & 31) === 0) this._emit();
+    }).catch(() => {
+      if (generation === this._generation) this._stats.decode_errors++;
+    });
   }
 
   _bufferDecodeMessage(buffer) {
@@ -384,6 +512,7 @@ export class VoipStackVideo extends EventTarget {
       this._pendingDecodeBytes + bytes.byteLength > MAX_PENDING_DECODE_BYTES
     ) {
       this._stats.dropped++;
+      this._stats.dropped_pending_decode++;
       return;
     }
     this._pendingDecode.push(buffer);
@@ -407,7 +536,96 @@ export class VoipStackVideo extends EventTarget {
     const delta = (value - this._rtpTimestampLast) >>> 0;
     if (delta < 0x80000000) this._rtpTimestampTicks += delta;
     this._rtpTimestampLast = value;
-    return Math.round(this._rtpTimestampTicks * 1000000 / 90000);
+    return Math.round(this._rtpTimestampTicks * 1000000 / this._clockRate);
+  }
+
+  _queueDecodedFrame(frame) {
+    if (!frame) return;
+    const now = performance.now();
+    const timestamp = Number(frame.timestamp || 0);
+    if (this._lastRenderedTimestamp !== null && timestamp < this._lastRenderedTimestamp) {
+      frame.close();
+      this._stats.dropped++;
+      this._stats.dropped_timestamp_regression++;
+      return;
+    }
+    if (this._lastDecodedAt) {
+      this._stats.max_arrival_gap_ms = Math.max(
+        this._stats.max_arrival_gap_ms,
+        Math.round(now - this._lastDecodedAt),
+      );
+    }
+    if (this._lastDecodedTimestamp !== null && timestamp >= this._lastDecodedTimestamp) {
+      this._stats.max_source_gap_ms = Math.max(
+        this._stats.max_source_gap_ms,
+        Math.round((timestamp - this._lastDecodedTimestamp) / 1000),
+      );
+    }
+    this._lastDecodedAt = now;
+    this._lastDecodedTimestamp = timestamp;
+    if (this._playoutBaseWall === null) {
+      this._playoutBaseWall = now + VIDEO_PLAYOUT_MIN_MS;
+      this._playoutBaseTimestamp = timestamp;
+      this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
+    } else {
+      const expected = this._playoutBaseWall + (Number(frame.timestamp || 0) - this._playoutBaseTimestamp) / 1000;
+      const lateBy = now - expected;
+      if (lateBy > 12 && this._playoutDelayMs < VIDEO_PLAYOUT_MAX_MS) {
+        const increase = Math.min(VIDEO_PLAYOUT_MAX_MS - this._playoutDelayMs, lateBy);
+        this._playoutDelayMs += increase;
+        this._playoutBaseWall += increase;
+      }
+    }
+    this._stats.playout_ms = Math.round(this._playoutDelayMs);
+    this._frameQueue.push(frame);
+    this._frameQueue.sort((left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0));
+    if (this._frameQueue.length > MAX_DECODED_FRAME_QUEUE) {
+      // Decoder setup and a browser reload can release a complete buffered GOP
+      // in one burst. Dropping exactly one oldest frame per arrival leaves the
+      // queue perpetually one frame ahead of the playout clock. Catch up once
+      // to a small live-edge queue and start a fresh bounded playout window.
+      while (this._frameQueue.length > DECODED_FRAME_CATCHUP_TARGET) {
+        this._frameQueue.shift()?.close();
+        this._stats.dropped++;
+        this._stats.dropped_frame_queue++;
+      }
+      const nextTimestamp = Number(this._frameQueue[0]?.timestamp || timestamp);
+      this._playoutBaseTimestamp = nextTimestamp;
+      this._playoutBaseWall = now + VIDEO_PLAYOUT_MIN_MS;
+      this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
+      this._stats.playout_ms = VIDEO_PLAYOUT_MIN_MS;
+    }
+    if (!this._renderHandle) this._renderHandle = requestAnimationFrame((time) => this._renderFrame(time));
+  }
+
+  _renderFrame(now) {
+    this._renderHandle = 0;
+    if (this._playoutBaseWall === null || this._playoutBaseTimestamp === null) return;
+    const dueTimestamp = this._playoutBaseTimestamp + Math.max(0, now - this._playoutBaseWall) * 1000;
+    let selected = null;
+    while (this._frameQueue.length && Number(this._frameQueue[0].timestamp || 0) <= dueTimestamp) {
+      if (selected) {
+        selected.close();
+        this._stats.dropped++;
+        this._stats.dropped_render_coalesce++;
+      }
+      selected = this._frameQueue.shift();
+    }
+    if (selected) {
+      this._drawFrame(selected);
+      if (this._lastRenderedAt) {
+        const gap = Math.round(now - this._lastRenderedAt);
+        this._stats.max_frame_gap_ms = Math.max(this._stats.max_frame_gap_ms, gap);
+        if (gap > 100) this._stats.render_gaps_over_100_ms++;
+        if (gap > 250) this._stats.render_gaps_over_250_ms++;
+      }
+      this._lastRenderedAt = now;
+      this._lastRenderedTimestamp = Number(selected.timestamp || 0);
+      this._stats.rendered++;
+    }
+    if (this._frameQueue.length) {
+      this._renderHandle = requestAnimationFrame((time) => this._renderFrame(time));
+    }
   }
 
   _drawFrame(frame) {
@@ -421,7 +639,7 @@ export class VoipStackVideo extends EventTarget {
         canvas.height = height;
       }
       const context = canvas.getContext("2d", { alpha: false, desynchronized: true });
-      context.drawImage(frame, 0, 0, width, height);
+      context.drawImage(frame.bitmap || frame, 0, 0, width, height);
     } finally {
       frame.close();
     }
@@ -450,6 +668,19 @@ export class VoipStackVideo extends EventTarget {
     this._encodedFrames = 0;
     this._pendingDecode = [];
     this._pendingDecodeBytes = 0;
+    this._negotiated = null;
+    this._cameraAllowed = false;
+    if (this._renderHandle) cancelAnimationFrame(this._renderHandle);
+    this._renderHandle = 0;
+    for (const frame of this._frameQueue) frame.close();
+    this._frameQueue = [];
+    this._playoutBaseWall = null;
+    this._playoutBaseTimestamp = null;
+    this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
+    this._lastRenderedAt = 0;
+    this._lastRenderedTimestamp = null;
+    this._lastDecodedAt = 0;
+    this._lastDecodedTimestamp = null;
     this._emit();
   }
 
@@ -480,6 +711,10 @@ export class VoipStackVideo extends EventTarget {
     }
     this._pendingDecode = [];
     this._pendingDecodeBytes = 0;
+    if (this._renderHandle) cancelAnimationFrame(this._renderHandle);
+    this._renderHandle = 0;
+    for (const frame of this._frameQueue) frame.close();
+    this._frameQueue = [];
     this._canReceive = false;
   }
 }

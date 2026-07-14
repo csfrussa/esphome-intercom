@@ -36,9 +36,11 @@ class SipInvite:
     recv_format: sdp.RtpPcmFormat
     remote_rtp_host: str
     remote_rtp_port: int
-    video_format: sdp.RtpH264Format | None = None
+    video_format: sdp.RtpVideoFormat | None = None
     remote_video_rtp_host: str = ""
     remote_video_rtp_port: int = 0
+    remote_video_rtcp_port: int = 0
+    remote_video_rtcp_mux: bool = False
 
     @property
     def selected_format(self) -> sdp.RtpPcmFormat:
@@ -170,6 +172,25 @@ def _same_dialog_request(request: sip.SipMessage, dialog: _ActiveDialog, addr: t
     )
 
 
+def _same_video_media(previous: SipInvite, updated: SipInvite) -> bool:
+    """Return whether an in-dialog request leaves video media unchanged.
+
+    The current SIP profile does not renegotiate an established video RTP
+    attachment. Accept session refreshes, but reject changes that the active
+    browser socket or B2BUA relay cannot apply atomically.
+    """
+
+    if previous.video_format is None or updated.video_format is None:
+        return previous.video_format is updated.video_format
+    return bool(
+        previous.video_format == updated.video_format
+        and previous.remote_video_rtp_host == updated.remote_video_rtp_host
+        and previous.remote_video_rtp_port == updated.remote_video_rtp_port
+        and previous.remote_video_rtcp_port == updated.remote_video_rtcp_port
+        and previous.remote_video_rtcp_mux == updated.remote_video_rtcp_mux
+    )
+
+
 def _response_via_header(request: sip.SipMessage, addr) -> str:
     values = request.header_values("Via")
     value = values[0] if values else ""
@@ -253,6 +274,8 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         send_override: SendHandler | None = None,
         signaling_transport: str = "UDP",
         enable_video: bool = False,
+        enable_video_transcoding: bool = False,
+        prefer_browser_video_send: bool = False,
     ) -> None:
         self.local_ip = local_ip
         self.local_sip_port = int(local_sip_port or 5060)
@@ -267,6 +290,8 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         self.send_override = send_override
         self.signaling_transport = (signaling_transport or "UDP").upper()
         self.enable_video = bool(enable_video)
+        self.enable_video_transcoding = bool(enable_video_transcoding)
+        self.prefer_browser_video_send = bool(prefer_browser_video_send)
         self.transport: asyncio.DatagramTransport | None = None
         self._closed_waiter: asyncio.Future[None] | None = None
         self.pending_invites: dict[str, _PendingInvite] = {}
@@ -591,6 +616,7 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                     == updated_invite.send_format.wire_token()
                     and previous_invite.recv_format.wire_token()
                     == updated_invite.recv_format.wire_token()
+                    and _same_video_media(previous_invite, updated_invite)
                 )
                 if not same_media:
                     self._send_response(
@@ -858,7 +884,24 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 ", ".join(sdp.offered_media_descriptions(request.body)),
             )
             remote = sdp.parse_sdp(request.body)
-            video_format = sdp.negotiate_h264(request.body) if self.enable_video else None
+            video_format = (
+                sdp.negotiate_video(
+                    request.body,
+                    accepted_encodings=(
+                        "H264",
+                        "VP8",
+                        "JPEG",
+                        "H263",
+                        "H263P",
+                        "H265",
+                    )
+                    if self.enable_video_transcoding
+                    else ("H264", "VP8", "JPEG"),
+                    prefer_browser_send=self.prefer_browser_video_send,
+                )
+                if self.enable_video
+                else None
+            )
             remote_video = sdp.parse_video_sdp(request.body) if video_format is not None else None
             caller = _identity_header(request.header("X-Voip-Stack-Caller-Name"))
             target = _identity_header(request.header("X-Voip-Stack-Dest-Name"))
@@ -883,6 +926,12 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 video_format=video_format,
                 remote_video_rtp_host=(str(remote_video["connection_ip"]) if remote_video else ""),
                 remote_video_rtp_port=(int(remote_video["media_port"]) if remote_video else 0),
+                remote_video_rtcp_port=(
+                    int(remote_video["rtcp_port"] or int(remote_video["media_port"]) + 1)
+                    if remote_video
+                    else 0
+                ),
+                remote_video_rtcp_mux=(bool(remote_video["rtcp_mux"]) if remote_video else False),
             )
         except Exception as err:
             _LOGGER.info("SIP INVITE parse failed: %s", err)
@@ -905,6 +954,8 @@ class SipUdpServer:
         on_register: RegisterHandler | None = None,
         on_info: InfoHandler | None = None,
         enable_video: bool = False,
+        enable_video_transcoding: bool = False,
+        prefer_browser_video_send: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -918,6 +969,8 @@ class SipUdpServer:
         self.on_register = on_register
         self.on_info = on_info
         self.enable_video = bool(enable_video)
+        self.enable_video_transcoding = bool(enable_video_transcoding)
+        self.prefer_browser_video_send = bool(prefer_browser_video_send)
         self.transport: asyncio.DatagramTransport | None = None
         self.endpoint: SipUdpEndpoint | None = None
 
@@ -940,6 +993,8 @@ class SipUdpServer:
                     on_info=self.on_info,
                     signaling_transport="UDP",
                     enable_video=self.enable_video,
+                    enable_video_transcoding=self.enable_video_transcoding,
+                    prefer_browser_video_send=self.prefer_browser_video_send,
                 )
                 return self.endpoint
 
@@ -999,6 +1054,8 @@ class SipTcpServer:
         on_register: RegisterHandler | None = None,
         on_info: InfoHandler | None = None,
         enable_video: bool = False,
+        enable_video_transcoding: bool = False,
+        prefer_browser_video_send: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -1012,6 +1069,8 @@ class SipTcpServer:
         self.on_register = on_register
         self.on_info = on_info
         self.enable_video = bool(enable_video)
+        self.enable_video_transcoding = bool(enable_video_transcoding)
+        self.prefer_browser_video_send = bool(prefer_browser_video_send)
         self.server: asyncio.AbstractServer | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
         self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
@@ -1057,6 +1116,8 @@ class SipTcpServer:
             send_override=_send,
             signaling_transport="TCP",
             enable_video=self.enable_video,
+            enable_video_transcoding=self.enable_video_transcoding,
+            prefer_browser_video_send=self.prefer_browser_video_send,
         )
         self.endpoints.add(endpoint)
         try:
