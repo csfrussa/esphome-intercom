@@ -39,7 +39,11 @@ from .video_rtp import (
     packetize_annex_b,
     packetize_vp8,
 )
-from .websocket_api import CALL_EVENT, _ha_softphone_store
+from .websocket_api import (
+    CALL_EVENT,
+    _ha_softphone_store,
+    _publish_ha_softphone_state,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +53,9 @@ _VIDEO_OWNER_HANDOFF_TIMEOUT = 2.0
 _VIDEO_ACCESS_UNIT_QUEUE = 12
 _RTCP_REPORT_INTERVAL = 5.0
 _KEYFRAME_FEEDBACK_INTERVAL = 1.0
+_SYMMETRIC_RTP_KEEPALIVE_INTERVAL = 0.25
+_SYMMETRIC_RTP_KEEPALIVE_ATTEMPTS = 8
+_DYNAMIC_RTP_PAYLOAD_TYPES = tuple(range(127, 95, -1))
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +67,7 @@ class _VideoMediaSession:
     remote_rtcp_port: int
     video_format: sdp.RtpVideoFormat
     local_direction: str
+    remote_video_payload_types: tuple[int, ...] = ()
     camera_send_enabled: bool = False
     transcoding_enabled: bool = False
     debug_mode: bool = False
@@ -211,6 +219,7 @@ def _active_video_session(hass: HomeAssistant) -> _VideoMediaSession | None:
                     or store.get("video_direction")
                     or "inactive"
                 ),
+                remote_video_payload_types=tuple(invite.remote_video_payload_types),
                 camera_send_enabled=camera_send,
                 transcoding_enabled=transcode,
                 debug_mode=debug,
@@ -232,6 +241,7 @@ def _active_video_session(hass: HomeAssistant) -> _VideoMediaSession | None:
         ),
         video_format=dialog.video_format,
         local_direction=str(dialog.local_video_direction or "inactive"),
+        remote_video_payload_types=tuple(dialog.remote_video_payload_types),
         camera_send_enabled=camera_send,
         transcoding_enabled=transcode,
         debug_mode=debug,
@@ -387,6 +397,8 @@ async def _run_video_session(
         "video_lost_packets": 0,
         "video_duplicate_packets": 0,
         "video_keyframe_requests": 0,
+        "video_symmetric_rtp_keepalives": 0,
+        "video_symmetric_rtp_keepalive_payload_type": 0,
         "video_access_unit_queue_max": 0,
     }
 
@@ -428,12 +440,31 @@ async def _run_video_session(
         """Persist diagnostics without emitting a call lifecycle occurrence."""
 
         store = _ha_softphone_store(hass)
-        if str(store.get("call_id") or "") != session.call_id:
+        current_call_id = str(store.get("call_id") or "")
+        if current_call_id:
+            if current_call_id != session.call_id:
+                return
+        elif str(store.get("last_terminal_call_id") or "") != session.call_id:
             return
         store.update(counters)
         store["video_rtp_dropped_packets"] = protocol.dropped_packets + int(
             transcode_protocol.dropped_packets if transcode_protocol is not None else 0
         )
+        if bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False)):
+            media_debug = dict(store.get("media_debug") or {})
+            media_debug["video"] = {
+                "call_id": session.call_id,
+                "local_rtp_port": session.local_rtp_port,
+                "remote_rtp_host": remote_host,
+                "remote_rtp_port": remote_port,
+                "remote_rtcp_port": session.remote_rtcp_port,
+                "format": session.video_format.wire_token(),
+                "direction": session.local_direction,
+                **counters,
+                "video_rtp_dropped_packets": store["video_rtp_dropped_packets"],
+            }
+            store["media_debug"] = media_debug
+            _publish_ha_softphone_state(hass)
 
     def queue_access_unit(access_unit: VideoAccessUnit) -> None:
         if access_units.full():
@@ -751,11 +782,67 @@ async def _run_video_session(
             elif msg.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
                 break
 
+    async def symmetric_rtp_keepalive() -> None:
+        """Open/latch the RTP mapping for a video receive path.
+
+        SIP media relays commonly use symmetric RTP when an endpoint is behind
+        NAT. A recvonly answer, delayed camera permission, or a browser with
+        Send Camera disabled can otherwise leave the advertised private RTP
+        port unreachable. RFC 6263 section 4.6 defines a zero-payload RTP
+        packet on an unnegotiated dynamic payload type for this purpose; it
+        carries no video media but lets the relay learn the symmetric RTP
+        source tuple.
+        """
+
+        nonlocal sequence
+        if not session.can_receive:
+            return
+        negotiated_payload_types = {
+            *session.remote_video_payload_types,
+            session.video_format.payload_type,
+        }
+        keepalive_payload_type = next(
+            (
+                payload_type
+                for payload_type in _DYNAMIC_RTP_PAYLOAD_TYPES
+                if payload_type not in negotiated_payload_types
+            ),
+            None,
+        )
+        if keepalive_payload_type is None:
+            _LOGGER.warning(
+                "SIP video symmetric RTP keepalive unavailable call_id=%s: all dynamic payload types negotiated",
+                session.call_id,
+            )
+            return
+        counters["video_symmetric_rtp_keepalive_payload_type"] = keepalive_payload_type
+        for _attempt in range(_SYMMETRIC_RTP_KEEPALIVE_ATTEMPTS):
+            if (
+                closed.is_set()
+                or counters["video_rtp_rx_packets"]
+                or counters["video_rtp_tx_packets"]
+            ):
+                return
+            keepalive = rtp.build_packet(
+                rtp.RtpPacket(
+                    payload_type=keepalive_payload_type,
+                    sequence=sequence,
+                    timestamp=int(loop.time() * session.video_format.clock_rate) & 0xFFFFFFFF,
+                    ssrc=ssrc,
+                    payload=b"",
+                )
+            )
+            transport.sendto(keepalive, (remote_host, remote_port))
+            sequence = rtp.next_sequence(sequence)
+            counters["video_symmetric_rtp_keepalives"] += 1
+            await asyncio.sleep(_SYMMETRIC_RTP_KEEPALIVE_INTERVAL)
+
     rx_task = asyncio.create_task(rtp_to_access_units())
     ws_task = asyncio.create_task(access_units_to_ws())
     rtcp_task = asyncio.create_task(rtcp_reports())
     lifetime_task = asyncio.create_task(close_on_call_end())
     browser_task = asyncio.create_task(browser_to_rtp())
+    keepalive_task = asyncio.create_task(symmetric_rtp_keepalive())
     transcode_input_task = (
         asyncio.create_task(rtp_to_transcoder()) if transcoder is not None else None
     )
@@ -780,7 +867,14 @@ async def _run_video_session(
     finally:
         closed.set()
         remove_call_listener()
-        tasks = [rx_task, ws_task, rtcp_task, lifetime_task, browser_task]
+        tasks = [
+            rx_task,
+            ws_task,
+            rtcp_task,
+            lifetime_task,
+            browser_task,
+            keepalive_task,
+        ]
         if transcode_input_task is not None:
             tasks.append(transcode_input_task)
         for task in tasks:

@@ -632,6 +632,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
 
         async def on_invite(invite):
             seen["video"] = invite.video_format
+            seen["video_payload_types"] = invite.remote_video_payload_types
             self.assertIsNotNone(invite.video_format)
             answer = sdp.build_answer_directional(
                 local,
@@ -686,6 +687,10 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(client.dialog.remote_video_rtp_port, server_video)
             self.assertEqual(client.dialog.local_video_direction, "sendrecv")
             self.assertIsNotNone(seen.get("video"))
+            self.assertEqual(
+                seen.get("video_payload_types"),
+                (sdp.DEFAULT_H264_FORMAT.payload_type,),
+            )
         finally:
             client.bye()
             await client.close()
@@ -2750,6 +2755,48 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(trunk.registrar_target, ("proxy.example", 5070))
 
+    def test_trunk_inbound_endpoint_inherits_video_policy(self) -> None:
+        config = sip_trunk.SipTrunkConfig(
+            enabled=True,
+            transport="tcp",
+            server="pbx.example",
+            port=5060,
+            domain="pbx.example",
+            username="ha",
+            auth_username="ha",
+            password="",
+            expires=300,
+        )
+        trunk = sip_trunk.SipTrunkClient(
+            config=config,
+            local_ip="127.0.0.1",
+            local_sip_port=5060,
+        )
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        manager = types.SimpleNamespace(
+            local_ip="127.0.0.1",
+            port=5060,
+            local_rtp_port=41000,
+            supported_formats=[audio],
+            supported_send_formats=[audio],
+            supported_recv_formats=[audio],
+            on_invite=lambda _invite: None,
+            on_terminated=None,
+            enable_video=True,
+            enable_video_transcoding=True,
+            prefer_browser_video_send=True,
+        )
+
+        trunk.attach_endpoint_manager(manager)
+
+        endpoint = trunk.inbound_endpoint
+        self.assertIsNotNone(endpoint)
+        assert endpoint is not None
+        self.assertTrue(endpoint.enable_video)
+        self.assertTrue(endpoint.enable_video_transcoding)
+        self.assertTrue(endpoint.prefer_browser_video_send)
+        self.assertEqual(endpoint.signaling_transport, "TCP")
+
     def test_trunk_refresh_precedes_short_granted_registration_expiry(self) -> None:
         self.assertEqual(sip_trunk._registration_refresh_delay(300, 1020.0, 1000.0), 10.0)
         self.assertEqual(sip_trunk._registration_refresh_delay(300, 1005.0, 1000.0), 1.0)
@@ -3235,8 +3282,15 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invites[0].header("X-Voip-Stack-Caller-Name"), "17770000000")
         self.assertEqual(invites[1].header("X-Voip-Stack-Caller-Name"), "17770000000")
         self.assertEqual(invites[0].body, invites[1].body)
-        self.assertIn(b"m=video 41002 RTP/AVP 102", invites[0].body)
-        self.assertIn(b"a=rtpmap:102 H264/90000", invites[0].body)
+        video_payload = sdp.DEFAULT_H264_FORMAT.payload_type
+        self.assertIn(
+            f"m=video 41002 RTP/AVP {video_payload}".encode(),
+            invites[0].body,
+        )
+        self.assertIn(
+            f"a=rtpmap:{video_payload} H264/90000".encode(),
+            invites[0].body,
+        )
         self.assertIn(b"a=sendrecv", invites[0].body)
         self.assertFalse(invites[0].header("Proxy-Authorization"))
         self.assertIn('username="17770000000"', invites[1].header("Proxy-Authorization"))

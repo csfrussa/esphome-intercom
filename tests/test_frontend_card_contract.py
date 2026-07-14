@@ -543,6 +543,19 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("position: relative;", self.source)
         self.assertIn("max-height: min(22%, 92px);", self.source)
 
+    def test_video_hangup_bar_tracks_the_real_call_phase(self) -> None:
+        render = _method_body(self.source, "_render")
+        self.assertIn("els.hangupState.textContent", render)
+        self.assertIn('? "Ending"', render)
+        self.assertIn('? "Calling"', render)
+        self.assertIn('normalizedState === "remote_ringing"', render)
+        self.assertIn('? "Ringing"', render)
+        self.assertIn(': "In call"', render)
+        self.assertIn(
+            "answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupDuration",
+            self.source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

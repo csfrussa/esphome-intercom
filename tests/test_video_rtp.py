@@ -267,11 +267,12 @@ class H264SdpTest(unittest.TestCase):
             video_port=40002,
             video_format=sdp.DEFAULT_H264_FORMAT,
         )
-        self.assertIn("m=video 40002 RTP/AVP 102", offer)
+        default = sdp.DEFAULT_H264_FORMAT
+        self.assertIn(f"m=video 40002 RTP/AVP {default.payload_type}", offer)
         selected = sdp.negotiate_h264(offer)
         self.assertIsNotNone(selected)
         assert selected is not None
-        self.assertEqual(selected.profile_level_id, "42e01f")
+        self.assertEqual(selected.profile_level_id, default.profile_level_id)
         self.assertEqual(selected.packetization_mode, 1)
         parsed = sdp.parse_video_sdp(offer)
         assert parsed is not None
@@ -299,7 +300,10 @@ class H264SdpTest(unittest.TestCase):
             remote_sdp=offer,
         )
         self.assertIn("m=audio 40000", answer)
-        self.assertIn("m=video 0 RTP/AVP 102", answer)
+        self.assertIn(
+            f"m=video 0 RTP/AVP {sdp.DEFAULT_H264_FORMAT.payload_type}",
+            answer,
+        )
 
     def test_answer_preserves_video_first_media_order_and_direction(self) -> None:
         offer = (
@@ -540,18 +544,23 @@ class H264SdpTest(unittest.TestCase):
         self.assertIsNone(sdp.negotiate_h264_answer(answer, sdp.DEFAULT_H264_FORMAT))
 
     def test_answer_cannot_change_h264_packetization_or_profile_family(self) -> None:
+        offered = sdp.DEFAULT_H264_FORMAT
+
         def answer(fmtp: str) -> str:
             return (
                 "v=0\r\nc=IN IP4 192.168.1.48\r\nt=0 0\r\n"
-                "m=video 19728 RTP/AVP 102\r\n"
-                "a=rtpmap:102 H264/90000\r\n"
-                f"a=fmtp:102 {fmtp}\r\n"
+                f"m=video 19728 RTP/AVP {offered.payload_type}\r\n"
+                f"a=rtpmap:{offered.payload_type} H264/90000\r\n"
+                f"a=fmtp:{offered.payload_type} {fmtp}\r\n"
             )
 
-        offered = sdp.DEFAULT_H264_FORMAT
         self.assertIsNone(
             sdp.negotiate_video_answer(
-                answer("packetization-mode=0;profile-level-id=42e01f"), offered
+                answer(
+                    "packetization-mode=0;"
+                    f"profile-level-id={offered.profile_level_id}"
+                ),
+                offered,
             )
         )
         self.assertIsNone(
@@ -560,11 +569,11 @@ class H264SdpTest(unittest.TestCase):
             )
         )
         selected = sdp.negotiate_video_answer(
-            answer("packetization-mode=1;profile-level-id=42e015"), offered
+            answer("packetization-mode=1;profile-level-id=428015"), offered
         )
         self.assertIsNotNone(selected)
         assert selected is not None
-        self.assertEqual(selected.profile_level_id, "42e015")
+        self.assertEqual(selected.profile_level_id, "428015")
 
     def test_unsupported_media_level_connection_does_not_break_audio(self) -> None:
         offer = (

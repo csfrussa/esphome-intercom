@@ -887,6 +887,15 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("RtpPortReservation.allocate", no_dtmf_branch)
         self.assertIn("RtpPortReservation.allocate(hass)", dtmf_branch)
 
+    def test_video_invites_skip_audio_only_dtmf_preanswer(self) -> None:
+        on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
+        trunk_branch = on_invite[
+            on_invite.index("if _is_trunk_invite(invite):") : on_invite.index(
+                "if not dtmf_preanswer:"
+            )
+        ]
+        self.assertIn("and invite.video_format is None", trunk_branch)
+
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated(") :]
         bridge_branch = terminated[
@@ -1043,6 +1052,30 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
         self.assertIn("callee=resolved_callee", route)
         self.assertIn("peer_name=resolved_callee", route)
+
+    def test_softphone_snapshot_exposes_video_rtp_diagnostics(self) -> None:
+        websocket = WEBSOCKET_API.read_text()
+        counters = websocket[
+            websocket.index("_MEDIA_COUNTER_KEYS = (") : websocket.index(
+                "def _runtime_counter("
+            )
+        ]
+        for name in (
+            "video_rtp_tx_packets",
+            "video_rtp_rx_packets",
+            "video_rtp_dropped_packets",
+            "video_drop_addr",
+            "video_drop_payload_type",
+            "video_drop_error",
+            "video_reordered_packets",
+            "video_lost_packets",
+            "video_duplicate_packets",
+            "video_symmetric_rtp_keepalives",
+            "video_symmetric_rtp_keepalive_payload_type",
+            "video_access_unit_queue_max",
+        ):
+            self.assertIn(f'"{name}"', counters)
+        self.assertIn('"media_debug": media_debug', websocket)
 
 
 if __name__ == "__main__":

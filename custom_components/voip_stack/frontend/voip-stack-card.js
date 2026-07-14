@@ -1430,6 +1430,14 @@ class VoipStackCard extends HTMLElement {
     voipStackEngine.setVideoCanvas(els.videoCanvas);
     this._syncVideoDurationTimer(videoVisible);
     if (els.hangupPeer) {
+      const normalizedState = espState.toLowerCase();
+      els.hangupState.textContent = this._stopping
+        ? "Ending"
+        : (this._starting || ["calling", "connecting"].includes(normalizedState))
+          ? "Calling"
+          : normalizedState === "remote_ringing"
+            ? "Ringing"
+            : "In call";
       els.hangupPeer.textContent = caller || destination || "Active call";
       els.hangupDuration.textContent = this._formatVideoCallDuration();
     }
@@ -2275,7 +2283,7 @@ class VoipStackCard extends HTMLElement {
       header, headerName,
       destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
       keypadPanel, keypadInput, keypadKeys,
-      answerBtn, declineBtn, hangupBtn, hangupPeer, hangupDuration, callBtn, placeholderBtn,
+      answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupDuration, callBtn, placeholderBtn,
       statusIndicator, statusText, statusReason,
       runtimeControls, keypadBtn, settingsBtn, settingsPanel,
       autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox, videoCameraRow, videoCameraCheckbox,

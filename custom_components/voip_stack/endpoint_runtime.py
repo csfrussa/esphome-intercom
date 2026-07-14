@@ -2682,6 +2682,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 trunk_cfg.get(CONF_TRUNK_INBOUND_MODE) == TRUNK_INBOUND_MODE_DTMF
                 and trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED)
                 and dtmf_timeout_ms > 0
+                # A 200 OK used to collect routing digits establishes the
+                # dialog's media contract.  Answering that leg audio-only and
+                # adding video after the user accepts is not valid SIP offer/
+                # answer.  Preserve the original video offer by routing it
+                # through the normal ringing/final-answer path.
+                and invite.video_format is None
             )
             if not dtmf_preanswer:
                 _LOGGER.info(

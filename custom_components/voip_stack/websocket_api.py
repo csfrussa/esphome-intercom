@@ -452,6 +452,13 @@ _MEDIA_COUNTER_KEYS = (
     "video_drop_addr",
     "video_drop_payload_type",
     "video_drop_error",
+    "video_reordered_packets",
+    "video_lost_packets",
+    "video_duplicate_packets",
+    "video_keyframe_requests",
+    "video_symmetric_rtp_keepalives",
+    "video_symmetric_rtp_keepalive_payload_type",
+    "video_access_unit_queue_max",
 )
 
 
@@ -685,6 +692,11 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_relays": runtime["rtp_relays"],
         "sip_client_dialogs": runtime["sip_client_dialogs"],
         "sip_trunk": runtime["sip_trunk"],
+        **{
+            key: _runtime_counter(store, runtime, key)
+            for key in _MEDIA_COUNTER_KEYS
+            if key.startswith("video_")
+        },
         "debug_mode": debug_mode,
         "media_debug": media_debug,
     }

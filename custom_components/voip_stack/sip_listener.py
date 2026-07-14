@@ -41,6 +41,7 @@ class SipInvite:
     remote_video_rtp_port: int = 0
     remote_video_rtcp_port: int = 0
     remote_video_rtcp_mux: bool = False
+    remote_video_payload_types: tuple[int, ...] = ()
 
     @property
     def selected_format(self) -> sdp.RtpPcmFormat:
@@ -903,6 +904,17 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 else None
             )
             remote_video = sdp.parse_video_sdp(request.body) if video_format is not None else None
+            _LOGGER.info(
+                "SIP INVITE video negotiation call_id=%s enabled=%s selected=%s remote=%s",
+                request.header("Call-ID"),
+                self.enable_video,
+                video_format.wire_token() if video_format is not None else "none",
+                (
+                    f"{remote_video['connection_ip']}:{remote_video['media_port']}"
+                    if remote_video is not None
+                    else "none"
+                ),
+            )
             caller = _identity_header(request.header("X-Voip-Stack-Caller-Name"))
             target = _identity_header(request.header("X-Voip-Stack-Dest-Name"))
             if not caller:
@@ -932,6 +944,11 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                     else 0
                 ),
                 remote_video_rtcp_mux=(bool(remote_video["rtcp_mux"]) if remote_video else False),
+                remote_video_payload_types=(
+                    tuple(int(item) for item in remote_video["payload_order"])
+                    if remote_video
+                    else ()
+                ),
             )
         except Exception as err:
             _LOGGER.info("SIP INVITE parse failed: %s", err)

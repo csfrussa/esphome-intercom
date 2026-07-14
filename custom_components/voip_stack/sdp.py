@@ -89,8 +89,8 @@ class RtpVideoFormat:
     an exact relay never invents or discards endpoint parameters.
     """
 
-    payload_type: int = 102
-    profile_level_id: str = "42e01f"
+    payload_type: int = 103
+    profile_level_id: str = "42800d"
     packetization_mode: int = 1
     direction: str = "sendrecv"
     sprop_parameter_sets: str = ""
@@ -134,7 +134,7 @@ RtpH264Format = RtpVideoFormat
 DEFAULT_H264_FORMAT = RtpH264Format()
 DEFAULT_VIDEO_FORMATS = (
     DEFAULT_H264_FORMAT,
-    RtpVideoFormat(payload_type=103, encoding="VP8"),
+    RtpVideoFormat(payload_type=104, encoding="VP8"),
     RtpVideoFormat(payload_type=26, encoding="JPEG"),
 )
 

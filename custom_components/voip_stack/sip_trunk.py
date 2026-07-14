@@ -313,6 +313,13 @@ class SipTrunkClient:
         """Route inbound trunk SIP requests through the HA SIP endpoint policy."""
         from .sip_listener import SipUdpEndpoint
 
+        _LOGGER.info(
+            "SIP trunk inbound media policy video=%s transcode=%s browser_send=%s",
+            bool(getattr(manager, "enable_video", False)),
+            bool(getattr(manager, "enable_video_transcoding", False)),
+            bool(getattr(manager, "prefer_browser_video_send", False)),
+        )
+
         endpoint = SipUdpEndpoint(
             local_ip=manager.local_ip,
             local_sip_port=manager.port,
@@ -326,6 +333,13 @@ class SipTrunkClient:
             on_info=getattr(manager, "on_info", None),
             send_override=self.send_response,
             signaling_transport=self.transport_name,
+            enable_video=bool(getattr(manager, "enable_video", False)),
+            enable_video_transcoding=bool(
+                getattr(manager, "enable_video_transcoding", False)
+            ),
+            prefer_browser_video_send=bool(
+                getattr(manager, "prefer_browser_video_send", False)
+            ),
         )
         self.inbound_endpoint = endpoint
         self.set_request_handler(endpoint._handle_datagram)

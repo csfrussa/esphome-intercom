@@ -190,6 +190,7 @@ class SipDialog:
     remote_video_rtp_port: int = 0
     remote_video_rtcp_port: int = 0
     remote_video_rtcp_mux: bool = False
+    remote_video_payload_types: tuple[int, ...] = ()
     local_video_rtp_port: int = 0
     local_video_direction: str = "inactive"
 
@@ -1022,6 +1023,11 @@ class SipCallClient:
                 else 0
             ),
             remote_video_rtcp_mux=(bool(remote_video["rtcp_mux"]) if remote_video else False),
+            remote_video_payload_types=(
+                tuple(int(item) for item in remote_video["payload_order"])
+                if remote_video
+                else ()
+            ),
             local_video_rtp_port=(self.local_video_rtp_port if video_answer is not None else 0),
             local_video_direction=(
                 sdp.constrained_video_direction(
