@@ -1421,6 +1421,10 @@ class VoipStackCard extends HTMLElement {
     const softphoneMode = this._isHaSoftphoneMode();
     const videoVisible = softphoneMode && espState.toLowerCase() === "in_call" && voipStackEngine.videoVisible;
     els.card.classList.toggle("video-active", videoVisible);
+    els.card.classList.toggle(
+      "video-auto-height",
+      videoVisible && String(this.config?.grid_options?.rows || "auto").toLowerCase() === "auto",
+    );
     els.videoCanvas.hidden = !videoVisible;
     els.videoShade.hidden = !videoVisible;
     voipStackEngine.setVideoCanvas(els.videoCanvas);
@@ -1613,6 +1617,15 @@ class VoipStackCard extends HTMLElement {
         background: linear-gradient(to bottom, rgba(0,0,0,.42), rgba(0,0,0,.08) 42%, rgba(0,0,0,.60));
       }
       .card.video-active { overflow: hidden; background: #000; }
+      /* Absolutely positioned video and call controls do not contribute to
+       * intrinsic height. Reserve a real 16:9 surface when a Sections card is
+       * configured with rows:auto; fixed-grid cards continue using the height
+       * assigned by Home Assistant. */
+      .card.video-active.video-auto-height {
+        height: auto;
+        min-height: 280px;
+        aspect-ratio: 16 / 9;
+      }
       .video-active .header,
       .video-active .destination-label,
       .video-active .destination-value,

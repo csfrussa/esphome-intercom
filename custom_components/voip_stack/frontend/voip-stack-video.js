@@ -3,10 +3,6 @@ const VIDEO_HEADER_BYTES = 6;
 const MAX_VIDEO_WS_BUFFER = 2 * 1024 * 1024;
 const MAX_PENDING_DECODE_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING_DECODE_FRAMES = 60;
-const VIDEO_PLAYOUT_MIN_MS = 80;
-const VIDEO_PLAYOUT_MAX_MS = 200;
-const MAX_DECODED_FRAME_QUEUE = 12;
-const DECODED_FRAME_CATCHUP_TARGET = 3;
 const CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 
 export class VoipStackVideo extends EventTarget {
@@ -40,11 +36,6 @@ export class VoipStackVideo extends EventTarget {
     this._pendingDecode = [];
     this._pendingDecodeBytes = 0;
     this._generation = 0;
-    this._frameQueue = [];
-    this._renderHandle = 0;
-    this._playoutBaseWall = null;
-    this._playoutBaseTimestamp = null;
-    this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
     this._lastRenderedAt = 0;
     this._lastRenderedTimestamp = null;
     this._lastDecodedAt = 0;
@@ -69,7 +60,7 @@ export class VoipStackVideo extends EventTarget {
       max_source_gap_ms: 0,
       render_gaps_over_100_ms: 0,
       render_gaps_over_250_ms: 0,
-      playout_ms: VIDEO_PLAYOUT_MIN_MS,
+      playout_ms: 0,
     };
   }
 
@@ -448,11 +439,10 @@ export class VoipStackVideo extends EventTarget {
     if (!this._decoder || this._decoder.state !== "configured") return;
     const bytes = new Uint8Array(buffer);
     if (bytes.byteLength <= VIDEO_HEADER_BYTES || bytes[0] !== VIDEO_ACCESS_UNIT) return;
-    if (this._decoder.decodeQueueSize > 3 && !(bytes[1] & 1)) {
-      this._stats.dropped++;
-      this._stats.dropped_decode_backpressure++;
-      return;
-    }
+    // Never discard an encoded inter-frame to relieve decoder backpressure.
+    // H.264 and VP8 delta frames are references for later pictures; dropping
+    // one creates exactly the frozen frames and motion trails that a live SIP
+    // stream must avoid. WebCodecs already owns the bounded decode queue.
     const rtpTimestamp = new DataView(buffer).getUint32(2, false);
     const timestamp = this._unwrapRtpTimestamp(rtpTimestamp);
     try {
@@ -563,69 +553,16 @@ export class VoipStackVideo extends EventTarget {
     }
     this._lastDecodedAt = now;
     this._lastDecodedTimestamp = timestamp;
-    if (this._playoutBaseWall === null) {
-      this._playoutBaseWall = now + VIDEO_PLAYOUT_MIN_MS;
-      this._playoutBaseTimestamp = timestamp;
-      this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
-    } else {
-      const expected = this._playoutBaseWall + (Number(frame.timestamp || 0) - this._playoutBaseTimestamp) / 1000;
-      const lateBy = now - expected;
-      if (lateBy > 12 && this._playoutDelayMs < VIDEO_PLAYOUT_MAX_MS) {
-        const increase = Math.min(VIDEO_PLAYOUT_MAX_MS - this._playoutDelayMs, lateBy);
-        this._playoutDelayMs += increase;
-        this._playoutBaseWall += increase;
-      }
+    this._drawFrame(frame);
+    if (this._lastRenderedAt) {
+      const gap = Math.round(now - this._lastRenderedAt);
+      this._stats.max_frame_gap_ms = Math.max(this._stats.max_frame_gap_ms, gap);
+      if (gap > 100) this._stats.render_gaps_over_100_ms++;
+      if (gap > 250) this._stats.render_gaps_over_250_ms++;
     }
-    this._stats.playout_ms = Math.round(this._playoutDelayMs);
-    this._frameQueue.push(frame);
-    this._frameQueue.sort((left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0));
-    if (this._frameQueue.length > MAX_DECODED_FRAME_QUEUE) {
-      // Decoder setup and a browser reload can release a complete buffered GOP
-      // in one burst. Dropping exactly one oldest frame per arrival leaves the
-      // queue perpetually one frame ahead of the playout clock. Catch up once
-      // to a small live-edge queue and start a fresh bounded playout window.
-      while (this._frameQueue.length > DECODED_FRAME_CATCHUP_TARGET) {
-        this._frameQueue.shift()?.close();
-        this._stats.dropped++;
-        this._stats.dropped_frame_queue++;
-      }
-      const nextTimestamp = Number(this._frameQueue[0]?.timestamp || timestamp);
-      this._playoutBaseTimestamp = nextTimestamp;
-      this._playoutBaseWall = now + VIDEO_PLAYOUT_MIN_MS;
-      this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
-      this._stats.playout_ms = VIDEO_PLAYOUT_MIN_MS;
-    }
-    if (!this._renderHandle) this._renderHandle = requestAnimationFrame((time) => this._renderFrame(time));
-  }
-
-  _renderFrame(now) {
-    this._renderHandle = 0;
-    if (this._playoutBaseWall === null || this._playoutBaseTimestamp === null) return;
-    const dueTimestamp = this._playoutBaseTimestamp + Math.max(0, now - this._playoutBaseWall) * 1000;
-    let selected = null;
-    while (this._frameQueue.length && Number(this._frameQueue[0].timestamp || 0) <= dueTimestamp) {
-      if (selected) {
-        selected.close();
-        this._stats.dropped++;
-        this._stats.dropped_render_coalesce++;
-      }
-      selected = this._frameQueue.shift();
-    }
-    if (selected) {
-      this._drawFrame(selected);
-      if (this._lastRenderedAt) {
-        const gap = Math.round(now - this._lastRenderedAt);
-        this._stats.max_frame_gap_ms = Math.max(this._stats.max_frame_gap_ms, gap);
-        if (gap > 100) this._stats.render_gaps_over_100_ms++;
-        if (gap > 250) this._stats.render_gaps_over_250_ms++;
-      }
-      this._lastRenderedAt = now;
-      this._lastRenderedTimestamp = Number(selected.timestamp || 0);
-      this._stats.rendered++;
-    }
-    if (this._frameQueue.length) {
-      this._renderHandle = requestAnimationFrame((time) => this._renderFrame(time));
-    }
+    this._lastRenderedAt = now;
+    this._lastRenderedTimestamp = timestamp;
+    this._stats.rendered++;
   }
 
   _drawFrame(frame) {
@@ -638,7 +575,7 @@ export class VoipStackVideo extends EventTarget {
         canvas.width = width;
         canvas.height = height;
       }
-      const context = canvas.getContext("2d", { alpha: false, desynchronized: true });
+      const context = canvas.getContext("2d", { alpha: false });
       context.drawImage(frame.bitmap || frame, 0, 0, width, height);
     } finally {
       frame.close();
@@ -670,13 +607,6 @@ export class VoipStackVideo extends EventTarget {
     this._pendingDecodeBytes = 0;
     this._negotiated = null;
     this._cameraAllowed = false;
-    if (this._renderHandle) cancelAnimationFrame(this._renderHandle);
-    this._renderHandle = 0;
-    for (const frame of this._frameQueue) frame.close();
-    this._frameQueue = [];
-    this._playoutBaseWall = null;
-    this._playoutBaseTimestamp = null;
-    this._playoutDelayMs = VIDEO_PLAYOUT_MIN_MS;
     this._lastRenderedAt = 0;
     this._lastRenderedTimestamp = null;
     this._lastDecodedAt = 0;
@@ -711,10 +641,6 @@ export class VoipStackVideo extends EventTarget {
     }
     this._pendingDecode = [];
     this._pendingDecodeBytes = 0;
-    if (this._renderHandle) cancelAnimationFrame(this._renderHandle);
-    this._renderHandle = 0;
-    for (const frame of this._frameQueue) frame.close();
-    this._frameQueue = [];
     this._canReceive = false;
   }
 }

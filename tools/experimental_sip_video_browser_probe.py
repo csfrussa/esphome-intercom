@@ -129,7 +129,7 @@ CARD_SAMPLE = r"""
     has_cleanup_task: Boolean(card._cleanupTask),
     engine_stats: globalThis.__voipStackEngine?.stats || null,
     video_debug: globalThis.__voipStackEngine?._video ? {
-      frame_queue: globalThis.__voipStackEngine._video._frameQueue.map((frame) => Number(frame.timestamp || 0)),
+      frame_queue: (globalThis.__voipStackEngine._video._frameQueue || []).map((frame) => Number(frame.timestamp || 0)),
       render_handle: Number(globalThis.__voipStackEngine._video._renderHandle || 0),
       playout_base_wall: Number(globalThis.__voipStackEngine._video._playoutBaseWall || 0),
       playout_base_timestamp: Number(globalThis.__voipStackEngine._video._playoutBaseTimestamp || 0),

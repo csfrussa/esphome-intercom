@@ -369,11 +369,17 @@ async def _start_video_sender(
     codec: str,
     destination: tuple[str, int],
     duration: float,
+    video_file: str = "",
 ):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("FFmpeg is required for the video qualification peer")
     profile = VIDEO_PROFILES[codec]
+    source = (
+        ["-stream_loop", "-1", "-i", video_file]
+        if video_file
+        else ["-f", "lavfi", "-i", f"testsrc2=size={profile['size']}:rate=15"]
+    )
     command = [
         ffmpeg,
         "-hide_banner",
@@ -381,10 +387,7 @@ async def _start_video_sender(
         "warning",
         "-nostdin",
         "-re",
-        "-f",
-        "lavfi",
-        "-i",
-        f"testsrc2=size={profile['size']}:rate=15",
+        *source,
         "-t",
         str(max(2.0, duration + 2.0)),
         "-an",
@@ -570,6 +573,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 codec=args.codec,
                 destination=(local_ip, video_port),
                 duration=args.duration,
+                video_file=args.video_file,
             )
             tasks.append(asyncio.create_task(_drain_stderr(video_process, video_stderr)))
 
@@ -723,6 +727,7 @@ def main() -> int:
         help="accept an audio-only answer when an offered video codec is rejected",
     )
     parser.add_argument("--duration", type=float, default=15.0)
+    parser.add_argument("--video-file", default="")
     parser.add_argument("--out", default="/tmp/experimental_sip_video_peer.json")
     args = parser.parse_args()
     try:
