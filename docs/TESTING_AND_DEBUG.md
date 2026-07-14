@@ -124,6 +124,22 @@ Always restore:
 
 ## Home Assistant Logs
 
+To include the integration's DEBUG messages in Home Assistant logs, add this
+top-level block to `configuration.yaml` and restart Home Assistant:
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.voip_stack: debug
+```
+
+The **Debug mode** option in the VoIP Stack config flow enables optional
+SIP/RTP diagnostics and media captures; it does not by itself change Home
+Assistant's logger level. Disable both forms of debug after collecting the
+trace, because logs and captures can contain call metadata or conversation
+audio.
+
 Useful filters:
 
 ```bash

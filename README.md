@@ -602,7 +602,11 @@ Recommended first setup:
   open call, and returns to listening after every reply. This does not create a
   second SIP listener or a separate Assist satellite.
 - **Debug mode**: keep disabled for normal use. Enable only while collecting
-  SIP/RTP diagnostics.
+  SIP/RTP diagnostics. To expose the integration's DEBUG messages in Home
+  Assistant logs, also configure
+  `logger.logs.custom_components.voip_stack: debug`; see
+  [Testing and debug](docs/TESTING_AND_DEBUG.md#home-assistant-logs) for the
+  complete YAML block.
 - **Trunk enabled**: leave disabled unless you want HA to register to a
   provider/PBX account for external inbound/outbound calls.
 

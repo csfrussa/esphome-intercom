@@ -104,6 +104,19 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("_eventConcernsThisCard", softphone)
         self.assertNotIn("_onSipStateEvent", self.source)
 
+    def test_engine_retries_startup_subscriptions_until_integration_is_ready(self) -> None:
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        configure = _method_body(engine, "configure")
+        ensure = _method_body(engine, "_ensureBusSubscriptions")
+        retry = _method_body(engine, "_scheduleBusSubscriptionRetry")
+
+        self.assertIn("this._ensureBusSubscriptions(conn)", configure)
+        self.assertIn("this._scheduleBusSubscriptionRetry(conn)", ensure)
+        self.assertIn("this._busSubscribePending", ensure)
+        self.assertIn("this._softphoneBusSubscribePending", ensure)
+        self.assertIn("setTimeout", retry)
+        self.assertIn("this._ensureBusSubscriptions(conn)", retry)
+
     def test_esp_mirror_terminal_bridge_event_uses_dialed_target_and_reason(self) -> None:
         body = _method_body(self.source, "_onMirroredBridgeStateEvent")
         self.assertIn("this._eventConcernsThisCard(data)", body)

@@ -516,7 +516,15 @@ class SipCallClient:
         sip.mark_sip_event(self, "SIP_RESPONSE", int(status), reason)
         _LOGGER.info("SIP TX %s %s to %s:%s", status, reason, host, port)
 
-    def _request_matches_dialog(self, request: sip.SipMessage, host: str, method: str) -> bool:
+    def _request_matches_dialog(self, request: sip.SipMessage, _host: str, method: str) -> bool:
+        """Match an in-dialog request using the RFC 3261 dialog identifiers.
+
+        A dialog is identified by its Call-ID and local/remote tags, not by the
+        source IP address.  The request has already been selected by Call-ID in
+        ``_read_response``.  Requiring the source to match the original target
+        breaks valid dialogs traversing a proxy or SBC whose sequential
+        requests can be emitted by a different signaling node.
+        """
         dialog = self.dialog
         if dialog is None:
             return False
@@ -524,22 +532,9 @@ class SipCallClient:
             cseq = sip.parse_cseq(request.header("CSeq"))
         except (TypeError, ValueError, sip.SipError):
             return False
-        remote_host = getattr(dialog, "remote_host", host)
-        remote_port = int(getattr(dialog, "remote_sip_port", 5060))
-        remote_target = getattr(dialog, "remote_target_uri", "")
-        allowed_hosts = {
-            remote_host,
-            self._signaling_target(remote_host, remote_port)[0],
-            self._dialog_next_hop(
-                remote_target,
-                remote_host,
-                remote_port,
-            )[0],
-        }
         return (
             cseq.method == method.upper()
             and cseq.number > 0
-            and host in allowed_hosts
             and sip.extract_tag(request.header("From")) == self.dialog_ids.remote_tag
             and sip.extract_tag(request.header("To")) == self.dialog_ids.local_tag
         )

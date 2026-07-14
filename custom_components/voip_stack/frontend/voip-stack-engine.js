@@ -12,6 +12,7 @@ const MODULE_VERSION = (() => {
 const { RINGTONE_REPEAT_MS, playVoipRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
+const BUS_SUBSCRIBE_RETRY_MS = 2000;
 const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call";
 const VIDEO_CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
@@ -41,6 +42,9 @@ class VoipStackEngine extends EventTarget {
     this._busConnection = null;
     this._busUnsub = null;
     this._softphoneBusUnsub = null;
+    this._busSubscribePending = false;
+    this._softphoneBusSubscribePending = false;
+    this._busSubscribeRetryTimer = null;
     this._callSubscribers = new Set();
     this._softphoneSubscribers = new Set();
     this._lastEvents = new Map();
@@ -79,34 +83,61 @@ class VoipStackEngine extends EventTarget {
     this._hass = hass;
     if (this._video) this._video.configure(hass);
     const conn = hass?.connection || null;
-    if (!conn || conn === this._busConnection) return;
-    if (this._busUnsub) {
-      this._busUnsub();
+    if (!conn) return;
+    if (conn !== this._busConnection) {
+      if (this._busUnsub) this._busUnsub();
+      if (this._softphoneBusUnsub) this._softphoneBusUnsub();
       this._busUnsub = null;
-    }
-    if (this._softphoneBusUnsub) {
-      this._softphoneBusUnsub();
       this._softphoneBusUnsub = null;
+      this._busSubscribePending = false;
+      this._softphoneBusSubscribePending = false;
+      if (this._busSubscribeRetryTimer) clearTimeout(this._busSubscribeRetryTimer);
+      this._busSubscribeRetryTimer = null;
+      this._busConnection = conn;
     }
-    this._busConnection = conn;
-    conn.subscribeMessage((event) => this._onBusEvent(event), { type: WS_SUBSCRIBE_CALL_EVENTS })
+    this._ensureBusSubscriptions(conn);
+  }
+
+  _scheduleBusSubscriptionRetry(conn) {
+    if (this._busConnection !== conn || this._busSubscribeRetryTimer) return;
+    this._busSubscribeRetryTimer = setTimeout(() => {
+      this._busSubscribeRetryTimer = null;
+      if (this._busConnection === conn) this._ensureBusSubscriptions(conn);
+    }, BUS_SUBSCRIBE_RETRY_MS);
+  }
+
+  _ensureBusSubscriptions(conn) {
+    if (this._busConnection !== conn) return;
+    if (!this._busUnsub && !this._busSubscribePending) {
+      this._busSubscribePending = true;
+      conn.subscribeMessage((event) => this._onBusEvent(event), { type: WS_SUBSCRIBE_CALL_EVENTS })
       .then((unsub) => {
         if (this._busConnection === conn) this._busUnsub = unsub;
         else unsub();
       })
       .catch((err) => {
-        if (this._busConnection === conn) this._busConnection = null;
         console.warn("voip-stack-engine: call_event subscription failed", err);
+        this._scheduleBusSubscriptionRetry(conn);
+      })
+      .finally(() => {
+        if (this._busConnection === conn) this._busSubscribePending = false;
       });
-    conn.subscribeMessage(
-      (event) => this._onSoftphoneState(event),
-      { type: WS_SUBSCRIBE_HA_SOFTPHONE },
-    ).then((unsub) => {
-      if (this._busConnection === conn) this._softphoneBusUnsub = unsub;
-      else unsub();
-    }).catch((err) => {
-      console.warn("voip-stack-engine: HA softphone subscription failed", err);
-    });
+    }
+    if (!this._softphoneBusUnsub && !this._softphoneBusSubscribePending) {
+      this._softphoneBusSubscribePending = true;
+      conn.subscribeMessage(
+        (event) => this._onSoftphoneState(event),
+        { type: WS_SUBSCRIBE_HA_SOFTPHONE },
+      ).then((unsub) => {
+        if (this._busConnection === conn) this._softphoneBusUnsub = unsub;
+        else unsub();
+      }).catch((err) => {
+        console.warn("voip-stack-engine: HA softphone subscription failed", err);
+        this._scheduleBusSubscriptionRetry(conn);
+      }).finally(() => {
+        if (this._busConnection === conn) this._softphoneBusSubscribePending = false;
+      });
+    }
   }
 
   get active() {

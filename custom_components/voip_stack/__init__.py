@@ -498,9 +498,18 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             rx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("rx_formats") or []],
         ))
     else:
-        _LOGGER.warning(
-            "HA softphone endpoint sensor is unavailable; HA will not appear in the SIP phonebook"
-        )
+        # The SIP endpoint is intentionally started before config-entry
+        # platforms are forwarded.  During that short startup window the HA
+        # endpoint sensor does not exist yet; the deferred phonebook sync will
+        # discover it as soon as the sensor platform is ready.
+        if hass.data.get(DOMAIN, {}).get("ha_softphone_endpoint_sensor") is None:
+            _LOGGER.debug(
+                "HA softphone endpoint sensor is not ready; phonebook sync is deferred"
+            )
+        else:
+            _LOGGER.warning(
+                "HA softphone endpoint sensor is unavailable; HA will not appear in the SIP phonebook"
+            )
     return out
 
 
@@ -1431,7 +1440,12 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     # SIP video is HA/browser-owned.  Native ESP audio endpoints deliberately
     # stay outside this path, while direct SIP URIs, trunk calls, registered
     # clients and manually configured standard SIP contacts may negotiate it.
-    video_enabled = bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)) and not native_audio_endpoint
+    # A phonebook entry may carry ESP-style audio capability metadata while
+    # its resolved route still exits through the SIP trunk.  The final route,
+    # not those contact hints, decides whether browser-owned video is valid.
+    video_enabled = bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)) and (
+        use_trunk or not native_audio_endpoint
+    )
     video_reservation = RtpPortReservation.allocate(hass) if video_enabled else None
     video_rtp_socket = None
     if video_reservation is not None:

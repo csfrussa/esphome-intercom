@@ -2027,6 +2027,13 @@ class RosterResolverTest(unittest.TestCase):
 
 
 class RouterContractTest(unittest.TestCase):
+    def test_trunk_route_keeps_experimental_video_despite_audio_contact_hints(self) -> None:
+        source = (PKG_DIR / "__init__.py").read_text()
+        self.assertIn(
+            "use_trunk or not native_audio_endpoint",
+            source,
+        )
+
     def _matrix_entries(self):
         return roster.parse_roster_json(
             [
@@ -2748,7 +2755,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sip_trunk._registration_refresh_delay(300, 1005.0, 1000.0), 1.0)
         self.assertEqual(sip_trunk._registration_refresh_delay(300, 1300.0, 1000.0), 240.0)
 
-    async def test_confirmed_dialog_rejects_cancel_without_ending_call(self) -> None:
+    async def test_confirmed_dialog_accepts_proxy_bye_without_ending_on_cancel(self) -> None:
         class FakeTransport:
             def __init__(self) -> None:
                 self.sent: list[tuple[bytes, tuple[str, int]]] = []
@@ -2780,12 +2787,13 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
             )
 
         client.queue.put_nowait((request("CANCEL", 1), ("127.0.0.2", 5060)))
+        # RFC 3261 dialog identity is Call-ID plus the two tags.  A proxy/SBC
+        # may originate a sequential request from a different signaling IP.
         client.queue.put_nowait((request("BYE", 2), ("127.0.0.99", 5060)))
-        client.queue.put_nowait((request("BYE", 2), ("127.0.0.2", 5060)))
         self.assertEqual(await client.wait_for_dialog_termination(timeout=0.1), "remote_hangup")
         self.assertEqual(
             [sip.parse_message(raw).status_code for raw, _addr in transport.sent],
-            [481, 481, 200],
+            [481, 200],
         )
 
     async def test_confirmed_dialog_rejects_reinvite_but_keeps_call_alive(self) -> None:
