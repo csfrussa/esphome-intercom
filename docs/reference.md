@@ -204,7 +204,9 @@ The setup flow has two layers:
 | `assist_extension` | Explicit 1-8 digit extension for the Assist destination. No extension is assumed or reserved. |
 | `assist_pipeline` | HA pipeline ID, or `preferred` to resolve HA's preferred pipeline. The pipeline's existing STT, conversation agent, TTS, language and voice settings are used. |
 | `debug_mode` | Opt-in detailed diagnostics and bounded audio captures. Leave disabled for normal operation. |
-| `experimental_sip_video` | Experimental and disabled by default. Allows the HA softphone to negotiate direct H.264 RTP video with standard SIP phones and door stations. Requires HTTPS and a WebCodecs-capable browser. ESP endpoints remain audio-only. |
+| `experimental_sip_video` | Experimental and disabled by default. Allows the HA softphone to negotiate SIP video with standard phones and door stations. Direct H.264, VP8 and JPEG require a secure context and compatible browser. ESP endpoints remain audio-only. |
+| `video_transcoding_enabled` | Shown only after experimental video is enabled. Uses Home Assistant's available FFmpeg binary for bounded receive-only H.263, H.263-1998 or H.265 to VP8 conversion. Direct codecs never use it. |
+| `video_camera_send_enabled` | Shown only after experimental video is enabled. Exposes the card's per-browser **Send Camera** choice for negotiated H.264 or VP8 transmit media. Receiving video never needs camera permission. |
 | `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
 

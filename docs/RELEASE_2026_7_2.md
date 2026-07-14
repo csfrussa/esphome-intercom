@@ -8,7 +8,7 @@
 > `2026.7.1`.
 
 `2026.7.2-dev` collects changes made after stable `2026.7.1`. It introduces
-automation-native call routing and an opt-in experimental H.264 video path for
+automation-native call routing and an opt-in experimental SIP video path for
 the Home Assistant softphone. Install it only when you intend to test the
 current `dev` integration and report regressions.
 
@@ -88,47 +88,49 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🎥 Experimental SIP Video For The HA Softphone
 
-- An opt-in, disabled-by-default path lets the HA softphone negotiate direct
-  H.264 video with standard SIP phones and door stations. ESPHome endpoints
-  remain audio-only.
-- SDP negotiation supports H.264 Baseline and Constrained Baseline over
-  RTP/AVP, RFC 6184 packetization mode 1 and independent send/receive
-  directions. Unsupported video is rejected without breaking compatible
-  audio.
-- Incoming RTP supports single NAL units, STAP-A and FU-A. Damaged or oversized
-  access units are bounded and discarded before they reach the browser.
-- The first experimental profile negotiates one video stream and preserves the
-  offer's media-section order. Unsupported extra video sections are rejected
-  explicitly instead of being associated with the wrong SDP transport.
-- The authenticated card path uses WebCodecs for low-latency browser decode and
-  camera encode. There is no server-side transcoding or intermediate video
-  file.
-- Camera denial or an encoder limitation cannot hide a valid incoming video
-  stream. A decoder limitation cannot tear down a valid outgoing stream, and
-  audio call control remains independent from video startup.
-- The card renders received video behind the live call controls and preserves
-  ownership across page reloads while the call is ringing or already active.
-- Live qualification covered incoming and outgoing H.264 calls with bareSIP,
-  `sendrecv`, `sendonly` and `recvonly` directions, bidirectional PCMA audio,
-  non-black decoded video, page reloads during remote ringing and an active
-  dialog, and clean teardown. Registered SIP and real Wildix trunk audio-only
-  calls were repeated after video was enabled.
-- A live receive-only test exposed and fixed concurrent duplicate browser
-  attaches. Video setup is now single-flight per call, so a second state update
-  cannot replace the decoder after the peer's initial H.264 key frame.
-- Runtime video counters no longer masquerade as call lifecycle occurrences,
-  so a long video session cannot retrigger `answered` or `connected`
-  automations every few seconds.
+- The disabled-by-default HA softphone video profile now negotiates H.264, VP8
+  and JPEG directly with standard SIP phones and door stations. ESPHome
+  endpoints remain audio-only.
+- H.264 Baseline and Constrained Baseline, VP8 and RFC 2435 JPEG use bounded
+  RTP reorder and depacketization before the authenticated card WebSocket.
+  H.264 and VP8 can also carry the browser camera when both the global option
+  and that browser's **Send Camera** choice are enabled.
+- A second independent opt-in can use Home Assistant's existing FFmpeg binary
+  to receive H.263, H.263-1998 or H.265 and stream VP8 to the browser. It is
+  receive-only, limited to one process and one thread, and never saves an
+  intermediate file. Direct H.264, VP8 and JPEG do not start FFmpeg.
+- AVP remains the compatible default. When a peer offers AVPF, compound RTCP
+  receiver reports and negotiated PLI/FIR requests help a newly attached or
+  reloaded card recover at a key frame. HA-owned standard SIP bridges can
+  relay matching-profile, exact-codec RTP and RTCP without decoding or
+  re-encoding the stream.
+- Audio, receive video and camera transmit have independent failure domains.
+  Camera denial, an unavailable codec or a failed optional transcode leaves the
+  compatible audio call and other usable media directions alive.
+- Received video fills the card behind the call identity. The call state,
+  duration and hang-up action become a responsive full-width bottom bar;
+  codec diagnostics remain hidden unless debug mode is enabled.
+- Video ownership survives dashboard reloads during ringing or an active call.
+  H.264 parameter sets are retained for the replacement decoder, catch-up is
+  bounded, and the old browser WebSocket is released before the new one owns
+  the media.
+- Live qualification covered direct H.264, VP8 and JPEG, FFmpeg receive for
+  H.263, H.263-1998 and H.265, H.264 and VP8 bidirectional camera media,
+  audio-only fallback, camera denial, local and remote hangup, caller CANCEL,
+  repeated calls and compact through tall Home Assistant card sizes.
+- Post-call diagnostics assert that sessions, dialogs, RTP sockets, browser
+  owners, cleanup tasks and the optional transcode slot all return to zero.
 
 This remains an experimental HA-softphone feature, not a general video PBX.
-There is no ESP video, SRTP, ICE/STUN/TURN, RTCP feedback, transcoding,
-recording, group/conference video relay or established-dialog renegotiation.
+There is no ESP, Assist, ring-group or conference video, cross-codec endpoint
+transcoding, SRTP, ICE/STUN/TURN, recording or established-dialog renegotiation.
 Read the complete [Experimental SIP Video profile](EXPERIMENTAL_SIP_VIDEO.md)
 before enabling it.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 361 tests and 35 subtests passing.
+- Full backend and frontend test suite: 395 tests plus 39 subtests passing,
+  including a real FFmpeg codec matrix.
 - Python compilation, JavaScript syntax and repository diff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.

@@ -136,10 +136,13 @@ trigger plus one `voip_stack.forward` action; the backend infers the active call
 safely.
 
 An opt-in experimental path also lets the Home Assistant softphone negotiate
-direct H.264 SIP video with standard SIP phones and door stations. The card
-renders incoming video behind its call controls and can return the browser
-camera when the negotiated direction permits it. Audio remains independent and
-ESPHome endpoints remain audio-only. See the
+SIP video with standard SIP phones and door stations. H.264, VP8 and JPEG use
+the direct browser path over AVP or negotiated AVPF; an independent FFmpeg
+option can receive H.263, H.263-1998 or H.265 without saving an intermediate
+file. The responsive card
+renders video behind a bottom hang-up bar and can return the browser camera for
+compatible H.264 or VP8 calls. Audio remains independent, camera transmission
+has both global and per-browser gates, and ESPHome endpoints remain audio-only. See the
 [experimental SIP video profile](docs/EXPERIMENTAL_SIP_VIDEO.md) for browser,
 codec, security and qualification boundaries.
 

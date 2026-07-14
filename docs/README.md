@@ -48,8 +48,9 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - 🎥 **Experimental SIP video**:
   [EXPERIMENTAL_SIP_VIDEO.md](EXPERIMENTAL_SIP_VIDEO.md) defines the opt-in
-  H.264 video-phone profile for the HA softphone, its browser requirements,
-  test probe and deliberate limits. ESPHome endpoints remain audio-only.
+  SIP video-phone profile for the HA softphone, its direct and optional
+  transcoded codec matrix, browser privacy controls, test probe and deliberate
+  limits. ESPHome endpoints remain audio-only.
 
 - 🧰 **HA services**: [SERVICES.md](SERVICES.md) documents every
   `voip_stack.*` service and the expected side effects.

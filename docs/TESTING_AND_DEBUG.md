@@ -47,21 +47,30 @@ Expected route evidence:
 
 ## Experimental SIP Video Matrix
 
-Enable video only on the HA softphone and use a standard SIP peer that can
-offer H.264 Baseline with RFC 6184 packetization mode 1. Cover at least:
+Enable video only on the HA softphone and use a standard SIP peer. Cover at
+least:
 
 - incoming audio-only call after video has been enabled;
 - outgoing audio-only call after video has been enabled;
 - incoming H.264 `sendrecv` with non-black browser canvas and outbound camera
   access units;
-- outgoing H.264 `sendrecv`, including dashboard reloads during ringing and
-  after media has connected;
+- direct H.264, VP8 and JPEG receive;
+- H.264 and VP8 browser camera transmit;
+- optional H.263, H.263-1998 and H.265 receive through FFmpeg;
+- outgoing video, including dashboard reloads during ringing and after media
+  has connected;
 - remote `sendonly`, proving receive-only video does not request a camera;
-- remote `recvonly`, proving a decoder failure cannot stop camera transmit;
+- remote `recvonly`, proving receive failure cannot stop camera transmit;
 - incompatible video rejected with `m=video 0` while compatible audio remains;
 - camera permission denied while incoming video and browser audio remain live;
+- RTP/AVP compatibility plus RTP/AVPF compound RR/SDES and negotiated PLI/FIR
+  recovery after attach;
+- exact-codec RTP and RTCP relay between two standard SIP legs;
+- compact 6-column, default, wide and tall card geometry with long caller text;
 - clean local and remote hangup with the video RTP port and browser owner
-  released.
+  released;
+- caller CANCEL while ringing and repeated mixed-codec calls with zero active
+  sessions, dialogs, media owners, transcoders and cleanup tasks afterwards.
 
 The Playwright probe records runtime evidence rather than relying on a source
 string check:
@@ -71,6 +80,18 @@ export HA_URL="https://home-assistant.example/dashboard/voip"
 export PLAYWRIGHT_STORAGE_STATE="$HOME/.cache/ha-playwright-state.json"
 python tools/experimental_sip_video_browser_probe.py \
   --out /tmp/voip-video-result.json
+```
+
+Start a deterministic audio/video caller while the browser probe waits:
+
+```bash
+python tools/experimental_sip_video_peer.py \
+  --host home-assistant.example \
+  --port 5060 \
+  --target HA \
+  --codec vp8 \
+  --direction sendrecv \
+  --out /tmp/voip-video-peer.json
 ```
 
 See [Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) for an outgoing probe,

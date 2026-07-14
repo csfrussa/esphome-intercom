@@ -75,8 +75,11 @@ RTP audio remains UDP in the current profile, even when SIP signaling is TCP.
 
 The HA softphone has an optional experimental video extension to this profile.
 It does not change the ESP media contract and is disabled by default. When
-enabled, standard SIP endpoints may negotiate H.264 over RTP/AVP using RFC 6184
-packetization mode 1. See
+enabled, standard SIP endpoints may negotiate direct H.264, VP8 or JPEG over
+RTP/AVP, or RTP/AVPF when the remote offer selects feedback. A separate
+opt-in can receive H.263, H.263-1998 or H.265 through the FFmpeg binary already
+available to Home Assistant. Exact-codec HA-owned SIP bridges relay encoded
+RTP and RTCP without transcoding when the codec and transport profile match. See
 [Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) for the exact capability
 and security boundaries.
 
