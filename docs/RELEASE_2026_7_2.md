@@ -7,10 +7,11 @@
 > offered through HACS; the normal HACS installation remains on stable
 > `2026.7.1`.
 
-`2026.7.2-dev` collects changes made after stable `2026.7.1`. It introduces
-automation-native call routing and an opt-in experimental SIP video path for
-the Home Assistant softphone. Install it only when you intend to test the
-current `dev` integration and report regressions.
+`2026.7.2-dev` is where the slightly unreasonable ideas that arrived after
+stable `2026.7.1` are becoming real: Home Assistant automations can now steer
+live calls, and yes, we appear to be getting rather close to a real native
+Home Assistant video phone. This is still a development build, so install it
+when you actually want to test the new toys and tell us what breaks.
 
 ## 🧩 Native ESPHome Platform Boundaries
 
@@ -62,6 +63,34 @@ current `dev` integration and report regressions.
 
 ## 🧭 Home Assistant Automations Can Override The Dial Plan
 
+Automations can now cover some genuinely useful home-phone scenarios. Someone
+rings the doorbell, or an external call arrives: Home Assistant rings first;
+if nobody answers, the same call can be sent to Assist. With a sensible prompt,
+your voice assistant can become a surprisingly capable domestic secretary.
+Not mine, obviously: mine swears and insults saints.
+
+Here is the complete no-answer automation. It waits while the HA softphone
+rings, then forwards the still-open call to the Assist extension `1666`:
+
+```yaml
+alias: VoIP - HA unanswered to Assist
+mode: parallel
+max: 10
+triggers:
+  - trigger: state
+    entity_id: sensor.voip_stack_call_state
+    to: ringing
+    for: "00:00:30"
+actions:
+  - action: voip_stack.forward
+    data:
+      destination: "1666"
+      on_failure: resume
+```
+
+Change `1666` to any destination understood by the phonebook. No Call-ID,
+helper timer or Jinja plumbing is required for the normal single-call case.
+
 - The phonebook remains the complete default dial plan. With no matching
   automation, calls behave exactly as before.
 - Trunk inbound routing now has explicit Direct and DTMF modes. Direct follows
@@ -99,6 +128,27 @@ See the [Automation Dial Plan guide](AUTOMATION_DIALPLAN.md) for copyable
 conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🎥 Experimental SIP Video For The HA Softphone
+
+Yes, apparently we are close to a real native Home Assistant video phone. Soon
+you may be able to remain safely inside your sealed fortress of misanthropy and
+despair while checking exactly how ugly the person ringing your doorbell is.
+
+The results so far are encouraging. I do not own a SIP video door station yet
+(I told you I am poor), so qualification currently uses standard SIP clients
+sending webcam, generated video and real media streams. It is behaving well in
+the lab; now I need real door-station tests from users, so please tell me what
+works, what stutters and what catches fire.
+
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/dev/docs/images/ha-sip-video-call.gif"
+    alt="Live SIP video call in the Home Assistant softphone"
+    width="800"
+  />
+</p>
+
+_A real SIP call feeding video into the HA softphone card. The video stays the
+main character; identity, duration and hang-up move into the bottom bar._
 
 - The disabled-by-default HA softphone video profile now negotiates H.264, VP8
   and JPEG directly with standard SIP phones and door stations. ESPHome

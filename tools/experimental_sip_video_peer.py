@@ -290,6 +290,45 @@ async def _receive_audio(
         counters["audio_rx_packets"] += 1
 
 
+async def _start_audio_sender(video_file: str, duration: float):
+    command = [
+        shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "-nostdin", "-re", "-stream_loop", "-1", "-i", video_file,
+        "-t", str(max(2.0, duration + 2.0)), "-vn",
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-ac", "1", "-ar", "8000", "-c:a", "pcm_alaw", "-f", "alaw", "pipe:1",
+    ]
+    return await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+
+
+async def _send_audio_process(
+    process: asyncio.subprocess.Process,
+    sock: socket.socket,
+    destination: tuple[str, int],
+    stopped: asyncio.Event,
+    counters: dict[str, int],
+) -> None:
+    """Packetize raw A-law into the negotiated 20 ms PCMA RTP cadence."""
+    if process.stdout is None:
+        raise RuntimeError("FFmpeg audio stdout is unavailable")
+    loop = asyncio.get_running_loop()
+    sequence = secrets.randbelow(65536)
+    timestamp = secrets.randbelow(2**32)
+    ssrc = secrets.randbelow(2**32 - 1) + 1
+    while not stopped.is_set():
+        try:
+            payload = await process.stdout.readexactly(160)
+        except asyncio.IncompleteReadError:
+            break
+        packet = rtp.build_packet(rtp.RtpPacket(8, sequence, timestamp, ssrc, payload))
+        await loop.sock_sendto(sock, packet, destination)
+        counters["audio_tx_packets"] += 1
+        sequence = (sequence + 1) & 0xFFFF
+        timestamp = (timestamp + 160) & 0xFFFFFFFF
+
+
 async def _receive_rtcp(
     sock: socket.socket,
     stopped: asyncio.Event,
@@ -470,6 +509,7 @@ async def async_main(args: argparse.Namespace) -> int:
         "video_rtcp_packet_types": [],
     }
     video_process = None
+    audio_process = None
     tasks: list[asyncio.Task] = []
     stopped = asyncio.Event()
     answered = False
@@ -543,17 +583,20 @@ async def async_main(args: argparse.Namespace) -> int:
             ),
         )
         await loop.sock_sendto(sip_socket, ack, (args.host, args.port))
-        tasks = [
-            asyncio.create_task(
-                _send_pcma(
-                    audio_socket,
-                    (str(answer_audio["connection_ip"]), int(answer_audio["media_port"])),
-                    stopped,
-                    result,
-                )
-            ),
-            asyncio.create_task(_receive_audio(audio_socket, stopped, result)),
-        ]
+        audio_destination = (str(answer_audio["connection_ip"]), int(answer_audio["media_port"]))
+        audio_stderr: list[str] = []
+        if args.video_file:
+            audio_process = await _start_audio_sender(args.video_file, args.duration)
+            tasks = [
+                asyncio.create_task(_send_audio_process(audio_process, audio_socket, audio_destination, stopped, result)),
+                asyncio.create_task(_receive_audio(audio_socket, stopped, result)),
+                asyncio.create_task(_drain_stderr(audio_process, audio_stderr)),
+            ]
+        else:
+            tasks = [
+                asyncio.create_task(_send_pcma(audio_socket, audio_destination, stopped, result)),
+                asyncio.create_task(_receive_audio(audio_socket, stopped, result)),
+            ]
         if parsed_video is not None and video_socket is not None and rtcp_socket is not None:
             tasks.append(asyncio.create_task(_receive_rtcp(rtcp_socket, stopped, result)))
             tasks.append(
@@ -686,6 +729,17 @@ async def async_main(args: argparse.Namespace) -> int:
                 await video_process.wait()
         if video_process is not None:
             result["video_sender_returncode"] = video_process.returncode
+        if audio_process is not None and audio_process.returncode is None:
+            audio_process.terminate()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(audio_process.wait(), 2.0)
+            if audio_process.returncode is None:
+                audio_process.kill()
+                await audio_process.wait()
+        if audio_process is not None:
+            result["audio_sender_returncode"] = audio_process.returncode
+        if audio_stderr:
+            result["audio_sender_stderr_tail"] = list(audio_stderr)
         if "video_stderr" in locals() and video_stderr:
             result["video_sender_stderr_tail"] = list(video_stderr)
         result["elapsed_s"] = round(time.monotonic() - started, 3)

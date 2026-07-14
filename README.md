@@ -124,27 +124,41 @@ LVGL button, automation, service call or Lovelace card.
 
 ### `2026.7.2` In Development
 
-The next release starts with stricter outbound trunk identity handling and a
-standard SIP cancellation lifecycle shared by the HA softphone, bridges, ring
-groups and conference invitations. Hang Up remains available while a call is
-connecting, sends a real CANCEL to the remote endpoint and cannot be undone by
-a late ringing response. Native call event and durable call-state entities let
-Home Assistant automations optionally override selected phonebook routes
-without changing the default dial plan. Direct and DTMF inbound modes make the
-normal trunk path explicit, while a common no-answer forward is one state
-trigger plus one `voip_stack.forward` action; the backend infers the active call
-safely.
+The next release lets Home Assistant automations do something more interesting
+than switch lights on and off. A doorbell or external call can ring HA first;
+if nobody answers, the still-open call can move to Assist and your carefully
+trained assistant can act as a domestic secretary. Not mine, obviously: mine
+swears and insults saints. The phonebook remains the normal dial plan, while
+automations are optional contextual overrides. Direct and DTMF inbound modes,
+durable call state and one `voip_stack.forward` action cover the ordinary
+no-answer case without Call-ID archaeology or Jinja acrobatics.
 
-An opt-in experimental path also lets the Home Assistant softphone negotiate
-SIP video with standard SIP phones and door stations. H.264, VP8 and JPEG use
-the direct browser path over AVP or negotiated AVPF; an independent FFmpeg
-option can receive H.263, H.263-1998 or H.265 without saving an intermediate
-file. The responsive card
-renders video behind a bottom hang-up bar and can return the browser camera for
-compatible H.264 or VP8 calls. Audio remains independent, camera transmission
-has both global and per-browser gates, and ESPHome endpoints remain audio-only. See the
-[experimental SIP video profile](docs/EXPERIMENTAL_SIP_VIDEO.md) for browser,
-codec, security and qualification boundaries.
+The less glamorous work matters too: outbound trunk identity is stricter and
+Hang Up now follows the real SIP cancellation lifecycle across the HA
+softphone, bridges, ring groups and conference invitations. It remains
+available while connecting, sends a proper CANCEL and cannot be undone by a
+late ringing response.
+
+And yes, we appear to be getting rather close to a real native Home Assistant
+video phone. From the safety of your sealed fortress of misanthropy and despair,
+you can watch exactly how ugly the person ringing the doorbell is. I do not own
+a SIP video door station yet (I told you I am poor), so current tests use SIP
+clients sending webcam, generated video and real streams. The results are
+encouraging, but real user hardware is the next test.
+
+The opt-in path supports direct H.264, VP8 and JPEG; an independent FFmpeg
+option receives H.263, H.263-1998 or H.265 without saving an intermediate file.
+The responsive card keeps video as the main view, moves call information and
+hang-up into a bottom bar and can return the browser camera on compatible H.264
+or VP8 calls. Audio remains independent, camera transmission has global and
+per-browser gates, and ESPHome endpoints remain audio-only. See the
+[experimental SIP video profile](docs/EXPERIMENTAL_SIP_VIDEO.md) for the less
+funny codec, security and qualification details.
+
+![Experimental SIP video call in the Home Assistant softphone](docs/images/ha-sip-video-call.gif)
+
+_Live SIP video demo: the incoming stream becomes the card background while
+call identity, duration and hang-up remain accessible in the bottom bar._
 
 - 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
 - 🚀 [Published `2026.7.1` release notes](docs/RELEASE_2026_7_1.md)
