@@ -623,6 +623,74 @@ class SipProfileTest(unittest.TestCase):
 
 
 class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
+    async def test_video_capable_trunk_profile_negotiates_h264_end_to_end(self) -> None:
+        local = "127.0.0.1"
+        with _reserved_udp_ports(5) as ports:
+            sip_port, server_audio, server_video, client_audio, client_video = ports
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        seen: dict[str, object] = {}
+
+        async def on_invite(invite):
+            seen["video"] = invite.video_format
+            self.assertIsNotNone(invite.video_format)
+            answer = sdp.build_answer_directional(
+                local,
+                local,
+                server_audio,
+                invite.send_format,
+                invite.recv_format,
+                remote_sdp=invite.remote_sdp,
+                video_port=server_video,
+                video_format=invite.video_format,
+                video_direction="sendrecv",
+            )
+            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer)
+
+        server = sip_listener.SipUdpServer(
+            host=local,
+            port=sip_port,
+            local_ip=local,
+            local_rtp_port=server_audio,
+            supported_formats=[audio],
+            on_invite=on_invite,
+            enable_video=True,
+        )
+        self.assertTrue(await server.start())
+        client = sip_client.SipCallClient(
+            local_ip=local,
+            local_name="HA Mare",
+            local_sip_port=5060,
+            local_rtp_port=client_audio,
+            supported_formats=[audio],
+            local_video_rtp_port=client_video,
+            video_formats=(sdp.DEFAULT_H264_FORMAT,),
+            video_direction="sendrecv",
+            username="390000000001",
+            auth_username="390000000001",
+            password="test-only",
+        )
+        try:
+            self.assertEqual(
+                await client.invite(
+                    target="390000000002",
+                    remote_host=local,
+                    remote_sip_port=sip_port,
+                ),
+                "in_call",
+            )
+            self.assertIsNotNone(client.dialog)
+            assert client.dialog is not None
+            self.assertIsNotNone(client.dialog.video_format)
+            assert client.dialog.video_format is not None
+            self.assertEqual(client.dialog.video_format.encoding, "H264")
+            self.assertEqual(client.dialog.remote_video_rtp_port, server_video)
+            self.assertEqual(client.dialog.local_video_direction, "sendrecv")
+            self.assertIsNotNone(seen.get("video"))
+        finally:
+            client.bye()
+            await client.close()
+            await server.stop()
+
     async def test_invite_100_trying_stops_udp_retransmission_without_reporting_ringing(self) -> None:
         client = sip_client.SipCallClient(
             local_ip="127.0.0.1",
@@ -3115,6 +3183,9 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
             local_name="17770000000",
             local_sip_port=5060,
             local_rtp_port=41000,
+            local_video_rtp_port=41002,
+            video_formats=(sdp.DEFAULT_H264_FORMAT,),
+            video_direction="sendrecv",
             username="17770000000",
             auth_username="17770000000",
             password="secret",
@@ -3155,6 +3226,10 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(invites[0].header("Contact").startswith("<sip:17770000000@192.168.1.10:5060"))
         self.assertEqual(invites[0].header("X-Voip-Stack-Caller-Name"), "17770000000")
         self.assertEqual(invites[1].header("X-Voip-Stack-Caller-Name"), "17770000000")
+        self.assertEqual(invites[0].body, invites[1].body)
+        self.assertIn(b"m=video 41002 RTP/AVP 102", invites[0].body)
+        self.assertIn(b"a=rtpmap:102 H264/90000", invites[0].body)
+        self.assertIn(b"a=sendrecv", invites[0].body)
         self.assertFalse(invites[0].header("Proxy-Authorization"))
         self.assertIn('username="17770000000"', invites[1].header("Proxy-Authorization"))
         self.assertIn('uri="sip:+15551234567@sip.example:5060;transport=udp"', invites[1].header("Proxy-Authorization"))

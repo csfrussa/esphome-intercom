@@ -54,6 +54,26 @@ H.264 packetization mode, profile and RTP transport profile must match, and
 other codecs must have matching normalized format parameters. Different
 codecs are not transcoded between two SIP endpoints.
 
+## Direct, Trunk And PBX Calls
+
+Experimental video is not limited to LAN or VPN SIP URIs. The HA softphone
+offers and accepts the same video profile when a call uses a configured SIP
+trunk or a video-capable PBX. An authenticated `401` or `407` retry preserves
+the complete audio/video SDP offer, including media direction and codec
+parameters.
+
+For inbound trunk video, use **Direct to default destination** and route the
+call to the HA softphone. The DTMF extension-selection mode currently
+pre-answers the trunk as an audio call to collect digits; because established
+dialog video renegotiation is not implemented, it cannot add video later.
+
+End-to-end success still depends on every provider or PBX in the route keeping
+the `m=video` section and forwarding the negotiated RTP/RTCP ports. A normal
+PSTN leg or an audio-only ITSP may remove video while leaving audio usable.
+When a PBX bridges two HA instances, exact-codec H.264, VP8 or JPEG can remain
+passthrough; this integration does not require both homes to share one HA
+instance.
+
 ## Card Behavior And Privacy
 
 Received video becomes the background of the in-call card. The caller,

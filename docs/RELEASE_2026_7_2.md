@@ -39,6 +39,10 @@ main character; identity, duration and hang-up move into the bottom bar._
 - The disabled-by-default HA softphone video profile now negotiates H.264, VP8
   and JPEG directly with standard SIP phones and door stations. ESPHome
   endpoints remain audio-only.
+- Video is supported both on direct SIP routes and through a video-capable
+  trunk or PBX. Authenticated trunk retries preserve the complete audio/video
+  offer; inbound trunk video uses Direct routing because DTMF pre-answer is an
+  audio-only decision stage.
 - H.264 Baseline and Constrained Baseline, VP8 and RFC 2435 JPEG use bounded
   RTP reorder and depacketization before the authenticated card WebSocket.
   H.264 and VP8 can also carry the browser camera when both the global option
@@ -191,7 +195,7 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 395 tests plus 39 subtests passing,
+- Full backend and frontend test suite: 396 tests plus 39 subtests passing,
   including a real FFmpeg codec matrix.
 - Python compilation, JavaScript syntax and repository diff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183

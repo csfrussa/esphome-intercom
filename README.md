@@ -148,6 +148,8 @@ encouraging, but real user hardware is the next test.
 
 The opt-in path supports direct H.264, VP8 and JPEG; an independent FFmpeg
 option receives H.263, H.263-1998 or H.265 without saving an intermediate file.
+The same profile works on direct SIP routes and through a video-capable trunk
+or PBX; it is not restricted to a shared LAN or VPN.
 The responsive card keeps video as the main view, moves call information and
 hang-up into a bottom bar and can return the browser camera on compatible H.264
 or VP8 calls. Audio remains independent, camera transmission has global and
