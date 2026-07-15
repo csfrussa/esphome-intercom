@@ -20,6 +20,7 @@ from homeassistant.helpers.selector import (
 
 from .config_validation import extension_conflicts
 from .const import (
+    CONF_ASSIST_ADVANCED_CALL_CONTEXT,
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_EXTENSION,
     CONF_ASSIST_PIPELINE,
@@ -52,6 +53,8 @@ from .const import (
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
+
+
 def _port_selector():
     return NumberSelector(NumberSelectorConfig(min=1, max=65535, step=1, mode="box"))
 
@@ -96,9 +99,7 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
             CONF_TRUNK_DTMF_TIMEOUT_MS: int(
                 legacy_value(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)
             ),
-            CONF_TRUNK_DTMF_TERMINATOR: legacy_value(
-                CONF_TRUNK_DTMF_TERMINATOR, ""
-            ),
+            CONF_TRUNK_DTMF_TERMINATOR: legacy_value(CONF_TRUNK_DTMF_TERMINATOR, ""),
             "sip_accounts": legacy_value("sip_accounts", []),
             CONF_PHONEBOOK_CONTACTS: legacy_value(CONF_PHONEBOOK_CONTACTS, []),
         }
@@ -148,7 +149,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             "rtp_port": existing.get("rtp_port", VOIP_STACK_RTP_PORT),
             "advertise_host": existing.get("advertise_host", ""),
             CONF_ASSIST_INTENTS: existing.get(CONF_ASSIST_INTENTS, False),
-            CONF_ASSIST_ENDPOINT_ENABLED: existing.get(CONF_ASSIST_ENDPOINT_ENABLED, False),
+            CONF_ASSIST_ENDPOINT_ENABLED: existing.get(
+                CONF_ASSIST_ENDPOINT_ENABLED, False
+            ),
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
             CONF_EXPERIMENTAL_VIDEO: existing.get(CONF_EXPERIMENTAL_VIDEO, False),
             CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
@@ -156,21 +159,34 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         schema = vol.Schema(
             {
-                vol.Required("sip_port", default=defaults["sip_port"]): _port_selector(),
-                vol.Required("rtp_port", default=defaults["rtp_port"]): _port_selector(),
+                vol.Required(
+                    "sip_port", default=defaults["sip_port"]
+                ): _port_selector(),
+                vol.Required(
+                    "rtp_port", default=defaults["rtp_port"]
+                ): _port_selector(),
                 vol.Optional("advertise_host", default=defaults["advertise_host"]): str,
                 vol.Required(
                     CONF_ASSIST_INTENTS,
                     default=defaults[CONF_ASSIST_INTENTS],
                 ): BooleanSelector(),
-                vol.Required(CONF_ASSIST_ENDPOINT_ENABLED, default=defaults[CONF_ASSIST_ENDPOINT_ENABLED]): BooleanSelector(),
-                vol.Required(CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]): BooleanSelector(),
+                vol.Required(
+                    CONF_ASSIST_ENDPOINT_ENABLED,
+                    default=defaults[CONF_ASSIST_ENDPOINT_ENABLED],
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]
+                ): BooleanSelector(),
                 vol.Required(
                     CONF_EXPERIMENTAL_VIDEO,
                     default=defaults[CONF_EXPERIMENTAL_VIDEO],
                 ): BooleanSelector(),
-                vol.Required(CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]): BooleanSelector(),
-                vol.Required(CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]): BooleanSelector(),
+                vol.Required(
+                    CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_TRUNK_ENABLED, default=defaults[CONF_TRUNK_ENABLED]
+                ): BooleanSelector(),
             }
         )
         errors: dict[str, str] = {}
@@ -192,11 +208,18 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._base_input[CONF_VIDEO_CAMERA_SEND] = False
                 if user_input[CONF_ASSIST_ENDPOINT_ENABLED]:
                     return await self.async_step_assist()
-                self._base_input[CONF_ASSIST_EXTENSION] = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
-                self._base_input[CONF_ASSIST_PIPELINE] = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
+                self._base_input[CONF_ASSIST_EXTENSION] = str(
+                    existing.get(CONF_ASSIST_EXTENSION) or ""
+                ).strip()
+                self._base_input[CONF_ASSIST_PIPELINE] = str(
+                    existing.get(CONF_ASSIST_PIPELINE) or ""
+                ).strip()
+                self._base_input[CONF_ASSIST_ADVANCED_CALL_CONTEXT] = bool(
+                    existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+                )
                 if user_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
-                data = dict(user_input)
+                data = dict(self._base_input)
                 _disabled_trunk_data(data, existing)
                 current_entry, _existing = self._current_entry_data()
                 if current_entry is None:
@@ -224,12 +247,23 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         if user_input is not None:
             assert self._base_input is not None
-            self._base_input[CONF_VIDEO_TRANSCODING] = bool(user_input[CONF_VIDEO_TRANSCODING])
-            self._base_input[CONF_VIDEO_CAMERA_SEND] = bool(user_input[CONF_VIDEO_CAMERA_SEND])
+            self._base_input[CONF_VIDEO_TRANSCODING] = bool(
+                user_input[CONF_VIDEO_TRANSCODING]
+            )
+            self._base_input[CONF_VIDEO_CAMERA_SEND] = bool(
+                user_input[CONF_VIDEO_CAMERA_SEND]
+            )
             if self._base_input[CONF_ASSIST_ENDPOINT_ENABLED]:
                 return await self.async_step_assist()
-            self._base_input[CONF_ASSIST_EXTENSION] = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
-            self._base_input[CONF_ASSIST_PIPELINE] = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
+            self._base_input[CONF_ASSIST_EXTENSION] = str(
+                existing.get(CONF_ASSIST_EXTENSION) or ""
+            ).strip()
+            self._base_input[CONF_ASSIST_PIPELINE] = str(
+                existing.get(CONF_ASSIST_PIPELINE) or ""
+            ).strip()
+            self._base_input[CONF_ASSIST_ADVANCED_CALL_CONTEXT] = bool(
+                existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+            )
             if self._base_input[CONF_TRUNK_ENABLED]:
                 return await self.async_step_trunk()
             data = dict(self._base_input)
@@ -246,18 +280,33 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
         _current_entry, existing = self._current_entry_data()
         suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
         pipeline = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
-        extension_key = vol.Required(CONF_ASSIST_EXTENSION, default=suggested) if suggested else vol.Required(CONF_ASSIST_EXTENSION)
+        advanced_call_context = bool(
+            existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+        )
+        extension_key = (
+            vol.Required(CONF_ASSIST_EXTENSION, default=suggested)
+            if suggested
+            else vol.Required(CONF_ASSIST_EXTENSION)
+        )
         # HA's native selector represents "Preferred assistant" as an empty
         # selection, while named pipelines carry their concrete pipeline ID.
         pipeline_key = (
-            vol.Optional(CONF_ASSIST_PIPELINE, description={"suggested_value": pipeline})
+            vol.Optional(
+                CONF_ASSIST_PIPELINE, description={"suggested_value": pipeline}
+            )
             if pipeline and pipeline != "preferred"
             else vol.Optional(CONF_ASSIST_PIPELINE)
         )
-        schema = vol.Schema({
-            extension_key: TextSelector(),
-            pipeline_key: AssistPipelineSelector(),
-        })
+        schema = vol.Schema(
+            {
+                extension_key: TextSelector(),
+                pipeline_key: AssistPipelineSelector(),
+                vol.Required(
+                    CONF_ASSIST_ADVANCED_CALL_CONTEXT,
+                    default=advanced_call_context,
+                ): BooleanSelector(),
+            }
+        )
         errors: dict[str, str] = {}
         if user_input is not None:
             extension = str(user_input.get(CONF_ASSIST_EXTENSION) or "").strip()
@@ -268,7 +317,12 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             if not errors:
                 assert self._base_input is not None
                 self._base_input[CONF_ASSIST_EXTENSION] = extension
-                self._base_input[CONF_ASSIST_PIPELINE] = str(user_input.get(CONF_ASSIST_PIPELINE) or "preferred").strip()
+                self._base_input[CONF_ASSIST_PIPELINE] = str(
+                    user_input.get(CONF_ASSIST_PIPELINE) or "preferred"
+                ).strip()
+                self._base_input[CONF_ASSIST_ADVANCED_CALL_CONTEXT] = bool(
+                    user_input.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+                )
                 if self._base_input[CONF_TRUNK_ENABLED]:
                     return await self.async_step_trunk()
                 data = dict(self._base_input)
@@ -282,7 +336,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_trunk(self, user_input=None):
         _current_entry, existing = self._current_entry_data()
-        legacy_timeout = _dtmf_timeout_seconds(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000))
+        legacy_timeout = _dtmf_timeout_seconds(
+            existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)
+        )
         legacy_mode = (
             TRUNK_INBOUND_MODE_DTMF
             if existing.get(CONF_TRUNK_DTMF_ENABLED, True) and legacy_timeout > 0
@@ -298,52 +354,86 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_TRUNK_PASSWORD: existing.get(CONF_TRUNK_PASSWORD, ""),
             CONF_TRUNK_EXPIRES: existing.get(CONF_TRUNK_EXPIRES, 300),
             CONF_TRUNK_OUTBOUND_PROXY: existing.get(CONF_TRUNK_OUTBOUND_PROXY, ""),
-            CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"),
+            CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(
+                CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"
+            ),
             CONF_TRUNK_INBOUND_MODE: existing.get(CONF_TRUNK_INBOUND_MODE, legacy_mode),
-            CONF_AUTOMATION_ROUTING_ENABLED: existing.get(CONF_AUTOMATION_ROUTING_ENABLED, False),
+            CONF_AUTOMATION_ROUTING_ENABLED: existing.get(
+                CONF_AUTOMATION_ROUTING_ENABLED, False
+            ),
             CONF_TRUNK_DTMF_TIMEOUT_MS: legacy_timeout,
             CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
         }
         schema = vol.Schema(
             {
-                vol.Required(CONF_TRUNK_TRANSPORT, default=defaults[CONF_TRUNK_TRANSPORT]): SelectSelector(
-                    SelectSelectorConfig(options=["udp", "tcp"])
-                ),
-                vol.Required(CONF_TRUNK_SERVER, default=defaults[CONF_TRUNK_SERVER]): TextSelector(),
-                vol.Required(CONF_TRUNK_PORT, default=defaults[CONF_TRUNK_PORT]): _port_selector(),
-                vol.Optional(CONF_TRUNK_DOMAIN, default=defaults[CONF_TRUNK_DOMAIN]): TextSelector(),
-                vol.Required(CONF_TRUNK_USERNAME, default=defaults[CONF_TRUNK_USERNAME]): TextSelector(),
-                vol.Optional(CONF_TRUNK_AUTH_USERNAME, default=defaults[CONF_TRUNK_AUTH_USERNAME]): TextSelector(),
+                vol.Required(
+                    CONF_TRUNK_TRANSPORT, default=defaults[CONF_TRUNK_TRANSPORT]
+                ): SelectSelector(SelectSelectorConfig(options=["udp", "tcp"])),
+                vol.Required(
+                    CONF_TRUNK_SERVER, default=defaults[CONF_TRUNK_SERVER]
+                ): TextSelector(),
+                vol.Required(
+                    CONF_TRUNK_PORT, default=defaults[CONF_TRUNK_PORT]
+                ): _port_selector(),
+                vol.Optional(
+                    CONF_TRUNK_DOMAIN, default=defaults[CONF_TRUNK_DOMAIN]
+                ): TextSelector(),
+                vol.Required(
+                    CONF_TRUNK_USERNAME, default=defaults[CONF_TRUNK_USERNAME]
+                ): TextSelector(),
+                vol.Optional(
+                    CONF_TRUNK_AUTH_USERNAME, default=defaults[CONF_TRUNK_AUTH_USERNAME]
+                ): TextSelector(),
                 vol.Required(
                     CONF_TRUNK_PASSWORD, default=defaults[CONF_TRUNK_PASSWORD]
                 ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-                vol.Required(CONF_TRUNK_EXPIRES, default=defaults[CONF_TRUNK_EXPIRES]): NumberSelector(
+                vol.Required(
+                    CONF_TRUNK_EXPIRES, default=defaults[CONF_TRUNK_EXPIRES]
+                ): NumberSelector(
                     NumberSelectorConfig(min=60, max=3600, step=30, mode="box")
                 ),
-                vol.Optional(CONF_TRUNK_OUTBOUND_PROXY, default=defaults[CONF_TRUNK_OUTBOUND_PROXY]): TextSelector(),
+                vol.Optional(
+                    CONF_TRUNK_OUTBOUND_PROXY,
+                    default=defaults[CONF_TRUNK_OUTBOUND_PROXY],
+                ): TextSelector(),
                 vol.Optional(
                     CONF_TRUNK_INBOUND_DEFAULT_TARGET,
                     default=defaults[CONF_TRUNK_INBOUND_DEFAULT_TARGET],
                 ): TextSelector(),
-                vol.Required(CONF_TRUNK_INBOUND_MODE, default=defaults[CONF_TRUNK_INBOUND_MODE]): SelectSelector(
-                    SelectSelectorConfig(options=[TRUNK_INBOUND_MODE_DIRECT, TRUNK_INBOUND_MODE_DTMF], translation_key="trunk_inbound_mode")
+                vol.Required(
+                    CONF_TRUNK_INBOUND_MODE, default=defaults[CONF_TRUNK_INBOUND_MODE]
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[TRUNK_INBOUND_MODE_DIRECT, TRUNK_INBOUND_MODE_DTMF],
+                        translation_key="trunk_inbound_mode",
+                    )
                 ),
                 vol.Required(
                     CONF_AUTOMATION_ROUTING_ENABLED,
                     default=defaults[CONF_AUTOMATION_ROUTING_ENABLED],
                 ): BooleanSelector(),
-                vol.Required(CONF_TRUNK_DTMF_TIMEOUT_MS, default=defaults[CONF_TRUNK_DTMF_TIMEOUT_MS]): NumberSelector(
+                vol.Required(
+                    CONF_TRUNK_DTMF_TIMEOUT_MS,
+                    default=defaults[CONF_TRUNK_DTMF_TIMEOUT_MS],
+                ): NumberSelector(
                     NumberSelectorConfig(min=0, max=10, step=1, mode="box")
                 ),
-                vol.Optional(CONF_TRUNK_DTMF_TERMINATOR, default=defaults[CONF_TRUNK_DTMF_TERMINATOR]): TextSelector(),
+                vol.Optional(
+                    CONF_TRUNK_DTMF_TERMINATOR,
+                    default=defaults[CONF_TRUNK_DTMF_TERMINATOR],
+                ): TextSelector(),
             }
         )
         errors: dict[str, str] = {}
         if user_input is not None:
             for k in (CONF_TRUNK_PORT, CONF_TRUNK_EXPIRES, CONF_TRUNK_DTMF_TIMEOUT_MS):
                 user_input[k] = int(user_input[k])
-            user_input[CONF_TRUNK_DTMF_TIMEOUT_MS] = max(0, min(10, user_input[CONF_TRUNK_DTMF_TIMEOUT_MS])) * 1000
-            inbound_mode = str(user_input.get(CONF_TRUNK_INBOUND_MODE) or TRUNK_INBOUND_MODE_DIRECT)
+            user_input[CONF_TRUNK_DTMF_TIMEOUT_MS] = (
+                max(0, min(10, user_input[CONF_TRUNK_DTMF_TIMEOUT_MS])) * 1000
+            )
+            inbound_mode = str(
+                user_input.get(CONF_TRUNK_INBOUND_MODE) or TRUNK_INBOUND_MODE_DIRECT
+            )
             user_input[CONF_TRUNK_DTMF_ENABLED] = (
                 inbound_mode == TRUNK_INBOUND_MODE_DTMF
                 and user_input[CONF_TRUNK_DTMF_TIMEOUT_MS] > 0
@@ -360,7 +450,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input[k] = (user_input.get(k) or "").strip()
             # SIP digest credentials are opaque. Leading/trailing whitespace is
             # uncommon but valid and must survive a reconfigure unchanged.
-            user_input[CONF_TRUNK_PASSWORD] = str(user_input.get(CONF_TRUNK_PASSWORD) or "")
+            user_input[CONF_TRUNK_PASSWORD] = str(
+                user_input.get(CONF_TRUNK_PASSWORD) or ""
+            )
             trunk_fields_empty = not any(
                 user_input.get(k)
                 for k in (
@@ -378,13 +470,37 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                     or {
                         "sip_port": int(existing.get("sip_port", VOIP_STACK_SIP_PORT)),
                         "rtp_port": int(existing.get("rtp_port", VOIP_STACK_RTP_PORT)),
-                        "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
-                        CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
+                        "advertise_host": str(
+                            existing.get("advertise_host", "") or ""
+                        ).strip(),
+                        CONF_ASSIST_INTENTS: bool(
+                            existing.get(CONF_ASSIST_INTENTS, False)
+                        ),
+                        CONF_ASSIST_ENDPOINT_ENABLED: bool(
+                            existing.get(CONF_ASSIST_ENDPOINT_ENABLED, False)
+                        ),
+                        CONF_ASSIST_EXTENSION: str(
+                            existing.get(CONF_ASSIST_EXTENSION, "") or ""
+                        ).strip(),
+                        CONF_ASSIST_PIPELINE: str(
+                            existing.get(CONF_ASSIST_PIPELINE, "") or ""
+                        ).strip(),
+                        CONF_ASSIST_ADVANCED_CALL_CONTEXT: bool(
+                            existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+                        ),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
-                        CONF_EXPERIMENTAL_VIDEO: bool(existing.get(CONF_EXPERIMENTAL_VIDEO, False)),
-                        CONF_VIDEO_TRANSCODING: bool(existing.get(CONF_VIDEO_TRANSCODING, False)),
-                        CONF_VIDEO_CAMERA_SEND: bool(existing.get(CONF_VIDEO_CAMERA_SEND, False)),
-                        CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
+                        CONF_EXPERIMENTAL_VIDEO: bool(
+                            existing.get(CONF_EXPERIMENTAL_VIDEO, False)
+                        ),
+                        CONF_VIDEO_TRANSCODING: bool(
+                            existing.get(CONF_VIDEO_TRANSCODING, False)
+                        ),
+                        CONF_VIDEO_CAMERA_SEND: bool(
+                            existing.get(CONF_VIDEO_CAMERA_SEND, False)
+                        ),
+                        CONF_REGISTRAR_ENABLED: bool(
+                            existing.get(CONF_REGISTRAR_ENABLED, False)
+                        ),
                     }
                 )
                 return self._store_entry(_disabled_trunk_data(data, existing))
@@ -400,18 +516,44 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                     or {
                         "sip_port": int(existing.get("sip_port", VOIP_STACK_SIP_PORT)),
                         "rtp_port": int(existing.get("rtp_port", VOIP_STACK_RTP_PORT)),
-                        "advertise_host": str(existing.get("advertise_host", "") or "").strip(),
-                        CONF_ASSIST_INTENTS: bool(existing.get(CONF_ASSIST_INTENTS, False)),
+                        "advertise_host": str(
+                            existing.get("advertise_host", "") or ""
+                        ).strip(),
+                        CONF_ASSIST_INTENTS: bool(
+                            existing.get(CONF_ASSIST_INTENTS, False)
+                        ),
+                        CONF_ASSIST_ENDPOINT_ENABLED: bool(
+                            existing.get(CONF_ASSIST_ENDPOINT_ENABLED, False)
+                        ),
+                        CONF_ASSIST_EXTENSION: str(
+                            existing.get(CONF_ASSIST_EXTENSION, "") or ""
+                        ).strip(),
+                        CONF_ASSIST_PIPELINE: str(
+                            existing.get(CONF_ASSIST_PIPELINE, "") or ""
+                        ).strip(),
+                        CONF_ASSIST_ADVANCED_CALL_CONTEXT: bool(
+                            existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+                        ),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
-                        CONF_EXPERIMENTAL_VIDEO: bool(existing.get(CONF_EXPERIMENTAL_VIDEO, False)),
-                        CONF_VIDEO_TRANSCODING: bool(existing.get(CONF_VIDEO_TRANSCODING, False)),
-                        CONF_VIDEO_CAMERA_SEND: bool(existing.get(CONF_VIDEO_CAMERA_SEND, False)),
-                        CONF_REGISTRAR_ENABLED: bool(existing.get(CONF_REGISTRAR_ENABLED, False)),
+                        CONF_EXPERIMENTAL_VIDEO: bool(
+                            existing.get(CONF_EXPERIMENTAL_VIDEO, False)
+                        ),
+                        CONF_VIDEO_TRANSCODING: bool(
+                            existing.get(CONF_VIDEO_TRANSCODING, False)
+                        ),
+                        CONF_VIDEO_CAMERA_SEND: bool(
+                            existing.get(CONF_VIDEO_CAMERA_SEND, False)
+                        ),
+                        CONF_REGISTRAR_ENABLED: bool(
+                            existing.get(CONF_REGISTRAR_ENABLED, False)
+                        ),
                     }
                 )
                 data[CONF_TRUNK_ENABLED] = True
                 data.setdefault("sip_accounts", existing.get("sip_accounts", []))
-                data.setdefault(CONF_PHONEBOOK_CONTACTS, existing.get(CONF_PHONEBOOK_CONTACTS, []))
+                data.setdefault(
+                    CONF_PHONEBOOK_CONTACTS, existing.get(CONF_PHONEBOOK_CONTACTS, [])
+                )
                 data.update(user_input)
                 current_entry, _existing = self._current_entry_data()
                 if current_entry is None:

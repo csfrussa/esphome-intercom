@@ -6,6 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_ASSIST_ADVANCED_CALL_CONTEXT,
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_EXTENSION,
     CONF_ASSIST_PIPELINE,
@@ -41,7 +42,12 @@ def entry_assist_config(entry: ConfigEntry | None = None) -> dict:
     """Return the optional local Assist pipeline endpoint configuration."""
     data = entry.data if entry is not None else {}
     return {
-        CONF_ASSIST_ENDPOINT_ENABLED: bool(data.get(CONF_ASSIST_ENDPOINT_ENABLED, False)),
+        CONF_ASSIST_ADVANCED_CALL_CONTEXT: bool(
+            data.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+        ),
+        CONF_ASSIST_ENDPOINT_ENABLED: bool(
+            data.get(CONF_ASSIST_ENDPOINT_ENABLED, False)
+        ),
         CONF_ASSIST_EXTENSION: str(data.get(CONF_ASSIST_EXTENSION) or "").strip(),
         CONF_ASSIST_PIPELINE: str(data.get(CONF_ASSIST_PIPELINE) or "").strip(),
     }
@@ -64,15 +70,21 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
     data = entry.data if entry is not None else {}
     raw_dtmf_value = data.get(CONF_TRUNK_DTMF_TIMEOUT_MS)
     raw_dtmf_timeout = 3000 if raw_dtmf_value in (None, "") else int(raw_dtmf_value)
-    dtmf_timeout_ms = raw_dtmf_timeout * 1000 if 0 <= raw_dtmf_timeout <= 10 else raw_dtmf_timeout
+    dtmf_timeout_ms = (
+        raw_dtmf_timeout * 1000 if 0 <= raw_dtmf_timeout <= 10 else raw_dtmf_timeout
+    )
     legacy_dtmf = bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)) and dtmf_timeout_ms > 0
     inbound_mode = str(data.get(CONF_TRUNK_INBOUND_MODE) or "").strip().lower()
     if inbound_mode not in {TRUNK_INBOUND_MODE_DIRECT, TRUNK_INBOUND_MODE_DTMF}:
-        inbound_mode = TRUNK_INBOUND_MODE_DTMF if legacy_dtmf else TRUNK_INBOUND_MODE_DIRECT
+        inbound_mode = (
+            TRUNK_INBOUND_MODE_DTMF if legacy_dtmf else TRUNK_INBOUND_MODE_DIRECT
+        )
     dtmf_enabled = inbound_mode == TRUNK_INBOUND_MODE_DTMF and dtmf_timeout_ms > 0
     return {
         CONF_TRUNK_ENABLED: bool(data.get(CONF_TRUNK_ENABLED, False)),
-        CONF_TRUNK_TRANSPORT: str(data.get(CONF_TRUNK_TRANSPORT) or "udp").strip().lower(),
+        CONF_TRUNK_TRANSPORT: str(data.get(CONF_TRUNK_TRANSPORT) or "udp")
+        .strip()
+        .lower(),
         CONF_TRUNK_SERVER: str(data.get(CONF_TRUNK_SERVER) or "").strip(),
         CONF_TRUNK_PORT: int(data.get(CONF_TRUNK_PORT) or VOIP_STACK_SIP_PORT),
         CONF_TRUNK_DOMAIN: str(data.get(CONF_TRUNK_DOMAIN) or "").strip(),
@@ -80,13 +92,22 @@ def entry_trunk_config(entry: ConfigEntry | None = None) -> dict:
         CONF_TRUNK_AUTH_USERNAME: str(data.get(CONF_TRUNK_AUTH_USERNAME) or "").strip(),
         CONF_TRUNK_PASSWORD: str(data.get(CONF_TRUNK_PASSWORD) or ""),
         CONF_TRUNK_EXPIRES: int(data.get(CONF_TRUNK_EXPIRES) or 300),
-        CONF_TRUNK_OUTBOUND_PROXY: str(data.get(CONF_TRUNK_OUTBOUND_PROXY) or "").strip(),
-        CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip() or "HA",
+        CONF_TRUNK_OUTBOUND_PROXY: str(
+            data.get(CONF_TRUNK_OUTBOUND_PROXY) or ""
+        ).strip(),
+        CONF_TRUNK_INBOUND_DEFAULT_TARGET: str(
+            data.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA"
+        ).strip()
+        or "HA",
         CONF_TRUNK_INBOUND_MODE: inbound_mode,
-        CONF_AUTOMATION_ROUTING_ENABLED: bool(data.get(CONF_AUTOMATION_ROUTING_ENABLED, False)),
+        CONF_AUTOMATION_ROUTING_ENABLED: bool(
+            data.get(CONF_AUTOMATION_ROUTING_ENABLED, False)
+        ),
         CONF_TRUNK_DTMF_ENABLED: dtmf_enabled,
         CONF_TRUNK_DTMF_TIMEOUT_MS: max(0, min(10000, dtmf_timeout_ms)),
-        CONF_TRUNK_DTMF_TERMINATOR: str(data.get(CONF_TRUNK_DTMF_TERMINATOR) or "").strip(),
+        CONF_TRUNK_DTMF_TERMINATOR: str(
+            data.get(CONF_TRUNK_DTMF_TERMINATOR) or ""
+        ).strip(),
     }
 
 

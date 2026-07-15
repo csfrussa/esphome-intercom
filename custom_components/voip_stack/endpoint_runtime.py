@@ -23,6 +23,7 @@ from .call_registry import TERMINAL_STATES
 from .config import debug_mode as _debug_mode
 from .const import (
     CONF_AUTOMATION_ROUTING_ENABLED,
+    CONF_ASSIST_ADVANCED_CALL_CONTEXT,
     CONF_ASSIST_PIPELINE,
     CONF_EXPERIMENTAL_VIDEO,
     CONF_REGISTRAR_ENABLED,
@@ -446,7 +447,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         called_extension: str,
         release_reservation_on_failure: bool = True,
     ):
-        from .assist_runtime import AssistMediaSession, build_call_context_prompt
+        from .assist_runtime import AssistMediaSession, build_call_connected_intent
 
         assist_cfg = hass.data.setdefault(DOMAIN, {}).get("assist_config", {})
         caller_entry = _roster_entry_for_target(invite.caller, roster_entries)
@@ -492,14 +493,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             local_rtp_port=local_rtp_port,
             reservation=reservation,
             pipeline_id=str(assist_cfg.get(CONF_ASSIST_PIPELINE) or "preferred"),
-            caller_label=caller_name,
-            extra_system_prompt=build_call_context_prompt(
+            call_connected_intent=build_call_connected_intent(
                 caller=caller_name,
                 caller_id=caller_id,
-                caller_uri=caller_uri,
                 caller_in_phonebook=caller_entry is not None,
                 source=source,
                 called_extension=called_extension,
+                include_advanced_context=bool(
+                    assist_cfg.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
+                ),
             ),
             on_complete=_complete,
         )

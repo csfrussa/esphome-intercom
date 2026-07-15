@@ -20,6 +20,7 @@ SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 SERVICES_YAML = ROOT / "custom_components" / "voip_stack" / "services.yaml"
 STRINGS = ROOT / "custom_components" / "voip_stack" / "strings.json"
 TRANSLATIONS = ROOT / "custom_components" / "voip_stack" / "translations"
+CONFIG = ROOT / "custom_components" / "voip_stack" / "config.py"
 
 
 def _load_disabled_trunk_data():
@@ -150,9 +151,10 @@ def test_trunk_password_config_field_is_masked() -> None:
     assert (
         "TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))" in trunk_step
     )
-    assert source.count(
-        "TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))"
-    ) == 1
+    assert (
+        source.count("TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))")
+        == 1
+    )
 
 
 def test_create_account_password_service_field_is_masked() -> None:
@@ -253,3 +255,40 @@ def test_phonebook_schema_accepts_bounded_standard_media_fields() -> None:
 
     assert validated["port"] == 5060
     assert validated["tx_formats"] == ["OPUS/48000/2/20", "PCMA/8000/1/20"]
+
+
+def test_advanced_assist_context_is_opt_in_and_persisted_by_config_flow() -> None:
+    config_source = CONFIG.read_text()
+    flow_source = CONFIG_FLOW.read_text()
+
+    assert (
+        'CONF_ASSIST_ADVANCED_CALL_CONTEXT = "assist_advanced_call_context"'
+        in CONST.read_text()
+    )
+    assert "data.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)" in config_source
+    assert "CONF_ASSIST_ADVANCED_CALL_CONTEXT" in flow_source
+    assert "BooleanSelector()" in flow_source
+    assert "user_input.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)" in flow_source
+    assert "data = dict(self._base_input)" in flow_source
+
+
+@pytest.mark.parametrize(
+    "path",
+    [STRINGS, TRANSLATIONS / "en.json", TRANSLATIONS / "it.json"],
+)
+def test_assist_config_explains_agent_instructions_and_untrusted_context(
+    path: Path,
+) -> None:
+    assist = json.loads(path.read_text())["config"]["step"]["assist"]
+    description = assist["description"]
+    advanced = assist["data_description"]["assist_advanced_call_context"].lower()
+
+    assert 'Incoming SIP call from "Daniele".' in description
+    assert "Instructions" in description
+    assert "do not repeat their name" in description
+    assert "s**t" in description
+    assert "f**k" in description
+    assert "untrusted" in advanced or "non attendibili" in advanced
+    assert (
+        "not authentication" in advanced or "non costituisce autenticazione" in advanced
+    )

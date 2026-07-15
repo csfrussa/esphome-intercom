@@ -175,11 +175,13 @@ preferred assistant or select a specific pipeline, then call it from an ESP
 intercom, a registered SIP phone or an external number arriving through your
 trunk.
 
-The assistant receives the SIP caller identity and can greet first. It listens
-through the pipeline's existing STT provider, answers through its configured
-TTS voice and returns to listening in the same open call for a natural
-multi-turn conversation. The extension is not tied to one AI provider: cloud
-and local Home Assistant conversation agents use the same route.
+The assistant receives one initial user message such as
+`Incoming SIP call from "Daniele".` and can greet first. It listens through the
+pipeline's existing STT provider, answers through its configured TTS voice and
+returns to listening in the same open call for a natural multi-turn
+conversation. Caller identity is not injected again on every turn. The
+extension is not tied to one AI provider: cloud and local Home Assistant
+conversation agents use the same route.
 
 <p align="center">
   <img
@@ -192,6 +194,26 @@ and local Home Assistant conversation agents use the same route.
 
 _Pick the SIP extension yourself and route it to HA's preferred Assist pipeline
 or to a specific assistant. No extension is silently reserved._
+
+Configure how calls should be handled in the selected conversation agent's own
+**Instructions** or prompt field, normally under **Settings > Devices &
+services > the agent integration > Configure** (the exact label varies by
+provider). VoIP Stack deliberately has no second prompt field. For example:
+
+- Professional receptionist: `When you receive a message beginning with
+  "Incoming SIP call from", treat it as a live phone call. Greet the caller
+  once, act as a concise receptionist, and do not repeat their name in every
+  reply.`
+- Friendly mood: `During SIP calls, sound cheerful and informal. Adapt your
+  tone to the caller while remaining concise and helpful.`
+- Terrible mood: `When you receive an incoming SIP call and you are in a
+  terrible mood, you may answer: "Hi. I don't give a s**t—please go f**k
+  yourself."`
+
+Enable **Advanced Assist call context** only when the agent benefits from
+`caller_id`, `caller_in_phonebook`, `source` and `called_extension`. These are
+appended once to the first user message as untrusted metadata; a phonebook
+match is not proof of the caller's identity.
 
 ### 🏠 One Home, One Phone System
 
@@ -599,10 +621,17 @@ Recommended first setup:
   preferred pipeline or choose a specific one, and asks for its extension; both
   fields are empty until you enable the feature and no extension is reserved by
   default. Calls may come from ESP endpoints, registered clients, trunks or
-  other compatible SIP callers. VoIP Stack passes the SIP caller identity to
-  Assist, streams the configured STT/conversation/TTS pipeline over the same
-  open call, and returns to listening after every reply. This does not create a
-  second SIP listener or a separate Assist satellite.
+  other compatible SIP callers. VoIP Stack sends one initial user message such
+  as `Incoming SIP call from "Daniele".`, streams the configured
+  STT/conversation/TTS pipeline over the same open call, and returns to
+  listening after every reply. It does not add a persistent parallel system
+  prompt. This does not create a second SIP listener or a separate Assist
+  satellite.
+- **Advanced Assist call context**: disabled by default. When enabled, caller
+  ID, phonebook match, call source and called extension are appended once to
+  the initial user message. This can help a receptionist agent route a caller
+  or check whether somebody is available. The values are untrusted SIP call
+  metadata: `caller_in_phonebook: true` is useful context, not authentication.
 - **Debug mode**: keep disabled for normal use. Enable only while collecting
   SIP/RTP diagnostics. To expose the integration's DEBUG messages in Home
   Assistant logs, also configure
@@ -1889,11 +1918,11 @@ The Voice Assistant, Micro Wake Word, and VoIP call path coexist on the same har
 - **Assist by telephone**: enable **Include voice assistant** in the VoIP Stack
   config flow, choose a native Assist pipeline and assign its SIP extension.
   The pipeline becomes a normal phonebook destination. It receives the caller
-  identity, speaks first, listens through its configured STT provider, replies
-  through its configured TTS provider and keeps the conversation open until the
-  SIP caller hangs up. The route is independent of the conversation provider,
-  so compatible HA conversation agents work without Home Assistant's separate
-  VoIP integration or another SIP port.
+  identity once, speaks first, listens through its configured STT provider,
+  replies through its configured TTS provider and keeps the same conversation
+  open until the SIP caller hangs up. The route is independent of the
+  conversation provider, so compatible HA conversation agents work without
+  Home Assistant's separate VoIP integration or another SIP port.
 - **Runtime AEC mode switching**: An `AEC Mode` select entity in Home Assistant lets you switch between SR and VOIP AEC modes at runtime without reflashing
 - **Weather at a glance**: Current conditions, temperature, and 5-day forecast updated automatically (touch displays)
 - **Mood-aware responses**: The assistant shows different expressions (happy, neutral, angry) based on the tone of its reply. Requires instructing your LLM to prepend an ASCII emoticon (`:-)` `:-(` `:-|`) to each response based on its tone
