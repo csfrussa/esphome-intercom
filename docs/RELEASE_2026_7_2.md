@@ -75,7 +75,10 @@ main character; identity, duration and hang-up move into the bottom bar._
 
 This remains an experimental HA-softphone feature, not a general video PBX.
 There is no ESP, Assist, ring-group or conference video, cross-codec endpoint
-transcoding, SRTP, ICE/STUN/TURN, recording or established-dialog renegotiation.
+transcoding, SRTP, ICE/STUN/TURN or recording. HA accepts compatible
+peer-initiated UPDATE/re-INVITE hold, direction and RTP-endpoint changes for an
+established stream, but it does not add/remove video, change its codec or
+originate renegotiation.
 Read the complete [Experimental SIP Video profile](EXPERIMENTAL_SIP_VIDEO.md)
 before enabling it.
 

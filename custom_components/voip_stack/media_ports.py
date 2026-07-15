@@ -38,9 +38,11 @@ class RtpPortReservation:
 
 def release_media_reservation(item) -> None:
     """Release an owned RTP reservation stored in runtime dict metadata."""
-    video_socket = (item or {}).pop("video_rtp_socket", None) if isinstance(item, dict) else None
-    if video_socket is not None and hasattr(video_socket, "close"):
-        video_socket.close()
+    if isinstance(item, dict):
+        for key in ("video_rtp_socket", "video_rtcp_socket"):
+            video_socket = item.pop(key, None)
+            if video_socket is not None and hasattr(video_socket, "close"):
+                video_socket.close()
     reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
     if reservation is not None and hasattr(reservation, "release"):
         reservation.release()
@@ -71,6 +73,71 @@ def bind_sip_rtp_socket(port: int) -> socket.socket:
     except BaseException:
         sock.close()
         raise
+
+
+def bind_sip_video_sockets(rtp_port: int) -> tuple[socket.socket, socket.socket]:
+    """Reserve the advertised RTP/RTCP pair before SIP signaling completes."""
+
+    if not 1 <= int(rtp_port) < 65535:
+        raise OSError("invalid video RTP/RTCP port pair")
+    rtp_socket = bind_sip_rtp_socket(int(rtp_port))
+    try:
+        rtcp_socket = bind_sip_rtp_socket(int(rtp_port) + 1)
+    except BaseException:
+        rtp_socket.close()
+        raise
+    return rtp_socket, rtcp_socket
+
+
+def reserve_sip_video_media(
+    hass: HomeAssistant,
+    *,
+    attempts: int = 64,
+) -> tuple[RtpPortReservation, socket.socket, socket.socket]:
+    """Allocate audio/video ports and pre-bind the video's RTP/RTCP pair.
+
+    A single occupied RTCP port must not silently downgrade an otherwise
+    valid call to audio-only while the bounded media pool still has room.
+    """
+
+    last_error: OSError | None = None
+    for _ in range(max(1, int(attempts))):
+        reservation = RtpPortReservation.allocate(hass)
+        try:
+            rtp_socket, rtcp_socket = bind_sip_video_sockets(reservation.ports[1])
+        except OSError as err:
+            last_error = err
+            reservation.release()
+            continue
+        return reservation, rtp_socket, rtcp_socket
+    raise OSError("SIP video RTP/RTCP port allocation exhausted") from last_error
+
+
+def reserve_sip_video_relay_media(
+    hass: HomeAssistant,
+    *,
+    attempts: int = 64,
+) -> tuple[
+    RtpPortReservation,
+    tuple[socket.socket, socket.socket, socket.socket, socket.socket],
+]:
+    """Allocate and pre-bind RTP/RTCP sockets for both video relay legs."""
+
+    last_error: OSError | None = None
+    for _ in range(max(1, int(attempts))):
+        reservation = RtpPortReservation.allocate(hass)
+        sockets: list[socket.socket] = []
+        try:
+            sockets.extend(bind_sip_video_sockets(reservation.ports[0]))
+            sockets.extend(bind_sip_video_sockets(reservation.ports[1]))
+        except OSError as err:
+            last_error = err
+            for sock in sockets:
+                sock.close()
+            reservation.release()
+            continue
+        return reservation, (sockets[0], sockets[1], sockets[2], sockets[3])
+    raise OSError("SIP video relay RTP/RTCP port allocation exhausted") from last_error
 
 
 def allocate_sip_rtp_port(hass: HomeAssistant, *, step: int = 2) -> int:

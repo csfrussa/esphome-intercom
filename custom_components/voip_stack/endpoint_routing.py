@@ -10,7 +10,6 @@ from .audio_format import (
     AudioFormat,
     HA_SIP_PCM_RX_FORMATS,
     HA_SIP_PCM_TX_FORMATS,
-    choose_common_frame_ms,
     parse_audio_format_list,
 )
 from .peer import Peer
@@ -121,22 +120,24 @@ def sip_target_audio_profile(
         )
         return [], []
 
-    common_frame_ms = choose_common_frame_ms(send_candidates, recv_candidates)
-    if common_frame_ms is None:
+    common_formats = set(send_candidates) & set(recv_candidates)
+    if not common_formats:
         _LOGGER.warning(
-            "No common SIP ptime for %s (send=%s recv=%s)",
+            "No bidirectional SIP RTP format for %s (send=%s recv=%s)",
             target,
             [fmt.wire_token() for fmt in send_candidates],
             [fmt.wire_token() for fmt in recv_candidates],
         )
         return [], []
 
-    send_candidates = [fmt for fmt in send_candidates if fmt.frame_ms == common_frame_ms]
-    recv_candidates = [fmt for fmt in recv_candidates if fmt.frame_ms == common_frame_ms]
+    # A single RFC 3264 sendrecv m=audio cannot assign one payload contract
+    # to TX and another to RX. Keep direction-specific preference ordering,
+    # but expose only formats supported on both sides of this dialog leg.
+    send_candidates = [fmt for fmt in send_candidates if fmt in common_formats]
+    recv_candidates = [fmt for fmt in recv_candidates if fmt in common_formats]
     _LOGGER.debug(
-        "Directional SIP PCM profile for %s: ptime=%sms send=%s recv=%s",
+        "Bidirectional SIP PCM profile for %s: send=%s recv=%s",
         target,
-        common_frame_ms,
         [fmt.wire_token() for fmt in send_candidates],
         [fmt.wire_token() for fmt in recv_candidates],
     )

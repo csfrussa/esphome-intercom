@@ -12,13 +12,33 @@ const MODULE_VERSION = (() => {
 const { RINGTONE_REPEAT_MS, playVoipRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
+const AUDIO_NEGOTIATION_TIMEOUT_MS = 3000;
 const BUS_SUBSCRIBE_RETRY_MS = 2000;
 const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call";
+const MEDIA_CLIENT_SESSION_KEY = "voip_stack_media_client_id";
 const VIDEO_CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
 const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
 const FRAME_MS = Object.freeze([10, 16, 20, 32]);
+
+function mediaClientInstanceId() {
+  try {
+    const existing = sessionStorage.getItem(MEDIA_CLIENT_SESSION_KEY) || "";
+    if (/^[A-Za-z0-9][A-Za-z0-9._~-]{15,127}$/.test(existing)) return existing;
+  } catch (_) {}
+  let generated = "";
+  try {
+    generated = globalThis.crypto?.randomUUID?.() || "";
+  } catch (_) {}
+  if (!generated) {
+    // This token is collision resistance, not authentication: Home
+    // Assistant signs the complete path including it before WebSocket use.
+    generated = `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  }
+  try { sessionStorage.setItem(MEDIA_CLIENT_SESSION_KEY, generated); } catch (_) {}
+  return generated;
+}
 
 class VoipStackEngine extends EventTarget {
   constructor() {
@@ -29,9 +49,12 @@ class VoipStackEngine extends EventTarget {
     this._deviceId = "";
     this._callId = "";
     this._audioMode = "full_duplex";
+    this._audioDirection = "sendrecv";
     this._txFormat = null;
     this._rxFormat = null;
     this._lastSessionPayload = null;
+    this._audioReady = false;
+    this._audioSetupGeneration = 0;
     this._mediaStream = null;
     this._audioContext = null;
     this._captureNode = null;
@@ -51,8 +74,10 @@ class VoipStackEngine extends EventTarget {
     this._lastSoftphoneState = null;
     this._controlWaiter = null;
     this._connectPromise = null;
+    this._connectGeneration = 0;
     this._sessionAttachKey = "";
     this._sessionAttachPromise = null;
+    this._mediaClientId = mediaClientInstanceId();
     // Media ownership belongs to the page-level engine, not to one Lovelace
     // element. Home Assistant may recreate a card while an outbound call is
     // ringing; the replacement must still be able to attach that call's media.
@@ -68,6 +93,8 @@ class VoipStackEngine extends EventTarget {
     this._video = null;
     this._videoLoadPromise = null;
     this._videoCanvas = null;
+    this._videoCanvasOwner = null;
+    this._softphoneController = null;
     this._videoAttachGeneration = 0;
     this._videoAttachPromise = null;
     this._videoAttachCallId = "";
@@ -81,7 +108,7 @@ class VoipStackEngine extends EventTarget {
 
   configure(hass) {
     this._hass = hass;
-    if (this._video) this._video.configure(hass);
+    if (this._video) this._video.configure(hass, this._mediaClientId);
     const conn = hass?.connection || null;
     if (!conn) return;
     if (conn !== this._busConnection) {
@@ -180,6 +207,20 @@ class VoipStackEngine extends EventTarget {
     }
   }
 
+  claimSoftphoneController(owner) {
+    if (!owner || owner.isConnected === false) return false;
+    if (this._softphoneController && this._softphoneController !== owner) return false;
+    if (!this._softphoneController) this._softphoneController = owner;
+    return true;
+  }
+
+  releaseSoftphoneController(owner) {
+    if (!owner || this._softphoneController !== owner) return false;
+    this._softphoneController = null;
+    this._emit();
+    return true;
+  }
+
   get stats() {
     return { ...this._stats, video: this._video?.stats || {} };
   }
@@ -197,6 +238,21 @@ class VoipStackEngine extends EventTarget {
     if (this._video) this._video.setCanvas(this._videoCanvas);
   }
 
+  claimVideoCanvas(owner, canvas) {
+    if (!owner || owner.isConnected === false || !canvas) return false;
+    if (this._videoCanvasOwner && this._videoCanvasOwner !== owner) return false;
+    this._videoCanvasOwner = owner;
+    this.setVideoCanvas(canvas);
+    return true;
+  }
+
+  releaseVideoCanvas(owner) {
+    if (!owner || this._videoCanvasOwner !== owner) return false;
+    this._videoCanvasOwner = null;
+    this.setVideoCanvas(null);
+    return true;
+  }
+
   get videoCanSend() {
     return Boolean(this._video?.canSend);
   }
@@ -212,13 +268,43 @@ class VoipStackEngine extends EventTarget {
     await video.setCameraEnabled(enabled);
   }
 
+  async prepareVideoCameraPermission({ persistentOnly = false } = {}) {
+    if (!this.videoCameraEnabled || !navigator.mediaDevices?.getUserMedia) return false;
+    if (persistentOnly) {
+      if (!navigator.permissions?.query) return false;
+      try {
+        const permission = await navigator.permissions.query({ name: "camera" });
+        if (permission.state !== "granted") return false;
+      } catch (_) {
+        return false;
+      }
+    }
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640, max: 1280 },
+          height: { ideal: 360, max: 720 },
+          frameRate: { ideal: 15, max: 20 },
+        },
+        audio: false,
+      });
+      return Boolean(stream?.getVideoTracks?.()[0]);
+    } catch (err) {
+      console.warn("voip-stack-engine: camera permission unavailable; continuing receive-only", err);
+      return false;
+    } finally {
+      for (const track of stream?.getTracks?.() || []) track.stop();
+    }
+  }
+
   async _loadVideo() {
     if (this._video) return this._video;
     if (!this._videoLoadPromise) {
       this._videoLoadPromise = import(`./voip-stack-video.js?v=${encodeURIComponent(MODULE_VERSION)}`)
         .then(({ VoipStackVideo }) => {
           const video = new VoipStackVideo();
-          if (this._hass) video.configure(this._hass);
+          if (this._hass) video.configure(this._hass, this._mediaClientId);
           video.setCanvas(this._videoCanvas);
           video.addEventListener("state", () => this._emit());
           this._video = video;
@@ -350,9 +436,9 @@ class VoipStackEngine extends EventTarget {
     }
   }
 
-  async _wsUrl(deviceId) {
+  async _wsUrl(deviceId, callId) {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const path = `/api/voip_stack/ws?device_id=${encodeURIComponent(deviceId)}`;
+    const path = `/api/voip_stack/ws?device_id=${encodeURIComponent(deviceId)}&call_id=${encodeURIComponent(callId)}&client_id=${encodeURIComponent(this._mediaClientId)}`;
     const signed = await this._hass.callWS({ type: "auth/sign_path", path });
     return `${proto}//${window.location.host}${signed.path || path}`;
   }
@@ -364,7 +450,7 @@ class VoipStackEngine extends EventTarget {
       this._deviceId === deviceId &&
       this._callId === wantedCallId &&
       this._ws.readyState === WebSocket.OPEN
-    ) return;
+    ) return this._lastSessionPayload;
     if (
       this._connectPromise &&
       this._deviceId === deviceId &&
@@ -374,22 +460,56 @@ class VoipStackEngine extends EventTarget {
     ) {
       return this._connectPromise;
     }
-    await this.close("switch", true);
+    const connectGeneration = ++this._connectGeneration;
+    await this.close("switch", true, true);
+    if (connectGeneration !== this._connectGeneration) {
+      throw new Error("Audio WebSocket superseded before connect");
+    }
     this._deviceId = deviceId;
     this._callId = wantedCallId;
     this._lastSessionPayload = null;
-    const wsUrl = await this._wsUrl(deviceId);
-    if (this._deviceId !== deviceId || this._callId !== wantedCallId) {
+    const wsUrl = await this._wsUrl(deviceId, wantedCallId);
+    if (
+      connectGeneration !== this._connectGeneration ||
+      this._deviceId !== deviceId ||
+      this._callId !== wantedCallId
+    ) {
       throw new Error("Audio WebSocket superseded before connect");
     }
     const ws = new WebSocket(wsUrl);
     this._ws = ws;
     ws.binaryType = "arraybuffer";
+    let helloResolve;
+    let helloReject;
+    let helloSettled = false;
+    const settleHello = (method, value) => {
+      if (helloSettled) return;
+      helloSettled = true;
+      method(value);
+    };
+    const hello = new Promise((resolve, reject) => {
+      helloResolve = resolve;
+      helloReject = reject;
+    });
+    // onclose can reject this before OPEN has completed. Observe it now so a
+    // losing connect generation never creates an unhandled rejection.
+    void hello.catch(() => {});
     ws.onmessage = (event) => {
-      if (this._ws === ws) this._handleMessage(event);
+      if (this._ws !== ws) return;
+      if (typeof event.data === "string") {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.error) {
+            settleHello(helloReject, new Error(payload.error));
+          } else if (payload?.tx_format || payload?.selected_tx_format) {
+            settleHello(helloResolve, payload);
+          }
+        } catch (_) {}
+      }
+      this._handleMessage(event);
     };
     let opened = false;
-    const connectPromise = new Promise((resolve, reject) => {
+    const openedPromise = new Promise((resolve, reject) => {
       ws.onopen = () => {
         opened = true;
         if (this._ws === ws) resolve();
@@ -398,17 +518,46 @@ class VoipStackEngine extends EventTarget {
           reject(new Error("Audio WebSocket superseded"));
         }
       };
-      ws.onerror = () => reject(new Error("Audio WebSocket failed"));
+      ws.onerror = () => {
+        const error = new Error("Audio WebSocket failed");
+        settleHello(helloReject, error);
+        reject(error);
+      };
       ws.onclose = () => {
-        if (!opened) reject(new Error("Audio WebSocket closed before opening"));
+        const error = new Error(
+          opened
+            ? "Audio WebSocket closed before negotiation"
+            : "Audio WebSocket closed before opening",
+        );
+        settleHello(helloReject, error);
+        if (!opened) reject(error);
         if (this._ws !== ws) return;
         this._ws = null;
         void this._cleanupAudio("ws_close");
       };
     });
+    const connectPromise = (async () => {
+      await openedPromise;
+      const negotiated = await Promise.race([
+        hello,
+        new Promise((_, reject) => window.setTimeout(
+          () => reject(new Error("Audio WebSocket negotiation timed out")),
+          AUDIO_NEGOTIATION_TIMEOUT_MS,
+        )),
+      ]);
+      if (
+        connectGeneration !== this._connectGeneration ||
+        this._ws !== ws ||
+        this._deviceId !== deviceId ||
+        this._callId !== wantedCallId
+      ) {
+        throw new Error("Audio WebSocket superseded during negotiation");
+      }
+      return negotiated;
+    })();
     this._connectPromise = connectPromise;
     try {
-      await connectPromise;
+      return await connectPromise;
     } catch (err) {
       if (this._ws === ws) {
         this._ws = null;
@@ -459,6 +608,7 @@ class VoipStackEngine extends EventTarget {
 
   _sendAudio(buffer) {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    if (!this._canSendAudio()) return;
     const bytes = new Uint8Array(buffer);
     if (!bytes.byteLength) return;
     const bytesPerSample = this._txFormat?.pcmFormat === "s16le" ? 2 :
@@ -489,7 +639,15 @@ class VoipStackEngine extends EventTarget {
     if (typeof event.data === "string") {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.tx_format || msg.rx_format) this._lastSessionPayload = msg;
+        if (msg.tx_format || msg.rx_format || msg.audio_direction) {
+          this._lastSessionPayload = { ...(this._lastSessionPayload || {}), ...msg };
+        }
+        if (msg.audio_direction) {
+          if (this._audioReady) void this._reconcileAudioMedia(msg);
+          else this._audioDirection = this._normaliseAudioDirection(msg.audio_direction);
+        } else if (this._audioReady && (msg.tx_format || msg.rx_format)) {
+          void this._reconcileAudioMedia(msg);
+        }
         if (msg.state) this._setState(String(msg.state).toUpperCase());
         if (msg.error) this.dispatchEvent(new CustomEvent("error", { detail: msg.error }));
         this._resolveControlWaiter(msg);
@@ -497,7 +655,12 @@ class VoipStackEngine extends EventTarget {
       return;
     }
     const raw = new Uint8Array(event.data);
-    if (raw[0] !== WS_AUDIO || raw.byteLength < 2 || !this._playbackNode) return;
+    if (
+      raw[0] !== WS_AUDIO ||
+      raw.byteLength < 2 ||
+      !this._playbackNode ||
+      !this._canReceiveAudio()
+    ) return;
     this._playbackNode.port.postMessage({ type: "audio", buffer: event.data, byteOffset: 1 }, [event.data]);
     this._stats.received++;
     if ((this._stats.received & 31) === 0) this._emit();
@@ -537,48 +700,111 @@ class VoipStackEngine extends EventTarget {
     };
   }
 
-  async _setupAudio(deviceInfo, negotiated = null) {
-    this._audioMode = this._normaliseAudioMode(deviceInfo?.audio_mode);
+  async _setupAudio(deviceInfo, negotiated = null, attachKey = "") {
+    const audioMode = this._normaliseAudioMode(deviceInfo?.audio_mode);
+    const audioDirection = this._normaliseAudioDirection(negotiated?.audio_direction);
     const formats = this._resolveSessionFormats(negotiated);
-    this._txFormat = formats.tx;
-    this._rxFormat = formats.rx;
-    const sendToEsp = this._audioMode === "full_duplex" || this._audioMode === "speaker_only";
-    const receiveFromEsp = this._audioMode === "full_duplex" || this._audioMode === "mic_only";
-    if (!sendToEsp && !receiveFromEsp) return;
+    const { capture, playback } = this._desiredAudioPaths(audioMode, audioDirection);
+    const setupGeneration = ++this._audioSetupGeneration;
+    const expectedCallId = this._callId;
+    const resources = {
+      audioContext: null,
+      mediaStream: null,
+      captureNode: null,
+      captureSink: null,
+      source: null,
+      playbackNode: null,
+    };
+    const assertCurrent = () => {
+      if (
+        setupGeneration !== this._audioSetupGeneration ||
+        this._callId !== expectedCallId
+      ) {
+        throw new Error("Audio setup superseded");
+      }
+      if (attachKey && this._sessionAttachKey !== attachKey) {
+        throw new Error("Audio setup superseded");
+      }
+    };
 
-    this._audioContext = this._createAudioContext();
-    if (this._audioContext.state === "suspended") await this._audioContext.resume();
+    try {
+      assertCurrent();
+      if (capture || playback) {
+        resources.audioContext = this._createAudioContext();
+        if (resources.audioContext.state === "suspended") {
+          await resources.audioContext.resume();
+          assertCurrent();
+        }
+      }
 
-    if (sendToEsp) {
-      this._mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      await this._audioContext.audioWorklet.addModule(`/voip-stack/voip-stack-processor.js?v=${encodeURIComponent(MODULE_VERSION)}`);
-      this._source = this._audioContext.createMediaStreamSource(this._mediaStream);
-      this._captureNode = new AudioWorkletNode(this._audioContext, "voip-stack-processor", {
-        processorOptions: { format: this._txFormat },
-      });
-      this._captureNode.port.onmessage = (event) => {
-        if (event.data?.type === "audio") this._sendAudio(event.data.buffer);
-      };
-      this._source.connect(this._captureNode);
-      this._captureSink = this._audioContext.createGain();
-      this._captureSink.gain.value = 0;
-      this._captureNode.connect(this._captureSink).connect(this._audioContext.destination);
-    }
+      if (capture) {
+        resources.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        assertCurrent();
+        await resources.audioContext.audioWorklet.addModule(
+          `/voip-stack/voip-stack-processor.js?v=${encodeURIComponent(MODULE_VERSION)}`,
+        );
+        assertCurrent();
+        resources.source = resources.audioContext.createMediaStreamSource(resources.mediaStream);
+        resources.captureNode = new AudioWorkletNode(resources.audioContext, "voip-stack-processor", {
+          processorOptions: { format: formats.tx },
+        });
+        resources.captureNode.port.onmessage = (event) => {
+          if (
+            this._captureNode === resources.captureNode &&
+            event.data?.type === "audio"
+          ) this._sendAudio(event.data.buffer);
+        };
+        resources.source.connect(resources.captureNode);
+        resources.captureSink = resources.audioContext.createGain();
+        resources.captureSink.gain.value = 0;
+        resources.captureNode
+          .connect(resources.captureSink)
+          .connect(resources.audioContext.destination);
+      }
 
-    if (receiveFromEsp) {
-      await this._audioContext.audioWorklet.addModule(`/voip-stack/voip-stack-playback-processor.js?v=${encodeURIComponent(MODULE_VERSION)}`);
-      this._playbackNode = new AudioWorkletNode(this._audioContext, "voip-stack-playback-processor", {
-        outputChannelCount: [this._rxFormat.channels],
-        processorOptions: { format: this._rxFormat },
-      });
-      this._playbackNode.port.onmessage = (event) => {
-        if (event.data?.type !== "stats") return;
-        this._stats = { ...this._stats, ...event.data };
-        this._emit();
-      };
-      this._playbackNode.connect(this._audioContext.destination);
+      if (playback) {
+        await resources.audioContext.audioWorklet.addModule(
+          `/voip-stack/voip-stack-playback-processor.js?v=${encodeURIComponent(MODULE_VERSION)}`,
+        );
+        assertCurrent();
+        resources.playbackNode = new AudioWorkletNode(
+          resources.audioContext,
+          "voip-stack-playback-processor",
+          {
+            outputChannelCount: [formats.rx.channels],
+            processorOptions: { format: formats.rx },
+          },
+        );
+        resources.playbackNode.port.onmessage = (event) => {
+          if (
+            this._playbackNode !== resources.playbackNode ||
+            event.data?.type !== "stats"
+          ) return;
+          this._stats = { ...this._stats, ...event.data };
+          this._emit();
+        };
+        resources.playbackNode.connect(resources.audioContext.destination);
+      }
+      assertCurrent();
+      const previous = this._takeAudioResources();
+      this._audioMode = audioMode;
+      this._audioDirection = audioDirection;
+      this._txFormat = formats.tx;
+      this._rxFormat = formats.rx;
+      this._audioContext = resources.audioContext;
+      this._mediaStream = resources.mediaStream;
+      this._captureNode = resources.captureNode;
+      this._captureSink = resources.captureSink;
+      this._source = resources.source;
+      this._playbackNode = resources.playbackNode;
+      this._audioReady = true;
+      this._applyAudioDirection(audioDirection);
+      await this._disposeAudioResources(previous);
+    } catch (err) {
+      await this._disposeAudioResources(resources);
+      throw err;
     }
   }
 
@@ -587,25 +813,118 @@ class VoipStackEngine extends EventTarget {
     return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v) ? v : "full_duplex";
   }
 
-  async _setupAudioOrAbort(deviceId, deviceInfo, reply, attachKey = "") {
+  _normaliseAudioDirection(value) {
+    const direction = String(value || "sendrecv").trim().toLowerCase();
+    return ["sendrecv", "sendonly", "recvonly", "inactive"].includes(direction)
+      ? direction
+      : "sendrecv";
+  }
+
+  _desiredAudioPaths(audioMode, audioDirection) {
+    const mode = this._normaliseAudioMode(audioMode);
+    const direction = this._normaliseAudioDirection(audioDirection);
+    const modeCanCapture = mode === "full_duplex" || mode === "speaker_only";
+    const modeCanPlayback = mode === "full_duplex" || mode === "mic_only";
+    return {
+      capture: modeCanCapture && ["sendrecv", "sendonly"].includes(direction),
+      playback: modeCanPlayback && ["sendrecv", "recvonly"].includes(direction),
+    };
+  }
+
+  _sameAudioFormat(left, right) {
+    return Boolean(left && right) &&
+      left.sampleRate === right.sampleRate &&
+      left.pcmFormat === right.pcmFormat &&
+      left.channels === right.channels &&
+      left.frameMs === right.frameMs;
+  }
+
+  async _reconcileAudioMedia(update = {}) {
+    if (!this._audioReady || !this._callId) return;
+    const negotiated = { ...(this._lastSessionPayload || {}), ...(update || {}) };
+    if (update?.tx_format || update?.rx_format) this._lastSessionPayload = negotiated;
+    const direction = this._normaliseAudioDirection(
+      negotiated.audio_direction || this._audioDirection,
+    );
+    const formats = this._resolveSessionFormats(negotiated);
+    const desired = this._desiredAudioPaths(this._audioMode, direction);
+    if (
+      this._sameAudioFormat(formats.tx, this._txFormat) &&
+      this._sameAudioFormat(formats.rx, this._rxFormat) &&
+      desired.capture === Boolean(this._captureNode) &&
+      desired.playback === Boolean(this._playbackNode)
+    ) {
+      this._applyAudioDirection(direction);
+      return;
+    }
     try {
-      await this._connect(deviceId, reply?.call_id || "");
-      await this._setupAudio(deviceInfo, reply);
+      await this._setupAudio(
+        { audio_mode: this._audioMode },
+        { ...negotiated, audio_direction: direction },
+      );
+    } catch (err) {
+      if (String(err?.message || err).includes("superseded")) return;
+      console.warn("voip-stack-engine: audio media update failed", err);
+      this.dispatchEvent(new CustomEvent("error", {
+        detail: `Audio media update failed: ${err?.message || String(err)}`,
+      }));
+    }
+  }
+
+  _canSendAudio() {
+    return ["sendrecv", "sendonly"].includes(this._audioDirection);
+  }
+
+  _canReceiveAudio() {
+    return ["sendrecv", "recvonly"].includes(this._audioDirection);
+  }
+
+  _applyAudioDirection(value) {
+    this._audioDirection = this._normaliseAudioDirection(value);
+    const enabled = this._canSendAudio();
+    for (const track of this._mediaStream?.getAudioTracks?.() || []) track.enabled = enabled;
+    this._emit();
+  }
+
+  async _setupAudioOrAbort(deviceId, deviceInfo, reply, attachKey = "") {
+    let connected = false;
+    const callId = String(reply?.call_id || "");
+    try {
+      const negotiated = await this._connect(deviceId, callId);
+      connected = true;
+      await this._setupAudio(
+        deviceInfo,
+        { ...(reply || {}), ...(negotiated || {}) },
+        attachKey,
+      );
       if (attachKey && this._sessionAttachKey !== attachKey) {
-        await this.close("superseded", true);
         return false;
       }
+      // A re-INVITE may land while getUserMedia or the worklet module is
+      // pending. The WebSocket handler records it while the pipeline is not
+      // yet publishable; reconcile once after the atomic initial commit.
+      await this._reconcileAudioMedia(this._lastSessionPayload || {});
+      if (attachKey && this._sessionAttachKey !== attachKey) return false;
       return true;
     } catch (err) {
       if (attachKey && this._sessionAttachKey !== attachKey) {
-        await this.close("superseded", true);
         return false;
       }
       console.error("voip-stack-engine: audio setup failed", err);
       this.dispatchEvent(new CustomEvent("error", { detail: err?.message || String(err) }));
-      if (deviceId === HA_SOFTPHONE_DEVICE_ID && this._hass) {
+      // A failed HTTP/WebSocket ownership claim (for example, a 409 while a
+      // newer card takes over) never established a media path and therefore
+      // must not terminate the live SIP dialog.  Once the socket opened, a
+      // real browser media-format/setup failure is still fatal for this leg.
+      if (
+        connected &&
+        deviceId === HA_SOFTPHONE_DEVICE_ID &&
+        this._deviceId === deviceId &&
+        this._callId === callId &&
+        this._hass
+      ) {
         await this._hass.callService("voip_stack", "hangup", {
-          call_id: reply?.call_id || "",
+          call_id: callId,
           reason: "media_incompatible",
         }).catch(() => {});
       }
@@ -624,12 +943,25 @@ class VoipStackEngine extends EventTarget {
       call_id: context.call_id || "",
       send_video: Boolean(context.sendVideo),
     });
-    if (!["calling", "connecting", "remote_ringing", "ringing", "in_call"].includes(String(reply?.state || "").toLowerCase())) {
+    const state = String(reply?.state || "").toLowerCase();
+    const callId = String(reply?.call_id || "");
+    if (typeof context.shouldAbort === "function" && context.shouldAbort()) {
+      if (
+        callId &&
+        ["calling", "connecting", "remote_ringing", "ringing", "in_call"].includes(state)
+      ) {
+        await this._hass.callService("voip_stack", "hangup", {
+          call_id: callId,
+          reason: "superseded",
+        }).catch(() => {});
+      }
+      return { ...(reply || {}), superseded: true };
+    }
+    if (!["calling", "connecting", "remote_ringing", "ringing", "in_call"].includes(state)) {
       this._setState("IDLE");
       return reply;
     }
-    this.claimSoftphoneSession(reply?.call_id || "");
-    const state = String(reply.state || "calling").toLowerCase();
+    this.claimSoftphoneSession(callId);
     if (state === "in_call") {
       const mediaInfo = {
         ...(softphoneInfo || {}),
@@ -651,10 +983,8 @@ class VoipStackEngine extends EventTarget {
     if (this._sessionAttachPromise && this._sessionAttachKey === attachKey) {
       return this._sessionAttachPromise;
     }
-    const previousAttach = this._sessionAttachPromise;
     this._sessionAttachKey = attachKey;
     const attachPromise = (async () => {
-      if (previousAttach) await previousAttach.catch(() => {});
       if (this._sessionAttachKey !== attachKey) return;
       return this._resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey);
     })();
@@ -667,13 +997,29 @@ class VoipStackEngine extends EventTarget {
     return this._sessionAttachPromise;
   }
 
+  async reconcileSession(statePayload) {
+    const callId = String(statePayload?.call_id || "");
+    if (
+      String(statePayload?.state || "").toLowerCase() !== "in_call" ||
+      !callId ||
+      this._callId !== callId
+    ) return;
+    if (statePayload.audio_direction) {
+      this._lastSessionPayload = { ...(this._lastSessionPayload || {}), ...statePayload };
+      if (this._audioReady) await this._reconcileAudioMedia(statePayload);
+      else this._audioDirection = this._normaliseAudioDirection(statePayload.audio_direction);
+    }
+    await this._ensureVideo(statePayload);
+  }
+
   async _resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey) {
     const callId = String(statePayload?.call_id || "");
     if (
       this._ws &&
       this._deviceId === deviceId &&
       this._callId === callId &&
-      this._ws.readyState === WebSocket.OPEN
+      this._ws.readyState === WebSocket.OPEN &&
+      this._audioReady
     ) {
       this._setState("IN_CALL");
       void this._ensureVideo(statePayload);
@@ -698,14 +1044,26 @@ class VoipStackEngine extends EventTarget {
   async _ensureVideo(statePayload) {
     const wantedCallId = String(statePayload?.call_id || "");
     if (!statePayload?.video_active) {
+      if (wantedCallId && this._callId !== wantedCallId) return;
       this._videoAttachGeneration++;
       this._videoAttachPromise = null;
       this._videoAttachCallId = "";
-      if (this._video) await this._video.close();
+      if (
+        this._video &&
+        (!wantedCallId || !this._video.callId || this._video.callId === wantedCallId)
+      ) await this._video.close();
       return;
     }
 
+    if (!wantedCallId || this._callId !== wantedCallId) return;
+    const intentGeneration = this._videoAttachGeneration;
+
     const video = await this._loadVideo();
+    if (
+      intentGeneration !== this._videoAttachGeneration ||
+      !wantedCallId ||
+      this._callId !== wantedCallId
+    ) return;
 
     if (video.active && video.callId === wantedCallId) return;
     if (this._videoAttachPromise && this._videoAttachCallId === wantedCallId) {
@@ -746,7 +1104,8 @@ class VoipStackEngine extends EventTarget {
     this._stats = { sent: 0, received: 0, tx_dropped: 0, buffered_frames: 0, frames_drop: 0, underruns: 0 };
   }
 
-  async close(_reason = "", preserveAttach = false) {
+  async close(_reason = "", preserveAttach = false, preserveConnect = false) {
+    if (!preserveConnect) this._connectGeneration++;
     this._videoAttachGeneration++;
     this._videoAttachPromise = null;
     this._videoAttachCallId = "";
@@ -757,24 +1116,57 @@ class VoipStackEngine extends EventTarget {
       try { ws.close(); } catch (_) {}
     }
     this._callId = "";
-    if (this._video) await this._video.close();
-    await this._cleanupAudio("close");
+    // Detach audio resources before the first await. A new call may start
+    // while video/AudioContext teardown for the old call is still pending;
+    // that old continuation must never close or null the new pipeline.
+    const audioCleanup = this._cleanupAudio("close");
+    const videoCleanup = this._video ? this._video.close() : Promise.resolve();
+    await Promise.allSettled([audioCleanup, videoCleanup]);
   }
 
-  async _cleanupAudio(_reason) {
+  _detachAudioResources() {
+    this._audioSetupGeneration++;
+    this._audioReady = false;
     if (this._controlWaiter) {
       window.clearTimeout(this._controlWaiter.timer);
       this._controlWaiter.resolve(null);
       this._controlWaiter = null;
     }
-    if (this._captureNode) { this._captureNode.disconnect(); this._captureNode = null; }
-    if (this._captureSink) { this._captureSink.disconnect(); this._captureSink = null; }
-    if (this._source) { this._source.disconnect(); this._source = null; }
-    if (this._mediaStream) { this._mediaStream.getTracks().forEach((t) => t.stop()); this._mediaStream = null; }
-    if (this._playbackNode) { this._playbackNode.disconnect(); this._playbackNode = null; }
-    if (this._audioContext) { await this._audioContext.close().catch(() => {}); this._audioContext = null; }
+    return this._takeAudioResources();
+  }
+
+  _takeAudioResources() {
+    const resources = {
+      captureNode: this._captureNode,
+      captureSink: this._captureSink,
+      source: this._source,
+      mediaStream: this._mediaStream,
+      playbackNode: this._playbackNode,
+      audioContext: this._audioContext,
+    };
+    this._captureNode = null;
+    this._captureSink = null;
+    this._source = null;
+    this._mediaStream = null;
+    this._playbackNode = null;
+    this._audioContext = null;
     this._audioFrameBuffer = null;
+    return resources;
+  }
+
+  async _disposeAudioResources(resources = {}) {
+    try { resources.captureNode?.disconnect(); } catch (_) {}
+    try { resources.captureSink?.disconnect(); } catch (_) {}
+    try { resources.source?.disconnect(); } catch (_) {}
+    try { resources.mediaStream?.getTracks?.().forEach((track) => track.stop()); } catch (_) {}
+    try { resources.playbackNode?.disconnect(); } catch (_) {}
+    if (resources.audioContext) await resources.audioContext.close().catch(() => {});
+  }
+
+  async _cleanupAudio(_reason) {
+    const resources = this._detachAudioResources();
     this._forceIdle();
+    await this._disposeAudioResources(resources);
   }
 }
 

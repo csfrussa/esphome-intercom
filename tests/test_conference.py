@@ -12,10 +12,18 @@ import types
 import unittest
 from pathlib import Path
 
+import voluptuous as vol
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG_NAME = "custom_components.voip_stack"
 PKG_DIR = ROOT / "custom_components" / "voip_stack"
+
+
+class _FakeUnauthorized(Exception):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args)
+        self.details = kwargs
 
 
 def _install_ha_fakes() -> None:
@@ -33,15 +41,22 @@ def _install_ha_fakes() -> None:
     if not hasattr(helpers, "__path__"):
         helpers.__path__ = []
     core = sys.modules.setdefault("homeassistant.core", types.ModuleType("homeassistant.core"))
+    exceptions = sys.modules.setdefault(
+        "homeassistant.exceptions", types.ModuleType("homeassistant.exceptions")
+    )
     config_entries = sys.modules.setdefault("homeassistant.config_entries", types.ModuleType("homeassistant.config_entries"))
     device_registry = sys.modules.setdefault("homeassistant.helpers.device_registry", types.ModuleType("homeassistant.helpers.device_registry"))
     entity_registry = sys.modules.setdefault("homeassistant.helpers.entity_registry", types.ModuleType("homeassistant.helpers.entity_registry"))
     websocket_api = sys.modules.setdefault("homeassistant.components.websocket_api", types.ModuleType("homeassistant.components.websocket_api"))
-    vol = sys.modules.setdefault("voluptuous", types.ModuleType("voluptuous"))
+    sys.modules.setdefault("voluptuous", vol)
 
     core.HomeAssistant = getattr(core, "HomeAssistant", type("HomeAssistant", (), {}))
     core.ServiceCall = getattr(core, "ServiceCall", type("ServiceCall", (), {}))
     core.callback = getattr(core, "callback", lambda fn: fn)
+    exceptions.Unauthorized = getattr(
+        exceptions, "Unauthorized", _FakeUnauthorized
+    )
+    exceptions.UnknownUser = getattr(exceptions, "UnknownUser", _FakeUnauthorized)
     config_entries.ConfigEntry = getattr(config_entries, "ConfigEntry", type("ConfigEntry", (), {}))
     device_registry.async_get = getattr(device_registry, "async_get", lambda _hass: None)
     entity_registry.async_get = getattr(entity_registry, "async_get", lambda _hass: None)
@@ -70,12 +85,17 @@ def _load_module(name: str):
         raise RuntimeError(f"cannot load {full_name}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[full_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(full_name, None)
+        raise
     return module
 
 
 conference = _load_module("conference")
 endpoint_lifecycle = _load_module("endpoint_lifecycle")
+trunk_runtime = _load_module("trunk_runtime")
 sip_listener = _load_module("sip_listener")
 sip_client = _load_module("sip_client")
 sdp = _load_module("sdp")
@@ -146,6 +166,80 @@ class ConferenceMixerTest(unittest.TestCase):
 
 
 class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_media_timeout_respects_direction_hold_and_ha_listener(self) -> None:
+        hass = _FakeHass()
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        now = 100.0
+
+        def leg(**updates):
+            values = {
+                "call_id": "leg",
+                "caller": "Desk",
+                "role": "manual",
+                "remote_host": "127.0.0.1",
+                "remote_port": 40000,
+                "in_converter": conference.PcmFrameConverter(
+                    conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+                ),
+                "out_converter": conference.PcmFrameConverter(
+                    conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+                ),
+                "last_rx": now - conference.CONFERENCE_INACTIVITY_S - 1,
+            }
+            values.update(updates)
+            return conference._ConferenceLeg(**values)
+
+        self.assertTrue(room._rx_inactivity_expired(leg(can_receive=True), now))
+        self.assertFalse(room._rx_inactivity_expired(leg(can_receive=False), now))
+        self.assertFalse(
+            room._rx_inactivity_expired(
+                leg(can_receive=True, connection_held=True), now
+            )
+        )
+        self.assertFalse(
+            room._rx_inactivity_expired(
+                leg(can_receive=True, local_out=asyncio.Queue()), now
+            )
+        )
+
+    async def test_legacy_connection_hold_suppresses_conference_tx_and_keeps_clock(self) -> None:
+        hass = _FakeHass()
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        sent: list[tuple[bytes, tuple[str, int]]] = []
+        leg = conference._ConferenceLeg(
+            call_id="held",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+            ),
+            out_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+            ),
+            transport=types.SimpleNamespace(
+                sendto=lambda packet, addr: sent.append((packet, addr))
+            ),
+            encoder=conference.RtpPayloadEncoder(fmt),
+            can_receive=True,
+            can_send=False,
+            connection_held=True,
+            timestamp=100,
+        )
+        room.legs[leg.call_id] = leg
+
+        task = asyncio.create_task(room._mix_loop())
+        await asyncio.sleep(0.03)
+        room.legs.clear()
+        await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(sent, [])
+        self.assertEqual(leg.tx_packets, 0)
+        self.assertGreater(leg.tx_suppressed, 0)
+        self.assertGreater(leg.timestamp, 100)
+
     async def test_mixer_advances_rtp_clock_when_one_send_fails(self) -> None:
         hass = _FakeHass()
         room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
@@ -209,7 +303,112 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         await room._dispose_leg(leg, reason="local_hangup")
 
-        self.assertEqual(calls, ["terminate", "close", "release"])
+        self.assertEqual(calls, ["release", "terminate", "close"])
+
+    async def test_cancelled_room_close_finishes_client_and_releases_port(self) -> None:
+        hass = _FakeHass()
+        room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
+        terminate_entered = asyncio.Event()
+        release_terminate = asyncio.Event()
+        calls: list[str] = []
+
+        class Client:
+            async def terminate(self) -> None:
+                calls.append("terminate")
+                terminate_entered.set()
+                await release_terminate.wait()
+
+            async def close(self) -> None:
+                calls.append("close")
+
+        class Reservation:
+            def release(self) -> None:
+                calls.append("release")
+
+        class Transport:
+            def close(self) -> None:
+                calls.append("transport")
+
+        room.legs["outbound"] = conference._ConferenceLeg(
+            call_id="outbound",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+            ),
+            out_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+            ),
+            transport=Transport(),
+            client=Client(),
+            port_reservation=Reservation(),
+        )
+
+        close_task = asyncio.create_task(room.close(reason="local_hangup"))
+        await asyncio.wait_for(terminate_entered.wait(), timeout=1)
+        self.assertEqual(calls[:3], ["transport", "release", "terminate"])
+        close_task.cancel()
+        await asyncio.sleep(0)
+        close_task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(close_task.done())
+
+        release_terminate.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await close_task
+
+        self.assertEqual(calls, ["transport", "release", "terminate", "close"])
+        self.assertTrue(room._closed)
+        self.assertFalse(room.legs)
+
+    async def test_manager_rejects_new_rooms_while_close_is_in_progress(self) -> None:
+        hass = _FakeHass()
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        room = conference.ConferenceRoom(
+            hass,
+            name="Existing",
+            local_ip="127.0.0.1",
+        )
+        manager.rooms[room.name] = room
+        terminate_entered = asyncio.Event()
+        release_terminate = asyncio.Event()
+
+        class Client:
+            async def terminate(self) -> None:
+                terminate_entered.set()
+                await release_terminate.wait()
+
+            async def close(self) -> None:
+                return
+
+        room.legs["existing"] = conference._ConferenceLeg(
+            call_id="existing",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT,
+                conference.CONFERENCE_FORMAT,
+            ),
+            out_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT,
+                conference.CONFERENCE_FORMAT,
+            ),
+            client=Client(),
+        )
+
+        close_task = asyncio.create_task(manager.close())
+        await asyncio.wait_for(terminate_entered.wait(), timeout=1)
+        self.assertIsNone(manager.start_ha_softphone("New"))
+        self.assertNotIn("New", manager.rooms)
+        release_terminate.set()
+        await asyncio.wait_for(close_task, timeout=1)
+
+        self.assertTrue(manager._closed)
+        self.assertFalse(manager.rooms)
 
     async def test_room_that_closes_itself_is_removed_from_manager(self) -> None:
         hass = _FakeHass()
@@ -255,7 +454,7 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         await manager.close()
 
-        self.assertEqual(calls, ["terminate", "close", "release"])
+        self.assertEqual(calls, ["release", "terminate", "close"])
         self.assertTrue(mixer.done())
         self.assertFalse(manager.rooms)
 
@@ -336,6 +535,80 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(registry.sessions)
         self.assertFalse(registry.relays)
         self.assertFalse(registry.sip_clients)
+
+    async def test_endpoint_shutdown_mapping_survives_until_cancel_safe_stop(self) -> None:
+        hass = _FakeHass()
+
+        class Endpoint:
+            def __init__(self) -> None:
+                self.entered = asyncio.Event()
+                self.release = asyncio.Event()
+                self.stopped = False
+
+            def snapshot(self):
+                return types.SimpleNamespace(
+                    pending_call_ids=(),
+                    active_call_ids=(),
+                )
+
+            async def stop(self) -> None:
+                self.entered.set()
+                await self.release.wait()
+                self.stopped = True
+
+        endpoint = Endpoint()
+        hass.data[const.DOMAIN]["sip_endpoint"] = endpoint
+        stopping = asyncio.create_task(
+            endpoint_lifecycle.async_stop_sip_endpoint(hass)
+        )
+        await asyncio.wait_for(endpoint.entered.wait(), timeout=1)
+        stopping.cancel()
+        await asyncio.sleep(0)
+        stopping.cancel()
+        await asyncio.sleep(0)
+
+        self.assertFalse(stopping.done())
+        self.assertIs(hass.data[const.DOMAIN]["sip_endpoint"], endpoint)
+
+        endpoint.release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await stopping
+
+        self.assertTrue(endpoint.stopped)
+        self.assertNotIn("sip_endpoint", hass.data[const.DOMAIN])
+
+    async def test_trunk_shutdown_mapping_survives_until_cancel_safe_stop(self) -> None:
+        hass = _FakeHass()
+
+        class Trunk:
+            def __init__(self) -> None:
+                self.entered = asyncio.Event()
+                self.release = asyncio.Event()
+                self.stopped = False
+
+            async def stop(self) -> None:
+                self.entered.set()
+                await self.release.wait()
+                self.stopped = True
+
+        trunk = Trunk()
+        hass.data[const.DOMAIN]["sip_trunk"] = trunk
+        stopping = asyncio.create_task(trunk_runtime.async_stop_sip_trunk(hass))
+        await asyncio.wait_for(trunk.entered.wait(), timeout=1)
+        stopping.cancel()
+        await asyncio.sleep(0)
+        stopping.cancel()
+        await asyncio.sleep(0)
+
+        self.assertFalse(stopping.done())
+        self.assertIs(hass.data[const.DOMAIN]["sip_trunk"], trunk)
+
+        trunk.release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await stopping
+
+        self.assertTrue(trunk.stopped)
+        self.assertNotIn("sip_trunk", hass.data[const.DOMAIN])
 
     async def test_outbound_and_ha_legs_cannot_exceed_room_capacity(self) -> None:
         hass = _FakeHass()

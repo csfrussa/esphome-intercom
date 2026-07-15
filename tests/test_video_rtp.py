@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import struct
 import sys
 import types
 import unittest
@@ -55,14 +56,18 @@ class H264RtpTest(unittest.TestCase):
         depacketizer = video_rtp.H264Depacketizer()
         result = None
         for packet in packets:
-            result = depacketizer.push(rtp.parse_packet(rtp.build_packet(packet))) or result
+            result = (
+                depacketizer.push(rtp.parse_packet(rtp.build_packet(packet))) or result
+            )
         return packets, result
 
     def test_single_nal_and_fu_a_round_trip(self) -> None:
         sps = b"\x67\x42\xe0\x1f\x11"
         pps = b"\x68\xce\x06\xe2"
         idr = b"\x65" + bytes(range(256)) * 8
-        access_unit = b"".join(video_rtp.ANNEX_B_START_CODE + item for item in (sps, pps, idr))
+        access_unit = b"".join(
+            video_rtp.ANNEX_B_START_CODE + item for item in (sps, pps, idr)
+        )
         packets, result = self._round_trip(access_unit, max_payload=220)
         self.assertGreater(len(packets), 3)
         self.assertTrue(packets[-1].marker)
@@ -76,11 +81,19 @@ class H264RtpTest(unittest.TestCase):
     def test_stap_a_is_depacketized(self) -> None:
         sps = b"\x67\x42\xe0\x1f"
         pps = b"\x68\xce\x06\xe2"
-        stap = b"\x78" + len(sps).to_bytes(2, "big") + sps + len(pps).to_bytes(2, "big") + pps
+        stap = (
+            b"\x78"
+            + len(sps).to_bytes(2, "big")
+            + sps
+            + len(pps).to_bytes(2, "big")
+            + pps
+        )
         depacketizer = video_rtp.H264Depacketizer()
         first = depacketizer.push(rtp.RtpPacket(102, 1, 90, 5, stap))
         self.assertIsNone(first)
-        result = depacketizer.push(rtp.RtpPacket(102, 2, 90, 5, b"\x65\x99", marker=True))
+        result = depacketizer.push(
+            rtp.RtpPacket(102, 2, 90, 5, b"\x65\x99", marker=True)
+        )
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(video_rtp.split_annex_b(result.data), [sps, pps, b"\x65\x99"])
@@ -91,7 +104,9 @@ class H264RtpTest(unittest.TestCase):
         pps = b"\x68\xce\x06\xe2"
         depacketizer.push(rtp.RtpPacket(102, 1, 1, 5, sps))
         depacketizer.push(rtp.RtpPacket(102, 2, 1, 5, pps, marker=True))
-        result = depacketizer.push(rtp.RtpPacket(102, 3, 2, 5, b"\x65\xaa", marker=True))
+        result = depacketizer.push(
+            rtp.RtpPacket(102, 3, 2, 5, b"\x65\xaa", marker=True)
+        )
         assert result is not None
         self.assertEqual(video_rtp.split_annex_b(result.data), [sps, pps, b"\x65\xaa"])
         self.assertEqual(depacketizer.parameter_sets, (sps, pps))
@@ -104,6 +119,30 @@ class H264RtpTest(unittest.TestCase):
         self.assertEqual(
             video_rtp.split_annex_b(resumed.data),
             [sps, pps, b"\x65\xbb"],
+        )
+
+    def test_damaged_access_unit_cannot_poison_parameter_set_cache(self) -> None:
+        good_sps = b"\x67\x42\xe0\x1f"
+        good_pps = b"\x68\xce\x06\xe2"
+        bad_sps = b"\x67\xff\xff\xff"
+        bad_pps = b"\x68\xff\xff\xff"
+        depacketizer = video_rtp.H264Depacketizer([good_sps, good_pps])
+
+        depacketizer.push(rtp.RtpPacket(102, 10, 100, 5, bad_sps))
+        damaged = depacketizer.push(
+            rtp.RtpPacket(102, 12, 100, 5, bad_pps, marker=True)
+        )
+        recovered = depacketizer.push(
+            rtp.RtpPacket(102, 13, 200, 5, b"\x65\xaa", marker=True)
+        )
+
+        self.assertIsNone(damaged)
+        self.assertEqual(depacketizer.parameter_sets, (good_sps, good_pps))
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertEqual(
+            video_rtp.split_annex_b(recovered.data),
+            [good_sps, good_pps, b"\x65\xaa"],
         )
 
     def test_sequence_gap_discards_entire_access_unit(self) -> None:
@@ -124,10 +163,46 @@ class H264RtpTest(unittest.TestCase):
         self.assertEqual(depacketizer.sequence_gaps, 1)
         self.assertEqual(depacketizer.dropped_access_units, 1)
 
+    def test_fu_a_contract_cannot_mutate_or_nest_packetization_units(self) -> None:
+        cases = {
+            "changed-nri": (b"\x7c\x85aa", b"\x5c\x45bb"),
+            "changed-type": (b"\x7c\x85aa", b"\x7c\x41bb"),
+            "reserved-bit": (b"\x7c\xa5aa", b"\x7c\x45bb"),
+            "nested-fu": (b"\x7c\x9caa", b"\x7c\x5cbb"),
+        }
+        for name, (start, end) in cases.items():
+            with self.subTest(name=name):
+                depacketizer = video_rtp.H264Depacketizer()
+                self.assertIsNone(
+                    depacketizer.push(rtp.RtpPacket(102, 1, 90, 5, start))
+                )
+                self.assertIsNone(
+                    depacketizer.push(rtp.RtpPacket(102, 2, 90, 5, end, marker=True))
+                )
+                self.assertEqual(depacketizer.dropped_access_units, 1)
+
+        nested = b"\x78\x00\x02\x78\x00"
+        depacketizer = video_rtp.H264Depacketizer()
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(102, 1, 90, 5, nested, marker=True))
+        )
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+        with self.assertRaises(video_rtp.H264RtpError):
+            video_rtp.packetize_annex_b(
+                video_rtp.ANNEX_B_START_CODE + b"\x7c\x00",
+                payload_type=102,
+                sequence=1,
+                timestamp=90,
+                ssrc=5,
+            )
+
     def test_timestamp_change_discards_unmarked_access_unit(self) -> None:
         depacketizer = video_rtp.H264Depacketizer()
         depacketizer.push(rtp.RtpPacket(102, 1, 100, 1, b"\x61\x01"))
-        result = depacketizer.push(rtp.RtpPacket(102, 2, 200, 1, b"\x61\x02", marker=True))
+        result = depacketizer.push(
+            rtp.RtpPacket(102, 2, 200, 1, b"\x61\x02", marker=True)
+        )
         self.assertIsNotNone(result)
         self.assertEqual(depacketizer.dropped_access_units, 1)
 
@@ -146,6 +221,36 @@ class H264RtpTest(unittest.TestCase):
 
 
 class VideoTransportTest(unittest.TestCase):
+    def test_keepalive_and_browser_media_share_one_continuous_rtp_clock(self) -> None:
+        clock = video_rtp.RtpTimestampClock(
+            clock_rate=90000,
+            origin_timestamp=1000,
+            origin_time=10.0,
+        )
+        self.assertEqual(clock.current(11.0), 91000)
+        self.assertEqual(clock.map_browser(0, 11.0), 91000)
+        self.assertEqual(clock.map_browser(9000, 11.1), 100000)
+        self.assertEqual(clock.current(11.2), 109000)
+
+        clock.reset_browser()
+        self.assertEqual(clock.map_browser(0, 12.0), 181000)
+
+    def test_extended_sequence_tracks_wrap_and_ignores_previous_cycle_late_packet(
+        self,
+    ) -> None:
+        tracker = video_rtp.RtpExtendedSequenceTracker()
+
+        self.assertEqual(tracker.observe(65534), 65534)
+        self.assertEqual(tracker.observe(65535), 65535)
+        self.assertEqual(tracker.observe(0), 0x10000)
+        self.assertEqual(tracker.observe(1), 0x10001)
+        self.assertEqual(tracker.observe(65535), 0x10001)
+        self.assertEqual(tracker.highest, 0x10001)
+
+        tracker.reset()
+        self.assertEqual(tracker.highest, 0)
+        self.assertEqual(tracker.observe(1234), 1234)
+
     def test_reorder_waits_for_gap_then_emits_in_order(self) -> None:
         reorder = video_rtp.RtpReorderBuffer(max_delay=0.020)
         self.assertEqual(reorder.push(10, "10", 1.000), ["10"])
@@ -203,6 +308,49 @@ class VideoTransportTest(unittest.TestCase):
         self.assertEqual(depacketizer.sequence_gaps, 1)
         self.assertEqual(depacketizer.dropped_access_units, 1)
 
+    def test_vp8_tiny_fragment_flood_is_bounded_and_resets(self) -> None:
+        depacketizer = video_rtp.Vp8Depacketizer()
+        timestamp = 123456
+
+        self.assertIsNone(
+            depacketizer.push(
+                rtp.RtpPacket(103, 1, timestamp, 42, b"\x10\x00")
+            )
+        )
+        for index in range(1, video_rtp.MAX_ACCESS_UNIT_FRAGMENTS):
+            self.assertIsNone(
+                depacketizer.push(
+                    rtp.RtpPacket(
+                        103,
+                        (index + 1) & 0xFFFF,
+                        timestamp,
+                        42,
+                        b"\x00x",
+                    )
+                )
+            )
+        self.assertEqual(len(depacketizer._parts), video_rtp.MAX_ACCESS_UNIT_FRAGMENTS)
+        self.assertEqual(
+            depacketizer._parts_bytes,
+            video_rtp.MAX_ACCESS_UNIT_FRAGMENTS,
+        )
+
+        self.assertIsNone(
+            depacketizer.push(
+                rtp.RtpPacket(
+                    103,
+                    (video_rtp.MAX_ACCESS_UNIT_FRAGMENTS + 1) & 0xFFFF,
+                    timestamp,
+                    42,
+                    b"\x00x",
+                )
+            )
+        )
+
+        self.assertEqual(depacketizer._parts, [])
+        self.assertEqual(depacketizer._parts_bytes, 0)
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
     def test_rfc2435_jpeg_fragments_become_jfif(self) -> None:
         scan = b"\x11\x22\xff\x00\x33\x44"
         header = b"\x00\x00\x00\x00\x00\x32\x28\x1e"
@@ -232,7 +380,50 @@ class VideoTransportTest(unittest.TestCase):
         first = b"\x00\x00\x00\x00\x00\x32\x28\x1eabc"
         second = b"\x00\x00\x00\x04\x00\x32\x28\x1edef"
         self.assertIsNone(depacketizer.push(rtp.RtpPacket(26, 1, 9, 1, first)))
-        self.assertIsNone(depacketizer.push(rtp.RtpPacket(26, 2, 9, 1, second, marker=True)))
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(26, 2, 9, 1, second, marker=True))
+        )
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+    def test_rfc2435_jpeg_rejects_changed_fragment_header(self) -> None:
+        depacketizer = video_rtp.JpegDepacketizer()
+        first = b"\x00\x00\x00\x00\x00\x32\x28\x1eabc"
+        changed_type = b"\x00\x00\x00\x03\x01\x32\x28\x1edef"
+
+        self.assertIsNone(depacketizer.push(rtp.RtpPacket(26, 1, 9, 1, first)))
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(26, 2, 9, 1, changed_type, marker=True))
+        )
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+    def test_rfc2435_jpeg_rejects_zero_restart_interval(self) -> None:
+        depacketizer = video_rtp.JpegDepacketizer()
+        payload = b"\x00\x00\x00\x00\x40\x32\x28\x1e\x00\x00\x00\x00scan"
+
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(26, 1, 9, 1, payload, marker=True))
+        )
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+    def test_rfc2435_jpeg_rejects_incomplete_dynamic_quantizers(self) -> None:
+        depacketizer = video_rtp.JpegDepacketizer()
+        payload = (
+            b"\x00\x00\x00\x00\x00\x80\x28\x1e"
+            b"\x00\x00\x00\x40" + bytes(range(64)) + b"scan"
+        )
+
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(26, 1, 9, 1, payload, marker=True))
+        )
+        self.assertEqual(depacketizer.dropped_access_units, 1)
+
+    def test_rfc2435_jpeg_rejects_unimplemented_interlaced_type(self) -> None:
+        depacketizer = video_rtp.JpegDepacketizer()
+        payload = b"\x01\x00\x00\x00\x00\x32\x28\x1escan"
+
+        self.assertIsNone(
+            depacketizer.push(rtp.RtpPacket(26, 1, 9, 1, payload, marker=True))
+        )
         self.assertEqual(depacketizer.dropped_access_units, 1)
 
     def test_rtcp_feedback_and_report_round_trip(self) -> None:
@@ -253,9 +444,136 @@ class VideoTransportTest(unittest.TestCase):
             [(201, 1), (202, 1), (206, 1), (206, 4)],
         )
 
+    def test_active_video_sender_uses_rtcp_sender_report(self) -> None:
+        report = video_rtcp.build_sender_compound(
+            0x11111111,
+            0x22222222,
+            ntp_seconds=0x01020304,
+            ntp_fraction=0x05060708,
+            rtp_timestamp=0x090A0B0C,
+            packet_count=17,
+            octet_count=12345,
+            cumulative_lost=2,
+            highest_sequence=99,
+        )
+
+        parsed = video_rtcp.parse_compound(report)
+        self.assertEqual(
+            [(item.packet_type, item.fmt) for item in parsed],
+            [(200, 1), (202, 1)],
+        )
+        self.assertEqual(
+            struct.unpack_from("!IIIIII", parsed[0].payload),
+            (0x11111111, 0x01020304, 0x05060708, 0x090A0B0C, 17, 12345),
+        )
+
+    def test_send_only_sender_report_has_no_reception_report_block(self) -> None:
+        report = video_rtcp.build_sender_compound(
+            0x11111111,
+            None,
+            ntp_seconds=0x01020304,
+            ntp_fraction=0x05060708,
+            rtp_timestamp=0x090A0B0C,
+            packet_count=17,
+            octet_count=12345,
+        )
+
+        parsed = video_rtcp.parse_compound(report)
+        self.assertEqual(
+            [(item.packet_type, item.fmt) for item in parsed],
+            [(200, 0), (202, 1)],
+        )
+        self.assertEqual(len(parsed[0].payload), 24)
+        self.assertEqual(
+            struct.unpack("!IIIIII", parsed[0].payload),
+            (0x11111111, 0x01020304, 0x05060708, 0x090A0B0C, 17, 12345),
+        )
+
+    def test_rtcp_parser_strips_valid_final_padding(self) -> None:
+        pli = video_rtcp.build_pli(1, 2)
+        payload = pli[4:] + b"\x00\x00\x00\x04"
+        padded = struct.pack("!BBH", pli[0] | 0x20, pli[1], len(payload) // 4) + payload
+
+        parsed = video_rtcp.parse_compound(padded)
+
+        self.assertEqual([(item.packet_type, item.fmt) for item in parsed], [(206, 1)])
+        self.assertEqual(parsed[0].payload, pli[4:])
+
+    def test_rtcp_parser_rejects_invalid_padding_and_feedback_layouts(self) -> None:
+        pli = video_rtcp.build_pli(1, 2)
+        fir = video_rtcp.build_fir(1, 2, 7)
+
+        def extend(packet: bytes, suffix: bytes, *, padding: bool = False) -> bytes:
+            payload = packet[4:] + suffix
+            first = packet[0] | (0x20 if padding else 0)
+            return struct.pack("!BBH", first, packet[1], len(payload) // 4) + payload
+
+        invalid_packets = {
+            "empty": b"",
+            "not_word_aligned": pli + b"\x00",
+            "padding_not_last": extend(pli, b"\x00\x00\x00\x04", padding=True) + fir,
+            "zero_padding": extend(pli, b"\x00\x00\x00\x00", padding=True),
+            "oversized_padding": extend(pli, b"\x00\x00\x00\x20", padding=True),
+            "pli_with_fci": extend(pli, b"\x00\x00\x00\x00"),
+            "fir_without_fci": struct.pack("!BBH", fir[0], fir[1], 2) + fir[4:12],
+            "fir_partial_fci": extend(fir, b"\x00\x00\x00\x00"),
+            "fir_nonzero_media_ssrc": fir[:8] + struct.pack("!I", 2) + fir[12:],
+        }
+
+        for name, packet in invalid_packets.items():
+            with self.subTest(name=name), self.assertRaises(video_rtcp.RtcpError):
+                video_rtcp.parse_compound(packet)
+
+        # RFC 5104 requires receivers to ignore, rather than reject, the FIR
+        # FCI reserved bits if a non-conforming sender leaves them non-zero.
+        parsed = video_rtcp.parse_compound(fir[:-1] + b"\x01")
+        self.assertEqual([(item.packet_type, item.fmt) for item in parsed], [(206, 4)])
+
 
 class H264SdpTest(unittest.TestCase):
     AUDIO_FORMATS = [audio_format.AudioFormat(16000, "s16le", 1, 20)]
+
+    def test_static_video_payload_type_cannot_be_remapped(self) -> None:
+        invalid = (
+            "v=0\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 26\r\n"
+            "a=rtpmap:26 H264/90000\r\n"
+        )
+        self.assertEqual(sdp.offered_video_formats(invalid), [])
+
+        canonical = invalid.replace("H264/90000", "JPEG/90000")
+        offered = sdp.offered_video_formats(canonical)
+        self.assertEqual(
+            [(item.payload_type, item.encoding) for item in offered],
+            [(26, "JPEG")],
+        )
+
+    def test_h264_without_fmtp_uses_rfc6184_baseline_level_one_defaults(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+        )
+        selected = sdp.negotiate_h264(offer)
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.profile_level_id, "42000a")
+        self.assertEqual(selected.packetization_mode, 0)
+
+    def test_standard_video_codecs_require_their_90khz_rtp_clock(self) -> None:
+        for payload_type, mapping in (
+            (102, "H264/8000"),
+            (103, "VP8/48000"),
+            (104, "JPEG/1000"),
+            (105, "H263-1998/8000"),
+        ):
+            with self.subTest(mapping=mapping):
+                offer = (
+                    "v=0\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+                    f"m=video 41002 RTP/AVP {payload_type}\r\n"
+                    f"a=rtpmap:{payload_type} {mapping}\r\n"
+                )
+                self.assertEqual(sdp.offered_video_formats(offer), [])
 
     def test_offer_and_answer_negotiate_h264_mode_one(self) -> None:
         offer = sdp.build_offer_directional(
@@ -278,6 +596,101 @@ class H264SdpTest(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed["connection_ip"], "192.168.1.10")
         self.assertEqual(parsed["media_port"], 40002)
+
+    def test_h264_answer_may_use_a_different_dynamic_payload_type(self) -> None:
+        offer = sdp.build_offer_directional(
+            "192.0.2.10",
+            "192.0.2.10",
+            40000,
+            self.AUDIO_FORMATS,
+            self.AUDIO_FORMATS,
+            video_port=40002,
+            video_formats=(sdp.DEFAULT_H264_FORMAT,),
+        )
+        answer = (
+            "v=0\r\no=- 2 1 IN IP4 192.0.2.20\r\n"
+            "s=answer\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\n"
+            "m=video 41002 RTP/AVP 120\r\n"
+            "a=rtpmap:120 H264/90000\r\n"
+            "a=fmtp:120 profile-level-id=42801f;packetization-mode=1;"
+            "level-asymmetry-allowed=1\r\na=sendrecv\r\n"
+        )
+
+        sdp.validate_sdp_answer(offer, answer)
+        selected = sdp.negotiate_video_answer_directional(
+            answer,
+            (sdp.DEFAULT_H264_FORMAT,),
+        )
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.send.payload_type, 120)
+        self.assertEqual(
+            selected.recv.payload_type,
+            sdp.DEFAULT_H264_FORMAT.payload_type,
+        )
+
+    def test_default_browser_video_envelope_matches_h264_and_vp8_sdp(self) -> None:
+        self.assertEqual(sdp.DEFAULT_H264_FORMAT.profile_level_id, "42801f")
+        self.assertEqual(
+            sdp.DEFAULT_VIDEO_FORMATS[1].fmtp,
+            "max-fr=20;max-fs=3600",
+        )
+        offer = sdp.build_offer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            self.AUDIO_FORMATS,
+            self.AUDIO_FORMATS,
+            video_port=40002,
+            video_formats=sdp.DEFAULT_VIDEO_FORMATS,
+        )
+        self.assertIn(
+            "a=fmtp:103 profile-level-id=42801f;packetization-mode=1;"
+            "level-asymmetry-allowed=1",
+            offer,
+        )
+        self.assertIn("a=fmtp:104 max-fr=20;max-fs=3600", offer)
+
+    def test_h264_sdp_serialization_preserves_complete_fmtp_contract(self) -> None:
+        video = sdp.RtpVideoFormat(
+            payload_type=108,
+            profile_level_id="428015",
+            packetization_mode=1,
+            level_asymmetry_allowed=True,
+            sprop_parameter_sets="Z0KAHtoCgPaEAAAAwAQAAAMAyPFCqWA=,aM48gA==",
+            fmtp=(
+                "profile-level-id=64001f;packetization-mode=0;"
+                "level-asymmetry-allowed=0;sprop-parameter-sets=stale;"
+                "max-fs=1200;max-mbps=36000;x-example=kept"
+            ),
+        )
+        offer = sdp.build_offer_directional(
+            "192.0.2.10",
+            "192.0.2.10",
+            40000,
+            self.AUDIO_FORMATS,
+            self.AUDIO_FORMATS,
+            video_port=40002,
+            video_format=video,
+        )
+        fmtp = next(
+            line for line in offer.splitlines() if line.startswith("a=fmtp:108 ")
+        )
+        self.assertEqual(
+            fmtp,
+            "a=fmtp:108 profile-level-id=428015;packetization-mode=1;"
+            "level-asymmetry-allowed=1;"
+            "sprop-parameter-sets=Z0KAHtoCgPaEAAAAwAQAAAMAyPFCqWA=,aM48gA==;"
+            "max-fs=1200;max-mbps=36000;x-example=kept",
+        )
+        reparsed = sdp.offered_video_formats(offer)
+        self.assertEqual(len(reparsed), 1)
+        self.assertEqual(reparsed[0].sprop_parameter_sets, video.sprop_parameter_sets)
+        self.assertIn("max-fs=1200", reparsed[0].fmtp)
+        self.assertIn("max-mbps=36000", reparsed[0].fmtp)
 
     def test_answer_rejects_video_with_port_zero_when_disabled(self) -> None:
         offer = sdp.build_offer_directional(
@@ -349,7 +762,27 @@ class H264SdpTest(unittest.TestCase):
         )
         formats = sdp.offered_h264_formats(offer)
         self.assertEqual([item.packetization_mode for item in formats], [0, 1])
-        self.assertEqual([item.profile_level_id for item in formats], ["42e01f", "64001f"])
+        self.assertEqual(
+            [item.profile_level_id for item in formats], ["42e01f", "64001f"]
+        )
+
+    def test_parses_all_rfc6184_table5_profiles_for_generic_relay(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 102 103\r\n"
+            "a=rtpmap:102 H264/90000\r\n"
+            "a=fmtp:102 profile-level-id=58c00d;packetization-mode=1\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 profile-level-id=6e000d;packetization-mode=1\r\n"
+        )
+
+        formats = sdp.offered_h264_formats(offer)
+
+        self.assertEqual(
+            [item.profile_level_id for item in formats],
+            ["58c00d", "6e000d"],
+        )
+        self.assertEqual(sdp.negotiate_h264(offer), formats[0])
 
     def test_generic_video_formats_and_feedback(self) -> None:
         offer = (
@@ -377,7 +810,7 @@ class H264SdpTest(unittest.TestCase):
         self.assertEqual(formats[0].transport_profile, "RTP/AVP")
         self.assertEqual(formats[0].rtcp_feedback, ())
 
-    def test_rtcp_mux_video_is_rejected_without_affecting_audio(self) -> None:
+    def test_rtcp_mux_offer_can_be_answered_with_separate_rtcp(self) -> None:
         offer = (
             "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
             "m=audio 41000 RTP/AVP 96\r\n"
@@ -385,10 +818,105 @@ class H264SdpTest(unittest.TestCase):
             "m=video 41002 RTP/AVPF 103\r\n"
             "a=rtpmap:103 VP8/90000\r\na=rtcp-mux\r\n"
         )
-        self.assertEqual(sdp.offered_video_formats(offer), [])
+        audio = sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
+        video = sdp.negotiate_video(offer)
+        self.assertIsNotNone(audio)
+        self.assertIsNotNone(video)
+        assert audio is not None and video is not None
+        answer = sdp.build_answer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            audio.send,
+            audio.recv,
+            remote_sdp=offer,
+            video_port=40002,
+            video_format=video,
+        )
+        # RFC 5761 makes rtcp-mux negotiable. Omitting it in the answer
+        # declines multiplexing while retaining otherwise compatible video.
+        self.assertNotIn("a=rtcp-mux", answer)
+        self.assertIn("a=rtcp:40003", answer)
+        self.assertIn("m=video 40002 RTP/AVPF 103", answer)
+
+    def test_rtcp_mux_only_offer_rejects_video_but_preserves_audio(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+            "m=video 41002 RTP/AVPF 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp-mux\r\na=rtcp-mux-only\r\n"
+        )
+        audio = sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
+
+        self.assertIsNotNone(audio)
+        self.assertIsNone(sdp.parse_video_sdp(offer))
+        self.assertIsNone(sdp.negotiate_video(offer))
+        assert audio is not None
+        answer = sdp.build_answer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            audio.send,
+            audio.recv,
+            remote_sdp=offer,
+            video_port=40002,
+            video_format=sdp.RtpVideoFormat(payload_type=103, encoding="VP8"),
+        )
+        self.assertIn("m=audio 40000 RTP/AVP 96", answer)
+        self.assertIn("m=video 0 RTP/AVPF 103", answer)
+        self.assertNotIn("a=rtcp-mux", answer)
+
+    def test_answer_preserves_offer_time_description(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\n"
+            "t=123 456\r\nr=604800 3600 0 90000\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+        )
+        audio = sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
+        assert audio is not None
+
+        answer = sdp.build_answer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            audio.send,
+            audio.recv,
+            remote_sdp=offer,
+        )
+
+        self.assertIn("t=123 456\r\nr=604800 3600 0 90000\r\n", answer)
+        self.assertNotIn("t=0 0", answer)
+
+    def test_parses_standard_rtcp_port_with_distinct_ipv4_address(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVPF 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp:53020 IN IP4 198.51.100.22\r\n"
+        )
+        parsed = sdp.parse_video_sdp(offer)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed["connection_ip"], "192.0.2.20")
+        self.assertEqual(parsed["rtcp_port"], 53020)
+        self.assertEqual(parsed["rtcp_address"], "198.51.100.22")
+
+    def test_unsupported_rtcp_address_family_rejects_only_video(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+            "m=video 41002 RTP/AVPF 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp:53020 IN IP6 2001:db8::22\r\n"
+        )
         self.assertIsNotNone(
             sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
         )
+        self.assertIsNone(sdp.parse_video_sdp(offer))
 
     def test_answer_preserves_avpf_profile_and_feedback(self) -> None:
         offer = (
@@ -399,9 +927,7 @@ class H264SdpTest(unittest.TestCase):
             "a=rtpmap:103 VP8/90000\r\n"
             "a=rtcp-fb:103 nack pli\r\na=sendonly\r\n"
         )
-        audio = sdp.negotiate_directional(
-            offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS
-        )
+        audio = sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
         video = sdp.negotiate_video(offer)
         assert audio is not None and video is not None
         answer = sdp.build_answer_directional(
@@ -417,6 +943,41 @@ class H264SdpTest(unittest.TestCase):
         self.assertIn("m=video 40002 RTP/AVPF 103", answer)
         self.assertIn("a=rtcp-fb:103 nack pli", answer)
 
+    def test_avpf_answer_advertises_only_implemented_exact_feedback(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96\r\n"
+            "a=rtpmap:96 L16/16000/1\r\na=ptime:20\r\n"
+            "m=video 41002 RTP/AVPF 103\r\n"
+            "a=rtpmap:103 VP8/90000\r\n"
+            "a=rtcp-fb:103 nack pli\r\n"
+            "a=rtcp-fb:103 ccm fir\r\n"
+            "a=rtcp-fb:103 nack\r\n"
+            "a=rtcp-fb:103 goog-remb\r\n"
+            "a=rtcp-fb:103 NACK PLI\r\n"
+        )
+        audio = sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
+        video = sdp.negotiate_video(offer)
+        assert audio is not None and video is not None
+        self.assertEqual(video.rtcp_feedback, ("nack pli", "ccm fir"))
+
+        answer = sdp.build_answer_directional(
+            "192.168.1.10",
+            "192.168.1.10",
+            40000,
+            audio.send,
+            audio.recv,
+            remote_sdp=offer,
+            video_port=40002,
+            video_format=video,
+        )
+
+        self.assertIn("a=rtcp-fb:103 nack pli", answer)
+        self.assertIn("a=rtcp-fb:103 ccm fir", answer)
+        self.assertNotIn("a=rtcp-fb:103 nack\r\n", answer)
+        self.assertNotIn("goog-remb", answer)
+        self.assertNotIn("NACK PLI", answer)
+
     def test_h263p_uses_the_standard_rtpmap_token_in_answers(self) -> None:
         offer = (
             "v=0\r\nc=IN IP4 192.168.1.20\r\nt=0 0\r\n"
@@ -426,9 +987,7 @@ class H264SdpTest(unittest.TestCase):
             "a=rtpmap:105 H263-1998/90000\r\n"
             "a=sendonly\r\n"
         )
-        audio = sdp.negotiate_directional(
-            offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS
-        )
+        audio = sdp.negotiate_directional(offer, self.AUDIO_FORMATS, self.AUDIO_FORMATS)
         video = sdp.negotiate_video(offer, accepted_encodings=("H263P",))
         assert audio is not None and video is not None
         answer = sdp.build_answer_directional(
@@ -557,8 +1116,7 @@ class H264SdpTest(unittest.TestCase):
         self.assertIsNone(
             sdp.negotiate_video_answer(
                 answer(
-                    "packetization-mode=0;"
-                    f"profile-level-id={offered.profile_level_id}"
+                    f"packetization-mode=0;profile-level-id={offered.profile_level_id}"
                 ),
                 offered,
             )
@@ -568,12 +1126,407 @@ class H264SdpTest(unittest.TestCase):
                 answer("packetization-mode=1;profile-level-id=64001f"), offered
             )
         )
+        self.assertIsNone(
+            sdp.negotiate_video_answer(
+                answer("packetization-mode=1;profile-level-id=428020"), offered
+            )
+        )
+        downgraded = sdp.negotiate_video_answer(
+            answer("packetization-mode=1;profile-level-id=42800a"), offered
+        )
+        self.assertIsNotNone(downgraded)
+        assert downgraded is not None
+        self.assertEqual(downgraded.profile_level_id, "42800a")
         selected = sdp.negotiate_video_answer(
-            answer("packetization-mode=1;profile-level-id=428015"), offered
+            answer(
+                "packetization-mode=1;profile-level-id=428015;level-asymmetry-allowed=1"
+            ),
+            offered,
         )
         self.assertIsNotNone(selected)
         assert selected is not None
         self.assertEqual(selected.profile_level_id, "428015")
+
+    def test_h264_answer_accepts_rfc_level_1b_downgrade(self) -> None:
+        offered = sdp.RtpVideoFormat(
+            payload_type=98,
+            profile_level_id="42a00b",
+            level_asymmetry_allowed=False,
+        )
+        answer = (
+            "v=0\r\nc=IN IP4 192.0.2.2\r\nt=0 0\r\n"
+            "m=video 49170 RTP/AVP 98\r\n"
+            "a=rtpmap:98 H264/90000\r\n"
+            "a=fmtp:98 profile-level-id=42b00b;packetization-mode=1\r\n"
+        )
+
+        selected = sdp.negotiate_video_answer(answer, offered)
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.profile_level_id, "42b00b")
+
+    def test_h264_passthrough_checks_directional_stream_level(self) -> None:
+        high = sdp.RtpVideoFormat(
+            profile_level_id="42e01f",
+            level_asymmetry_allowed=True,
+        )
+        low = sdp.RtpVideoFormat(
+            profile_level_id="42e015",
+            level_asymmetry_allowed=True,
+        )
+        self.assertTrue(sdp.video_formats_passthrough_compatible(low, high))
+        self.assertFalse(sdp.video_formats_passthrough_compatible(high, low))
+
+    def test_h264_passthrough_enforces_receiver_maximum_extensions(self) -> None:
+        large_frames = sdp.RtpVideoFormat(
+            profile_level_id="428015",
+            fmtp="max-fs=3600;max-mbps=108000",
+        )
+        small_frames = sdp.RtpVideoFormat(
+            profile_level_id="428015",
+            fmtp="max-fs=1200;max-mbps=36000",
+        )
+
+        self.assertFalse(
+            sdp.video_formats_passthrough_compatible(large_frames, small_frames)
+        )
+        self.assertTrue(
+            sdp.video_formats_passthrough_compatible(small_frames, large_frames)
+        )
+        # Conservatively reject an extension that the destination did not
+        # advertise; an encoded relay cannot prove the stream fits.
+        self.assertFalse(
+            sdp.video_formats_passthrough_compatible(
+                large_frames,
+                sdp.RtpVideoFormat(profile_level_id="428015"),
+            )
+        )
+        # RFC 6184 max-* parameters extend the source's signalled level.
+        # A higher destination level already includes those limits even when
+        # it does not repeat the optional extension parameters.
+        self.assertTrue(
+            sdp.video_formats_passthrough_compatible(
+                large_frames,
+                sdp.RtpVideoFormat(profile_level_id="428028"),
+            )
+        )
+
+    def test_h264_passthrough_uses_complete_effective_level_limits(self) -> None:
+        extended_level_21 = sdp.RtpVideoFormat(
+            profile_level_id="428015",
+            fmtp=(
+                "max-mbps=108000;max-smbps=108000;max-fs=3600;"
+                "max-cpb=5000;max-dpb=2000;max-br=5000"
+            ),
+        )
+        level_40 = sdp.RtpVideoFormat(profile_level_id="428028")
+
+        self.assertTrue(
+            sdp.video_formats_passthrough_compatible(extended_level_21, level_40)
+        )
+        self.assertFalse(
+            sdp.video_formats_passthrough_compatible(
+                sdp.RtpVideoFormat(
+                    profile_level_id="428015",
+                    fmtp="max-br=30000",
+                ),
+                level_40,
+            )
+        )
+
+    def test_h264_passthrough_rejects_invalid_receiver_extensions(self) -> None:
+        level_31 = sdp.RtpVideoFormat(profile_level_id="42801f")
+        invalid_formats = (
+            sdp.RtpVideoFormat(
+                profile_level_id="428015",
+                fmtp="max-fs=700",
+            ),
+            sdp.RtpVideoFormat(
+                profile_level_id="428015",
+                fmtp="max-mbps=10000",
+            ),
+            sdp.RtpVideoFormat(
+                profile_level_id="428015",
+                fmtp="max-mbps=36000;max-smbps=30000",
+            ),
+        )
+
+        for invalid in invalid_formats:
+            with self.subTest(fmtp=invalid.fmtp):
+                self.assertFalse(
+                    sdp.video_formats_passthrough_compatible(invalid, level_31)
+                )
+
+    def test_h264_max_recv_level_changes_directional_receive_envelope(self) -> None:
+        extended = sdp.RtpVideoFormat(
+            profile_level_id="42800d",
+            fmtp="max-recv-level=801f",
+        )
+        level_21 = sdp.RtpVideoFormat(profile_level_id="428015")
+        level_31 = sdp.RtpVideoFormat(profile_level_id="42801f")
+
+        self.assertFalse(sdp.video_formats_passthrough_compatible(extended, level_21))
+        self.assertTrue(sdp.video_formats_passthrough_compatible(extended, level_31))
+        invalid = sdp.RtpVideoFormat(
+            profile_level_id="428015",
+            fmtp="max-recv-level=800d",
+        )
+        self.assertFalse(sdp.video_formats_passthrough_compatible(invalid, level_31))
+        wrong_subprofile = sdp.RtpVideoFormat(
+            profile_level_id="428015",
+            fmtp="max-recv-level=e01f",
+        )
+        malformed = sdp.RtpVideoFormat(
+            profile_level_id="428015",
+            fmtp="max-recv-level=not-hex",
+        )
+        self.assertFalse(
+            sdp.video_formats_passthrough_compatible(wrong_subprofile, level_31)
+        )
+        self.assertFalse(sdp.video_formats_passthrough_compatible(malformed, level_31))
+
+    def test_outbound_h264_answer_retains_bilateral_directional_levels(self) -> None:
+        offered = sdp.RtpVideoFormat(
+            payload_type=103,
+            profile_level_id="42801f",
+            level_asymmetry_allowed=True,
+        )
+        answer = (
+            "v=0\r\nc=IN IP4 192.0.2.2\r\nt=0 0\r\n"
+            "m=video 49170 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 profile-level-id=42800d;packetization-mode=1;"
+            "level-asymmetry-allowed=1\r\n"
+            "a=sendrecv\r\n"
+        )
+
+        directional = sdp.negotiate_video_answer_directional(answer, offered)
+
+        self.assertIsNotNone(directional)
+        assert directional is not None
+        self.assertEqual(directional.send.profile_level_id, "42800d")
+        self.assertEqual(directional.recv.profile_level_id, "42801f")
+        self.assertTrue(directional.send.level_asymmetry_allowed)
+        self.assertTrue(directional.recv.level_asymmetry_allowed)
+
+    def test_outbound_h264_answer_without_bilateral_asymmetry_is_symmetric(
+        self,
+    ) -> None:
+        offered = sdp.RtpVideoFormat(
+            payload_type=103,
+            profile_level_id="42801f",
+            level_asymmetry_allowed=True,
+        )
+        answer = (
+            "v=0\r\nc=IN IP4 192.0.2.2\r\nt=0 0\r\n"
+            "m=video 49170 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 profile-level-id=42800d;packetization-mode=1\r\n"
+        )
+
+        directional = sdp.negotiate_video_answer_directional(answer, offered)
+
+        self.assertIsNotNone(directional)
+        assert directional is not None
+        self.assertEqual(directional.send.profile_level_id, "42800d")
+        self.assertEqual(directional.recv.profile_level_id, "42800d")
+        self.assertFalse(directional.send.level_asymmetry_allowed)
+
+    def test_inbound_h264_offer_serializes_local_receive_level_in_answer(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.0.2.2\r\nt=0 0\r\n"
+            "m=video 49170 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 profile-level-id=42800d;packetization-mode=1;"
+            "level-asymmetry-allowed=1\r\n"
+            "a=sendrecv\r\n"
+        )
+        local = sdp.RtpVideoFormat(
+            payload_type=120,
+            profile_level_id="42801f",
+            level_asymmetry_allowed=True,
+        )
+
+        directional = sdp.negotiate_video_offer_directional(
+            offer,
+            local_formats=(local,),
+        )
+
+        self.assertIsNotNone(directional)
+        assert directional is not None
+        self.assertEqual(directional.send.profile_level_id, "42800d")
+        self.assertEqual(directional.recv.profile_level_id, "42801f")
+        self.assertEqual(directional.recv.payload_type, 103)
+
+    def test_h264_parameter_sets_follow_the_sender_not_receiver_limits(self) -> None:
+        remote_sets = "Z0IAHw==,aM4G4g=="
+        local_sets = "Z0IAHQ==,aM4G4g=="
+        remote_answer_sets = "Z0IAFA==,aM4G4g=="
+        offer = (
+            "v=0\r\nc=IN IP4 192.0.2.2\r\nt=0 0\r\n"
+            "m=video 49170 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 profile-level-id=42800d;packetization-mode=1;"
+            "level-asymmetry-allowed=1;"
+            f"sprop-parameter-sets={remote_sets}\r\n"
+        )
+        local = sdp.RtpVideoFormat(
+            payload_type=103,
+            profile_level_id="42801f",
+            level_asymmetry_allowed=True,
+            sprop_parameter_sets=local_sets,
+        )
+
+        inbound = sdp.negotiate_video_offer_directional(
+            offer,
+            local_formats=(local,),
+        )
+
+        self.assertIsNotNone(inbound)
+        assert inbound is not None
+        self.assertEqual(inbound.send.profile_level_id, "42800d")
+        self.assertEqual(inbound.send.sprop_parameter_sets, local_sets)
+        self.assertEqual(inbound.recv.profile_level_id, "42801f")
+        self.assertEqual(inbound.recv.sprop_parameter_sets, remote_sets)
+        self.assertEqual(inbound.answer_format.sprop_parameter_sets, local_sets)
+
+        answer = offer.replace("42800d", "428015").replace(
+            remote_sets,
+            remote_answer_sets,
+        )
+        outbound = sdp.negotiate_video_answer_directional(answer, local)
+        self.assertIsNotNone(outbound)
+        assert outbound is not None
+        self.assertEqual(outbound.send.profile_level_id, "428015")
+        self.assertEqual(outbound.send.sprop_parameter_sets, local_sets)
+        self.assertEqual(outbound.recv.profile_level_id, "42801f")
+        self.assertEqual(outbound.recv.sprop_parameter_sets, remote_answer_sets)
+
+    def test_vp8_offer_and_answer_keep_independent_receiver_limits(self) -> None:
+        offer = (
+            "v=0\r\nc=IN IP4 192.0.2.2\r\nt=0 0\r\n"
+            "m=video 49170 RTP/AVP 104\r\n"
+            "a=rtpmap:104 VP8/90000\r\n"
+            "a=fmtp:104 max-fr=15;max-fs=1200\r\n"
+        )
+        local = sdp.RtpVideoFormat(
+            payload_type=104,
+            encoding="VP8",
+            fmtp="max-fr=30;max-fs=3600",
+        )
+
+        inbound = sdp.negotiate_video_offer_directional(
+            offer,
+            local_formats=(local,),
+        )
+
+        self.assertIsNotNone(inbound)
+        assert inbound is not None
+        self.assertEqual(inbound.send.fmtp, "max-fr=15;max-fs=1200")
+        self.assertEqual(inbound.recv.fmtp, "max-fr=30;max-fs=3600")
+
+        answer = offer.replace("max-fr=15;max-fs=1200", "max-fr=10;max-fs=600")
+        outbound = sdp.negotiate_video_answer_directional(answer, local)
+        self.assertIsNotNone(outbound)
+        assert outbound is not None
+        self.assertEqual(outbound.send.fmtp, "max-fr=10;max-fs=600")
+        self.assertEqual(outbound.recv.fmtp, "max-fr=30;max-fs=3600")
+
+    def test_b2bua_projects_h264_answer_level_onto_source_payload(self) -> None:
+        source_offer = sdp.RtpVideoFormat(
+            payload_type=102,
+            profile_level_id="42e01f",
+            level_asymmetry_allowed=False,
+        )
+        destination_answer = sdp.RtpVideoFormat(
+            payload_type=110,
+            profile_level_id="42e015",
+            level_asymmetry_allowed=False,
+        )
+
+        source_answer = sdp.video_answer_contract(
+            source_offer,
+            destination_answer,
+        )
+
+        self.assertIsNotNone(source_answer)
+        assert source_answer is not None
+        self.assertEqual(source_answer.payload_type, 102)
+        self.assertEqual(source_answer.profile_level_id, "42e015")
+        self.assertTrue(
+            sdp.video_formats_passthrough_compatible(
+                source_answer,
+                destination_answer,
+            )
+        )
+
+    def test_b2bua_encodes_level_1b_on_the_source_subprofile(self) -> None:
+        source_offer = sdp.RtpVideoFormat(
+            payload_type=102,
+            profile_level_id="42a00b",
+            level_asymmetry_allowed=False,
+        )
+        destination_answer = sdp.RtpVideoFormat(
+            payload_type=110,
+            profile_level_id="42b00b",
+            level_asymmetry_allowed=False,
+        )
+
+        source_answer = sdp.video_answer_contract(
+            source_offer,
+            destination_answer,
+        )
+
+        self.assertIsNotNone(source_answer)
+        assert source_answer is not None
+        self.assertEqual(source_answer.profile_level_id, "42b00b")
+
+    def test_h264_equivalent_rfc_subprofile_encodings_interoperate(self) -> None:
+        constrained_baseline = sdp.RtpVideoFormat(profile_level_id="42e015")
+        main_compatible = sdp.RtpVideoFormat(profile_level_id="4d8015")
+
+        self.assertTrue(
+            sdp.video_formats_passthrough_compatible(
+                constrained_baseline,
+                main_compatible,
+            )
+        )
+
+    def test_b2bua_projects_vp8_receiver_limits_without_blocking_relay(self) -> None:
+        caller = sdp.RtpVideoFormat(
+            payload_type=103,
+            encoding="VP8",
+            fmtp="max-fr=30;max-fs=3600",
+        )
+        callee = sdp.RtpVideoFormat(
+            payload_type=110,
+            encoding="VP8",
+            fmtp="max-fr=15;max-fs=1200",
+        )
+
+        answer = sdp.video_answer_contract(caller, callee)
+
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertEqual(answer.payload_type, caller.payload_type)
+        self.assertEqual(answer.fmtp, callee.fmtp)
+        self.assertTrue(sdp.video_formats_passthrough_compatible(caller, callee))
+        self.assertTrue(sdp.video_formats_passthrough_compatible(callee, caller))
+        self.assertTrue(sdp.video_formats_renegotiation_compatible(caller, answer))
+
+    def test_camera_authorization_survives_video_hold_and_resume(self) -> None:
+        authorized = True
+
+        initial = sdp.constrained_video_direction("sendrecv", allow_send=authorized)
+        held = sdp.constrained_video_direction("sendonly", allow_send=authorized)
+        resumed = sdp.constrained_video_direction("sendrecv", allow_send=authorized)
+
+        self.assertEqual((initial, held, resumed), ("sendrecv", "recvonly", "sendrecv"))
+        self.assertEqual(
+            sdp.constrained_video_direction("sendrecv", allow_send=False),
+            "recvonly",
+        )
 
     def test_unsupported_media_level_connection_does_not_break_audio(self) -> None:
         offer = (
@@ -635,7 +1588,9 @@ class H264SdpTest(unittest.TestCase):
             audio.recv,
             remote_sdp=offer,
         )
-        self.assertLess(answer.index("m=audio 40000"), answer.index("m=audio 0 RTP/AVP 97"))
+        self.assertLess(
+            answer.index("m=audio 40000"), answer.index("m=audio 0 RTP/AVP 97")
+        )
 
     def test_answer_rejects_unsupported_audio_before_selected_rtp_avp(self) -> None:
         offer = (
@@ -655,7 +1610,10 @@ class H264SdpTest(unittest.TestCase):
             audio.recv,
             remote_sdp=offer,
         )
-        self.assertLess(answer.index("m=audio 0 RTP/SAVP 96"), answer.index("m=audio 40000 RTP/AVP 97"))
+        self.assertLess(
+            answer.index("m=audio 0 RTP/SAVP 96"),
+            answer.index("m=audio 40000 RTP/AVP 97"),
+        )
 
 
 if __name__ == "__main__":

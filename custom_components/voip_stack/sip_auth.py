@@ -42,7 +42,12 @@ def build_digest_authorization(
     algorithm = (challenge.get("algorithm") or "MD5").upper()
     qop_raw = challenge.get("qop", "")
     qops = [part.strip() for part in qop_raw.split(",") if part.strip()]
-    qop = "auth" if "auth" in qops else (qops[0] if qops else "")
+    if qops and "auth" not in qops:
+        # auth-int hashes the entity body and is not implemented by this
+        # compact SIP client. Sending an auth-int label with an auth digest is
+        # worse than failing explicitly because it can hide interop failures.
+        raise ValueError(f"unsupported SIP digest qop {','.join(qops)}")
+    qop = "auth" if qops else ""
     digest_user = auth_username or username
     if algorithm not in {"MD5", ""}:
         raise ValueError(f"unsupported SIP digest algorithm {algorithm}")

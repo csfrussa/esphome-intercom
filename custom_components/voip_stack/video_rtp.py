@@ -14,6 +14,7 @@ DEFAULT_MAX_RTP_PAYLOAD = 1200
 MAX_ACCESS_UNIT_BYTES = 4 * 1024 * 1024
 MAX_NAL_UNIT_BYTES = 2 * 1024 * 1024
 MAX_ACCESS_UNIT_NALS = 512
+MAX_ACCESS_UNIT_FRAGMENTS = 4096
 DEFAULT_REORDER_DELAY = 0.020
 DEFAULT_REORDER_PACKETS = 128
 
@@ -41,6 +42,77 @@ class VideoAccessUnit:
     timestamp: int
     key_frame: bool
     encoding: str
+
+
+@dataclass(slots=True)
+class RtpTimestampClock:
+    """Map browser timestamps and RTP keepalives onto one continuous clock."""
+
+    clock_rate: int
+    origin_timestamp: int
+    origin_time: float
+    _browser_source_base: int | None = None
+    _browser_clock_base: int | None = None
+
+    def current(self, now: float) -> int:
+        elapsed = max(0.0, float(now) - float(self.origin_time))
+        return (
+            int(self.origin_timestamp) + round(elapsed * int(self.clock_rate))
+        ) & 0xFFFFFFFF
+
+    def map_browser(self, source_timestamp: int, now: float) -> int:
+        source = int(source_timestamp) & 0xFFFFFFFF
+        if self._browser_source_base is None or self._browser_clock_base is None:
+            self._browser_source_base = source
+            self._browser_clock_base = self.current(now)
+        delta = (source - self._browser_source_base) & 0xFFFFFFFF
+        return (self._browser_clock_base + delta) & 0xFFFFFFFF
+
+    def reset_browser(self) -> None:
+        """Start a new browser capture epoch without resetting the RTP clock."""
+
+        self._browser_source_base = None
+        self._browser_clock_base = None
+
+
+@dataclass(slots=True)
+class RtpExtendedSequenceTracker:
+    """Track the RFC 3550 extended highest RTP sequence number."""
+
+    _highest: int | None = None
+
+    @property
+    def highest(self) -> int:
+        """Return the extended maximum suitable for an RTCP report block."""
+
+        return 0 if self._highest is None else self._highest
+
+    def observe(self, sequence: int) -> int:
+        """Observe a packet sequence while preserving wrap-cycle history."""
+
+        sequence = int(sequence) & 0xFFFF
+        if self._highest is None:
+            self._highest = sequence
+            return self._highest
+
+        highest_low = self._highest & 0xFFFF
+        cycles = self._highest & ~0xFFFF
+        if sequence < highest_low and highest_low - sequence > 0x8000:
+            candidate = cycles + 0x10000 + sequence
+        elif sequence > highest_low and sequence - highest_low > 0x8000:
+            # A reordered packet from the preceding cycle must not advance the
+            # extended maximum after the current cycle has wrapped.
+            candidate = cycles - 0x10000 + sequence
+        else:
+            candidate = cycles + sequence
+        if candidate > self._highest:
+            self._highest = candidate
+        return self._highest
+
+    def reset(self) -> None:
+        """Start a fresh RTP source generation."""
+
+        self._highest = None
 
 
 class RtpReorderBuffer(Generic[_T]):
@@ -250,13 +322,10 @@ class H264Depacketizer:
     def _append_nal(self, nal: bytes) -> None:
         if not nal or len(nal) > MAX_NAL_UNIT_BYTES:
             raise H264RtpError("invalid H.264 NAL unit size")
+        if not 1 <= (nal[0] & 0x1F) <= 23:
+            raise H264RtpError("invalid nested H.264 packetization NAL type")
         if len(self._nals) >= MAX_ACCESS_UNIT_NALS:
             raise H264RtpError("too many H.264 NAL units")
-        nal_type = nal[0] & 0x1F
-        if nal_type == 7:
-            self._sps = nal
-        elif nal_type == 8:
-            self._pps = nal
         self._nals.append(nal)
         if sum(len(item) + 4 for item in self._nals) > MAX_ACCESS_UNIT_BYTES:
             raise H264RtpError("H.264 access unit exceeds safety limit")
@@ -294,7 +363,11 @@ class H264Depacketizer:
             start = bool(header & 0x80)
             end = bool(header & 0x40)
             reconstructed_type = header & 0x1F
-            if reconstructed_type == 0 or start and end:
+            if (
+                not 1 <= reconstructed_type <= 23
+                or header & 0x20
+                or start and end
+            ):
                 raise H264RtpError("invalid FU-A header")
             fragment = payload[2:]
             if not fragment:
@@ -306,6 +379,8 @@ class H264Depacketizer:
             elif self._fu is None:
                 raise H264RtpError("FU-A continuation without start")
             assert self._fu is not None
+            if self._fu[0] != ((indicator & 0xE0) | reconstructed_type):
+                raise H264RtpError("FU-A NRI/type changed during fragmentation")
             self._fu.extend(fragment)
             if len(self._fu) > MAX_NAL_UNIT_BYTES:
                 raise H264RtpError("FU-A NAL exceeds safety limit")
@@ -327,7 +402,8 @@ class H264Depacketizer:
         if damaged:
             self.dropped_access_units += 1
             return None
-        key_frame = any((nal[0] & 0x1F) == 5 for nal in nals)
+        received_nals = nals
+        key_frame = any((nal[0] & 0x1F) == 5 for nal in received_nals)
         if key_frame:
             present = {nal[0] & 0x1F for nal in nals}
             prefix: list[bytes] = []
@@ -341,6 +417,16 @@ class H264Depacketizer:
         except H264RtpError:
             self.dropped_access_units += 1
             return None
+        # Parameter sets belong to the persistent decoder bootstrap cache only
+        # after their complete access unit has passed sequence, fragmentation,
+        # size and Annex-B validation. A damaged RTP unit must not poison the
+        # next IDR (or a replacement browser decoder) with partial SPS/PPS.
+        for nal in received_nals:
+            nal_type = nal[0] & 0x1F
+            if nal_type == 7:
+                self._sps = nal
+            elif nal_type == 8:
+                self._pps = nal
         return H264AccessUnit(data=data, timestamp=timestamp, key_frame=key_frame)
 
 
@@ -351,11 +437,19 @@ class Vp8Depacketizer:
         self._timestamp: int | None = None
         self._expected_sequence: int | None = None
         self._parts: list[bytes] = []
+        self._parts_bytes = 0
         self._started = False
         self._key_frame = False
         self._damaged = False
         self.dropped_access_units = 0
         self.sequence_gaps = 0
+
+    def _reset_unit(self) -> None:
+        self._parts = []
+        self._parts_bytes = 0
+        self._started = False
+        self._damaged = False
+        self._expected_sequence = None
 
     @staticmethod
     def _payload(payload: bytes) -> tuple[bytes, bool, int]:
@@ -388,10 +482,7 @@ class Vp8Depacketizer:
         if self._timestamp is not None and packet.timestamp != self._timestamp:
             if self._parts:
                 self.dropped_access_units += 1
-            self._parts = []
-            self._started = False
-            self._damaged = False
-            self._expected_sequence = None
+            self._reset_unit()
         self._timestamp = packet.timestamp
         if self._expected_sequence is not None and packet.sequence != self._expected_sequence:
             self.sequence_gaps += 1
@@ -400,28 +491,27 @@ class Vp8Depacketizer:
         try:
             payload, start, partition = self._payload(packet.payload)
         except ValueError:
-            self._parts = []
-            self._started = False
-            self._damaged = False
-            self._expected_sequence = None
+            self._reset_unit()
             self.dropped_access_units += 1
             return None
         if start and partition == 0:
             self._parts = []
+            self._parts_bytes = 0
             self._started = True
             self._key_frame = bool(payload) and not bool(payload[0] & 0x01)
         if not self._started or not payload:
             if packet.marker:
                 self.dropped_access_units += 1
             return None
-        self._parts.append(payload)
-        if sum(map(len, self._parts)) > MAX_ACCESS_UNIT_BYTES:
-            self._parts = []
-            self._started = False
-            self._damaged = False
-            self._expected_sequence = None
+        if (
+            len(self._parts) >= MAX_ACCESS_UNIT_FRAGMENTS
+            or self._parts_bytes + len(payload) > MAX_ACCESS_UNIT_BYTES
+        ):
+            self._reset_unit()
             self.dropped_access_units += 1
             return None
+        self._parts.append(payload)
+        self._parts_bytes += len(payload)
         if not packet.marker:
             return None
         damaged = self._damaged
@@ -429,6 +519,7 @@ class Vp8Depacketizer:
         timestamp = int(self._timestamp)
         key_frame = self._key_frame
         self._parts = []
+        self._parts_bytes = 0
         self._started = False
         self._damaged = False
         self._timestamp = None
@@ -477,7 +568,7 @@ def _jpeg_interchange_header(
 ) -> bytes:
     if jpeg_type not in {0, 1} or not width_blocks or not height_blocks:
         raise ValueError("unsupported RFC 2435 JPEG geometry/type")
-    if len(quantizers) not in {64, 128}:
+    if len(quantizers) != 128:
         raise ValueError("unsupported RFC 2435 quantization tables")
     width = int(width_blocks) << 3
     height = int(height_blocks) << 3
@@ -513,6 +604,7 @@ class JpegDepacketizer:
 
     def __init__(self) -> None:
         self._timestamp: int | None = None
+        self._frame_header: tuple[int, int, int, int, int, int] | None = None
         self._header = b""
         self._scan = bytearray()
         self._dynamic_quantizers: dict[int, bytes] = {}
@@ -520,6 +612,7 @@ class JpegDepacketizer:
 
     def _drop(self) -> None:
         self._timestamp = None
+        self._frame_header = None
         self._header = b""
         self._scan.clear()
         self.dropped_access_units += 1
@@ -530,18 +623,28 @@ class JpegDepacketizer:
             self._drop()
             return None
         offset = int.from_bytes(payload[1:4], "big")
-        jpeg_type = int(payload[4])
+        type_specific = int(payload[0])
+        jpeg_type_raw = int(payload[4])
+        jpeg_type = jpeg_type_raw
         quality = int(payload[5])
         width = int(payload[6])
         height = int(payload[7])
         cursor = 8
         dri = 0
+        if type_specific:
+            # RFC 2435 type-specific values 1..3 describe interlaced fields;
+            # emitting them as a progressive JFIF would corrupt geometry.
+            self._drop()
+            return None
         if jpeg_type & 0x40:
             if len(payload) < cursor + 4:
                 self._drop()
                 return None
             dri = int.from_bytes(payload[cursor : cursor + 2], "big")
             cursor += 4
+            if not dri:
+                self._drop()
+                return None
             jpeg_type &= ~0x40
         if jpeg_type not in {0, 1}:
             self._drop()
@@ -554,7 +657,7 @@ class JpegDepacketizer:
                     precision = payload[cursor + 1]
                     table_len = int.from_bytes(payload[cursor + 2 : cursor + 4], "big")
                     cursor += 4
-                    if precision or table_len not in {0, 64, 128}:
+                    if precision or table_len not in {0, 128}:
                         raise ValueError("unsupported RFC 2435 quantization header")
                     if table_len:
                         if len(payload) < cursor + table_len:
@@ -580,8 +683,21 @@ class JpegDepacketizer:
                 self._drop()
                 return None
             self._timestamp = packet.timestamp
+            self._frame_header = (
+                type_specific,
+                jpeg_type_raw,
+                quality,
+                width,
+                height,
+                dri,
+            )
             self._scan.clear()
-        elif self._timestamp != packet.timestamp or offset != len(self._scan):
+        elif (
+            self._timestamp != packet.timestamp
+            or offset != len(self._scan)
+            or self._frame_header
+            != (type_specific, jpeg_type_raw, quality, width, height, dri)
+        ):
             self._drop()
             return None
         frame_data = payload[cursor:]
@@ -597,6 +713,7 @@ class JpegDepacketizer:
         data = self._header + bytes(self._scan) + b"\xff\xd9"
         timestamp = int(packet.timestamp)
         self._timestamp = None
+        self._frame_header = None
         self._header = b""
         self._scan.clear()
         return VideoAccessUnit(data, timestamp, True, "JPEG")
@@ -652,6 +769,9 @@ def packetize_annex_b(
     packets: list[rtp.RtpPacket] = []
     current_sequence = int(sequence) & 0xFFFF
     for nal in nals:
+        nal_type = nal[0] & 0x1F
+        if not 1 <= nal_type <= 23:
+            raise H264RtpError("cannot packetize reserved or nested H.264 NAL type")
         if len(nal) <= max_payload:
             packets.append(
                 rtp.RtpPacket(
@@ -666,7 +786,6 @@ def packetize_annex_b(
             continue
         nal_header = nal[0]
         fu_indicator = (nal_header & 0xE0) | 28
-        nal_type = nal_header & 0x1F
         fragment_size = max_payload - 2
         body = memoryview(nal)[1:]
         offset = 0

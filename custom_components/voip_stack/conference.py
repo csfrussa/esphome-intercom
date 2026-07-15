@@ -23,6 +23,7 @@ from .media_ports import RtpPortReservation
 from .rtp import RtpPacket, build_packet, next_sequence, next_timestamp, parse_packet
 from .sdp import build_answer_directional
 from . import sdp
+from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 from .sip_listener import SipInvite, SipInviteResult
 from .websocket_api import _fire_call_event, _set_ha_softphone_call_state
@@ -83,6 +84,11 @@ class _ConferenceLeg:
     rx_packets: int = 0
     tx_packets: int = 0
     dropped_frames: int = 0
+    can_receive: bool = True
+    can_send: bool = True
+    connection_held: bool = False
+    rx_suppressed: int = 0
+    tx_suppressed: int = 0
 
 
 class _ConferenceRtpProtocol(asyncio.DatagramProtocol):
@@ -109,6 +115,7 @@ class ConferenceRoom:
         self.local_ip = local_ip
         self.legs: dict[str, _ConferenceLeg] = {}
         self._task: asyncio.Task | None = None
+        self._close_task: asyncio.Task[None] | None = None
         self._closed = False
         self._ha_softphone_announced = False
 
@@ -147,6 +154,12 @@ class ConferenceRoom:
                 encoder=RtpPayloadEncoder(invite.send_format),
                 in_converter=PcmFrameConverter(invite.recv_format.audio_format, CONFERENCE_FORMAT),
                 out_converter=PcmFrameConverter(CONFERENCE_FORMAT, invite.send_format.audio_format),
+                can_receive=invite.local_audio_direction in {"recvonly", "sendrecv"},
+                can_send=(
+                    invite.local_audio_direction in {"sendonly", "sendrecv"}
+                    and not invite.remote_audio_connection_held
+                ),
+                connection_held=invite.remote_audio_connection_held,
             )
             self.legs[invite.call_id] = leg
             if self._task is None or self._task.done():
@@ -221,6 +234,12 @@ class ConferenceRoom:
                 in_converter=PcmFrameConverter(dialog.recv_format.audio_format, CONFERENCE_FORMAT),
                 out_converter=PcmFrameConverter(CONFERENCE_FORMAT, dialog.send_format.audio_format),
                 client=client,
+                can_receive=dialog.local_audio_direction in {"recvonly", "sendrecv"},
+                can_send=(
+                    dialog.local_audio_direction in {"sendonly", "sendrecv"}
+                    and not dialog.remote_audio_connection_held
+                ),
+                connection_held=dialog.remote_audio_connection_held,
             )
             self.legs[call_id] = leg
             if self._task is None or self._task.done():
@@ -242,6 +261,9 @@ class ConferenceRoom:
         if leg is None:
             return
         if leg.decoder is None:
+            return
+        if not leg.can_receive:
+            leg.rx_suppressed += 1
             return
         if addr[0] != leg.remote_host:
             return
@@ -277,15 +299,55 @@ class ConferenceRoom:
         leg = self.legs.pop(call_id, None)
         if leg is None:
             return False
-        await self._dispose_leg(leg, reason=reason)
-        self._fire("conference_participant_left", call_id, caller=leg.caller, count=len(self.legs), reason=reason)
-        if not self.legs:
-            await self.close(reason=reason)
+        origin = asyncio.current_task()
+        cleanup = asyncio.create_task(
+            self._finish_leave(leg, reason=reason, origin=origin),
+            name=f"voip-conference-leave-{self.name}-{call_id}",
+        )
+        # A service-call or shutdown waiter may be cancelled repeatedly, but
+        # ownership has already left the room. Complete teardown first so the
+        # detached leg cannot become unreachable.
+        await async_wait_for_cleanup(cleanup)
         return True
 
-    async def close(self, reason: str = "idle") -> None:
-        if self._closed:
-            return
+    async def _finish_leave(
+        self,
+        leg: _ConferenceLeg,
+        *,
+        reason: str,
+        origin: asyncio.Task[Any] | None,
+    ) -> None:
+        await self._dispose_leg(leg, reason=reason)
+        self._fire(
+            "conference_participant_left",
+            leg.call_id,
+            caller=leg.caller,
+            count=len(self.legs),
+            reason=reason,
+        )
+        if not self.legs:
+            await self.close(reason=reason, _origin=origin)
+
+    async def close(
+        self,
+        reason: str = "idle",
+        *,
+        _origin: asyncio.Task[Any] | None = None,
+    ) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                self._close(reason=reason, origin=_origin or asyncio.current_task()),
+                name=f"voip-conference-close-{self.name}",
+            )
+        cleanup = self._close_task
+        await async_wait_for_cleanup(cleanup)
+
+    async def _close(
+        self,
+        *,
+        reason: str,
+        origin: asyncio.Task[Any] | None,
+    ) -> None:
         self._closed = True
         legs = list(self.legs.values())
         self.legs.clear()
@@ -293,7 +355,7 @@ class ConferenceRoom:
             await asyncio.gather(*(self._dispose_leg(leg, reason=reason) for leg in legs))
         task = self._task
         self._task = None
-        if task is not None and task is not asyncio.current_task():
+        if task is not None and task is not origin and task is not asyncio.current_task():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         self._set_softphone_idle(reason)
@@ -303,16 +365,34 @@ class ConferenceRoom:
             manager.rooms.pop(self.name, None)
 
     async def _dispose_leg(self, leg: _ConferenceLeg, *, reason: str) -> None:
-        if leg.transport is not None:
-            leg.transport.close()
-        if leg.client is not None:
+        # Detach synchronous resources before signaling awaits.  This is both
+        # the ownership boundary and the guarantee that cancellation cannot
+        # strand a reserved RTP pair behind a leg already removed from `legs`.
+        transport = leg.transport
+        leg.transport = None
+        if transport is not None:
+            transport.close()
+        reservation = leg.port_reservation
+        leg.port_reservation = None
+        if reservation is not None:
+            reservation.release()
+        client = leg.client
+        leg.client = None
+        if client is None:
+            return
+
+        async def close_client() -> None:
             if reason != "remote_hangup":
-                with contextlib.suppress(Exception):
-                    await leg.client.terminate()
-            with contextlib.suppress(Exception):
-                await leg.client.close()
-        if leg.port_reservation is not None:
-            leg.port_reservation.release()
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await client.terminate()
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await client.close()
+
+        cleanup = asyncio.create_task(
+            close_client(),
+            name=f"voip-conference-client-close-{self.name}-{leg.call_id}",
+        )
+        await async_wait_for_cleanup(cleanup)
 
     async def _mix_loop(self) -> None:
         next_deadline = time.monotonic()
@@ -330,7 +410,7 @@ class ConferenceRoom:
                 next_deadline += CONFERENCE_TICK_S
                 now = time.monotonic()
                 for call_id, leg in list(self.legs.items()):
-                    if now - leg.last_rx > CONFERENCE_INACTIVITY_S:
+                    if self._rx_inactivity_expired(leg, now):
                         await self.leave(call_id, reason="media_timeout")
                 if not self.legs:
                     break
@@ -347,6 +427,13 @@ class ConferenceRoom:
                             leg.tx_packets += 1
                             continue
                         if leg.transport is None or leg.encoder is None:
+                            continue
+                        if not leg.can_send or leg.connection_held:
+                            leg.tx_suppressed += 1
+                            leg.timestamp = next_timestamp(
+                                leg.timestamp,
+                                leg.encoder.fmt.audio_format.nominal_frame_samples,
+                            )
                             continue
                         try:
                             payload = leg.encoder.encode(out_frame)
@@ -376,6 +463,23 @@ class ConferenceRoom:
             if not self._closed and not self.legs:
                 await self.close(reason="idle")
 
+    @staticmethod
+    def _rx_inactivity_expired(leg: _ConferenceLeg, now: float) -> bool:
+        """Apply RTP timeout only to a SIP leg expected to transmit audio.
+
+        A local ``sendonly``/``inactive`` answer explicitly tells the peer not
+        to send RTP. The browser conference leg may likewise be a deliberate
+        listener with no microphone frames. Neither is evidence of a dead SIP
+        dialog, and legacy c=0 hold suspends the expectation as well.
+        """
+
+        return bool(
+            leg.local_out is None
+            and leg.can_receive
+            and not leg.connection_held
+            and now - leg.last_rx > CONFERENCE_INACTIVITY_S
+        )
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -387,6 +491,11 @@ class ConferenceRoom:
                     "rx_packets": leg.rx_packets,
                     "tx_packets": leg.tx_packets,
                     "dropped_frames": leg.dropped_frames,
+                    "can_receive": leg.can_receive,
+                    "can_send": leg.can_send,
+                    "connection_held": leg.connection_held,
+                    "rx_suppressed": leg.rx_suppressed,
+                    "tx_suppressed": leg.tx_suppressed,
                 }
                 for call_id, leg in self.legs.items()
             },
@@ -490,8 +599,13 @@ class ConferenceManager:
         self.hass = hass
         self.local_ip = local_ip
         self.rooms: dict[str, ConferenceRoom] = {}
+        self._close_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self._closed = False
 
     async def join(self, invite: SipInvite, entry: Any, *, ring_ha: bool = False) -> SipInviteResult:
+        if self._closing or self._closed:
+            return SipInviteResult(503, "Service Unavailable", to_tag="")
         room_name = str(getattr(entry, "name", "") or getattr(entry, "id", "") or invite.target)
         room = self.rooms.get(room_name)
         if room is None or room._closed:
@@ -509,6 +623,9 @@ class ConferenceManager:
         port_reservation: RtpPortReservation,
         role: str = "manual",
     ) -> bool:
+        if self._closing or self._closed:
+            port_reservation.release()
+            return False
         room_key = str(room_name or "").strip()
         room = self.rooms.get(room_key)
         if room is None or room._closed:
@@ -534,12 +651,16 @@ class ConferenceManager:
         return False
 
     def join_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes] | None:
+        if self._closing or self._closed:
+            return None
         room = self.rooms.get(str(room_name or "").strip())
         if room is None or room._closed:
             return None
         return room.add_ha_softphone_leg()
 
     def start_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes] | None:
+        if self._closing or self._closed:
+            return None
         room_key = str(room_name or "").strip()
         room = self.rooms.get(room_key)
         if room is None or room._closed:
@@ -561,10 +682,23 @@ class ConferenceManager:
                 self.rooms.pop(room_key, None)
 
     async def close(self, reason: str = "local_hangup") -> None:
-        rooms = list(self.rooms.values())
-        self.rooms.clear()
-        if rooms:
-            await asyncio.gather(*(room.close(reason=reason) for room in rooms))
+        self._closing = True
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                self._close(reason=reason),
+                name="voip-conference-manager-close",
+            )
+        cleanup = self._close_task
+        await async_wait_for_cleanup(cleanup)
+
+    async def _close(self, *, reason: str) -> None:
+        try:
+            rooms = list(self.rooms.values())
+            self.rooms.clear()
+            if rooms:
+                await asyncio.gather(*(room.close(reason=reason) for room in rooms))
+        finally:
+            self._closed = True
 
     def snapshot(self) -> dict[str, Any]:
         return {name: room.snapshot() for name, room in self.rooms.items()}

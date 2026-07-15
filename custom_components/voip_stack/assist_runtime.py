@@ -98,9 +98,17 @@ class AssistMediaSession:
         self._pipeline_task: asyncio.Task | None = None
         self._tx_task: asyncio.Task | None = None
         self._tts_task: asyncio.Task | None = None
+        self._start_lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
+        self._cleanup_done = asyncio.Event()
         self._completed = False
         self._pipeline_failed = False
         self._accepting_input = False
+        self.can_receive = invite.local_audio_direction in {"recvonly", "sendrecv"}
+        self.can_send = (
+            invite.local_audio_direction in {"sendonly", "sendrecv"}
+            and not invite.remote_audio_connection_held
+        )
         self.counters = {
             "rtp_rx": 0,
             "rtp_tx": 0,
@@ -112,22 +120,34 @@ class AssistMediaSession:
             "rx_suppressed": 0,
             "tx_error": 0,
             "tx_silence": 0,
+            "tx_suppressed": 0,
+            "drop_direction_rx": 0,
+            "drop_connection_hold": 0,
             "pipeline_runs": 0,
             "speech_gate_opens": 0,
         }
 
     async def start(self) -> None:
         """Bind RTP and start the persistent pipeline/media tasks."""
-        if self.transport is not None:
-            return
-        loop = asyncio.get_running_loop()
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _AssistRtpProtocol(self),
-            local_addr=("0.0.0.0", self.local_rtp_port),
-        )
-        self.transport = transport  # type: ignore[assignment]
-        self._tx_task = self.hass.async_create_task(self._send_loop())
-        self._pipeline_task = self.hass.async_create_task(self._pipeline_loop())
+        async with self._start_lock:
+            if self.transport is not None:
+                return
+            if self.closed.is_set() or self._cleanup_done.is_set():
+                raise RuntimeError("Assist media session is already closed")
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _AssistRtpProtocol(self),
+                local_addr=("0.0.0.0", self.local_rtp_port),
+            )
+            # stop() deliberately does not wait behind a potentially blocked
+            # socket bind. If shutdown won the race, close the acquired
+            # transport before it can publish tasks behind cleanup_done.
+            if self.closed.is_set() or self._cleanup_done.is_set():
+                transport.close()
+                raise RuntimeError("Assist media session closed while starting")
+            self.transport = transport  # type: ignore[assignment]
+            self._tx_task = self.hass.async_create_task(self._send_loop())
+            self._pipeline_task = self.hass.async_create_task(self._pipeline_loop())
         _LOGGER.info(
             "Assist media session started call_id=%s local_rtp=%s remote=%s:%s tx=%s rx=%s pipeline=%s",
             self.invite.call_id,
@@ -141,31 +161,41 @@ class AssistMediaSession:
 
     async def stop(self) -> None:
         """Stop pipeline and RTP exactly once."""
-        if self.closed.is_set():
-            return
-        self.closed.set()
-        current = asyncio.current_task()
-        tasks = [self._pipeline_task, self._tts_task, self._tx_task]
-        for task in tasks:
-            if task is not None and task is not current and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in tasks if task is not None and task is not current),
-            return_exceptions=True,
-        )
-        if self.transport is not None:
-            self.transport.close()
-            self.transport = None
-        self.reservation.release()
-        _LOGGER.info(
-            "Assist media session stopped call_id=%s counters=%s",
-            self.invite.call_id,
-            self.counters,
-        )
+        async with self._stop_lock:
+            if self._cleanup_done.is_set():
+                return
+            self.closed.set()
+            current = asyncio.current_task()
+            tasks = [self._pipeline_task, self._tts_task, self._tx_task]
+            for task in tasks:
+                if task is not None and task is not current and not task.done():
+                    task.cancel()
+            try:
+                await asyncio.gather(
+                    *(task for task in tasks if task is not None and task is not current),
+                    return_exceptions=True,
+                )
+            finally:
+                # These resources are synchronous to release.  Keep them in a
+                # finally block so cancellation of a Home Assistant shutdown
+                # cannot strand the reserved RTP port behind a closed flag.
+                if self.transport is not None:
+                    self.transport.close()
+                    self.transport = None
+                self.reservation.release()
+                self._cleanup_done.set()
+                _LOGGER.info(
+                    "Assist media session stopped call_id=%s counters=%s",
+                    self.invite.call_id,
+                    self.counters,
+                )
 
     def handle_rtp(self, data: bytes, addr) -> None:
         """Decode one negotiated RTP packet and enqueue pipeline PCM."""
         if self.closed.is_set():
+            return
+        if not self.can_receive:
+            self.counters["drop_direction_rx"] += 1
             return
         if str(addr[0]) != self.invite.remote_rtp_host:
             self.counters["drop_addr"] += 1
@@ -219,22 +249,27 @@ class AssistMediaSession:
                     queued = False
                     self.counters["tx_silence"] += 1
                 try:
-                    payload = self.encoder.encode(pcm)
-                    packet = rtp.build_packet(
-                        rtp.RtpPacket(
-                            payload_type=self.invite.send_format.payload_type,
-                            sequence=self.sequence,
-                            timestamp=self.timestamp,
-                            ssrc=self.ssrc,
-                            payload=payload,
+                    if not self.can_send:
+                        self.counters["tx_suppressed"] += 1
+                        if self.invite.remote_audio_connection_held:
+                            self.counters["drop_connection_hold"] += 1
+                    else:
+                        payload = self.encoder.encode(pcm)
+                        packet = rtp.build_packet(
+                            rtp.RtpPacket(
+                                payload_type=self.invite.send_format.payload_type,
+                                sequence=self.sequence,
+                                timestamp=self.timestamp,
+                                ssrc=self.ssrc,
+                                payload=payload,
+                            )
                         )
-                    )
-                    if self.transport is not None:
-                        self.transport.sendto(
-                            packet,
-                            (self.invite.remote_rtp_host, self.remote_rtp_port),
-                        )
-                        self.counters["rtp_tx"] += 1
+                        if self.transport is not None:
+                            self.transport.sendto(
+                                packet,
+                                (self.invite.remote_rtp_host, self.remote_rtp_port),
+                            )
+                            self.counters["rtp_tx"] += 1
                 except Exception as err:  # noqa: BLE001 - keep the media clock alive.
                     self.counters["tx_error"] += 1
                     _LOGGER.debug("Assist RTP TX drop call_id=%s: %s", self.invite.call_id, err)
@@ -447,6 +482,8 @@ class AssistMediaSession:
             "local_rtp_port": self.local_rtp_port,
             "remote_rtp_host": self.invite.remote_rtp_host,
             "remote_rtp_port": self.remote_rtp_port,
+            "local_audio_direction": self.invite.local_audio_direction,
+            "remote_connection_held": self.invite.remote_audio_connection_held,
             **self.counters,
         }
 

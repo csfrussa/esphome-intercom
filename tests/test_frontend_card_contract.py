@@ -45,7 +45,8 @@ class FrontendCardContractTest(unittest.TestCase):
 
     def test_esp_contact_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _startCall")
-        esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
+        self.assertIn("const softphoneAction = this._isHaSoftphoneMode()", body)
+        esp_branch = body.split("if (softphoneAction)", 1)[1]
         esp_branch = esp_branch.split("catch (err)", 1)[0]
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
         self.assertIn("this._mirrorKeypadOpen", esp_branch)
@@ -76,7 +77,8 @@ class FrontendCardContractTest(unittest.TestCase):
 
     def test_esp_answer_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _answer")
-        esp_branch = body.split("if (this._isHaSoftphoneMode())", 1)[1]
+        self.assertIn("const softphoneAction = this._isHaSoftphoneMode()", body)
+        esp_branch = body.split("if (softphoneAction)", 1)[1]
         esp_branch = esp_branch.split("catch (err)", 1)[0]
         self.assertIn('this._pressEspButton(this._callButtonEntityId, "Call")', esp_branch)
         self.assertNotIn("answer_esp_call", esp_branch)
@@ -205,29 +207,31 @@ class FrontendCardContractTest(unittest.TestCase):
 
     def test_ha_softphone_actions_target_only_the_ha_softphone(self) -> None:
         answer = _method_body(self.source, "async _answer")
-        ha_answer = answer.split("if (this._isHaSoftphoneMode())", 1)[1].split("return;", 1)[0]
+        ha_answer = answer.split("if (softphoneAction)", 1)[1].split(
+            'await this._pressEspButton(this._callButtonEntityId, "Call")', 1
+        )[0]
         self.assertIn('"voip_stack", "answer"', ha_answer)
-        self.assertIn("call_id: this._sessionCallId()", ha_answer)
+        self.assertIn("call_id: callId", ha_answer)
         self.assertNotIn('type: "voip_stack/answer"', ha_answer)
         self.assertNotIn("voipStackEngine.resumeSession(sessionInfo, HA_SOFTPHONE_DEVICE_ID", ha_answer)
         self.assertNotIn("this._sessionDeviceId()", ha_answer)
 
         decline = _method_body(self.source, "async _decline")
-        ha_decline = decline.split("if (this._isHaSoftphoneMode())", 1)[1].split("} else {", 1)[0]
+        ha_decline = decline.split("if (softphoneAction)", 1)[1].split("} else {", 1)[0]
         self.assertIn('"voip_stack", "decline"', ha_decline)
-        self.assertIn("call_id: this._sessionCallId()", ha_decline)
+        self.assertIn("call_id: callId", ha_decline)
         self.assertNotIn("this._sessionDeviceId()", ha_decline)
 
         hangup = _method_body(self.source, "async _hangup")
         softphone_hangup = hangup.split("if (wasSoftphone)", 1)[1].split("} else {", 1)[0]
         self.assertIn('"voip_stack", "hangup"', softphone_hangup)
-        self.assertIn("call_id: this._sessionCallId()", softphone_hangup)
+        self.assertIn("call_id: callId", softphone_hangup)
         self.assertNotIn("this._sessionDeviceId()", softphone_hangup)
 
     def test_hangup_preempts_pending_outbound_start(self) -> None:
         render = _method_body(self.source, "_render")
         hangup = _method_body(self.source, "async _hangup")
-        start = _method_body(self.source, "async _startHaSoftphoneCall")
+        start = _method_body(self.source, "async _startCall")
 
         self.assertIn("els.hangupBtn.disabled = this._stopping", render)
         self.assertNotIn("els.hangupBtn.disabled = buttonDisabled", render)
@@ -237,6 +241,10 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._starting = false", hangup)
         self.assertIn("const operationId = ++this._callOperationId", start)
         self.assertIn("operationId === this._callOperationId", start)
+        self.assertLess(
+            start.index("const operationId = ++this._callOperationId"),
+            start.index("await this._getDeviceInfo()"),
+        )
 
     def test_ha_terminal_reason_is_transient_and_deduplicated(self) -> None:
         apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
@@ -251,8 +259,11 @@ class FrontendCardContractTest(unittest.TestCase):
         normalise = _method_body(self.source, "_normaliseSoftphoneSnapshot")
         apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
 
+        self.assertIn("sequence: Number(payload.sequence || 0)", normalise)
         self.assertIn("revision: Number(payload.revision || 0)", normalise)
         self.assertIn("current?.call_id === snapshot.call_id", apply_snapshot)
+        self.assertIn("snapshot.sequence < currentSequence", apply_snapshot)
+        self.assertIn("snapshot.sequence === currentSequence", apply_snapshot)
         self.assertIn("Number(current.revision || 0) > snapshot.revision", apply_snapshot)
         self.assertIn("return false", apply_snapshot)
 
@@ -334,7 +345,38 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("if (!this._isHaSoftphoneMode()) return", maybe_answer)
         self.assertIn("snap.direction", maybe_answer)
         self.assertIn("snap.call_id", maybe_answer)
-        self.assertIn("this._tryAutoAnswer({ requirePersistentPermission: false })", maybe_answer)
+        self.assertIn("callId: String(snap.call_id)", maybe_answer)
+        self.assertIn("requirePersistentPermission: false", maybe_answer)
+
+    def test_softphone_actions_capture_call_identity_before_async_work(self) -> None:
+        answer = _method_body(self.source, "async _answer")
+        decline = _method_body(self.source, "async _decline")
+        hangup = _method_body(self.source, "async _hangup")
+        auto_answer = _method_body(self.source, "async _tryAutoAnswer")
+
+        for body in (answer, decline, hangup):
+            self.assertLess(body.index("const callId ="), body.index("await this._getDeviceInfo()"))
+            self.assertIn("const operationId = ++this._callOperationId", body)
+        self.assertIn("this._sessionCallId() !== callId", answer)
+        self.assertIn("this._sessionCallId() !== callId", decline)
+        self.assertIn("const ownedCallId = String(voipStackEngine.softphoneCallId", hangup)
+        self.assertIn("this._sessionCallId() !== callId", auto_answer)
+        self.assertIn("await this._answer({ callId, videoPermission })", auto_answer)
+
+    def test_video_answer_preflights_camera_and_auto_answer_never_prompts(self) -> None:
+        answer = _method_body(self.source, "async _answer")
+        auto_answer = _method_body(self.source, "async _tryAutoAnswer")
+        engine = (
+            ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js"
+        ).read_text()
+        permission = _method_body(engine, "async prepareVideoCameraPermission")
+
+        self.assertIn("await voipStackEngine.prepareVideoCameraPermission()", answer)
+        self.assertIn("persistentOnly: true", auto_answer)
+        self.assertIn("if (!navigator.permissions?.query) return false", permission)
+        self.assertIn('permission.state !== "granted"', permission)
+        self.assertIn("navigator.mediaDevices.getUserMedia", permission)
+        self.assertIn("track.stop()", permission)
 
     def test_deep_link_answer_is_not_part_of_esp_mirror_state_updates(self) -> None:
         setter = _method_body(self.source, "set hass")
@@ -374,6 +416,46 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("const connection = this._hass.connection", softphone_state)
         self.assertIn("!this._isHaSoftphoneMode()", softphone_state)
         self.assertIn("this._hass?.connection !== connection", softphone_state)
+
+    def test_detached_card_transfers_page_owned_media_without_reclaiming_ui(self) -> None:
+        controller = _method_body(self.source, "_isSoftphoneController")
+        config = _method_body(self.source, "setConfig")
+        disconnect = _method_body(self.source, "disconnectedCallback")
+        self.assertIn("this.isConnected", controller)
+        self.assertIn('oldMode === "ha_softphone" && newMode !== "ha_softphone"', config)
+        self.assertIn("voipStackEngine.releaseSoftphoneController(this)", config)
+        self.assertIn("voipStackEngine.releaseVideoCanvas(this)", config)
+        self.assertIn("this._unsubSoftphoneState()", config)
+        start = _method_body(self.source, "async _startHaSoftphoneCall")
+        answer = _method_body(self.source, "async _answer")
+        self.assertNotIn("this._callOperationId++", disconnect)
+        self.assertIn("shouldAbort: () => operationId !== this._callOperationId", start)
+        self.assertNotIn("!this.isConnected", start)
+        self.assertNotIn('reason: "superseded"', answer)
+        hass_setter = _method_body(self.source, "set hass")
+        connected = _method_body(self.source, "connectedCallback")
+        self.assertGreaterEqual(hass_setter.count("this.isConnected"), 2)
+        self.assertIn("this._subscribeBusEvents()", connected)
+        self.assertIn("this._loadSoftphoneState()", connected)
+        self.assertIn("this._render()", connected)
+
+    def test_active_panel_does_not_label_answering_as_in_call(self) -> None:
+        render = _method_body(self.source, "_render")
+        self.assertIn('normalizedState === "answering"', render)
+        self.assertIn('? "Answering"', render)
+        self.assertIn('normalizedState === "terminating"', render)
+        self.assertIn('case "terminating":', render)
+        self.assertIn('statusText = "Ending call..."', render)
+
+    def test_anonymous_incoming_calls_ring_and_receive_only_autoanswer_needs_no_mic(self) -> None:
+        incoming = _method_body(self.source, "_isIncomingSoftphoneRing")
+        ringtone = _method_body(self.source, "_syncRingtoneRequest")
+        autoanswer = _method_body(self.source, "async _tryAutoAnswer")
+        self.assertNotIn("_getCallerName", incoming)
+        self.assertIn("this._softphoneSnapshot?.call_id", incoming)
+        self.assertNotIn("!this._autoAnswer", ringtone)
+        self.assertIn('["sendonly", "sendrecv"].includes(audioDirection)', autoanswer)
+        self.assertIn("requirePersistentPermission && needsMicrophone", autoanswer)
 
     def test_frontend_has_no_esp_call_control_ws_commands(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
@@ -418,9 +500,18 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._stats.tx_dropped++", engine)
         self.assertIn("if (this._ws !== ws) return", engine)
         self.assertIn("if (this._connectPromise === connectPromise)", engine)
-        self.assertIn("this._deviceId !== deviceId || this._callId !== wantedCallId", engine)
+        self.assertIn("connectGeneration !== this._connectGeneration ||", engine)
+        self.assertIn("this._deviceId !== deviceId ||", engine)
+        self.assertIn("this._callId !== wantedCallId", engine)
         self.assertIn("Audio WebSocket superseded before connect", engine)
-        self.assertIn('await this._connect(deviceId, reply?.call_id || "")', engine)
+        self.assertIn("const callId = String(reply?.call_id || \"\")", engine)
+        self.assertIn("await this._connect(deviceId, callId)", engine)
+        setup = _method_body(engine, "async _setupAudioOrAbort")
+        self.assertIn("let connected = false", setup)
+        self.assertIn("connected = true", setup)
+        self.assertIn("connected &&", setup)
+        self.assertIn("deviceId === HA_SOFTPHONE_DEVICE_ID &&", setup)
+        self.assertIn("this._callId === callId", setup)
         self.assertNotIn("raw.slice(1)", engine)
         self.assertIn("byteOffset: 1", engine)
         self.assertIn("new DataView(buffer, byteOffset, frameBytes)", playback)
@@ -430,18 +521,35 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("s * 0x800000 : s * 0x7fffff", capture)
         self.assertNotIn("0x7fffff00", capture)
         self.assertIn("await this.resumeSession(mediaInfo, HA_SOFTPHONE_DEVICE_ID, reply)", engine)
-        self.assertIn("const previousAttach = this._sessionAttachPromise", engine)
-        self.assertIn("if (previousAttach) await previousAttach.catch", engine)
+        self.assertNotIn("const previousAttach = this._sessionAttachPromise", engine)
+        self.assertNotIn("if (previousAttach) await previousAttach.catch", engine)
         self.assertIn("if (this._sessionAttachKey !== attachKey) return", engine)
-        self.assertIn('await this.close("superseded", true)', engine)
         setup = _method_body(engine, "async _setupAudioOrAbort")
-        self.assertIn("await this._setupAudio(deviceInfo, reply)", setup)
-        after_setup = setup.split("await this._setupAudio(deviceInfo, reply)", 1)[1]
+        self.assertIn("await this._setupAudio(", setup)
+        self.assertIn("{ ...(reply || {}), ...(negotiated || {}) }", setup)
+        after_setup = setup.split("await this._setupAudio(", 1)[1]
         self.assertIn("this._sessionAttachKey !== attachKey", after_setup)
-        self.assertIn('await this.close("superseded", true)', after_setup)
-        self.assertIn('await this.close("switch", true)', engine)
+        self.assertNotIn('await this.close("superseded", true)', after_setup)
+        self.assertIn('await this.close("switch", true, true)', engine)
+        self.assertIn("const connectGeneration = ++this._connectGeneration", engine)
+        self.assertIn("connectGeneration !== this._connectGeneration", engine)
         self.assertIn('if (!preserveAttach) this._sessionAttachKey = ""', engine)
         self.assertIn("if (this._sessionAttachPromise !== trackedPromise) return", engine)
+        self.assertIn("const audioCleanup = this._cleanupAudio", engine)
+        self.assertIn("await Promise.allSettled([audioCleanup, videoCleanup])", engine)
+
+    def test_browser_audio_applies_negotiated_direction_and_media_updates(self) -> None:
+        engine = (
+            ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js"
+        ).read_text()
+        self.assertIn('this._audioDirection = "sendrecv"', engine)
+        self.assertIn("negotiated?.audio_direction", engine)
+        self.assertIn("if (!this._canSendAudio()) return", engine)
+        self.assertIn("!this._canReceiveAudio()", engine)
+        self.assertIn("void this._reconcileAudioMedia(msg)", engine)
+        self.assertIn("_desiredAudioPaths(audioMode, audioDirection)", engine)
+        self.assertIn("Audio WebSocket negotiation timed out", engine)
+        self.assertIn('"sendrecv", "sendonly", "recvonly", "inactive"', engine)
 
     def test_dynamic_call_controls_expose_accessible_state(self) -> None:
         source = CARD.read_text()
@@ -485,6 +593,10 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_softphone_media_ownership_survives_card_recreation_in_same_tab(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         self.assertIn('const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call"', engine)
+        self.assertIn('const MEDIA_CLIENT_SESSION_KEY = "voip_stack_media_client_id"', engine)
+        self.assertIn("sessionStorage.getItem(MEDIA_CLIENT_SESSION_KEY)", engine)
+        self.assertIn("sessionStorage.setItem(MEDIA_CLIENT_SESSION_KEY", engine)
+        self.assertIn("client_id=${encodeURIComponent(this._mediaClientId)}", engine)
         self.assertIn("sessionStorage.getItem(SOFTPHONE_MEDIA_SESSION_KEY)", engine)
         self.assertIn("sessionStorage.setItem(SOFTPHONE_MEDIA_SESSION_KEY", engine)
         self.assertIn("sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY)", engine)
@@ -494,7 +606,10 @@ class FrontendCardContractTest(unittest.TestCase):
         state_loader = self.source.split("async _loadSoftphoneState()", 1)[1].split(
             "_cycleSoftphoneTarget(", 1
         )[0]
-        self.assertIn("this._ensureHaSoftphoneAudioPath(snapshot)", state_loader)
+        self.assertIn(
+            "this._ensureHaSoftphoneAudioPath(this._softphoneSnapshot || snapshot)",
+            state_loader,
+        )
 
     def test_experimental_video_keeps_send_and_receive_paths_independent(self) -> None:
         video = (
@@ -507,6 +622,10 @@ class FrontendCardContractTest(unittest.TestCase):
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         self.assertIn("window.isSecureContext", video)
         self.assertIn("MAX_PENDING_DECODE_BYTES", video)
+        self.assertIn("MAX_DECODE_QUEUE_FRAMES", video)
+        self.assertIn("this._decoder.decodeQueueSize", video)
+        self.assertIn("this._dropUntilKeyFrame", video)
+        self.assertIn('type: "request_key_frame"', video)
         self.assertIn("this._canReceive = true", video)
         self.assertIn("this._canSend = true", video)
         self.assertIn("if (!usablePaths)", video)

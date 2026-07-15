@@ -15,6 +15,7 @@ from .sip_auth import build_digest_authorization
 from .sip_client import SIP_T1, SIP_T2, _SipClientProtocol
 from .sip_tcp_io import SipTcpWriter, read_sip_stream_message as _read_sip_stream_message
 from .queue_utils import put_drop_oldest
+from .session_cleanup import async_wait_for_cleanup
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -89,12 +90,21 @@ class SipTrunkClient:
         self._refresh_task: asyncio.Task | None = None
         self._receive_task: asyncio.Task | None = None
         self._stopped = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._start_task: asyncio.Task[None] | None = None
+        self._stop_task: asyncio.Task[None] | None = None
         self.request_handler: TrunkRequestHandler | None = None
         self.inbound_endpoint: Any | None = None
+        self._trusted_udp_hosts: frozenset[str] = frozenset()
 
     def _ensure_receive_task(self) -> None:
-        if self._receive_task is None or self._receive_task.done():
-            self._receive_task = asyncio.create_task(self._receive_loop())
+        if not self._stopped and (
+            self._receive_task is None or self._receive_task.done()
+        ):
+            self._receive_task = asyncio.create_task(
+                self._receive_loop(),
+                name=f"voip-sip-trunk-receive-{self.call_id}",
+            )
 
     @property
     def registrar_target(self) -> tuple[str, int]:
@@ -128,22 +138,37 @@ class SipTrunkClient:
         return str(sip.SipUri(self.config.username, self.domain))
 
     async def start(self) -> None:
-        self._stopped = False
+        async with self._lifecycle_lock:
+            if self._stopped:
+                raise RuntimeError("SIP trunk has already been stopped")
+            if self._start_task is None:
+                self._start_task = asyncio.create_task(
+                    self._start(),
+                    name=f"voip-sip-trunk-start-{self.call_id}",
+                )
+            task = self._start_task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await async_wait_for_cleanup(task)
+            await self.stop()
+            raise
+
+    async def _start(self) -> None:
         try:
             if self.transport_name == "TCP":
                 await self._connect_tcp()
-            elif self.transport is None:
-                loop = asyncio.get_running_loop()
-                self.protocol = _SipClientProtocol(self.queue)
-                transport, _ = await loop.create_datagram_endpoint(
-                    lambda: self.protocol,
-                    local_addr=("0.0.0.0", 0),
-                    family=socket.AF_INET,
-                )
-                self.transport = transport  # type: ignore[assignment]
+            else:
+                await self._connect_udp()
+            if self._stopped:
+                return
             self._ensure_receive_task()
             await self.register(timeout=2.0)
         except Exception as err:
+            if self._stopped:
+                return
             self.registered = False
             self.status_code = 0
             self.status_reason = str(err)
@@ -153,10 +178,26 @@ class SipTrunkClient:
                 self.transport_name,
                 err,
             )
-        self._ensure_refresh_task()
+        if not self._stopped:
+            self._ensure_refresh_task()
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            self._stopped = True
+            if self._stop_task is None:
+                self._stop_task = asyncio.create_task(
+                    self._stop(),
+                    name=f"voip-sip-trunk-stop-{self.call_id}",
+                )
+            task = self._stop_task
+        await async_wait_for_cleanup(task)
+
+    async def _stop(self) -> None:
         self._stopped = True
+        start_task = self._start_task
+        if start_task is not None and start_task is not asyncio.current_task() and not start_task.done():
+            start_task.cancel()
+            await asyncio.gather(start_task, return_exceptions=True)
         if self._refresh_task is not None:
             self._refresh_task.cancel()
             try:
@@ -197,8 +238,13 @@ class SipTrunkClient:
         self._reader_ready.clear()
 
     def _ensure_refresh_task(self) -> None:
-        if self._refresh_task is None or self._refresh_task.done():
-            self._refresh_task = asyncio.create_task(self._refresh_loop())
+        if not self._stopped and (
+            self._refresh_task is None or self._refresh_task.done()
+        ):
+            self._refresh_task = asyncio.create_task(
+                self._refresh_loop(),
+                name=f"voip-sip-trunk-refresh-{self.call_id}",
+            )
 
     async def _refresh_loop(self) -> None:
         retry_delay = 30.0
@@ -217,6 +263,8 @@ class SipTrunkClient:
             try:
                 if self.transport_name == "TCP" and (self.writer is None or self.writer.is_closing()):
                     await self._connect_tcp()
+                elif self.transport_name != "TCP":
+                    await self._connect_udp()
                 self._ensure_receive_task()
                 result = await self.register(timeout=2.0)
             except asyncio.CancelledError:
@@ -255,12 +303,67 @@ class SipTrunkClient:
             while not self.responses.empty():
                 with contextlib.suppress(asyncio.QueueEmpty):
                     self.responses.get_nowait()
-            self.reader, self.writer = await asyncio.wait_for(
+            reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(self.registrar_host, self.registrar_port),
                 timeout=2.0,
             )
+            if self._stopped:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                raise RuntimeError("SIP trunk stopped while connecting")
+            self.reader = reader
+            self.writer = writer
             self._tcp_writer = SipTcpWriter(self.writer, label=f"trunk {self.registrar_host}:{self.registrar_port}")
             self._reader_ready.set()
+
+    async def _connect_udp(self) -> None:
+        """Refresh UDP proxy trust and create the local socket when needed."""
+
+        await self._refresh_udp_trusted_hosts()
+        if self.transport is not None:
+            return
+        loop = asyncio.get_running_loop()
+        self.protocol = _SipClientProtocol(self.queue)
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: self.protocol,
+            local_addr=("0.0.0.0", 0),
+            family=socket.AF_INET,
+        )
+        if self._stopped:
+            transport.close()
+            raise RuntimeError("SIP trunk stopped while opening UDP transport")
+        self.transport = transport  # type: ignore[assignment]
+
+    async def _refresh_udp_trusted_hosts(self) -> None:
+        """Resolve the configured UDP proxy to a fail-closed source allowlist."""
+
+        if self.transport_name == "TCP":
+            return
+        loop = asyncio.get_running_loop()
+        host, port = self.registrar_target
+        try:
+            addresses = await loop.getaddrinfo(
+                host,
+                port,
+                family=socket.AF_INET,
+                type=socket.SOCK_DGRAM,
+            )
+        except OSError:
+            if self._trusted_udp_hosts:
+                _LOGGER.warning(
+                    "SIP trunk UDP proxy DNS refresh failed for %s; retaining prior source allowlist",
+                    host,
+                )
+                return
+            raise
+        resolved = frozenset(str(item[4][0]) for item in addresses if item[4])
+        if not resolved:
+            raise OSError(f"SIP trunk UDP proxy {host!r} has no IPv4 address")
+        self._trusted_udp_hosts = resolved
+
+    def _udp_source_is_trusted(self, addr: tuple[str, int]) -> bool:
+        return bool(self._trusted_udp_hosts) and str(addr[0]) in self._trusted_udp_hosts
 
     async def _send_raw(self, raw: bytes) -> None:
         if self.transport_name == "TCP":
@@ -340,6 +443,7 @@ class SipTrunkClient:
             prefer_browser_video_send=bool(
                 getattr(manager, "prefer_browser_video_send", False)
             ),
+            trusted_trunk=True,
         )
         self.inbound_endpoint = endpoint
         self.set_request_handler(endpoint._handle_datagram)
@@ -440,6 +544,13 @@ class SipTrunkClient:
                     addr = self._remote_addr()
                 else:
                     raw, addr = await self.queue.get()
+                    if not self._udp_source_is_trusted(addr):
+                        _LOGGER.warning(
+                            "SIP trunk dropped UDP packet from untrusted source %s:%s",
+                            addr[0],
+                            addr[1],
+                        )
+                        continue
                 try:
                     msg = sip.parse_message(raw)
                 except Exception as err:

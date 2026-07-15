@@ -9,7 +9,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,11 +146,112 @@ class MediaPortPoolTest(unittest.TestCase):
             sock = media_ports.bind_sip_rtp_socket(0)
             self.assertFalse(sock.getblocking())
             self.assertGreaterEqual(sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF), 1024 * 1024)
-            item = {"rtp_reservation": reservation, "video_rtp_socket": sock}
+            rtcp_sock = media_ports.bind_sip_rtp_socket(0)
+            item = {
+                "rtp_reservation": reservation,
+                "video_rtp_socket": sock,
+                "video_rtcp_socket": rtcp_sock,
+            }
             media_ports.release_media_reservation(item)
             self.assertEqual(sock.fileno(), -1)
+            self.assertEqual(rtcp_sock.fileno(), -1)
             self.assertNotIn("video_rtp_socket", item)
+            self.assertNotIn("video_rtcp_socket", item)
             self.assertEqual(hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set())
+
+    def test_bind_video_sockets_reserves_adjacent_rtp_and_rtcp_ports(self) -> None:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.bind(("127.0.0.1", 0))
+            base = int(probe.getsockname()[1])
+        finally:
+            probe.close()
+        if base >= 65535:
+            self.skipTest("no adjacent UDP port available")
+
+        rtp_socket = rtcp_socket = None
+        try:
+            rtp_socket, rtcp_socket = media_ports.bind_sip_video_sockets(base)
+            self.assertEqual(rtp_socket.getsockname()[1], base)
+            self.assertEqual(rtcp_socket.getsockname()[1], base + 1)
+            self.assertFalse(rtp_socket.getblocking())
+            self.assertFalse(rtcp_socket.getblocking())
+        except OSError:
+            self.skipTest("adjacent UDP port became unavailable")
+        finally:
+            if rtp_socket is not None:
+                rtp_socket.close()
+            if rtcp_socket is not None:
+                rtcp_socket.close()
+
+    def test_bind_video_sockets_closes_rtp_when_rtcp_bind_fails(self) -> None:
+        first = Mock()
+        second = Mock()
+        with patch.object(
+            media_ports,
+            "bind_sip_rtp_socket",
+            side_effect=[first, OSError("RTCP busy")],
+        ):
+            with self.assertRaisesRegex(OSError, "RTCP busy"):
+                media_ports.bind_sip_video_sockets(40000)
+        first.close.assert_called_once_with()
+        second.close.assert_not_called()
+
+    def test_video_media_reservation_retries_after_busy_rtcp_port(self) -> None:
+        first = Mock(ports=(40002, 40004))
+        second = Mock(ports=(40006, 40008))
+        rtp_socket = Mock()
+        rtcp_socket = Mock()
+        with patch.object(
+            media_ports.RtpPortReservation,
+            "allocate",
+            side_effect=[first, second],
+        ), patch.object(
+            media_ports,
+            "bind_sip_video_sockets",
+            side_effect=[OSError("RTCP busy"), (rtp_socket, rtcp_socket)],
+        ) as bind:
+            reservation, bound_rtp, bound_rtcp = media_ports.reserve_sip_video_media(
+                FakeHass(), attempts=2
+            )
+
+        first.release.assert_called_once_with()
+        second.release.assert_not_called()
+        self.assertIs(reservation, second)
+        self.assertIs(bound_rtp, rtp_socket)
+        self.assertIs(bound_rtcp, rtcp_socket)
+        self.assertEqual([item.args[0] for item in bind.call_args_list], [40004, 40008])
+
+    def test_video_relay_reservation_retries_and_closes_partial_pair(self) -> None:
+        first = Mock(ports=(40002, 40004))
+        second = Mock(ports=(40006, 40008))
+        first_rtp = Mock()
+        first_rtcp = Mock()
+        final_sockets = tuple(Mock() for _ in range(4))
+        with patch.object(
+            media_ports.RtpPortReservation,
+            "allocate",
+            side_effect=[first, second],
+        ), patch.object(
+            media_ports,
+            "bind_sip_video_sockets",
+            side_effect=[
+                (first_rtp, first_rtcp),
+                OSError("second relay RTCP busy"),
+                final_sockets[:2],
+                final_sockets[2:],
+            ],
+        ):
+            reservation, sockets = media_ports.reserve_sip_video_relay_media(
+                FakeHass(), attempts=2
+            )
+
+        first.release.assert_called_once_with()
+        first_rtp.close.assert_called_once_with()
+        first_rtcp.close.assert_called_once_with()
+        second.release.assert_not_called()
+        self.assertIs(reservation, second)
+        self.assertEqual(sockets, final_sockets)
 
 
 if __name__ == "__main__":

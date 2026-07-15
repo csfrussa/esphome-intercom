@@ -457,7 +457,7 @@ clear_contacts:
 
 export_phonebook:
   name: Export Phonebook
-  description: Emit the current central JSON phonebook as a VoIP Stack call event.
+  description: Return the current central JSON phonebook privately to the administrator.
 
 push_phonebook:
   name: Push Phonebook
@@ -528,10 +528,11 @@ create_account:
         text:
     password:
       name: Optional Password
-      description: Optional password, preserved exactly as entered and never echoed. If omitted, Home Assistant generates one and shows it once in the call event stream and in a persistent notification.
+      description: Optional password, preserved exactly as entered and never echoed. If omitted, Home Assistant generates one and returns it only in this administrator service response.
       required: false
       selector:
         text:
+          type: password
     enabled:
       name: Optional Enabled
       required: false
@@ -582,7 +583,7 @@ remove_account:
 
 rotate_account_password:
   name: Rotate SIP Endpoint Password
-  description: Generate a new password for a local SIP account, clear its active registration and show the replacement once in the call event stream and a persistent notification.
+  description: Generate a new password for a local SIP account, clear its active registration and return the replacement only in this administrator service response.
   fields:
     username:
       name: Username
@@ -612,8 +613,8 @@ disable_account:
 
 list_accounts:
   name: List SIP Endpoint Accounts
-  description: Show configured local SIP endpoint accounts without passwords and emit them in the voip_stack call event stream.
+  description: Return configured local SIP endpoint accounts without passwords to the administrator who called this service.
 
 export_accounts:
   name: Export SIP Endpoint Accounts
-  description: Show configured local SIP endpoint accounts without passwords and emit them in the voip_stack call event stream.
+  description: Return configured local SIP endpoint accounts without passwords to the administrator who called this service.

@@ -103,8 +103,8 @@ state.
   self-forward rejection all publish terminal/forward events.
 - `voip_stack.route`: resolves an outstanding explicit route request and
   rejects missing/stale requests deterministically.
-- `voip_stack.export_phonebook`: emits the current canonical roster without
-  mutating it.
+- `voip_stack.export_phonebook`: returns the current canonical roster only in
+  the administrator's service response, without mutating or broadcasting it.
 - `voip_stack.set_ha_softphone_settings`: updates extension and group settings,
   refreshes the roster and leaves unrelated settings intact.
 - `voip_stack.purge_devices`: no-op and removal cases report exactly which
@@ -152,8 +152,14 @@ Collect HA logs, ESP logs and sampled entity snapshots.
   rejected merely because the source is absent from the phonebook.
 - Unknown, unregistered SIP peer calls WS3 and Spotpear directly with compatible
   SDP; each endpoint rings or returns only its normal busy/DND response.
-- Established HA and ESP calls receive a hold/codec re-INVITE: responder sends
-  `488`, the original RTP/dialog stays usable, and a later BYE cleans up.
+- Established ESP calls receive a hold/codec re-INVITE: the ESP sends `488`,
+  the original RTP/dialog stays usable, and a later BYE cleans up.
+- Established HA-owned calls receive compatible UPDATE and re-INVITE offers:
+  hold/resume, direction, RTP endpoint and supported audio-format changes
+  commit once; rejected or retransmitted offers do not duplicate the commit.
+- HA video hold/resume retains the directional H.264/VP8/JPEG contract and
+  camera authorization. Adding/removing video or changing its codec receives
+  `488` without damaging the current call.
 - HA/Baresip legs negotiate Opus at 48 kHz where offered and supported; a
   separate L16 48 kHz case verifies high-rate PCM without implying that ESP
   endpoints support compressed codecs.

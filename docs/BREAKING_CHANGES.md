@@ -25,10 +25,11 @@ automation, SIP client or card fork.
   network reachability can call HA or an ESP. Normal destination, busy/DND and
   SDP checks still apply. Enforce caller admission at a firewall, VLAN, VPN or
   SBC boundary when required.
-- **No transparent hold renegotiation.** An in-dialog re-INVITE, including
-  ordinary hold or codec replacement, receives `488 Not Acceptable Here`. The
-  original media/dialog remains established and a later BYE still terminates
-  it normally.
+- **Constrained in-dialog renegotiation.** ESP endpoints still return `488 Not
+  Acceptable Here` for media-changing re-INVITEs. HA-owned dialogs accept
+  compatible peer-initiated UPDATE/re-INVITE changes, including hold/resume,
+  but cannot add/remove video, change its established codec or originate a
+  renegotiation. A rejected offer leaves the previous media/dialog active.
 - **DTMF route input.** The trunk digit router accepts RTP `telephone-event`
   and compatible legacy SIP INFO DTMF. It does not decode acoustic in-band tones from
   the call audio.

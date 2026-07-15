@@ -134,7 +134,8 @@ Clear manual contacts only.
 
 ### `voip_stack.export_phonebook`
 
-Emit the current central JSON phonebook as a `voip_stack.call_event`.
+Return the current central JSON phonebook in the administrator-only service
+response. The roster is never broadcast on the Home Assistant event bus.
 
 ### `voip_stack.push_phonebook`
 

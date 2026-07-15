@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 REALM = "voip_stack"
 NONCE_TTL = 600.0
 MAX_ACTIVE_NONCES = 256
+MAX_NONCE_USE_RECORDS = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +45,14 @@ class SipRegistration:
     source_port: int
     transport: str
     expires_at: float
+    advertised_contact_uri: str = ""
     user_agent: str = ""
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "username": self.username,
             "contact_uri": self.contact_uri,
+            "advertised_contact_uri": self.advertised_contact_uri,
             "source_host": self.source_host,
             "source_port": self.source_port,
             "transport": self.transport.lower(),
@@ -166,6 +169,47 @@ def _same_contact(left: str, right: str) -> bool:
     return _extract_uri(left).strip().lower() == _extract_uri(right).strip().lower()
 
 
+def _contact_for_source_flow(
+    contact_uri: str,
+    addr: tuple[str, int],
+    transport: str,
+) -> str:
+    """Pin a REGISTER binding to the authenticated signaling flow.
+
+    The Contact user and non-transport URI parameters remain intact, while an
+    endpoint cannot turn its authenticated account into an arbitrary network
+    target.  This is also the NAT-friendly behavior expected for a registrar
+    that receives REGISTER directly rather than through a trusted edge proxy.
+    """
+
+    advertised = sip.parse_sip_uri(contact_uri)
+    source_host = str(addr[0] or "").strip()
+    if ":" in source_host and not source_host.startswith("["):
+        source_host = f"[{source_host}]"
+    source_port = int(addr[1])
+    if not source_host or not 1 <= source_port <= 65535:
+        raise sip.SipError("REGISTER source flow is invalid")
+    actual_transport = str(transport or "UDP").strip().lower()
+    had_transport = any(
+        key.lower() == "transport" for key, _value in advertised.params
+    )
+    params = tuple(
+        (key, value)
+        for key, value in advertised.params
+        if key.lower() != "transport"
+    )
+    if had_transport or actual_transport != "udp":
+        params += (("transport", actual_transport),)
+    return str(
+        sip.SipUri(
+            user=advertised.user,
+            host=source_host,
+            port=source_port,
+            params=params,
+        )
+    )
+
+
 class SipRegistrar:
     def __init__(self, *, enabled: bool, accounts: list[SipAccount], local_ip: str, local_sip_port: int) -> None:
         self.enabled = bool(enabled)
@@ -174,32 +218,140 @@ class SipRegistrar:
         self.accounts = {account.username.lower(): account for account in accounts}
         self.registrations: dict[str, SipRegistration] = {}
         self.nonces: dict[str, float] = {}
+        self.nonce_uses: dict[
+            tuple[str, str, str],
+            tuple[int, tuple[Any, ...]],
+        ] = {}
+        self.source_nonces: dict[str, str] = {}
         self.last_sip_event = ""
         self.last_sip_status_code = 0
         self.last_sip_reason = ""
 
     def update_accounts(self, accounts: list[SipAccount]) -> None:
+        previous_accounts = self.accounts
         self.accounts = {account.username.lower(): account for account in accounts}
-        for username in list(self.registrations):
-            account = self.accounts.get(username.lower())
-            if account is None or not account.enabled:
-                self.registrations.pop(username, None)
+        registrations: dict[str, SipRegistration] = {}
+        for registration in self.registrations.values():
+            key = registration.username.lower()
+            account = self.accounts.get(key)
+            previous = previous_accounts.get(key)
+            if (
+                account is None
+                or not account.enabled
+                or previous is None
+                or not hmac.compare_digest(previous.password, account.password)
+            ):
+                continue
+            registration.username = account.username
+            registrations[account.username] = registration
+        self.registrations = registrations
 
-    def _challenge(self) -> tuple[str, str]:
+    def _registration(self, username: str) -> SipRegistration | None:
+        wanted = str(username or "").lower()
+        return next(
+            (
+                registration
+                for key, registration in self.registrations.items()
+                if key.lower() == wanted or registration.username.lower() == wanted
+            ),
+            None,
+        )
+
+    def remove_registration(self, username: str) -> None:
+        wanted = str(username or "").lower()
+        for key in list(self.registrations):
+            registration = self.registrations[key]
+            if key.lower() == wanted or registration.username.lower() == wanted:
+                self.registrations.pop(key, None)
+
+    def registration_matches_source(
+        self,
+        username: str,
+        host: str,
+        port: int,
+        transport: str,
+    ) -> bool:
+        """Authenticate an in-dialog origin against its live REGISTER flow."""
+
+        self.expire()
+        registration = self._registration(username)
+        return bool(
+            registration is not None
+            and registration.source_host == str(host or "")
+            and int(registration.source_port) == int(port)
+            and registration.transport.upper() == str(transport or "").upper()
+        )
+
+    def _prune_nonces(self) -> None:
         now = time.time()
         self.nonces = {key: exp for key, exp in self.nonces.items() if exp > now}
+        active = set(self.nonces)
+        self.nonce_uses = {
+            key: value for key, value in self.nonce_uses.items() if key[0] in active
+        }
+        self.source_nonces = {
+            source: nonce
+            for source, nonce in self.source_nonces.items()
+            if nonce in active
+        }
+
+    def _challenge(self, source: str = "") -> tuple[str, str]:
+        self._prune_nonces()
+        cached_nonce = self.source_nonces.get(source) if source else None
+        if cached_nonce and cached_nonce in self.nonces:
+            return cached_nonce, (
+                f'Digest realm="{REALM}", nonce="{cached_nonce}", '
+                'algorithm=MD5, qop="auth"'
+            )
         while len(self.nonces) >= MAX_ACTIVE_NONCES:
-            self.nonces.pop(next(iter(self.nonces)))
+            expired_nonce = next(iter(self.nonces))
+            self.nonces.pop(expired_nonce)
+            self.nonce_uses = {
+                key: value
+                for key, value in self.nonce_uses.items()
+                if key[0] != expired_nonce
+            }
+            self.source_nonces = {
+                key: value
+                for key, value in self.source_nonces.items()
+                if value != expired_nonce
+            }
         nonce = token_hex(16)
-        self.nonces[nonce] = now + NONCE_TTL
+        self.nonces[nonce] = time.time() + NONCE_TTL
+        if source:
+            self.source_nonces[source] = nonce
         return nonce, f'Digest realm="{REALM}", nonce="{nonce}", algorithm=MD5, qop="auth"'
 
     def _valid_nonce(self, nonce: str) -> bool:
-        now = time.time()
-        self.nonces = {key: exp for key, exp in self.nonces.items() if exp > now}
-        return bool(nonce and self.nonces.get(nonce, 0) > now)
+        self._prune_nonces()
+        return bool(nonce and nonce in self.nonces)
 
-    def _check_authorization(self, request: sip.SipMessage, account: SipAccount) -> bool:
+    @staticmethod
+    def _register_fingerprint(
+        request: sip.SipMessage,
+        addr: tuple[str, int],
+        transport: str,
+    ) -> tuple[Any, ...]:
+        return (
+            request.method,
+            request.uri,
+            request.header("Call-ID"),
+            request.header("CSeq"),
+            request.header_values("Via")[:1],
+            request.header_values("Contact"),
+            request.header("Expires"),
+            str(addr[0]),
+            int(addr[1]),
+            str(transport or "").upper(),
+        )
+
+    def _check_authorization(
+        self,
+        request: sip.SipMessage,
+        account: SipAccount,
+        addr: tuple[str, int],
+        transport: str,
+    ) -> bool:
         params = parse_digest_challenge(request.header("Authorization"))
         nonce = params.get("nonce", "")
         if not self._valid_nonce(nonce):
@@ -209,18 +361,50 @@ class SipRegistrar:
             return False
         realm = params.get("realm", REALM)
         uri = params.get("uri", request.uri)
-        qop = params.get("qop", "")
-        if realm != REALM or uri != request.uri or (qop and qop.lower() != "auth"):
+        qop = params.get("qop", "").lower()
+        algorithm = params.get("algorithm", "MD5").upper()
+        cnonce = params.get("cnonce", "")
+        nc = params.get("nc", "")
+        if (
+            realm != REALM
+            or uri != request.uri
+            or qop != "auth"
+            or algorithm != "MD5"
+            or not cnonce
+            or len(cnonce) > 128
+            or len(nc) != 8
+        ):
+            return False
+        try:
+            nonce_count = int(nc, 16)
+        except ValueError:
+            return False
+        if nonce_count <= 0:
             return False
         ha1 = sip_digest_md5(f"{account.username}:{realm}:{account.password}")
         ha2 = sip_digest_md5(f"REGISTER:{uri}")
-        if qop:
-            expected = sip_digest_md5(
-                f"{ha1}:{nonce}:{params.get('nc', '')}:{params.get('cnonce', '')}:{qop}:{ha2}"
-            )
-        else:
-            expected = sip_digest_md5(f"{ha1}:{nonce}:{ha2}")
-        return hmac.compare_digest(expected, params.get("response", ""))
+        expected = sip_digest_md5(
+            f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}"
+        )
+        if not hmac.compare_digest(expected, params.get("response", "")):
+            return False
+        use_key = (nonce, account.username.lower(), cnonce)
+        fingerprint = self._register_fingerprint(request, addr, transport)
+        previous = self.nonce_uses.get(use_key)
+        if previous is not None:
+            previous_count, previous_fingerprint = previous
+            if nonce_count < previous_count:
+                return False
+            if nonce_count == previous_count:
+                return hmac.compare_digest(
+                    repr(fingerprint),
+                    repr(previous_fingerprint),
+                )
+        if use_key not in self.nonce_uses:
+            while len(self.nonce_uses) >= MAX_NONCE_USE_RECORDS:
+                self.nonce_uses.pop(next(iter(self.nonce_uses)))
+        self.nonce_uses[use_key] = (nonce_count, fingerprint)
+        return True
 
     async def handle_register(self, request: sip.SipMessage, addr: tuple[str, int], transport: str) -> SipRegisterResult:
         self.last_sip_event = "REGISTER"
@@ -232,10 +416,13 @@ class SipRegistrar:
         except Exception:
             return self._result(400, "Bad Request")
         account = self.accounts.get(username.lower())
-        if account is None or not account.enabled:
-            return self._result(403, "Forbidden")
-        if not self._check_authorization(request, account):
-            _nonce, challenge = self._challenge()
+        source_key = f"{str(transport or '').upper()}:{addr[0]}"
+        if (
+            account is None
+            or not account.enabled
+            or not self._check_authorization(request, account, addr, transport)
+        ):
+            _nonce, challenge = self._challenge(source_key)
             return self._result(401, "Unauthorized", (("WWW-Authenticate", challenge),))
 
         contacts = _register_contacts(request)
@@ -245,7 +432,16 @@ class SipRegistrar:
         remove_contacts = [contact for contact in contacts if contact[0] == "*" or contact[1] <= 0]
 
         if active_contacts:
-            contact_uri, expires, raw_contact = active_contacts[-1]
+            advertised_contact_uri, expires, raw_contact = active_contacts[-1]
+            try:
+                contact_uri = _contact_for_source_flow(
+                    advertised_contact_uri,
+                    addr,
+                    transport,
+                )
+            except (TypeError, ValueError, sip.SipError):
+                return self._result(400, "Bad Request")
+            self.remove_registration(account.username)
             self.registrations[account.username] = SipRegistration(
                 username=account.username,
                 contact_uri=contact_uri,
@@ -253,6 +449,7 @@ class SipRegistrar:
                 source_port=int(addr[1]),
                 transport=transport,
                 expires_at=time.time() + expires,
+                advertised_contact_uri=advertised_contact_uri,
                 user_agent=request.header("User-Agent"),
             )
             _LOGGER.info(
@@ -266,12 +463,17 @@ class SipRegistrar:
             return self._result(200, "OK", (("Expires", str(expires)), ("Contact", raw_contact)))
 
         if remove_contacts:
-            current = self.registrations.get(account.username)
+            current = self._registration(account.username)
             contact_uri, _expires_value, _raw_contact = remove_contacts[-1]
             if contact_uri == "*" or (
-                current is not None and contact_uri and _same_contact(contact_uri, current.contact_uri)
+                current is not None
+                and contact_uri
+                and _same_contact(
+                    contact_uri,
+                    current.advertised_contact_uri or current.contact_uri,
+                )
             ):
-                self.registrations.pop(account.username, None)
+                self.remove_registration(account.username)
                 _LOGGER.info(
                     "SIP registrar unregistered user=%s transport=%s contact=%s contacts=%s",
                     account.username,

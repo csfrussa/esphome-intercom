@@ -14,10 +14,14 @@ ENDPOINT_RUNTIME = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
+VIDEO_WS = ROOT / "custom_components" / "voip_stack" / "video_ws_view.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
-    match = re.search(rf"\n(?:async def|def) {re.escape(function_name)}\([^)]*\)(?: -> [^:]+)?:", source)
+    match = re.search(
+        rf"\n(?:async def|def) {re.escape(function_name)}\([^)]*\)(?: -> [^:]+)?:",
+        source,
+    )
     if not match:
         raise AssertionError(f"function {function_name} not found")
     start = match.end()
@@ -74,12 +78,16 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
         body = _function_body(endpoint_runtime, "async_start_sip_endpoint")
         bridge_path = body.split("routeable_sip_target =", 1)[1]
-        bridge_path = bridge_path.split("ha_softphone_active = _ha_softphone_has_active_call", 1)[0]
+        bridge_path = bridge_path.split(
+            "ha_softphone_active = _ha_softphone_has_active_call", 1
+        )[0]
         self.assertIn("_set_sip_bridge_call_state(", bridge_path)
         self.assertNotIn("_set_ha_softphone_call_state(", bridge_path)
 
     def test_ha_softphone_busy_excludes_bridge_runtime_maps(self) -> None:
-        ws = (ROOT / "custom_components" / "voip_stack" / "websocket_api.py").read_text()
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
         state_body = _function_body(ws, "_ha_softphone_state")
         busy_expr = state_body.split('"busy":', 1)[1].split(",", 1)[0]
         self.assertIn("session_device_id", busy_expr)
@@ -87,7 +95,9 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("active_dialogs", busy_expr)
 
     def test_debug_snapshot_exposes_live_cleanup_ownership(self) -> None:
-        ws = (ROOT / "custom_components" / "voip_stack" / "websocket_api.py").read_text()
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
         state_body = _function_body(ws, "_ha_softphone_state")
         self.assertIn('"call_registry": registry.snapshot()', state_body)
         self.assertIn('"audio_ws_owner_call_ids"', state_body)
@@ -95,17 +105,179 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn('"video_transcoder_call_id"', state_body)
         self.assertIn("if debug_mode:", state_body)
 
+    def test_shutdown_revokes_media_owners_without_rebinding_maps(self) -> None:
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
+        body = _function_body(ws, "_async_shutdown_all")
+        self.assertIn("async_revoke_media_owners", body)
+        self.assertIn("await asyncio.gather(*owner_shutdowns)", body)
+        self.assertNotIn('bucket.pop("audio_ws_owners"', body)
+        self.assertNotIn('bucket.pop("video_ws_owners"', body)
+
+    def test_shutdown_does_not_cancel_inflight_executor_capture_writes(self) -> None:
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
+        body = _function_body(ws, "_async_shutdown_all")
+        capture_cleanup = body.split("capture_tasks =", 1)[1].split(
+            "store = _ha_softphone_store", 1
+        )[0]
+        self.assertIn("await asyncio.wait(capture_tasks, timeout=2.0)", capture_cleanup)
+        self.assertIn("will finish in background", capture_cleanup)
+        self.assertNotIn("task.cancel()", capture_cleanup)
+        self.assertIn("_set_ha_softphone_call_state(", body)
+        self.assertIn("CallState.IDLE.value", body)
+        self.assertIn('last_sip_event="shutdown"', body)
+        self.assertIn("if active_call_id or active_state in {", body)
+        idle_branch = body.split("else:", 1)[1]
+        self.assertIn("_publish_ha_softphone_state(hass)", idle_branch)
+        self.assertNotIn("_fire_call_event", idle_branch)
+        self.assertIn('setdefault("debug_capture_tasks", set())', body)
+
+    def test_topology_details_are_exposed_only_in_debug_mode(self) -> None:
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
+        state_body = _function_body(ws, "_ha_softphone_state")
+        for key in ("rtp_relays", "sip_client_dialogs", "sip_trunk"):
+            self.assertIn(
+                f'"{key}": runtime["{key}"] if debug_mode else {{}}',
+                state_body,
+            )
+
+    def test_idle_softphone_counters_do_not_fall_back_to_other_relays(self) -> None:
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
+        body = _function_body(ws, "_runtime_counter")
+        self.assertIn("return store_value", body)
+        self.assertNotIn("store_value or runtime_value", body)
+        self.assertNotIn("max(store_value, runtime_value)", body)
+
+    def test_video_reorder_timeout_and_teardown_publish_final_loss(self) -> None:
+        body = VIDEO_WS.read_text(encoding="utf-8")
+
+        input_timeout = body.index(
+            "except TimeoutError:", body.index("async def rtp_to_transcoder")
+        )
+        direct_timeout = body.index(
+            "except TimeoutError:", body.index("async def rtp_to_access_units")
+        )
+        final_store = body.index(
+            "store_counters(force=True)",
+            body.index('counters["video_rtp_dropped_packets"]'),
+        )
+        self.assertIn(
+            "sync_reorder_counters()", body[input_timeout : input_timeout + 500]
+        )
+        self.assertIn(
+            "sync_reorder_counters()", body[direct_timeout : direct_timeout + 500]
+        )
+        self.assertIn("sync_reorder_counters()", body[final_store - 200 : final_store])
+
+    def test_nonfatal_video_rtcp_and_keepalive_failures_are_observable(self) -> None:
+        body = VIDEO_WS.read_text(encoding="utf-8")
+
+        self.assertIn('counters["video_rtcp_send_errors"] += 1', body)
+        self.assertIn('record_rtcp_send_error("keyframe feedback", err)', body)
+        self.assertIn('record_rtcp_send_error("report", err)', body)
+        self.assertIn("failures & (failures - 1) == 0", body)
+        self.assertIn('counters["video_keepalive_task_errors"] += 1', body)
+        self.assertIn("observe_nonfatal_task", body)
+        self.assertIn("rtcp_task.add_done_callback", body)
+        self.assertIn("keepalive_task.add_done_callback", body)
+
+    def test_video_rtcp_reports_cover_send_only_and_use_current_rtp_clock(self) -> None:
+        body = VIDEO_WS.read_text(encoding="utf-8")
+        reports = body.split("    async def rtcp_reports()", 1)[1].split(
+            "\n    async def rtcp_to_browser_feedback", 1
+        )[0]
+
+        initial_guard = reports.split("report_kwargs =", 1)[0]
+        self.assertNotIn("latched_ssrc is None", initial_guard)
+        self.assertIn('if counters["video_rtp_tx_packets"]:', reports)
+        self.assertIn(
+            "build_sender_compound(\n                    ssrc,\n                    latched_ssrc,",
+            reports,
+        )
+        self.assertIn("rtp_timestamp=outbound_clock.current(monotonic_now)", reports)
+        self.assertIn("elif latched_ssrc is not None:", reports)
+        self.assertIn("extended_sequence.observe(packet.sequence)", body)
+        self.assertIn("extended_sequence.reset()", body)
+
+    def test_video_pipeline_changes_restart_the_media_owner(self) -> None:
+        body = VIDEO_WS.read_text(encoding="utf-8")
+        refresh = body.split("    async def refresh_media_state", 1)[1].split(
+            "\n    try:", 1
+        )[0]
+
+        self.assertIn("_video_pipeline_signature(session)", refresh)
+        self.assertIn('payload["restart_required"] = True', refresh)
+        self.assertIn('payload["restart_reason"] = "video_pipeline_changed"', refresh)
+        self.assertIn('counters["video_pipeline_restarts"] += 1', refresh)
+        self.assertIn("return False", refresh)
+        self.assertGreaterEqual(
+            body.count("if not await refresh_media_state("),
+            5,
+        )
+
+    def test_audio_reinvite_rebuilds_codec_timing_and_capture_generation(self) -> None:
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        refresh = audio_ws.split("    async def refresh_media_state", 1)[1].split(
+            "\n    try:", 1
+        )[0]
+
+        self.assertIn("next_decoder = RtpPayloadDecoder(session.recv_format)", refresh)
+        self.assertIn("next_encoder = RtpPayloadEncoder(session.send_format)", refresh)
+        self.assertIn("tx_frame_delay = next_frame_delay", refresh)
+        self.assertIn("tx_silence_pcm = next_silence_pcm", refresh)
+        self.assertIn(
+            "_schedule_debug_capture_write(hass, debug_capture, counters)", refresh
+        )
+        self.assertIn("debug_capture = _DebugAudioCapture(", refresh)
+
+        outbound = _function_body(self.source, "_handle_sip_call_target_service")
+        self.assertIn("audio_session.send_format = updated.send_format", outbound)
+        self.assertIn("audio_session.recv_format = updated.recv_format", outbound)
+        self.assertNotIn("audio_contract_changed", outbound)
+
+        endpoint_runtime = ENDPOINT_RUNTIME.read_text()
+        inbound = endpoint_runtime.split("    async def _on_media_update(", 1)[1].split(
+            "\n    async def _on_terminated", 1
+        )[0]
+        self.assertIn("audio_session.send_format = updated.send_format", inbound)
+        self.assertIn("audio_session.recv_format = updated.recv_format", inbound)
+        self.assertNotIn("audio_contract_changed", inbound)
+        self.assertIn("protocol.reconfigure_frame_ms(", audio_ws)
+
+    def test_conference_audio_websocket_tracks_call_lifetime(self) -> None:
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        conference_audio = audio_ws.split("async def _run_conference_audio_session", 1)[
+            1
+        ]
+
+        self.assertIn("_listen_for_call_end(hass, session.call_id)", conference_audio)
+        self.assertIn("lifetime_task", conference_audio)
+        self.assertIn("remove_call_listener()", conference_audio)
+
     def test_missing_roster_formats_do_not_force_implicit_16k_default(self) -> None:
         endpoint_routing = ENDPOINT_ROUTING.read_text()
         body = _function_body(endpoint_routing, "roster_entry_formats")
         self.assertIn("if entry is None:", body)
         self.assertIn("return []", body)
-        self.assertIn("if value in (None, \"\"):", body)
+        self.assertIn('if value in (None, ""):', body)
         self.assertIn("if not raw.strip():", body)
 
-    def test_services_register_async_handlers_not_coroutine_returning_lambdas(self) -> None:
+    def test_services_register_async_handlers_not_coroutine_returning_lambdas(
+        self,
+    ) -> None:
         services = SERVICES.read_text()
-        self.assertIn("async def _handle(call: ServiceCall) -> None:", services)
+        self.assertIn("async def _handle(call: ServiceCall) -> object:", services)
         self.assertNotIn("lambda call:", services)
         self.assertNotIn("call_handler(", services)
 
@@ -116,12 +288,16 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("_state_is_available(new_state)", sensor)
 
     def test_stale_call_id_cannot_replace_active_softphone_session(self) -> None:
-        ws = (ROOT / "custom_components" / "voip_stack" / "websocket_api.py").read_text()
+        ws = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
         body = _function_body(ws, "_set_ha_softphone_call_state")
         self.assertIn("next_call_id != previous_call_id", body)
         self.assertIn("previous_state", body)
         self.assertIn("Ignoring stale HA softphone", body)
-        guard = body.split("next_call_id != previous_call_id", 1)[1].split("if terminal:", 1)[0]
+        guard = body.split("next_call_id != previous_call_id", 1)[1].split(
+            "if terminal:", 1
+        )[0]
         self.assertIn("CallState.IN_CALL.value", guard)
         self.assertIn("return", guard)
 
@@ -135,33 +311,144 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("retry", body.lower())
 
     def test_softphone_rtp_latches_source_port_and_ssrc(self) -> None:
-        audio_ws = (ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py").read_text()
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
         self.assertIn("latched_rtp_source", audio_ws)
         self.assertIn("latched_rtp_ssrc", audio_ws)
         self.assertIn("remote_rtp_port = source[1]", audio_ws)
         self.assertIn("packet.ssrc != latched_rtp_ssrc", audio_ws)
-        self.assertIn("(session.remote_rtp_host, remote_rtp_port)", audio_ws)
+        self.assertIn("(remote_rtp_host, remote_rtp_port)", audio_ws)
+        self.assertIn("session.signaling_host", audio_ws)
+
+    def test_video_rtp_setup_failure_releases_prebound_rtp_and_rtcp(self) -> None:
+        video_ws = VIDEO_WS.read_text()
+        body = _function_body(video_ws, "_run_video_session")
+        setup_failure = body.split(
+            "except (OSError, RuntimeError, ValueError) as err:", 1
+        )[1].split("browser_format =", 1)[0]
+        socket_cleanup = body.split("def close_detached_sockets()", 1)[1].split(
+            "try:", 1
+        )[0]
+        self.assertIn("session.rtp_socket.close()", socket_cleanup)
+        self.assertIn("session.rtp_socket = None", socket_cleanup)
+        self.assertIn("session.rtcp_socket.close()", socket_cleanup)
+        self.assertIn("session.rtcp_socket = None", socket_cleanup)
+        self.assertIn("close_detached_sockets()", setup_failure)
+
+    def test_video_rtcp_accepts_separately_advertised_host(self) -> None:
+        video_ws = VIDEO_WS.read_text()
+        start = video_ws.index("    async def rtcp_to_browser_feedback()")
+        body = video_ws[
+            start : video_ws.index("    try:\n        if session.rtcp_socket", start)
+        ]
+        allowed = body.split("allowed_hosts = {", 1)[1].split("}", 1)[0]
+        self.assertIn("session.remote_rtcp_host", allowed)
+        self.assertIn("remote_rtcp_host", allowed)
+        self.assertIn("remote_rtcp_host_explicit", video_ws)
+        self.assertIn(
+            "latched_rtcp_source is None and not remote_rtcp_host_explicit",
+            video_ws,
+        )
+
+    def test_final_audio_counters_preserve_terminal_sip_event(self) -> None:
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        start = audio_ws.index("    def publish_counters(")
+        body = audio_ws[start : audio_ws.index("    def negotiation_payload(", start)]
+        update = body.split("update = {", 1)[1].split("if bool(hass.data.get", 1)[0]
+        self.assertNotIn('"last_sip_event": "rtp_media"', update.split("}", 1)[0])
+        self.assertIn("if current_call_id:", update)
+        self.assertIn('update["last_sip_event"] = "rtp_media"', update)
+
+    def test_audio_negotiation_failure_closes_bound_rtp_transport(self) -> None:
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        body = _function_body(audio_ws, "_run_audio_session")
+        negotiation = body.split("await ws.send_json(negotiation_payload())", 1)[1]
+        before_attach = negotiation.split('"HA softphone audio websocket attached', 1)[
+            0
+        ]
+        self.assertIn("except asyncio.CancelledError:", before_attach)
+        self.assertGreaterEqual(before_attach.count("transport.close()"), 3)
+
+    def test_audio_media_telemetry_never_reemits_sip_lifecycle_events(self) -> None:
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        counters_start = audio_ws.index("    def publish_counters(")
+        counters = audio_ws[
+            counters_start : audio_ws.index(
+                "    def negotiation_payload(", counters_start
+            )
+        ]
+        conference_start = audio_ws.index("async def _run_conference_audio_session(")
+        conference = audio_ws[conference_start:]
+
+        self.assertNotIn("_fire_call_event", counters)
+        self.assertIn("_publish_ha_softphone_state(hass)", counters)
+        self.assertNotIn("_fire_call_event", conference)
+        self.assertIn("_publish_ha_softphone_state(hass)", conference)
+
+    def test_final_video_snapshot_includes_pending_rtcp_queue_drops(self) -> None:
+        video_ws = VIDEO_WS.read_text()
+        start = video_ws.index("    def store_counters(*, force: bool = False)")
+        end = video_ws.index("    def queue_access_unit", start)
+        body = video_ws[start:end]
+        drain = body.index(
+            'counters["video_rtcp_drop_queue"] += rtcp_protocol.dropped_packets'
+        )
+        persist = body.index("store.update(counters)")
+        self.assertLess(drain, persist)
+        self.assertIn("rtcp_protocol.dropped_packets = 0", body)
+        debug_line = next(
+            line
+            for line in body.splitlines()
+            if "if bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE" in line
+        )
+        publish_line = next(
+            line
+            for line in body.splitlines()
+            if "_publish_ha_softphone_state(hass)" in line
+        )
+        self.assertEqual(
+            len(debug_line) - len(debug_line.lstrip()),
+            len(publish_line) - len(publish_line.lstrip()),
+        )
 
     def test_softphone_tx_uses_one_deadline_per_frame_without_double_wait(self) -> None:
-        audio_ws = (ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py").read_text()
-        self.assertIn("tx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)", audio_ws)
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        self.assertIn(
+            "tx_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)", audio_ws
+        )
         self.assertIn("pcm = tx_queue.get_nowait()", audio_ws)
         self.assertNotIn("while not tx_queue.empty():", audio_ws)
         self.assertIn("payload = rtp_encoder.encode(pcm)", audio_ws)
         self.assertIn("tx_queue.put_nowait(pcm)", audio_ws)
-        self.assertNotIn("await asyncio.wait_for(tx_queue.get(), timeout=frame_delay)", audio_ws)
+        self.assertNotIn(
+            "await asyncio.wait_for(tx_queue.get(), timeout=frame_delay)", audio_ws
+        )
         self.assertNotIn("asyncio.wait_for(closed.wait()", audio_ws)
         self.assertIn("await asyncio.sleep(sleep_for)", audio_ws)
         self.assertIn("next_send = loop.time() + frame_delay", audio_ws)
 
-    def test_softphone_start_is_serialized_and_ring_group_claims_state_before_io(self) -> None:
+    def test_softphone_start_is_serialized_and_ring_group_claims_state_before_io(
+        self,
+    ) -> None:
         prepare = _function_body(self.source, "_async_prepare_ha_outbound_call")
         self.assertIn('setdefault("ha_softphone_start_lock", asyncio.Lock())', prepare)
         self.assertIn("async with start_lock:", prepare)
 
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
         start = endpoint_runtime.index("async def _start_ring_group_from_ha(")
-        end = endpoint_runtime.index('\n    hass.data.setdefault(DOMAIN, {})["async_ring_conference_members"]', start)
+        end = endpoint_runtime.index(
+            '\n    hass.data.setdefault(DOMAIN, {})["async_ring_conference_members"]',
+            start,
+        )
         ring_start = endpoint_runtime[start:end]
         publish = ring_start.index("_set_ha_softphone_call_state(")
         snapshot = ring_start.index("peers = await _async_build_peer_snapshot(hass)")
@@ -179,15 +466,81 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertLess(initial_result, watcher)
         self.assertIn("fast peer can place 180 and 200", outbound)
 
-    def test_ha_originated_ring_group_exposes_browser_audio_through_existing_relay(self) -> None:
+    def test_final_200_commits_registry_before_publishing_in_call(self) -> None:
+        tracker = _function_body(self.source, "_track_outbound_sip_client")
+        watcher = tracker.split("async def _watch_sip_lifecycle()", 1)[1]
+        accepted = watcher.split(
+            "if public_final == CallState.IN_CALL.value and client.dialog is not None:",
+            1,
+        )[1].split("elif public_final", 1)[0]
+        self.assertIn(
+            "registry.sip_clients.get(client.dialog_ids.call_id) is not client",
+            watcher,
+        )
+        self.assertIn("registry.upsert(", accepted)
+        self.assertIn("registry.add_leg(", accepted)
+        self.assertLess(
+            accepted.index("registry.add_leg("),
+            accepted.index("_set_ha_softphone_call_state("),
+        )
+        self.assertIn("state=CallState.IN_CALL.value", accepted)
+
+    def test_video_hold_resume_keeps_per_call_camera_authorization(self) -> None:
+        answer = _function_body(self.source, "_handle_sip_answer_service")
+        self.assertIn('"camera_send_authorized": bool(', answer)
+
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
-        audio_ws = (ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py").read_text()
-        bridge_manager = (ROOT / "custom_components" / "voip_stack" / "bridge_manager.py").read_text()
+        start = endpoint_runtime.index("    async def _on_media_update(")
+        end = endpoint_runtime.index("\n    async def _on_terminated", start)
+        media_update = endpoint_runtime[start:end]
+        self.assertIn(
+            'allow_video_send = bool(media.get("camera_send_authorized", False))',
+            media_update,
+        )
+        self.assertNotIn("previous_video_direction", media_update)
+        self.assertIn('"video_active": bool(', media_update)
+
+    def test_video_bridge_projects_destination_h264_level_to_source_leg(self) -> None:
+        endpoint_runtime = ENDPOINT_RUNTIME.read_text()
+        self.assertIn("source_video = (", endpoint_runtime)
+        self.assertIn("video_answer_contract(", endpoint_runtime)
+        self.assertIn(
+            "video_relay.left.video_format = source_directional.send",
+            endpoint_runtime,
+        )
+        self.assertIn(
+            "video_relay.left.local_video_format = (\n"
+            "                                source_directional.recv",
+            endpoint_runtime,
+        )
+        self.assertIn("selected_video = source_video", endpoint_runtime)
+
+    def test_outbound_softphone_accepts_live_peer_media_updates(self) -> None:
+        outbound = _function_body(self.source, "_handle_sip_call_target_service")
+        self.assertIn("async def _prepare_softphone_media_update", outbound)
+        self.assertIn(
+            "client.on_media_update = _prepare_softphone_media_update",
+            outbound,
+        )
+        self.assertIn("audio_session.media_generation += 1", outbound)
+        self.assertIn("video_session.media_generation += 1", outbound)
+        self.assertIn('"video_active": bool(', outbound)
+
+    def test_ha_originated_ring_group_exposes_browser_audio_through_existing_relay(
+        self,
+    ) -> None:
+        endpoint_runtime = ENDPOINT_RUNTIME.read_text()
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
+        bridge_manager = (
+            ROOT / "custom_components" / "voip_stack" / "bridge_manager.py"
+        ).read_text()
 
         ring_group = endpoint_runtime[
-            endpoint_runtime.index("async def _run_ring_group_call(") : endpoint_runtime.index(
-                "async def _ring_conference_members("
-            )
+            endpoint_runtime.index(
+                "async def _run_ring_group_call("
+            ) : endpoint_runtime.index("async def _ring_conference_members(")
         ]
         self.assertIn('"rtp_loopback": True', ring_group)
         self.assertIn('"remote_rtp_port": source_relay_port', ring_group)
@@ -196,21 +549,32 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn('item.get("rtp_loopback")', audio_ws)
         self.assertIn("local_rtp_port=0", audio_ws)
         self.assertIn("int(session.local_ssrc) or secrets.randbelow", audio_ws)
-        self.assertIn("registry.softphone_media.pop(source_call_id, None)", bridge_manager)
+        self.assertIn(
+            "registry.softphone_media.pop(source_call_id, None)", bridge_manager
+        )
 
-    def test_conference_checks_softphone_busy_and_releases_browser_session(self) -> None:
+    def test_conference_checks_softphone_busy_and_websocket_does_not_own_call(
+        self,
+    ) -> None:
         call_service = _function_body(self.source, "_handle_sip_call_target_service")
-        conference_branch = call_service.split('if group_type == "conference":', 1)[1].split(
+        conference_branch = call_service.split('if group_type == "conference":', 1)[
+            1
+        ].split(
             "route_uri = route.sip_uri",
             1,
         )[0]
         self.assertIn("await _async_prepare_ha_outbound_call(hass)", conference_branch)
 
-        audio_ws = (ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py").read_text()
+        audio_ws = (
+            ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
+        ).read_text()
         conference_audio = _function_body(audio_ws, "_run_conference_audio_session")
-        self.assertIn("media.get(\"conference_queue\") is session.conference_queue", conference_audio)
-        self.assertIn("registry.softphone_media.pop(session.call_id, None)", conference_audio)
-        self.assertIn("registry.finish_and_pop(session.call_id", conference_audio)
+        self.assertNotIn("leave_ha_softphone", conference_audio)
+        self.assertNotIn("registry.softphone_media.pop", conference_audio)
+        self.assertNotIn("registry.finish_and_pop", conference_audio)
+        self.assertIn("conference_media_handoff", conference_audio)
+        hangup = _function_body(self.source, "_handle_sip_hangup_service")
+        self.assertIn("await manager.leave_ha_softphone(conference_room)", hangup)
 
 
 if __name__ == "__main__":

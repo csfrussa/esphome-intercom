@@ -258,14 +258,16 @@ The `2026.7.0` SIP migration remains the breaking baseline: ESP devices are SIP
 phones, Home Assistant is a SIP softphone/router/bridge/trunk endpoint, and the
 old project-specific call-control path is not a fallback.
 
-Additional `2026.7.1` boundaries matter when upgrading an earlier version:
+The current boundaries matter when upgrading an earlier version:
 
 - ESP structured contacts use `ip` and `transport`; the richer
   `address`/`sip_uri` schema belongs to the HA phonebook.
 - The phonebook is an outbound dial plan, not an inbound caller allowlist.
-- A hold or media-changing in-dialog re-INVITE is rejected with `488` while the
-  established call remains active. HA may acknowledge an unchanged session
-  refresh without rerouting; full hold/resume renegotiation is not implemented.
+- ESP endpoints reject a hold or media-changing in-dialog re-INVITE with `488`
+  while the established call remains active. HA-owned dialogs accept compatible
+  peer-initiated re-INVITE or UPDATE offers, including direction, RTP endpoint
+  and audio-format changes. HA does not add, remove or change the codec of an
+  established video stream, and it does not originate renegotiation.
 - Trunk digit routing accepts standard RTP `telephone-event` and compatible
   legacy SIP INFO DTMF; acoustic in-band tones are not decoded.
 - **Experimental:** established calls bridged by HA expose one
@@ -699,10 +701,23 @@ one of the old domains, remove that old integration entry and stale
 
 #### Option B: Manual install
 
+From a source checkout:
+
 ```bash
 # From the repository root
 cp -r custom_components/voip_stack /config/custom_components/
 ```
+
+The release asset `voip_stack.zip` is intentionally flat for HACS. To install
+that archive manually, extract it into the integration directory:
+
+```bash
+mkdir -p /config/custom_components/voip_stack
+unzip -o voip_stack.zip -d /config/custom_components/voip_stack
+```
+
+Verify that `/config/custom_components/voip_stack/manifest.json` exists before
+restarting Home Assistant.
 
 Then add via UI: **Settings → Integrations → Add Integration → VoIP Stack**, restart Home Assistant.
 

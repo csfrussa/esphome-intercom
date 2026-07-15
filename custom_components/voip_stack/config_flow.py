@@ -14,6 +14,8 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .config_validation import extension_conflicts
@@ -63,26 +65,42 @@ def _dtmf_timeout_seconds(value: object) -> int:
 
 def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
     """Return entry data with trunk explicitly disabled."""
+
+    def legacy_value(key: str, default: Any) -> Any:
+        """Replace empty values written by older flows with a safe default."""
+        value = existing.get(key)
+        return default if value in (None, "") else value
+
     data.update(
         {
             CONF_TRUNK_ENABLED: False,
-            CONF_TRUNK_TRANSPORT: existing.get(CONF_TRUNK_TRANSPORT, "udp"),
-            CONF_TRUNK_SERVER: existing.get(CONF_TRUNK_SERVER, ""),
-            CONF_TRUNK_PORT: existing.get(CONF_TRUNK_PORT, VOIP_STACK_SIP_PORT),
-            CONF_TRUNK_DOMAIN: existing.get(CONF_TRUNK_DOMAIN, ""),
-            CONF_TRUNK_USERNAME: existing.get(CONF_TRUNK_USERNAME, ""),
-            CONF_TRUNK_AUTH_USERNAME: existing.get(CONF_TRUNK_AUTH_USERNAME, ""),
-            CONF_TRUNK_PASSWORD: existing.get(CONF_TRUNK_PASSWORD, ""),
-            CONF_TRUNK_EXPIRES: existing.get(CONF_TRUNK_EXPIRES, 300),
-            CONF_TRUNK_OUTBOUND_PROXY: existing.get(CONF_TRUNK_OUTBOUND_PROXY, ""),
-            CONF_TRUNK_INBOUND_DEFAULT_TARGET: existing.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"),
-            CONF_TRUNK_INBOUND_MODE: existing.get(CONF_TRUNK_INBOUND_MODE, TRUNK_INBOUND_MODE_DIRECT),
-            CONF_AUTOMATION_ROUTING_ENABLED: existing.get(CONF_AUTOMATION_ROUTING_ENABLED, False),
-            CONF_TRUNK_DTMF_ENABLED: existing.get(CONF_TRUNK_DTMF_ENABLED, False),
-            CONF_TRUNK_DTMF_TIMEOUT_MS: int(existing.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)),
-            CONF_TRUNK_DTMF_TERMINATOR: existing.get(CONF_TRUNK_DTMF_TERMINATOR, ""),
-            "sip_accounts": existing.get("sip_accounts", []),
-            CONF_PHONEBOOK_CONTACTS: existing.get(CONF_PHONEBOOK_CONTACTS, []),
+            CONF_TRUNK_TRANSPORT: legacy_value(CONF_TRUNK_TRANSPORT, "udp"),
+            CONF_TRUNK_SERVER: legacy_value(CONF_TRUNK_SERVER, ""),
+            CONF_TRUNK_PORT: int(legacy_value(CONF_TRUNK_PORT, VOIP_STACK_SIP_PORT)),
+            CONF_TRUNK_DOMAIN: legacy_value(CONF_TRUNK_DOMAIN, ""),
+            CONF_TRUNK_USERNAME: legacy_value(CONF_TRUNK_USERNAME, ""),
+            CONF_TRUNK_AUTH_USERNAME: legacy_value(CONF_TRUNK_AUTH_USERNAME, ""),
+            CONF_TRUNK_PASSWORD: legacy_value(CONF_TRUNK_PASSWORD, ""),
+            CONF_TRUNK_EXPIRES: int(legacy_value(CONF_TRUNK_EXPIRES, 300)),
+            CONF_TRUNK_OUTBOUND_PROXY: legacy_value(CONF_TRUNK_OUTBOUND_PROXY, ""),
+            CONF_TRUNK_INBOUND_DEFAULT_TARGET: legacy_value(
+                CONF_TRUNK_INBOUND_DEFAULT_TARGET, "HA"
+            ),
+            CONF_TRUNK_INBOUND_MODE: legacy_value(
+                CONF_TRUNK_INBOUND_MODE, TRUNK_INBOUND_MODE_DIRECT
+            ),
+            CONF_AUTOMATION_ROUTING_ENABLED: legacy_value(
+                CONF_AUTOMATION_ROUTING_ENABLED, False
+            ),
+            CONF_TRUNK_DTMF_ENABLED: legacy_value(CONF_TRUNK_DTMF_ENABLED, False),
+            CONF_TRUNK_DTMF_TIMEOUT_MS: int(
+                legacy_value(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)
+            ),
+            CONF_TRUNK_DTMF_TERMINATOR: legacy_value(
+                CONF_TRUNK_DTMF_TERMINATOR, ""
+            ),
+            "sip_accounts": legacy_value("sip_accounts", []),
+            CONF_PHONEBOOK_CONTACTS: legacy_value(CONF_PHONEBOOK_CONTACTS, []),
         }
     )
     return data
@@ -296,7 +314,9 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_TRUNK_DOMAIN, default=defaults[CONF_TRUNK_DOMAIN]): TextSelector(),
                 vol.Required(CONF_TRUNK_USERNAME, default=defaults[CONF_TRUNK_USERNAME]): TextSelector(),
                 vol.Optional(CONF_TRUNK_AUTH_USERNAME, default=defaults[CONF_TRUNK_AUTH_USERNAME]): TextSelector(),
-                vol.Required(CONF_TRUNK_PASSWORD, default=defaults[CONF_TRUNK_PASSWORD]): TextSelector(),
+                vol.Required(
+                    CONF_TRUNK_PASSWORD, default=defaults[CONF_TRUNK_PASSWORD]
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 vol.Required(CONF_TRUNK_EXPIRES, default=defaults[CONF_TRUNK_EXPIRES]): NumberSelector(
                     NumberSelectorConfig(min=60, max=3600, step=30, mode="box")
                 ),

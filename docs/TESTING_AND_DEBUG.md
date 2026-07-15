@@ -22,6 +22,43 @@ Important groups:
 - `tests/test_group_call_matrix.py`: PBX-style ring/conference group matrix.
 - `tests/test_conference.py`: conference mixer and lifecycle primitives.
 
+## HACS Release Archive
+
+Build the release asset from the repository root:
+
+```bash
+./.venv/bin/python scripts/build_hacs_zip.py
+sha256sum voip_stack.zip
+```
+
+The output is a flat, reproducible archive whose integration files, including
+`manifest.json`, are at the ZIP root. The builder rejects hidden files,
+symlinks, debug captures and unknown file types, and adds the repository's MIT
+`LICENSE`. Run `tests/test_hacs_contract.py` before publishing it.
+
+When `hacs.json` has `zip_release: true`, every HACS-visible release must expose
+an asset named exactly `voip_stack.zip`. Publish or backfill that flat asset
+before making the setting visible on the default branch; a differently named
+or nested ZIP is not a HACS release asset.
+
+`.github/workflows/release.yml` builds and uploads the archive when a GitHub
+release is published. It can also target an existing tag through a manual
+dispatch. Manual dispatch preserves an existing asset by default; enable its
+explicit replacement input only after the locally built ZIP has passed the
+contract test, because GitHub CLI replacement deletes the old asset before
+uploading the new one.
+
+For a manual installation of this same flat archive, extract it into the
+integration directory rather than directly into `/config`:
+
+```bash
+mkdir -p /config/custom_components/voip_stack
+unzip -o voip_stack.zip -d /config/custom_components/voip_stack
+```
+
+After extraction, `/config/custom_components/voip_stack/manifest.json` must
+exist. Restart Home Assistant and hard-refresh dashboards containing the card.
+
 ## Real SIP Matrix
 
 The development environment can run local SIP endpoints against the real HA
@@ -203,11 +240,19 @@ The filenames include source/destination call IDs and side labels. Use these
 when a call connects but audio direction, volume or format negotiation is
 unclear.
 
-Captures are opt-in through `debug_mode`. The directory is created with mode
-`0700`, names are sanitized, and pruning keeps at most the newest 24 files and
-64 MiB in total. WAV/JSON data can still contain private conversation audio and
-call metadata: disable debug mode after the test and remove retained artifacts
-according to the deployment's privacy policy.
+Captures are opt-in through `debug_mode`. HA automatically records up to 15
+seconds in each direction for a Home Assistant softphone WebSocket session and
+up to 8 seconds for each leg of an RTP relay. The directory is created with
+mode `0700`, names are sanitized, and pruning keeps at most the newest 24 files
+and 64 MiB in total. Related WAV/JSON files are published and retained as one
+capture group, so a failed writer or retention pass never leaves half of a
+session. At most four capture groups may be waiting for disk I/O across all
+calls; further snapshots are dropped instead of growing an unbounded executor
+queue. Inspect `debug_capture_pending_writes` and
+`debug_capture_dropped_writes` in the debug snapshot when evidence is missing.
+WAV/JSON data can still contain private conversation audio and call metadata:
+disable debug mode after the test and remove retained artifacts according to
+the deployment's privacy policy.
 
 ## Serial And Device Debug
 
@@ -230,8 +275,10 @@ When testing real devices, cover:
 - HA/card to registered SIP endpoint;
 - unknown, unregistered SIP endpoint to HA;
 - unknown, unregistered SIP endpoint to each ESP;
-- in-dialog hold/re-INVITE receives `488` while the established call and later
-  BYE remain functional;
+- ESP in-dialog hold/re-INVITE receives `488` while the established call and
+  later BYE remain functional;
+- HA-owned UPDATE/re-INVITE hold/resume and supported audio changes commit once
+  while incompatible video additions/removals leave existing media untouched;
 - ring group caller cancel before answer;
 - ring group first-answer-wins;
 - conference join/leave;

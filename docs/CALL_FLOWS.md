@@ -112,17 +112,25 @@ The HA registrar authenticates REGISTER and publishes the endpoint's current
 Contact. It does not make registered accounts the only callers HA or an ESP can
 receive. Use network policy when an installation needs that restriction.
 
-## Hold Or Media-Changing Re-INVITE
+## In-Dialog Hold Or Media Update
 
 1. A call is already established with its original negotiated media.
-2. One peer sends an in-dialog INVITE whose SDP signals hold or changes media.
-3. The ESP or HA returns `488 Not Acceptable Here`.
-4. The established dialog and RTP selection remain active; no second call
-   state is created.
-5. Either peer can later send BYE and both sides clean up the original call.
+2. One peer sends an in-dialog INVITE or UPDATE carrying an SDP offer.
+3. An ESP endpoint returns `488 Not Acceptable Here`; its original dialog and
+   RTP selection remain active.
+4. An HA-owned dialog validates the offer against the live media owner. A
+   compatible audio change or direction/hold/resume update is answered and
+   committed once without rerunning the dial plan or creating a second call.
+5. An established HA video stream may change direction or RTP endpoint while
+   keeping a compatible codec contract. Adding, removing or changing the video
+   codec is rejected with `488`, leaving the original media usable.
+6. A successful re-INVITE follows the normal 2xx/ACK transaction. If ACK never
+   arrives, HA terminates the uncertain dialog; UPDATE needs no ACK.
+7. Either peer can later send BYE and both sides clean up the active call.
 
-HA may answer an in-dialog session refresh with unchanged SDP using the
-existing answer. It does not rerun the dial plan or create a second call.
+An offerless UPDATE is accepted as a session refresh. An offerless re-INVITE is
+rejected because HA does not implement the delayed offer-in-2xx/answer-in-ACK
+exchange.
 
 ## Registered SIP Endpoint To HA
 

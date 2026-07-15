@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
@@ -16,13 +17,18 @@ from .audio_format import AudioFormat
 from .audio_pcm import PcmFrameConverter
 from .debug_capture import (
     DEBUG_CAPTURE_DIR,
-    ensure_debug_capture_dir,
+    capture_temp_path,
+    capture_session_name,
+    commit_capture_file,
+    debug_capture_transaction,
     prune_debug_captures,
-    safe_capture_name,
+    release_debug_capture_write,
+    try_reserve_debug_capture_write,
     wav_pcm_payload,
 )
 from .dtmf import RtpDtmfDecoder
 from .sdp import RtpPcmFormat, audio_format_to_rtp
+from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,10 +47,19 @@ class RtpPeer:
     send_audio_format: AudioFormat | None = None
     send_rtp_format: RtpPcmFormat | None = None
     dtmf_payload_type: int | None = None
+    can_send: bool = True
+    can_receive: bool = True
+    connection_held: bool = False
+    signaling_host: str = ""
+    advertised_host: str = ""
     rx_ssrc: int | None = None
     sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
     timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
     ssrc: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
+
+    def __post_init__(self) -> None:
+        if not self.advertised_host:
+            self.advertised_host = self.host
 
     @property
     def outbound_payload_type(self) -> int:
@@ -63,6 +78,15 @@ class RtpPeer:
         if self.send_rtp_format is not None:
             return self.send_rtp_format
         return audio_format_to_rtp(self.outbound_audio_format, self.outbound_payload_type)
+
+    def accepts_source_host(self, source_host: str) -> bool:
+        """Allow the SDP media host or the authenticated SIP flow host."""
+
+        return str(source_host) in {
+            self.host,
+            self.advertised_host,
+            self.signaling_host,
+        }
 
 
 class _RelayProtocol(asyncio.DatagramProtocol):
@@ -107,9 +131,15 @@ class SipRtpRelay:
         self._on_release = on_release
         self.on_dtmf = on_dtmf
         self._released = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._start_task: asyncio.Task[None] | None = None
+        self._stop_task: asyncio.Task[None] | None = None
+        self._stop_requested = False
         self.video_relay: Any | None = None
         self.forwarded = 0
         self.dropped = 0
+        self.drop_connection_hold = 0
+        self.debug_capture_dropped_writes = 0
         self.left_rx_packets = 0
         self.left_rx_bytes = 0
         self.left_tx_packets = 0
@@ -118,25 +148,105 @@ class SipRtpRelay:
         self.right_rx_bytes = 0
         self.right_tx_packets = 0
         self.right_tx_bytes = 0
-        self.left_to_right = PcmFrameConverter(left.audio_format, right.outbound_audio_format)
-        self.right_to_left = PcmFrameConverter(right.audio_format, left.outbound_audio_format)
-        self.left_decoder = RtpPayloadDecoder(left.inbound_rtp_format)
-        self.right_decoder = RtpPayloadDecoder(right.inbound_rtp_format)
-        self.left_encoder = RtpPayloadEncoder(left.outbound_rtp_format)
-        self.right_encoder = RtpPayloadEncoder(right.outbound_rtp_format)
-        self._dtmf_decoders = {
-            "left": RtpDtmfDecoder(left.dtmf_payload_type) if left.dtmf_payload_type is not None else None,
-            "right": RtpDtmfDecoder(right.dtmf_payload_type) if right.dtmf_payload_type is not None else None,
-        }
+        self._configure_media(left, right)
         self._capture_buffers: dict[str, bytearray] = {}
         self._capture_paths: dict[str, Path] = {}
         self._capture_formats: dict[str, AudioFormat] = {}
         self._capture_frames: dict[str, int] = {"left": 0, "right": 0}
+        self._capture_snapshot: dict[str, tuple[bytes, AudioFormat, Path]] = {}
         if debug_capture:
             self._prepare_debug_capture(capture_name)
 
+    @staticmethod
+    def _build_media_state(left: RtpPeer, right: RtpPeer) -> dict[str, Any]:
+        """Prepare converters without changing the live relay."""
+
+        return {
+            "left_to_right": PcmFrameConverter(left.audio_format, right.outbound_audio_format),
+            "right_to_left": PcmFrameConverter(right.audio_format, left.outbound_audio_format),
+            "left_decoder": RtpPayloadDecoder(left.inbound_rtp_format),
+            "right_decoder": RtpPayloadDecoder(right.inbound_rtp_format),
+            "left_encoder": RtpPayloadEncoder(left.outbound_rtp_format),
+            "right_encoder": RtpPayloadEncoder(right.outbound_rtp_format),
+            "dtmf_decoders": {
+                "left": RtpDtmfDecoder(left.dtmf_payload_type)
+                if left.dtmf_payload_type is not None
+                else None,
+                "right": RtpDtmfDecoder(right.dtmf_payload_type)
+                if right.dtmf_payload_type is not None
+                else None,
+            },
+        }
+
+    def _apply_media_state(
+        self,
+        left: RtpPeer,
+        right: RtpPeer,
+        state: dict[str, Any],
+    ) -> None:
+        """Publish one fully prepared media state."""
+
+        self.left = left
+        self.right = right
+        self.left_to_right = state["left_to_right"]
+        self.right_to_left = state["right_to_left"]
+        self.left_decoder = state["left_decoder"]
+        self.right_decoder = state["right_decoder"]
+        self.left_encoder = state["left_encoder"]
+        self.right_encoder = state["right_encoder"]
+        self._dtmf_decoders = state["dtmf_decoders"]
+
+    def _configure_media(self, left: RtpPeer, right: RtpPeer) -> None:
+        """Build all codec state first, then publish one coherent peer pair."""
+
+        self._apply_media_state(left, right, self._build_media_state(left, right))
+
+    def prepare_peer_reconfiguration(
+        self,
+        side: str,
+        peer: RtpPeer,
+    ) -> Callable[[], None]:
+        """Validate a negotiated peer update and return its infallible commit."""
+
+        if side not in {"left", "right"}:
+            raise ValueError(f"unknown RTP relay side: {side}")
+        previous = self.left if side == "left" else self.right
+        left = peer if side == "left" else self.left
+        right = peer if side == "right" else self.right
+        state = self._build_media_state(left, right)
+
+        def _commit() -> None:
+            current = self.left if side == "left" else self.right
+            if current is not previous:
+                raise RuntimeError("stale RTP relay reconfiguration")
+            commit_left = peer if side == "left" else self.left
+            commit_right = peer if side == "right" else self.right
+            commit_state = (
+                state
+                if commit_left is left and commit_right is right
+                else self._build_media_state(commit_left, commit_right)
+            )
+            # Preserve the sender identity at commit time so packets forwarded
+            # while the SIP response was in flight cannot rewind the RTP clock.
+            peer.sequence = current.sequence
+            peer.timestamp = current.timestamp
+            peer.ssrc = current.ssrc
+            peer.rx_ssrc = None
+            self._apply_media_state(commit_left, commit_right, commit_state)
+            if side in self._capture_buffers:
+                self._capture_buffers[side].clear()
+                self._capture_frames[side] = 0
+                self._capture_formats[side] = peer.audio_format
+
+        return _commit
+
+    def reconfigure_peer(self, side: str, peer: RtpPeer) -> None:
+        """Atomically apply a negotiated RTP peer update to one dialog leg."""
+
+        self.prepare_peer_reconfiguration(side, peer)()
+
     def _prepare_debug_capture(self, capture_name: str) -> None:
-        safe_name = safe_capture_name(capture_name or f"relay_{self.left_port}_{self.right_port}")
+        safe_name = capture_session_name(capture_name or f"relay_{self.left_port}_{self.right_port}")
         for side, fmt in (("left", self.left.audio_format), ("right", self.right.audio_format)):
             path = DEBUG_CAPTURE_DIR / f"{safe_name}_{side}_rx.wav"
             self._capture_buffers[side] = bytearray()
@@ -161,65 +271,122 @@ class SipRtpRelay:
         buffer.extend(pcm)
         self._capture_frames[side] = current + samples
 
-    def _write_debug_capture_files(self) -> None:
-        if not self._capture_buffers:
-            return
-        ensure_debug_capture_dir()
-        for side, pcm in self._capture_buffers.items():
-            fmt = self._capture_formats[side]
-            path = self._capture_paths[side]
-            sample_width, wav_payload = wav_pcm_payload(fmt, pcm)
-            with wave.open(str(path), "wb") as wav:
-                wav.setnchannels(fmt.channels)
-                wav.setsampwidth(sample_width)
-                wav.setframerate(fmt.sample_rate)
-                wav.writeframes(wav_payload)
-            _LOGGER.info(
-                "SIP RTP debug capture wrote side=%s path=%s bytes=%d format=%s",
-                side,
-                path,
-                len(pcm),
-                fmt.wire_token(),
+    def _detach_debug_capture_snapshot(self) -> None:
+        """Freeze live capture buffers before any asynchronous teardown await."""
+
+        self._capture_snapshot = {
+            side: (
+                bytes(pcm),
+                self._capture_formats[side],
+                self._capture_paths[side],
             )
-        prune_debug_captures()
+            for side, pcm in list(self._capture_buffers.items())
+            if side in self._capture_formats and side in self._capture_paths
+        }
+        self._capture_buffers.clear()
+        self._capture_frames.clear()
+
+    def _write_debug_capture_files(self) -> None:
+        snapshot = dict(self._capture_snapshot)
+        if not snapshot:
+            return
+        with debug_capture_transaction():
+            published: list[Path] = []
+            try:
+                for side, (pcm, fmt, path) in snapshot.items():
+                    temporary = capture_temp_path(path)
+                    try:
+                        sample_width, wav_payload = wav_pcm_payload(fmt, pcm)
+                        with wave.open(str(temporary), "wb") as wav:
+                            wav.setnchannels(fmt.channels)
+                            wav.setsampwidth(sample_width)
+                            wav.setframerate(fmt.sample_rate)
+                            wav.writeframes(wav_payload)
+                        commit_capture_file(temporary, path)
+                        published.append(path)
+                    finally:
+                        with contextlib.suppress(OSError):
+                            temporary.unlink()
+                    _LOGGER.info(
+                        "SIP RTP debug capture wrote side=%s path=%s bytes=%d format=%s",
+                        side,
+                        path,
+                        len(pcm),
+                        fmt.wire_token(),
+                    )
+                prune_debug_captures()
+            except BaseException:
+                for destination in published:
+                    with contextlib.suppress(OSError):
+                        destination.unlink()
+                raise
 
     async def start(self) -> None:
+        async with self._lifecycle_lock:
+            if self.left_transport is not None and self.right_transport is not None:
+                return
+            if self._released or self._stop_requested:
+                raise RuntimeError("SIP RTP relay has already been stopped")
+            task = self._start_task
+            if task is None:
+                task = asyncio.create_task(
+                    self._start_impl(),
+                    name=f"voip-rtp-relay-start-{self.left_port}-{self.right_port}",
+                )
+                self._start_task = task
+        try:
+            await task
+        finally:
+            async with self._lifecycle_lock:
+                if self._start_task is task and task.done():
+                    self._start_task = None
+
+    async def _start_impl(self) -> None:
         loop = asyncio.get_running_loop()
         left_sock: socket.socket | None = None
         right_sock: socket.socket | None = None
         try:
             left_sock = self._rtp_socket(self.left_port)
             right_sock = self._rtp_socket(self.right_port)
-            self.left_transport, _ = await loop.create_datagram_endpoint(
+            left_transport, _ = await loop.create_datagram_endpoint(
                 lambda: _RelayProtocol(self, "left"),
                 sock=left_sock,
             )
+            if self._stop_requested:
+                left_transport.close()
+                raise asyncio.CancelledError
+            self.left_transport = left_transport
             left_sock = None
-            self.right_transport, _ = await loop.create_datagram_endpoint(
+            right_transport, _ = await loop.create_datagram_endpoint(
                 lambda: _RelayProtocol(self, "right"),
                 sock=right_sock,
             )
+            if self._stop_requested:
+                right_transport.close()
+                raise asyncio.CancelledError
+            self.right_transport = right_transport
             right_sock = None
+            if self.video_relay is not None:
+                await self.video_relay.start()
+            if self._stop_requested:
+                raise asyncio.CancelledError
         except BaseException:
-            if self.left_transport is not None:
-                self.left_transport.close()
-                self.left_transport = None
-            if self.right_transport is not None:
-                self.right_transport.close()
-                self.right_transport = None
+            self._close_audio_resources()
             if left_sock is not None:
                 left_sock.close()
             if right_sock is not None:
                 right_sock.close()
-            if self.video_relay is not None:
-                await self.video_relay.stop()
-                self.video_relay = None
-            raise
-        try:
-            if self.video_relay is not None:
-                await self.video_relay.start()
-        except BaseException:
-            await self.stop()
+            video_relay = self.video_relay
+            self.video_relay = None
+            if video_relay is not None:
+                try:
+                    await video_relay.stop()
+                except BaseException:
+                    _LOGGER.debug(
+                        "SIP video relay cleanup failed during audio relay start",
+                        exc_info=True,
+                    )
+            self._release_ports()
             raise
         _LOGGER.info(
             "SIP RTP relay listening left=%s right=%s left=%s->%s right=%s->%s",
@@ -245,6 +412,24 @@ class SipRtpRelay:
             raise
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            self._stop_requested = True
+            task = self._stop_task
+            if task is None:
+                task = asyncio.create_task(
+                    self._stop_impl(),
+                    name=f"voip-rtp-relay-stop-{self.left_port}-{self.right_port}",
+                )
+                self._stop_task = task
+        await async_wait_for_cleanup(task)
+
+    async def _stop_impl(self) -> None:
+        async with self._lifecycle_lock:
+            start_task = self._start_task
+            if start_task is not None and not start_task.done():
+                start_task.cancel()
+        if start_task is not None and start_task is not asyncio.current_task():
+            await asyncio.gather(start_task, return_exceptions=True)
         _LOGGER.info(
             "SIP RTP relay stopped left=%s right=%s forwarded=%s dropped=%s left_rx=%s right_rx=%s left_tx=%s right_tx=%s",
             self.left_port,
@@ -256,26 +441,75 @@ class SipRtpRelay:
             self.left_tx_packets,
             self.right_tx_packets,
         )
-        if self.video_relay is not None:
-            await self.video_relay.stop()
-            self.video_relay = None
+        video_relay = self.video_relay
+        self.video_relay = None
+        self._close_audio_resources()
+        self._detach_debug_capture_snapshot()
+        # Port ownership is independent from optional diagnostics and video
+        # cleanup. Release it before the first await so a slow filesystem or a
+        # broken video relay cannot starve subsequent calls.
+        self._release_ports()
+        if video_relay is not None:
+            try:
+                await video_relay.stop()
+            except asyncio.CancelledError:
+                # This task is shielded from caller cancellation. A child
+                # relay returning CancelledError is therefore a child cleanup
+                # failure, not a request to abandon audio/debug teardown.
+                _LOGGER.warning(
+                    "SIP video relay cleanup was cancelled; audio teardown continues left=%s right=%s",
+                    self.left_port,
+                    self.right_port,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "SIP video relay cleanup failed; audio teardown continues left=%s right=%s",
+                    self.left_port,
+                    self.right_port,
+                )
+        if self._capture_snapshot:
+            if not try_reserve_debug_capture_write():
+                self.debug_capture_dropped_writes += 1
+                _LOGGER.warning(
+                    "VoIP debug capture writer pool full; dropping RTP relay capture left=%s right=%s",
+                    self.left_port,
+                    self.right_port,
+                )
+            else:
+                try:
+                    await asyncio.to_thread(self._write_debug_capture_files)
+                except Exception:
+                    _LOGGER.exception(
+                        "SIP RTP debug capture write failed; relay teardown continues left=%s right=%s",
+                        self.left_port,
+                        self.right_port,
+                    )
+                finally:
+                    release_debug_capture_write()
+        self._capture_snapshot.clear()
+
+    def _close_audio_resources(self) -> None:
+        """Synchronously revoke both RTP transports."""
+
         if self.left_transport is not None:
             self.left_transport.close()
             self.left_transport = None
         if self.right_transport is not None:
             self.right_transport.close()
             self.right_transport = None
-        try:
-            await asyncio.to_thread(self._write_debug_capture_files)
-        finally:
-            self._capture_buffers.clear()
-            if self._on_release is not None and not self._released:
-                self._released = True
-                self._on_release((self.left_port, self.right_port))
+
+    def _release_ports(self) -> None:
+        """Return the reserved RTP pair exactly once."""
+
+        if self._on_release is not None and not self._released:
+            self._released = True
+            self._on_release((self.left_port, self.right_port))
 
     def attach_video_relay(self, relay: Any) -> None:
         """Attach one call-owned video relay to the audio relay lifecycle."""
 
+        if self._released or self._stop_requested:
+            raise RuntimeError("SIP RTP relay has already been stopped")
         if self.video_relay is not None and self.video_relay is not relay:
             raise RuntimeError("video relay already attached")
         self.video_relay = relay
@@ -287,16 +521,27 @@ class SipRtpRelay:
         if transport is None:
             self.dropped += 1
             return
-        if addr[0] != source.host:
+        if not source.accepts_source_host(str(addr[0])):
             self.dropped += 1
             _LOGGER.debug("RTP relay rejected packet from unexpected %s:%s", addr[0], addr[1])
+            return
+        if dest.connection_held:
+            self.dropped += 1
+            self.drop_connection_hold += 1
+            _LOGGER.debug("RTP relay suppressed packet toward held connection")
+            return
+        if not source.can_send or not dest.can_receive:
+            self.dropped += 1
+            _LOGGER.debug("RTP relay rejected packet: media direction is not negotiated")
             return
         dtmf_decoder = self._dtmf_decoders[side]
         if dtmf_decoder is not None and (digit := dtmf_decoder.decode(data, expected_ssrc=source.rx_ssrc)):
             if source.rx_ssrc is None:
                 source.rx_ssrc = dtmf_decoder.ssrc
+                source.host = str(addr[0])
                 source.port = int(addr[1])
-            elif int(addr[1]) != int(source.port):
+            elif (str(addr[0]), int(addr[1])) != (source.host, int(source.port)):
+                source.host = str(addr[0])
                 source.port = int(addr[1])
             if self.on_dtmf is not None:
                 try:
@@ -316,9 +561,11 @@ class SipRtpRelay:
                 return
             if source.rx_ssrc is None:
                 source.rx_ssrc = packet.ssrc
+                source.host = str(addr[0])
                 source.port = int(addr[1])
-            elif int(addr[1]) != int(source.port):
-                # Symmetric RTP: follow a valid same-SSRC NAT port rebind.
+            elif (str(addr[0]), int(addr[1])) != (source.host, int(source.port)):
+                # Symmetric RTP: follow a valid same-SSRC NAT tuple rebind.
+                source.host = str(addr[0])
                 source.port = int(addr[1])
             self._capture_pcm(side, pcm)
             converter = self.left_to_right if side == "left" else self.right_to_left
@@ -377,6 +624,8 @@ class SipRtpRelay:
             "right_peer": f"{self.right.host}:{self.right.port}",
             "forwarded_packets": self.forwarded,
             "dropped_packets": self.dropped,
+            "drop_connection_hold": self.drop_connection_hold,
+            "debug_capture_dropped_writes": self.debug_capture_dropped_writes,
             "left_rx_packets": self.left_rx_packets,
             "left_rx_bytes": self.left_rx_bytes,
             "left_tx_packets": self.left_tx_packets,
@@ -389,7 +638,21 @@ class SipRtpRelay:
             "left_tx_format": self.left.outbound_audio_format.wire_token(),
             "right_rx_format": self.right.audio_format.wire_token(),
             "right_tx_format": self.right.outbound_audio_format.wire_token(),
+            "left_direction": self._peer_direction(self.left),
+            "right_direction": self._peer_direction(self.right),
+            "left_connection_held": self.left.connection_held,
+            "right_connection_held": self.right.connection_held,
         }
         if self.video_relay is not None:
             snapshot["video"] = self.video_relay.snapshot()
         return snapshot
+
+    @staticmethod
+    def _peer_direction(peer: RtpPeer) -> str:
+        if peer.can_send and peer.can_receive:
+            return "sendrecv"
+        if peer.can_send:
+            return "sendonly"
+        if peer.can_receive:
+            return "recvonly"
+        return "inactive"

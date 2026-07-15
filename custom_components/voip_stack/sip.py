@@ -20,7 +20,9 @@ CRLF = "\r\n"
 SIP_VERSION = "SIP/2.0"
 MAX_SIP_MESSAGE_BYTES = 8192
 MAX_SIP_BODY_BYTES = 4096
-SUPPORTED_METHODS = frozenset({"INVITE", "ACK", "BYE", "CANCEL", "INFO", "OPTIONS", "REGISTER"})
+SUPPORTED_METHODS = frozenset(
+    {"INVITE", "ACK", "BYE", "CANCEL", "INFO", "OPTIONS", "REGISTER", "UPDATE"}
+)
 KNOWN_UNSUPPORTED_METHODS = frozenset(
     {
         "MESSAGE",
@@ -29,7 +31,6 @@ KNOWN_UNSUPPORTED_METHODS = frozenset(
         "PUBLISH",
         "REFER",
         "SUBSCRIBE",
-        "UPDATE",
     }
 )
 _TOKEN_SEPARATORS = set("()<>@,;:\\\"/[]?={} \t")
@@ -210,6 +211,15 @@ class SipCSeq:
     method: str
 
 
+@dataclass(frozen=True, slots=True)
+class SipDialogRoute:
+    """Routing contract for one request inside an established dialog."""
+
+    request_uri: str
+    route_headers: tuple[str, ...]
+    next_hop_uri: str
+
+
 def make_call_id(prefix: str = "voip") -> str:
     return f"{prefix}-{token_hex(12)}"
 
@@ -263,6 +273,126 @@ def parse_sip_uri(value: str) -> SipUri:
     uri = SipUri(user=user, host=host.strip(), port=port, params=tuple(params))
     str(uri)
     return uri
+
+
+def contact_target_uri(message: SipMessage) -> str:
+    """Return the single Contact URI carried by one SIP message.
+
+    Target-refresh requests are allowed to omit Contact for compatibility with
+    older intercom firmware.  When Contact is present, however, accepting a
+    list, wildcard, or malformed value would make the subsequent dialog target
+    ambiguous.  Commas inside a quoted display name or URI brackets are not
+    contact separators.
+    """
+
+    values = message.header_values("Contact")
+    if not values:
+        return ""
+    if len(values) != 1:
+        raise SipError("SIP dialog Contact must contain exactly one value")
+    value = values[0].strip()
+    if not value or value == "*":
+        raise SipError("SIP dialog Contact must contain one SIP URI")
+
+    contacts = _split_comma_header_values(value)
+    if len(contacts) != 1:
+        raise SipError("SIP dialog Contact must not contain a contact list")
+    return str(parse_sip_uri(contacts[0]))
+
+
+def _split_comma_header_values(value: str) -> tuple[str, ...]:
+    """Split a SIP list header without breaking quoted names or name-addrs."""
+
+    if any(char in "\r\n" for char in value):
+        raise SipError("SIP list header contains a line break")
+    values: list[str] = []
+    start = 0
+    quoted = False
+    escaped = False
+    angle_depth = 0
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if quoted and char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            quoted = not quoted
+            continue
+        if quoted:
+            continue
+        if char == "<":
+            angle_depth += 1
+            if angle_depth > 1:
+                raise SipError("SIP list header has nested name-address brackets")
+        elif char == ">":
+            if angle_depth == 0:
+                raise SipError("SIP list header has an unmatched closing bracket")
+            angle_depth -= 1
+        elif char == "," and angle_depth == 0:
+            item = value[start:index].strip()
+            if not item:
+                raise SipError("SIP list header contains an empty value")
+            values.append(item)
+            start = index + 1
+    if quoted or escaped or angle_depth:
+        raise SipError("SIP list header is malformed")
+    item = value[start:].strip()
+    if not item:
+        raise SipError("SIP list header contains an empty value")
+    values.append(item)
+    return tuple(values)
+
+
+def record_route_set(
+    message: SipMessage,
+    *,
+    reverse: bool = False,
+) -> tuple[str, ...]:
+    """Return a validated route set from all Record-Route field values.
+
+    A UAS retains the request order.  A UAC reverses the order copied into the
+    response, as required by RFC 3261.  Original name-address rendering is
+    retained so extension parameters survive subsequent ``Route`` fields.
+    """
+
+    routes: list[str] = []
+    for field_value in message.header_values("Record-Route"):
+        for route in _split_comma_header_values(field_value):
+            parse_sip_uri(route)
+            routes.append(route)
+    if reverse:
+        routes.reverse()
+    return tuple(routes)
+
+
+def dialog_request_routing(
+    remote_target_uri: str,
+    route_set: Iterable[str] = (),
+) -> SipDialogRoute:
+    """Apply RFC 3261 loose/strict routing to an in-dialog request."""
+
+    remote_target = str(parse_sip_uri(remote_target_uri))
+    routes = tuple(str(value).strip() for value in route_set)
+    if not routes:
+        return SipDialogRoute(remote_target, (), remote_target)
+
+    parsed_routes = tuple(parse_sip_uri(value) for value in routes)
+    first_uri = str(parsed_routes[0])
+    first_is_loose_router = any(
+        key.strip().lower() == "lr" for key, _value in parsed_routes[0].params
+    )
+    if first_is_loose_router:
+        return SipDialogRoute(remote_target, routes, first_uri)
+
+    # A strict router occupies the Request-URI. The remote target is appended
+    # to Route so the final strict hop restores it before reaching the peer.
+    return SipDialogRoute(
+        first_uri,
+        (*routes[1:], f"<{remote_target}>"),
+        first_uri,
+    )
 
 
 def _split_semicolon_params(value: str) -> tuple[str, tuple[tuple[str, str | None], ...]]:
@@ -363,12 +493,19 @@ def parse_message(data: bytes) -> SipMessage:
     lines = head.split(CRLF)
     if not lines or not lines[0]:
         raise SipError("empty SIP start line")
-    headers: list[tuple[str, str]] = []
+    unfolded: list[str] = []
     for line in lines[1:]:
         if not line:
             continue
         if line.startswith((" ", "\t")):
-            raise SipError("folded SIP headers are not supported")
+            if not unfolded:
+                raise SipError("SIP header continuation has no preceding header")
+            unfolded[-1] += " " + line.lstrip(" \t")
+            continue
+        unfolded.append(line)
+
+    headers: list[tuple[str, str]] = []
+    for line in unfolded:
         if ":" not in line:
             raise SipError(f"malformed SIP header: {line!r}")
         key, value = line.split(":", 1)
@@ -399,8 +536,6 @@ def parse_message(data: bytes) -> SipMessage:
     if len(body_tail) < content_length:
         raise SipError("SIP body shorter than Content-Length")
     body = body_tail[:content_length]
-    if body_tail[content_length:]:
-        raise SipError("SIP message has trailing bytes after Content-Length")
 
     start = lines[0]
     parts = start.split(" ", 2)

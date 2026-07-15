@@ -101,13 +101,19 @@ DND and active-call contention should produce `486 Busy Here` or a terminal
 reason of `busy`. Decline should produce `603 Decline` or a configured SIP
 final response.
 
-## Hold Or Re-INVITE Receives `488`
+## Hold, UPDATE Or Re-INVITE
 
-Session-modifying in-dialog INVITE is not supported in the current ESP or HA
-profile. A hold or codec-renegotiation re-INVITE receives `488 Not Acceptable
-Here`; the already established dialog and media selection remain active. A
-later BYE must still end that original call normally. Do not diagnose this as a
-dropped call unless the original dialog or RTP also stops.
+ESP endpoints do not renegotiate established media. A hold or media-changing
+re-INVITE receives `488 Not Acceptable Here`; the original dialog and media
+remain active and a later BYE must still end the call normally.
+
+HA-owned dialogs accept compatible peer-initiated UPDATE or re-INVITE offers.
+If HA returns `488`, inspect whether the peer tried to add/remove video, change
+the established video codec, supplied an unsupported audio shape or sent an
+offerless re-INVITE. A rejected offer must not replace the previous media. For
+an accepted update, inspect `media_renegotiations`, the current directional
+formats and the WebSocket `media_update` notification. A re-INVITE 2xx also
+requires ACK; HA terminates the dialog if that ACK never arrives.
 
 ## No Audio
 

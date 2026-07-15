@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from .const import DOMAIN
 from .sdp import RtpVideoFormat
+from .session_cleanup import async_wait_for_cleanup
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -26,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 _ACTIVE_TRANSCODER = "video_transcoder_active"
 _TRANSCODER_LOCK = "video_transcoder_lock"
 _MAX_FMTP_LENGTH = 1024
+_PROCESS_STOP_TIMEOUT = 2.0
 
 
 class VideoTranscoderError(RuntimeError):
@@ -87,8 +89,32 @@ class FfmpegVideoTranscoder:
     _stderr_task: asyncio.Task[None] | None = None
     stderr_tail: list[str] = field(default_factory=list, init=False)
     _released: bool = field(default=False, init=False)
+    _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _start_task: asyncio.Task[None] | None = field(default=None, init=False)
+    _cleanup_task: asyncio.Task[None] | None = field(default=None, init=False)
+    _close_requested: bool = field(default=False, init=False)
 
     async def async_start(self) -> None:
+        async with self._lifecycle_lock:
+            if self.process is not None and self.process.returncode is None:
+                return
+            if self._close_requested or self._released:
+                raise VideoTranscoderError("SIP video transcoder has already been closed")
+            task = self._start_task
+            if task is None:
+                task = asyncio.create_task(
+                    self._async_start_impl(),
+                    name=f"voip-video-transcoder-start-{self.call_id}",
+                )
+                self._start_task = task
+        try:
+            await task
+        finally:
+            async with self._lifecycle_lock:
+                if self._start_task is task and task.done():
+                    self._start_task = None
+
+    async def _async_start_impl(self) -> None:
         bucket = self.hass.data.setdefault(DOMAIN, {})
         lock = bucket.setdefault(_TRANSCODER_LOCK, asyncio.Lock())
         async with lock:
@@ -96,6 +122,9 @@ class FfmpegVideoTranscoder:
             if active is not None and active is not self:
                 raise VideoTranscoderError("another SIP video transcode is active")
             bucket[_ACTIVE_TRANSCODER] = self
+        process: asyncio.subprocess.Process | None = None
+        send_socket: socket.socket | None = None
+        stderr_task: asyncio.Task[None] | None = None
         try:
             self.input_port = _available_udp_port()
             command = [
@@ -132,19 +161,31 @@ class FfmpegVideoTranscoder:
                 "-payload_type", "103",
                 f"rtp://127.0.0.1:{int(self.output_port)}?pkt_size=1200",
             ]
-            self.process = await asyncio.create_subprocess_exec(
+            process = await asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            assert self.process.stdin is not None
-            self.process.stdin.write(_input_sdp(self.input_format, self.input_port).encode())
-            await self.process.stdin.drain()
-            self.process.stdin.close()
-            self._send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._send_socket.setblocking(False)
-            self._stderr_task = asyncio.create_task(self._drain_stderr())
+            assert process.stdin is not None
+            process.stdin.write(_input_sdp(self.input_format, self.input_port).encode())
+            await process.stdin.drain()
+            process.stdin.close()
+            send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_socket.setblocking(False)
+            stderr_task = asyncio.create_task(
+                self._drain_stderr(process),
+                name=f"voip-video-transcoder-stderr-{self.call_id}",
+            )
+            async with self._lifecycle_lock:
+                if self._close_requested or self._released:
+                    raise asyncio.CancelledError
+                self.process = process
+                self._send_socket = send_socket
+                self._stderr_task = stderr_task
+                process = None
+                send_socket = None
+                stderr_task = None
             _LOGGER.info(
                 "Started optional SIP video transcode call_id=%s input=%s loopback=%s output=VP8/%s",
                 self.call_id,
@@ -152,8 +193,19 @@ class FfmpegVideoTranscoder:
                 self.input_port,
                 self.output_port,
             )
-        except Exception:
-            await self.async_close()
+        except BaseException:
+            # Cancellation is a normal unload path and must release the
+            # process/pipe as well as the singleton transcode slot.
+            cleanup = asyncio.create_task(
+                self._dispose_resources(
+                    process=process,
+                    send_socket=send_socket,
+                    stderr_task=stderr_task,
+                    release_slot=True,
+                ),
+                name=f"voip-video-transcoder-start-cleanup-{self.call_id}",
+            )
+            await async_wait_for_cleanup(cleanup)
             raise
 
     def send_rtp(self, data: bytes) -> None:
@@ -161,9 +213,8 @@ class FfmpegVideoTranscoder:
             raise VideoTranscoderError("FFmpeg video transcoder stopped")
         self._send_socket.sendto(data, ("127.0.0.1", int(self.input_port)))
 
-    async def _drain_stderr(self) -> None:
-        process = self.process
-        if process is None or process.stderr is None:
+    async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:
+        if process.stderr is None:
             return
         while line := await process.stderr.readline():
             text = line.decode(errors="replace").rstrip()
@@ -172,35 +223,76 @@ class FfmpegVideoTranscoder:
             _LOGGER.debug("FFmpeg SIP video: %s", text)
 
     async def async_close(self) -> None:
-        if self._released:
-            return
-        self._released = True
-        try:
-            if self._send_socket is not None:
-                self._send_socket.close()
-                self._send_socket = None
+        """Finish one idempotent cleanup even if the waiting caller is cancelled."""
+
+        async with self._lifecycle_lock:
+            self._close_requested = True
+            task = self._cleanup_task
+            if task is None:
+                task = asyncio.create_task(
+                    self._async_close_impl(),
+                    name=f"voip-video-transcoder-close-{self.call_id}",
+                )
+                self._cleanup_task = task
+        await async_wait_for_cleanup(task)
+
+    async def _async_close_impl(self) -> None:
+        async with self._lifecycle_lock:
+            start_task = self._start_task
+            if start_task is not None and not start_task.done():
+                start_task.cancel()
+        if start_task is not None and start_task is not asyncio.current_task():
+            await asyncio.gather(start_task, return_exceptions=True)
+        async with self._lifecycle_lock:
             process = self.process
             self.process = None
+            send_socket = self._send_socket
+            self._send_socket = None
+            stderr_task = self._stderr_task
+            self._stderr_task = None
+        await self._dispose_resources(
+            process=process,
+            send_socket=send_socket,
+            stderr_task=stderr_task,
+            release_slot=True,
+        )
+        _LOGGER.info("Stopped optional SIP video transcode call_id=%s", self.call_id)
+
+    async def _dispose_resources(
+        self,
+        *,
+        process: asyncio.subprocess.Process | None,
+        send_socket: socket.socket | None,
+        stderr_task: asyncio.Task[None] | None,
+        release_slot: bool,
+    ) -> None:
+        """Dispose detached FFmpeg resources and release singleton ownership."""
+
+        try:
+            if send_socket is not None:
+                send_socket.close()
             if process is not None:
                 if process.returncode is None:
                     with contextlib.suppress(ProcessLookupError):
                         process.terminate()
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                    await asyncio.wait_for(
+                        process.wait(), timeout=_PROCESS_STOP_TIMEOUT
+                    )
                 except TimeoutError:
                     with contextlib.suppress(ProcessLookupError):
                         process.kill()
                     await process.wait()
-            if self._stderr_task is not None:
-                self._stderr_task.cancel()
-                await asyncio.gather(self._stderr_task, return_exceptions=True)
-                self._stderr_task = None
         finally:
+            if stderr_task is not None:
+                stderr_task.cancel()
+                await asyncio.gather(stderr_task, return_exceptions=True)
             # Never strand the single bounded transcode slot because FFmpeg
             # exited between the returncode check and process cleanup.
-            bucket = self.hass.data.setdefault(DOMAIN, {})
-            lock = bucket.setdefault(_TRANSCODER_LOCK, asyncio.Lock())
-            async with lock:
-                if bucket.get(_ACTIVE_TRANSCODER) is self:
-                    bucket.pop(_ACTIVE_TRANSCODER, None)
-        _LOGGER.info("Stopped optional SIP video transcode call_id=%s", self.call_id)
+            if release_slot:
+                bucket = self.hass.data.setdefault(DOMAIN, {})
+                lock = bucket.setdefault(_TRANSCODER_LOCK, asyncio.Lock())
+                async with lock:
+                    if bucket.get(_ACTIVE_TRANSCODER) is self:
+                        bucket.pop(_ACTIVE_TRANSCODER, None)
+            self._released = True

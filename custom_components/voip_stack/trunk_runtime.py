@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.core import HomeAssistant
@@ -19,6 +20,7 @@ from .const import (
     CONF_TRUNK_USERNAME,
     DOMAIN,
 )
+from .session_cleanup import async_wait_for_cleanup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,10 +64,30 @@ async def async_start_sip_trunk(hass: HomeAssistant, *, local_ip: str) -> bool:
 
 
 async def async_stop_sip_trunk(hass: HomeAssistant) -> None:
-    trunk = hass.data.get(DOMAIN, {}).pop("sip_trunk", None)
+    bucket = hass.data.setdefault(DOMAIN, {})
+    task = bucket.get("sip_trunk_stop_task")
+    if not isinstance(task, asyncio.Task) or task.done():
+        task = asyncio.create_task(
+            _async_stop_sip_trunk(hass),
+            name="voip-sip-trunk-runtime-stop",
+        )
+        bucket["sip_trunk_stop_task"] = task
+    try:
+        await async_wait_for_cleanup(task)
+    finally:
+        if task.done() and bucket.get("sip_trunk_stop_task") is task:
+            bucket.pop("sip_trunk_stop_task", None)
+
+
+async def _async_stop_sip_trunk(hass: HomeAssistant) -> None:
+    bucket = hass.data.get(DOMAIN, {})
+    trunk = bucket.get("sip_trunk")
     if trunk is None:
         return
     try:
         await trunk.stop()
     except Exception:
         _LOGGER.debug("Ignoring SIP trunk stop error", exc_info=True)
+        return
+    if bucket.get("sip_trunk") is trunk:
+        bucket.pop("sip_trunk", None)

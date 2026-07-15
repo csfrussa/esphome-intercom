@@ -30,6 +30,12 @@ PKG_NAME = "custom_components.voip_stack"
 PKG_DIR = ROOT / "custom_components" / "voip_stack"
 
 
+class _FakeUnauthorized(Exception):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args)
+        self.details = kwargs
+
+
 def _install_ha_fakes() -> None:
     if "homeassistant" not in sys.modules:
         ha_pkg = types.ModuleType("homeassistant")
@@ -45,10 +51,16 @@ def _install_ha_fakes() -> None:
         config_entries = types.ModuleType("homeassistant.config_entries")
         config_entries.ConfigEntry = object
         sys.modules["homeassistant.config_entries"] = config_entries
-    if "homeassistant.exceptions" not in sys.modules:
-        exceptions = types.ModuleType("homeassistant.exceptions")
-        exceptions.ConfigEntryError = RuntimeError
-        sys.modules["homeassistant.exceptions"] = exceptions
+    exceptions = sys.modules.setdefault(
+        "homeassistant.exceptions", types.ModuleType("homeassistant.exceptions")
+    )
+    exceptions.ConfigEntryError = getattr(
+        exceptions, "ConfigEntryError", RuntimeError
+    )
+    exceptions.Unauthorized = getattr(
+        exceptions, "Unauthorized", _FakeUnauthorized
+    )
+    exceptions.UnknownUser = getattr(exceptions, "UnknownUser", _FakeUnauthorized)
     if "homeassistant.components" not in sys.modules:
         components = types.ModuleType("homeassistant.components")
         components.__path__ = []
@@ -60,11 +72,16 @@ def _install_ha_fakes() -> None:
         websocket_api.websocket_command = lambda _schema: (lambda fn: fn)
         websocket_api.async_response = lambda fn: fn
         sys.modules["homeassistant.components.websocket_api"] = websocket_api
+    # Use the real validator when available so this dynamic loader cannot
+    # poison later tests through the process-wide module cache.
     if "voluptuous" not in sys.modules:
-        vol = types.ModuleType("voluptuous")
-        vol.Required = lambda key: key
-        vol.Optional = lambda key, default=None: key
-        sys.modules["voluptuous"] = vol
+        try:
+            import voluptuous  # noqa: F401
+        except ImportError:
+            vol = types.ModuleType("voluptuous")
+            vol.Required = lambda key: key
+            vol.Optional = lambda key, default=None: key
+            sys.modules["voluptuous"] = vol
 
 
 def _load_module(name: str):
@@ -85,7 +102,11 @@ def _load_module(name: str):
         raise RuntimeError(f"cannot load {full_name}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[full_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(full_name, None)
+        raise
     return module
 
 
@@ -107,9 +128,11 @@ class _FakeConfig:
 class _FakeBus:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict]] = []
+        self.contexts: list[object | None] = []
 
-    def async_fire(self, event_type: str, event: dict) -> None:
+    def async_fire(self, event_type: str, event: dict, *, context=None) -> None:
         self.events.append((event_type, dict(event)))
+        self.contexts.append(context)
 
 
 class _FakeHass:
@@ -120,6 +143,57 @@ class _FakeHass:
 
 
 class GroupCallMatrixTest(unittest.TestCase):
+    def test_call_and_softphone_events_preserve_the_initiating_ha_context(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        context = types.SimpleNamespace(user_id="user-a", id="context-a")
+        registry.upsert("call-1", state="calling", owner="ha_softphone")
+        registry.bind_controller("call-1", context=context)
+
+        websocket_api._fire_call_event(
+            hass,
+            {"call_id": "call-1", "state": "calling", "direction": "outgoing"},
+            "session",
+        )
+        websocket_api._publish_ha_softphone_state(
+            hass,
+            {"call_id": "call-1", "state": "calling"},
+        )
+
+        self.assertTrue(hass.bus.contexts)
+        self.assertTrue(all(item is context for item in hass.bus.contexts))
+
+    def test_sip_target_profile_keeps_only_bidirectional_rtp_contracts(self) -> None:
+        audio_format = endpoint_routing.AudioFormat
+        remote_tx = [
+            audio_format(32000, "s16le", 1, 10),
+            audio_format(16000, "s16le", 1, 10),
+        ]
+        remote_rx = [
+            audio_format(48000, "s16le", 1, 10),
+            audio_format(16000, "s16le", 1, 10),
+        ]
+
+        send, recv = endpoint_routing.sip_target_audio_profile(
+            remote_tx_formats=remote_tx,
+            remote_rx_formats=remote_rx,
+            target="standard-phone",
+        )
+
+        expected = [audio_format(16000, "s16le", 1, 10)]
+        self.assertEqual(send, expected)
+        self.assertEqual(recv, expected)
+
+    def test_sip_target_profile_rejects_disjoint_tx_rx_contracts(self) -> None:
+        audio_format = endpoint_routing.AudioFormat
+        send, recv = endpoint_routing.sip_target_audio_profile(
+            remote_tx_formats=[audio_format(16000, "s16le", 1, 10)],
+            remote_rx_formats=[audio_format(48000, "s16le", 1, 10)],
+            target="nonstandard-phone",
+        )
+
+        self.assertEqual((send, recv), ([], []))
+
     def test_voip_matrix_runner_all_scenarios_validate(self) -> None:
         results, errors = run_matrix()
         self.assertEqual(errors, [])

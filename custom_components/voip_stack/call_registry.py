@@ -87,6 +87,7 @@ class CallRegistry:
                 "previous_state": "",
                 "route_history": [],
             }
+        call_id = self.resolve_session_id(call_id)
         context = self.event_contexts.get(call_id)
         if context is None:
             if len(self.event_contexts) >= 256:
@@ -97,7 +98,7 @@ class CallRegistry:
             context.previous_state = context.state
             context.state = state
             context.sequence += 1
-        session = self.sessions.get(self.resolve_session_id(call_id))
+        session = self.sessions.get(call_id)
         return {
             "schema_version": 1,
             "sequence": context.sequence,
@@ -276,6 +277,55 @@ class CallRegistry:
     def resolve_session_id(self, call_id: str) -> str:
         return self.leg_index.get(call_id, call_id)
 
+    def bind_controller(
+        self,
+        call_id: str,
+        *,
+        context: Any | None = None,
+        user_id: str = "",
+    ) -> CallSession:
+        """Bind one logical call to its initiating HA user and context.
+
+        The user identity is deliberately sticky for the whole call.  A later
+        browser reconnect may reclaim media only as that same user; it cannot
+        silently transfer a microphone or camera to another authenticated HA
+        session.  Internal automations still retain their original HA Context
+        so lifecycle events preserve trace/parent provenance.
+        """
+
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"unknown call_id {call_id!r}")
+        requested_user_id = str(
+            user_id or getattr(context, "user_id", "") or ""
+        ).strip()
+        current_user_id = str(
+            session.metadata.get("controller_user_id") or ""
+        ).strip()
+        if current_user_id and requested_user_id and current_user_id != requested_user_id:
+            raise ValueError(
+                f"call_id {session_id} is already controlled by another HA user"
+            )
+        changed = False
+        if requested_user_id and not current_user_id:
+            session.metadata["controller_user_id"] = requested_user_id
+            changed = True
+        if context is not None and session.metadata.get("ha_context") is None:
+            session.metadata["ha_context"] = context
+            changed = True
+        if changed:
+            session.revision += 1
+        return session
+
+    def ha_context(self, call_id: str) -> Any | None:
+        """Return the original HA Context for a call or one of its legs."""
+
+        session = self.sessions.get(
+            self.resolve_session_id(str(call_id or "").strip())
+        )
+        return session.metadata.get("ha_context") if session is not None else None
+
     def finish(self, call_id: str, *, reason: str = "", state: str = "idle") -> CallSession | None:
         session_id = self.resolve_session_id(call_id)
         session = self.sessions.get(session_id)
@@ -289,13 +339,17 @@ class CallRegistry:
         return session
 
     def pop(self, call_id: str) -> CallSession | None:
+        call_id = str(call_id or "").strip()
         session_id = self.resolve_session_id(call_id)
         session = self.sessions.pop(session_id, None)
+        event_context_ids = {call_id, session_id}
         if session is not None:
             for leg_id in list(session.legs):
+                event_context_ids.add(leg_id)
                 self.leg_index.pop(leg_id, None)
         self.leg_index.pop(call_id, None)
-        self.event_contexts.pop(session_id, None)
+        for context_id in event_context_ids:
+            self.event_contexts.pop(context_id, None)
         self.pending_invites.pop(session_id, None)
         self.video_parameter_sets.pop(session_id, None)
         self.video_parameter_sets.pop(call_id, None)

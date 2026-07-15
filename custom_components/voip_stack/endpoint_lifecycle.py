@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Coroutine
 from typing import Any
@@ -13,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from .call_registry import CallRegistry
 from .const import DOMAIN
 from .media_ports import release_media_reservation
+from .session_cleanup import async_cleanup_sip_runtime, async_wait_for_cleanup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +47,22 @@ def call_registry(hass: HomeAssistant) -> CallRegistry:
 
 
 async def async_stop_sip_endpoint(hass: HomeAssistant) -> None:
+    bucket = hass.data.setdefault(DOMAIN, {})
+    task = bucket.get("sip_endpoint_stop_task")
+    if not isinstance(task, asyncio.Task) or task.done():
+        task = asyncio.create_task(
+            _async_stop_sip_endpoint(hass),
+            name="voip-sip-endpoint-runtime-stop",
+        )
+        bucket["sip_endpoint_stop_task"] = task
+    try:
+        await async_wait_for_cleanup(task)
+    finally:
+        if task.done() and bucket.get("sip_endpoint_stop_task") is task:
+            bucket.pop("sip_endpoint_stop_task", None)
+
+
+async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
     registry = call_registry(hass)
     bucket = hass.data.get(DOMAIN, {})
     await cancel_runtime_tasks(hass)
@@ -54,9 +70,7 @@ async def async_stop_sip_endpoint(hass: HomeAssistant) -> None:
     bucket.pop("forward_tasks", None)
     bucket.pop("forward_claims", None)
     bucket.pop("call_deadlines", None)
-    endpoint = bucket.pop("sip_endpoint", None)
-    bucket.pop("sip_server", None)
-    bucket.pop("sip_tcp_server", None)
+    endpoint = bucket.get("sip_endpoint")
 
     if endpoint is not None:
         snapshot = endpoint.snapshot()
@@ -87,13 +101,10 @@ async def async_stop_sip_endpoint(hass: HomeAssistant) -> None:
             _LOGGER.debug("Ignoring SIP RTP relay stop error", exc_info=True)
 
     async def _stop_client(client) -> None:
-        try:
-            await client.terminate()
-        except Exception:
-            _LOGGER.debug("Ignoring SIP client terminate error", exc_info=True)
-        finally:
-            with contextlib.suppress(Exception):
-                await client.close()
+        await async_cleanup_sip_runtime(
+            client=client,
+            terminate_client=True,
+        )
 
     relays = {id(relay): relay for relay in registry.relays.values()}.values()
     clients = {id(client): client for client in registry.sip_clients.values()}.values()
@@ -111,4 +122,8 @@ async def async_stop_sip_endpoint(hass: HomeAssistant) -> None:
             await endpoint.stop()
         except Exception:
             _LOGGER.debug("Ignoring SIP endpoint stop error", exc_info=True)
+    if bucket.get("sip_endpoint") is endpoint:
+        bucket.pop("sip_endpoint", None)
+    bucket.pop("sip_server", None)
+    bucket.pop("sip_tcp_server", None)
     registry.clear_runtime()

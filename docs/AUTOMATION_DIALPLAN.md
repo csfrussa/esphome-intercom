@@ -178,9 +178,10 @@ normal no-answer forward.
   redirect media it does not own.
 - The current operation is an HA B2BUA redirect, not a SIP phone transfer.
 - Supported signaling includes INVITE, ACK, BYE, CANCEL, REGISTER, OPTIONS,
-  SIP INFO DTMF and RTP telephone-event.
-- REFER/NOTIFY transfer, complete SDP hold/resume, PRACK/100rel, UPDATE and
-  session timers are not currently implemented.
+  SIP INFO DTMF, RTP telephone-event and peer-initiated UPDATE on HA-owned
+  dialogs.
+- REFER/NOTIFY transfer, locally originated renegotiation, offerless re-INVITE
+  delayed offer/answer, PRACK/100rel and session timers are not implemented.
 - Legacy `voip_stack.call_event`, `voip_stack.route_request` and
   `voip_stack.dtmf` bus events remain for compatibility. New automations should
   prefer the entities above.

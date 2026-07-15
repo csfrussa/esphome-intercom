@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 import logging
 from .audio_format import AudioFormat
-from .sip_listener import InfoHandler, InviteHandler, RegisterHandler, SipTcpServer, SipUdpServer, TerminateHandler
+from .session_cleanup import async_wait_for_cleanup
+from .sip_listener import (
+    InfoHandler,
+    InviteHandler,
+    MediaUpdateHandler,
+    RegisterHandler,
+    SipTcpServer,
+    SipUdpServer,
+    TerminateHandler,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +61,7 @@ class SipEndpointManager:
         on_terminated: TerminateHandler | None = None,
         on_register: RegisterHandler | None = None,
         on_info: InfoHandler | None = None,
+        on_media_update: MediaUpdateHandler | None = None,
         udp_enabled: bool = True,
         tcp_enabled: bool = True,
         enable_video: bool = False,
@@ -67,6 +79,7 @@ class SipEndpointManager:
         self.on_terminated = on_terminated
         self.on_register = on_register
         self.on_info = on_info
+        self.on_media_update = on_media_update
         self.udp_enabled = bool(udp_enabled)
         self.tcp_enabled = bool(tcp_enabled)
         self.enable_video = bool(enable_video)
@@ -74,8 +87,31 @@ class SipEndpointManager:
         self.prefer_browser_video_send = bool(prefer_browser_video_send)
         self.udp_server: SipUdpServer | None = None
         self.tcp_server: SipTcpServer | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._start_task: asyncio.Task[bool] | None = None
+        self._stop_task: asyncio.Task[None] | None = None
+        self._stopping = False
+        self._stopped = False
 
     async def start(self) -> bool:
+        async with self._lifecycle_lock:
+            if self._stopping or self._stopped:
+                raise RuntimeError("SIP endpoint manager has already been stopped")
+            if self._start_task is None:
+                self._start_task = asyncio.create_task(
+                    self._start(),
+                    name=f"voip-sip-endpoint-start-{self.port}",
+                )
+            task = self._start_task
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await async_wait_for_cleanup(task)
+            raise
+
+    async def _start(self) -> bool:
         if not self.udp_enabled and not self.tcp_enabled:
             _LOGGER.error("Cannot start SIP endpoint manager: no signaling transport is enabled")
             return False
@@ -87,65 +123,102 @@ class SipEndpointManager:
 
         udp: SipUdpServer | None = None
         tcp: SipTcpServer | None = None
-        if self.udp_enabled:
-            udp = SipUdpServer(
-                host=self.host,
-                port=self.port,
-                local_ip=self.local_ip,
-                local_rtp_port=self.local_rtp_port,
-                supported_formats=self.supported_formats,
-                supported_send_formats=self.supported_send_formats,
-                supported_recv_formats=self.supported_recv_formats,
-                on_invite=self.on_invite,
-                on_terminated=self.on_terminated,
-                on_register=self.on_register,
-                on_info=self.on_info,
-                enable_video=self.enable_video,
-                enable_video_transcoding=self.enable_video_transcoding,
-                prefer_browser_video_send=self.prefer_browser_video_send,
-            )
-            if not await udp.start():
-                return False
+        published = False
+        try:
+            if self.udp_enabled:
+                udp = SipUdpServer(
+                    host=self.host,
+                    port=self.port,
+                    local_ip=self.local_ip,
+                    local_rtp_port=self.local_rtp_port,
+                    supported_formats=self.supported_formats,
+                    supported_send_formats=self.supported_send_formats,
+                    supported_recv_formats=self.supported_recv_formats,
+                    on_invite=self.on_invite,
+                    on_terminated=self.on_terminated,
+                    on_register=self.on_register,
+                    on_info=self.on_info,
+                    on_media_update=self.on_media_update,
+                    enable_video=self.enable_video,
+                    enable_video_transcoding=self.enable_video_transcoding,
+                    prefer_browser_video_send=self.prefer_browser_video_send,
+                )
+                if not await udp.start():
+                    return False
 
-        if self.tcp_enabled:
-            tcp = SipTcpServer(
-                host=self.host,
-                port=self.port,
-                local_ip=self.local_ip,
-                local_rtp_port=self.local_rtp_port,
-                supported_formats=self.supported_formats,
-                supported_send_formats=self.supported_send_formats,
-                supported_recv_formats=self.supported_recv_formats,
-                on_invite=self.on_invite,
-                on_terminated=self.on_terminated,
-                on_register=self.on_register,
-                on_info=self.on_info,
-                enable_video=self.enable_video,
-                enable_video_transcoding=self.enable_video_transcoding,
-                prefer_browser_video_send=self.prefer_browser_video_send,
-            )
-            if not await tcp.start():
-                if udp is not None:
-                    await udp.stop()
-                return False
+            if self.tcp_enabled:
+                tcp = SipTcpServer(
+                    host=self.host,
+                    port=self.port,
+                    local_ip=self.local_ip,
+                    local_rtp_port=self.local_rtp_port,
+                    supported_formats=self.supported_formats,
+                    supported_send_formats=self.supported_send_formats,
+                    supported_recv_formats=self.supported_recv_formats,
+                    on_invite=self.on_invite,
+                    on_terminated=self.on_terminated,
+                    on_register=self.on_register,
+                    on_info=self.on_info,
+                    on_media_update=self.on_media_update,
+                    enable_video=self.enable_video,
+                    enable_video_transcoding=self.enable_video_transcoding,
+                    prefer_browser_video_send=self.prefer_browser_video_send,
+                )
+                if not await tcp.start():
+                    return False
 
-        self.udp_server = udp
-        self.tcp_server = tcp
-        transports = "+".join(
-            name
-            for name, enabled in (("UDP", self.udp_enabled), ("TCP", self.tcp_enabled))
-            if enabled
-        )
-        _LOGGER.info("SIP endpoint manager ready on %s/%s", transports, self.port)
-        return True
+            if self._stopping or self._stopped:
+                return False
+            self.udp_server = udp
+            self.tcp_server = tcp
+            published = True
+            transports = "+".join(
+                name
+                for name, enabled in (
+                    ("UDP", self.udp_enabled),
+                    ("TCP", self.tcp_enabled),
+                )
+                if enabled
+            )
+            _LOGGER.info("SIP endpoint manager ready on %s/%s", transports, self.port)
+            return True
+        finally:
+            if not published:
+                cleanup = asyncio.gather(
+                    *(server.stop() for server in (udp, tcp) if server is not None),
+                    return_exceptions=True,
+                )
+                with contextlib.suppress(asyncio.CancelledError):
+                    await async_wait_for_cleanup(cleanup)
 
     async def stop(self) -> None:
-        if self.udp_server is not None:
-            await self.udp_server.stop()
-            self.udp_server = None
-        if self.tcp_server is not None:
-            await self.tcp_server.stop()
-            self.tcp_server = None
+        async with self._lifecycle_lock:
+            self._stopping = True
+            if self._stop_task is None:
+                self._stop_task = asyncio.create_task(
+                    self._stop(),
+                    name=f"voip-sip-endpoint-stop-{self.port}",
+                )
+            task = self._stop_task
+        await async_wait_for_cleanup(task)
+
+    async def _stop(self) -> None:
+        start_task = self._start_task
+        if start_task is not None and not start_task.done():
+            start_task.cancel()
+            await asyncio.gather(start_task, return_exceptions=True)
+        udp = self.udp_server
+        tcp = self.tcp_server
+        self.udp_server = None
+        self.tcp_server = None
+        try:
+            if udp is not None or tcp is not None:
+                await asyncio.gather(
+                    *(server.stop() for server in (udp, tcp) if server is not None),
+                    return_exceptions=True,
+                )
+        finally:
+            self._stopped = True
 
     @property
     def servers(self) -> list[object]:

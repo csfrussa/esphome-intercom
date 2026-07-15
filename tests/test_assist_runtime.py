@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import sys
 import types
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,18 +22,14 @@ def _install_ha_stubs() -> None:
         package = types.ModuleType("homeassistant")
         package.__path__ = []
         sys.modules["homeassistant"] = package
-    if "homeassistant.core" not in sys.modules:
-        core = types.ModuleType("homeassistant.core")
-
-        class Context:
-            pass
-
-        class HomeAssistant:
-            pass
-
-        core.Context = Context
-        core.HomeAssistant = HomeAssistant
-        sys.modules["homeassistant.core"] = core
+    core = sys.modules.setdefault(
+        "homeassistant.core",
+        types.ModuleType("homeassistant.core"),
+    )
+    if not hasattr(core, "Context"):
+        core.Context = type("Context", (), {})
+    if not hasattr(core, "HomeAssistant"):
+        core.HomeAssistant = type("HomeAssistant", (), {})
 
 
 def _load(name: str):
@@ -95,13 +93,13 @@ def _invite() -> object:
     )
 
 
-def _session() -> object:
+def _session(invite=None) -> object:
     async def complete(_reason: str) -> None:
         return None
 
     return assist_runtime.AssistMediaSession(
         _Hass(),
-        invite=_invite(),
+        invite=invite or _invite(),
         local_rtp_port=41000,
         reservation=_Reservation(),
         pipeline_id="preferred",
@@ -127,6 +125,174 @@ def test_rtp_is_normalized_to_assist_pcm() -> None:
     assert session.rx_queue.get_nowait() == pcm
     assert session.remote_rtp_port == 45000
     assert session.counters["rtp_rx"] == 1
+
+
+def test_legacy_connection_hold_suppresses_only_assist_rtp_tx() -> None:
+    async def run() -> None:
+        invite = replace(
+            _invite(),
+            local_audio_direction="recvonly",
+            remote_audio_connection_held=True,
+        )
+        session = _session(invite)
+        sent: list[tuple[bytes, tuple[str, int]]] = []
+        session.transport = types.SimpleNamespace(
+            sendto=lambda packet, addr: sent.append((packet, addr))
+        )
+
+        # RFC 3264 legacy c=0 hold removes only our send permission.  The
+        # remote endpoint may still send media, so the receive path stays on.
+        session._accepting_input = True
+        pcm = bytes(assist_runtime.ASSIST_PCM_FORMAT.nominal_frame_bytes)
+        packet = rtp.build_packet(rtp.RtpPacket(96, 1, 2, 3, pcm))
+        session.handle_rtp(packet, ("192.0.2.20", 40000))
+        assert session.rx_queue.get_nowait() == pcm
+
+        task = asyncio.create_task(session._send_loop())
+        await asyncio.sleep(0.03)
+        session.closed.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        assert sent == []
+        assert session.counters["rtp_tx"] == 0
+        assert session.counters["tx_suppressed"] > 0
+        assert session.counters["drop_connection_hold"] > 0
+        assert session.snapshot()["remote_connection_held"] is True
+
+    asyncio.run(run())
+
+
+def test_assist_respects_sendonly_receive_direction() -> None:
+    invite = replace(_invite(), local_audio_direction="sendonly")
+    session = _session(invite)
+    packet = rtp.build_packet(rtp.RtpPacket(96, 1, 2, 3, bytes(640)))
+
+    session.handle_rtp(packet, ("192.0.2.20", 40000))
+
+    assert session.rx_queue.empty()
+    assert session.counters["drop_direction_rx"] == 1
+
+
+def test_stop_cancellation_still_closes_transport_and_releases_port() -> None:
+    async def run() -> None:
+        session = _session()
+        transport = types.SimpleNamespace(closed=False)
+
+        def close() -> None:
+            transport.closed = True
+
+        transport.close = close
+        session.transport = transport
+        child_cancelled = asyncio.Event()
+        release_child = asyncio.Event()
+
+        async def child() -> None:
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                child_cancelled.set()
+                await release_child.wait()
+
+        session._tx_task = asyncio.create_task(child())
+        stop_task = asyncio.create_task(session.stop())
+        await asyncio.wait_for(child_cancelled.wait(), timeout=1)
+        stop_task.cancel()
+        try:
+            await stop_task
+        except asyncio.CancelledError:
+            pass
+
+        assert transport.closed is True
+        assert session.transport is None
+        assert session.reservation.released is True
+        assert session._cleanup_done.is_set()
+
+        release_child.set()
+        await session.stop()
+
+    asyncio.run(run())
+
+
+def test_stop_racing_start_cannot_publish_transport_or_tasks() -> None:
+    async def run() -> None:
+        session = _session()
+        entered = asyncio.Event()
+        release_endpoint = asyncio.Event()
+        transport = types.SimpleNamespace(closed=False)
+        transport.close = lambda: setattr(transport, "closed", True)
+
+        async def create_endpoint(*_args, **_kwargs):
+            entered.set()
+            await release_endpoint.wait()
+            return transport, object()
+
+        loop = asyncio.get_running_loop()
+        with mock.patch.object(
+            loop,
+            "create_datagram_endpoint",
+            new=create_endpoint,
+        ):
+            start_task = asyncio.create_task(session.start())
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            await asyncio.wait_for(session.stop(), timeout=1)
+            assert session.reservation.released is True
+            assert session._cleanup_done.is_set()
+            release_endpoint.set()
+            try:
+                await start_task
+            except RuntimeError as err:
+                assert "closed while starting" in str(err)
+            else:
+                raise AssertionError("start unexpectedly survived stop")
+
+        assert transport.closed is True
+        assert session.transport is None
+        assert session._tx_task is None
+        assert session._pipeline_task is None
+
+    asyncio.run(run())
+
+
+def test_concurrent_start_creates_one_transport_and_task_pair() -> None:
+    async def run() -> None:
+        session = _session()
+        calls = 0
+        entered = asyncio.Event()
+        release_endpoint = asyncio.Event()
+        transport = types.SimpleNamespace(closed=False, sendto=lambda *_args: None)
+        transport.close = lambda: setattr(transport, "closed", True)
+
+        async def create_endpoint(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release_endpoint.wait()
+            return transport, object()
+
+        async def idle() -> None:
+            await session.closed.wait()
+
+        session._send_loop = idle
+        session._pipeline_loop = idle
+        loop = asyncio.get_running_loop()
+        with mock.patch.object(
+            loop,
+            "create_datagram_endpoint",
+            new=create_endpoint,
+        ):
+            first = asyncio.create_task(session.start())
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            second = asyncio.create_task(session.start())
+            release_endpoint.set()
+            await asyncio.gather(first, second)
+
+        assert calls == 1
+        assert session.transport is transport
+        assert session._tx_task is not None
+        assert session._pipeline_task is not None
+        await session.stop()
+
+    asyncio.run(run())
 
 
 def test_tts_stream_accepts_arbitrary_provider_chunk_boundaries() -> None:

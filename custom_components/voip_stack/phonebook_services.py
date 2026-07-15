@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import logging
+from typing import Any
 
 from homeassistant.core import ServiceCall
 
@@ -11,14 +12,13 @@ from .const import DOMAIN
 from .phonebook_runtime import push_roster_json_to_esps
 from .roster import RosterEntry, parse_roster_json
 from .store import manual_roster_entries, store_manual_roster_entries
-from .websocket_api import _fire_call_event
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def build_phonebook_service_handlers(
     refresh_and_push_phonebook: Callable[[object], Awaitable[None]],
-) -> dict[str, Callable[[ServiceCall], Awaitable[None]]]:
+) -> dict[str, Callable[[ServiceCall], Awaitable[Any]]]:
     """Build phonebook service handlers with refresh behavior injected."""
 
     async def add_contact(call: ServiceCall) -> None:
@@ -105,7 +105,7 @@ def build_phonebook_service_handlers(
         await refresh_and_push_phonebook(hass)
         _LOGGER.info("Phonebook manual contacts cleared")
 
-    async def export_phonebook(call: ServiceCall) -> None:
+    async def export_phonebook(call: ServiceCall) -> dict[str, str]:
         hass = call.hass
         sensor = hass.data.get(DOMAIN, {}).get("phonebook_sensor")
         if sensor is not None:
@@ -113,16 +113,8 @@ def build_phonebook_service_handlers(
             roster_json = sensor.extra_state_attributes.get("roster_json", "")
         else:
             roster_json = ""
-        _fire_call_event(
-            hass,
-            {
-                "state": "export_phonebook",
-                "roster_json": roster_json,
-                "call_id": "",
-            },
-            "phonebook",
-        )
         _LOGGER.info("Phonebook exported (%d bytes)", len(roster_json))
+        return {"roster_json": str(roster_json)}
 
     async def push_phonebook(call: ServiceCall) -> None:
         hass = call.hass

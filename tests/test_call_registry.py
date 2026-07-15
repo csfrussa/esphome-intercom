@@ -82,6 +82,40 @@ class CallRegistryEventContextTest(unittest.TestCase):
             registry.event_context("source"),
         )
 
+    def test_event_fields_for_leg_alias_advances_canonical_context(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.register_bridge(
+            source_call_id="source",
+            dest_call_id="destination",
+            client=object(),
+            state="ringing",
+        )
+        registry.event_fields("source", "ringing")
+
+        fields = registry.event_fields("destination", "in_call")
+
+        self.assertEqual(fields["sequence"], 2)
+        self.assertEqual(fields["previous_state"], "ringing")
+        self.assertEqual(registry.event_context("source").state, "in_call")
+        self.assertNotIn("destination", registry.event_contexts)
+
+    def test_pop_by_leg_alias_removes_alias_event_context(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.event_fields("destination", "queued")
+        registry.register_bridge(
+            source_call_id="source",
+            dest_call_id="destination",
+            client=object(),
+            state="ringing",
+        )
+        registry.event_fields("source", "ringing")
+        self.assertIn("destination", registry.event_contexts)
+
+        popped = registry.pop("destination")
+
+        self.assertIsNotNone(popped)
+        self.assertEqual(registry.event_contexts, {})
+
     def test_revision_advances_for_owner_and_destination_without_state_change(self) -> None:
         registry = call_registry.CallRegistry()
         session = registry.upsert(
@@ -206,6 +240,43 @@ class CallRegistryEventContextTest(unittest.TestCase):
         self.assertNotIn("call-1", registry.event_contexts)
         self.assertNotIn("call-1", registry.pending_invites)
         self.assertNotIn("call-1", registry.pending_routes)
+
+    def test_controller_identity_is_sticky_and_preserves_first_ha_context(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert("call-1", state="calling", owner="ha_softphone")
+        first_context = types.SimpleNamespace(user_id="user-a", id="context-a")
+        duplicate_context = types.SimpleNamespace(user_id="user-a", id="context-b")
+
+        session = registry.bind_controller("call-1", context=first_context)
+        duplicate = registry.bind_controller("call-1", context=duplicate_context)
+
+        self.assertIs(session, duplicate)
+        self.assertEqual(session.metadata["controller_user_id"], "user-a")
+        self.assertIs(session.metadata["ha_context"], first_context)
+
+    def test_controller_identity_cannot_be_reassigned_to_another_user(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert("call-1", state="ringing", owner="ha_softphone")
+        registry.bind_controller("call-1", user_id="user-a")
+
+        with self.assertRaisesRegex(ValueError, "already controlled"):
+            registry.bind_controller("call-1", user_id="user-b")
+
+        self.assertEqual(
+            registry.sessions["call-1"].metadata["controller_user_id"],
+            "user-a",
+        )
+
+    def test_internal_context_survives_later_admin_media_binding(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert("call-1", state="in_call", owner="ha_softphone")
+        automation_context = types.SimpleNamespace(user_id=None, id="automation")
+
+        registry.bind_controller("call-1", context=automation_context)
+        session = registry.bind_controller("call-1", user_id="admin")
+
+        self.assertEqual(session.metadata["controller_user_id"], "admin")
+        self.assertIs(session.metadata["ha_context"], automation_context)
 
 
 class AutomationEventTypeTest(unittest.TestCase):

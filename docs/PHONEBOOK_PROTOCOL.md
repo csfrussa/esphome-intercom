@@ -153,8 +153,8 @@ Central roster services:
 - `voip_stack.clear_contacts`: clear manual central contacts.
 - `voip_stack.push_phonebook`: push the current roster immediately to
   online ESP devices.
-- `voip_stack.export_phonebook`: emit the current roster as an HA event for
-  diagnostics/backup.
+- `voip_stack.export_phonebook`: return the current roster privately in the
+  administrator-only service response for diagnostics/backup.
 
 ESPHome also exposes native API actions such as
 `esphome.<slug>_add_contact`, `esphome.<slug>_remove_contact`,

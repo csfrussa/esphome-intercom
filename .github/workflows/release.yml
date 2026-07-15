@@ -1,0 +1,55 @@
+name: Build HACS release asset
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to update
+        required: true
+        type: string
+      replace_existing:
+        description: Replace an existing voip_stack.zip asset
+        required: true
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: hacs-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.2"
+      - name: Build deterministic HACS archive
+        run: python scripts/build_hacs_zip.py
+      - name: Verify archive integrity
+        run: |
+          python -m zipfile -t voip_stack.zip
+          sha256sum voip_stack.zip
+      - name: Upload new release asset
+        if: ${{ github.event_name == 'release' || !inputs.replace_existing }}
+        run: gh release upload "$RELEASE_TAG" voip_stack.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Replace existing release asset
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.replace_existing }}
+        run: gh release upload "$RELEASE_TAG" voip_stack.zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

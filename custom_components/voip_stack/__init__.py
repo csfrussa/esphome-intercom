@@ -65,17 +65,18 @@ from .fsm import (
     sip_terminal_reason as _sip_terminal_reason,
 )
 from .media_ports import (
-    RtpPortReservation,
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
-    bind_sip_rtp_socket,
     release_media_reservation as _release_media_reservation,
+    reserve_sip_video_media,
 )
 from .session_cleanup import async_cleanup_sip_runtime
 from .audio_format import HA_TRUNK_AUDIO_FORMATS
+from .authorization import async_require_service_admin
 from .peer import Peer
 from .phonebook_runtime import push_roster_json_to_esps as _push_roster_json_to_esps
 from .router import (
     RouteAction,
+    RouteReason,
     ha_uri_for,
     resolve_ha_router,
 )
@@ -619,7 +620,25 @@ async def _track_outbound_sip_client(
             )
             final = "error"
         public_final = _sip_public_state(final)
+        if registry.sip_clients.get(client.dialog_ids.call_id) is not client:
+            # Hangup/replacement already revoked this watcher.  A queued final
+            # response must never resurrect a detached call in the HA store.
+            return
         if public_final == CallState.IN_CALL.value and client.dialog is not None:
+            registry.upsert(
+                client.dialog_ids.call_id,
+                state=CallState.IN_CALL.value,
+                owner="ha_softphone",
+                caller=_ha_peer_name(hass),
+                callee=target,
+                route_kind="direct",
+            )
+            registry.add_leg(
+                client.dialog_ids.call_id,
+                client.dialog_ids.call_id,
+                role="ha_softphone",
+                state=CallState.IN_CALL.value,
+            )
             _set_ha_softphone_call_state(
                 hass,
                 CallState.IN_CALL.value,
@@ -633,6 +652,8 @@ async def _track_outbound_sip_client(
                 selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
                 selected_tx_rtp_format=client.dialog.send_format.wire_token(),
                 selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
+                audio_direction=client.dialog.local_audio_direction,
+                audio_connection_held=client.dialog.remote_audio_connection_held,
                 video_active=bool(
                     client.dialog.video_format is not None
                     and client.dialog.local_video_direction != "inactive"
@@ -640,6 +661,16 @@ async def _track_outbound_sip_client(
                 video_format=(
                     client.dialog.video_format.wire_token()
                     if client.dialog.video_format is not None
+                    else ""
+                ),
+                video_send_format=(
+                    client.dialog.send_video_format.wire_token()
+                    if client.dialog.send_video_format is not None
+                    else ""
+                ),
+                video_receive_format=(
+                    client.dialog.recv_video_format.wire_token()
+                    if client.dialog.recv_video_format is not None
                     else ""
                 ),
                 video_direction=client.dialog.local_video_direction,
@@ -728,6 +759,17 @@ async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
             registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
 
 
+def _bind_service_call_controller(registry, call_id: str, call: ServiceCall) -> None:
+    """Persist the initiating HA Context before publishing call events."""
+
+    from homeassistant.exceptions import ServiceValidationError
+
+    try:
+        registry.bind_controller(call_id, context=getattr(call, "context", None))
+    except ValueError as err:
+        raise ServiceValidationError(str(err)) from err
+
+
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
     """Remove stale VoIP devices."""
     from datetime import datetime, timedelta, timezone
@@ -777,6 +819,9 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     call_id = str(call.data.get("call_id") or "").strip()
     if not call_id:
         call_id = _single_pending_route_call_id(hass)
+    registry = _call_registry(hass)
+    if call_id and registry.resolve_session_id(call_id) in registry.sessions:
+        _bind_service_call_controller(registry, call_id, call)
     bucket = hass.data.setdefault(DOMAIN, {})
     forward_task = bucket.get("forward_tasks", {}).get(call_id)
     forward_claimed = call_id in bucket.get("forward_claims", set())
@@ -787,7 +832,6 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
         return
-    registry = _call_registry(hass)
     if call_id.startswith("conference:"):
         room_name = call_id.split(":", 1)[1]
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
@@ -807,6 +851,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             callee=_ha_peer_name(hass),
             route_kind="conference",
         )
+        _bind_service_call_controller(registry, call_id, call)
         registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
         _set_ha_softphone_call_state(
             hass,
@@ -828,6 +873,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     pending = registry.pending_invites
     if not call_id and len(pending) == 1:
         call_id = next(iter(pending))
+        _bind_service_call_controller(registry, call_id, call)
     invite = pending.pop(call_id, None) if call_id else None
     if invite is None:
         _LOGGER.warning("sip_answer: no pending SIP call %s", call_id or "(current)")
@@ -843,19 +889,22 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     local_rtp_port = int((preanswered or {}).get("local_rtp_port") or 0)
     local_video_rtp_port = 0
     video_rtp_socket = None
+    video_rtcp_socket = None
     media_reservation = (preanswered or {}).get("rtp_reservation")
-    # Negotiate the browser-camera direction whenever the integration allows
-    # it.  The per-browser Send Camera choice controls capture/transmission in
-    # the frontend; coupling SDP to that transient choice makes an incoming
-    # answer irreversibly recvonly before the browser media path can attach.
+    # Camera transmission is opt-in for each answer.  The integration option
+    # is the administrator-level capability gate; ``send_video`` is the
+    # browser/user choice for this dialog.  A receive-only answer can still
+    # display the remote stream without advertising media that the browser did
+    # not authorize HA to send.
     camera_send_enabled = bool(
         _get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)
-    )
+    ) and bool(call.data.get("send_video", False))
     video_direction = (
         constrained_video_direction(
             invite.video_format.direction,
             allow_send=camera_send_enabled
-            and browser_video_send_supported(invite.video_format),
+            and browser_video_send_supported(invite.video_format)
+            and not invite.remote_video_connection_held,
         )
         if invite.video_format is not None
         else "inactive"
@@ -865,13 +914,17 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     else:
         local_ip = await _ha_advertise_host(hass)
         if invite.video_format is not None:
-            media_reservation = RtpPortReservation.allocate(hass)
-            local_rtp_port, local_video_rtp_port = media_reservation.ports
             try:
-                video_rtp_socket = bind_sip_rtp_socket(local_video_rtp_port)
-            except OSError as err:
-                _LOGGER.warning("SIP video socket unavailable, answering audio-only: %s", err)
-                media_reservation.release()
+                (
+                    media_reservation,
+                    video_rtp_socket,
+                    video_rtcp_socket,
+                ) = reserve_sip_video_media(hass)
+                local_rtp_port, local_video_rtp_port = media_reservation.ports
+            except (OSError, RuntimeError) as err:
+                _LOGGER.warning(
+                    "SIP video socket unavailable, answering audio-only: %s", err
+                )
                 media_reservation = None
                 local_rtp_port = _allocate_sip_rtp_port(hass)
                 local_video_rtp_port = 0
@@ -885,12 +938,14 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             invite.recv_format,
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
-            video_format=invite.video_format,
+            video_format=invite.answer_video_format,
             video_direction=video_direction,
         )
         if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
             if video_rtp_socket is not None:
                 video_rtp_socket.close()
+            if video_rtcp_socket is not None:
+                video_rtcp_socket.close()
             if media_reservation is not None and hasattr(media_reservation, "release"):
                 media_reservation.release()
             _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
@@ -901,7 +956,13 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         "local_rtp_port": local_rtp_port,
         "local_video_rtp_port": local_video_rtp_port,
         "video_direction": video_direction,
+        "camera_send_authorized": bool(
+            camera_send_enabled
+            and invite.video_format is not None
+            and browser_video_send_supported(invite.video_format)
+        ),
         "video_rtp_socket": video_rtp_socket,
+        "video_rtcp_socket": video_rtcp_socket,
         "rtp_reservation": media_reservation,
     }
     registry.upsert(
@@ -930,12 +991,24 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         selected_rx_format=invite.recv_format.audio_format.wire_token(),
         selected_tx_rtp_format=invite.send_format.wire_token(),
         selected_rx_rtp_format=invite.recv_format.wire_token(),
+        audio_direction=invite.local_audio_direction,
+        audio_connection_held=invite.remote_audio_connection_held,
         video_active=bool(
             invite.video_format is not None
             and local_video_rtp_port
             and video_direction != "inactive"
         ),
         video_format=(invite.video_format.wire_token() if invite.video_format else ""),
+        video_send_format=(
+            invite.send_video_format.wire_token()
+            if invite.send_video_format is not None
+            else ""
+        ),
+        video_receive_format=(
+            invite.recv_video_format.wire_token()
+            if invite.recv_video_format is not None
+            else ""
+        ),
         video_direction=(
             video_direction
             if invite.video_format is not None and local_video_rtp_port
@@ -1328,6 +1401,13 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
     contacts = parse_roster_json(roster_json) if roster_json else []
     route = resolve_ha_router(target, contacts, trunk_ready=trunk_ready)
+    if route.reason is RouteReason.DIRECT_URI:
+        # Entity CONTROL permits ordinary phone operation, but an ad-hoc SIP
+        # URI also chooses an arbitrary network host/port.  Keep that SSRF and
+        # port-probing capability behind HA administrator authentication;
+        # roster contacts, registered endpoints and trunk numbers are still
+        # available to normal controllers.
+        await async_require_service_admin(hass, call)
     display_target = route.entry.display_name if route.entry is not None else target
     if (force_ha_bridge or bool(call.data.get("ha_bridge", False))) and route.action not in {
         RouteAction.ANSWER_HA,
@@ -1352,7 +1432,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             if start_ring_group is None:
                 raise ServiceValidationError(f"{target} is not available yet")
             await _async_prepare_ha_outbound_call(hass)
-            await start_ring_group(route.entry)
+            await start_ring_group(
+                route.entry,
+                context=getattr(call, "context", None),
+            )
             _LOGGER.info("HA softphone started ring group=%s", route.entry.display_name)
             return
         if group_type == "conference":
@@ -1378,6 +1461,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 callee=room_name,
                 route_kind="conference",
             )
+            _bind_service_call_controller(registry, call_id, call)
             registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
             _set_ha_softphone_call_state(
                 hass,
@@ -1446,26 +1530,39 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     video_enabled = bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)) and (
         use_trunk or not native_audio_endpoint
     )
-    video_reservation = RtpPortReservation.allocate(hass) if video_enabled else None
+    video_reservation = None
     video_rtp_socket = None
-    if video_reservation is not None:
-        local_rtp_port, local_video_rtp_port = video_reservation.ports
+    video_rtcp_socket = None
+    if video_enabled:
         try:
-            video_rtp_socket = bind_sip_rtp_socket(local_video_rtp_port)
-        except OSError as err:
-            _LOGGER.warning("SIP video socket unavailable, originating audio-only: %s", err)
-            video_reservation.release()
+            (
+                video_reservation,
+                video_rtp_socket,
+                video_rtcp_socket,
+            ) = reserve_sip_video_media(hass)
+            local_rtp_port, local_video_rtp_port = video_reservation.ports
+        except (OSError, RuntimeError) as err:
+            _LOGGER.warning(
+                "SIP video socket unavailable, originating audio-only: %s", err
+            )
             video_reservation = None
             local_rtp_port = _allocate_sip_rtp_port(hass)
             local_video_rtp_port = 0
     else:
         local_rtp_port = _allocate_sip_rtp_port(hass)
         local_video_rtp_port = 0
-    from .sdp import DEFAULT_VIDEO_FORMATS, browser_video_send_supported
+    from .sdp import (
+        DEFAULT_VIDEO_FORMATS,
+        browser_video_send_supported,
+        video_formats_renegotiation_compatible,
+    )
 
-    # Offer the permitted direction independently from the browser-local
-    # camera toggle.  The frontend still owns permission and actual capture.
-    camera_send_enabled = bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False))
+    # Camera transmission is opt-in for each call.  Keep offering a receive
+    # path when it is off, but never advertise send capability solely because
+    # the administrator enabled the experimental camera feature globally.
+    camera_send_enabled = bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False)) and bool(
+        call.data.get("send_video", False)
+    )
     offered_video_formats = (
         tuple(item for item in DEFAULT_VIDEO_FORMATS if browser_video_send_supported(item))
         if camera_send_enabled
@@ -1494,7 +1591,112 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         video_direction=("sendrecv" if camera_send_enabled else "recvonly"),
         media_reservation=video_reservation,
         video_rtp_socket=video_rtp_socket,
+        video_rtcp_socket=video_rtcp_socket,
     )
+
+    async def _prepare_softphone_media_update(previous, updated, method):
+        """Stage one peer re-offer for the live HA browser media owner."""
+
+        call_id = client.dialog_ids.call_id
+        bucket = hass.data.setdefault(DOMAIN, {})
+        audio_session = bucket.setdefault("active_audio_sessions", {}).get(call_id)
+        previous_video = previous.video_format
+        updated_video = updated.video_format
+        if (previous_video is None) != (updated_video is None):
+            return None
+        video_session = bucket.setdefault("active_video_sessions", {}).get(call_id)
+        if previous_video is not None and updated_video is not None:
+            if not (
+                video_formats_renegotiation_compatible(
+                    previous_video,
+                    updated_video,
+                )
+                and video_formats_renegotiation_compatible(
+                    previous.recv_video_format,
+                    updated.recv_video_format,
+                )
+            ):
+                return None
+
+        async def _commit() -> None:
+            if audio_session is not None:
+                audio_session.send_format = updated.send_format
+                audio_session.recv_format = updated.recv_format
+                audio_session.remote_rtp_host = updated.remote_rtp_host
+                audio_session.remote_rtp_port = int(updated.remote_rtp_port)
+                audio_session.local_audio_direction = updated.local_audio_direction
+                audio_session.remote_audio_connection_held = bool(
+                    updated.remote_audio_connection_held
+                )
+                audio_session.media_generation += 1
+                audio_session.update_event.set()
+            if video_session is not None and updated_video is not None:
+                registry.video_parameter_sets.pop(call_id, None)
+                video_session.remote_rtp_host = updated.remote_video_rtp_host
+                video_session.remote_rtp_port = int(updated.remote_video_rtp_port)
+                video_session.remote_rtcp_host = (
+                    updated.remote_video_rtcp_host
+                    or updated.remote_video_rtp_host
+                )
+                video_session.remote_rtcp_port = int(
+                    updated.remote_video_rtcp_port
+                    or int(updated.remote_video_rtp_port) + 1
+                )
+                video_session.remote_rtcp_mux = bool(
+                    updated.remote_video_rtcp_mux
+                )
+                video_session.remote_video_payload_types = tuple(
+                    updated.remote_video_payload_types
+                )
+                video_session.video_format = updated_video
+                video_session.local_video_format = updated.recv_video_format
+                video_session.local_direction = updated.local_video_direction
+                video_session.remote_connection_held = bool(
+                    updated.remote_video_connection_held
+                )
+                video_session.media_generation += 1
+                video_session.update_event.set()
+            store = _ha_softphone_store(hass)
+            if str(store.get("call_id") or "") == call_id:
+                store.update(
+                    {
+                        "audio_direction": updated.local_audio_direction,
+                        "audio_connection_held": updated.remote_audio_connection_held,
+                        "video_active": bool(
+                            updated_video is not None
+                            and updated.local_video_direction != "inactive"
+                        ),
+                        "video_format": (
+                            updated_video.wire_token() if updated_video else ""
+                        ),
+                        "video_send_format": (
+                            updated.send_video_format.wire_token()
+                            if updated.send_video_format is not None
+                            else ""
+                        ),
+                        "video_receive_format": (
+                            updated.recv_video_format.wire_token()
+                            if updated.recv_video_format is not None
+                            else ""
+                        ),
+                        "video_direction": updated.local_video_direction,
+                        "video_connection_held": updated.remote_video_connection_held,
+                        "last_sip_event": method,
+                        "media_renegotiations": int(
+                            store.get("media_renegotiations") or 0
+                        )
+                        + 1,
+                    }
+                )
+                _fire_call_event(
+                    hass,
+                    dict(store, device_id=HA_SOFTPHONE_DEVICE_ID),
+                    "session",
+                )
+
+        return _commit
+
+    client.on_media_update = _prepare_softphone_media_update
     if not use_trunk:
         _enable_reused_sip_tcp_connection(
             hass,
@@ -1503,6 +1705,17 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             target=target,
             default_sip_port=int(cfg["sip_port"]),
         )
+    registry = _call_registry(hass)
+    registry.upsert(
+        client.dialog_ids.call_id,
+        state=CallState.CALLING.value,
+        owner="ha_softphone",
+        caller=_ha_peer_name(hass),
+        callee=display_target,
+        route_kind="direct",
+        direction="outgoing",
+    )
+    _bind_service_call_controller(registry, client.dialog_ids.call_id, call)
     _set_ha_softphone_call_state(
         hass,
         CallState.CALLING.value,
@@ -1516,7 +1729,6 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         last_sip_event="INVITE",
         sip_uri=route_uri,
     )
-    registry = _call_registry(hass)
     registry.sip_clients[client.dialog_ids.call_id] = client
     result = await client.invite(
         target=uri.user,
@@ -1565,11 +1777,23 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             selected_rx_format=client.dialog.recv_format.audio_format.wire_token(),
             selected_tx_rtp_format=client.dialog.send_format.wire_token(),
             selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
+            audio_direction=client.dialog.local_audio_direction,
+            audio_connection_held=client.dialog.remote_audio_connection_held,
             video_active=bool(
                 client.dialog.video_format is not None
                 and client.dialog.local_video_direction != "inactive"
             ),
             video_format=(client.dialog.video_format.wire_token() if client.dialog.video_format else ""),
+            video_send_format=(
+                client.dialog.send_video_format.wire_token()
+                if client.dialog.send_video_format is not None
+                else ""
+            ),
+            video_receive_format=(
+                client.dialog.recv_video_format.wire_token()
+                if client.dialog.recv_video_format is not None
+                else ""
+            ),
             video_direction=client.dialog.local_video_direction,
             sip_status_code=200,
             last_sip_event="SIP_RESPONSE",
@@ -1710,7 +1934,11 @@ async def _async_apply_assist_intents(hass: HomeAssistant, enabled: bool) -> Non
 
 async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -> None:
     """Shared setup logic for both YAML and config entry."""
-    if hass.data.get(DOMAIN, {}).get("initialized"):
+    bucket = hass.data.setdefault(DOMAIN, {})
+    # Views survive config-entry reloads; reopen media ownership only after a
+    # new setup begins.
+    bucket.setdefault("media_shutdown", asyncio.Event()).clear()
+    if bucket.get("initialized"):
         # Services, websocket commands and HTTP views stay registered across a
         # config-entry reload. The event listeners are explicitly removed by
         # unload, so restore just those idempotent subscriptions here.
@@ -1722,8 +1950,7 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
             async_register_video_ws_view(hass)
         return
 
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN]["initialized"] = True
+    bucket["initialized"] = True
 
     await _async_load_ha_softphone_store(hass)
     async_register_websocket_api(hass)

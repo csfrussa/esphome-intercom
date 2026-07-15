@@ -64,8 +64,9 @@ parameters.
 
 For inbound trunk video, use **Direct to default destination** and route the
 call to the HA softphone. The DTMF extension-selection mode currently
-pre-answers the trunk as an audio call to collect digits; because established
-dialog video renegotiation is not implemented, it cannot add video later.
+pre-answers the trunk as an audio call to collect digits. HA supports compatible
+in-dialog direction and endpoint updates, but intentionally does not add a new
+video stream to an audio-only dialog, so this path cannot add video later.
 
 End-to-end success still depends on every provider or PBX in the route keeping
 the `m=video` section and forwarding the negotiated RTP/RTCP ports. A normal
@@ -162,7 +163,8 @@ This experimental profile does not claim support for:
 - SRTP, DTLS, ICE, STUN or TURN;
 - RTCP multiplexing, generic NACK retransmission or bandwidth adaptation;
 - recording, snapshots or a camera entity;
-- established-dialog video renegotiation, hold or transfer;
+- adding/removing video or changing its codec in an established dialog;
+- locally initiated media renegotiation or REFER/NOTIFY transfer;
 - IPv6 RTP media.
 
 Unsupported video is rejected in the SDP answer with a zero media port while
@@ -222,6 +224,8 @@ Qualification for this implementation covered:
 - reload while ringing and while media is active;
 - exact-codec RTP/RTCP relay contracts;
 - RTP/AVP compatibility and RTP/AVPF compound RR/SDES/PLI feedback;
+- peer-initiated UPDATE/re-INVITE video hold/resume with immutable camera
+  authorization and compatible directional codec contracts;
 - repeated mixed-codec calls with zero post-call owners or RTP sockets;
 - compact, default, wide and tall Home Assistant card sizes.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict
@@ -11,8 +12,8 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
+from .authorization import require_websocket_control, require_websocket_read
 from .call_registry import CallRegistry
-from .endpoint_lifecycle import call_registry
 from .const import (
     CONF_DEBUG_MODE,
     CONF_HA_SOFTPHONE_CONFERENCE_GROUP,
@@ -26,7 +27,10 @@ from .const import (
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
 )
+from .endpoint_lifecycle import call_registry
 from .fsm import CallState, TerminalReason, sip_phone_state, sip_public_state as _sip_public_state
+from .debug_capture import debug_capture_pending_writes
+from .websocket_owner import async_revoke_media_owners
 
 if TYPE_CHECKING:
     from homeassistant.core import Event
@@ -181,6 +185,20 @@ def _json_event_value(value: Any) -> Any:
     return None
 
 
+def _async_fire_with_context(
+    hass: HomeAssistant,
+    event_type: str,
+    payload: dict[str, Any],
+    context: Any | None,
+) -> None:
+    """Publish with call provenance while preserving context-free test buses."""
+
+    if context is None:
+        hass.bus.async_fire(event_type, payload)
+    else:
+        hass.bus.async_fire(event_type, payload, context=context)
+
+
 def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -> dict[str, Any]:
     event = _json_event_value(payload) or {}
     # Scope identifies the state owner publishing this occurrence. Transport
@@ -216,10 +234,11 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
         else "observed"
     )
     event.update(registry.event_fields(call_id, event["state"]))
-    hass.bus.async_fire(CALL_EVENT, event)
-    hass.bus.async_fire(SIP_CALL_STATE_EVENT, event)
+    context = registry.ha_context(call_id)
+    _async_fire_with_context(hass, CALL_EVENT, event, context)
+    _async_fire_with_context(hass, SIP_CALL_STATE_EVENT, event, context)
     if event.get("route_request") or event["state"] == "route_requested":
-        hass.bus.async_fire(SIP_ROUTE_REQUEST_EVENT, event)
+        _async_fire_with_context(hass, SIP_ROUTE_REQUEST_EVENT, event, context)
     if event.get("direction") == "incoming" and (
         event.get("route_request")
         or event["state"]
@@ -229,9 +248,9 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
             CallState.RINGING.value,
         )
     ):
-        hass.bus.async_fire(SIP_INCOMING_CALL_EVENT, event)
+        _async_fire_with_context(hass, SIP_INCOMING_CALL_EVENT, event, context)
     if event["type"] in {"ended", "missed", "failed"}:
-        hass.bus.async_fire(SIP_CALL_ENDED_EVENT, event)
+        _async_fire_with_context(hass, SIP_CALL_ENDED_EVENT, event, context)
     return event
 
 
@@ -327,32 +346,75 @@ async def _async_shutdown_all(hass: HomeAssistant) -> None:
         if future is not None and not future.done():
             future.cancel()
     bucket.pop("sip_bridge_state", None)
-    bucket.pop("audio_ws_owners", None)
-    bucket.pop("video_ws_owners", None)
-    store = _ha_softphone_store(hass)
-    store.update(
-        {
-            "state": CallState.IDLE.value,
-            "sip_state": CallState.IDLE.value,
-            "terminal_reason": TerminalReason.LOCAL_HANGUP.value,
-            "last_sip_event": "shutdown",
-            "video_active": False,
-            "video_offered": False,
-            "video_format": "",
-            "video_direction": "inactive",
-        }
-    )
-    for key in (
-        "session_device_id",
-        "target_device_id",
-        "selected_tx_format",
-        "selected_rx_format",
-        "audio_mode",
-        "route_kind",
-        "sip_uri",
-        "media_debug",
+    # HTTP views remain registered across a config-entry reload. Gate claims
+    # before taking owner snapshots so a concurrent GET cannot outlive unload.
+    bucket.setdefault("media_shutdown", asyncio.Event()).set()
+    owner_shutdowns = []
+    for owner_key, lock_key in (
+        ("audio_ws_owners", "audio_ws_owner_lock"),
+        ("video_ws_owners", "video_ws_owner_lock"),
     ):
-        store.pop(key, None)
+        owners = bucket.setdefault(owner_key, {})
+        owner_lock = bucket.setdefault(lock_key, asyncio.Lock())
+        owner_shutdowns.append(
+            async_revoke_media_owners(owners, owner_lock, timeout=5.0)
+        )
+    pending_owner_sets = await asyncio.gather(*owner_shutdowns)
+    pending_owner_ids = set().union(*pending_owner_sets)
+    if pending_owner_ids:
+        _LOGGER.warning(
+            "Could not confirm HA softphone media owner shutdown call_ids=%s",
+            sorted(pending_owner_ids),
+        )
+    capture_tasks = {
+        task
+        for task in bucket.setdefault("debug_capture_tasks", set())
+        if not task.done()
+    }
+    if capture_tasks:
+        _done, pending_captures = await asyncio.wait(capture_tasks, timeout=2.0)
+        if pending_captures:
+            # Executor Future cancellation cannot stop a worker that is
+            # already writing. Keep it tracked until its done callback sees
+            # the real result; capture transactions are atomic and serialized,
+            # so a bounded post-unload completion is safer than masking a late
+            # write failure as ``cancelled``.
+            _LOGGER.warning(
+                "HA softphone debug capture shutdown timed out; %d atomic write(s) will finish in background",
+                len(pending_captures),
+            )
+    store = _ha_softphone_store(hass)
+    active_call_id = str(store.get("call_id") or "")
+    active_state = str(store.get("state") or "").lower()
+    if active_call_id or active_state in {
+        CallState.CALLING.value,
+        CallState.REMOTE_RINGING.value,
+        CallState.RINGING.value,
+        CallState.CONNECTING.value,
+        CallState.IN_CALL.value,
+        CallState.TERMINATING.value,
+    }:
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.IDLE.value,
+            session_device_id=str(store.get("session_device_id") or ""),
+            caller=str(store.get("caller") or ""),
+            callee=str(store.get("callee") or ""),
+            peer_name=str(store.get("peer_name") or ""),
+            direction=str(store.get("direction") or ""),
+            call_id=active_call_id,
+            reason=TerminalReason.LOCAL_HANGUP.value,
+            terminal_reason=TerminalReason.LOCAL_HANGUP.value,
+            last_sip_event="shutdown",
+        )
+    else:
+        # Reloading an already-idle integration is not a call lifecycle event.
+        # Publish one dedicated state snapshot so cards observe the shutdown
+        # gate without fabricating an empty ``ended`` occurrence.
+        store["state"] = CallState.IDLE.value
+        store["sip_state"] = CallState.IDLE.value
+        store["last_sip_event"] = "shutdown"
+        _publish_ha_softphone_state(hass)
 
 
 async def _async_load_ha_softphone_store(
@@ -446,12 +508,15 @@ _MEDIA_COUNTER_KEYS = (
     "video_rtp_rx_packets",
     "video_rtp_tx_bytes",
     "video_rtp_rx_bytes",
+    "video_rtp_tx_payload_bytes",
     "video_rtp_dropped_packets",
     "video_access_units_tx",
     "video_access_units_rx",
     "video_drop_addr",
     "video_drop_payload_type",
     "video_drop_error",
+    "video_drop_direction",
+    "video_drop_connection_hold",
     "video_reordered_packets",
     "video_lost_packets",
     "video_duplicate_packets",
@@ -459,21 +524,38 @@ _MEDIA_COUNTER_KEYS = (
     "video_symmetric_rtp_keepalives",
     "video_symmetric_rtp_keepalive_payload_type",
     "video_access_unit_queue_max",
+    "video_access_unit_queue_drops",
+    "video_browser_keyframe_requests",
+    "video_rtcp_rx_packets",
+    "video_rtcp_rx_bytes",
+    "video_rtcp_tx_packets",
+    "video_rtcp_tx_bytes",
+    "video_rtcp_drop_addr",
+    "video_rtcp_drop_error",
+    "video_rtcp_drop_queue",
+    "video_rtcp_task_errors",
+    "video_keepalive_task_errors",
+    "video_rtcp_pli_rx",
+    "video_rtcp_fir_rx",
+    "video_rtcp_keyframe_requests_to_browser",
 )
 
 
 def _runtime_counter(store: dict[str, Any], runtime: dict[str, Any], key: str) -> int:
-    store_call_id = str(store.get("call_id") or "")
-    active_call_ids = {str(call_id) for call_id in runtime.get("active_call_ids", [])}
-    pending_call_ids = {str(call_id) for call_id in runtime.get("pending_call_ids", [])}
+    del runtime
     store_value = int(store.get(key, 0) or 0)
-    runtime_value = int(runtime.get(key, 0) or 0)
-    if store_call_id and store_call_id in active_call_ids | pending_call_ids:
-        return max(store_value, runtime_value)
-    return store_value or runtime_value
+    # Runtime totals aggregate every relay in the integration, so they cannot
+    # safely represent one HA softphone call even while its call-id is active.
+    # Browser audio/video reporters persist call-scoped counters in ``store``;
+    # aggregate relay counters remain available under debug topology maps.
+    return store_value
 
 
-def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
+def _sip_runtime_snapshot(
+    hass: HomeAssistant,
+    *,
+    detailed: bool = False,
+) -> dict[str, Any]:
     bucket = hass.data.get(DOMAIN, {})
     registry = bucket.get("call_registry")
     if not isinstance(registry, CallRegistry):
@@ -519,11 +601,24 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
             }
         )
     for call_id, relay in dict((registry.relays if registry is not None else {}) or {}).items():
-        snap = getattr(relay, "snapshot", None)
-        if not callable(snap):
-            continue
-        relay_data = dict(snap())
-        data["rtp_relays"][call_id] = relay_data
+        if detailed:
+            snap = getattr(relay, "snapshot", None)
+            if not callable(snap):
+                continue
+            relay_data = dict(snap())
+            data["rtp_relays"][call_id] = relay_data
+        else:
+            relay_data = {
+                "left_rx_packets": getattr(relay, "left_rx_packets", 0),
+                "left_rx_bytes": getattr(relay, "left_rx_bytes", 0),
+                "left_tx_packets": getattr(relay, "left_tx_packets", 0),
+                "left_tx_bytes": getattr(relay, "left_tx_bytes", 0),
+                "right_rx_packets": getattr(relay, "right_rx_packets", 0),
+                "right_rx_bytes": getattr(relay, "right_rx_bytes", 0),
+                "right_tx_packets": getattr(relay, "right_tx_packets", 0),
+                "right_tx_bytes": getattr(relay, "right_tx_bytes", 0),
+                "dropped_packets": getattr(relay, "dropped", 0),
+            }
         data["rtp_rx_packets"] += int(relay_data.get("left_rx_packets", 0)) + int(relay_data.get("right_rx_packets", 0))
         data["rtp_rx_bytes"] += int(relay_data.get("left_rx_bytes", 0)) + int(relay_data.get("right_rx_bytes", 0))
         data["rtp_tx_packets"] += int(relay_data.get("left_tx_packets", 0)) + int(relay_data.get("right_tx_packets", 0))
@@ -534,7 +629,8 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
         if not callable(snap):
             continue
         client_data = dict(snap())
-        data["sip_client_dialogs"][key] = client_data
+        if detailed:
+            data["sip_client_dialogs"][key] = client_data
         if client_data.get("dialog_active"):
             data["active_dialogs"] += 1
             call_id = str(client_data.get("call_id") or "")
@@ -552,21 +648,37 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
     trunk = bucket.get("sip_trunk")
     trunk_snapshot = getattr(trunk, "snapshot", None)
     if callable(trunk_snapshot):
-        data["sip_trunk"] = dict(trunk_snapshot())
-        if data["sip_trunk"].get("trunk_last_sip_event"):
-            data["last_sip_event"] = str(data["sip_trunk"].get("trunk_last_sip_event") or data["last_sip_event"])
-        if data["sip_trunk"].get("trunk_status_code"):
-            data["last_sip_status_code"] = int(data["sip_trunk"].get("trunk_status_code") or 0)
-            data["last_sip_reason"] = str(data["sip_trunk"].get("trunk_status_reason") or "")
+        trunk_data = dict(trunk_snapshot())
+        if detailed:
+            data["sip_trunk"] = trunk_data
+        if trunk_data.get("trunk_last_sip_event"):
+            data["last_sip_event"] = str(
+                trunk_data.get("trunk_last_sip_event") or data["last_sip_event"]
+            )
+        if trunk_data.get("trunk_status_code"):
+            data["last_sip_status_code"] = int(
+                trunk_data.get("trunk_status_code") or 0
+            )
+            data["last_sip_reason"] = str(
+                trunk_data.get("trunk_status_reason") or ""
+            )
     registrar = bucket.get("sip_registrar")
     registrar_snapshot = getattr(registrar, "snapshot", None)
-    if callable(registrar_snapshot):
+    if detailed and callable(registrar_snapshot):
         data["sip_registrar"] = dict(registrar_snapshot())
         if data["sip_registrar"].get("registrar_last_sip_event"):
             data["last_sip_event"] = str(data["sip_registrar"].get("registrar_last_sip_event") or data["last_sip_event"])
         if data["sip_registrar"].get("registrar_last_sip_status_code"):
             data["last_sip_status_code"] = int(data["sip_registrar"].get("registrar_last_sip_status_code") or 0)
             data["last_sip_reason"] = str(data["sip_registrar"].get("registrar_last_sip_reason") or "")
+    elif registrar is not None:
+        if getattr(registrar, "last_sip_event", ""):
+            data["last_sip_event"] = str(registrar.last_sip_event)
+        if getattr(registrar, "last_sip_status_code", 0):
+            data["last_sip_status_code"] = int(registrar.last_sip_status_code)
+            data["last_sip_reason"] = str(
+                getattr(registrar, "last_sip_reason", "") or ""
+            )
     data["pending_call_ids"] = sorted(set(data["pending_call_ids"]))
     data["active_call_ids"] = sorted(set(data["active_call_ids"]))
     return data
@@ -574,9 +686,9 @@ def _sip_runtime_snapshot(hass: HomeAssistant) -> dict[str, Any]:
 
 def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
     store = _ha_softphone_store(hass)
-    runtime = _sip_runtime_snapshot(hass)
     bucket = hass.data.get(DOMAIN, {})
     debug_mode = bool(bucket.get(CONF_DEBUG_MODE, False))
+    runtime = _sip_runtime_snapshot(hass, detailed=debug_mode)
     transport_config = bucket.get("transport_config", {})
     active_softphone = store.get("state") in {
         CallState.CALLING.value,
@@ -608,6 +720,10 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
                 "video_ws_owner_call_ids": sorted(bucket.get("video_ws_owners", {})),
                 "video_transcoder_call_id": str(
                     getattr(active_transcoder, "call_id", "") or ""
+                ),
+                "debug_capture_pending_writes": debug_capture_pending_writes(),
+                "debug_capture_dropped_writes": int(
+                    bucket.get("debug_capture_dropped_writes", 0)
                 ),
             }
         )
@@ -662,9 +778,17 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "selected_tx_rtp_format": store.get("selected_tx_rtp_format", ""),
         "selected_rx_rtp_format": store.get("selected_rx_rtp_format", ""),
         "audio_mode": store.get("audio_mode", ""),
+        "audio_direction": store.get("audio_direction", "sendrecv"),
+        "audio_connection_held": bool(store.get("audio_connection_held", False)),
         "video_active": bool(store.get("video_active", False)),
         "video_offered": bool(store.get("video_offered", False)),
         "video_format": store.get("video_format", ""),
+        "video_send_format": store.get(
+            "video_send_format", store.get("video_format", "")
+        ),
+        "video_receive_format": store.get(
+            "video_receive_format", store.get("video_format", "")
+        ),
         "video_direction": store.get("video_direction", "inactive"),
         "video_camera_send_enabled": bool(
             transport_config.get(CONF_VIDEO_CAMERA_SEND, False)
@@ -689,9 +813,12 @@ def _ha_softphone_state(hass: HomeAssistant) -> dict[str, Any]:
         "rtp_tx_bytes": _runtime_counter(store, runtime, "rtp_tx_bytes"),
         "rtp_rx_bytes": _runtime_counter(store, runtime, "rtp_rx_bytes"),
         "rtp_dropped_packets": runtime["rtp_dropped_packets"],
-        "rtp_relays": runtime["rtp_relays"],
-        "sip_client_dialogs": runtime["sip_client_dialogs"],
-        "sip_trunk": runtime["sip_trunk"],
+        # Topology and trunk addresses belong to opt-in diagnostics. The
+        # authenticated softphone state stream otherwise needs call state and
+        # aggregate counters only.
+        "rtp_relays": runtime["rtp_relays"] if debug_mode else {},
+        "sip_client_dialogs": runtime["sip_client_dialogs"] if debug_mode else {},
+        "sip_trunk": runtime["sip_trunk"] if debug_mode else {},
         **{
             key: _runtime_counter(store, runtime, key)
             for key in _MEDIA_COUNTER_KEYS
@@ -706,9 +833,16 @@ def _publish_ha_softphone_state(
     hass: HomeAssistant, state: dict[str, Any] | None = None
 ) -> None:
     """Publish one complete authoritative HA softphone snapshot."""
-    hass.bus.async_fire(
+    payload = dict(state) if state is not None else _ha_softphone_state(hass)
+    call_id = str(
+        payload.get("call_id") or payload.get("last_terminal_call_id") or ""
+    )
+    context = call_registry(hass).ha_context(call_id)
+    _async_fire_with_context(
+        hass,
         HA_SOFTPHONE_STATE_EVENT,
-        dict(state) if state is not None else _ha_softphone_state(hass),
+        payload,
+        context,
     )
 
 
@@ -811,9 +945,13 @@ def _set_ha_softphone_call_state(
             "selected_tx_rtp_format",
             "selected_rx_rtp_format",
             "audio_mode",
+            "audio_direction",
+            "audio_connection_held",
             "video_active",
             "video_offered",
             "video_format",
+            "video_send_format",
+            "video_receive_format",
             "video_direction",
             "connected_at",
             "route_kind",
@@ -963,6 +1101,7 @@ def websocket_subscribe_call_events(
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any],
 ) -> None:
+    require_websocket_read(connection)
     msg_id = msg["id"]
 
     @callback
@@ -983,6 +1122,7 @@ def websocket_subscribe_ha_softphone_state(
     msg: Dict[str, Any],
 ) -> None:
     """Stream authoritative HA softphone snapshots."""
+    require_websocket_read(connection)
     msg_id = msg["id"]
 
     @callback
@@ -1011,6 +1151,7 @@ async def websocket_ha_softphone_start(
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any],
 ) -> None:
+    require_websocket_control(connection)
     selector = str(msg.get("target_name") or msg.get("callee") or msg.get("target_device_id") or "").strip()
     if not selector:
         connection.send_error(msg["id"], "target_required", "SIP target is required")
@@ -1025,6 +1166,7 @@ async def websocket_ha_softphone_start(
                 "send_video": bool(msg.get("send_video", False)),
             },
             blocking=True,
+            context=connection.context(msg),
         )
     except Exception as err:
         connection.send_error(msg["id"], "sip_call_failed", str(err))
@@ -1039,6 +1181,7 @@ async def websocket_ha_softphone_state(
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any],
 ) -> None:
+    require_websocket_read(connection)
     connection.send_result(msg["id"], _ha_softphone_state(hass))
 
 
@@ -1049,6 +1192,7 @@ async def websocket_list_devices(
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any],
 ) -> None:
+    require_websocket_read(connection)
     connection.send_result(msg["id"], {"devices": [_ha_softphone_device(hass), *(await _get_voip_devices(hass))]})
 
 
@@ -1061,6 +1205,7 @@ async def websocket_resolve_device(
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any],
 ) -> None:
+    require_websocket_read(connection)
     device_id = str(msg.get("device_id") or "")
     if device_id == HA_SOFTPHONE_DEVICE_ID:
         connection.send_result(msg["id"], {"device": _ha_softphone_device(hass)})

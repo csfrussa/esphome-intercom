@@ -61,10 +61,15 @@ Required responses:
 Unsupported methods are rejected explicitly. Unsupported media is rejected with
 `488 Not Acceptable Here`.
 
-Session-modifying in-dialog INVITE, including ordinary hold or codec
-renegotiation, is not supported. ESP and HA answer it with `488` while keeping
-the established dialog and its selected media unchanged; the original dialog
-can still be terminated normally with BYE.
+ESP endpoints do not support session-modifying in-dialog INVITE. They answer
+hold or codec renegotiation with `488` while keeping the established dialog and
+its selected media unchanged; the original dialog can still be terminated
+normally with BYE.
+
+HA-owned dialogs accept compatible peer-initiated UPDATE or re-INVITE offers.
+They may update audio direction, supported audio format and RTP endpoint, and
+may hold/resume an already negotiated compatible video stream. HA does not add,
+remove or change the codec of video in-dialog and does not originate the offer.
 
 SIP signaling transports:
 

@@ -87,12 +87,23 @@ For outbound INVITE failures, HA sends the required ACK for non-2xx final
 responses before surfacing the terminal reason. This keeps failed calls SIP
 compliant rather than relying on retry side effects.
 
-The current profile does not renegotiate established media. ESP and HA reject a
-hold or media-changing in-dialog re-INVITE with `488 Not Acceptable Here`
-without replacing or tearing down the original dialog. HA may acknowledge a
-session refresh whose SDP is unchanged, without rerunning routing or replacing
-media. Existing media and a later BYE continue to use the original negotiated
-session.
+ESP endpoints do not renegotiate established media. They reject a hold or
+media-changing in-dialog re-INVITE with `488 Not Acceptable Here` without
+replacing or tearing down the original dialog.
+
+HA-owned dialogs accept a compatible peer-initiated re-INVITE or UPDATE. The
+new offer may change direction, RTP destination, payload type, packet duration
+or another audio format already supported on that leg. An established video
+stream may be held and resumed or move its RTP endpoint only while its codec
+contract remains compatible; video cannot be added, removed or changed to a
+different codec in-dialog. HA stages the replacement, sends the SDP answer and
+commits the media owner once. Rejected updates leave the original session
+usable, and a later BYE still terminates it normally.
+
+Confirmed dialogs retain the remote Contact and every Record-Route value. UAC
+route sets reverse the response order, UAS route sets preserve request order,
+and subsequent ACK/BYE requests follow RFC 3261 loose or strict routing instead
+of bypassing an intervening proxy.
 
 ## Media
 

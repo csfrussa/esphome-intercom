@@ -155,6 +155,234 @@ class VideoTranscoderPolicyTests(unittest.IsolatedAsyncioTestCase):
             hass.data[video_transcoder.DOMAIN],
         )
 
+    async def test_cancelled_start_releases_the_transcoder_slot(self) -> None:
+        hass = _Hass()
+        transcoder = video_transcoder.FfmpegVideoTranscoder(
+            hass=hass,
+            call_id="cancelled-start",
+            input_format=sdp.RtpVideoFormat(payload_type=34, encoding="H263"),
+            output_port=45678,
+        )
+        entered = asyncio.Event()
+
+        async def blocked_spawn(*_args, **_kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+        with (
+            mock.patch.object(video_transcoder, "_ffmpeg_binary", return_value="ffmpeg"),
+            mock.patch.object(
+                video_transcoder.asyncio,
+                "create_subprocess_exec",
+                side_effect=blocked_spawn,
+            ),
+        ):
+            task = asyncio.create_task(transcoder.async_start())
+            await entered.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertNotIn(
+            video_transcoder._ACTIVE_TRANSCODER,
+            hass.data[video_transcoder.DOMAIN],
+        )
+
+    async def test_cancelled_close_still_kills_process_and_stderr_task(self) -> None:
+        hass = _Hass()
+        transcoder = video_transcoder.FfmpegVideoTranscoder(
+            hass=hass,
+            call_id="cancelled-close",
+            input_format=sdp.RtpVideoFormat(payload_type=34, encoding="H263"),
+            output_port=45678,
+        )
+        killed = False
+        wait_entered = asyncio.Event()
+
+        class Process:
+            returncode = None
+
+            def terminate(self) -> None:
+                pass
+
+            def kill(self) -> None:
+                nonlocal killed
+                killed = True
+
+            async def wait(self) -> int:
+                wait_entered.set()
+                if not killed:
+                    await asyncio.Event().wait()
+                return 0
+
+        stderr_task = asyncio.create_task(asyncio.Event().wait())
+        transcoder.process = Process()  # type: ignore[assignment]
+        transcoder._stderr_task = stderr_task  # noqa: SLF001
+        hass.data[video_transcoder.DOMAIN] = {
+            video_transcoder._ACTIVE_TRANSCODER: transcoder,
+        }
+
+        with mock.patch.object(video_transcoder, "_PROCESS_STOP_TIMEOUT", 0.01):
+            task = asyncio.create_task(transcoder.async_close())
+            await wait_entered.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertTrue(killed)
+        self.assertTrue(stderr_task.done())
+        self.assertNotIn(
+            video_transcoder._ACTIVE_TRANSCODER,
+            hass.data[video_transcoder.DOMAIN],
+        )
+
+    async def test_close_cancels_and_joins_inflight_process_spawn(self) -> None:
+        hass = _Hass()
+        transcoder = video_transcoder.FfmpegVideoTranscoder(
+            hass=hass,
+            call_id="start-close-race",
+            input_format=sdp.RtpVideoFormat(payload_type=34, encoding="H263"),
+            output_port=45678,
+        )
+        entered = asyncio.Event()
+        resume = asyncio.Event()
+
+        class Stdin:
+            def write(self, _data: bytes) -> None:
+                pass
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class Stderr:
+            async def readline(self) -> bytes:
+                return b""
+
+        class Process:
+            def __init__(self) -> None:
+                self.stdin = Stdin()
+                self.stderr = Stderr()
+                self.returncode = None
+                self.terminated = 0
+                self.waited = 0
+
+            def terminate(self) -> None:
+                self.terminated += 1
+                self.returncode = 0
+
+            def kill(self) -> None:
+                raise AssertionError("graceful termination should complete")
+
+            async def wait(self) -> int:
+                self.waited += 1
+                return 0
+
+        process = Process()
+
+        async def delayed_spawn(*_args, **_kwargs):
+            entered.set()
+            try:
+                await resume.wait()
+            except asyncio.CancelledError:
+                # Model process creation finishing while cancellation is
+                # already in flight; the returned child still needs reaping.
+                await resume.wait()
+            return process
+
+        with (
+            mock.patch.object(video_transcoder, "_ffmpeg_binary", return_value="ffmpeg"),
+            mock.patch.object(
+                video_transcoder.asyncio,
+                "create_subprocess_exec",
+                side_effect=delayed_spawn,
+            ),
+        ):
+            start = asyncio.create_task(transcoder.async_start())
+            await entered.wait()
+            close = asyncio.create_task(transcoder.async_close())
+            await asyncio.sleep(0)
+            self.assertFalse(close.done())
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await start
+            await close
+            await transcoder.async_close()
+
+        self.assertEqual(process.terminated, 1)
+        self.assertEqual(process.waited, 1)
+        self.assertIsNone(transcoder.process)
+        self.assertIsNone(transcoder._send_socket)  # noqa: SLF001
+        self.assertNotIn(
+            video_transcoder._ACTIVE_TRANSCODER,
+            hass.data[video_transcoder.DOMAIN],
+        )
+        with self.assertRaisesRegex(video_transcoder.VideoTranscoderError, "closed"):
+            await transcoder.async_start()
+
+    async def test_repeated_close_cancellation_waits_for_process_reap(self) -> None:
+        hass = _Hass()
+        transcoder = video_transcoder.FfmpegVideoTranscoder(
+            hass=hass,
+            call_id="double-cancel-close",
+            input_format=sdp.RtpVideoFormat(payload_type=34, encoding="H263"),
+            output_port=45678,
+        )
+        first_wait = asyncio.Event()
+        finish_wait = asyncio.Event()
+
+        class Process:
+            returncode = None
+
+            def __init__(self) -> None:
+                self.killed = False
+                self.wait_calls = 0
+
+            def terminate(self) -> None:
+                pass
+
+            def kill(self) -> None:
+                self.killed = True
+
+            async def wait(self) -> int:
+                self.wait_calls += 1
+                if self.wait_calls == 1:
+                    first_wait.set()
+                    await asyncio.Event().wait()
+                await finish_wait.wait()
+                self.returncode = 0
+                return 0
+
+        process = Process()
+        stderr_task = asyncio.create_task(asyncio.Event().wait())
+        transcoder.process = process  # type: ignore[assignment]
+        transcoder._stderr_task = stderr_task  # noqa: SLF001
+        hass.data[video_transcoder.DOMAIN] = {
+            video_transcoder._ACTIVE_TRANSCODER: transcoder,
+        }
+
+        with mock.patch.object(video_transcoder, "_PROCESS_STOP_TIMEOUT", 0.01):
+            close = asyncio.create_task(transcoder.async_close())
+            await first_wait.wait()
+            close.cancel()
+            await asyncio.sleep(0)
+            close.cancel()
+            await asyncio.sleep(0.02)
+            self.assertTrue(process.killed)
+            self.assertFalse(close.done())
+            finish_wait.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await close
+
+        self.assertEqual(process.wait_calls, 2)
+        self.assertTrue(stderr_task.done())
+        self.assertNotIn(
+            video_transcoder._ACTIVE_TRANSCODER,
+            hass.data[video_transcoder.DOMAIN],
+        )
+
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for the transcode qualification")
 class VideoTranscoderTests(unittest.IsolatedAsyncioTestCase):
