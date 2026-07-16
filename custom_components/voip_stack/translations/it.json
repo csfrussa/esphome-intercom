@@ -105,6 +105,10 @@
   },
   "config_subentries": {
     "phone": {
+      "entry_type": "Telefono",
+      "initiate_flow": {
+        "user": "Aggiungi telefono"
+      },
       "title": "Endpoint telefonico",
       "step": {
         "user": {
