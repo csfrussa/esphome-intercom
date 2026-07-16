@@ -27,7 +27,10 @@ class RuntimeDiag : public Component {
   std::string build_snapshot_(const char *reason);
 
   struct TaskSample {
-    TaskNumber_t number{0};
+    // TaskStatus_t::xTaskNumber is UBaseType_t in current ESP-IDF/FreeRTOS.
+    // Using the public field type keeps the diagnostic component compatible
+    // with IDF releases that do not expose the private TaskNumber_t alias.
+    UBaseType_t number{0};
     uint32_t runtime{0};
     bool used{false};
   };
