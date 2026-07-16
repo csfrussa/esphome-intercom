@@ -244,6 +244,36 @@ def test_owner_scoped_session_event_does_not_cross_local_phone_legs() -> None:
     )
 
 
+def test_only_session_projection_can_change_a_phone_entity_state() -> None:
+    registry = endpoint_registry.EndpointRegistry()
+    registry.register(_endpoint(device_id="kitchen-device"))
+    endpoint = registry.require("kitchen")
+    bridge_event = {
+        "scope": "sip_bridge",
+        "endpoint_id": "kitchen",
+        "device_id": "kitchen-device",
+        "call_id": "call-1",
+        "state": "connecting",
+        "automation_control": "routable",
+    }
+    session_event = {
+        **bridge_event,
+        "scope": "session",
+        "state": "ringing",
+    }
+
+    assert not entity_manager.event_projects_endpoint_state(
+        bridge_event,
+        endpoint,
+        registry,
+    )
+    assert entity_manager.event_projects_endpoint_state(
+        session_event,
+        endpoint,
+        registry,
+    )
+
+
 def test_public_attributes_exclude_live_media_diagnostics() -> None:
     attributes = endpoint_device.endpoint_public_attributes(
         _endpoint(extension="401")

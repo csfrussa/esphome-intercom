@@ -36,7 +36,7 @@ from .endpoint_device import (
 )
 from .endpoint_entity_manager import (
     EndpointEntityManager,
-    event_matches_endpoint,
+    event_projects_endpoint_state,
     register_endpoint_entity_manager,
 )
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
@@ -144,6 +144,7 @@ class HaSoftphoneCallStateSensor(SensorEntity):
         self._attr_extra_state_attributes: dict[str, object] = {}
         self._active_call_id = ""
         self._revision = -1
+        self.endpoint = endpoint
         self.endpoint_registry = registry
         self._attr_device_info = endpoint_device_info(endpoint) if endpoint is not None else DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
@@ -166,15 +167,16 @@ class HaSoftphoneCallStateSensor(SensorEntity):
         endpoint_id = str(snapshot.get("endpoint_id") or DEFAULT_ENDPOINT_ID)
         if endpoint_id != DEFAULT_ENDPOINT_ID:
             return
-        scope = str(snapshot.get("scope") or "")
-        control = str(snapshot.get("automation_control") or "")
-        call_id = str(snapshot.get("call_id") or "").strip()
-        if (
-            scope != "session"
-            and control not in {"routable", "ha_anchored"}
-            and call_id != self._active_call_id
-        ):
+        if self.endpoint is not None:
+            if not event_projects_endpoint_state(
+                snapshot,
+                self.endpoint,
+                self.endpoint_registry,
+            ):
+                return
+        elif str(snapshot.get("scope") or "") != "session":
             return
+        call_id = str(snapshot.get("call_id") or "").strip()
         incoming_revision = int(snapshot.get("revision") or snapshot.get("sequence") or 0)
         if (
             call_id
@@ -326,11 +328,10 @@ class PhoneEndpointCallStateSensor(SensorEntity):
     @callback
     def _on_call_event(self, event: Event) -> None:
         payload = dict(event.data)
-        if not event_matches_endpoint(
+        if not event_projects_endpoint_state(
             payload,
             self.endpoint,
             self.registry,
-            owner_scoped=str(payload.get("scope") or "") == "session",
         ):
             return
         self._apply_call_payload(payload)

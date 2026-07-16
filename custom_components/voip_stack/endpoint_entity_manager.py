@@ -255,3 +255,22 @@ def event_matches_endpoint(
     # help users read a global event, but can never select a per-phone entity:
     # an external caller named "Kitchen" must not impersonate that endpoint.
     return False
+
+
+def event_projects_endpoint_state(
+    payload: dict[str, object],
+    endpoint: PhoneEndpoint,
+    registry: EndpointRegistry | None = None,
+) -> bool:
+    """Return whether ``payload`` is the authoritative state of one phone.
+
+    Bridge, DTMF and routing events describe the call as a whole.  They may
+    involve several endpoints, but must never become the durable state of any
+    one phone; only the endpoint-scoped session projection may do that.
+    """
+    return str(payload.get("scope") or "") == "session" and event_matches_endpoint(
+        payload,
+        endpoint,
+        registry,
+        owner_scoped=True,
+    )
