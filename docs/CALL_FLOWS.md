@@ -146,14 +146,18 @@ transaction.
 
 ## HA Forward To Registered SIP Endpoint
 
-1. HA service `voip_stack.forward` is called without a pending `call_id`, for
-   example destination `SvcPhone` or extension `761`.
-2. HA resolves the registered endpoint to its current Contact URI.
-3. HA originates a SIP call to that Contact.
+1. An HA-owned inbound/ringing call already exists.
+2. HA service `voip_stack.forward` is called with that `call_id`, or without it
+   when exactly one call is forwardable on the selected logical phone; the
+   destination is, for example, `SvcPhone` or extension `761`.
+3. HA resolves the registered endpoint to its current Contact URI and replaces
+   the destination leg while preserving the source call.
 4. HA must not rewrite the destination to `sip:<target>@<ha-ip>`.
 
 If it does rewrite to HA itself, the call loops into the inbound router and
 appears as `route_requested`. That is a bug.
+
+Use `voip_stack.call`, not `forward`, when there is no existing source call.
 
 ## Ring Group
 

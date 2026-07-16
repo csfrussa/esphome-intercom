@@ -21,7 +21,17 @@ def sip_account_dicts(hass: HomeAssistant) -> list[dict]:
     entry = config_entry(hass)
     if entry is None:
         return []
-    return [dict(item) for item in entry.data.get(CONF_SIP_ACCOUNTS, []) if isinstance(item, dict)]
+    from .phone_config import sip_account_dicts_from_subentries
+
+    configured = sip_account_dicts_from_subentries(entry)
+    if configured:
+        return configured
+    # Read compatibility for entries which have not reached migration setup.
+    return [
+        dict(item)
+        for item in entry.data.get(CONF_SIP_ACCOUNTS, [])
+        if isinstance(item, dict)
+    ]
 
 
 def sip_accounts(hass: HomeAssistant):
@@ -85,9 +95,9 @@ def update_sip_accounts(hass: HomeAssistant, accounts: list[dict]) -> None:
     entry = config_entry(hass)
     if entry is None:
         raise ConfigEntryError("VoIP Stack config entry is required for SIP accounts")
-    data = dict(entry.data)
-    data[CONF_SIP_ACCOUNTS] = accounts
-    hass.config_entries.async_update_entry(entry, data=data)
+    from .phone_config import replace_sip_account_subentries
+
+    replace_sip_account_subentries(hass, entry, accounts)
     registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
     if registrar is not None:
         registrar.update_accounts(sip_accounts(hass))

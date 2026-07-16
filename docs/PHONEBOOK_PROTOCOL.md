@@ -172,9 +172,9 @@ diagnostic/manual recovery tool, not the normal synchronization path.
 
 Local SIP accounts are created with `voip_stack.create_account`.
 The `username` becomes the SIP username and central roster ID. If `password` is
-omitted, HA generates one and shows it once in a persistent notification and in
-the `voip_stack.call_event` stream. Registered clients publish a dynamic
-Contact into the roster so ESP devices can call them by name.
+omitted, HA generates one and returns it once in the administrator-only action
+response. Registered clients publish a dynamic Contact into the roster so ESP
+devices can call them by name.
 
 ## Routing
 

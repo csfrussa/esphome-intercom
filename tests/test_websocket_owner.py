@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 from pathlib import Path
 import sys
+import types
 import unittest
 
 
@@ -25,6 +26,10 @@ SPEC.loader.exec_module(OWNER_MODULE)
 MediaWebSocketOwner = OWNER_MODULE.MediaWebSocketOwner
 WebSocketOwnerBusyError = OWNER_MODULE.WebSocketOwnerBusyError
 async_claim_media_owner = OWNER_MODULE.async_claim_media_owner
+async_claim_call_media_owner = OWNER_MODULE.async_claim_call_media_owner
+async_release_local_media_if_unowned = (
+    OWNER_MODULE.async_release_local_media_if_unowned
+)
 async_release_media_owner = OWNER_MODULE.async_release_media_owner
 async_revoke_media_owners = OWNER_MODULE.async_revoke_media_owners
 
@@ -51,7 +56,200 @@ class _FakeTransport:
             raise RuntimeError("synthetic transport failure")
 
 
+class _CallRegistry:
+    def __init__(self, client_id: str = "") -> None:
+        self.sessions = {
+            "call-1": types.SimpleNamespace(
+                metadata={"media_client_id": client_id},
+                revision=1,
+            )
+        }
+        self.softphone_media = {
+            "call-1": {"media_client_id": client_id}
+        }
+
+    @staticmethod
+    def resolve_session_id(call_id: str) -> str:
+        return call_id
+
+
 class WebSocketOwnerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_disconnected_same_user_document_can_rebind_call_identity(
+        self,
+    ) -> None:
+        bucket: dict[str, object] = {}
+        registry = _CallRegistry("closed-document")
+        replacement = MediaWebSocketOwner(
+            user_id="user-a",
+            client_id="reloaded-document",
+        )
+
+        owners, _lock, owner_key = await async_claim_call_media_owner(
+            bucket,
+            registry,
+            "call-1",
+            "kitchen",
+            replacement,
+            channel="audio",
+            timeout=1.0,
+        )
+
+        self.assertIs(owners[owner_key], replacement)
+        self.assertEqual(
+            registry.sessions["call-1"].metadata["media_client_id"],
+            "reloaded-document",
+        )
+        self.assertEqual(
+            registry.softphone_media["call-1"]["media_client_id"],
+            "reloaded-document",
+        )
+        self.assertEqual(registry.sessions["call-1"].revision, 2)
+
+    async def test_live_channel_blocks_other_document_identity_takeover(
+        self,
+    ) -> None:
+        bucket: dict[str, object] = {}
+        registry = _CallRegistry("document-a")
+        first = MediaWebSocketOwner(user_id="user-a", client_id="document-a")
+        await async_claim_call_media_owner(
+            bucket,
+            registry,
+            "call-1",
+            "kitchen",
+            first,
+            channel="audio",
+            timeout=1.0,
+        )
+
+        with self.assertRaises(WebSocketOwnerBusyError):
+            await async_claim_call_media_owner(
+                bucket,
+                registry,
+                "call-1",
+                "kitchen",
+                MediaWebSocketOwner(
+                    user_id="user-a",
+                    client_id="document-b",
+                ),
+                channel="video",
+                timeout=1.0,
+            )
+
+        self.assertEqual(
+            registry.sessions["call-1"].metadata["media_client_id"],
+            "document-a",
+        )
+        self.assertEqual(bucket.get("video_ws_owners"), {})
+
+    async def test_disconnected_local_leg_rebinds_before_owner_claim(self) -> None:
+        bucket: dict[str, object] = {}
+        registry = _CallRegistry()
+        snapshot = types.SimpleNamespace(
+            caller_endpoint_id="office",
+            callee_endpoint_id="kitchen",
+            caller_media_owner_id="office-document",
+            callee_media_owner_id="closed-kitchen-document",
+        )
+        rebinds: list[tuple[str, str, str]] = []
+        bridge = types.SimpleNamespace(
+            get_call=lambda _call_id: snapshot,
+            rebind_media_owner=lambda call_id, endpoint_id, owner_id: rebinds.append(
+                (call_id, endpoint_id, owner_id)
+            ),
+        )
+        replacement = MediaWebSocketOwner(
+            user_id="user-a",
+            client_id="new-kitchen-document",
+        )
+
+        owners, _lock, owner_key = await async_claim_call_media_owner(
+            bucket,
+            registry,
+            "call-1",
+            "kitchen",
+            replacement,
+            channel="audio",
+            timeout=1.0,
+            pin_client_identity=False,
+            local_bridge=bridge,
+        )
+
+        self.assertEqual(
+            rebinds,
+            [("call-1", "kitchen", "new-kitchen-document")],
+        )
+        self.assertIs(owners[owner_key], replacement)
+
+    async def test_local_rebind_race_is_reported_as_busy_without_owner_leak(
+        self,
+    ) -> None:
+        bucket: dict[str, object] = {}
+        registry = _CallRegistry()
+        snapshot = types.SimpleNamespace(
+            caller_endpoint_id="office",
+            callee_endpoint_id="kitchen",
+            caller_media_owner_id="office-document",
+            callee_media_owner_id="closed-kitchen-document",
+        )
+
+        def _raise_ended(*_args) -> None:
+            raise RuntimeError("call ended during local lease rebind")
+
+        bridge = types.SimpleNamespace(
+            get_call=lambda _call_id: snapshot,
+            rebind_media_owner=_raise_ended,
+        )
+
+        with self.assertRaises(WebSocketOwnerBusyError):
+            await async_claim_call_media_owner(
+                bucket,
+                registry,
+                "call-1",
+                "kitchen",
+                MediaWebSocketOwner(
+                    user_id="user-a",
+                    client_id="replacement-document",
+                ),
+                channel="audio",
+                timeout=1.0,
+                pin_client_identity=False,
+                local_bridge=bridge,
+            )
+
+        self.assertEqual(bucket.get("audio_ws_owners"), {})
+        self.assertEqual(bucket.get("video_ws_owners"), {})
+
+    async def test_local_lease_releases_only_after_last_media_channel(self) -> None:
+        key = "kitchen|call-1"
+        bucket: dict[str, object] = {
+            "audio_ws_owners": {key: object()},
+            "video_ws_owners": {key: object()},
+        }
+        releases: list[tuple[str, str, str]] = []
+        bridge = types.SimpleNamespace(
+            release_media=lambda call_id, endpoint_id, token: (
+                releases.append((call_id, endpoint_id, token)) or True
+            )
+        )
+        lease = types.SimpleNamespace(
+            call_id="call-1",
+            endpoint_id="kitchen",
+            token="lease",
+        )
+
+        self.assertFalse(
+            await async_release_local_media_if_unowned(bucket, bridge, lease)
+        )
+        bucket["audio_ws_owners"].clear()
+        self.assertFalse(
+            await async_release_local_media_if_unowned(bucket, bridge, lease)
+        )
+        bucket["video_ws_owners"].clear()
+        self.assertTrue(
+            await async_release_local_media_if_unowned(bucket, bridge, lease)
+        )
+        self.assertEqual(releases, [("call-1", "kitchen", "lease")])
+
     async def test_reconnect_revokes_then_waits_for_previous_teardown(self) -> None:
         owners: dict[str, object] = {}
         lock = asyncio.Lock()

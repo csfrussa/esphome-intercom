@@ -9,6 +9,12 @@ logic.
 
 ## Softphone Services
 
+`call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
+`set_ha_softphone_settings` accept one optional logical-phone selector:
+`endpoint_id`, `device_id` or `entity_id`. If omitted, the migrated default HA
+phone is selected. `source_device_id` identifies a physical ESP source and is
+not a substitute for the logical HA-phone selector.
+
 ### `voip_stack.call`
 
 Originate a call from Home Assistant.
@@ -32,8 +38,8 @@ With `call_id`, moves an HA-owned pending, ringing or remotely ringing call to
 another dial-plan destination. Repeated forwarding cancels the previous
 ringing SIP leg before starting the replacement.
 
-Without `call_id`, originates a HA-anchored call using the same central dial
-plan as `voip_stack.call`.
+If `call_id` is omitted, HA infers it only when exactly one call is forwardable
+for the selected logical phone. Use `voip_stack.call` to originate a new call.
 
 Important rule: forwarding to a registered SIP endpoint keeps that endpoint's
 current registration Contact as the destination. It must not rewrite to
@@ -77,7 +83,7 @@ softphone media where applicable.
 
 ### `voip_stack.set_dnd`
 
-Enable or disable DND on the HA softphone.
+Enable or disable DND on the selected HA softphone.
 
 When DND is enabled, calls targeting HA return `486 Busy Here` with terminal
 reason `dnd`.
@@ -167,15 +173,16 @@ Fields:
 
 - `username`: SIP username and roster ID.
 - `display_name`: optional friendly name.
-- `password`: optional. If omitted, HA generates one and shows it once.
+- `password`: optional. If omitted, HA generates one and returns it once in the
+  administrator-only action response.
 - `enabled`: default true.
 - `replace`: allow replacing an existing account.
 - `extension`: optional internal extension. When set, the endpoint can be
   called by name or extension.
 - `ring_group`, `conference_group`, `conference_ring`: group membership.
 
-If a manual password is provided, HA preserves it exactly and creates a
-notification without echoing the password back.
+If a manual password is provided, HA preserves it exactly without echoing the
+password in the response, logs or events.
 
 ### `voip_stack.remove_account`
 
@@ -191,12 +198,13 @@ Disable an account and clear active registration.
 
 ### `voip_stack.rotate_account_password`
 
-Generate a new password, clear active registration and show the replacement
-once in both the call event stream and a persistent notification.
+Generate a new password, clear active registration and return the replacement
+once in the administrator-only action response.
 
 ### `voip_stack.list_accounts` / `voip_stack.export_accounts`
 
-Emit configured accounts without passwords.
+Return configured accounts without passwords in the administrator-only action
+response.
 
 ## Automation Route Service
 
@@ -207,6 +215,9 @@ publishes `calling_timeout_requested` or `ringing_timeout_requested` only when
 the call is still in the same state and sequence. A deadline never changes the
 route itself.
 
+These call-global controls are administrator-only for authenticated service
+callers. Internal Home Assistant automations remain allowed.
+
 Fields for `set_deadline`:
 
 - `call_id`, `phase`, `timeout`.
@@ -215,6 +226,9 @@ Fields for `set_deadline`:
 ### `voip_stack.route`
 
 Apply a decision to a pending inbound SIP route request.
+
+This call-global control is administrator-only for authenticated service
+callers. Internal Home Assistant automations remain allowed.
 
 Fields:
 

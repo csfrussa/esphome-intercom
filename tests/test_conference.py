@@ -58,6 +58,9 @@ def _install_ha_fakes() -> None:
     )
     exceptions.UnknownUser = getattr(exceptions, "UnknownUser", _FakeUnauthorized)
     config_entries.ConfigEntry = getattr(config_entries, "ConfigEntry", type("ConfigEntry", (), {}))
+    config_entries.ConfigSubentry = getattr(
+        config_entries, "ConfigSubentry", type("ConfigSubentry", (), {})
+    )
     device_registry.async_get = getattr(device_registry, "async_get", lambda _hass: None)
     entity_registry.async_get = getattr(entity_registry, "async_get", lambda _hass: None)
     websocket_api.async_register_command = getattr(websocket_api, "async_register_command", lambda *args, **kwargs: None)
@@ -95,6 +98,8 @@ def _load_module(name: str):
 
 conference = _load_module("conference")
 endpoint_lifecycle = _load_module("endpoint_lifecycle")
+endpoint_registry_module = _load_module("endpoint_registry")
+phone_endpoint = _load_module("phone_endpoint")
 trunk_runtime = _load_module("trunk_runtime")
 sip_listener = _load_module("sip_listener")
 sip_client = _load_module("sip_client")
@@ -143,6 +148,32 @@ def _first_sample(frame: bytes) -> int:
     return pcm[0]
 
 
+def _install_browser_endpoints(hass: _FakeHass, *endpoint_ids: str):
+    registry = endpoint_registry_module.EndpointRegistry()
+    for endpoint_id in endpoint_ids:
+        registry.register(
+            phone_endpoint.PhoneEndpoint(
+                endpoint_id=endpoint_id,
+                name=endpoint_id.title(),
+                kind=phone_endpoint.EndpointKind.BROWSER,
+                device_id=f"device-{endpoint_id}",
+                availability=phone_endpoint.EndpointAvailability.AVAILABLE,
+                capabilities={"audio", "video"},
+            )
+        )
+    hass.data[const.DOMAIN]["endpoint_registry"] = registry
+    endpoint_lifecycle.call_registry(hass).bind_endpoint_registry(registry)
+    return registry
+
+
+async def _wait_for_sample(queue: asyncio.Queue[bytes], expected: int) -> bytes:
+    async with asyncio.timeout(1.0):
+        while True:
+            frame = await queue.get()
+            if _first_sample(frame) == expected:
+                return frame
+
+
 class ConferenceMixerTest(unittest.TestCase):
     def test_mix_frames_is_n_minus_one(self) -> None:
         out = conference.mix_frames([_frame(1000), _frame(2000), _frame(-500)])
@@ -166,6 +197,122 @@ class ConferenceMixerTest(unittest.TestCase):
 
 
 class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _invite(*, call_id: str = "source-call"):
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        return sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri(
+                "sip:Conference@127.0.0.1"
+            ),
+            caller_uri=voip_sip.parse_sip_uri("sip:Door@127.0.0.1"),
+            target="Conference",
+            caller="Door",
+            call_id=call_id,
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45690,
+        )
+
+    async def test_conference_reservation_failure_rolls_back_prior_phone(self) -> None:
+        hass = _FakeHass()
+        endpoints = _install_browser_endpoints(hass, "kitchen", "hall")
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        original_reserve = manager._reserve_ha_call
+        reservations = 0
+
+        def fail_second_reservation(*args, **kwargs):
+            nonlocal reservations
+            reservations += 1
+            if reservations == 2:
+                raise RuntimeError("simulated reservation failure")
+            return original_reserve(*args, **kwargs)
+
+        manager._reserve_ha_call = fail_second_reservation
+        with self.assertRaisesRegex(RuntimeError, "reservation failure"):
+            await manager.join(
+                self._invite(),
+                types.SimpleNamespace(name="Conference", id="Conference"),
+                ring_endpoint_ids=("kitchen", "hall"),
+            )
+
+        registry = endpoint_lifecycle.call_registry(hass)
+        self.assertFalse(manager.rooms)
+        self.assertFalse(manager.ha_calls)
+        self.assertFalse(registry.sessions)
+        self.assertFalse(registry.endpoint_claims)
+        self.assertFalse(endpoints.require("kitchen").active_call_id)
+        self.assertFalse(endpoints.require("hall").active_call_id)
+
+    async def test_conference_state_publication_failure_releases_all_claims(self) -> None:
+        hass = _FakeHass()
+        endpoints = _install_browser_endpoints(hass, "kitchen", "hall")
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        room = conference.ConferenceRoom(
+            hass,
+            name="Conference",
+            local_ip="127.0.0.1",
+        )
+        manager.rooms[room.name] = room
+        original_publish = room._set_softphone_ringing
+        publications = 0
+
+        def fail_second_publication(*args, **kwargs):
+            nonlocal publications
+            publications += 1
+            if publications == 2:
+                raise RuntimeError("simulated state publication failure")
+            return original_publish(*args, **kwargs)
+
+        room._set_softphone_ringing = fail_second_publication
+        with self.assertRaisesRegex(RuntimeError, "state publication failure"):
+            manager.ring_ha_endpoints(
+                "Conference",
+                ("kitchen", "hall"),
+                caller="Door",
+            )
+
+        registry = endpoint_lifecycle.call_registry(hass)
+        self.assertFalse(manager.ha_calls)
+        self.assertFalse(registry.sessions)
+        self.assertFalse(registry.endpoint_claims)
+        self.assertFalse(room._ha_softphone_announced)
+        self.assertFalse(endpoints.require("kitchen").active_call_id)
+        self.assertFalse(endpoints.require("hall").active_call_id)
+        self.assertEqual(
+            hass.data[const.DOMAIN]["ha_softphones"]["kitchen"]["state"],
+            "idle",
+        )
+
+    async def test_conference_leg_failure_does_not_leave_empty_room_or_claim(self) -> None:
+        hass = _FakeHass()
+        endpoints = _install_browser_endpoints(hass, "kitchen")
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        room = conference.ConferenceRoom(
+            hass,
+            name="Conference",
+            local_ip="127.0.0.1",
+        )
+        manager.rooms[room.name] = room
+
+        def fail_add(*args, **kwargs):
+            raise RuntimeError("simulated HA leg failure")
+
+        room.add_ha_softphone_leg = fail_add
+        with self.assertRaisesRegex(RuntimeError, "HA leg failure"):
+            manager.start_ha_softphone("Conference", endpoint_id="kitchen")
+
+        registry = endpoint_lifecycle.call_registry(hass)
+        self.assertFalse(manager.rooms)
+        self.assertFalse(manager.ha_calls)
+        self.assertFalse(registry.sessions)
+        self.assertFalse(registry.endpoint_claims)
+        self.assertFalse(endpoints.require("kitchen").active_call_id)
+
     async def test_media_timeout_respects_direction_hold_and_ha_listener(self) -> None:
         hass = _FakeHass()
         room = conference.ConferenceRoom(hass, name="Conference", local_ip="127.0.0.1")
@@ -303,7 +450,44 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         await room._dispose_leg(leg, reason="local_hangup")
 
-        self.assertEqual(calls, ["release", "terminate", "close"])
+        self.assertEqual(calls, ["terminate", "close", "release"])
+
+    async def test_inbound_media_timeout_signals_before_releasing_rtp_port(self) -> None:
+        hass = _FakeHass()
+        calls: list[str] = []
+
+        async def on_timeout(call_id: str, reason: str) -> None:
+            calls.append(f"signal:{call_id}:{reason}")
+
+        room = conference.ConferenceRoom(
+            hass,
+            name="Conference",
+            local_ip="127.0.0.1",
+            on_inbound_timeout=on_timeout,
+        )
+
+        class Reservation:
+            def release(self) -> None:
+                calls.append("release")
+
+        leg = conference._ConferenceLeg(
+            call_id="inbound",
+            caller="Desk",
+            role="manual",
+            remote_host="127.0.0.1",
+            remote_port=40000,
+            in_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+            ),
+            out_converter=conference.PcmFrameConverter(
+                conference.CONFERENCE_FORMAT, conference.CONFERENCE_FORMAT
+            ),
+            port_reservation=Reservation(),
+        )
+
+        await room._dispose_leg(leg, reason="media_timeout")
+
+        self.assertEqual(calls, ["signal:inbound:media_timeout", "release"])
 
     async def test_cancelled_room_close_finishes_client_and_releases_port(self) -> None:
         hass = _FakeHass()
@@ -348,7 +532,8 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         close_task = asyncio.create_task(room.close(reason="local_hangup"))
         await asyncio.wait_for(terminate_entered.wait(), timeout=1)
-        self.assertEqual(calls[:3], ["transport", "release", "terminate"])
+        self.assertEqual(calls[:2], ["transport", "terminate"])
+        self.assertNotIn("release", calls)
         close_task.cancel()
         await asyncio.sleep(0)
         close_task.cancel()
@@ -359,7 +544,7 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await close_task
 
-        self.assertEqual(calls, ["transport", "release", "terminate", "close"])
+        self.assertEqual(calls, ["transport", "terminate", "close", "release"])
         self.assertTrue(room._closed)
         self.assertFalse(room.legs)
 
@@ -454,7 +639,7 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
         await manager.close()
 
-        self.assertEqual(calls, ["release", "terminate", "close"])
+        self.assertEqual(calls, ["terminate", "close", "release"])
         self.assertTrue(mixer.done())
         self.assertFalse(manager.rooms)
 
@@ -632,7 +817,12 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(added)
         self.assertTrue(reservation.released)
-        self.assertIsNone(room.add_ha_softphone_leg())
+        self.assertIsNone(
+            room.add_ha_softphone_leg(
+                call_id="conference:overflow",
+                endpoint_id="default",
+            )
+        )
 
     async def test_remote_rtp_reaches_ha_softphone_participant(self) -> None:
         hass = _FakeHass()
@@ -669,9 +859,10 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("m=audio", result.answer_sdp)
         self.assertIn("m=video 0 RTP/AVP 102", result.answer_sdp)
 
-        queue = manager.join_ha_softphone("Conference")
-        self.assertIsNotNone(queue)
-        assert queue is not None
+        joined = manager.join_ha_softphone("Conference")
+        self.assertIsNotNone(joined)
+        assert joined is not None
+        softphone_call_id, queue = joined
         room = manager.rooms["Conference"]
         payload = _frame(1200)
         encoded = sip_client.RtpPayloadEncoder(fmt).encode(payload)
@@ -693,11 +884,139 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store["state"], "ringing")
         self.assertEqual(store["call_id"], "conference:Conference")
 
-        await manager.leave_ha_softphone("Conference")
+        await manager.leave_ha_softphone(
+            "Conference",
+            call_id=softphone_call_id,
+        )
         await manager.leave_call("call-1", reason="remote_hangup")
         self.assertNotIn("Conference", manager.rooms)
         pool = hass.data[const.DOMAIN]["sip_rtp_port_pool"]
         self.assertFalse(pool["used"])
+
+    async def test_multiple_browser_phones_ring_join_and_leave_independently(self) -> None:
+        hass = _FakeHass()
+        endpoints = _install_browser_endpoints(hass, "kitchen", "hall")
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        fmt = sdp.RtpPcmFormat(96, "L16", 16000, 1, 20)
+        invite = sip_listener.SipInvite(
+            source_host="127.0.0.1",
+            source_port=5060,
+            request_uri=voip_sip.parse_sip_uri("sip:Conference@127.0.0.1"),
+            caller_uri=voip_sip.parse_sip_uri("sip:Door@127.0.0.1"),
+            target="Conference",
+            caller="Door",
+            call_id="source-call",
+            cseq="1 INVITE",
+            remote_sdp=b"",
+            send_format=fmt,
+            recv_format=fmt,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=45690,
+        )
+        result = await manager.join(
+            invite,
+            types.SimpleNamespace(name="Conference", id="Conference"),
+            ring_endpoint_ids=("kitchen", "hall"),
+        )
+        self.assertEqual(result.status, 200)
+
+        calls_by_endpoint = {
+            endpoint_id: call_id
+            for call_id, (_room, endpoint_id) in manager.ha_calls.items()
+        }
+        self.assertEqual(set(calls_by_endpoint), {"kitchen", "hall"})
+        self.assertNotEqual(calls_by_endpoint["kitchen"], calls_by_endpoint["hall"])
+        self.assertEqual(
+            hass.data[const.DOMAIN]["ha_softphones"]["kitchen"]["state"],
+            "ringing",
+        )
+        self.assertEqual(
+            hass.data[const.DOMAIN]["ha_softphones"]["hall"]["state"],
+            "ringing",
+        )
+
+        kitchen_join = manager.join_ha_softphone(
+            "Conference",
+            endpoint_id="kitchen",
+            call_id=calls_by_endpoint["kitchen"],
+        )
+        hall_join = manager.join_ha_softphone(
+            "Conference",
+            endpoint_id="hall",
+            call_id=calls_by_endpoint["hall"],
+        )
+        self.assertIsNotNone(kitchen_join)
+        self.assertIsNotNone(hall_join)
+        assert kitchen_join is not None and hall_join is not None
+        _kitchen_call_id, kitchen_queue = kitchen_join
+        hall_call_id, hall_queue = hall_join
+
+        manager.push_ha_audio(calls_by_endpoint["kitchen"], _frame(1400))
+        heard = await _wait_for_sample(hall_queue, 1400)
+        self.assertEqual(_first_sample(heard), 1400)
+        # N-1 mixing never loops a participant's own microphone back to it.
+        own_mix = await asyncio.wait_for(kitchen_queue.get(), timeout=1.0)
+        self.assertEqual(_first_sample(own_mix), 0)
+
+        await manager.leave_ha_softphone(
+            "Conference",
+            call_id=calls_by_endpoint["kitchen"],
+        )
+        self.assertFalse(endpoints.require("kitchen").active_call_id)
+        self.assertEqual(endpoints.require("hall").active_call_id, hall_call_id)
+        self.assertIn("source-call", manager.rooms["Conference"].legs)
+        self.assertIn(hall_call_id, manager.rooms["Conference"].legs)
+
+        await manager.leave_call("source-call", reason="remote_hangup")
+        self.assertIn("Conference", manager.rooms)
+        await manager.leave_ha_softphone("Conference", call_id=hall_call_id)
+        self.assertFalse(endpoints.require("hall").active_call_id)
+        self.assertNotIn("Conference", manager.rooms)
+
+    async def test_one_browser_declining_conference_does_not_cancel_other_phone(self) -> None:
+        hass = _FakeHass()
+        endpoints = _install_browser_endpoints(hass, "kitchen", "hall")
+        manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
+        room = conference.ConferenceRoom(
+            hass,
+            name="Conference",
+            local_ip="127.0.0.1",
+        )
+        manager.rooms[room.name] = room
+        call_ids = manager.ring_ha_endpoints(
+            "Conference",
+            ("kitchen", "hall"),
+            caller="Door",
+        )
+        calls_by_endpoint = {
+            manager.ha_calls[call_id][1]: call_id for call_id in call_ids
+        }
+
+        declined = await manager.decline_ha_softphone(
+            calls_by_endpoint["kitchen"],
+            "kitchen",
+        )
+        self.assertTrue(declined)
+        self.assertFalse(endpoints.require("kitchen").active_call_id)
+        self.assertEqual(
+            endpoints.require("hall").active_call_id,
+            calls_by_endpoint["hall"],
+        )
+        self.assertEqual(
+            hass.data[const.DOMAIN]["ha_softphones"]["hall"]["state"],
+            "ringing",
+        )
+
+        joined = manager.join_ha_softphone(
+            "Conference",
+            endpoint_id="hall",
+            call_id=calls_by_endpoint["hall"],
+        )
+        self.assertIsNotNone(joined)
+        await manager.leave_ha_softphone(
+            "Conference",
+            call_id=calls_by_endpoint["hall"],
+        )
 
     async def test_conference_join_does_not_ring_ha_without_ring_flag(self) -> None:
         hass = _FakeHass()
@@ -727,8 +1046,10 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_ha_softphone_can_start_empty_conference_and_leave_without_closing_peers(self) -> None:
         hass = _FakeHass()
         manager = conference.ConferenceManager(hass, local_ip="127.0.0.1")
-        queue = manager.start_ha_softphone("Conference")
-        self.assertIsNotNone(queue)
+        started = manager.start_ha_softphone("Conference")
+        self.assertIsNotNone(started)
+        assert started is not None
+        softphone_call_id, _queue = started
         room = manager.rooms["Conference"]
         self.assertIn("conference:Conference", room.legs)
         self.assertEqual(room.legs["conference:Conference"].role, "ha")
@@ -753,7 +1074,10 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, 200)
         self.assertIn("call-3", room.legs)
 
-        await manager.leave_ha_softphone("Conference")
+        await manager.leave_ha_softphone(
+            "Conference",
+            call_id=softphone_call_id,
+        )
         self.assertNotIn("conference:Conference", room.legs)
         self.assertIn("call-3", room.legs)
 

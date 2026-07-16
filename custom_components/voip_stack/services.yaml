@@ -15,7 +15,8 @@ purge_devices:
       required: false
       selector:
         device:
-          integration: esphome
+          filter:
+            - integration: esphome
     min_unavailable_hours:
       name: Minimum Hours Unavailable
       description: >-
@@ -37,6 +38,30 @@ answer:
   name: Answer SIP Call
   description: Send 200 OK for a pending SIP call addressed to Home Assistant.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: HA phone device
+      description: Optional logical HA phone or ESPHome intercom Device. It must identify the same phone as Endpoint ID when both are set.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
+    entity_id:
+      name: HA phone entity
+      description: Optional Entity belonging to the logical HA phone or ESPHome intercom.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
     call_id:
       name: Call ID
       description: Pending SIP Call-ID. If omitted and only one call is pending, that call is answered.
@@ -55,6 +80,30 @@ decline:
   name: Decline SIP Call
   description: Send a final SIP rejection for a pending SIP call.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: HA phone device
+      description: Optional logical HA phone or ESPHome intercom Device. It must identify the same phone as Endpoint ID when both are set.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
+    entity_id:
+      name: HA phone entity
+      description: Optional Entity belonging to the logical HA phone or ESPHome intercom.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
     call_id:
       name: Call ID
       description: Pending SIP Call-ID. If omitted and only one call is pending, that call is declined.
@@ -91,6 +140,30 @@ call:
   name: SIP Call
   description: Originate a standards-SIP call from Home Assistant to a roster target or SIP URI.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical source-phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: Phone device
+      description: Optional VoIP phone Device. A logical HA phone originates the call; an ESP phone remains a legacy physical command target.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
+    entity_id:
+      name: Phone entity
+      description: Optional Entity belonging to the logical HA phone or legacy ESP phone.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
     destination:
       name: Destination
       description: Contact ID/name, number, user@host, or sip:user@host URI.
@@ -128,6 +201,28 @@ forward:
   name: SIP Forward
   description: Route an active HA-owned SIP call to another dial-plan destination. Call ID is inferred when exactly one call is forwardable.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: Phone device
+      description: Optional VoIP Stack logical phone Device. It must identify the same phone as Endpoint ID when both are set.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+    entity_id:
+      name: Phone entity
+      description: Optional Entity belonging to the logical VoIP Stack phone.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
     call_id:
       name: Call ID
       description: Optional pending SIP Call-ID. Omit it when exactly one call is forwardable.
@@ -293,6 +388,30 @@ hangup:
   name: SIP Hang Up
   description: Send BYE and stop any SIP RTP relay for an active SIP call.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: Phone device
+      description: Optional logical HA phone or ESPHome intercom Device. It must identify the same phone as Endpoint ID when both are set.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
+    entity_id:
+      name: Phone entity
+      description: Optional Entity belonging to the logical HA phone or ESPHome intercom.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
+            - integration: esphome
     call_id:
       name: Call ID
       description: Active SIP Call-ID. If omitted and only one call is active, that call is ended.
@@ -471,6 +590,28 @@ set_dnd:
   name: Set SIP DND
   description: Enable or disable Do Not Disturb on the Home Assistant softphone.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: HA phone device
+      description: Optional VoIP Stack phone Device. It must identify the same phone as Endpoint ID when both are set.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+    entity_id:
+      name: HA phone entity
+      description: Optional Entity belonging to the logical HA phone.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
     dnd:
       name: DND
       required: true
@@ -485,6 +626,28 @@ set_ha_softphone_settings:
     declaration: the HA softphone endpoint publishes it to the central phonebook,
     which creates or updates the dynamic group like it does for ESP endpoints.
   fields:
+    endpoint_id:
+      name: HA phone endpoint
+      description: Optional stable logical phone ID. Omit it for the default HA phone.
+      required: false
+      selector:
+        text:
+    device_id:
+      name: HA phone device
+      description: Optional VoIP Stack phone Device. It must identify the same phone as Endpoint ID when both are set.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+    entity_id:
+      name: HA phone entity
+      description: Optional Entity belonging to the logical HA phone.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: voip_stack
     extension:
       name: Extension
       description: Optional extension number published by the Home Assistant softphone endpoint.

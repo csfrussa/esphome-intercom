@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import contextlib
 from dataclasses import dataclass, field
 import logging
 import random
+import secrets
 import time
 from typing import Any
 
@@ -17,6 +19,8 @@ from homeassistant.core import HomeAssistant
 from .audio_format import AudioFormat, PcmFormat
 from .audio_pcm import PcmFrameConverter
 from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
+from .endpoint_lifecycle import call_registry
+from .endpoint_registry import EndpointBusyError
 from .fsm import CallState, TerminalReason
 from .groups import GROUP_TYPE_CONFERENCE
 from .media_ports import RtpPortReservation
@@ -27,6 +31,11 @@ from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 from .sip_listener import SipInvite, SipInviteResult
 from .websocket_api import _fire_call_event, _set_ha_softphone_call_state
+from .phone_endpoint import (
+    DEFAULT_ENDPOINT_ID,
+    EndpointAvailability,
+    EndpointKind,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +77,7 @@ class _ConferenceLeg:
     remote_port: int
     in_converter: PcmFrameConverter
     out_converter: PcmFrameConverter
+    endpoint_id: str = ""
     local_ports: tuple[int, int] = (0, 0)
     transport: asyncio.DatagramTransport | None = None
     decoder: RtpPayloadDecoder | None = None
@@ -109,6 +119,7 @@ class ConferenceRoom:
         *,
         name: str,
         local_ip: str,
+        on_inbound_timeout: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self.hass = hass
         self.name = name
@@ -117,9 +128,16 @@ class ConferenceRoom:
         self._task: asyncio.Task | None = None
         self._close_task: asyncio.Task[None] | None = None
         self._closed = False
-        self._ha_softphone_announced = False
+        self._ha_softphone_announced: dict[str, str] = {}
+        self.on_inbound_timeout = on_inbound_timeout
 
-    async def join(self, invite: SipInvite, *, ring_ha: bool = False) -> SipInviteResult:
+    async def join(
+        self,
+        invite: SipInvite,
+        *,
+        ring_ha: bool = False,
+        ring_endpoints: tuple[tuple[str, str], ...] = (),
+    ) -> SipInviteResult:
         if len(self.legs) >= MAX_CONFERENCE_LEGS:
             return SipInviteResult(486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value)
         port_reservation = RtpPortReservation.allocate(self.hass)
@@ -145,6 +163,7 @@ class ConferenceRoom:
                 call_id=invite.call_id,
                 caller=invite.caller,
                 role="owner" if was_empty else "manual",
+                endpoint_id="",
                 remote_host=invite.remote_rtp_host,
                 remote_port=int(invite.remote_rtp_port),
                 local_ports=local_ports,
@@ -164,8 +183,18 @@ class ConferenceRoom:
             self.legs[invite.call_id] = leg
             if self._task is None or self._task.done():
                 self._task = self.hass.async_create_task(self._mix_loop())
-            if was_empty and ring_ha:
-                self._set_softphone_ringing(invite)
+            if was_empty:
+                announced = ring_endpoints or (
+                    ((DEFAULT_ENDPOINT_ID, f"conference:{self.name}"),)
+                    if ring_ha
+                    else ()
+                )
+                for endpoint_id, call_id in announced:
+                    self._set_softphone_ringing(
+                        invite,
+                        endpoint_id=endpoint_id,
+                        call_id=call_id,
+                    )
             if was_empty:
                 self._fire("conference_started", invite.call_id, count=1)
             self._fire("conference_participant_joined", invite.call_id, caller=invite.caller, count=len(self.legs))
@@ -224,6 +253,7 @@ class ConferenceRoom:
                 call_id=call_id,
                 caller=caller,
                 role=role,
+                endpoint_id="",
                 remote_host=dialog.remote_rtp_host,
                 remote_port=int(dialog.remote_rtp_port),
                 local_ports=local_ports,
@@ -365,20 +395,35 @@ class ConferenceRoom:
             manager.rooms.pop(self.name, None)
 
     async def _dispose_leg(self, leg: _ConferenceLeg, *, reason: str) -> None:
-        # Detach synchronous resources before signaling awaits.  This is both
-        # the ownership boundary and the guarantee that cancellation cannot
-        # strand a reserved RTP pair behind a leg already removed from `legs`.
+        # Detach the socket from the mixer immediately, but keep the reserved
+        # port until dialog teardown has completed.  A late 2xx/RTP packet must
+        # never land on a port already reassigned to an unrelated call.
         transport = leg.transport
         leg.transport = None
         if transport is not None:
             transport.close()
         reservation = leg.port_reservation
         leg.port_reservation = None
-        if reservation is not None:
-            reservation.release()
         client = leg.client
         leg.client = None
         if client is None:
+            try:
+                if (
+                    reason == "media_timeout"
+                    and leg.local_out is None
+                    and self.on_inbound_timeout is not None
+                ):
+                    await self.on_inbound_timeout(leg.call_id, reason)
+            except Exception:
+                _LOGGER.exception(
+                    "Conference inbound timeout signaling failed room=%s "
+                    "call_id=%s",
+                    self.name,
+                    leg.call_id,
+                )
+            finally:
+                if reservation is not None:
+                    reservation.release()
             return
 
         async def close_client() -> None:
@@ -388,8 +433,15 @@ class ConferenceRoom:
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await client.close()
 
+        async def close_client_and_release() -> None:
+            try:
+                await close_client()
+            finally:
+                if reservation is not None:
+                    reservation.release()
+
         cleanup = asyncio.create_task(
-            close_client(),
+            close_client_and_release(),
             name=f"voip-conference-client-close-{self.name}-{leg.call_id}",
         )
         await async_wait_for_cleanup(cleanup)
@@ -501,8 +553,12 @@ class ConferenceRoom:
             },
         }
 
-    def add_ha_softphone_leg(self) -> asyncio.Queue[bytes] | None:
-        call_id = f"conference:{self.name}"
+    def add_ha_softphone_leg(
+        self,
+        *,
+        call_id: str,
+        endpoint_id: str,
+    ) -> asyncio.Queue[bytes] | None:
         existing = self.legs.get(call_id)
         if existing is not None and existing.local_out is not None:
             return existing.local_out
@@ -514,6 +570,7 @@ class ConferenceRoom:
             call_id=call_id,
             caller="HA",
             role="ha",
+            endpoint_id=endpoint_id,
             remote_host="",
             remote_port=0,
             in_converter=PcmFrameConverter(CONFERENCE_FORMAT, CONFERENCE_FORMAT),
@@ -525,17 +582,24 @@ class ConferenceRoom:
         if was_empty:
             self._fire("conference_started", call_id, count=1)
         self._fire("conference_participant_joined", call_id, caller="HA", count=len(self.legs))
-        self._ha_softphone_announced = True
+        self._ha_softphone_announced[call_id] = endpoint_id
         return queue
 
-    async def remove_ha_softphone_leg(self) -> None:
-        removed = await self.leave(f"conference:{self.name}", reason="local_hangup")
+    async def remove_ha_softphone_leg(
+        self,
+        call_id: str,
+        *,
+        reason: str = "local_hangup",
+    ) -> None:
+        endpoint_id = self._ha_softphone_announced.get(call_id, "")
+        removed = await self.leave(call_id, reason=reason)
         if removed and not self._closed:
-            self._set_softphone_idle("local_hangup")
-            self._ha_softphone_announced = False
+            self._set_softphone_idle(reason, call_id=call_id)
+        elif endpoint_id:
+            self._set_softphone_idle(reason, call_id=call_id)
 
-    def push_ha_audio(self, pcm: bytes) -> None:
-        leg = self.legs.get(f"conference:{self.name}")
+    def push_ha_audio(self, call_id: str, pcm: bytes) -> None:
+        leg = self.legs.get(call_id)
         if leg is None:
             return
         leg.last_rx = time.monotonic()
@@ -546,38 +610,87 @@ class ConferenceRoom:
                 leg.dropped_frames += 1
             leg.in_fifo.append(frame)
 
-    def _set_softphone_ringing(self, invite: SipInvite) -> None:
-        self._ha_softphone_announced = True
+    def _set_softphone_ringing(
+        self,
+        invite: SipInvite | None = None,
+        *,
+        endpoint_id: str,
+        call_id: str,
+        caller: str = "",
+        target: str = "",
+    ) -> None:
+        endpoint_registry = self.hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None
+            else None
+        )
+        self._ha_softphone_announced[call_id] = endpoint_id
         _set_ha_softphone_call_state(
             self.hass,
             CallState.RINGING.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=self.name,
-            callee=invite.target,
-            peer_name=self.name,
+            endpoint_id=endpoint_id,
+            session_device_id=str(
+                getattr(endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+            ),
+            caller=str(caller or getattr(invite, "caller", "") or self.name),
+            callee=str(target or getattr(invite, "target", "") or self.name),
+            peer_name=str(caller or getattr(invite, "caller", "") or self.name),
             direction="incoming",
-            call_id=f"conference:{self.name}",
+            call_id=call_id,
             route_kind=GROUP_TYPE_CONFERENCE,
             sip_status_code=180,
             last_sip_event="INVITE",
         )
 
-    def _set_softphone_idle(self, reason: str) -> None:
-        if not self._ha_softphone_announced:
-            return
-        _set_ha_softphone_call_state(
-            self.hass,
-            CallState.IDLE.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=self.name,
-            callee=self.name,
-            peer_name=self.name,
-            direction="incoming",
-            call_id=f"conference:{self.name}",
-            reason=reason,
-            route_kind=GROUP_TYPE_CONFERENCE,
-            last_sip_event="BYE",
+    def _set_softphone_idle(
+        self,
+        reason: str,
+        *,
+        call_id: str = "",
+    ) -> None:
+        selected = (
+            {call_id: self._ha_softphone_announced.get(call_id, "")}
+            if call_id
+            else dict(self._ha_softphone_announced)
         )
+        endpoint_registry = self.hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        registry = call_registry(self.hass)
+        manager = self.hass.data.get(DOMAIN, {}).get("conference_manager")
+        for softphone_call_id, endpoint_id in selected.items():
+            if not endpoint_id:
+                continue
+            endpoint = (
+                endpoint_registry.get(endpoint_id)
+                if endpoint_registry is not None
+                else None
+            )
+            _set_ha_softphone_call_state(
+                self.hass,
+                CallState.IDLE.value,
+                endpoint_id=endpoint_id,
+                session_device_id=str(
+                    getattr(endpoint, "device_id", "")
+                    or HA_SOFTPHONE_DEVICE_ID
+                ),
+                caller=self.name,
+                callee=self.name,
+                peer_name=self.name,
+                direction="incoming",
+                call_id=softphone_call_id,
+                reason=reason,
+                route_kind=GROUP_TYPE_CONFERENCE,
+                last_sip_event="BYE",
+            )
+            registry.softphone_media.pop(softphone_call_id, None)
+            registry.finish_and_pop(
+                softphone_call_id,
+                reason=reason,
+                state=CallState.IDLE.value,
+            )
+            self._ha_softphone_announced.pop(softphone_call_id, None)
+            if isinstance(manager, ConferenceManager):
+                manager.forget_ha_call(softphone_call_id)
 
     def _fire(self, event: str, call_id: str, **extra: Any) -> None:
         _fire_call_event(
@@ -595,23 +708,225 @@ class ConferenceRoom:
 
 
 class ConferenceManager:
-    def __init__(self, hass: HomeAssistant, *, local_ip: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        *,
+        local_ip: str,
+        on_inbound_timeout: Callable[[str, str], Awaitable[None]] | None = None,
+    ) -> None:
         self.hass = hass
         self.local_ip = local_ip
         self.rooms: dict[str, ConferenceRoom] = {}
+        self.ha_calls: dict[str, tuple[str, str]] = {}
         self._close_task: asyncio.Task[None] | None = None
         self._closing = False
         self._closed = False
+        self.on_inbound_timeout = on_inbound_timeout
 
-    async def join(self, invite: SipInvite, entry: Any, *, ring_ha: bool = False) -> SipInviteResult:
+    def _reserve_ha_call(
+        self,
+        room_name: str,
+        endpoint_id: str,
+        *,
+        call_id: str = "",
+        state: str = CallState.RINGING.value,
+    ) -> str:
+        endpoint_id = str(endpoint_id or DEFAULT_ENDPOINT_ID).strip()
+        room_name = str(room_name or "").strip()
+        registry = call_registry(self.hass)
+        candidate = str(call_id or "").strip()
+        if not candidate:
+            legacy = f"conference:{room_name}"
+            candidate = (
+                legacy
+                if endpoint_id == DEFAULT_ENDPOINT_ID
+                and legacy not in self.ha_calls
+                and legacy not in registry.sessions
+                else f"conference:{secrets.token_hex(16)}"
+            )
+        existing = self.ha_calls.get(candidate)
+        if existing is not None:
+            if existing != (room_name, endpoint_id):
+                raise ValueError(f"conference call_id {candidate!r} is already bound")
+            return candidate
+        endpoint_registry = self.hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None
+            else None
+        )
+        registry.upsert(
+            candidate,
+            state=state,
+            owner="ha_softphone",
+            caller=room_name,
+            callee=str(getattr(endpoint, "name", "") or endpoint_id),
+            route_kind=GROUP_TYPE_CONFERENCE,
+            endpoint_id=endpoint_id,
+            conference_room=room_name,
+            session_device_id=str(
+                getattr(endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+            ),
+        )
+        try:
+            registry.claim_endpoint(candidate, endpoint_id, role="ha_softphone")
+        except BaseException:
+            registry.finish_and_pop(
+                candidate,
+                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
+            raise
+        self.ha_calls[candidate] = (room_name, endpoint_id)
+        return candidate
+
+    def _release_ha_reservations(
+        self,
+        reservations: list[tuple[str, str]] | tuple[tuple[str, str], ...],
+        *,
+        room: ConferenceRoom | None = None,
+        reason: str = TerminalReason.TRANSPORT_UNREACHABLE.value,
+        state: str = CallState.TRANSPORT_UNREACHABLE.value,
+    ) -> None:
+        """Release provisional browser legs even when publication failed.
+
+        Conference setup spans the endpoint registry, the call registry and
+        the browser state adapter.  Keep teardown idempotent so an exception
+        at any point cannot leave a logical phone busy forever.
+        """
+        registry = call_registry(self.hass)
+        for _endpoint_id, call_id in reservations:
+            try:
+                if room is not None and call_id in room._ha_softphone_announced:
+                    room._set_softphone_idle(reason, call_id=call_id)
+            except Exception:  # pragma: no cover - defensive state adapter isolation
+                _LOGGER.exception(
+                    "Failed to publish conference browser cleanup call_id=%s",
+                    call_id,
+                )
+            finally:
+                registry.softphone_media.pop(call_id, None)
+                registry.finish_and_pop(call_id, reason=reason, state=state)
+                self.forget_ha_call(call_id)
+                if room is not None:
+                    room._ha_softphone_announced.pop(call_id, None)
+
+    def resolve_ha_call(self, call_id: str) -> tuple[str, str] | None:
+        return self.ha_calls.get(str(call_id or "").strip())
+
+    def forget_ha_call(self, call_id: str) -> None:
+        self.ha_calls.pop(str(call_id or "").strip(), None)
+
+    def ring_ha_endpoints(
+        self,
+        room_name: str,
+        endpoint_ids: tuple[str, ...],
+        *,
+        caller: str,
+    ) -> tuple[str, ...]:
+        room_key = str(room_name or "").strip()
+        room = self.rooms.get(room_key)
+        if room is None or room._closed:
+            return ()
+        endpoint_registry = self.hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        call_ids: list[str] = []
+        reservations: list[tuple[str, str]] = []
+        try:
+            for endpoint_id in endpoint_ids:
+                endpoint = (
+                    endpoint_registry.get(endpoint_id)
+                    if endpoint_registry is not None
+                    else None
+                )
+                if endpoint is not None and (
+                    endpoint.kind is not EndpointKind.BROWSER
+                    or endpoint.dnd
+                    or endpoint.availability
+                    is not EndpointAvailability.AVAILABLE
+                ):
+                    continue
+                try:
+                    call_id = self._reserve_ha_call(room_key, endpoint_id)
+                except EndpointBusyError:
+                    continue
+                reservations.append((endpoint_id, call_id))
+                room._set_softphone_ringing(
+                    endpoint_id=endpoint_id,
+                    call_id=call_id,
+                    caller=caller,
+                    target=room_key,
+                )
+                call_ids.append(call_id)
+        except BaseException:
+            self._release_ha_reservations(reservations, room=room)
+            raise
+        return tuple(call_ids)
+
+    async def join(
+        self,
+        invite: SipInvite,
+        entry: Any,
+        *,
+        ring_ha: bool = False,
+        ring_endpoint_ids: tuple[str, ...] = (),
+    ) -> SipInviteResult:
         if self._closing or self._closed:
             return SipInviteResult(503, "Service Unavailable", to_tag="")
         room_name = str(getattr(entry, "name", "") or getattr(entry, "id", "") or invite.target)
         room = self.rooms.get(room_name)
         if room is None or room._closed:
-            room = ConferenceRoom(self.hass, name=room_name, local_ip=self.local_ip)
+            room = ConferenceRoom(
+                self.hass,
+                name=room_name,
+                local_ip=self.local_ip,
+                on_inbound_timeout=self.on_inbound_timeout,
+            )
             self.rooms[room_name] = room
-        return await room.join(invite, ring_ha=ring_ha)
+        requested_endpoint_ids = ring_endpoint_ids or (
+            (DEFAULT_ENDPOINT_ID,) if ring_ha else ()
+        )
+        endpoint_registry = self.hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        ring_endpoints: list[tuple[str, str]] = []
+        try:
+            for endpoint_id in requested_endpoint_ids:
+                endpoint = (
+                    endpoint_registry.get(endpoint_id)
+                    if endpoint_registry is not None
+                    else None
+                )
+                if endpoint is not None and (
+                    endpoint.kind is not EndpointKind.BROWSER
+                    or endpoint.dnd
+                    or endpoint.availability
+                    is not EndpointAvailability.AVAILABLE
+                ):
+                    continue
+                try:
+                    call_id = self._reserve_ha_call(room_name, endpoint_id)
+                except EndpointBusyError:
+                    continue
+                ring_endpoints.append((endpoint_id, call_id))
+            result = await room.join(
+                invite,
+                ring_ha=False,
+                ring_endpoints=tuple(ring_endpoints),
+            )
+        except BaseException:
+            self._release_ha_reservations(ring_endpoints, room=room)
+            if not room.legs and self.rooms.get(room_name) is room:
+                self.rooms.pop(room_name, None)
+            raise
+        if result.status != 200:
+            self._release_ha_reservations(
+                ring_endpoints,
+                room=room,
+                reason=result.decline_reason
+                or TerminalReason.TRANSPORT_UNREACHABLE.value,
+            )
+            if not room.legs and self.rooms.get(room_name) is room:
+                self.rooms.pop(room_name, None)
+        return result
 
     async def add_client_leg(
         self,
@@ -632,7 +947,12 @@ class ConferenceManager:
             if role == "auto_invited":
                 port_reservation.release()
                 return False
-            room = ConferenceRoom(self.hass, name=room_key, local_ip=self.local_ip)
+            room = ConferenceRoom(
+                self.hass,
+                name=room_key,
+                local_ip=self.local_ip,
+                on_inbound_timeout=self.on_inbound_timeout,
+            )
             self.rooms[room_key] = room
         return await room.add_client_leg(
             call_id=call_id,
@@ -650,15 +970,52 @@ class ConferenceManager:
                 return True
         return False
 
-    def join_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes] | None:
+    def join_ha_softphone(
+        self,
+        room_name: str,
+        *,
+        endpoint_id: str = DEFAULT_ENDPOINT_ID,
+        call_id: str = "",
+    ) -> tuple[str, asyncio.Queue[bytes]] | None:
         if self._closing or self._closed:
             return None
         room = self.rooms.get(str(room_name or "").strip())
         if room is None or room._closed:
             return None
-        return room.add_ha_softphone_leg()
+        try:
+            resolved_call_id = self._reserve_ha_call(
+                room_name,
+                endpoint_id,
+                call_id=call_id,
+                state=CallState.IN_CALL.value,
+            )
+        except EndpointBusyError:
+            return None
+        reservation = [(endpoint_id, resolved_call_id)]
+        try:
+            queue = room.add_ha_softphone_leg(
+                call_id=resolved_call_id,
+                endpoint_id=endpoint_id,
+            )
+        except BaseException:
+            self._release_ha_reservations(reservation, room=room)
+            raise
+        if queue is None:
+            self._release_ha_reservations(
+                reservation,
+                room=room,
+                reason=TerminalReason.BUSY.value,
+                state=CallState.BUSY.value,
+            )
+            return None
+        return resolved_call_id, queue
 
-    def start_ha_softphone(self, room_name: str) -> asyncio.Queue[bytes] | None:
+    def start_ha_softphone(
+        self,
+        room_name: str,
+        *,
+        endpoint_id: str = DEFAULT_ENDPOINT_ID,
+    ) -> tuple[str, asyncio.Queue[bytes]] | None:
         if self._closing or self._closed:
             return None
         room_key = str(room_name or "").strip()
@@ -666,20 +1023,66 @@ class ConferenceManager:
         if room is None or room._closed:
             room = ConferenceRoom(self.hass, name=room_key, local_ip=self.local_ip)
             self.rooms[room_key] = room
-        return room.add_ha_softphone_leg()
+        try:
+            joined = self.join_ha_softphone(room_key, endpoint_id=endpoint_id)
+        except BaseException:
+            if not room.legs and self.rooms.get(room_key) is room:
+                self.rooms.pop(room_key, None)
+            raise
+        if joined is None and not room.legs and self.rooms.get(room_key) is room:
+            self.rooms.pop(room_key, None)
+        return joined
 
-    def push_ha_audio(self, room_name: str, pcm: bytes) -> None:
-        room = self.rooms.get(str(room_name or "").strip())
+    def push_ha_audio(self, call_id: str, pcm: bytes) -> None:
+        resolved = self.resolve_ha_call(call_id)
+        room = self.rooms.get(resolved[0]) if resolved is not None else None
         if room is not None and not room._closed:
-            room.push_ha_audio(pcm)
+            room.push_ha_audio(call_id, pcm)
 
-    async def leave_ha_softphone(self, room_name: str) -> None:
+    async def leave_ha_softphone(
+        self,
+        room_name: str,
+        *,
+        call_id: str,
+        reason: str = "local_hangup",
+    ) -> None:
         room_key = str(room_name or "").strip()
         room = self.rooms.get(room_key)
         if room is not None:
-            await room.remove_ha_softphone_leg()
+            await room.remove_ha_softphone_leg(call_id, reason=reason)
             if room._closed and self.rooms.get(room_key) is room:
                 self.rooms.pop(room_key, None)
+        else:
+            registry = call_registry(self.hass)
+            registry.softphone_media.pop(call_id, None)
+            registry.finish_and_pop(
+                call_id,
+                reason=reason,
+                state=CallState.IDLE.value,
+            )
+            self.forget_ha_call(call_id)
+
+    async def decline_ha_softphone(
+        self,
+        call_id: str,
+        endpoint_id: str,
+        *,
+        reason: str = TerminalReason.DECLINED.value,
+    ) -> bool:
+        resolved = self.resolve_ha_call(call_id)
+        if resolved is None or resolved[1] != endpoint_id:
+            return False
+        room = self.rooms.get(resolved[0])
+        if room is not None:
+            room._set_softphone_idle(reason, call_id=call_id)
+        else:
+            call_registry(self.hass).finish_and_pop(
+                call_id,
+                reason=reason,
+                state="declined",
+            )
+            self.forget_ha_call(call_id)
+        return True
 
     async def close(self, reason: str = "local_hangup") -> None:
         self._closing = True
@@ -699,15 +1102,29 @@ class ConferenceManager:
                 await asyncio.gather(*(room.close(reason=reason) for room in rooms))
         finally:
             self._closed = True
+            self.ha_calls.clear()
 
     def snapshot(self) -> dict[str, Any]:
         return {name: room.snapshot() for name, room in self.rooms.items()}
 
 
-def conference_manager(hass: HomeAssistant, *, local_ip: str) -> ConferenceManager:
+def conference_manager(
+    hass: HomeAssistant,
+    *,
+    local_ip: str,
+    on_inbound_timeout: Callable[[str, str], Awaitable[None]] | None = None,
+) -> ConferenceManager:
     bucket = hass.data.setdefault(DOMAIN, {})
     manager = bucket.get("conference_manager")
     if not isinstance(manager, ConferenceManager) or manager.local_ip != local_ip:
-        manager = ConferenceManager(hass, local_ip=local_ip)
+        manager = ConferenceManager(
+            hass,
+            local_ip=local_ip,
+            on_inbound_timeout=on_inbound_timeout,
+        )
         bucket["conference_manager"] = manager
+    elif on_inbound_timeout is not None:
+        manager.on_inbound_timeout = on_inbound_timeout
+        for room in manager.rooms.values():
+            room.on_inbound_timeout = on_inbound_timeout
     return manager

@@ -13,6 +13,7 @@ export class VoipStackVideo extends EventTarget {
     this._clientId = "";
     this._ws = null;
     this._callId = "";
+    this._endpointId = "default";
     this._active = false;
     this._canReceive = false;
     this._canSend = false;
@@ -150,34 +151,45 @@ export class VoipStackVideo extends EventTarget {
         send_payload_type: send.payloadType,
         receive_payload_type: receive.payloadType,
         call_id: this._callId,
+        endpoint_id: this._endpointId,
         stats: this.stats,
       },
     }));
   }
 
-  async _wsUrl(callId) {
+  async _wsUrl(callId, endpointId = "default") {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const path = `/api/voip_stack/video_ws?call_id=${encodeURIComponent(callId)}&client_id=${encodeURIComponent(this._clientId)}`;
+    const path = `/api/voip_stack/video_ws?endpoint_id=${encodeURIComponent(endpointId || "default")}&call_id=${encodeURIComponent(callId)}&client_id=${encodeURIComponent(this._clientId)}`;
     const signed = await this._hass.callWS({ type: "auth/sign_path", path });
     return `${proto}//${window.location.host}${signed.path || path}`;
   }
 
   async start(statePayload) {
     const callId = String(statePayload?.call_id || "");
+    const endpointId = String(statePayload?.endpoint_id || "default");
     if (!statePayload?.video_active || !callId) {
       await this.close();
       return false;
     }
-    if (this._ws?.readyState === WebSocket.OPEN && this._callId === callId) return true;
+    if (
+      this._ws?.readyState === WebSocket.OPEN &&
+      this._callId === callId &&
+      this._endpointId === endpointId
+    ) return true;
     await this.close();
     if (!window.isSecureContext) {
       throw new Error("Experimental SIP video requires a secure browser context");
     }
     const generation = ++this._generation;
     this._callId = callId;
+    this._endpointId = endpointId;
     this._stats = this._emptyStats();
-    const url = await this._wsUrl(callId);
-    if (generation !== this._generation || this._callId !== callId) return false;
+    const url = await this._wsUrl(callId, endpointId);
+    if (
+      generation !== this._generation ||
+      this._callId !== callId ||
+      this._endpointId !== endpointId
+    ) return false;
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     this._ws = ws;
@@ -356,6 +368,7 @@ export class VoipStackVideo extends EventTarget {
       // live owner. Release the old media socket first, then reconnect using
       // the normal ownership handoff and the newly committed SDP generation.
       const expectedClosedGeneration = this._generation + 1;
+      const endpointId = this._endpointId;
       await this.close();
       if (
         this._generation !== expectedClosedGeneration ||
@@ -365,6 +378,7 @@ export class VoipStackVideo extends EventTarget {
       return this.start({
         ...negotiated,
         call_id: callId,
+        endpoint_id: endpointId,
         video_active: true,
       });
     }
@@ -1102,6 +1116,7 @@ export class VoipStackVideo extends EventTarget {
     this._cleanupReceiver();
     if (generation === this._generation) {
       this._callId = "";
+      this._endpointId = "default";
       this._active = false;
       this._canReceive = false;
       this._canSend = false;

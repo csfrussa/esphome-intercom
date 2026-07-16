@@ -73,6 +73,13 @@ from .media_ports import (
     reserve_sip_video_media,
     reserve_sip_video_relay_media,
 )
+from .endpoint_registry import EndpointBusyError
+from .phone_endpoint import (
+    DEFAULT_ENDPOINT_ID,
+    EndpointAvailability,
+    EndpointKind,
+    OfflinePolicy,
+)
 from .phonebook_runtime import registered_roster_entries as _registered_roster_entries
 from .router import (
     CallContext,
@@ -93,7 +100,6 @@ from .store import sip_accounts as _sip_accounts
 from .websocket_api import (
     SIP_DTMF_EVENT,
     _fire_call_event,
-    _ha_softphone_dnd,
     _ha_softphone_store,
     _release_ha_softphone_claim,
     _set_ha_softphone_call_state,
@@ -223,7 +229,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _trunk_enabled,
         _ha_advertise_host,
         _ha_peer_name,
-        _ha_softphone_has_active_call,
         _sip_send_bye,
         _sip_send_final_response,
         _sip_uri_transport,
@@ -266,11 +271,64 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     if not local_ip:
         _LOGGER.error("Cannot start SIP endpoint: HA announce IP is unknown")
         return False
+
+    async def _on_conference_inbound_timeout(call_id: str, reason: str) -> None:
+        """End a timed-out inbound UAS dialog and release its logical claim."""
+        if not _sip_send_bye(hass, call_id):
+            _LOGGER.warning(
+                "Conference media timeout could not send SIP BYE call_id=%s",
+                call_id,
+            )
+        registry = _call_registry(hass)
+        session = registry.sessions.get(registry.resolve_session_id(call_id))
+        _set_sip_bridge_call_state(
+            hass,
+            CallState.IDLE.value,
+            caller=(session.caller if session is not None else ""),
+            callee=(session.callee if session is not None else ""),
+            peer_name=(session.caller if session is not None else ""),
+            call_id=call_id,
+            reason=reason,
+            terminal_reason=reason,
+            origin="self",
+            last_sip_event="BYE",
+            route_kind=GROUP_TYPE_CONFERENCE,
+        )
+        registry.finish_and_pop(
+            call_id,
+            reason=reason,
+            state=CallState.IDLE.value,
+        )
+
+    def _on_registration_change(username: str, registered: bool) -> None:
+        from .phone_endpoint import EndpointAvailability
+
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        endpoint = (
+            endpoint_registry.by_username(username)
+            if endpoint_registry is not None
+            else None
+        )
+        if (
+            endpoint is not None
+            and endpoint.availability is not EndpointAvailability.UNAVAILABLE
+        ):
+            endpoint_registry.update(
+                endpoint.endpoint_id,
+                availability=(
+                    EndpointAvailability.AVAILABLE
+                    if registered
+                    else EndpointAvailability.OFFLINE
+                ),
+            )
+        create_runtime_task(hass, _refresh_and_push_phonebook(hass))
+
     registrar = SipRegistrar(
         enabled=bool(cfg.get(CONF_REGISTRAR_ENABLED, False)),
         accounts=_sip_accounts(hass),
         local_ip=local_ip,
         local_sip_port=int(cfg["sip_port"]),
+        on_registration_change=_on_registration_change,
     )
     hass.data.setdefault(DOMAIN, {})["sip_registrar"] = registrar
 
@@ -599,6 +657,67 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         client: SipCallClient
         ports: RtpPortReservation
         bridge_to_softphone: bool = False
+        endpoint_id: str = ""
+
+    @dataclass(frozen=True, slots=True)
+    class BrowserLeg:
+        member: str
+        endpoint_id: str
+        name: str
+        device_id: str
+
+    def _logical_endpoint_for_member(
+        member: str,
+        peers: list[Peer],
+        entries: list[RosterEntry],
+    ):
+        """Resolve a group member to its transport-independent endpoint."""
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        if endpoint_registry is None:
+            return None
+        entry = _roster_entry_for_target(member, entries)
+        endpoint_id = str(
+            ((entry.metadata if entry is not None else {}) or {}).get("endpoint_id")
+            or ""
+        ).strip()
+        if not endpoint_id:
+            peer = next(
+                (
+                    candidate
+                    for candidate in peers
+                    if _same_route_name(member, candidate.name)
+                ),
+                None,
+            )
+            endpoint_id = str(getattr(peer, "endpoint_id", "") or "").strip()
+        if not endpoint_id and _is_ha_target(member):
+            endpoint_id = DEFAULT_ENDPOINT_ID
+        return endpoint_registry.get(endpoint_id) if endpoint_id else None
+
+    def _browser_leg_for_member(
+        member: str,
+        peers: list[Peer],
+        entries: list[RosterEntry],
+    ) -> BrowserLeg | None:
+        endpoint = _logical_endpoint_for_member(member, peers, entries)
+        if endpoint is not None:
+            if endpoint.kind is not EndpointKind.BROWSER:
+                return None
+            return BrowserLeg(
+                member=member,
+                endpoint_id=endpoint.endpoint_id,
+                name=endpoint.name,
+                device_id=str(endpoint.device_id or HA_SOFTPHONE_DEVICE_ID),
+            )
+        # Preserve the pre-registry/YAML-only master-phone compatibility path.
+        if _is_ha_target(member):
+            return BrowserLeg(
+                member=member,
+                endpoint_id=DEFAULT_ENDPOINT_ID,
+                name=_ha_peer_name(hass),
+                device_id=HA_SOFTPHONE_DEVICE_ID,
+            )
+        return None
 
     def _prepare_outbound_leg(
         *,
@@ -657,6 +776,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 client=client,
                 ports=ports,
                 bridge_to_softphone=bridge_to_softphone,
+                endpoint_id=str(
+                    getattr(
+                        _logical_endpoint_for_member(
+                            member, peers, roster_entries
+                        ),
+                        "endpoint_id",
+                        "",
+                    )
+                    or ""
+                ),
             )
         except Exception:
             ports.release()
@@ -683,27 +812,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     async def _close_outbound_leg(
         attempt: OutboundLeg, *, cancel: bool = False, bye_or_cancel: bool = False
     ) -> None:
-        if cancel:
-            # The port pair is no longer reachable once this loser is removed
-            # from the group, so release it synchronously before scheduling
-            # the slower SIP CANCEL/487 cleanup.
-            attempt.ports.release()
-            create_runtime_task(
-                hass,
-                async_cleanup_sip_runtime(
-                    client=attempt.client,
-                    terminate_client=True,
-                ),
-            )
-            return
-
         async def cleanup() -> None:
             try:
                 await async_cleanup_sip_runtime(
                     client=attempt.client,
-                    terminate_client=bye_or_cancel,
+                    terminate_client=bool(cancel or bye_or_cancel),
                 )
             finally:
+                # Keep the reservation until CANCEL/BYE teardown has consumed
+                # late final responses.  Reusing it earlier could route late
+                # RTP from the losing dialog into an unrelated new call.
                 attempt.ports.release()
 
         task = asyncio.create_task(
@@ -759,12 +877,161 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         peer = _peer_for_target(member, peers)
         return bool(peer is not None and peer.host and peer.host == source_host)
 
+    def _publish_pending_ha_softphone_ringing(
+        invite: SipInvite,
+        *,
+        route_kind: str,
+        endpoint_id: str,
+        endpoint_device_id: str,
+        callee: str,
+        sip_uri: str | None = None,
+        last_sip_event: str = "INVITE",
+    ) -> None:
+        """Project one pending SIP dialog onto its owning browser phone."""
+        registry = _call_registry(hass)
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None
+            else None
+        )
+        video_enabled = bool(
+            invite.video_format is not None
+            and (endpoint is None or endpoint.supports("video"))
+        )
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.RINGING.value,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
+            caller=invite.caller,
+            callee=callee,
+            peer_name=invite.caller,
+            direction="incoming",
+            call_id=invite.call_id,
+            selected_tx_format=invite.send_format.audio_format.wire_token(),
+            selected_rx_format=invite.recv_format.audio_format.wire_token(),
+            selected_tx_rtp_format=invite.send_format.wire_token(),
+            selected_rx_rtp_format=invite.recv_format.wire_token(),
+            audio_mode="full_duplex",
+            route_kind=route_kind,
+            sip_uri=sip_uri,
+            sip_status_code=(
+                200 if invite.call_id in registry.preanswered else 180
+            ),
+            last_sip_event=last_sip_event,
+            video_offered=video_enabled,
+            video_format=(
+                invite.video_format.wire_token() if video_enabled else ""
+            ),
+            video_send_format=(
+                invite.send_video_format.wire_token()
+                if video_enabled and invite.send_video_format is not None
+                else ""
+            ),
+            video_receive_format=(
+                invite.recv_video_format.wire_token()
+                if video_enabled and invite.recv_video_format is not None
+                else ""
+            ),
+        )
+
+    def _schedule_ha_softphone_offline_wait(
+        invite: SipInvite,
+        *,
+        endpoint_id: str,
+        endpoint_device_id: str,
+        callee: str,
+        offline_wait_seconds: int,
+    ) -> None:
+        """Expire only the still-current offline browser owner of an INVITE."""
+        if offline_wait_seconds <= 0:
+            return
+        registry = _call_registry(hass)
+
+        def _is_current_owner() -> bool:
+            current = registry.sessions.get(
+                registry.resolve_session_id(invite.call_id)
+            )
+            return bool(
+                invite.call_id in registry.pending_invites
+                and current is not None
+                and current.state == CallState.RINGING.value
+                and current.owner == "ha_softphone"
+                and str(current.metadata.get("endpoint_id") or "") == endpoint_id
+            )
+
+        async def _wait_for_browser() -> None:
+            event = (
+                hass.data.setdefault(DOMAIN, {})
+                .setdefault("ha_softphone_presence_events", {})
+                .setdefault(endpoint_id, asyncio.Event())
+            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + float(offline_wait_seconds)
+            while _is_current_owner():
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                try:
+                    # Presence may legitimately remain offline for hours.
+                    # Recheck ownership periodically so an answer, decline or
+                    # second forward cannot leave or misapply this timeout.
+                    await asyncio.wait_for(
+                        event.wait(), timeout=min(remaining, 1.0)
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    continue
+            if not _is_current_owner():
+                return
+            registry.pending_invites.pop(invite.call_id, None)
+            preanswered = registry.preanswered.pop(invite.call_id, None)
+            if preanswered is not None:
+                _release_media_reservation(preanswered)
+                _sip_send_bye(hass, invite.call_id)
+            else:
+                _sip_send_final_response(
+                    hass,
+                    invite.call_id,
+                    480,
+                    "Temporarily Unavailable",
+                    decline_reason=RouteReason.TARGET_UNREACHABLE.value,
+                )
+            _set_ha_softphone_call_state(
+                hass,
+                CallState.TRANSPORT_UNREACHABLE.value,
+                endpoint_id=endpoint_id,
+                session_device_id=endpoint_device_id,
+                caller=invite.caller,
+                callee=callee,
+                peer_name=invite.caller,
+                direction="incoming",
+                call_id=invite.call_id,
+                reason=RouteReason.TARGET_UNREACHABLE.value,
+                sip_status_code=480,
+                last_sip_event=(
+                    "BYE" if preanswered is not None else "OFFLINE_WAIT_TIMEOUT"
+                ),
+            )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=RouteReason.TARGET_UNREACHABLE.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
+
+        create_runtime_task(hass, _wait_for_browser())
+
     def _defer_invite_to_ha_softphone(
         invite: SipInvite,
         *,
         route_kind: str,
+        endpoint_id: str = DEFAULT_ENDPOINT_ID,
+        endpoint_device_id: str = HA_SOFTPHONE_DEVICE_ID,
         callee: str | None = None,
         sip_uri: str | None = None,
+        offline_wait_seconds: int = 0,
+        last_sip_event: str = "INVITE",
     ) -> None:
         registry = _call_registry(hass)
         registry.pending_invites[invite.call_id] = invite
@@ -775,6 +1042,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             callee=callee or invite.target,
             route_kind=route_kind,
             owner="ha_softphone",
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
+        )
+        registry.claim_endpoint(
+            invite.call_id,
+            endpoint_id,
+            role="destination",
         )
         registry.add_leg(
             invite.call_id,
@@ -796,41 +1070,24 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     expected_revision,
                 )
                 return
-            _set_ha_softphone_call_state(
-                hass,
-                CallState.RINGING.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=invite.caller,
-                callee=callee or invite.target,
-                peer_name=invite.caller,
-                direction="incoming",
-                call_id=invite.call_id,
-                selected_tx_format=invite.send_format.audio_format.wire_token(),
-                selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                selected_tx_rtp_format=invite.send_format.wire_token(),
-                selected_rx_rtp_format=invite.recv_format.wire_token(),
-                audio_mode="full_duplex",
+            _publish_pending_ha_softphone_ringing(
+                invite,
                 route_kind=route_kind,
+                endpoint_id=endpoint_id,
+                endpoint_device_id=endpoint_device_id,
+                callee=callee or invite.target,
                 sip_uri=sip_uri,
-                sip_status_code=180,
-                last_sip_event="INVITE",
-                video_offered=invite.video_format is not None,
-                video_format=(
-                    invite.video_format.wire_token() if invite.video_format else ""
-                ),
-                video_send_format=(
-                    invite.send_video_format.wire_token()
-                    if invite.send_video_format is not None
-                    else ""
-                ),
-                video_receive_format=(
-                    invite.recv_video_format.wire_token()
-                    if invite.recv_video_format is not None
-                    else ""
-                ),
+                last_sip_event=last_sip_event,
             )
 
         hass.loop.call_soon(_publish_ringing_if_current)
+        _schedule_ha_softphone_offline_wait(
+            invite,
+            endpoint_id=endpoint_id,
+            endpoint_device_id=endpoint_device_id,
+            callee=callee or invite.target,
+            offline_wait_seconds=offline_wait_seconds,
+        )
 
     def _inbound_route_decision(
         invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]
@@ -1452,6 +1709,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 f"call_id {call_id} is already being forwarded"
             )
         forward_claims.add(call_id)
+        target_browser_endpoint = None
         try:
             peers = await _async_build_peer_snapshot(hass)
             if registry.pending_invites.get(call_id) is not invite:
@@ -1477,7 +1735,38 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 _registered_roster_entries(hass),
             )
             decision = _ha_router_decision(destination, roster_entries)
-            if decision.action in {RouteAction.REJECT, RouteAction.ANSWER_HA}:
+            endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+            visited_browser_endpoints: set[str] = set()
+            while decision.action is RouteAction.ANSWER_HA:
+                target_browser_endpoint = _logical_endpoint_for_member(
+                    decision.target or destination,
+                    peers,
+                    roster_entries,
+                )
+                if (
+                    target_browser_endpoint is None
+                    or target_browser_endpoint.kind is not EndpointKind.BROWSER
+                ):
+                    raise ServiceValidationError(
+                        f"destination {destination} is not a configured Home Assistant phone"
+                    )
+                if target_browser_endpoint.endpoint_id in visited_browser_endpoints:
+                    raise ServiceValidationError(
+                        f"destination {destination} has an offline-forward loop"
+                    )
+                if (
+                    target_browser_endpoint.availability
+                    is not EndpointAvailability.AVAILABLE
+                    and target_browser_endpoint.offline_policy
+                    is OfflinePolicy.FORWARD
+                ):
+                    visited_browser_endpoints.add(target_browser_endpoint.endpoint_id)
+                    destination = target_browser_endpoint.offline_forward_target
+                    decision = _ha_router_decision(destination, roster_entries)
+                    target_browser_endpoint = None
+                    continue
+                break
+            if decision.action is RouteAction.REJECT:
                 raise ServiceValidationError(
                     f"destination {destination} is not a forwardable SIP dial-plan target"
                 )
@@ -1510,6 +1799,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     source="automation",
                 )
             session = registry.sessions.get(registry.resolve_session_id(call_id))
+            session_endpoint_id = str(
+                (session.metadata if session is not None else {}).get("endpoint_id")
+                or DEFAULT_ENDPOINT_ID
+            ).strip()
+            if (
+                target_browser_endpoint is not None
+                and target_browser_endpoint.endpoint_id == session_endpoint_id
+            ):
+                raise ServiceValidationError(
+                    "a Home Assistant phone cannot forward a call to itself"
+                )
+            session_endpoint = (
+                endpoint_registry.get(session_endpoint_id)
+                if endpoint_registry is not None
+                else None
+            )
+            session_device_id = str(
+                getattr(session_endpoint, "device_id", "")
+                or HA_SOFTPHONE_DEVICE_ID
+            )
             original_callee = session.callee if session is not None else invite.target
             original_route_kind = session.route_kind if session is not None else ""
             # A trunk call is already SIP-answered while its DTMF/automation
@@ -1552,6 +1861,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 hass,
                 call_id,
                 destination=destination,
+                endpoint_id=session_endpoint_id,
             )
             if not route_already_claimed:
                 _set_sip_bridge_call_state(
@@ -1598,22 +1908,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     if resumed is None:
                         return
                 if ha_claimed:
-                    _set_ha_softphone_call_state(
-                        hass,
-                        CallState.RINGING.value,
-                        session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                        caller=invite.caller,
-                        callee=original_callee,
-                        peer_name=invite.caller,
-                        direction="incoming",
-                        call_id=call_id,
-                        selected_tx_format=invite.send_format.audio_format.wire_token(),
-                        selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                        selected_tx_rtp_format=invite.send_format.wire_token(),
-                        selected_rx_rtp_format=invite.recv_format.wire_token(),
-                        audio_mode="full_duplex",
+                    _publish_pending_ha_softphone_ringing(
+                        invite,
                         route_kind=original_route_kind,
-                        sip_status_code=200 if preanswered is not None else 180,
+                        endpoint_id=session_endpoint_id,
+                        endpoint_device_id=session_device_id,
+                        callee=original_callee,
                         last_sip_event="ROUTE_RESUME",
                     )
                 return
@@ -1664,9 +1964,71 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             client = None
             reservation = None
             reservation_from_preanswer = False
+            video_relay = None
             dest_call_id = ""
             try:
                 preanswered = registry.preanswered.get(call_id)
+                if decision.action is RouteAction.ANSWER_HA:
+                    endpoint = target_browser_endpoint
+                    if endpoint is None or endpoint.kind is not EndpointKind.BROWSER:
+                        raise RuntimeError("target Home Assistant phone disappeared")
+                    if endpoint.dnd:
+                        raise RuntimeError("target Home Assistant phone is in DND")
+                    if endpoint.active_call_id and endpoint.active_call_id != call_id:
+                        raise RuntimeError("target Home Assistant phone is busy")
+                    if endpoint.availability is EndpointAvailability.UNAVAILABLE:
+                        raise RuntimeError("target Home Assistant phone is disabled")
+                    offline_wait_seconds = 0
+                    if endpoint.availability is EndpointAvailability.OFFLINE:
+                        if endpoint.offline_policy is not OfflinePolicy.WAIT:
+                            raise RuntimeError("target Home Assistant phone is offline")
+                        offline_wait_seconds = endpoint.offline_wait_seconds
+
+                    session_id = registry.resolve_session_id(call_id)
+                    claims = registry.endpoint_claims.get(session_id, {})
+                    target_was_claimed = endpoint.endpoint_id in claims
+                    old_was_claimed = session_endpoint_id in claims
+                    target_claimed = False
+                    old_released = False
+                    try:
+                        registry.claim_endpoint(
+                            call_id,
+                            endpoint.endpoint_id,
+                            role="destination",
+                        )
+                        target_claimed = not target_was_claimed
+                        if session_endpoint_id != endpoint.endpoint_id:
+                            old_released = registry.release_endpoint_claim(
+                                call_id,
+                                session_endpoint_id,
+                            ) or old_was_claimed
+                        _defer_invite_to_ha_softphone(
+                            invite,
+                            route_kind=decision.action.value,
+                            endpoint_id=endpoint.endpoint_id,
+                            endpoint_device_id=str(
+                                endpoint.device_id or HA_SOFTPHONE_DEVICE_ID
+                            ),
+                            callee=endpoint.name,
+                            sip_uri=decision.sip_uri,
+                            offline_wait_seconds=offline_wait_seconds,
+                            last_sip_event="ROUTE_FORWARD",
+                        )
+                    except Exception:
+                        if target_claimed:
+                            registry.release_endpoint_claim(
+                                call_id,
+                                endpoint.endpoint_id,
+                            )
+                        if old_released and old_was_claimed:
+                            registry.claim_endpoint(
+                                call_id,
+                                session_endpoint_id,
+                                role="destination",
+                            )
+                        raise
+                    return
+
                 reservation = (preanswered or {}).get("rtp_reservation")
                 reservation_from_preanswer = reservation is not None
                 if reservation is None:
@@ -2009,6 +2371,85 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     sip_send_formats = list(HA_TRUNK_AUDIO_FORMATS)
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
                 trunk_cfg = _get_trunk_config(hass)
+                endpoint_registry = hass.data.get(DOMAIN, {}).get(
+                    "endpoint_registry"
+                )
+                source_route_endpoint_id = str(
+                    ((session.metadata if session is not None else {}) or {}).get(
+                        "source_endpoint_id"
+                    )
+                    or ""
+                ).strip()
+                target_route_endpoint_id = str(
+                    ((decision.entry.metadata if decision.entry is not None else {}) or {}).get(
+                        "endpoint_id"
+                    )
+                    or ""
+                ).strip()
+                source_route_endpoint = (
+                    endpoint_registry.get(source_route_endpoint_id)
+                    if endpoint_registry is not None and source_route_endpoint_id
+                    else None
+                )
+                target_route_endpoint = (
+                    endpoint_registry.get(target_route_endpoint_id)
+                    if endpoint_registry is not None and target_route_endpoint_id
+                    else None
+                )
+                forward_video_enabled = bool(
+                    preanswered is None
+                    and cfg.get(CONF_EXPERIMENTAL_VIDEO, False)
+                    and invite.video_format is not None
+                    and (
+                        source_route_endpoint is None
+                        or source_route_endpoint.supports("video")
+                    )
+                    and (
+                        target_route_endpoint is None
+                        or target_route_endpoint.supports("video")
+                    )
+                )
+                video_dest_port = 0
+                if forward_video_enabled:
+                    video_reservation = None
+                    sockets = ()
+                    try:
+                        video_reservation, sockets = reserve_sip_video_relay_media(hass)
+                        source_video_port, video_dest_port = video_reservation.ports
+                        video_relay = SipVideoRtpRelay(
+                            left=invite_video_rtp_peer(invite),
+                            right=VideoRtpPeer(
+                                host=str(bridge_uri.host),
+                                port=0,
+                                rtcp_host=str(bridge_uri.host),
+                                rtcp_port=0,
+                                video_format=invite.video_format,
+                                local_video_format=invite.video_format,
+                                signaling_host=str(bridge_uri.host),
+                            ),
+                            left_port=source_video_port,
+                            right_port=video_dest_port,
+                            left_socket=sockets[0],
+                            right_socket=sockets[2],
+                            left_rtcp_socket=sockets[1],
+                            right_rtcp_socket=sockets[3],
+                            on_release=lambda ports: _release_sip_rtp_port_pair(
+                                hass, ports
+                            ),
+                        )
+                        # The relay owns all four bound sockets from here.
+                        video_reservation.detach()
+                    except (OSError, RuntimeError) as err:
+                        for sock in sockets:
+                            sock.close()
+                        if video_reservation is not None:
+                            video_reservation.release()
+                        video_relay = None
+                        video_dest_port = 0
+                        _LOGGER.warning(
+                            "SIP forward video relay unavailable; continuing audio-only: %s",
+                            err,
+                        )
                 client = SipCallClient(
                     local_ip=local_ip,
                     local_name=(
@@ -2034,6 +2475,14 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     if bridge_to_trunk
                     else "",
                     include_common_codecs=bridge_to_trunk or bridge_to_registered,
+                    local_video_rtp_port=video_dest_port,
+                    video_formats=(invite.video_format,) if video_relay is not None else (),
+                    video_direction=(
+                        invite.video_format.direction
+                        if video_relay is not None
+                        else "inactive"
+                    ),
+                    generic_video_relay=video_relay is not None,
                 )
                 if not bridge_to_trunk:
                     _enable_reused_sip_tcp_connection(
@@ -2094,6 +2543,64 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if result != "in_call" or client.dialog is None:
                     raise RuntimeError(result)
 
+                selected_video = None
+                selected_video_direction = "inactive"
+                if video_relay is not None:
+                    remote_video = client.dialog.video_format
+                    source_video = (
+                        video_answer_contract(invite.video_format, remote_video)
+                        if remote_video is not None
+                        else None
+                    )
+                    source_directional = (
+                        video_offer_answer_directional(
+                            invite.video_format,
+                            source_video,
+                        )
+                        if source_video is not None
+                        else None
+                    )
+                    if (
+                        remote_video is not None
+                        and source_video is not None
+                        and source_directional is not None
+                        and client.dialog.remote_video_rtp_port > 0
+                        and video_formats_passthrough_compatible(
+                            source_directional.recv,
+                            client.dialog.send_video_format,
+                        )
+                        and video_formats_passthrough_compatible(
+                            client.dialog.recv_video_format,
+                            source_directional.send,
+                        )
+                    ):
+                        video_relay.left.video_format = source_directional.send
+                        video_relay.left.local_video_format = source_directional.recv
+                        video_relay.reconfigure_peer(
+                            "right", dialog_video_rtp_peer(client.dialog)
+                        )
+                        selected_video = source_video
+                        selected_video_direction = constrained_video_direction(
+                            invite.video_format.direction,
+                            allow_send=(
+                                remote_can_send(remote_video)
+                                and not invite.remote_video_connection_held
+                            ),
+                            allow_receive=remote_can_receive(
+                                remote_video,
+                                connection_held=(
+                                    client.dialog.remote_video_connection_held
+                                ),
+                            ),
+                        )
+                    else:
+                        _LOGGER.info(
+                            "SIP forward video rejected: destination did not accept an exact codec call_id=%s",
+                            call_id,
+                        )
+                        await video_relay.stop()
+                        video_relay = None
+
                 relay = build_invite_client_relay(
                     invite=invite,
                     client=client,
@@ -2111,6 +2618,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     callee=destination,
                     client=client,
                 )
+                if video_relay is not None:
+                    relay.attach_video_relay(video_relay)
                 await relay.start()
                 reservation.detach()
                 _attach_client_media_update(
@@ -2130,6 +2639,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         invite.recv_format,
                         dtmf=_invite_dtmf_format(invite),
                         remote_sdp=invite.remote_sdp,
+                        video_port=(
+                            video_relay.left_port if video_relay is not None else 0
+                        ),
+                        video_format=selected_video,
+                        video_direction=selected_video_direction,
                     )
                     _sip_send_final_response(
                         hass, call_id, 200, "OK", answer_sdp=answer
@@ -2161,6 +2675,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     last_sip_event="SIP_RESPONSE",
                     route_kind=decision.action.value,
                     sip_uri=str(bridge_uri),
+                    video_active=bool(video_relay is not None),
+                    video_format=(
+                        selected_video.wire_token() if selected_video else ""
+                    ),
                 )
                 terminal = await client.wait_for_dialog_termination()
                 terminal_reason = (
@@ -2181,6 +2699,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     registry.remove_leg(call_id, dest_call_id)
                 if reservation is not None and not reservation_from_preanswer:
                     reservation.release()
+                if video_relay is not None:
+                    await video_relay.stop()
+                    video_relay = None
                 if client is not None:
                     await async_cleanup_sip_runtime(
                         client=client,
@@ -2202,6 +2723,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     registry.remove_leg(call_id, dest_call_id)
                 if reservation is not None and not reservation_from_preanswer:
                     reservation.release()
+                if video_relay is not None:
+                    await video_relay.stop()
+                    video_relay = None
                 if client is not None:
                     await async_cleanup_sip_runtime(
                         client=client,
@@ -2220,73 +2744,319 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         entry: RosterEntry,
         peers: list[Peer],
         roster_entries: list[RosterEntry],
+        *,
+        origin_endpoint_id: str = "",
+        origin_media_client_id: str = "",
+        request_video: bool = False,
+        enable_caller_video_send: bool = False,
     ) -> None:
         registry = _call_registry(hass)
+        origin_endpoint_id = str(origin_endpoint_id or "").strip()
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        origin_endpoint = (
+            endpoint_registry.get(origin_endpoint_id)
+            if endpoint_registry is not None and origin_endpoint_id
+            else None
+        )
+        origin_device_id = str(
+            getattr(origin_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+        )
+        origin_name = str(
+            getattr(origin_endpoint, "name", "") or _ha_peer_name(hass)
+        ).strip()
+        ha_origin = bool(origin_endpoint_id)
         members = _unique_group_members(entry.metadata.get("members"))
         attempts: list[OutboundLeg] = []
-        ha_member = False
-        for member in members:
-            if _caller_matches_member(invite.caller, invite.source_host, member, peers):
-                continue
-            if _is_ha_target(member):
-                ha_member = True
-                continue
-            if len(attempts) >= MAX_RING_GROUP_ATTEMPTS:
-                _LOGGER.warning(
-                    "SIP ring group %s has more than %d dialable members; excess members were skipped",
-                    entry.display_name,
-                    MAX_RING_GROUP_ATTEMPTS,
+        browser_legs: list[BrowserLeg] = []
+        session = registry.sessions.get(registry.resolve_session_id(invite.call_id))
+        source_endpoint_id = str(
+            origin_endpoint_id
+            or ((session.metadata if session is not None else {}) or {}).get(
+                "source_endpoint_id"
+            )
+            or ""
+        ).strip()
+
+        def _settle_browser_candidates(
+            state: str,
+            reason: str,
+            *,
+            keep_endpoint_id: str = "",
+        ) -> None:
+            """Release and publish every browser candidate except the winner."""
+            for browser_leg in browser_legs:
+                if browser_leg.endpoint_id == keep_endpoint_id:
+                    continue
+                registry.release_endpoint_claim(
+                    invite.call_id,
+                    browser_leg.endpoint_id,
                 )
-                break
-            try:
-                leg = _prepare_outbound_leg(
-                    member=member,
-                    peers=peers,
-                    roster_entries=roster_entries,
-                    local_name=invite.caller or _ha_peer_name(hass),
-                    local_rtp_port_index=1,
+                try:
+                    _set_ha_softphone_call_state(
+                        hass,
+                        state,
+                        endpoint_id=browser_leg.endpoint_id,
+                        session_device_id=browser_leg.device_id,
+                        caller=invite.caller,
+                        callee=entry.display_name,
+                        peer_name=invite.caller,
+                        direction="incoming",
+                        call_id=invite.call_id,
+                        reason=reason,
+                        terminal_reason=reason,
+                        route_kind=GROUP_TYPE_RING,
+                        last_sip_event="SIP_RESPONSE",
+                    )
+                except Exception:
+                    # State publication is an observer boundary.  A broken
+                    # observer must never prevent the registry claim and media
+                    # resources of every other candidate from being released.
+                    _LOGGER.exception(
+                        "SIP ring group candidate cleanup publication failed "
+                        "call_id=%s endpoint_id=%s",
+                        invite.call_id,
+                        browser_leg.endpoint_id,
+                    )
+        async def _prepare_candidates() -> None:
+            for member in members:
+                if _caller_matches_member(
+                    invite.caller, invite.source_host, member, peers
+                ):
+                    continue
+                browser_leg = _browser_leg_for_member(
+                    member, peers, roster_entries
                 )
-            except RuntimeError as err:
-                _LOGGER.warning(
-                    "SIP ring group RTP port allocation failed member=%s: %s",
-                    member,
-                    err,
+                if browser_leg is not None:
+                    if browser_leg.endpoint_id == source_endpoint_id:
+                        continue
+                    endpoint = (
+                        endpoint_registry.get(browser_leg.endpoint_id)
+                        if endpoint_registry is not None
+                        else None
+                    )
+                    if endpoint is not None and (
+                        endpoint.dnd
+                        or endpoint.availability
+                        is not EndpointAvailability.AVAILABLE
+                    ):
+                        continue
+                    try:
+                        registry.claim_endpoint(
+                            invite.call_id,
+                            browser_leg.endpoint_id,
+                            role="group_candidate",
+                        )
+                    except EndpointBusyError:
+                        continue
+                    browser_legs.append(browser_leg)
+                    continue
+                if len(attempts) >= MAX_RING_GROUP_ATTEMPTS:
+                    _LOGGER.warning(
+                        "SIP ring group %s has more than %d dialable members; "
+                        "excess members were skipped",
+                        entry.display_name,
+                        MAX_RING_GROUP_ATTEMPTS,
+                    )
+                    break
+                try:
+                    leg = _prepare_outbound_leg(
+                        member=member,
+                        peers=peers,
+                        roster_entries=roster_entries,
+                        local_name=invite.caller or _ha_peer_name(hass),
+                        local_rtp_port_index=1,
+                    )
+                except RuntimeError as err:
+                    _LOGGER.warning(
+                        "SIP ring group RTP port allocation failed member=%s: %s",
+                        member,
+                        err,
+                    )
+                    break
+                if leg is None:
+                    continue
+                if leg.endpoint_id == source_endpoint_id:
+                    await _close_outbound_leg(leg)
+                    continue
+                logical_endpoint = (
+                    endpoint_registry.get(leg.endpoint_id)
+                    if endpoint_registry is not None and leg.endpoint_id
+                    else None
                 )
-                break
-            if leg is not None:
+                if logical_endpoint is not None and (
+                    logical_endpoint.dnd
+                    or logical_endpoint.availability
+                    is not EndpointAvailability.AVAILABLE
+                ):
+                    await _close_outbound_leg(leg)
+                    continue
+                try:
+                    if leg.endpoint_id:
+                        registry.claim_endpoint(
+                            invite.call_id,
+                            leg.endpoint_id,
+                            role="group_candidate",
+                            adopt_transport=(
+                                logical_endpoint is not None
+                                and logical_endpoint.kind is EndpointKind.ESPHOME
+                            ),
+                        )
+                except EndpointBusyError:
+                    await _close_outbound_leg(leg)
+                    continue
                 attempts.append(leg)
+
+        try:
+            await _prepare_candidates()
+        except asyncio.CancelledError:
+            _settle_browser_candidates(
+                CallState.CANCELLED.value,
+                TerminalReason.CANCELLED.value,
+            )
+            await _cleanup_outbound_attempts([], attempts)
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.CANCELLED.value,
+                state=CallState.CANCELLED.value,
+            )
+            raise
+        except Exception as err:
+            _LOGGER.exception(
+                "SIP ring group candidate preparation failed call_id=%s: %s",
+                invite.call_id,
+                err,
+            )
+            _settle_browser_candidates(
+                CallState.TRANSPORT_UNREACHABLE.value,
+                TerminalReason.PROTOCOL_ERROR.value,
+            )
+            await _cleanup_outbound_attempts([], attempts)
+            _sip_send_final_response(
+                hass,
+                invite.call_id,
+                500,
+                "Server Internal Error",
+                decline_reason=TerminalReason.PROTOCOL_ERROR.value,
+            )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.PROTOCOL_ERROR.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
+            return
         route_future: asyncio.Future = asyncio.get_running_loop().create_future()
         _pending_routes(hass)[invite.call_id] = {
             "invite": invite,
             "future": route_future,
+            "ring_group_endpoint_ids": tuple(
+                leg.endpoint_id for leg in browser_legs
+            ),
+            "declined_endpoint_ids": set(),
         }
-        if ha_member:
-            registry.add_leg(
-                invite.call_id,
-                invite.call_id,
-                role="ha_softphone",
-                state=CallState.RINGING.value,
-            )
-            _set_ha_softphone_call_state(
-                hass,
-                CallState.RINGING.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=invite.caller,
-                callee=entry.display_name,
-                peer_name=invite.caller,
-                direction="incoming",
-                call_id=invite.call_id,
-                selected_tx_format=invite.send_format.audio_format.wire_token(),
-                selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                selected_tx_rtp_format=invite.send_format.wire_token(),
-                selected_rx_rtp_format=invite.recv_format.wire_token(),
-                audio_mode="full_duplex",
-                route_kind=GROUP_TYPE_RING,
-                sip_status_code=180,
-                last_sip_event="INVITE",
-            )
-        if not attempts and not ha_member:
+        try:
+            if browser_legs:
+                registry.upsert(
+                    invite.call_id,
+                    state=CallState.RINGING.value,
+                    owner="ha_softphone",
+                    caller=invite.caller,
+                    callee=entry.display_name,
+                    route_kind=GROUP_TYPE_RING,
+                    endpoint_id=(origin_endpoint_id if ha_origin else ""),
+                    source_endpoint_id=source_endpoint_id,
+                    ring_endpoint_ids=tuple(
+                        leg.endpoint_id for leg in browser_legs
+                    ),
+                    media_client_id=origin_media_client_id,
+                )
+                for browser_leg in browser_legs:
+                    registry.add_leg(
+                        invite.call_id,
+                        f"browser:{browser_leg.endpoint_id}",
+                        role="ha_softphone",
+                        state=CallState.RINGING.value,
+                    )
+                    _set_ha_softphone_call_state(
+                        hass,
+                        CallState.RINGING.value,
+                        endpoint_id=browser_leg.endpoint_id,
+                        session_device_id=browser_leg.device_id,
+                        caller=invite.caller,
+                        callee=entry.display_name,
+                        peer_name=invite.caller,
+                        direction="incoming",
+                        call_id=invite.call_id,
+                        selected_tx_format=(
+                            invite.send_format.audio_format.wire_token()
+                        ),
+                        selected_rx_format=(
+                            invite.recv_format.audio_format.wire_token()
+                        ),
+                        selected_tx_rtp_format=invite.send_format.wire_token(),
+                        selected_rx_rtp_format=invite.recv_format.wire_token(),
+                        audio_mode="full_duplex",
+                        route_kind=GROUP_TYPE_RING,
+                        sip_status_code=180,
+                        last_sip_event="INVITE",
+                    )
+        except asyncio.CancelledError:
             _pending_routes(hass).pop(invite.call_id, None)
+            _settle_browser_candidates(
+                CallState.CANCELLED.value,
+                TerminalReason.CANCELLED.value,
+            )
+            await _cleanup_outbound_attempts([], attempts)
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.CANCELLED.value,
+                state=CallState.CANCELLED.value,
+            )
+            raise
+        except Exception as err:
+            _LOGGER.exception(
+                "SIP ring group state publication failed call_id=%s: %s",
+                invite.call_id,
+                err,
+            )
+            _pending_routes(hass).pop(invite.call_id, None)
+            _settle_browser_candidates(
+                CallState.TRANSPORT_UNREACHABLE.value,
+                TerminalReason.PROTOCOL_ERROR.value,
+            )
+            await _cleanup_outbound_attempts([], attempts)
+            _sip_send_final_response(
+                hass,
+                invite.call_id,
+                500,
+                "Server Internal Error",
+                decline_reason=TerminalReason.PROTOCOL_ERROR.value,
+            )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.PROTOCOL_ERROR.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
+            return
+        if not attempts and not browser_legs:
+            _pending_routes(hass).pop(invite.call_id, None)
+            if ha_origin:
+                _set_ha_softphone_call_state(
+                    hass,
+                    CallState.TRANSPORT_UNREACHABLE.value,
+                    endpoint_id=origin_endpoint_id,
+                    session_device_id=origin_device_id,
+                    caller=origin_name,
+                    callee=entry.display_name,
+                    peer_name=entry.display_name,
+                    direction="outgoing",
+                    call_id=invite.call_id,
+                    reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                    terminal_reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                    origin="remote",
+                    sip_status_code=480,
+                    last_sip_event="SIP_RESPONSE",
+                    route_kind=GROUP_TYPE_RING,
+                )
             _sip_send_final_response(
                 hass,
                 invite.call_id,
@@ -2315,21 +3085,49 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 result = await client.wait_for_final(timeout=RING_GROUP_TIMEOUT_S)
             return result, attempt
 
-        async def _wait_ha() -> tuple[str, dict]:
+        browser_decision: dict[str, Any] = {}
+
+        async def _wait_browser() -> tuple[str, BrowserLeg | dict]:
             try:
                 decision = await asyncio.wait_for(
                     route_future, timeout=RING_GROUP_TIMEOUT_S
                 )
             except asyncio.TimeoutError:
-                return "timeout", {"member": _ha_peer_name(hass), "ha": True}
+                return "timeout", {"member": "__browser__", "browser": True}
             action = str((decision or {}).get("action") or "").strip().lower()
+            browser_decision.update(decision or {})
+            selected_endpoint_id = str(
+                (decision or {}).get("endpoint_id") or ""
+            ).strip()
+            selected = next(
+                (
+                    leg
+                    for leg in browser_legs
+                    if leg.endpoint_id == selected_endpoint_id
+                ),
+                None,
+            )
             if action in {"answer_ha", "default"}:
-                return "in_call_ha", {"member": _ha_peer_name(hass), "ha": True}
+                if selected is None:
+                    return "declined", {
+                        "member": "__browser__",
+                        "browser": True,
+                    }
+                return "in_call_browser", selected
             if action == "busy":
-                return "busy", {"member": _ha_peer_name(hass), "ha": True}
+                return "busy", selected or {
+                    "member": "__browser__",
+                    "browser": True,
+                }
             if action == "cancel":
-                return "cancelled", {"member": _ha_peer_name(hass), "ha": True}
-            return "declined", {"member": _ha_peer_name(hass), "ha": True}
+                return "cancelled", selected or {
+                    "member": "__caller__",
+                    "caller_control": True,
+                }
+            return "declined", selected or {
+                "member": "__browser__",
+                "browser": True,
+            }
 
         async def _wait_caller_cancel() -> tuple[str, dict]:
             try:
@@ -2345,12 +3143,73 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
 
         tasks = [asyncio.create_task(_dial(attempt)) for attempt in attempts]
-        if ha_member:
-            tasks.append(asyncio.create_task(_wait_ha()))
+        if browser_legs:
+            tasks.append(asyncio.create_task(_wait_browser()))
         else:
             tasks.append(asyncio.create_task(_wait_caller_cancel()))
-        winner: OutboundLeg | dict | None = None
-        ha_winner = False
+
+        async def _cleanup_ring_resources(reason: str) -> None:
+            """Tear down every ownership layer after an aborted group call."""
+            _pending_routes(hass).pop(invite.call_id, None)
+            (
+                _source_call_id,
+                _dest_call_id,
+                relay,
+                bridge_client,
+                watcher,
+                _called_by_dest,
+            ) = registry.detach_bridge(invite.call_id)
+            if relay is not None or bridge_client is not None:
+                current = asyncio.current_task()
+                cleanup = asyncio.create_task(
+                    async_cleanup_sip_runtime(
+                        relay=relay,
+                        client=bridge_client,
+                        watcher=(watcher if watcher is not current else None),
+                        terminate_client=True,
+                        relay_first=True,
+                    ),
+                    name=f"voip-ring-group-bridge-cleanup-{invite.call_id}",
+                )
+                await async_wait_for_cleanup(cleanup)
+            remaining_attempts = [
+                attempt
+                for attempt in attempts
+                if attempt.client is not bridge_client
+            ]
+            await _cleanup_outbound_attempts(tasks, remaining_attempts)
+            active_media = registry.softphone_media.pop(invite.call_id, None)
+            _release_media_reservation(active_media)
+
+            # HA-to-HA ring groups switch to the transport-neutral local bridge
+            # after selection.  If answer publication then fails, terminate
+            # that newly-created call as part of the same rollback boundary.
+            from .local_softphone_runtime import local_softphone_bridge
+
+            local_bridge = local_softphone_bridge(hass)
+            local_call = (
+                local_bridge.get_call(invite.call_id)
+                if local_bridge is not None
+                else None
+            )
+            if local_call is not None:
+                with contextlib.suppress(Exception):
+                    local_bridge.hangup(
+                        invite.call_id,
+                        local_call.caller_endpoint_id,
+                    )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=reason,
+                state=(
+                    CallState.CANCELLED.value
+                    if reason == TerminalReason.CANCELLED.value
+                    else CallState.TRANSPORT_UNREACHABLE.value
+                ),
+            )
+
+        winner: OutboundLeg | BrowserLeg | dict | None = None
+        browser_winner = False
         final_result = "timeout"
         failure_priority = {
             "ignored": -1,
@@ -2397,7 +3256,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         for result, attempt in completed
                         if result == "cancelled"
                         and isinstance(attempt, dict)
-                        and (attempt.get("caller_control") or attempt.get("ha"))
+                        and attempt.get("caller_control")
                     ),
                     None,
                 )
@@ -2414,9 +3273,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     ):
                         winner = attempt
                         break
-                    if result == "in_call_ha":
+                    if result == "in_call_browser":
                         winner = attempt
-                        ha_winner = True
+                        browser_winner = True
                         break
                     if failure_priority.get(result, 1) > failure_priority.get(final_result, 0):
                         final_result = result
@@ -2426,33 +3285,53 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 *(_close_outbound_leg(attempt, cancel=True) for attempt in losers),
                 return_exceptions=True,
             )
-            if ha_member and not ha_winner:
-                _pending_routes(hass).pop(invite.call_id, None)
-                _set_ha_softphone_call_state(
-                    hass,
-                    CallState.CANCELLED.value
-                    if winner is not None
-                    else CallState.IDLE.value,
-                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                    caller=invite.caller,
-                    callee=entry.display_name,
-                    peer_name=invite.caller,
-                    direction="incoming",
-                    call_id=invite.call_id,
-                    reason=TerminalReason.CANCELLED.value
-                    if winner is not None
-                    else TerminalReason.TIMEOUT.value,
-                    terminal_reason=TerminalReason.CANCELLED.value
-                    if winner is not None
-                    else TerminalReason.TIMEOUT.value,
-                    route_kind=GROUP_TYPE_RING,
-                    last_sip_event="SIP_RESPONSE",
-                )
+            for attempt in losers:
+                if attempt.endpoint_id:
+                    registry.release_endpoint_claim(
+                        invite.call_id, attempt.endpoint_id
+                    )
+            if winner is not None:
+                candidate_state = CallState.CANCELLED.value
+                candidate_reason = TerminalReason.CANCELLED.value
+            else:
+                (
+                    _candidate_status,
+                    _candidate_sip_reason,
+                    candidate_reason,
+                    candidate_state,
+                ) = _sip_failure_response(final_result)
+            _settle_browser_candidates(
+                candidate_state,
+                candidate_reason,
+                keep_endpoint_id=(
+                    winner.endpoint_id
+                    if browser_winner and isinstance(winner, BrowserLeg)
+                    else ""
+                ),
+            )
             if winner is None:
                 _pending_routes(hass).pop(invite.call_id, None)
                 status_code, sip_reason, terminal_reason, public_state = (
                     _sip_failure_response(final_result)
                 )
+                if ha_origin:
+                    _set_ha_softphone_call_state(
+                        hass,
+                        public_state,
+                        endpoint_id=origin_endpoint_id,
+                        session_device_id=origin_device_id,
+                        caller=origin_name,
+                        callee=entry.display_name,
+                        peer_name=entry.display_name,
+                        direction="outgoing",
+                        call_id=invite.call_id,
+                        reason=terminal_reason,
+                        terminal_reason=terminal_reason,
+                        origin="remote",
+                        sip_status_code=status_code,
+                        last_sip_event="SIP_RESPONSE",
+                        route_kind=GROUP_TYPE_RING,
+                    )
                 _sip_send_final_response(
                     hass,
                     invite.call_id,
@@ -2480,9 +3359,46 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     state=public_state,
                 )
                 return
-            if ha_winner:
+            if browser_winner and isinstance(winner, BrowserLeg):
                 _pending_routes(hass).pop(invite.call_id, None)
-                connected_party = _ha_peer_name(hass)
+                connected_party = winner.name
+                winner_media_client_id = str(
+                    browser_decision.get("media_client_id") or ""
+                ).strip()
+                if ha_origin:
+                    from .local_softphone_runtime import (
+                        local_softphone_bridge,
+                        start_local_softphone_call,
+                    )
+
+                    original_context = registry.ha_context(invite.call_id)
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason="local_group_selected",
+                        state=CallState.IDLE.value,
+                    )
+                    snapshot = start_local_softphone_call(
+                        hass,
+                        origin_endpoint_id,
+                        winner.endpoint_id,
+                        call_id=invite.call_id,
+                        request_video=request_video,
+                        enable_caller_video_send=enable_caller_video_send,
+                        caller_owner_id=origin_media_client_id,
+                        context=original_context,
+                    )
+                    bridge = local_softphone_bridge(hass)
+                    if bridge is None:
+                        raise RuntimeError("local softphone bridge is unavailable")
+                    bridge.answer(
+                        snapshot.call_id,
+                        winner.endpoint_id,
+                        winner_media_client_id,
+                        enable_video_send=bool(
+                            browser_decision.get("send_video", False)
+                        ),
+                    )
+                    return
                 local_rtp_port = _allocate_sip_rtp_port(hass)
                 answer = build_answer_directional(
                     local_ip,
@@ -2496,6 +3412,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.softphone_media[invite.call_id] = {
                     "invite": invite,
                     "local_rtp_port": local_rtp_port,
+                    "endpoint_id": winner.endpoint_id,
+                    "media_client_id": winner_media_client_id,
                 }
                 registry.upsert(
                     invite.call_id,
@@ -2504,10 +3422,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     caller=invite.caller,
                     callee=entry.display_name,
                     route_kind=GROUP_TYPE_RING,
+                    endpoint_id=winner.endpoint_id,
+                    dest_endpoint_id=winner.endpoint_id,
+                    media_client_id=winner_media_client_id,
                 )
                 registry.add_leg(
                     invite.call_id,
-                    invite.call_id,
+                    f"browser:{winner.endpoint_id}",
                     role="ha_softphone",
                     state=CallState.IN_CALL.value,
                 )
@@ -2517,7 +3438,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 _set_ha_softphone_call_state(
                     hass,
                     CallState.IN_CALL.value,
-                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    endpoint_id=winner.endpoint_id,
+                    session_device_id=winner.device_id,
                     caller=invite.caller,
                     callee=entry.display_name,
                     peer_name=invite.caller,
@@ -2567,6 +3489,24 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "Server Internal Error",
                     decline_reason=TerminalReason.PROTOCOL_ERROR.value,
                 )
+                if ha_origin:
+                    _set_ha_softphone_call_state(
+                        hass,
+                        CallState.TRANSPORT_UNREACHABLE.value,
+                        endpoint_id=origin_endpoint_id,
+                        session_device_id=origin_device_id,
+                        caller=origin_name,
+                        callee=entry.display_name,
+                        peer_name=entry.display_name,
+                        direction="outgoing",
+                        call_id=invite.call_id,
+                        reason=TerminalReason.PROTOCOL_ERROR.value,
+                        terminal_reason=TerminalReason.PROTOCOL_ERROR.value,
+                        origin="self",
+                        sip_status_code=500,
+                        last_sip_event="SIP_RESPONSE",
+                        route_kind=GROUP_TYPE_RING,
+                    )
                 registry.finish_and_pop(
                     invite.call_id,
                     reason=TerminalReason.PROTOCOL_ERROR.value,
@@ -2614,6 +3554,24 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "Not Acceptable Here",
                     decline_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
                 )
+                if ha_origin:
+                    _set_ha_softphone_call_state(
+                        hass,
+                        CallState.MEDIA_INCOMPATIBLE.value,
+                        endpoint_id=origin_endpoint_id,
+                        session_device_id=origin_device_id,
+                        caller=origin_name,
+                        callee=entry.display_name,
+                        peer_name=str(winner.member or entry.display_name),
+                        direction="outgoing",
+                        call_id=invite.call_id,
+                        reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                        terminal_reason=TerminalReason.MEDIA_INCOMPATIBLE.value,
+                        origin="self",
+                        sip_status_code=488,
+                        last_sip_event="SIP_RESPONSE",
+                        route_kind=GROUP_TYPE_RING,
+                    )
                 registry.discard_bridge_session(
                     invite.call_id,
                     client.dialog_ids.call_id,
@@ -2631,7 +3589,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.relays[invite.call_id] = relay
             dialed_target = entry.display_name or invite.target
             connected_party = str(winner.member or "").strip() or invite.target
-            ha_origin = _is_ha_target(invite.caller)
             if ha_origin:
                 # The synthetic HA caller has no SIP/RTP socket of its own.
                 # Feed the already-running source side of the relay from the
@@ -2643,6 +3600,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "send_format": invite.recv_format,
                     "recv_format": invite.send_format,
                     "local_ssrc": secrets.randbelow(0xFFFFFFFF) + 1,
+                    "endpoint_id": origin_endpoint_id,
                 }
             registry.upsert(
                 invite.call_id,
@@ -2651,6 +3609,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 caller=invite.caller,
                 callee=dialed_target,
                 route_kind=GROUP_TYPE_RING,
+                endpoint_id=origin_endpoint_id if ha_origin else "",
+                source_endpoint_id=source_endpoint_id,
+                dest_endpoint_id=winner.endpoint_id,
+                media_client_id=origin_media_client_id,
             )
             answer = build_answer_directional(
                 local_ip,
@@ -2686,7 +3648,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 _set_ha_softphone_call_state(
                     hass,
                     CallState.IN_CALL.value,
-                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                    endpoint_id=origin_endpoint_id,
+                    session_device_id=origin_device_id,
                     caller=invite.caller,
                     callee=dialed_target,
                     peer_name=connected_party,
@@ -2716,17 +3679,76 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 else _sip_terminal_reason(terminal, _sip_public_state(terminal))
             )
             await _terminate_sip_bridge(
-                hass, client.dialog_ids.call_id, terminal_reason=terminal_reason
+                hass,
+                client.dialog_ids.call_id,
+                endpoint_id=(origin_endpoint_id if ha_origin else DEFAULT_ENDPOINT_ID),
+                session_device_id=(
+                    origin_device_id if ha_origin else HA_SOFTPHONE_DEVICE_ID
+                ),
+                terminal_reason=terminal_reason,
             )
         except asyncio.CancelledError:
-            _pending_routes(hass).pop(invite.call_id, None)
-            registry.finish_and_pop(
-                invite.call_id,
-                reason=TerminalReason.CANCELLED.value,
-                state=CallState.CANCELLED.value,
+            _settle_browser_candidates(
+                CallState.CANCELLED.value,
+                TerminalReason.CANCELLED.value,
             )
-            await _cleanup_outbound_attempts(tasks, attempts)
+            if ha_origin:
+                with contextlib.suppress(Exception):
+                    _set_ha_softphone_call_state(
+                        hass,
+                        CallState.CANCELLED.value,
+                        endpoint_id=origin_endpoint_id,
+                        session_device_id=origin_device_id,
+                        caller=origin_name,
+                        callee=entry.display_name,
+                        peer_name=entry.display_name,
+                        direction="outgoing",
+                        call_id=invite.call_id,
+                        reason=TerminalReason.CANCELLED.value,
+                        terminal_reason=TerminalReason.CANCELLED.value,
+                        origin="self",
+                        last_sip_event="CANCEL",
+                        route_kind=GROUP_TYPE_RING,
+                    )
+            await _cleanup_ring_resources(TerminalReason.CANCELLED.value)
             raise
+        except Exception as err:
+            _LOGGER.exception(
+                "SIP ring group runtime failed call_id=%s: %s",
+                invite.call_id,
+                err,
+            )
+            _settle_browser_candidates(
+                CallState.TRANSPORT_UNREACHABLE.value,
+                TerminalReason.PROTOCOL_ERROR.value,
+            )
+            if ha_origin:
+                with contextlib.suppress(Exception):
+                    _set_ha_softphone_call_state(
+                        hass,
+                        CallState.TRANSPORT_UNREACHABLE.value,
+                        endpoint_id=origin_endpoint_id,
+                        session_device_id=origin_device_id,
+                        caller=origin_name,
+                        callee=entry.display_name,
+                        peer_name=entry.display_name,
+                        direction="outgoing",
+                        call_id=invite.call_id,
+                        reason=TerminalReason.PROTOCOL_ERROR.value,
+                        terminal_reason=TerminalReason.PROTOCOL_ERROR.value,
+                        origin="self",
+                        sip_status_code=500,
+                        last_sip_event="SIP_RESPONSE",
+                        route_kind=GROUP_TYPE_RING,
+                    )
+            _sip_send_final_response(
+                hass,
+                invite.call_id,
+                500,
+                "Server Internal Error",
+                decline_reason=TerminalReason.PROTOCOL_ERROR.value,
+            )
+            await _cleanup_ring_resources(TerminalReason.PROTOCOL_ERROR.value)
 
     async def _ring_conference_members(
         *,
@@ -2736,8 +3758,27 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         entry: RosterEntry,
         peers: list[Peer],
         roster_entries: list[RosterEntry],
+        owner_call_id: str = "",
     ) -> None:
-        manager = conference_manager(hass, local_ip=local_ip)
+        manager = conference_manager(
+            hass,
+            local_ip=local_ip,
+            on_inbound_timeout=_on_conference_inbound_timeout,
+        )
+        registry = _call_registry(hass)
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        owner_session = registry.sessions.get(
+            registry.resolve_session_id(str(owner_call_id or "").strip())
+        )
+        source_endpoint_id = str(
+            ((owner_session.metadata if owner_session is not None else {}) or {}).get(
+                "source_endpoint_id"
+            )
+            or ((owner_session.metadata if owner_session is not None else {}) or {}).get(
+                "endpoint_id"
+            )
+            or ""
+        ).strip()
         room = manager.rooms.get(str(room_name or "").strip())
         available_legs = max(
             0,
@@ -2746,12 +3787,20 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         )
         members = _unique_group_members(entry.metadata.get("ring_members"))
         attempts: list[OutboundLeg] = []
+        browser_endpoint_ids: list[str] = []
         for member in members:
-            if _caller_matches_member(
-                caller, source_host, member, peers
-            ) or _is_ha_target(member):
+            if _caller_matches_member(caller, source_host, member, peers):
                 continue
-            if len(attempts) >= available_legs:
+            browser_leg = _browser_leg_for_member(member, peers, roster_entries)
+            if browser_leg is not None:
+                if (
+                    browser_leg.endpoint_id != source_endpoint_id
+                    and browser_leg.endpoint_id not in browser_endpoint_ids
+                    and len(browser_endpoint_ids) + len(attempts) < available_legs
+                ):
+                    browser_endpoint_ids.append(browser_leg.endpoint_id)
+                continue
+            if len(browser_endpoint_ids) + len(attempts) >= available_legs:
                 _LOGGER.warning(
                     "SIP conference %s has no capacity for additional ring members; excess members were skipped",
                     room_name,
@@ -2773,12 +3822,65 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 break
             if leg is not None:
+                if leg.endpoint_id == source_endpoint_id:
+                    await _close_outbound_leg(leg)
+                    continue
+                endpoint = (
+                    endpoint_registry.get(leg.endpoint_id)
+                    if endpoint_registry is not None and leg.endpoint_id
+                    else None
+                )
+                if endpoint is not None and (
+                    endpoint.dnd
+                    or endpoint.availability
+                    is not EndpointAvailability.AVAILABLE
+                ):
+                    await _close_outbound_leg(leg)
+                    continue
+                leg_call_id = leg.client.dialog_ids.call_id
+                registry.upsert(
+                    leg_call_id,
+                    state=CallState.CALLING.value,
+                    owner="bridge",
+                    caller=room_name,
+                    callee=member,
+                    route_kind=GROUP_TYPE_CONFERENCE,
+                    source_call_id=owner_call_id,
+                    dest_endpoint_id=leg.endpoint_id,
+                )
+                try:
+                    if leg.endpoint_id:
+                        registry.claim_endpoint(
+                            leg_call_id,
+                            leg.endpoint_id,
+                            role="conference_member",
+                            adopt_transport=(
+                                endpoint is not None
+                                and endpoint.kind is EndpointKind.ESPHOME
+                            ),
+                        )
+                except EndpointBusyError:
+                    registry.finish_and_pop(
+                        leg_call_id,
+                        reason=TerminalReason.BUSY.value,
+                        state=CallState.BUSY.value,
+                    )
+                    await _close_outbound_leg(leg)
+                    continue
                 attempts.append(leg)
+
+        if browser_endpoint_ids:
+            manager.ring_ha_endpoints(
+                room_name,
+                tuple(browser_endpoint_ids),
+                caller=caller,
+            )
 
         async def _dial(attempt: OutboundLeg) -> None:
             client = attempt.client
             uri = attempt.uri
             owned_by_room = False
+            cleanup_reason = TerminalReason.TRANSPORT_UNREACHABLE.value
             try:
                 result = await client.invite(
                     target=uri.user or attempt.member,
@@ -2807,10 +3909,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     if terminal == "remote_hangup"
                     else _sip_terminal_reason(terminal, _sip_public_state(terminal))
                 )
+                cleanup_reason = terminal_reason
                 await manager.leave_call(
                     client.dialog_ids.call_id, reason=terminal_reason
                 )
+                registry.finish_and_pop(
+                    client.dialog_ids.call_id,
+                    reason=terminal_reason,
+                    state=CallState.IDLE.value,
+                )
             except asyncio.CancelledError:
+                cleanup_reason = TerminalReason.CANCELLED.value
                 raise
             except Exception as err:
                 _LOGGER.debug(
@@ -2819,15 +3928,35 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     err,
                 )
             finally:
-                if not owned_by_room:
+                if owned_by_room:
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await manager.leave_call(
+                            client.dialog_ids.call_id,
+                            reason=cleanup_reason,
+                        )
+                    registry.finish_and_pop(
+                        client.dialog_ids.call_id,
+                        reason=cleanup_reason,
+                        state=CallState.IDLE.value,
+                    )
+                else:
                     with contextlib.suppress(Exception):
                         await _close_outbound_leg(attempt, bye_or_cancel=True)
+                    registry.finish_and_pop(
+                        attempt.client.dialog_ids.call_id,
+                        reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                        state=CallState.TRANSPORT_UNREACHABLE.value,
+                    )
 
         await asyncio.gather(
             *(_dial(attempt) for attempt in attempts), return_exceptions=True
         )
 
-    async def _ring_conference_members_from_ha(entry: RosterEntry) -> None:
+    async def _ring_conference_members_from_ha(
+        entry: RosterEntry,
+        *,
+        owner_call_id: str = "",
+    ) -> None:
         peers = await _async_build_peer_snapshot(hass)
         roster_entries = _roster_from_peers(
             hass, peers, _registered_roster_entries(hass)
@@ -2840,15 +3969,41 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             entry=entry,
             peers=peers,
             roster_entries=roster_entries,
+            owner_call_id=owner_call_id,
         )
 
     async def _start_ring_group_from_ha(
         entry: RosterEntry,
         *,
         context: Any | None = None,
+        endpoint_id: str = DEFAULT_ENDPOINT_ID,
+        media_client_id: str = "",
+        request_video: bool = False,
+        enable_caller_video_send: bool = False,
     ) -> str:
+        endpoint_id = str(endpoint_id or DEFAULT_ENDPOINT_ID).strip() or DEFAULT_ENDPOINT_ID
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        browser_endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None
+            else None
+        )
+        if (
+            browser_endpoint is not None
+            and browser_endpoint.kind is not EndpointKind.BROWSER
+        ):
+            raise ValueError(f"endpoint {endpoint_id!r} is not a browser phone")
+        local_name = str(
+            getattr(browser_endpoint, "name", "") or _ha_peer_name(hass)
+        ).strip()
+        endpoint_device_id = str(
+            getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+        )
         group_name = str(entry.name or entry.id or "")
-        call_id = f"ha-{int(time.time() * 1000):x}"
+        # A timestamp is not a dialog identifier: two phones can start in the
+        # same millisecond.  Use cryptographic entropy just like the normal SIP
+        # client path so concurrent HA callers cannot alias one registry entry.
+        call_id = f"ha-{secrets.token_hex(16)}"
         send_format = next(
             fmt
             for fmt in HA_SIP_PCM_TX_FORMATS
@@ -2866,10 +4021,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 f"sip:{group_name.replace(' ', '_')}@{local_ip};transport=tcp"
             ),
             caller_uri=parse_sip_uri(
-                f"sip:{_ha_peer_name(hass).replace(' ', '_')}@{local_ip};transport=tcp"
+                f"sip:{local_name.replace(' ', '_')}@{local_ip};transport=tcp"
             ),
             target=group_name,
-            caller=_ha_peer_name(hass),
+            caller=local_name,
             call_id=call_id,
             cseq="1 INVITE",
             remote_sdp=b"",
@@ -2883,19 +4038,37 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             call_id,
             state=CallState.RINGING.value,
             owner="ha_softphone",
-            caller=_ha_peer_name(hass),
+            caller=local_name,
             callee=group_name,
             route_kind=GROUP_TYPE_RING,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
+            source_endpoint_id=endpoint_id,
+            media_client_id=str(media_client_id or "").strip(),
         )
-        registry.bind_controller(call_id, context=context)
+        try:
+            registry.claim_endpoint(call_id, endpoint_id, role="source")
+        except EndpointBusyError:
+            registry.finish_and_pop(
+                call_id,
+                reason=TerminalReason.BUSY.value,
+                state=CallState.BUSY.value,
+            )
+            raise
+        registry.bind_controller(
+            call_id,
+            context=context,
+            endpoint_id=endpoint_id,
+        )
         registry.add_leg(
             call_id, call_id, role="ha_softphone", state=CallState.REMOTE_RINGING.value
         )
         _set_ha_softphone_call_state(
             hass,
             CallState.REMOTE_RINGING.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=_ha_peer_name(hass),
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
+            caller=local_name,
             callee=group_name,
             peer_name=group_name,
             direction="outgoing",
@@ -2910,16 +4083,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 hass, peers, _registered_roster_entries(hass)
             )
         except Exception:
-            registry.finish_and_pop(
-                call_id,
-                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
-                state=CallState.TRANSPORT_UNREACHABLE.value,
-            )
             _set_ha_softphone_call_state(
                 hass,
                 CallState.TRANSPORT_UNREACHABLE.value,
+                endpoint_id=endpoint_id,
+                session_device_id=endpoint_device_id,
                 call_id=call_id,
-                caller=_ha_peer_name(hass),
+                caller=local_name,
                 callee=group_name,
                 peer_name=group_name,
                 direction="outgoing",
@@ -2927,9 +4097,24 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 route_kind=GROUP_TYPE_RING,
                 last_sip_event="PEER_SNAPSHOT_FAILED",
             )
+            registry.finish_and_pop(
+                call_id,
+                reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
             raise
         create_runtime_task(
-            hass, _run_ring_group_call(invite, entry, peers, roster_entries)
+            hass,
+            _run_ring_group_call(
+                invite,
+                entry,
+                peers,
+                roster_entries,
+                origin_endpoint_id=endpoint_id,
+                origin_media_client_id=str(media_client_id or "").strip(),
+                request_video=bool(request_video),
+                enable_caller_video_send=bool(enable_caller_video_send),
+            ),
         )
         return call_id
 
@@ -3015,6 +4200,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
         bucket = hass.data.setdefault(DOMAIN, {})
         registry = _call_registry(hass)
+        endpoint_registry = bucket.get("endpoint_registry")
+        source_endpoint_id = str(
+            ((caller_roster_entry.metadata or {}).get("endpoint_id"))
+            if caller_roster_entry is not None
+            else ""
+        ).strip()
+        source_endpoint = (
+            endpoint_registry.get(source_endpoint_id)
+            if endpoint_registry is not None and source_endpoint_id
+            else None
+        )
         route_bucket = _pending_routes(hass)
         pending = registry.pending_invites
         if invite.call_id in route_bucket:
@@ -3049,10 +4245,44 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 486, "Busy Here", to_tag="", decline_reason=TerminalReason.BUSY.value
             )
         if decision.action is RouteAction.ASSIST:
+            if source_endpoint is not None and source_endpoint.kind is not EndpointKind.BROWSER:
+                registry.upsert(
+                    invite.call_id,
+                    state=CallState.CONNECTING.value,
+                    owner="router",
+                    caller=invite.caller,
+                    callee=invite.target,
+                    route_kind=RouteAction.ASSIST.value,
+                    source_endpoint_id=source_endpoint.endpoint_id,
+                )
+                try:
+                    registry.claim_endpoint(
+                        invite.call_id,
+                        source_endpoint.endpoint_id,
+                        role="source",
+                        adopt_transport=True,
+                    )
+                except EndpointBusyError:
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason=TerminalReason.BUSY.value,
+                        state=CallState.BUSY.value,
+                    )
+                    return SipInviteResult(
+                        486,
+                        "Busy Here",
+                        to_tag="",
+                        decline_reason=TerminalReason.BUSY.value,
+                    )
             try:
                 assist_ports = RtpPortReservation.allocate(hass)
             except RuntimeError as err:
                 _LOGGER.warning("Assist RTP port allocation failed: %s", err)
+                registry.finish_and_pop(
+                    invite.call_id,
+                    reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                    state=CallState.TRANSPORT_UNREACHABLE.value,
+                )
                 return SipInviteResult(503, "Service Unavailable", to_tag="")
             assist_rtp_port = assist_ports.ports[0]
             try:
@@ -3069,6 +4299,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             except Exception:
                 _LOGGER.exception("Assist bridge failed call_id=%s", invite.call_id)
                 assist_ports.release()
+                registry.finish_and_pop(
+                    invite.call_id,
+                    reason=TerminalReason.PROTOCOL_ERROR.value,
+                    state=CallState.TRANSPORT_UNREACHABLE.value,
+                )
                 return SipInviteResult(
                     500,
                     "Server Internal Error",
@@ -3085,6 +4320,35 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")
         if decision.action is RouteAction.GROUP:
+            if source_endpoint is not None and source_endpoint.kind is not EndpointKind.BROWSER:
+                registry.upsert(
+                    invite.call_id,
+                    state=CallState.RINGING.value,
+                    owner="router",
+                    caller=invite.caller,
+                    callee=invite.target,
+                    route_kind=RouteAction.GROUP.value,
+                    source_endpoint_id=source_endpoint.endpoint_id,
+                )
+                try:
+                    registry.claim_endpoint(
+                        invite.call_id,
+                        source_endpoint.endpoint_id,
+                        role="source",
+                        adopt_transport=True,
+                    )
+                except EndpointBusyError:
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason=TerminalReason.BUSY.value,
+                        state=CallState.BUSY.value,
+                    )
+                    return SipInviteResult(
+                        486,
+                        "Busy Here",
+                        to_tag="",
+                        decline_reason=TerminalReason.BUSY.value,
+                    )
             group_type = (
                 str((decision.entry.metadata or {}).get("group_type") or "")
                 if decision.entry is not None
@@ -3097,8 +4361,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         (decision.entry.metadata or {}).get("ring_members") or []
                     )
                 ]
-                ring_ha = any(_is_ha_target(member) for member in ring_members)
-                result = await conference_manager(hass, local_ip=local_ip).join(invite, decision.entry, ring_ha=ring_ha)
+                ring_endpoint_ids = tuple(
+                    leg.endpoint_id
+                    for member in ring_members
+                    if (
+                        leg := _browser_leg_for_member(
+                            member, peers, roster_entries
+                        )
+                    )
+                    is not None
+                    and leg.endpoint_id != source_endpoint_id
+                )
+                result = await conference_manager(
+                    hass,
+                    local_ip=local_ip,
+                    on_inbound_timeout=_on_conference_inbound_timeout,
+                ).join(
+                    invite,
+                    decision.entry,
+                    ring_endpoint_ids=ring_endpoint_ids,
+                )
                 if result.status == 200:
                     registry.upsert(
                         invite.call_id,
@@ -3127,6 +4409,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             entry=decision.entry,
                             peers=peers,
                             roster_entries=roster_entries,
+                            owner_call_id=invite.call_id,
+                        ),
+                    )
+                else:
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason=result.decline_reason
+                        or TerminalReason.TRANSPORT_UNREACHABLE.value,
+                        state=_sip_public_state(
+                            result.decline_reason
+                            or TerminalReason.TRANSPORT_UNREACHABLE.value
                         ),
                     )
                 return result
@@ -3390,6 +4683,55 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 decision.sip_uri or "-",
             )
 
+        def _decision_endpoint(current_decision):
+            if endpoint_registry is None or current_decision.entry is None:
+                return None
+            endpoint_id = str(
+                (current_decision.entry.metadata or {}).get("endpoint_id") or ""
+            ).strip()
+            return endpoint_registry.get(endpoint_id) if endpoint_id else None
+
+        # Offline forwarding is a logical dial-plan operation. Resolve it
+        # before any SIP leg is created and guard loops across endpoint names,
+        # extensions and usernames through stable endpoint IDs.
+        visited_endpoint_ids: set[str] = set()
+        while True:
+            candidate_endpoint = _decision_endpoint(decision)
+            if (
+                candidate_endpoint is None
+                or candidate_endpoint.availability
+                is EndpointAvailability.AVAILABLE
+                or candidate_endpoint.offline_policy is not OfflinePolicy.FORWARD
+            ):
+                break
+            if candidate_endpoint.endpoint_id in visited_endpoint_ids:
+                _LOGGER.warning(
+                    "Offline forward loop rejected call_id=%s endpoint=%s visited=%s",
+                    invite.call_id,
+                    candidate_endpoint.endpoint_id,
+                    sorted(visited_endpoint_ids),
+                )
+                return SipInviteResult(
+                    480,
+                    "Temporarily Unavailable",
+                    to_tag="",
+                    decline_reason="forward_loop",
+                )
+            visited_endpoint_ids.add(candidate_endpoint.endpoint_id)
+            forward_target = candidate_endpoint.offline_forward_target
+            if not forward_target:
+                break
+            decision = _ha_router_decision(forward_target, roster_entries)
+            _LOGGER.info(
+                "Offline endpoint forward call_id=%s endpoint=%s destination=%s route=%s",
+                invite.call_id,
+                candidate_endpoint.endpoint_id,
+                forward_target,
+                decision.action.value,
+            )
+
+        target_endpoint = _decision_endpoint(decision)
+
         resolved_callee = str(
             (
                 decision.entry.display_name
@@ -3410,6 +4752,59 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             and decision.action is RouteAction.TRUNK
             and trunk_ready
         )
+        if target_endpoint is not None:
+            if target_endpoint.dnd:
+                _LOGGER.info(
+                    "SIP INVITE rejected by endpoint DND call_id=%s endpoint=%s",
+                    invite.call_id,
+                    target_endpoint.endpoint_id,
+                )
+                return SipInviteResult(
+                    486,
+                    "Busy Here",
+                    to_tag="",
+                    decline_reason="dnd",
+                )
+            if (
+                target_endpoint.active_call_id
+                and target_endpoint.active_call_id != invite.call_id
+            ):
+                return SipInviteResult(
+                    486,
+                    "Busy Here",
+                    to_tag="",
+                    decline_reason=TerminalReason.BUSY.value,
+                )
+            if target_endpoint.availability is EndpointAvailability.UNAVAILABLE:
+                return SipInviteResult(
+                    480,
+                    "Temporarily Unavailable",
+                    to_tag="",
+                    decline_reason=RouteReason.TARGET_DISABLED.value,
+                )
+            if (
+                target_endpoint.availability is EndpointAvailability.OFFLINE
+                and target_endpoint.kind is not EndpointKind.BROWSER
+            ):
+                # Registrar phones persist as Devices while offline, but a
+                # missing Contact cannot receive a standards SIP dialog.
+                return SipInviteResult(
+                    480,
+                    "Temporarily Unavailable",
+                    to_tag="",
+                    decline_reason=RouteReason.TARGET_UNREACHABLE.value,
+                )
+            if (
+                target_endpoint.availability is EndpointAvailability.OFFLINE
+                and target_endpoint.kind is EndpointKind.BROWSER
+                and target_endpoint.offline_policy is OfflinePolicy.UNAVAILABLE
+            ):
+                return SipInviteResult(
+                    480,
+                    "Temporarily Unavailable",
+                    to_tag="",
+                    decline_reason=RouteReason.TARGET_UNREACHABLE.value,
+                )
         if not force_ha_softphone and decision.action is RouteAction.REJECT:
             if decision.reason is RouteReason.TARGET_DISABLED:
                 status = 403
@@ -3549,9 +4944,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
                 video_bridge_ports = None
                 video_relay = None
+                source_video_enabled = (
+                    source_endpoint is None or source_endpoint.supports("video")
+                )
+                target_video_enabled = (
+                    target_endpoint is None or target_endpoint.supports("video")
+                )
                 if (
                     bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False))
                     and invite.video_format is not None
+                    and source_video_enabled
+                    and target_video_enabled
                 ):
                     sockets = ()
                     try:
@@ -3638,13 +5041,95 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         target=decision.target or invite.target,
                         default_sip_port=int(cfg["sip_port"]),
                     )
-                result = await client.invite(
-                    target=decision_uri.user,
-                    remote_host=decision_uri.host,
-                    remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
-                    request_uri=str(decision_uri),
-                    timeout=SIP_TIMER_B if bridge_to_trunk else 8.0,
+                logical_source_endpoint = (
+                    source_endpoint
+                    if source_endpoint is not None
+                    and source_endpoint.kind is not EndpointKind.BROWSER
+                    else None
                 )
+                logical_target_endpoint = (
+                    target_endpoint
+                    if target_endpoint is not None
+                    and target_endpoint.kind is not EndpointKind.BROWSER
+                    else None
+                )
+                if logical_source_endpoint is not None or logical_target_endpoint is not None:
+                    registry.upsert(
+                        invite.call_id,
+                        state=CallState.CONNECTING.value,
+                        owner="router",
+                        caller=invite.caller,
+                        callee=resolved_callee,
+                        route_kind=decision.action.value,
+                        source_endpoint_id=(
+                            logical_source_endpoint.endpoint_id
+                            if logical_source_endpoint is not None
+                            else ""
+                        ),
+                        target_endpoint_id=(
+                            logical_target_endpoint.endpoint_id
+                            if logical_target_endpoint is not None
+                            else ""
+                        ),
+                    )
+                    try:
+                        if logical_source_endpoint is not None:
+                            registry.claim_endpoint(
+                                invite.call_id,
+                                logical_source_endpoint.endpoint_id,
+                                role="source",
+                                adopt_transport=True,
+                            )
+                        if logical_target_endpoint is not None:
+                            registry.claim_endpoint(
+                                invite.call_id,
+                                logical_target_endpoint.endpoint_id,
+                                role="destination",
+                            )
+                    except EndpointBusyError:
+                        await _close_client_and_release(client, bridge_ports)
+                        if video_relay is not None:
+                            await video_relay.stop()
+                        registry.finish_and_pop(
+                            invite.call_id,
+                            reason=TerminalReason.BUSY.value,
+                            state=CallState.BUSY.value,
+                        )
+                        return SipInviteResult(
+                            486,
+                            "Busy Here",
+                            to_tag="",
+                            decline_reason=TerminalReason.BUSY.value,
+                        )
+                try:
+                    result = await client.invite(
+                        target=decision_uri.user,
+                        remote_host=decision_uri.host,
+                        remote_sip_port=decision_uri.port or int(cfg["sip_port"]),
+                        request_uri=str(decision_uri),
+                        timeout=SIP_TIMER_B if bridge_to_trunk else 8.0,
+                    )
+                except Exception as err:  # noqa: BLE001 - isolate one SIP leg.
+                    _LOGGER.warning(
+                        "SIP bridge INVITE failed call_id=%s target=%s: %s",
+                        invite.call_id,
+                        decision_uri.user,
+                        err,
+                    )
+                    await _close_client_and_release(client, bridge_ports)
+                    if video_relay is not None:
+                        await video_relay.stop()
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                        state=CallState.TRANSPORT_UNREACHABLE.value,
+                    )
+                    return SipInviteResult(
+                        503,
+                        "Service Unavailable",
+                        to_tag="",
+                        decline_reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+                    )
                 if invite.call_id in bucket.get("trunk_closed_calls", set()):
                     bucket["trunk_closed_calls"].discard(invite.call_id)
                     _LOGGER.info(
@@ -3654,6 +5139,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     await _close_client_and_release(client, bridge_ports, bye=True)
                     if video_relay is not None:
                         await video_relay.stop()
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason=TerminalReason.CANCELLED.value,
+                        state=CallState.CANCELLED.value,
+                    )
                     return SipInviteResult(
                         487,
                         "Request Terminated",
@@ -3667,6 +5157,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     await _close_client_and_release(client, bridge_ports)
                     if video_relay is not None:
                         await video_relay.stop()
+                    registry.finish_and_pop(
+                        invite.call_id,
+                        reason=terminal_reason,
+                        state=public_state,
+                    )
                     _set_sip_bridge_call_state(
                         hass,
                         public_state,
@@ -3999,70 +5494,158 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 registry.client_watchers[client.dialog_ids.call_id] = finish_task
                 return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
         if not force_ha_softphone and decision.action is RouteAction.ANSWER_HA:
-            ha_softphone_active = _ha_softphone_has_active_call(hass, ignore_call_id=invite.call_id)
-            active_media = len(registry.softphone_media)
-            if pending or active_media or ha_softphone_active:
-                _LOGGER.info(
-                    "SIP INVITE from %s rejected: HA softphone is busy "
-                    "(pending=%d media=%d ha_softphone=%s)",
-                    invite.caller or invite.source_host,
-                    len(pending),
-                    active_media,
-                    ha_softphone_active,
-                )
-                _fire_call_event(
-                    hass,
-                    {
-                        "state": CallState.BUSY.value,
-                        "call_id": invite.call_id,
-                        "caller": invite.caller,
-                        "callee": invite.target,
-                        "peer_name": invite.caller,
-                        "direction": "incoming",
-                        "terminal_reason": TerminalReason.BUSY.value,
-                        "sip_status_code": 486,
-                        "last_sip_event": "SIP_RESPONSE",
-                    },
-                    "sip",
-                )
-                return SipInviteResult(
-                    486, "Busy Here", to_tag="", decline_reason="busy"
-                )
-            if _ha_softphone_dnd(hass):
-                _LOGGER.info(
-                    "SIP INVITE from %s rejected: HA softphone DND is enabled",
-                    invite.caller or invite.source_host,
-                )
-                _set_ha_softphone_call_state(
-                    hass,
-                    "declined",
-                    session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                    caller=invite.caller,
-                    callee=invite.target,
-                    peer_name=invite.caller,
-                    direction="incoming",
-                    call_id=invite.call_id,
-                    reason="dnd",
-                    terminal_reason="dnd",
-                    origin="self",
-                    sip_status_code=486,
-                    last_sip_event="SIP_RESPONSE",
-                )
-                return SipInviteResult(
-                    486, "Busy Here", to_tag="", decline_reason="dnd"
-                )
-            _defer_invite_to_ha_softphone(
-                invite,
-                route_kind=decision.action.value,
-                callee=resolved_callee,
-                sip_uri=decision.sip_uri,
+            browser_endpoint = target_endpoint
+            if browser_endpoint is None and endpoint_registry is not None:
+                browser_endpoint = endpoint_registry.get(DEFAULT_ENDPOINT_ID)
+            endpoint_id = (
+                browser_endpoint.endpoint_id
+                if browser_endpoint is not None
+                else DEFAULT_ENDPOINT_ID
             )
+            endpoint_device_id = str(
+                getattr(browser_endpoint, "device_id", "")
+                or HA_SOFTPHONE_DEVICE_ID
+            )
+            offline_wait_seconds = (
+                browser_endpoint.offline_wait_seconds
+                if browser_endpoint is not None
+                and browser_endpoint.availability is EndpointAvailability.OFFLINE
+                and browser_endpoint.offline_policy is OfflinePolicy.WAIT
+                else 0
+            )
+            try:
+                if (
+                    source_endpoint is not None
+                    and source_endpoint.kind is not EndpointKind.BROWSER
+                ):
+                    registry.upsert(
+                        invite.call_id,
+                        state=CallState.RINGING.value,
+                        owner="router",
+                        caller=invite.caller,
+                        callee=resolved_callee,
+                        route_kind=decision.action.value,
+                        source_endpoint_id=source_endpoint.endpoint_id,
+                    )
+                    registry.claim_endpoint(
+                        invite.call_id,
+                        source_endpoint.endpoint_id,
+                        role="source",
+                        adopt_transport=True,
+                    )
+                _defer_invite_to_ha_softphone(
+                    invite,
+                    route_kind=decision.action.value,
+                    endpoint_id=endpoint_id,
+                    endpoint_device_id=endpoint_device_id,
+                    callee=resolved_callee,
+                    sip_uri=decision.sip_uri,
+                    offline_wait_seconds=offline_wait_seconds,
+                )
+            except EndpointBusyError:
+                registry.finish_and_pop(
+                    invite.call_id,
+                    reason=TerminalReason.BUSY.value,
+                    state=CallState.BUSY.value,
+                )
+                return SipInviteResult(
+                    486,
+                    "Busy Here",
+                    to_tag="",
+                    decline_reason=TerminalReason.BUSY.value,
+                )
             return SipInviteResult(180, "Ringing", to_tag="", defer_final=True)
+        browser_endpoint = (
+            target_endpoint
+            if target_endpoint is not None
+            and target_endpoint.kind is EndpointKind.BROWSER
+            else (
+                endpoint_registry.get(DEFAULT_ENDPOINT_ID)
+                if endpoint_registry is not None
+                else None
+            )
+        )
+        endpoint_id = (
+            browser_endpoint.endpoint_id
+            if browser_endpoint is not None
+            else DEFAULT_ENDPOINT_ID
+        )
+        endpoint_device_id = str(
+            getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+        )
+        if browser_endpoint is not None:
+            if browser_endpoint.dnd or (
+                browser_endpoint.active_call_id
+                and browser_endpoint.active_call_id != invite.call_id
+            ):
+                return SipInviteResult(
+                    486,
+                    "Busy Here",
+                    to_tag="",
+                    decline_reason=TerminalReason.BUSY.value,
+                )
+            if browser_endpoint.availability is EndpointAvailability.UNAVAILABLE or (
+                browser_endpoint.availability is EndpointAvailability.OFFLINE
+                and browser_endpoint.offline_policy is OfflinePolicy.UNAVAILABLE
+            ):
+                return SipInviteResult(
+                    480,
+                    "Temporarily Unavailable",
+                    to_tag="",
+                    decline_reason=RouteReason.TARGET_UNREACHABLE.value,
+                )
+        registry.upsert(
+            invite.call_id,
+            state=CallState.CONNECTING.value,
+            owner="ha_softphone",
+            caller=invite.caller,
+            callee=resolved_callee,
+            route_kind=decision.action.value,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
+            source_endpoint_id=(
+                source_endpoint.endpoint_id
+                if source_endpoint is not None
+                and source_endpoint.kind is not EndpointKind.BROWSER
+                else ""
+            ),
+        )
+        try:
+            if (
+                source_endpoint is not None
+                and source_endpoint.kind is not EndpointKind.BROWSER
+            ):
+                registry.claim_endpoint(
+                    invite.call_id,
+                    source_endpoint.endpoint_id,
+                    role="source",
+                    adopt_transport=True,
+                )
+            registry.claim_endpoint(
+                invite.call_id,
+                endpoint_id,
+                role="destination",
+            )
+        except EndpointBusyError:
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=TerminalReason.BUSY.value,
+                state=CallState.BUSY.value,
+            )
+            return SipInviteResult(
+                486,
+                "Busy Here",
+                to_tag="",
+                decline_reason=TerminalReason.BUSY.value,
+            )
         media_reservation = None
         local_video_rtp_port = 0
         video_rtp_socket = None
         video_rtcp_socket = None
-        if invite.video_format is not None:
+        endpoint_video_enabled = (
+            browser_endpoint is None or browser_endpoint.supports("video")
+        )
+        if invite.video_format is not None and endpoint_video_enabled:
             try:
                 (
                     media_reservation,
@@ -4088,7 +5671,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 # send_video are allowed to advertise a camera direction.
                 allow_send=False,
             )
-            if invite.video_format is not None
+            if invite.video_format is not None and endpoint_video_enabled
             else "inactive"
         )
         answer = build_answer_directional(
@@ -4099,7 +5682,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             invite.recv_format,
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
-            video_format=invite.answer_video_format,
+            video_format=(
+                invite.answer_video_format if endpoint_video_enabled else None
+            ),
             video_direction=video_direction,
         )
         registry.softphone_media[invite.call_id] = {
@@ -4111,6 +5696,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             "video_rtp_socket": video_rtp_socket,
             "video_rtcp_socket": video_rtcp_socket,
             "rtp_reservation": media_reservation,
+            "endpoint_id": endpoint_id,
         }
         registry.upsert(
             invite.call_id,
@@ -4119,6 +5705,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             caller=invite.caller,
             callee=resolved_callee,
             route_kind=decision.action.value,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
         )
         registry.add_leg(
             invite.call_id,
@@ -4129,7 +5717,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _set_ha_softphone_call_state(
             hass,
             CallState.IN_CALL.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
             caller=invite.caller,
             callee=resolved_callee,
             peer_name=invite.caller,
@@ -4186,6 +5775,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
         media = registry.softphone_media.get(call_id)
         if isinstance(media, dict) and media.get("invite") is not None:
+            session = registry.sessions.get(registry.resolve_session_id(call_id))
+            media_endpoint_id = str(
+                media.get("endpoint_id")
+                or (
+                    (session.metadata if session is not None else {}).get(
+                        "endpoint_id"
+                    )
+                )
+                or DEFAULT_ENDPOINT_ID
+            ).strip()
+            media_endpoint = (
+                hass.data.get(DOMAIN, {})
+                .get("endpoint_registry")
+                .get(media_endpoint_id)
+                if hass.data.get(DOMAIN, {}).get("endpoint_registry") is not None
+                else None
+            )
+            media_device_id = str(
+                getattr(media_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+            )
             local_rtp_port = int(media.get("local_rtp_port") or 0)
             if not local_rtp_port:
                 return SipInviteResult(488, "Not Acceptable Here")
@@ -4280,7 +5889,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                     video_session.media_generation += 1
                     video_session.update_event.set()
-                store = _ha_softphone_store(hass)
+                store = _ha_softphone_store(hass, media_endpoint_id)
                 if str(store.get("call_id") or "") == call_id:
                     store.update(
                         {
@@ -4316,7 +5925,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                     _fire_call_event(
                         hass,
-                        dict(store, device_id=HA_SOFTPHONE_DEVICE_ID),
+                        dict(
+                            store,
+                            endpoint_id=media_endpoint_id,
+                            device_id=media_device_id,
+                        ),
                         "session",
                     )
 
@@ -4444,7 +6057,22 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if invite is not None
             else ""
         )
-        softphone_store = bucket.get("ha_softphone", {})
+        session_metadata = session.metadata if session is not None else {}
+        session_endpoint_id = str(
+            session_metadata.get("endpoint_id") or DEFAULT_ENDPOINT_ID
+        ).strip() or DEFAULT_ENDPOINT_ID
+        endpoint_registry = bucket.get("endpoint_registry")
+        session_endpoint = (
+            endpoint_registry.get(session_endpoint_id)
+            if endpoint_registry is not None
+            else None
+        )
+        session_device_id = str(
+            session_metadata.get("session_device_id")
+            or getattr(session_endpoint, "device_id", "")
+            or HA_SOFTPHONE_DEVICE_ID
+        )
+        softphone_store = _ha_softphone_store(hass, session_endpoint_id)
         softphone_call_id = str(softphone_store.get("call_id") or "")
         terminal_reason = reason or "remote_hangup"
         terminal_state = (
@@ -4493,7 +6121,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             _set_ha_softphone_call_state(
                 hass,
                 terminal_state,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
+                endpoint_id=session_endpoint_id,
+                session_device_id=session_device_id,
                 caller=(invite.caller if invite is not None else ""),
                 callee=(invite.target if invite is not None else _ha_peer_name(hass)),
                 peer_name=(invite.caller if invite is not None else ""),

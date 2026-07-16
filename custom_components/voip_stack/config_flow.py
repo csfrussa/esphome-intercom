@@ -1,11 +1,18 @@
 """Config flow for VoIP Stack."""
 
 from collections.abc import Mapping
+import re
 from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigEntry, ConfigFlow
+from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
+    ConfigEntry,
+    ConfigFlow,
+    ConfigSubentryFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
     AssistPipelineSelector,
@@ -18,7 +25,30 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .config_validation import extension_conflicts
+from .config_validation import extension_conflicts, route_namespace_conflicts
+from .phone_config import (
+    CONF_PHONE_CONFERENCE_GROUP,
+    CONF_PHONE_CONFERENCE_RING,
+    CONF_PHONE_DND,
+    CONF_PHONE_ENABLED,
+    CONF_PHONE_ENDPOINT_ID,
+    CONF_PHONE_EXTENSION,
+    CONF_PHONE_KIND,
+    CONF_PHONE_NAME,
+    CONF_PHONE_OFFLINE_FORWARD_TARGET,
+    CONF_PHONE_OFFLINE_POLICY,
+    CONF_PHONE_OFFLINE_WAIT_SECONDS,
+    CONF_PHONE_PASSWORD,
+    CONF_PHONE_RING_GROUP,
+    CONF_PHONE_USERNAME,
+    CONF_PHONE_VIDEO_ENABLED,
+    PHONE_SUBENTRY_TYPE,
+    new_browser_endpoint_id,
+    new_sip_account_endpoint_id,
+    phone_subentries,
+)
+from .phone_endpoint import DEFAULT_ENDPOINT_ID, EndpointKind, OfflinePolicy
+from .sip_registrar import generate_password, normalize_username
 from .const import (
     CONF_ASSIST_ADVANCED_CALL_CONTEXT,
     CONF_ASSIST_ENDPOINT_ENABLED,
@@ -53,6 +83,51 @@ from .const import (
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
 )
+
+
+def _group_route_values(*values: object) -> list[str]:
+    return [
+        part.strip()
+        for value in values
+        for part in str(value or "").split(",")
+        if part.strip()
+    ]
+
+
+def _entry_route_mappings(
+    entry: ConfigEntry | None,
+    data: Mapping[str, Any],
+    *,
+    exclude_subentry_id: str = "",
+    include_assist: bool = True,
+) -> list[Mapping[str, Any]]:
+    """Build the complete persisted routing namespace for flow validation."""
+    mappings: list[Mapping[str, Any]] = [
+        item
+        for item in data.get(CONF_PHONEBOOK_CONTACTS, []) or []
+        if isinstance(item, Mapping)
+    ]
+    mappings.extend(
+        item
+        for item in data.get("sip_accounts", []) or []
+        if isinstance(item, Mapping)
+    )
+    if entry is not None:
+        mappings.extend(
+            subentry.data
+            for subentry in phone_subentries(entry)
+            if subentry.subentry_id != exclude_subentry_id
+        )
+    assist_extension = str(data.get(CONF_ASSIST_EXTENSION) or "").strip()
+    if include_assist and data.get(CONF_ASSIST_ENDPOINT_ENABLED) and assist_extension:
+        mappings.append(
+            {
+                "id": "assist",
+                "name": "Assist",
+                "extension": assist_extension,
+            }
+        )
+    return mappings
 
 
 def _port_selector():
@@ -110,8 +185,16 @@ def _disabled_trunk_data(data: dict, existing: Mapping[str, Any]) -> dict:
 class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for VoIP Stack."""
 
-    VERSION = 2
+    VERSION = 3
     _base_input: dict | None = None
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Expose the native Add phone flow on the integration entry."""
+        return {PHONE_SUBENTRY_TYPE: PhoneSubentryFlowHandler}
 
     def _current_entry(self) -> ConfigEntry | None:
         if self.source == SOURCE_RECONFIGURE:
@@ -125,7 +208,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
     def _store_entry(self, data: dict):
         current_entry, _existing = self._current_entry_data()
         if current_entry is not None:
-            return self.async_update_reload_and_abort(
+            return self.async_update_and_abort(
                 current_entry,
                 data=data,
                 reason="reconfigure_successful",
@@ -277,7 +360,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_assist(self, user_input=None):
         """Configure the optional local Assist pipeline extension."""
-        _current_entry, existing = self._current_entry_data()
+        current_entry, existing = self._current_entry_data()
         suggested = str(existing.get(CONF_ASSIST_EXTENSION) or "").strip()
         pipeline = str(existing.get(CONF_ASSIST_PIPELINE) or "").strip()
         advanced_call_context = bool(
@@ -312,7 +395,17 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
             extension = str(user_input.get(CONF_ASSIST_EXTENSION) or "").strip()
             if not extension.isdigit() or not 1 <= len(extension) <= 8:
                 errors["base"] = "assist_extension_invalid"
-            elif extension != suggested and extension_conflicts(extension, existing):
+            elif (
+                extension_conflicts(extension, existing)
+                or route_namespace_conflicts(
+                    candidate_routes=(extension,),
+                    existing=_entry_route_mappings(
+                        current_entry,
+                        existing,
+                        include_assist=False,
+                    ),
+                )
+            ):
                 errors["base"] = "assist_extension_conflict"
             if not errors:
                 assert self._base_input is not None
@@ -561,3 +654,316 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._abort_if_unique_id_configured()
                 return self._store_entry(data)
         return self.async_show_form(step_id="trunk", data_schema=schema, errors=errors)
+
+
+class PhoneSubentryFlowHandler(ConfigSubentryFlow):
+    """Add or reconfigure one logical browser/SIP phone."""
+
+    _kind: EndpointKind | None = None
+    _reconfigure = False
+    _suggested_password = ""
+
+    def _current_data(self) -> Mapping[str, Any]:
+        if not self._reconfigure:
+            return {}
+        return self._get_reconfigure_subentry().data
+
+    def _common_schema(self, *, sip_account: bool) -> vol.Schema:
+        current = self._current_data()
+        offline_policy = str(
+            current.get(CONF_PHONE_OFFLINE_POLICY)
+            or OfflinePolicy.UNAVAILABLE.value
+        )
+        if sip_account and offline_policy == OfflinePolicy.WAIT.value:
+            offline_policy = OfflinePolicy.UNAVAILABLE.value
+        fields: dict[Any, Any] = {
+            vol.Required(
+                CONF_PHONE_NAME,
+                default=str(current.get(CONF_PHONE_NAME) or ""),
+            ): TextSelector(),
+            vol.Optional(
+                CONF_PHONE_EXTENSION,
+                default=str(current.get(CONF_PHONE_EXTENSION) or ""),
+            ): TextSelector(),
+            vol.Required(
+                CONF_PHONE_ENABLED,
+                default=bool(current.get(CONF_PHONE_ENABLED, True)),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_PHONE_DND,
+                default=bool(current.get(CONF_PHONE_DND, False)),
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_PHONE_RING_GROUP,
+                default=str(current.get(CONF_PHONE_RING_GROUP) or ""),
+            ): TextSelector(),
+            vol.Optional(
+                CONF_PHONE_CONFERENCE_GROUP,
+                default=str(current.get(CONF_PHONE_CONFERENCE_GROUP) or ""),
+            ): TextSelector(),
+            vol.Required(
+                CONF_PHONE_CONFERENCE_RING,
+                default=bool(current.get(CONF_PHONE_CONFERENCE_RING, False)),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_PHONE_VIDEO_ENABLED,
+                default=bool(current.get(CONF_PHONE_VIDEO_ENABLED, True)),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_PHONE_OFFLINE_POLICY,
+                default=offline_policy,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=(
+                        [
+                            OfflinePolicy.UNAVAILABLE.value,
+                            OfflinePolicy.FORWARD.value,
+                        ]
+                        if sip_account
+                        else [item.value for item in OfflinePolicy]
+                    ),
+                    mode="dropdown",
+                )
+            ),
+            vol.Optional(
+                CONF_PHONE_OFFLINE_FORWARD_TARGET,
+                default=str(
+                    current.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
+                ),
+            ): TextSelector(),
+        }
+        if not sip_account:
+            fields[
+                vol.Required(
+                    CONF_PHONE_OFFLINE_WAIT_SECONDS,
+                    default=int(
+                        current.get(CONF_PHONE_OFFLINE_WAIT_SECONDS) or 60
+                    ),
+                )
+            ] = NumberSelector(
+                NumberSelectorConfig(min=1, max=86400, step=1, mode="box")
+            )
+        if sip_account:
+            if not self._suggested_password:
+                self._suggested_password = str(
+                    current.get(CONF_PHONE_PASSWORD) or generate_password()
+                )
+            fields.update(
+                {
+                    vol.Optional(
+                        CONF_PHONE_USERNAME,
+                        default=str(current.get(CONF_PHONE_USERNAME) or ""),
+                    ): TextSelector(),
+                    vol.Required(
+                        CONF_PHONE_PASSWORD,
+                        default=self._suggested_password,
+                    ): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
+                }
+            )
+        return vol.Schema(fields)
+
+    def _validate_aliases(
+        self,
+        *,
+        name: str,
+        extension: str,
+        username: str,
+        ring_group: str,
+        conference_group: str,
+    ) -> bool:
+        current_id = (
+            self._get_reconfigure_subentry().subentry_id
+            if self._reconfigure
+            else ""
+        )
+        entry = self._get_entry()
+        return not route_namespace_conflicts(
+            candidate_routes=(name, extension, username),
+            candidate_groups=_group_route_values(
+                ring_group,
+                conference_group,
+            ),
+            existing=_entry_route_mappings(
+                entry,
+                entry.data,
+                exclude_subentry_id=current_id,
+            ),
+        )
+
+    def _normalized_common(
+        self,
+        user_input: Mapping[str, Any],
+        *,
+        kind: EndpointKind,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        errors: dict[str, str] = {}
+        current = self._current_data()
+        name = str(user_input.get(CONF_PHONE_NAME) or "").strip()
+        extension = str(user_input.get(CONF_PHONE_EXTENSION) or "").strip()
+        username = ""
+        password = ""
+        if kind is EndpointKind.SIP_ACCOUNT:
+            username = str(user_input.get(CONF_PHONE_USERNAME) or "").strip()
+            if not username:
+                username = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-.")
+            try:
+                username = normalize_username(username)
+            except ValueError:
+                errors[CONF_PHONE_USERNAME] = "phone_username_invalid"
+            password = str(user_input.get(CONF_PHONE_PASSWORD) or "")
+            if not password:
+                errors[CONF_PHONE_PASSWORD] = "phone_password_required"
+            if (
+                str(user_input.get(CONF_PHONE_OFFLINE_POLICY) or "")
+                == OfflinePolicy.WAIT.value
+            ):
+                errors[CONF_PHONE_OFFLINE_POLICY] = (
+                    "phone_offline_policy_unsupported"
+                )
+        if not name:
+            errors[CONF_PHONE_NAME] = "phone_name_required"
+        if str(user_input.get(CONF_PHONE_OFFLINE_POLICY)) == OfflinePolicy.FORWARD.value and not str(
+            user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
+        ).strip():
+            errors[CONF_PHONE_OFFLINE_FORWARD_TARGET] = "phone_forward_target_required"
+        if not self._validate_aliases(
+            name=name,
+            extension=extension,
+            username=username,
+            ring_group=str(user_input.get(CONF_PHONE_RING_GROUP) or "").strip(),
+            conference_group=str(
+                user_input.get(CONF_PHONE_CONFERENCE_GROUP) or ""
+            ).strip(),
+        ):
+            errors["base"] = "phone_alias_conflict"
+        endpoint_id = str(current.get(CONF_PHONE_ENDPOINT_ID) or "")
+        if not endpoint_id:
+            if kind is EndpointKind.BROWSER:
+                endpoint_id = new_browser_endpoint_id()
+            elif CONF_PHONE_USERNAME not in errors:
+                endpoint_id = new_sip_account_endpoint_id()
+        data = {
+            CONF_PHONE_ENDPOINT_ID: endpoint_id,
+            CONF_PHONE_KIND: kind.value,
+            CONF_PHONE_NAME: name,
+            CONF_PHONE_EXTENSION: extension,
+            CONF_PHONE_USERNAME: username,
+            CONF_PHONE_PASSWORD: password,
+            CONF_PHONE_ENABLED: bool(user_input.get(CONF_PHONE_ENABLED, True)),
+            CONF_PHONE_DND: bool(user_input.get(CONF_PHONE_DND, False)),
+            CONF_PHONE_RING_GROUP: str(
+                user_input.get(CONF_PHONE_RING_GROUP) or ""
+            ).strip(),
+            CONF_PHONE_CONFERENCE_GROUP: str(
+                user_input.get(CONF_PHONE_CONFERENCE_GROUP) or ""
+            ).strip(),
+            CONF_PHONE_CONFERENCE_RING: bool(
+                user_input.get(CONF_PHONE_CONFERENCE_RING, False)
+            ),
+            CONF_PHONE_VIDEO_ENABLED: bool(
+                user_input.get(CONF_PHONE_VIDEO_ENABLED, True)
+            ),
+            CONF_PHONE_OFFLINE_POLICY: str(
+                user_input.get(CONF_PHONE_OFFLINE_POLICY)
+                or OfflinePolicy.UNAVAILABLE.value
+            ),
+            CONF_PHONE_OFFLINE_FORWARD_TARGET: str(
+                user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
+            ).strip(),
+            CONF_PHONE_OFFLINE_WAIT_SECONDS: int(
+                user_input.get(CONF_PHONE_OFFLINE_WAIT_SECONDS) or 60
+            ),
+        }
+        return data, errors
+
+    def _finish(self, data: dict[str, Any]):
+        if self._reconfigure:
+            return self.async_update_and_abort(
+                self._get_entry(),
+                self._get_reconfigure_subentry(),
+                data=data,
+                title=str(data[CONF_PHONE_NAME]),
+            )
+        return self.async_create_entry(
+            title=str(data[CONF_PHONE_NAME]),
+            data=data,
+            unique_id=f"phone:{data[CONF_PHONE_ENDPOINT_ID]}",
+        )
+
+    async def async_step_user(self, user_input=None):
+        """Choose which standard endpoint implementation to add."""
+        if user_input is not None:
+            self._kind = EndpointKind(str(user_input[CONF_PHONE_KIND]))
+            if self._kind is EndpointKind.BROWSER:
+                return await self.async_step_browser()
+            return await self.async_step_sip_account()
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PHONE_KIND, default=EndpointKind.BROWSER.value
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                EndpointKind.BROWSER.value,
+                                EndpointKind.SIP_ACCOUNT.value,
+                            ],
+                            mode="dropdown",
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_browser(self, user_input=None):
+        """Configure one browser/card-backed HA softphone."""
+        if user_input is not None:
+            data, errors = self._normalized_common(
+                user_input, kind=EndpointKind.BROWSER
+            )
+            if not errors:
+                return self._finish(data)
+            return self.async_show_form(
+                step_id="browser",
+                data_schema=self._common_schema(sip_account=False),
+                errors=errors,
+            )
+        return self.async_show_form(
+            step_id="browser", data_schema=self._common_schema(sip_account=False)
+        )
+
+    async def async_step_sip_account(self, user_input=None):
+        """Configure one standard SIP registrar account."""
+        if user_input is not None:
+            data, errors = self._normalized_common(
+                user_input, kind=EndpointKind.SIP_ACCOUNT
+            )
+            if not errors:
+                return self._finish(data)
+            return self.async_show_form(
+                step_id="sip_account",
+                data_schema=self._common_schema(sip_account=True),
+                errors=errors,
+            )
+        return self.async_show_form(
+            step_id="sip_account",
+            data_schema=self._common_schema(sip_account=True),
+        )
+
+    async def async_step_reconfigure(self, user_input=None):
+        """Keep endpoint identity and kind stable while editing settings."""
+        self._reconfigure = True
+        current = self._get_reconfigure_subentry().data
+        endpoint_id = str(current.get(CONF_PHONE_ENDPOINT_ID) or "")
+        if endpoint_id == DEFAULT_ENDPOINT_ID:
+            self._kind = EndpointKind.BROWSER
+        else:
+            self._kind = EndpointKind(
+                str(current.get(CONF_PHONE_KIND) or EndpointKind.BROWSER.value)
+            )
+        if self._kind is EndpointKind.BROWSER:
+            return await self.async_step_browser(user_input)
+        return await self.async_step_sip_account(user_input)

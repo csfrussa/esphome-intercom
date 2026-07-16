@@ -16,7 +16,7 @@ SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 PACKAGE = "voip_stack_phonebook_security_test"
 
 
-def _load_phonebook_services(monkeypatch):
+def _load_phonebook_services(monkeypatch, route_conflicts=None):
     package = types.ModuleType(PACKAGE)
     package.__path__ = [str(MODULE.parent)]
     monkeypatch.setitem(sys.modules, PACKAGE, package)
@@ -30,15 +30,24 @@ def _load_phonebook_services(monkeypatch):
 
     const = types.ModuleType(f"{PACKAGE}.const")
     const.DOMAIN = "voip_stack"
+    const.CONF_ASSIST_ENDPOINT_ENABLED = "assist_endpoint_enabled"
+    const.CONF_ASSIST_EXTENSION = "assist_extension"
+    validation = types.ModuleType(f"{PACKAGE}.config_validation")
+    validation.route_namespace_conflicts = route_conflicts or (
+        lambda **_kwargs: False
+    )
     runtime = types.ModuleType(f"{PACKAGE}.phonebook_runtime")
     runtime.push_roster_json_to_esps = lambda *_args, **_kwargs: None
     roster = types.ModuleType(f"{PACKAGE}.roster")
     roster.RosterEntry = object
+    roster.normalize_roster_key = lambda value: "".join(
+        char for char in str(value or "").lower() if char.isalnum()
+    )
     roster.parse_roster_json = lambda _value: []
     store = types.ModuleType(f"{PACKAGE}.store")
     store.manual_roster_entries = lambda _hass: []
     store.store_manual_roster_entries = lambda _hass, _entries: None
-    for dependency in (const, runtime, roster, store):
+    for dependency in (const, validation, runtime, roster, store):
         monkeypatch.setitem(sys.modules, dependency.__name__, dependency)
 
     name = f"{PACKAGE}.phonebook_services"
@@ -80,3 +89,57 @@ def test_export_service_requires_a_private_response() -> None:
     registration = source[source.index('"export_phonebook"') :]
 
     assert "supports_response=SupportsResponse.ONLY" in registration
+
+
+def test_contact_group_lists_are_validated_as_individual_router_aliases(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def route_conflicts(**kwargs):
+        calls.append(kwargs)
+        return False
+
+    module = _load_phonebook_services(monkeypatch, route_conflicts)
+    entry = types.SimpleNamespace(
+        id="desk",
+        name="Desk",
+        extension="401",
+        number="",
+        metadata={
+            "ring_group": "Night, Ground Floor",
+            "conference_group": "Staff",
+        },
+        display_name="Desk",
+    )
+    hass = types.SimpleNamespace(data={"voip_stack": {}})
+
+    module._validate_contact_namespace(hass, [entry])
+
+    assert calls[0]["candidate_groups"] == (
+        "Night",
+        "Ground Floor",
+        "Staff",
+    )
+
+
+def test_contact_namespace_conflict_is_rejected_before_persistence(
+    monkeypatch,
+) -> None:
+    module = _load_phonebook_services(monkeypatch, lambda **_kwargs: True)
+    entry = types.SimpleNamespace(
+        id="kitchen",
+        name="Kitchen",
+        extension="401",
+        number="",
+        metadata={},
+        display_name="Kitchen",
+    )
+    hass = types.SimpleNamespace(data={"voip_stack": {}})
+
+    try:
+        module._validate_contact_namespace(hass, [entry])
+    except ValueError as err:
+        assert "conflicts with an existing phone" in str(err)
+    else:
+        raise AssertionError("conflicting phonebook route was accepted")

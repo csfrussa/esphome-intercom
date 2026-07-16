@@ -289,9 +289,25 @@ class SipCallClient:
         self.local_name = local_name
         self.local_sip_port = int(local_sip_port)
         self.local_rtp_port = int(local_rtp_port)
-        base_formats = supported_formats or list(HA_SIP_PCM_FORMATS)
-        self.supported_send_formats = supported_send_formats or base_formats
-        self.supported_recv_formats = supported_recv_formats or base_formats
+        # ``None`` means that the caller did not constrain the profile.  An
+        # empty list is materially different: directional capability
+        # negotiation ran and found no usable format.  Never turn that result
+        # back into the broad HA default offer.
+        base_formats = (
+            list(HA_SIP_PCM_FORMATS)
+            if supported_formats is None
+            else list(supported_formats)
+        )
+        self.supported_send_formats = (
+            list(base_formats)
+            if supported_send_formats is None
+            else list(supported_send_formats)
+        )
+        self.supported_recv_formats = (
+            list(base_formats)
+            if supported_recv_formats is None
+            else list(supported_recv_formats)
+        )
         self.signaling_transport = (signaling_transport or "UDP").upper()
         self.auth_username = auth_username
         self.username = username or local_name

@@ -38,6 +38,31 @@ call_registry = _load_module("call_registry")
 automation_routing = _load_module("automation_routing")
 
 
+class _EndpointRegistryStub:
+    def __init__(self) -> None:
+        self.active: dict[str, str] = {}
+        self.releases: list[tuple[str, str]] = []
+
+    def claim_call(self, endpoint_id: str, call_id: str) -> None:
+        active_call_id = self.active.get(endpoint_id, "")
+        if active_call_id and active_call_id != call_id:
+            raise ValueError(f"{endpoint_id} is busy")
+        self.active[endpoint_id] = call_id
+
+    def release_call(self, endpoint_id: str, call_id: str) -> bool:
+        if self.active.get(endpoint_id) != call_id:
+            return False
+        self.active.pop(endpoint_id)
+        self.releases.append((endpoint_id, call_id))
+        return True
+
+    def adopt_transport_call(self, endpoint_id: str, call_id: str) -> None:
+        active_call_id = self.active.get(endpoint_id, "")
+        if active_call_id and not active_call_id.startswith("physical:"):
+            raise ValueError(f"{endpoint_id} is busy")
+        self.active[endpoint_id] = call_id
+
+
 class CallRegistryEventContextTest(unittest.TestCase):
     def test_sequence_advances_only_for_canonical_state_changes(self) -> None:
         registry = call_registry.CallRegistry()
@@ -140,6 +165,29 @@ class CallRegistryEventContextTest(unittest.TestCase):
         self.assertEqual(fields["revision"], redirected.revision)
         self.assertEqual(fields["owner"], "router")
 
+    def test_event_fields_use_owned_endpoint_ids_not_display_names(self) -> None:
+        registry = call_registry.CallRegistry()
+        endpoints = _EndpointRegistryStub()
+        registry.bind_endpoint_registry(endpoints)
+        registry.upsert(
+            "call-1",
+            state="ringing",
+            caller="Kitchen",
+            source_endpoint_id="front-door",
+            dest_endpoint_id="kitchen",
+        )
+        registry.claim_endpoint("call-1", "hall", role="destination")
+
+        fields = registry.event_fields("call-1", "ringing")
+
+        self.assertEqual(fields["source_endpoint_id"], "front-door")
+        self.assertEqual(fields["dest_endpoint_id"], "kitchen")
+        self.assertEqual(
+            fields["participant_endpoint_ids"],
+            ["front-door", "hall", "kitchen"],
+        )
+        self.assertNotIn("caller", fields)
+
     def test_stale_revision_or_owner_cannot_mutate_session(self) -> None:
         registry = call_registry.CallRegistry()
         session = registry.upsert("call-1", state="ringing", owner="ha_softphone")
@@ -241,6 +289,71 @@ class CallRegistryEventContextTest(unittest.TestCase):
         self.assertNotIn("call-1", registry.pending_invites)
         self.assertNotIn("call-1", registry.pending_routes)
 
+    def test_endpoint_claims_are_atomic_and_released_by_leg_teardown(self) -> None:
+        registry = call_registry.CallRegistry()
+        endpoints = _EndpointRegistryStub()
+        registry.bind_endpoint_registry(endpoints)
+        registry.upsert("source", state="connecting", owner="router")
+        registry.claim_endpoint("source", "caller", role="source")
+        registry.claim_endpoint("source", "callee", role="destination")
+        registry.register_bridge(
+            source_call_id="source",
+            dest_call_id="destination-leg",
+            client=object(),
+            state="ringing",
+        )
+
+        registry.finish_and_pop("destination-leg", reason="remote_hangup")
+
+        self.assertEqual(endpoints.active, {})
+        self.assertCountEqual(
+            endpoints.releases,
+            [("caller", "source"), ("callee", "source")],
+        )
+        self.assertEqual(registry.endpoint_claims, {})
+
+    def test_busy_endpoint_claim_never_records_partial_ownership(self) -> None:
+        registry = call_registry.CallRegistry()
+        endpoints = _EndpointRegistryStub()
+        endpoints.active["kitchen"] = "existing"
+        registry.bind_endpoint_registry(endpoints)
+
+        with self.assertRaisesRegex(ValueError, "kitchen is busy"):
+            registry.claim_endpoint("new-call", "kitchen")
+
+        self.assertEqual(registry.endpoint_claims, {})
+        self.assertEqual(endpoints.active, {"kitchen": "existing"})
+
+    def test_clear_runtime_releases_endpoint_claims_before_indexes(self) -> None:
+        registry = call_registry.CallRegistry()
+        endpoints = _EndpointRegistryStub()
+        registry.bind_endpoint_registry(endpoints)
+        registry.upsert("call-1", state="in_call", owner="bridge")
+        registry.claim_endpoint("call-1", "office")
+
+        registry.clear_runtime()
+
+        self.assertEqual(endpoints.active, {})
+        self.assertEqual(registry.endpoint_claims, {})
+        self.assertEqual(registry.sessions, {})
+
+    def test_source_call_can_adopt_provisional_physical_state_token(self) -> None:
+        registry = call_registry.CallRegistry()
+        endpoints = _EndpointRegistryStub()
+        endpoints.active["kiosk"] = "physical:kiosk"
+        registry.bind_endpoint_registry(endpoints)
+
+        registry.claim_endpoint(
+            "sip-call",
+            "kiosk",
+            role="source",
+            adopt_transport=True,
+        )
+
+        self.assertEqual(endpoints.active["kiosk"], "sip-call")
+        registry.finish_and_pop("sip-call", reason="remote_hangup")
+        self.assertEqual(endpoints.active, {})
+
     def test_controller_identity_is_sticky_and_preserves_first_ha_context(self) -> None:
         registry = call_registry.CallRegistry()
         registry.upsert("call-1", state="calling", owner="ha_softphone")
@@ -266,6 +379,33 @@ class CallRegistryEventContextTest(unittest.TestCase):
             registry.sessions["call-1"].metadata["controller_user_id"],
             "user-a",
         )
+
+    def test_local_bridge_has_one_sticky_controller_per_phone_leg(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert(
+            "call-1",
+            state="ringing",
+            owner="local_bridge",
+            local_bridge=True,
+        )
+
+        registry.bind_controller(
+            "call-1", user_id="user-a", endpoint_id="kitchen"
+        )
+        registry.bind_controller(
+            "call-1", user_id="user-b", endpoint_id="office"
+        )
+
+        session = registry.sessions["call-1"]
+        self.assertEqual(
+            session.metadata["controller_user_ids"],
+            {"kitchen": "user-a", "office": "user-b"},
+        )
+        self.assertNotIn("controller_user_id", session.metadata)
+        with self.assertRaisesRegex(ValueError, "endpoint kitchen"):
+            registry.bind_controller(
+                "call-1", user_id="user-c", endpoint_id="kitchen"
+            )
 
     def test_internal_context_survives_later_admin_media_binding(self) -> None:
         registry = call_registry.CallRegistry()

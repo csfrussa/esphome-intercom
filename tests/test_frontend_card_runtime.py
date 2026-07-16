@@ -41,11 +41,15 @@ source = source
 
 const serviceCalls = [];
 const engineEvents = [];
+let cameraPermissionChecks = 0;
 const engine = {{
   active: false,
   callId: "",
   deviceId: "",
+  endpointId: "default",
   softphoneCallId: "",
+  ownedSoftphoneCalls: new Map(),
+  mediaIntent: null,
   videoVisible: false,
   videoCameraEnabled: false,
   addEventListener() {{}},
@@ -57,10 +61,46 @@ const engine = {{
   clearRingtoneRequest() {{}},
   setRingtoneRequest() {{}},
   statsText() {{ return ""; }},
-  ownsSoftphoneSession(callId) {{ return this.softphoneCallId === callId; }},
-  claimSoftphoneSession(callId) {{ this.softphoneCallId = String(callId || ""); }},
-  releaseSoftphoneSession(callId = "") {{
-    if (!callId || this.softphoneCallId === callId) this.softphoneCallId = "";
+  ownsSoftphoneSession(callId, endpointId = "default") {{
+    return this.ownedSoftphoneCalls.get(endpointId) === callId;
+  }},
+  softphoneCallIdFor(endpointId = "default") {{
+    return this.ownedSoftphoneCalls.get(endpointId) || "";
+  }},
+  claimSoftphoneSession(callId, endpointId = "default") {{
+    const wanted = String(callId || "");
+    if (wanted) this.ownedSoftphoneCalls.set(endpointId, wanted);
+    else this.ownedSoftphoneCalls.delete(endpointId);
+    this.softphoneCallId = this.ownedSoftphoneCalls.get("default") || "";
+  }},
+  releaseSoftphoneSession(callId = "", endpointId = "default") {{
+    if (!callId || this.ownedSoftphoneCalls.get(endpointId) === callId) {{
+      this.ownedSoftphoneCalls.delete(endpointId);
+    }}
+    this.softphoneCallId = this.ownedSoftphoneCalls.get("default") || "";
+  }},
+  hasOwnedSoftphoneSessionForOtherEndpoint(endpointId = "default") {{
+    for (const [candidate, callId] of this.ownedSoftphoneCalls) {{
+      if (candidate !== endpointId && callId) return true;
+    }}
+    return this.active && this.endpointId !== endpointId;
+  }},
+  tryAcquireMediaIntent(endpointId = "default", token = null) {{
+    if (!token) return false;
+    if (this.mediaIntent) return this.mediaIntent.token === token;
+    if (this.hasOwnedSoftphoneSessionForOtherEndpoint(endpointId)) return false;
+    this.mediaIntent = {{ endpointId, token }};
+    return true;
+  }},
+  releaseMediaIntent(token) {{
+    if (!token || this.mediaIntent?.token !== token) return false;
+    this.mediaIntent = null;
+    return true;
+  }},
+  tryRecoverSoftphoneSession(callId, endpointId = "default") {{
+    if (!callId || this.hasOwnedSoftphoneSessionForOtherEndpoint(endpointId)) return false;
+    this.claimSoftphoneSession(callId, endpointId);
+    return true;
   }},
   async close(reason) {{
     engineEvents.push(["close", reason, this.callId]);
@@ -69,7 +109,7 @@ const engine = {{
   }},
   async reconcileSession() {{}},
   async resumeSession() {{ return true; }},
-  async prepareVideoCameraPermission() {{ return false; }},
+  async prepareVideoCameraPermission() {{ cameraPermissionChecks++; return false; }},
   async startHaSoftphone() {{ throw new Error("not configured"); }},
 }};
 
@@ -175,6 +215,7 @@ function makeCard() {{
   card.config = {{ mode: "ha_softphone", name: "Office HA" }};
   card._hass = {{
     config: {{ location_name: "Office HA" }},
+    user: {{ is_admin: true }},
     states: {{}},
     callService: async (...args) => serviceCalls.push(args),
   }};
@@ -202,6 +243,226 @@ const base = {{
   callee: "Home HA",
   peer_name: "Home HA",
 }};
+
+// Cards accept only snapshots belonging to their configured logical phone;
+// a legacy endpoint-less snapshot remains exclusive to the default card.
+const kitchen = makeCard();
+kitchen.config = {{
+  mode: "ha_softphone",
+  name: "Kitchen",
+  endpoint_id: "kitchen",
+  device_id: "device-kitchen",
+}};
+kitchen._onSoftphoneState({{ endpoint_id: "default", state: "ringing", call_id: "wrong" }});
+assert.equal(kitchen._softphoneSnapshot, null);
+kitchen._onSoftphoneState({{ endpoint_id: "kitchen", device_id: "device-kitchen", state: "ringing", call_id: "right" }});
+assert.equal(kitchen._softphoneSnapshot.call_id, "right");
+const defaultCard = makeCard();
+defaultCard._onSoftphoneState({{ state: "ringing", call_id: "legacy" }});
+assert.equal(defaultCard._softphoneSnapshot.call_id, "legacy");
+
+// A newly opened page can adopt authoritative media for an already answered
+// call even when it did not initiate or answer the dialog locally.
+engine.ownedSoftphoneCalls.clear();
+engine.active = false;
+let recoveredMediaCalls = 0;
+engine.resumeSession = async () => {{ recoveredMediaCalls++; return true; }};
+const recoveredCard = makeCard();
+recoveredCard.config = {{
+  mode: "ha_softphone", endpoint_id: "kitchen", device_id: "device-kitchen",
+}};
+recoveredCard._onSoftphoneState({{
+  endpoint_id: "kitchen", device_id: "device-kitchen",
+  session_device_id: "device-kitchen", state: "in_call",
+  call_id: "already-answered", capabilities: ["audio"], sequence: 1,
+}});
+await Promise.resolve();
+assert.equal(engine.ownsSoftphoneSession("already-answered", "kitchen"), true);
+assert.equal(recoveredMediaCalls, 1);
+engine.releaseSoftphoneSession("already-answered", "kitchen");
+engine.resumeSession = async () => true;
+
+// Device-only card identity is immutable across backend resolution. Local
+// settings and controller ownership must not jump from a Device key to an
+// endpoint key after the first snapshot.
+const deviceOnly = makeCard();
+deviceOnly.config = {{
+  mode: "ha_softphone", name: "Device only", device_id: "device-kiosk",
+}};
+const runtimeKeyBefore = deviceOnly._softphoneRuntimeKey();
+const storageKeyBefore = deviceOnly._autoAnswerStorageId();
+const targetKeyBefore = deviceOnly._softphoneTargetStorageKey();
+deviceOnly._onSoftphoneState({{
+  endpoint_id: "browser:kiosk", device_id: "device-kiosk", state: "idle", sequence: 1,
+}});
+assert.equal(deviceOnly._softphoneRuntimeKey(), runtimeKeyBefore);
+assert.equal(runtimeKeyBefore, "device:device-kiosk");
+assert.equal(deviceOnly._autoAnswerStorageId(), storageKeyBefore);
+assert.equal(deviceOnly._softphoneTargetStorageKey(), targetKeyBefore);
+
+// A disabled or removed idle logical phone must stop advertising a Call
+// action immediately. Active calls retain their answer/hangup controls until
+// teardown, so the availability flag is handled only by the idle branch.
+const disabledPhone = makeCard();
+disabledPhone._applySoftphoneSnapshot({{
+  endpoint_id: "default", state: "idle", enabled: false, sequence: 1,
+}});
+disabledPhone._render();
+assert.equal(disabledPhone._els.statusText.textContent, "Phone unavailable");
+assert.equal(disabledPhone._els.statusIndicator.className, "status-indicator unavailable");
+assert.equal(disabledPhone._els.callBtn.hidden, true);
+assert.equal(disabledPhone._els.settingsBtn.hidden, true);
+
+// One browser tab has one media pipeline. A call already claimed by one
+// logical phone blocks Call/Answer on every other card, including the
+// pre-media phase where engine.active is still false.
+engine.active = false;
+engine.claimSoftphoneSession("kitchen-call", "kitchen");
+const hall = makeCard();
+hall.config = {{
+  mode: "ha_softphone",
+  name: "Hall",
+  endpoint_id: "hall",
+  device_id: "device-hall",
+}};
+hall._rosterEntries = [{{
+  id: "desk", name: "Desk", enabled: true, metadata: {{}},
+}}];
+hall._applySoftphoneSnapshot({{
+  endpoint_id: "hall",
+  device_id: "device-hall",
+  state: "idle",
+  sequence: 1,
+}});
+hall._render();
+assert.equal(hall._els.callBtn.disabled, true);
+const blockedActionCount = serviceCalls.length;
+await hall._startCall();
+assert.equal(serviceCalls.length, blockedActionCount);
+assert.match(hall._errorMsg, /already handling another phone call/i);
+hall._applySoftphoneSnapshot({{
+  endpoint_id: "hall",
+  device_id: "device-hall",
+  state: "ringing",
+  direction: "incoming",
+  call_id: "hall-call",
+  caller: "Door",
+  sequence: 2,
+}});
+hall._render();
+assert.equal(hall._els.answerBtn.disabled, true);
+await hall._answer();
+assert.equal(serviceCalls.length, blockedActionCount);
+engine.releaseSoftphoneSession("kitchen-call", "kitchen");
+
+// The page-level reservation is atomic across awaits: two cards cannot both
+// answer after observing an initially free engine.
+const kitchenRace = makeCard();
+kitchenRace.config = {{
+  mode: "ha_softphone", endpoint_id: "kitchen", device_id: "device-kitchen",
+}};
+kitchenRace._applySoftphoneSnapshot({{
+  endpoint_id: "kitchen", device_id: "device-kitchen", state: "ringing",
+  direction: "incoming", call_id: "race-kitchen", caller: "Door", sequence: 1,
+}});
+const hallRace = makeCard();
+hallRace.config = {{
+  mode: "ha_softphone", endpoint_id: "hall", device_id: "device-hall",
+}};
+hallRace._applySoftphoneSnapshot({{
+  endpoint_id: "hall", device_id: "device-hall", state: "ringing",
+  direction: "incoming", call_id: "race-hall", caller: "Door", sequence: 1,
+}});
+let releaseRaceLookup;
+kitchenRace._getDeviceInfo = () => new Promise((resolve) => {{
+  releaseRaceLookup = resolve;
+}});
+const answerRaceCount = serviceCalls.length;
+const pendingKitchenAnswer = kitchenRace._answer();
+await Promise.resolve();
+await hallRace._answer();
+assert.equal(serviceCalls.length, answerRaceCount);
+assert.match(hallRace._errorMsg, /already handling another phone call/i);
+releaseRaceLookup({{ device_id: "device-kitchen" }});
+await pendingKitchenAnswer;
+assert.equal(serviceCalls.length, answerRaceCount + 1);
+assert.equal(serviceCalls.at(-1)[2].call_id, "race-kitchen");
+engine.releaseSoftphoneSession("race-kitchen", "kitchen");
+
+// A rejected Answer must release only the claim created by that operation.
+// Otherwise every other logical phone in the page stays blocked even though
+// no media WebSocket was ever attached.
+const rejectedAnswer = makeCard();
+rejectedAnswer.config = {{
+  mode: "ha_softphone", endpoint_id: "patio", device_id: "device-patio",
+}};
+rejectedAnswer._applySoftphoneSnapshot({{
+  endpoint_id: "patio", device_id: "device-patio", state: "ringing",
+  direction: "incoming", call_id: "reject-patio", caller: "Door", sequence: 1,
+}});
+rejectedAnswer._hass.callService = async () => {{
+  throw new Error("answer rejected");
+}};
+await rejectedAnswer._answer();
+assert.match(rejectedAnswer._errorMsg, /answer rejected/i);
+assert.equal(engine.ownsSoftphoneSession("reject-patio", "patio"), false);
+const postFailureIntent = {{}};
+assert.equal(engine.tryAcquireMediaIntent("hall", postFailureIntent), true);
+assert.equal(engine.releaseMediaIntent(postFailureIntent), true);
+
+// The same reservation covers outbound calls before the first WS reply has
+// supplied a call-id to claim.
+const startKitchen = makeCard();
+startKitchen.config = {{
+  mode: "ha_softphone", endpoint_id: "kitchen", device_id: "device-kitchen",
+}};
+startKitchen._rosterEntries = [{{ id: "desk", name: "Desk", enabled: true, metadata: {{}} }}];
+const startHall = makeCard();
+startHall.config = {{
+  mode: "ha_softphone", endpoint_id: "hall", device_id: "device-hall",
+}};
+startHall._rosterEntries = [{{ id: "desk", name: "Desk", enabled: true, metadata: {{}} }}];
+let releaseStartLookup;
+startKitchen._getDeviceInfo = () => new Promise((resolve) => {{
+  releaseStartLookup = resolve;
+}});
+const outboundRequests = [];
+engine.startHaSoftphone = async (target, session) => {{
+  outboundRequests.push([target, session]);
+  return {{
+    state: "calling", call_id: "start-kitchen", endpoint_id: session.endpoint_id,
+    sequence: 1,
+  }};
+}};
+const pendingKitchenStart = startKitchen._startCall();
+await Promise.resolve();
+await startHall._startCall();
+assert.equal(outboundRequests.length, 0);
+assert.match(startHall._errorMsg, /already handling another phone call/i);
+releaseStartLookup({{ device_id: "device-kitchen", softphone: true }});
+await pendingKitchenStart;
+assert.equal(outboundRequests.length, 1);
+assert.equal(outboundRequests[0][1].endpoint_id, "kitchen");
+engine.releaseSoftphoneSession("start-kitchen", "kitchen");
+
+// An endpoint-only card may be used before its first state snapshot. It must
+// not pair that non-default endpoint with the legacy default Device selector.
+const endpointOnly = makeCard();
+endpointOnly.config = {{ mode: "ha_softphone", endpoint_id: "kitchen" }};
+endpointOnly._rosterEntries = [{{
+  id: "desk", name: "Desk", enabled: true, metadata: {{}},
+}}];
+let endpointOnlyStart;
+engine.startHaSoftphone = async (target, session, options) => {{
+  endpointOnlyStart = {{ target, session, options }};
+  return {{
+    state: "calling", call_id: "endpoint-only", endpoint_id: "kitchen", sequence: 1,
+  }};
+}};
+await endpointOnly._startCall();
+assert.equal(endpointOnlyStart.session.endpoint_id, "kitchen");
+assert.equal(endpointOnlyStart.session.device_id, "");
+engine.releaseSoftphoneSession("endpoint-only", "kitchen");
 
 // The local Call action may publish only the backend's provisional result.
 // It must not optimistically promote the card to in_call.
@@ -266,10 +527,11 @@ incoming._applySoftphoneSnapshot({{
 }});
 await incoming._answer();
 assert.equal(incoming._softphoneSnapshot.state, "ringing");
+assert.equal(cameraPermissionChecks, 0);
 assert.equal(JSON.stringify(serviceCalls.at(-1)), JSON.stringify([
   "voip_stack",
   "answer",
-  {{ call_id: "incoming-A", send_video: false }},
+  {{ endpoint_id: "default", device_id: "__voip_stack_ha_softphone__", call_id: "incoming-A", send_video: false }},
 ]));
 incoming._applySoftphoneSnapshot({{
   state: "answering",
@@ -337,7 +599,7 @@ await pendingReplacementAnswer;
 assert.equal(JSON.stringify(replacementCalls), JSON.stringify([[
   "voip_stack",
   "answer",
-  {{ call_id: "replace-A", send_video: false }},
+  {{ endpoint_id: "default", device_id: "__voip_stack_ha_softphone__", call_id: "replace-A", send_video: false }},
 ]]));
 
 // Hangup is call-scoped and likewise waits for the backend terminal snapshot.
@@ -349,7 +611,7 @@ await incoming._hangup();
 assert.equal(JSON.stringify(serviceCalls.at(-1)), JSON.stringify([
   "voip_stack",
   "hangup",
-  {{ call_id: "incoming-A" }},
+  {{ endpoint_id: "default", device_id: "__voip_stack_ha_softphone__", call_id: "incoming-A" }},
 ]));
 assert.equal(incoming._softphoneSnapshot.state, "in_call");
 incoming._applySoftphoneSnapshot({{
@@ -361,6 +623,30 @@ incoming._applySoftphoneSnapshot({{
 incoming._render();
 assert.equal(incoming._els.statusText.textContent, "Call with Door ended.");
 assert.match(incoming._els.statusReason.textContent, /Local hangup/);
+
+// Media-engine failures are visible in the owning card instead of being
+// console-only diagnostics.
+const engineErrorCard = makeCard();
+engineErrorCard._engineErrorListener({{ detail: "Audio media update failed" }});
+assert.match(engineErrorCard._errorMsg, /audio media update failed/i);
+
+// A rejected Hangup keeps the exact call claim and attached media available
+// so the user can retry instead of silently becoming a spectator.
+const rejectedHangup = makeCard();
+rejectedHangup._applySoftphoneSnapshot({{
+  endpoint_id: "default", device_id: "__voip_stack_ha_softphone__",
+  state: "in_call", direction: "outgoing", call_id: "hangup-rejected",
+  peer_name: "Desk", sequence: 1,
+}});
+engine.claimSoftphoneSession("hangup-rejected", "default");
+engine.active = true;
+engine.endpointId = "default";
+engine.callId = "hangup-rejected";
+rejectedHangup._hass.callService = async () => {{ throw new Error("hangup denied"); }};
+rejectedHangup._loadSoftphoneState = async () => {{}};
+await rejectedHangup._hangup();
+assert.equal(engine.ownsSoftphoneSession("hangup-rejected", "default"), true);
+assert.match(rejectedHangup._errorMsg, /hangup denied/i);
 """
     completed = subprocess.run(
         [

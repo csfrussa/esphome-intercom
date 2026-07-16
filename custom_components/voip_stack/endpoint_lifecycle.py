@@ -43,6 +43,7 @@ def call_registry(hass: HomeAssistant) -> CallRegistry:
     if not isinstance(registry, CallRegistry):
         registry = CallRegistry()
         bucket["call_registry"] = registry
+    registry.bind_endpoint_registry(bucket.get("endpoint_registry"))
     return registry
 
 

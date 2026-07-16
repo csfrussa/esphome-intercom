@@ -89,8 +89,12 @@ def _load_audio_ws_runtime_module():
 
     websocket_api = types.ModuleType(f"{package_name}.websocket_api")
     websocket_api.CALL_EVENT = "voip_stack_call_event"
-    websocket_api._ha_softphone_store = lambda hass: hass.store
-    websocket_api._publish_ha_softphone_state = lambda _hass: None
+    websocket_api._ha_softphone_store = (
+        lambda hass, _endpoint_id="default": hass.store
+    )
+    websocket_api._publish_ha_softphone_state = (
+        lambda _hass, endpoint_id="default": None  # noqa: ARG005
+    )
     sys.modules[websocket_api.__name__] = websocket_api
 
     homeassistant = sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
@@ -126,6 +130,46 @@ def _load_audio_ws_runtime_module():
     except BaseException:
         # A failed dynamic import must not poison later tests with a partially
         # initialized module from ``sys.modules``.
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _load_video_ws_runtime_module():
+    """Load video_ws_view with minimal HA adapters and real video primitives."""
+
+    # Reuse the deterministic Home Assistant module stubs installed by the
+    # audio runtime loader; the media views share the same HA surface.
+    _load_audio_ws_runtime_module()
+    core = sys.modules["homeassistant.core"]
+    core.callback = getattr(core, "callback", lambda target: target)
+    package_name = "voip_stack_video_runtime_test"
+    module_name = f"{package_name}.video_ws_view"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(PKG_DIR)]
+    sys.modules[package_name] = package
+    websocket_api = types.ModuleType(f"{package_name}.websocket_api")
+    websocket_api.CALL_EVENT = "voip_stack_call_event"
+    websocket_api._ha_softphone_store = (
+        lambda hass, _endpoint_id="default": hass.store
+    )
+    websocket_api._publish_ha_softphone_state = (
+        lambda _hass, endpoint_id="default": None  # noqa: ARG005
+    )
+    sys.modules[websocket_api.__name__] = websocket_api
+
+    spec = importlib.util.spec_from_file_location(
+        module_name, PKG_DIR / "video_ws_view.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
         sys.modules.pop(module_name, None)
         raise
     return module
@@ -380,6 +424,27 @@ def _reserved_udp_ports(count: int):
 
 
 class SipProfileTest(unittest.TestCase):
+    def test_explicit_empty_client_profile_never_falls_back_to_defaults(self) -> None:
+        client = sip_client.SipCallClient(
+            local_ip="127.0.0.1",
+            local_name="HA",
+            local_sip_port=5060,
+            local_rtp_port=40000,
+            supported_send_formats=[],
+            supported_recv_formats=[],
+        )
+
+        self.assertEqual(client.supported_send_formats, [])
+        self.assertEqual(client.supported_recv_formats, [])
+        with self.assertRaises(sdp.SdpError):
+            sdp.build_offer_directional(
+                client.local_ip,
+                client.local_ip,
+                client.local_rtp_port,
+                client.supported_send_formats,
+                client.supported_recv_formats,
+            )
+
     def test_build_and_parse_invite_with_l16_sdp(self) -> None:
         body = sdp.build_offer(
             "192.168.1.20",
@@ -839,6 +904,269 @@ class SipProfileTest(unittest.TestCase):
 
 
 class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
+    async def test_local_audio_websocket_relays_pcm_without_rtp_and_isolates_bad_frames(
+        self,
+    ) -> None:
+        audio_ws_view = _load_audio_ws_runtime_module()
+        audio_ws = _load_intercom_module("audio_ws")
+        const = _load_intercom_module("const")
+        from aiohttp import WSMsgType
+
+        audio_contract = audio_format.HA_SIP_PCM_FORMATS[0]
+        expected = int(audio_contract.nominal_frame_bytes)
+        peer_pcm = bytes((index % 251 for index in range(expected)))
+        browser_pcm = bytes((250 - (index % 251) for index in range(expected)))
+
+        class Bridge:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+                self.peer_delivered = False
+                self.closed = asyncio.Event()
+
+            async def receive_audio(
+                self,
+                _call_id: str,
+                _endpoint_id: str,
+                _token: str,
+            ) -> bytes:
+                if not self.peer_delivered:
+                    self.peer_delivered = True
+                    return peer_pcm
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+            def send_audio(
+                self,
+                _call_id: str,
+                _endpoint_id: str,
+                _token: str,
+                pcm: bytes,
+            ) -> bool:
+                self.sent.append(bytes(pcm))
+                return False
+
+            async def wait_closed(self, _call_id: str) -> None:
+                await self.closed.wait()
+
+        class WebSocket:
+            def __init__(self) -> None:
+                self.json: list[dict] = []
+                self.binary: list[bytes] = []
+                self.messages = [
+                    types.SimpleNamespace(
+                        type=WSMsgType.BINARY,
+                        data=audio_ws.encode_audio_frame(bytes(expected + 1)),
+                    ),
+                    types.SimpleNamespace(
+                        type=WSMsgType.BINARY,
+                        data=audio_ws.encode_audio_frame(browser_pcm),
+                    ),
+                ]
+                self.peer_frame_sent = asyncio.Event()
+                self.forced_closed = False
+
+            async def send_json(self, payload: dict) -> None:
+                self.json.append(dict(payload))
+
+            async def send_bytes(self, payload: bytes) -> None:
+                self.binary.append(bytes(payload))
+                self.peer_frame_sent.set()
+
+            def force_close(self) -> None:
+                self.forced_closed = True
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.messages:
+                    return self.messages.pop(0)
+                await self.peer_frame_sent.wait()
+                raise StopAsyncIteration
+
+        lease = types.SimpleNamespace(
+            call_id="local-audio",
+            endpoint_id="kitchen",
+            token="lease-token",
+        )
+        hass = types.SimpleNamespace(
+            data={const.DOMAIN: {const.CONF_DEBUG_MODE: False}},
+            store={"call_id": lease.call_id, "state": "in_call"},
+        )
+        bridge = Bridge()
+        ws = WebSocket()
+
+        await asyncio.wait_for(
+            audio_ws_view._run_local_audio_session(hass, ws, bridge, lease),
+            timeout=1,
+        )
+
+        self.assertEqual(bridge.sent, [browser_pcm])
+        self.assertEqual(
+            [audio_ws.decode_audio_frame(frame) for frame in ws.binary],
+            [peer_pcm],
+        )
+        self.assertEqual(ws.json[0]["media_transport"], "local_websocket")
+        self.assertEqual(ws.json[0]["audio_direction"], "sendrecv")
+        self.assertEqual(hass.store["drop_payload_size"], 1)
+        self.assertEqual(hass.store["ws_rx"], 1)
+        self.assertEqual(hass.store["ws_tx"], 1)
+
+    async def test_local_video_websocket_relays_access_units_and_keyframe_control(
+        self,
+    ) -> None:
+        video_ws_view = _load_video_ws_runtime_module()
+        const = _load_intercom_module("const")
+        from aiohttp import WSMsgType
+
+        peer_frame = video_ws_view._VIDEO_HEADER.pack(
+            video_ws_view._VIDEO_ACCESS_UNIT,
+            0,
+            9000,
+        ) + b"peer-vp8"
+        browser_frame = video_ws_view._VIDEO_HEADER.pack(
+            video_ws_view._VIDEO_ACCESS_UNIT,
+            0,
+            18000,
+        ) + b"browser-vp8"
+
+        class Snapshot:
+            @staticmethod
+            def video_direction_for(_endpoint_id: str) -> str:
+                return "sendrecv"
+
+        class Bridge:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+                self.controls: list[str] = []
+                self.peer_delivered = False
+                self.control_delivered = False
+                self.closed = asyncio.Event()
+
+            @staticmethod
+            def require_call(_call_id: str) -> Snapshot:
+                return Snapshot()
+
+            async def receive_video(
+                self,
+                _call_id: str,
+                _endpoint_id: str,
+                _token: str,
+            ) -> bytes:
+                if not self.peer_delivered:
+                    self.peer_delivered = True
+                    return peer_frame
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+            async def receive_video_control(
+                self,
+                _call_id: str,
+                _endpoint_id: str,
+                _token: str,
+            ) -> str:
+                if not self.control_delivered:
+                    self.control_delivered = True
+                    return "force_key_frame"
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+            def send_video(
+                self,
+                _call_id: str,
+                _endpoint_id: str,
+                _token: str,
+                frame: bytes,
+            ) -> bool:
+                self.sent.append(bytes(frame))
+                return False
+
+            def send_video_control(
+                self,
+                _call_id: str,
+                _endpoint_id: str,
+                _token: str,
+                control: str,
+            ) -> bool:
+                self.controls.append(control)
+                return False
+
+            async def wait_closed(self, _call_id: str) -> None:
+                await self.closed.wait()
+
+        class WebSocket:
+            def __init__(self) -> None:
+                self.json: list[dict] = []
+                self.binary: list[bytes] = []
+                self.messages = [
+                    types.SimpleNamespace(type=WSMsgType.BINARY, data=b"bad"),
+                    types.SimpleNamespace(
+                        type=WSMsgType.BINARY,
+                        data=browser_frame,
+                    ),
+                    types.SimpleNamespace(
+                        type=WSMsgType.TEXT,
+                        data='{"type":"request_key_frame"}',
+                    ),
+                ]
+                self.peer_frame_sent = asyncio.Event()
+                self.control_sent = asyncio.Event()
+                self.forced_closed = False
+
+            async def send_json(self, payload: dict) -> None:
+                copied = dict(payload)
+                self.json.append(copied)
+                if copied.get("type") == "force_key_frame":
+                    self.control_sent.set()
+
+            async def send_bytes(self, payload: bytes) -> None:
+                self.binary.append(bytes(payload))
+                self.peer_frame_sent.set()
+
+            def force_close(self) -> None:
+                self.forced_closed = True
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.messages:
+                    return self.messages.pop(0)
+                await asyncio.gather(
+                    self.peer_frame_sent.wait(),
+                    self.control_sent.wait(),
+                )
+                raise StopAsyncIteration
+
+        lease = types.SimpleNamespace(
+            call_id="local-video",
+            endpoint_id="kitchen",
+            token="lease-token",
+        )
+        hass = types.SimpleNamespace(
+            data={const.DOMAIN: {const.CONF_DEBUG_MODE: False}},
+            store={"call_id": lease.call_id, "state": "in_call"},
+        )
+        bridge = Bridge()
+        ws = WebSocket()
+
+        await asyncio.wait_for(
+            video_ws_view._run_local_video_session(hass, ws, bridge, lease),
+            timeout=1,
+        )
+
+        self.assertEqual(bridge.sent, [browser_frame])
+        self.assertEqual(bridge.controls, ["force_key_frame"])
+        self.assertEqual(ws.binary, [peer_frame])
+        self.assertEqual(ws.json[0]["media_transport"], "local_websocket")
+        self.assertEqual(ws.json[0]["direction"], "sendrecv")
+        self.assertTrue(
+            any(item.get("type") == "force_key_frame" for item in ws.json)
+        )
+        self.assertEqual(hass.store["video_drop_error"], 1)
+        self.assertEqual(hass.store["video_access_units_tx"], 1)
+        self.assertEqual(hass.store["video_access_units_rx"], 1)
+
     async def test_debug_capture_tracks_home_assistant_executor_future(self) -> None:
         audio_ws_view = _load_audio_ws_runtime_module()
         const = _load_intercom_module("const")
@@ -1134,7 +1462,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
 
         await audio_ws_view._run_conference_audio_session(hass, ws, session)
 
-        self.assertEqual(manager.frames, [("Ops", bytes(expected))])
+        self.assertEqual(manager.frames, [("conference:Ops", bytes(expected))])
         self.assertEqual(hass.store["tx_error"], 1)
         self.assertLessEqual(audio_ws_view._MAX_BROWSER_AUDIO_MESSAGE_BYTES, 4096)
 
@@ -7601,6 +7929,64 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(registrar.registrations, {})
+
+    def test_account_title_case_update_retains_binding_without_offline_event(
+        self,
+    ) -> None:
+        changes: list[tuple[str, bool]] = []
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("deskphone", "Desk", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+            on_registration_change=lambda username, registered: changes.append(
+                (username, registered)
+            ),
+        )
+        registrar.registrations["deskphone"] = sip_registrar.SipRegistration(
+            username="deskphone",
+            contact_uri="sip:deskphone@192.168.1.50:5062",
+            source_host="192.168.1.50",
+            source_port=5062,
+            transport="UDP",
+            expires_at=9999999999,
+        )
+
+        registrar.update_accounts(
+            [sip_registrar.SipAccount("DeskPhone", "Desk", "secret")]
+        )
+
+        self.assertEqual(tuple(registrar.registrations), ("DeskPhone",))
+        self.assertEqual(
+            registrar.registrations["DeskPhone"].username,
+            "DeskPhone",
+        )
+        self.assertEqual(changes, [])
+
+    def test_account_removal_emits_one_offline_event(self) -> None:
+        changes: list[tuple[str, bool]] = []
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("DeskPhone", "Desk", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+            on_registration_change=lambda username, registered: changes.append(
+                (username, registered)
+            ),
+        )
+        registrar.registrations["DeskPhone"] = sip_registrar.SipRegistration(
+            username="DeskPhone",
+            contact_uri="sip:DeskPhone@192.168.1.50:5062",
+            source_host="192.168.1.50",
+            source_port=5062,
+            transport="UDP",
+            expires_at=9999999999,
+        )
+
+        registrar.update_accounts([])
+
+        self.assertEqual(registrar.registrations, {})
+        self.assertEqual(changes, [("DeskPhone", False)])
 
     async def test_registration_identity_requires_exact_signaling_flow(self) -> None:
         registrar = sip_registrar.SipRegistrar(

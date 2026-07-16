@@ -15,6 +15,7 @@ SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
 VIDEO_WS = ROOT / "custom_components" / "voip_stack" / "video_ws_view.py"
+CONFIG_FLOW = ROOT / "custom_components" / "voip_stack" / "config_flow.py"
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -37,7 +38,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
-        self.assertIn("_ha_softphone_store(hass)", body)
+        self.assertIn("_ha_softphone_store(hass, endpoint_id)", body)
         self.assertIn("_set_ha_softphone_call_state(", body)
         state_update = body.split("_set_ha_softphone_call_state(", 1)[1]
         self.assertIn("CallState.IDLE.value", state_update)
@@ -79,7 +80,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         body = _function_body(endpoint_runtime, "async_start_sip_endpoint")
         bridge_path = body.split("routeable_sip_target =", 1)[1]
         bridge_path = bridge_path.split(
-            "ha_softphone_active = _ha_softphone_has_active_call", 1
+            "if not force_ha_softphone and decision.action is RouteAction.ANSWER_HA:",
+            1,
         )[0]
         self.assertIn("_set_sip_bridge_call_state(", bridge_path)
         self.assertNotIn("_set_ha_softphone_call_state(", bridge_path)
@@ -131,7 +133,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn('last_sip_event="shutdown"', body)
         self.assertIn("if active_call_id or active_state in {", body)
         idle_branch = body.split("else:", 1)[1]
-        self.assertIn("_publish_ha_softphone_state(hass)", idle_branch)
+        self.assertIn(
+            "_publish_ha_softphone_state(hass, endpoint_id=endpoint_id)",
+            idle_branch,
+        )
         self.assertNotIn("_fire_call_event", idle_branch)
         self.assertIn('setdefault("debug_capture_tasks", set())', body)
 
@@ -154,6 +159,16 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("return store_value", body)
         self.assertNotIn("store_value or runtime_value", body)
         self.assertNotIn("max(store_value, runtime_value)", body)
+
+    def test_default_call_state_sensor_normalizes_every_terminal_state(self) -> None:
+        sensor = SENSOR.read_text()
+        default_sensor = sensor.split(
+            "class HaSoftphoneCallStateSensor", 1
+        )[1].split("class HaSoftphoneEndpointSensor", 1)[0]
+
+        self.assertIn("terminal = state in TERMINAL_CALL_STATES", default_sensor)
+        self.assertIn('"protocol_error"', sensor)
+        self.assertNotIn("terminal = state in {", default_sensor)
 
     def test_video_reorder_timeout_and_teardown_publish_final_loss(self) -> None:
         body = VIDEO_WS.read_text(encoding="utf-8")
@@ -261,7 +276,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             1
         ]
 
-        self.assertIn("_listen_for_call_end(hass, session.call_id)", conference_audio)
+        self.assertIn(
+            "_listen_for_call_end(\n        hass, session.call_id, endpoint_id",
+            conference_audio,
+        )
         self.assertIn("lifetime_task", conference_audio)
         self.assertIn("remove_call_listener()", conference_audio)
 
@@ -388,9 +406,13 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         conference = audio_ws[conference_start:]
 
         self.assertNotIn("_fire_call_event", counters)
-        self.assertIn("_publish_ha_softphone_state(hass)", counters)
+        self.assertIn(
+            "_publish_ha_softphone_state(hass, endpoint_id=endpoint_id)", counters
+        )
         self.assertNotIn("_fire_call_event", conference)
-        self.assertIn("_publish_ha_softphone_state(hass)", conference)
+        self.assertIn(
+            "_publish_ha_softphone_state(hass, endpoint_id=endpoint_id)", conference
+        )
 
     def test_final_video_snapshot_includes_pending_rtcp_queue_drops(self) -> None:
         video_ws = VIDEO_WS.read_text()
@@ -411,7 +433,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         publish_line = next(
             line
             for line in body.splitlines()
-            if "_publish_ha_softphone_state(hass)" in line
+            if "_publish_ha_softphone_state(hass, endpoint_id=endpoint_id)" in line
         )
         self.assertEqual(
             len(debug_line) - len(debug_line.lstrip()),
@@ -440,7 +462,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self,
     ) -> None:
         prepare = _function_body(self.source, "_async_prepare_ha_outbound_call")
-        self.assertIn('setdefault("ha_softphone_start_lock", asyncio.Lock())', prepare)
+        self.assertIn('setdefault("ha_softphone_start_locks", {})', prepare)
+        self.assertIn(
+            "start_locks.setdefault(endpoint_id, asyncio.Lock())", prepare
+        )
         self.assertIn("async with start_lock:", prepare)
 
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
@@ -485,6 +510,51 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         )
         self.assertIn("state=CallState.IN_CALL.value", accepted)
 
+    def test_outbound_call_claims_source_and_physical_destination_atomically(self) -> None:
+        outbound = _function_body(self.source, "_handle_sip_call_target_service")
+        claims = outbound.rsplit("registry = _call_registry(hass)", 1)[1].split(
+            "_bind_service_call_controller", 1
+        )[0]
+        self.assertIn("registry.claim_endpoint(", claims)
+        self.assertIn('role="source"', claims)
+        self.assertIn('role="destination"', claims)
+        self.assertIn("except EndpointBusyError as err:", claims)
+        self.assertIn("registry.finish_and_pop(", claims)
+
+        destination_policy = outbound.split(
+            "target_endpoint = _logical_endpoint_for_route", 1
+        )[1].split("local_ip =", 1)[0]
+        self.assertIn("target_endpoint.dnd", destination_policy)
+        self.assertIn("target_endpoint.active_call_id", destination_policy)
+        self.assertIn("EndpointAvailability.AVAILABLE", destination_policy)
+
+    def test_outbound_failure_and_invite_exception_release_call_ownership(self) -> None:
+        tracker = _function_body(self.source, "_track_outbound_sip_client")
+        immediate_failure = tracker.split(
+            'if result not in {"ringing", "in_call"}:', 1
+        )[1].split("registry.sip_clients[client.dialog_ids.call_id]", 1)[0]
+        self.assertIn("registry.finish_and_pop(", immediate_failure)
+        self.assertLess(
+            immediate_failure.index("registry.finish_and_pop("),
+            immediate_failure.index("await client.close()"),
+        )
+
+        outbound = _function_body(self.source, "_handle_sip_call_target_service")
+        invite_error = outbound.split(
+            "except Exception as err:  # noqa: BLE001 - isolate one outbound SIP leg.",
+            1,
+        )[1].split("if registry.sip_clients.get", 1)[0]
+        self.assertIn("registry.detach_client", invite_error)
+        self.assertIn("_set_ha_softphone_call_state(", invite_error)
+        self.assertIn("registry.finish_and_pop(", invite_error)
+
+    def test_esp_state_mirrors_physical_busy_ownership_into_logical_endpoint(self) -> None:
+        bridge = _function_body(self.source, "_async_emit_esp_state_event")
+        self.assertIn("endpoint_registry.sync_transport_call(", bridge)
+        self.assertIn('fallback_call_id=f"physical:{endpoint.endpoint_id}"', bridge)
+        self.assertIn("canonical_state in HA_SOFTPHONE_ACTIVE_STATES", bridge)
+        self.assertIn('payload["call_id"] = transport_call_id', bridge)
+
     def test_video_hold_resume_keeps_per_call_camera_authorization(self) -> None:
         answer = _function_body(self.source, "_handle_sip_answer_service")
         self.assertIn('"camera_send_authorized": bool(', answer)
@@ -499,6 +569,110 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         )
         self.assertNotIn("previous_video_direction", media_update)
         self.assertIn('"video_active": bool(', media_update)
+        self.assertIn("media_endpoint_id = str(", media_update)
+        self.assertIn("_ha_softphone_store(hass, media_endpoint_id)", media_update)
+        self.assertIn("endpoint_id=media_endpoint_id", media_update)
+        self.assertNotIn("_ha_softphone_store(hass)", media_update)
+
+    def test_call_membership_accepts_both_destination_metadata_spellings(self) -> None:
+        body = _function_body(self.source, "_call_endpoint_ids")
+        self.assertIn('"source_endpoint_id"', body)
+        self.assertIn('"dest_endpoint_id"', body)
+        self.assertIn('"target_endpoint_id"', body)
+
+    def test_all_documented_browser_service_selectors_are_accepted(self) -> None:
+        services = SERVICES.read_text()
+        self.assertIn("browser_target_fields = {", services)
+        for schema_name in (
+            "sip_answer_schema",
+            "sip_decline_schema",
+            "sip_hangup_schema",
+            "sip_call_schema",
+            "sip_forward_schema",
+            "set_dnd_schema",
+            "set_ha_softphone_settings_schema",
+        ):
+            schema = services.split(f"{schema_name} = vol.Schema(", 1)[1].split(
+                "extra=vol.PREVENT_EXTRA", 1
+            )[0]
+            selector_fields = (
+                "browser_target_fields"
+                if schema_name.startswith("set_")
+                else "target_fields"
+            )
+            self.assertIn(f"**{selector_fields}", schema)
+
+        websocket = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
+        selector = _function_body(websocket, "_endpoint_id_from_selector")
+        self.assertIn("for entity in _values(entity_id)", selector)
+        self.assertIn("endpoint = _by_current_entity_id(entity)", selector)
+        self.assertIn("registry.by_entity_id(entity_id)", selector)
+        self.assertIn("er.async_get(hass).async_get(entity_id)", selector)
+        self.assertIn("registry.by_device_id(device)", selector)
+        self.assertIn("len(selected_ids) > 1", selector)
+        self.assertIn("selected_ids != {resolved_id}", selector)
+
+        service_descriptions = (
+            ROOT / "custom_components" / "voip_stack" / "services.yaml"
+        ).read_text()
+        service_names = (
+            "answer",
+            "decline",
+            "hangup",
+            "call",
+            "forward",
+            "set_dnd",
+            "set_ha_softphone_settings",
+        )
+        for index, service_name in enumerate(service_names):
+            start = service_descriptions.index(f"\n{service_name}:\n")
+            later_starts = [
+                service_descriptions.find(f"\n{name}:\n", start + 1)
+                for name in service_names[index + 1 :]
+            ]
+            later_starts = [position for position in later_starts if position >= 0]
+            end = min(later_starts) if later_starts else len(service_descriptions)
+            description = service_descriptions[start:end]
+            for field in ("endpoint_id:", "device_id:", "entity_id:"):
+                self.assertIn(field, description)
+
+    def test_invalid_new_sip_username_stays_a_form_validation_error(self) -> None:
+        config_flow = CONFIG_FLOW.read_text()
+        start = config_flow.index("    def _normalized_common(")
+        normalized = config_flow[
+            start : config_flow.index("    def _finish(", start)
+        ]
+        self.assertIn(
+            "elif CONF_PHONE_USERNAME not in errors:", normalized
+        )
+        guarded = normalized.split(
+            "elif CONF_PHONE_USERNAME not in errors:", 1
+        )[1].split("data = {", 1)[0]
+        self.assertIn("endpoint_id = new_sip_account_endpoint_id()", guarded)
+
+    def test_dnd_targets_browser_and_registered_sip_phone_devices(self) -> None:
+        configured_start = self.source.index("def _service_configured_endpoint(")
+        configured = self.source[
+            configured_start : self.source.index(
+                "def _browser_endpoint_name(", configured_start
+            )
+        ]
+        self.assertIn("EndpointKind.BROWSER", configured)
+        self.assertIn("EndpointKind.SIP_ACCOUNT", configured)
+        self.assertIn("if len(selected) != 1:", configured)
+        self.assertIn('("by_device_id", call.data.get("device_id")', configured)
+        self.assertIn('"by_entity_id"', configured)
+
+        dnd = _function_body(self.source, "_handle_set_dnd_service")
+        settings = _function_body(
+            self.source, "_handle_set_ha_softphone_settings_service"
+        )
+        self.assertIn("_service_configured_endpoint(hass, call)", dnd)
+        self.assertIn(
+            "_service_browser_endpoint(hass, call, strict=True)", settings
+        )
 
     def test_video_bridge_projects_destination_h264_level_to_source_leg(self) -> None:
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
@@ -563,7 +737,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             "route_uri = route.sip_uri",
             1,
         )[0]
-        self.assertIn("await _async_prepare_ha_outbound_call(hass)", conference_branch)
+        self.assertIn(
+            "await _async_prepare_ha_outbound_call(hass, endpoint_id)",
+            conference_branch,
+        )
 
         audio_ws = (
             ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
@@ -574,7 +751,9 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("registry.finish_and_pop", conference_audio)
         self.assertIn("conference_media_handoff", conference_audio)
         hangup = _function_body(self.source, "_handle_sip_hangup_service")
-        self.assertIn("await manager.leave_ha_softphone(conference_room)", hangup)
+        self.assertIn("await manager.leave_ha_softphone(", hangup)
+        self.assertIn("conference_room,", hangup)
+        self.assertIn("call_id=call_id", hangup)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 const HA_SOFTPHONE_DEVICE_ID = "__voip_stack_ha_softphone__";
+const DEFAULT_SOFTPHONE_ENDPOINT_ID = "default";
 const WS_AUDIO = 1;
 const WS_SUBSCRIBE_CALL_EVENTS = "voip_stack/subscribe_call_events";
 const WS_SUBSCRIBE_HA_SOFTPHONE = "voip_stack/subscribe_ha_softphone_state";
@@ -15,7 +16,10 @@ const CONTROL_ACK_TIMEOUT_MS = 3000;
 const AUDIO_NEGOTIATION_TIMEOUT_MS = 3000;
 const BUS_SUBSCRIBE_RETRY_MS = 2000;
 const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call";
-const MEDIA_CLIENT_SESSION_KEY = "voip_stack_media_client_id";
+const SOFTPHONE_MEDIA_SESSIONS_KEY = "voip_stack_owned_softphone_calls";
+const MEDIA_CLIENT_GLOBAL_KEY = "__voipStackMediaClientId";
+const MEDIA_RECONNECT_ATTEMPTS = 3;
+const MEDIA_RECONNECT_DELAY_MS = 250;
 const VIDEO_CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
@@ -24,7 +28,7 @@ const FRAME_MS = Object.freeze([10, 16, 20, 32]);
 
 function mediaClientInstanceId() {
   try {
-    const existing = sessionStorage.getItem(MEDIA_CLIENT_SESSION_KEY) || "";
+    const existing = String(globalThis[MEDIA_CLIENT_GLOBAL_KEY] || "");
     if (/^[A-Za-z0-9][A-Za-z0-9._~-]{15,127}$/.test(existing)) return existing;
   } catch (_) {}
   let generated = "";
@@ -36,7 +40,10 @@ function mediaClientInstanceId() {
     // Assistant signs the complete path including it before WebSocket use.
     generated = `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
   }
-  try { sessionStorage.setItem(MEDIA_CLIENT_SESSION_KEY, generated); } catch (_) {}
+  // sessionStorage is cloned by browsers when a tab is duplicated. Keeping
+  // this identity in document memory makes every tab distinct while all card
+  // instances inside the same page still share one media engine.
+  try { globalThis[MEDIA_CLIENT_GLOBAL_KEY] = generated; } catch (_) {}
   return generated;
 }
 
@@ -47,6 +54,7 @@ class VoipStackEngine extends EventTarget {
     this._ws = null;
     this._state = "IDLE";
     this._deviceId = "";
+    this._endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID;
     this._callId = "";
     this._audioMode = "full_duplex";
     this._audioDirection = "sendrecv";
@@ -72,19 +80,34 @@ class VoipStackEngine extends EventTarget {
     this._softphoneSubscribers = new Set();
     this._lastEvents = new Map();
     this._lastSoftphoneState = null;
+    this._softphoneSubscriberSelectors = new Map();
+    this._lastSoftphoneStates = new Map();
+    this._softphoneScopeSubscriptions = new Map();
     this._controlWaiter = null;
     this._connectPromise = null;
     this._connectGeneration = 0;
     this._sessionAttachKey = "";
     this._sessionAttachPromise = null;
     this._mediaClientId = mediaClientInstanceId();
+    this._mediaIntent = null;
+    this._mediaRecoveryAttempts = new Set();
     // Media ownership belongs to the page-level engine, not to one Lovelace
     // element. Home Assistant may recreate a card while an outbound call is
     // ringing; the replacement must still be able to attach that call's media.
     try {
       this._ownedSoftphoneCallId = sessionStorage.getItem(SOFTPHONE_MEDIA_SESSION_KEY) || "";
+      const stored = JSON.parse(sessionStorage.getItem(SOFTPHONE_MEDIA_SESSIONS_KEY) || "{}");
+      this._ownedSoftphoneCalls = new Map(
+        Object.entries(stored)
+          .filter(([endpointId, callId]) => endpointId && callId)
+          .map(([endpointId, callId]) => [String(endpointId), String(callId)]),
+      );
+      if (this._ownedSoftphoneCallId && !this._ownedSoftphoneCalls.has(DEFAULT_SOFTPHONE_ENDPOINT_ID)) {
+        this._ownedSoftphoneCalls.set(DEFAULT_SOFTPHONE_ENDPOINT_ID, this._ownedSoftphoneCallId);
+      }
     } catch (_) {
       this._ownedSoftphoneCallId = "";
+      this._ownedSoftphoneCalls = new Map();
     }
     this._ringtoneRequests = new Map();
     this._ringtoneContext = null;
@@ -94,15 +117,23 @@ class VoipStackEngine extends EventTarget {
     this._videoLoadPromise = null;
     this._videoCanvas = null;
     this._videoCanvasOwner = null;
+    this._videoCanvasEndpointId = "";
     this._softphoneController = null;
+    this._softphoneControllers = new Map();
     this._videoAttachGeneration = 0;
     this._videoAttachPromise = null;
     this._videoAttachCallId = "";
+    this._pageHiding = false;
 
     window.addEventListener("pagehide", () => {
+      this._pageHiding = true;
       this._ringtoneRequests.clear();
       this._stopRingtone();
       void this.close("pagehide");
+    });
+    window.addEventListener("pageshow", () => {
+      this._pageHiding = false;
+      this._emit();
     });
   }
 
@@ -118,6 +149,12 @@ class VoipStackEngine extends EventTarget {
       this._softphoneBusUnsub = null;
       this._busSubscribePending = false;
       this._softphoneBusSubscribePending = false;
+      for (const record of this._softphoneScopeSubscriptions.values()) {
+        try { record.unsub?.(); } catch (_) {}
+        record.unsub = null;
+        record.pending = false;
+        record.invalid = false;
+      }
       if (this._busSubscribeRetryTimer) clearTimeout(this._busSubscribeRetryTimer);
       this._busSubscribeRetryTimer = null;
       this._busConnection = conn;
@@ -150,20 +187,107 @@ class VoipStackEngine extends EventTarget {
         if (this._busConnection === conn) this._busSubscribePending = false;
       });
     }
-    if (!this._softphoneBusUnsub && !this._softphoneBusSubscribePending) {
+    for (const record of this._softphoneScopeSubscriptions.values()) {
+      this._ensureSoftphoneScopeSubscription(conn, record);
+    }
+  }
+
+  _normaliseSoftphoneSelector(selector = {}) {
+    const deviceId = String(selector?.device_id || "").trim();
+    let endpointId = String(selector?.endpoint_id || "").trim();
+    if (!endpointId && !deviceId) endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID;
+    return { endpoint_id: endpointId, device_id: deviceId };
+  }
+
+  _softphoneScopeKey(selector = {}) {
+    const normalised = this._normaliseSoftphoneSelector(selector);
+    return normalised.endpoint_id
+      ? `endpoint:${normalised.endpoint_id}`
+      : `device:${normalised.device_id}`;
+  }
+
+  _softphoneStateMatches(state, selector = {}, subscriptionSelector = null) {
+    if (!state) return false;
+    const wanted = this._normaliseSoftphoneSelector(selector);
+    const source = this._normaliseSoftphoneSelector(subscriptionSelector || {});
+    const stateEndpoint = String(state.endpoint_id || "").trim();
+    const stateDevice = String(state.device_id || state.endpoint_device_id || "").trim();
+    if (wanted.endpoint_id) {
+      if (stateEndpoint) return stateEndpoint === wanted.endpoint_id;
+      // A legacy snapshot has no endpoint identity and belongs only to the
+      // historical master. Never leak it into another logical softphone.
+      return wanted.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID &&
+        (!source.endpoint_id || source.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    }
+    if (wanted.device_id) {
+      if (stateDevice) return stateDevice === wanted.device_id;
+      return source.device_id === wanted.device_id && !!stateEndpoint;
+    }
+    return false;
+  }
+
+  _isLegacySchemaError(err) {
+    const code = String(err?.code || err?.error || "").toLowerCase();
+    const message = String(err?.message || err || "").toLowerCase();
+    return code.includes("invalid_format") || code.includes("unknown_command") ||
+      message.includes("extra keys") || message.includes("not allowed") ||
+      message.includes("unknown command");
+  }
+
+  _isUnknownEndpointError(err) {
+    const code = String(err?.code || err?.error || "").toLowerCase();
+    const message = String(err?.message || err || "").toLowerCase();
+    return code.includes("unknown_endpoint") ||
+      message.includes("unknown phone endpoint") ||
+      message.includes("unknown endpoint");
+  }
+
+  _ensureSoftphoneScopeSubscription(conn, record) {
+    if (!record || record.unsub || record.pending || record.invalid || this._busConnection !== conn) return;
+    record.pending = true;
+    const request = { type: WS_SUBSCRIBE_HA_SOFTPHONE };
+    if (record.selector.endpoint_id) request.endpoint_id = record.selector.endpoint_id;
+    if (record.selector.device_id) request.device_id = record.selector.device_id;
+    const subscribe = (message, legacy = false) => conn.subscribeMessage(
+      (event) => this._onSoftphoneState(event, record.selector),
+      message,
+    ).catch((err) => {
+      if (!legacy && record.selector.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID && this._isLegacySchemaError(err)) {
+        return subscribe({ type: WS_SUBSCRIBE_HA_SOFTPHONE }, true);
+      }
+      throw err;
+    });
+    subscribe(request).then((unsub) => {
+      if (this._busConnection === conn && this._softphoneScopeSubscriptions.get(record.key) === record) {
+        record.unsub = unsub;
+        if (record.selector.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID) this._softphoneBusUnsub = unsub;
+      } else {
+        unsub();
+      }
+    }).catch((err) => {
+      if (this._isUnknownEndpointError(err)) {
+        record.invalid = true;
+        this._onSoftphoneState({
+          endpoint_id: record.selector.endpoint_id || "",
+          device_id: record.selector.device_id || "",
+          state: "unavailable",
+          sip_state: "unavailable",
+          availability: "unavailable",
+          terminal_reason: "unknown_endpoint",
+          subscription_error: "unknown_endpoint",
+        }, record.selector);
+        return;
+      }
+      console.warn("voip-stack-engine: HA softphone subscription failed", err);
+      this._scheduleBusSubscriptionRetry(conn);
+    }).finally(() => {
+      record.pending = false;
+      if (record.selector.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+        this._softphoneBusSubscribePending = false;
+      }
+    });
+    if (record.selector.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID) {
       this._softphoneBusSubscribePending = true;
-      conn.subscribeMessage(
-        (event) => this._onSoftphoneState(event),
-        { type: WS_SUBSCRIBE_HA_SOFTPHONE },
-      ).then((unsub) => {
-        if (this._busConnection === conn) this._softphoneBusUnsub = unsub;
-        else unsub();
-      }).catch((err) => {
-        console.warn("voip-stack-engine: HA softphone subscription failed", err);
-        this._scheduleBusSubscriptionRetry(conn);
-      }).finally(() => {
-        if (this._busConnection === conn) this._softphoneBusSubscribePending = false;
-      });
     }
   }
 
@@ -179,44 +303,125 @@ class VoipStackEngine extends EventTarget {
     return this._callId;
   }
 
-  claimSoftphoneSession(callId) {
-    this._ownedSoftphoneCallId = String(callId || "");
+  get endpointId() {
+    return this._endpointId;
+  }
+
+  _persistOwnedSoftphoneCalls() {
+    const legacy = this._ownedSoftphoneCalls.get(DEFAULT_SOFTPHONE_ENDPOINT_ID) || "";
+    this._ownedSoftphoneCallId = legacy;
     try {
-      if (this._ownedSoftphoneCallId) {
-        sessionStorage.setItem(SOFTPHONE_MEDIA_SESSION_KEY, this._ownedSoftphoneCallId);
+      const entries = Object.fromEntries(this._ownedSoftphoneCalls);
+      if (Object.keys(entries).length) {
+        sessionStorage.setItem(SOFTPHONE_MEDIA_SESSIONS_KEY, JSON.stringify(entries));
       } else {
-        sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY);
+        sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSIONS_KEY);
       }
+      if (legacy) sessionStorage.setItem(SOFTPHONE_MEDIA_SESSION_KEY, legacy);
+      else sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY);
     } catch (_) {}
   }
 
-  ownsSoftphoneSession(callId) {
+  claimSoftphoneSession(callId, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     const wanted = String(callId || "");
-    return !!wanted && wanted === this._ownedSoftphoneCallId;
+    if (wanted) this._ownedSoftphoneCalls.set(endpoint, wanted);
+    else this._ownedSoftphoneCalls.delete(endpoint);
+    this._persistOwnedSoftphoneCalls();
+  }
+
+  ownsSoftphoneSession(callId, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const wanted = String(callId || "");
+    return !!wanted && wanted === this._ownedSoftphoneCalls.get(String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID));
   }
 
   get softphoneCallId() {
     return this._ownedSoftphoneCallId;
   }
 
-  releaseSoftphoneSession(callId = "") {
-    const wanted = String(callId || "");
-    if (!wanted || wanted === this._ownedSoftphoneCallId) {
-      this._ownedSoftphoneCallId = "";
-      try { sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY); } catch (_) {}
-    }
+  softphoneCallIdFor(endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    return this._ownedSoftphoneCalls.get(String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID)) || "";
   }
 
-  claimSoftphoneController(owner) {
-    if (!owner || owner.isConnected === false) return false;
-    if (this._softphoneController && this._softphoneController !== owner) return false;
-    if (!this._softphoneController) this._softphoneController = owner;
+  hasOwnedSoftphoneSessionForOtherEndpoint(
+    endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID,
+  ) {
+    const selected = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    for (const [candidate, callId] of this._ownedSoftphoneCalls) {
+      if (candidate !== selected && callId) return true;
+    }
+    return Boolean(
+      this.active && this._endpointId && this._endpointId !== selected,
+    );
+  }
+
+  tryAcquireMediaIntent(
+    endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID,
+    token = null,
+  ) {
+    if (!token) return false;
+    const selected = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    if (this._mediaIntent) {
+      return this._mediaIntent.token === token;
+    }
+    if (this.hasOwnedSoftphoneSessionForOtherEndpoint(selected)) return false;
+    this._mediaIntent = { endpointId: selected, token };
     return true;
   }
 
-  releaseSoftphoneController(owner) {
-    if (!owner || this._softphoneController !== owner) return false;
-    this._softphoneController = null;
+  releaseMediaIntent(token) {
+    if (!token || this._mediaIntent?.token !== token) return false;
+    this._mediaIntent = null;
+    return true;
+  }
+
+  releaseSoftphoneSession(callId = "", endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    const wanted = String(callId || "");
+    if (!wanted || wanted === this._ownedSoftphoneCalls.get(endpoint)) {
+      this._ownedSoftphoneCalls.delete(endpoint);
+      this._persistOwnedSoftphoneCalls();
+    }
+  }
+
+  tryRecoverSoftphoneSession(callId, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const wanted = String(callId || "").trim();
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
+      DEFAULT_SOFTPHONE_ENDPOINT_ID;
+    if (!wanted || this._pageHiding) return false;
+    if (
+      this.active &&
+      this._endpointId === endpoint &&
+      this._callId === wanted
+    ) return true;
+    const attemptKey = `${endpoint}|${wanted}`;
+    if (this._mediaRecoveryAttempts.has(attemptKey)) {
+      return this.ownsSoftphoneSession(wanted, endpoint);
+    }
+    if (this.hasOwnedSoftphoneSessionForOtherEndpoint(endpoint)) return false;
+    if (this._mediaRecoveryAttempts.size >= 256) {
+      this._mediaRecoveryAttempts.delete(this._mediaRecoveryAttempts.values().next().value);
+    }
+    this._mediaRecoveryAttempts.add(attemptKey);
+    this.claimSoftphoneSession(wanted, endpoint);
+    return true;
+  }
+
+  claimSoftphoneController(owner, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    if (!owner || owner.isConnected === false) return false;
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    const controller = this._softphoneControllers.get(endpoint);
+    if (controller && controller !== owner) return false;
+    if (!controller) this._softphoneControllers.set(endpoint, owner);
+    if (endpoint === DEFAULT_SOFTPHONE_ENDPOINT_ID) this._softphoneController = owner;
+    return true;
+  }
+
+  releaseSoftphoneController(owner, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    if (!owner || this._softphoneControllers.get(endpoint) !== owner) return false;
+    this._softphoneControllers.delete(endpoint);
+    if (endpoint === DEFAULT_SOFTPHONE_ENDPOINT_ID) this._softphoneController = null;
     this._emit();
     return true;
   }
@@ -238,10 +443,21 @@ class VoipStackEngine extends EventTarget {
     if (this._video) this._video.setCanvas(this._videoCanvas);
   }
 
-  claimVideoCanvas(owner, canvas) {
+  claimVideoCanvas(owner, canvas, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
     if (!owner || owner.isConnected === false || !canvas) return false;
-    if (this._videoCanvasOwner && this._videoCanvasOwner !== owner) return false;
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    if (
+      this._videoCanvasOwner &&
+      this._videoCanvasOwner !== owner &&
+      this._videoCanvasEndpointId === endpoint
+    ) return false;
+    if (
+      this._videoCanvasOwner &&
+      this._videoCanvasOwner !== owner &&
+      this._endpointId !== endpoint
+    ) return false;
     this._videoCanvasOwner = owner;
+    this._videoCanvasEndpointId = endpoint;
     this.setVideoCanvas(canvas);
     return true;
   }
@@ -249,6 +465,7 @@ class VoipStackEngine extends EventTarget {
   releaseVideoCanvas(owner) {
     if (!owner || this._videoCanvasOwner !== owner) return false;
     this._videoCanvasOwner = null;
+    this._videoCanvasEndpointId = "";
     this.setVideoCanvas(null);
     return true;
   }
@@ -328,6 +545,7 @@ class VoipStackEngine extends EventTarget {
       detail: {
         state: this._state,
         device_id: this._deviceId,
+        endpoint_id: this._endpointId,
         stats: { ...this._stats },
       },
     }));
@@ -342,7 +560,7 @@ class VoipStackEngine extends EventTarget {
 
   _forceIdle() {
     this._state = "IDLE";
-    this._emit();
+    if (!this._pageHiding) this._emit();
   }
 
   _onBusEvent(event) {
@@ -370,20 +588,67 @@ class VoipStackEngine extends EventTarget {
     return () => this._callSubscribers.delete(cb);
   }
 
-  _onSoftphoneState(state) {
+  _onSoftphoneState(state, subscriptionSelector = null) {
     if (!state) return;
-    this._lastSoftphoneState = state;
+    const endpointId = String(state.endpoint_id || subscriptionSelector?.endpoint_id || "").trim();
+    const deviceId = String(state.device_id || state.endpoint_device_id || subscriptionSelector?.device_id || "").trim();
+    const key = endpointId ? `endpoint:${endpointId}` : deviceId ? `device:${deviceId}` : "endpoint:default";
+    const snapshot = endpointId && !state.endpoint_id ? { ...state, endpoint_id: endpointId } : state;
+    this._lastSoftphoneState = snapshot;
+    this._lastSoftphoneStates.set(key, snapshot);
     for (const cb of this._softphoneSubscribers) {
-      try { cb(state); } catch (err) { console.error("voip-stack-engine softphone subscriber", err); }
+      const selector = this._softphoneSubscriberSelectors.get(cb) || {};
+      // The same logical endpoint can temporarily have both an endpoint-id
+      // subscription and a legacy device-id subscription (for example while
+      // an old dashboard and a newly configured card coexist). Dispatch only
+      // through the subscription owned by this callback so a single backend
+      // event cannot be delivered twice via overlapping selectors.
+      if (
+        subscriptionSelector &&
+        this._softphoneScopeKey(selector) !== this._softphoneScopeKey(subscriptionSelector)
+      ) continue;
+      if (!this._softphoneStateMatches(snapshot, selector, subscriptionSelector)) continue;
+      try { cb(snapshot); } catch (err) { console.error("voip-stack-engine softphone subscriber", err); }
     }
   }
 
-  subscribeSoftphoneState(cb) {
+  subscribeSoftphoneState(cb, selector = {}) {
+    const normalised = this._normaliseSoftphoneSelector(selector);
+    const key = this._softphoneScopeKey(normalised);
     this._softphoneSubscribers.add(cb);
-    if (this._lastSoftphoneState) {
-      try { cb(this._lastSoftphoneState); } catch (err) { console.error("voip-stack-engine softphone replay", err); }
+    this._softphoneSubscriberSelectors.set(cb, normalised);
+    let record = this._softphoneScopeSubscriptions.get(key);
+    if (!record) {
+      record = {
+        key,
+        selector: normalised,
+        refs: 0,
+        unsub: null,
+        pending: false,
+        invalid: false,
+      };
+      this._softphoneScopeSubscriptions.set(key, record);
     }
-    return () => this._softphoneSubscribers.delete(cb);
+    record.refs++;
+    if (this._busConnection) this._ensureSoftphoneScopeSubscription(this._busConnection, record);
+    for (const state of this._lastSoftphoneStates.values()) {
+      if (!this._softphoneStateMatches(state, normalised)) continue;
+      try { cb(state); } catch (err) { console.error("voip-stack-engine softphone replay", err); }
+    }
+    return () => {
+      this._softphoneSubscribers.delete(cb);
+      this._softphoneSubscriberSelectors.delete(cb);
+      record.refs = Math.max(0, record.refs - 1);
+      if (record.refs) return;
+      try { record.unsub?.(); } catch (_) {}
+      if (this._softphoneScopeSubscriptions.get(key) === record) {
+        this._softphoneScopeSubscriptions.delete(key);
+      }
+      if (normalised.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+        this._softphoneBusUnsub = null;
+        this._softphoneBusSubscribePending = false;
+      }
+    };
   }
 
   setRingtoneRequest(key, active, enabled) {
@@ -436,24 +701,27 @@ class VoipStackEngine extends EventTarget {
     }
   }
 
-  async _wsUrl(deviceId, callId) {
+  async _wsUrl(deviceId, callId, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const path = `/api/voip_stack/ws?device_id=${encodeURIComponent(deviceId)}&call_id=${encodeURIComponent(callId)}&client_id=${encodeURIComponent(this._mediaClientId)}`;
+    const path = `/api/voip_stack/ws?device_id=${encodeURIComponent(deviceId)}&endpoint_id=${encodeURIComponent(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID)}&call_id=${encodeURIComponent(callId)}&client_id=${encodeURIComponent(this._mediaClientId)}`;
     const signed = await this._hass.callWS({ type: "auth/sign_path", path });
     return `${proto}//${window.location.host}${signed.path || path}`;
   }
 
-  async _connect(deviceId, callId = "") {
+  async _connect(deviceId, callId = "", endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
     const wantedCallId = String(callId || "");
+    const wantedEndpointId = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     if (
       this._ws &&
       this._deviceId === deviceId &&
+      this._endpointId === wantedEndpointId &&
       this._callId === wantedCallId &&
       this._ws.readyState === WebSocket.OPEN
     ) return this._lastSessionPayload;
     if (
       this._connectPromise &&
       this._deviceId === deviceId &&
+      this._endpointId === wantedEndpointId &&
       this._callId === wantedCallId &&
       this._ws &&
       this._ws.readyState === WebSocket.CONNECTING
@@ -466,12 +734,14 @@ class VoipStackEngine extends EventTarget {
       throw new Error("Audio WebSocket superseded before connect");
     }
     this._deviceId = deviceId;
+    this._endpointId = wantedEndpointId;
     this._callId = wantedCallId;
     this._lastSessionPayload = null;
-    const wsUrl = await this._wsUrl(deviceId, wantedCallId);
+    const wsUrl = await this._wsUrl(deviceId, wantedCallId, wantedEndpointId);
     if (
       connectGeneration !== this._connectGeneration ||
       this._deviceId !== deviceId ||
+      this._endpointId !== wantedEndpointId ||
       this._callId !== wantedCallId
     ) {
       throw new Error("Audio WebSocket superseded before connect");
@@ -549,6 +819,7 @@ class VoipStackEngine extends EventTarget {
         connectGeneration !== this._connectGeneration ||
         this._ws !== ws ||
         this._deviceId !== deviceId ||
+        this._endpointId !== wantedEndpointId ||
         this._callId !== wantedCallId
       ) {
         throw new Error("Audio WebSocket superseded during negotiation");
@@ -880,17 +1151,46 @@ class VoipStackEngine extends EventTarget {
   }
 
   _applyAudioDirection(value) {
-    this._audioDirection = this._normaliseAudioDirection(value);
+    const nextDirection = this._normaliseAudioDirection(value);
+    let changed = nextDirection !== this._audioDirection;
+    this._audioDirection = nextDirection;
     const enabled = this._canSendAudio();
-    for (const track of this._mediaStream?.getAudioTracks?.() || []) track.enabled = enabled;
-    this._emit();
+    for (const track of this._mediaStream?.getAudioTracks?.() || []) {
+      if (track.enabled !== enabled) {
+        track.enabled = enabled;
+        changed = true;
+      }
+    }
+    // Engine state listeners reconcile the authoritative call snapshot. An
+    // unconditional event here made an unchanged reconciliation call itself
+    // synchronously until Chrome exhausted the JavaScript stack, most often
+    // while Hangup was cleaning up an active media pipeline.
+    if (changed) this._emit();
   }
 
-  async _setupAudioOrAbort(deviceId, deviceInfo, reply, attachKey = "") {
+  async _setupAudioOrAbort(deviceId, deviceInfo, reply, attachKey = "", endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
     let connected = false;
     const callId = String(reply?.call_id || "");
     try {
-      const negotiated = await this._connect(deviceId, callId);
+      let negotiated = null;
+      for (let attempt = 0; attempt < MEDIA_RECONNECT_ATTEMPTS; attempt++) {
+        try {
+          negotiated = await this._connect(deviceId, callId, endpointId);
+          break;
+        } catch (err) {
+          const superseded = attachKey && this._sessionAttachKey !== attachKey;
+          const retryable =
+            !this._pageHiding &&
+            !superseded &&
+            this.ownsSoftphoneSession(callId, endpointId) &&
+            attempt + 1 < MEDIA_RECONNECT_ATTEMPTS;
+          if (!retryable) throw err;
+          await new Promise((resolve) => window.setTimeout(
+            resolve,
+            MEDIA_RECONNECT_DELAY_MS * (attempt + 1),
+          ));
+        }
+      }
       connected = true;
       await this._setupAudio(
         deviceInfo,
@@ -911,20 +1211,31 @@ class VoipStackEngine extends EventTarget {
         return false;
       }
       console.error("voip-stack-engine: audio setup failed", err);
-      this.dispatchEvent(new CustomEvent("error", { detail: err?.message || String(err) }));
       // A failed HTTP/WebSocket ownership claim (for example, a 409 while a
       // newer card takes over) never established a media path and therefore
       // must not terminate the live SIP dialog.  Once the socket opened, a
       // real browser media-format/setup failure is still fatal for this leg.
+      if (!connected) {
+        this.releaseSoftphoneSession(callId, endpointId);
+        await this.close("media_attach_conflict");
+        this._forceIdle();
+        this.dispatchEvent(new CustomEvent("error", {
+          detail: "Call media is active in another tab or could not be attached.",
+        }));
+        return false;
+      }
+      this.dispatchEvent(new CustomEvent("error", { detail: err?.message || String(err) }));
       if (
-        connected &&
-        deviceId === HA_SOFTPHONE_DEVICE_ID &&
+        (deviceId === HA_SOFTPHONE_DEVICE_ID || !!endpointId) &&
         this._deviceId === deviceId &&
+        this._endpointId === endpointId &&
         this._callId === callId &&
         this._hass
       ) {
         await this._hass.callService("voip_stack", "hangup", {
           call_id: callId,
+          endpoint_id: endpointId,
+          device_id: deviceId,
           reason: "media_incompatible",
         }).catch(() => {});
       }
@@ -936,13 +1247,24 @@ class VoipStackEngine extends EventTarget {
 
   async startHaSoftphone(target, softphoneInfo, context = {}) {
     this._resetStats();
-    const reply = await this._hass.callWS({
+    let endpointId = String(context.endpoint_id || softphoneInfo?.endpoint_id || "").trim();
+    let deviceId = String(context.device_id || softphoneInfo?.device_id || "").trim();
+    if (!endpointId && !deviceId) endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID;
+    if (!deviceId && endpointId === DEFAULT_SOFTPHONE_ENDPOINT_ID) deviceId = HA_SOFTPHONE_DEVICE_ID;
+    const request = {
       type: "voip_stack/ha_softphone_start",
+      target_device_id: target.device_id || "",
       target_name: context.callee || target.name || "",
       callee: context.callee || target.name || "",
       call_id: context.call_id || "",
       send_video: Boolean(context.sendVideo),
-    });
+      media_client_id: this._mediaClientId,
+    };
+    if (endpointId) request.endpoint_id = endpointId;
+    if (deviceId) request.device_id = deviceId;
+    const reply = await this._hass.callWS(request);
+    endpointId = String(reply?.endpoint_id || endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
+    deviceId = String(reply?.device_id || deviceId || HA_SOFTPHONE_DEVICE_ID);
     const state = String(reply?.state || "").toLowerCase();
     const callId = String(reply?.call_id || "");
     if (typeof context.shouldAbort === "function" && context.shouldAbort()) {
@@ -952,6 +1274,8 @@ class VoipStackEngine extends EventTarget {
       ) {
         await this._hass.callService("voip_stack", "hangup", {
           call_id: callId,
+          endpoint_id: endpointId,
+          device_id: deviceId,
           reason: "superseded",
         }).catch(() => {});
       }
@@ -961,33 +1285,46 @@ class VoipStackEngine extends EventTarget {
       this._setState("IDLE");
       return reply;
     }
-    this.claimSoftphoneSession(callId);
+    this.claimSoftphoneSession(callId, endpointId);
     if (state === "in_call") {
       const mediaInfo = {
         ...(softphoneInfo || {}),
         ...(target || {}),
-        device_id: HA_SOFTPHONE_DEVICE_ID,
+        device_id: deviceId,
+        endpoint_id: endpointId,
         audio_mode: target?.audio_mode || softphoneInfo?.audio_mode || "full_duplex",
       };
-      await this.resumeSession(mediaInfo, HA_SOFTPHONE_DEVICE_ID, reply);
+      await this.resumeSession(mediaInfo, deviceId, { ...(reply || {}), endpoint_id: endpointId });
     }
     return reply;
   }
 
+  get mediaClientId() {
+    return this._mediaClientId;
+  }
+
   async resumeSession(deviceInfo, sessionDeviceId, statePayload) {
+    if (this._pageHiding) return;
     const state = String(statePayload?.state || "").toLowerCase();
     if (state !== "in_call") return;
     const deviceId = sessionDeviceId || statePayload?.session_device_id || statePayload?.device_id || this._deviceId;
+    const endpointId = String(statePayload?.endpoint_id || deviceInfo?.endpoint_id || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     if (!deviceId) return;
-    const attachKey = `${deviceId}|${statePayload?.call_id || ""}`;
+    const attachKey = `${endpointId}|${deviceId}|${statePayload?.call_id || ""}`;
     if (this._sessionAttachPromise && this._sessionAttachKey === attachKey) {
       return this._sessionAttachPromise;
     }
     this._sessionAttachKey = attachKey;
-    const attachPromise = (async () => {
+    // Defer the actual attach until after `_sessionAttachPromise` has been
+    // installed below. `_connect()` synchronously emits an intermediate
+    // engine state while tearing down an older pipeline; a card listener may
+    // re-enter `resumeSession()` from that event. Starting this async body
+    // immediately left a small window where the re-entrant call could not see
+    // the in-flight promise and superseded the very same audio setup.
+    const attachPromise = Promise.resolve().then(() => {
       if (this._sessionAttachKey !== attachKey) return;
-      return this._resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey);
-    })();
+      return this._resumeSessionLocked(deviceInfo, deviceId, { ...statePayload, endpoint_id: endpointId }, attachKey);
+    });
     const trackedPromise = attachPromise.finally(() => {
       if (this._sessionAttachPromise !== trackedPromise) return;
       this._sessionAttachPromise = null;
@@ -1014,9 +1351,11 @@ class VoipStackEngine extends EventTarget {
 
   async _resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey) {
     const callId = String(statePayload?.call_id || "");
+    const endpointId = String(statePayload?.endpoint_id || deviceInfo?.endpoint_id || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     if (
       this._ws &&
       this._deviceId === deviceId &&
+      this._endpointId === endpointId &&
       this._callId === callId &&
       this._ws.readyState === WebSocket.OPEN &&
       this._audioReady
@@ -1031,6 +1370,7 @@ class VoipStackEngine extends EventTarget {
       { ...(deviceInfo || {}), device_id: deviceId },
       statePayload,
       attachKey,
+      endpointId,
     )) return;
     if (this._sessionAttachKey !== attachKey) return;
     this._setState("IN_CALL");

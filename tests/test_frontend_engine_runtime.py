@@ -74,12 +74,14 @@ await module.link(() => {{ throw new Error("unexpected import"); }});
 await module.evaluate();
 const Engine = module.namespace.VoipStackEngine;
 
-// Media ownership identity is stable for this browser tab and is part of the
-// Home Assistant signed path, so it cannot be changed after signing.
+// Media ownership identity is stable for this document and is part of the
+// Home Assistant signed path. A duplicated tab inherits sessionStorage, so a
+// copied legacy token must not become the new document's identity.
 const signedPaths = [];
 const signingHass = {{
   callWS: async (msg) => {{ signedPaths.push(msg.path); return {{ path: msg.path }}; }},
 }};
+session.set("voip_stack_media_client_id", "copied-session-token-1234");
 const signedA = new Engine();
 signedA.configure(signingHass);
 await signedA._wsUrl("device", "signed-call");
@@ -88,10 +90,124 @@ signedB.configure(signingHass);
 await signedB._wsUrl("device", "signed-call");
 assert.ok(signedA._mediaClientId.length >= 16);
 assert.equal(signedA._mediaClientId, signedB._mediaClientId);
+assert.notEqual(signedA._mediaClientId, "copied-session-token-1234");
 assert.equal(
   new URL(`https://ha.example${{signedPaths[0]}}`).searchParams.get("client_id"),
   signedA._mediaClientId,
 );
+assert.equal(
+  new URL(`https://ha.example${{signedPaths[0]}}`).searchParams.get("endpoint_id"),
+  "default",
+);
+await signedA._wsUrl("kitchen-device", "kitchen-call", "kitchen");
+assert.equal(
+  new URL(`https://ha.example${{signedPaths.at(-1)}}`).searchParams.get("endpoint_id"),
+  "kitchen",
+);
+
+// Snapshot replay and delivery are isolated by endpoint. Legacy snapshots
+// without endpoint_id belong only to the historical default softphone.
+const isolated = new Engine();
+const defaultStates = [];
+const kitchenStates = [];
+const kitchenDeviceStates = [];
+isolated.subscribeSoftphoneState((state) => defaultStates.push(state.call_id), {{ endpoint_id: "default" }});
+isolated.subscribeSoftphoneState((state) => kitchenStates.push(state.call_id), {{ endpoint_id: "kitchen" }});
+isolated.subscribeSoftphoneState(
+  (state) => kitchenDeviceStates.push(state.call_id),
+  {{ device_id: "kitchen-device" }},
+);
+const kitchenSnapshot = {{
+  endpoint_id: "kitchen",
+  device_id: "kitchen-device",
+  call_id: "K",
+  state: "ringing",
+}};
+isolated._onSoftphoneState(kitchenSnapshot, {{ endpoint_id: "kitchen" }});
+isolated._onSoftphoneState(kitchenSnapshot, {{ device_id: "kitchen-device" }});
+isolated._onSoftphoneState({{ call_id: "D", state: "ringing" }}, {{ endpoint_id: "default" }});
+assert.deepEqual(kitchenStates, ["K"]);
+assert.deepEqual(kitchenDeviceStates, ["K"]);
+assert.deepEqual(defaultStates, ["D"]);
+
+// Browser media claims and UI controllers are endpoint-local. Two logical
+// phones can therefore coexist without one endpoint releasing the other.
+isolated.claimSoftphoneSession("call-default", "default");
+isolated.claimSoftphoneSession("call-kitchen", "kitchen");
+isolated.releaseSoftphoneSession("call-default", "default");
+assert.equal(isolated.ownsSoftphoneSession("call-default", "default"), false);
+assert.equal(isolated.ownsSoftphoneSession("call-kitchen", "kitchen"), true);
+const controllerDefault = {{ isConnected: true }};
+const controllerKitchen = {{ isConnected: true }};
+assert.equal(isolated.claimSoftphoneController(controllerDefault, "default"), true);
+assert.equal(isolated.claimSoftphoneController(controllerKitchen, "kitchen"), true);
+
+// Register the in-flight media attach before its body starts. Engine state
+// listeners can synchronously re-enter resumeSession() while _connect() tears
+// down an older pipeline; the re-entrant call must join the same promise, not
+// start a second setup that supersedes and hangs up the call.
+const atomicAttach = new Engine();
+let attachRuns = 0;
+let reentrantAttach = null;
+const attachPayload = {{
+  state: "in_call",
+  call_id: "local-room-call",
+  endpoint_id: "kitchen",
+}};
+atomicAttach._resumeSessionLocked = async function(deviceInfo, deviceId, payload) {{
+  attachRuns++;
+  reentrantAttach = this.resumeSession(deviceInfo, deviceId, payload);
+  await Promise.resolve();
+}};
+const initialAttach = atomicAttach.resumeSession(
+  {{ endpoint_id: "kitchen", audio_mode: "full_duplex" }},
+  "kitchen-device",
+  attachPayload,
+);
+await initialAttach;
+await reentrantAttach;
+assert.equal(attachRuns, 1);
+
+// A brand-new page has no sessionStorage claim, but an authoritative in-call
+// snapshot may recover that exact endpoint once. A newer call on the same
+// logical phone replaces a stale, unattached claim instead of becoming a
+// permanent spectator.
+const recovered = new Engine();
+assert.equal(recovered.ownsSoftphoneSession("fresh-call", "kitchen"), false);
+assert.equal(recovered.tryRecoverSoftphoneSession("fresh-call", "kitchen"), true);
+assert.equal(recovered.ownsSoftphoneSession("fresh-call", "kitchen"), true);
+assert.equal(recovered.tryRecoverSoftphoneSession("replacement-call", "kitchen"), true);
+assert.equal(recovered.ownsSoftphoneSession("fresh-call", "kitchen"), false);
+assert.equal(recovered.ownsSoftphoneSession("replacement-call", "kitchen"), true);
+
+// A permanently removed endpoint is surfaced once as unavailable and is not
+// retried forever by the global subscription timer.
+const missing = new Engine();
+const missingStates = [];
+missing.subscribeSoftphoneState(
+  (state) => missingStates.push(state),
+  {{ endpoint_id: "removed-phone" }},
+);
+const missingRecord = missing._softphoneScopeSubscriptions.get("endpoint:removed-phone");
+let missingSubscribeAttempts = 0;
+let missingRetrySchedules = 0;
+const missingConnection = {{
+  subscribeMessage: async () => {{
+    missingSubscribeAttempts++;
+    const error = new Error("Unknown phone endpoint");
+    error.code = "unknown_endpoint";
+    throw error;
+  }},
+}};
+missing._busConnection = missingConnection;
+missing._scheduleBusSubscriptionRetry = () => {{ missingRetrySchedules++; }};
+missing._ensureSoftphoneScopeSubscription(missingConnection, missingRecord);
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(missingRecord.invalid, true);
+assert.equal(missingSubscribeAttempts, 1);
+assert.equal(missingRetrySchedules, 0);
+assert.equal(missingStates.at(-1).state, "unavailable");
+assert.equal(missingStates.at(-1).terminal_reason, "unknown_endpoint");
 
 // Auto-answer permission probing is fail-closed and never opens a camera
 // prompt when persistent camera access is absent.
@@ -128,10 +244,13 @@ assert.equal(stopped, 1);
 // send BYE for the dialog owned by the newer card.
 const ownership = new Engine();
 const services = [];
+const ownershipErrors = [];
 ownership._hass = {{ callService: async (...args) => services.push(args) }};
 ownership._connect = async () => {{ throw new Error("HTTP 409 owner conflict"); }};
 ownership.close = async () => {{}};
 ownership._setState = () => {{}};
+ownership.addEventListener("error", (event) => ownershipErrors.push(event.detail));
+ownership.claimSoftphoneSession("call-A", "default");
 assert.equal(
   await ownership._setupAudioOrAbort(
     "__voip_stack_ha_softphone__",
@@ -141,6 +260,40 @@ assert.equal(
   false,
 );
 assert.deepEqual(services, []);
+assert.equal(ownership.ownsSoftphoneSession("call-A", "default"), false);
+assert.equal(ownership._state, "IDLE");
+assert.match(ownershipErrors.at(-1), /another tab|could not be attached/i);
+
+// A reload can race the old document's socket teardown. An engine that owns
+// the exact call retries the bounded media claim; a mirror that never claimed
+// the call (the case above) remains fail-fast.
+const reconnect = new Engine();
+reconnect.claimSoftphoneSession("reload-call", "kitchen");
+let reconnectAttempts = 0;
+reconnect._connect = async () => {{
+  reconnectAttempts++;
+  if (reconnectAttempts < 3) throw new Error("HTTP 409 old document closing");
+  reconnect._callId = "reload-call";
+  return {{
+    call_id: "reload-call",
+    selected_tx_format: "48000:s16le:1:20",
+    selected_rx_format: "48000:s16le:1:20",
+    audio_direction: "sendrecv",
+  }};
+}};
+reconnect._setupAudio = async () => {{}};
+reconnect._reconcileAudioMedia = async () => {{}};
+assert.equal(
+  await reconnect._setupAudioOrAbort(
+    "kitchen-device",
+    {{ endpoint_id: "kitchen" }},
+    {{ call_id: "reload-call" }},
+    "",
+    "kitchen",
+  ),
+  true,
+);
+assert.equal(reconnectAttempts, 3);
 
 // Once the WebSocket is open, an actual local audio setup failure makes this
 // browser leg unusable and intentionally terminates that exact call.
@@ -178,6 +331,9 @@ assert.equal(canvas.claimVideoCanvas(ownerB, canvasB), true);
 assert.equal(canvas._videoCanvas, canvasB);
 assert.equal(canvas.claimSoftphoneController({{ isConnected: false }}), false);
 assert.equal(canvas.claimVideoCanvas({{ isConnected: false }}, {{}}), false);
+canvas._endpointId = "kitchen";
+assert.equal(canvas.claimVideoCanvas(ownerA, canvasA, "kitchen"), true);
+assert.equal(canvas._videoCanvas, canvasA);
 
 // A same-call audio-only -> video-active state update must reconcile the
 // optional video channel even though the audio WebSocket is already open.
@@ -381,6 +537,14 @@ await sendOnly._setupAudio(
 assert.equal(microphoneRequests, 2);
 assert.equal(sendOnly._captureNode?.name, "voip-stack-processor");
 assert.equal(sendOnly._playbackNode, null);
+
+// Reapplying an unchanged negotiated direction is a no-op. Card listeners
+// call reconcileSession() from engine state events, so emitting here would
+// recurse synchronously until the browser reports Maximum call stack size.
+let unchangedDirectionEvents = 0;
+sendOnly.addEventListener("state", () => {{ unchangedDirectionEvents++; }});
+sendOnly._applyAudioDirection("sendonly");
+assert.equal(unchangedDirectionEvents, 0);
 
 // Lazy video-module resolution from call A cannot attach or close media after
 // call B has replaced the session intent.

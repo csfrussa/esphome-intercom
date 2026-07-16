@@ -103,11 +103,122 @@
       "already_configured": "VoIP Stack è già configurato."
     }
   },
+  "config_subentries": {
+    "phone": {
+      "title": "Endpoint telefonico",
+      "step": {
+        "user": {
+          "title": "Aggiungi telefono",
+          "description": "Crea un altro softphone browser di Home Assistant oppure un account SIP standard. Tutti i telefoni condividono lo stesso listener SIP e pool RTP.",
+          "data": {
+            "kind": "Tipo di telefono"
+          }
+        },
+        "browser": {
+          "title": "Softphone Home Assistant",
+          "description": "Crea un telefono logico per una o più card Lovelace. Le card associate allo stesso telefono squillano insieme; la prima che risponde acquisisce i media.",
+          "data": {
+            "name": "Nome",
+            "extension": "Interno",
+            "enabled": "Abilitato",
+            "dnd": "Non disturbare",
+            "ring_group": "Gruppo di chiamata",
+            "conference_group": "Gruppo conferenza",
+            "conference_ring": "Squilla per le conferenze",
+            "video_enabled": "Abilita video",
+            "offline_policy": "Quando nessuna card è collegata",
+            "offline_forward_target": "Destinazione inoltro",
+            "offline_wait_seconds": "Tempo di attesa"
+          },
+          "data_description": {
+            "name": "Nome obbligatorio usato da card, rubrica e instradamento.",
+            "extension": "Interno componibile opzionale e univoco.",
+            "offline_policy": "Rispondi non disponibile, attendi una card oppure inoltra con protezione dai loop.",
+            "offline_forward_target": "Obbligatorio solo per Inoltra. Usa un altro nome o interno della rubrica.",
+            "offline_wait_seconds": "Secondi massimi di attesa di una card browser."
+          }
+        },
+        "sip_account": {
+          "title": "Account SIP standard",
+          "description": "Crea le credenziali per qualunque telefono o softphone SIP/RTP standard. Non viene usato alcun comportamento specifico del produttore.",
+          "data": {
+            "name": "Nome",
+            "extension": "Interno",
+            "username": "Nome utente SIP",
+            "password": "Password SIP",
+            "enabled": "Abilitato",
+            "dnd": "Non disturbare",
+            "ring_group": "Gruppo di chiamata",
+            "conference_group": "Gruppo conferenza",
+            "conference_ring": "Squilla per le conferenze",
+            "video_enabled": "Consenti negoziazione video",
+            "offline_policy": "Quando non registrato",
+            "offline_forward_target": "Destinazione inoltro",
+            "offline_wait_seconds": "Tempo di attesa"
+          }
+        },
+        "reconfigure": {
+          "title": "Riconfigura telefono"
+        }
+      },
+      "error": {
+        "phone_name_required": "Il nome del telefono è obbligatorio.",
+        "phone_username_invalid": "Usa solo lettere, numeri, punti, trattini bassi o trattini.",
+        "phone_password_required": "La password SIP è obbligatoria.",
+        "phone_forward_target_required": "La destinazione è obbligatoria con la policy Inoltra.",
+        "phone_offline_policy_unsupported": "Gli account SIP non possono usare la policy di attesa del browser.",
+        "phone_alias_conflict": "Nome, interno o username è già usato da un altro telefono."
+      },
+      "abort": {
+        "reconfigure_successful": "Telefono riconfigurato.",
+        "already_configured": "Questo telefono esiste già."
+      }
+    }
+  },
   "selector": {
     "trunk_inbound_mode": {
       "options": {
         "direct": "Diretto alla destinazione predefinita",
         "dtmf": "Selezione interno DTMF"
+      }
+    }
+  },
+  "entity": {
+    "event": {
+      "voip_stack_call_event": {
+        "name": "Chiamata VoIP Stack"
+      },
+      "phone_endpoint_call": {
+        "name": "Chiamata"
+      }
+    },
+    "sensor": {
+      "voip_stack_ha_softphone_call_state": {
+        "name": "Stato chiamata VoIP Stack"
+      },
+      "phone_endpoint_call_state": {
+        "name": "Stato chiamata",
+        "state": {
+          "offline": "Non in linea",
+          "idle": "Libero",
+          "calling": "Chiamata in corso",
+          "remote_ringing": "Squillo remoto",
+          "ringing": "Sta squillando",
+          "connecting": "Connessione",
+          "in_call": "In chiamata",
+          "held": "In attesa",
+          "terminating": "Chiusura"
+        }
+      }
+    },
+    "switch": {
+      "phone_endpoint_dnd": {
+        "name": "Non disturbare"
+      }
+    },
+    "binary_sensor": {
+      "phone_endpoint_connectivity": {
+        "name": "Connettività"
       }
     }
   }

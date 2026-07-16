@@ -26,7 +26,8 @@ from .authorization import (
     require_media_client_id,
 )
 from .call_registry import CallRegistry
-from .const import CONF_DEBUG_MODE, DOMAIN, HA_SOFTPHONE_DEVICE_ID
+from .const import CONF_DEBUG_MODE, DOMAIN
+from .audio_format import HA_SIP_PCM_FORMATS
 from .debug_capture import (
     DEBUG_CAPTURE_DIR,
     DEBUG_CAPTURE_MAX_PENDING_WRITES,
@@ -43,6 +44,8 @@ from .media_debug import merge_media_debug
 from .queue_utils import put_drop_oldest
 from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
+from .phone_endpoint import DEFAULT_ENDPOINT_ID
+from .local_softphone_bridge import LocalCallStateError
 from .websocket_api import (
     CALL_EVENT,
     _ha_softphone_store,
@@ -51,7 +54,8 @@ from .websocket_api import (
 from .websocket_owner import (
     MediaWebSocketOwner,
     WebSocketOwnerBusyError,
-    async_claim_media_owner,
+    async_claim_call_media_owner,
+    async_release_local_media_if_unowned,
     async_release_media_owner,
 )
 
@@ -346,15 +350,43 @@ class VoipAudioWebSocketView(HomeAssistantView):
             raise web.HTTPBadRequest(text=str(err)) from err
         hass: HomeAssistant = request.app["hass"]
         device_id = str(request.query.get("device_id") or "")
+        requested_endpoint_id = str(request.query.get("endpoint_id") or "")
+        from .websocket_api import _endpoint_id_from_selector
+
         requested_call_id = str(request.query.get("call_id") or "").strip()
-        if device_id and device_id != HA_SOFTPHONE_DEVICE_ID:
-            raise web.HTTPNotFound()
+        try:
+            endpoint_id = _endpoint_id_from_selector(
+                hass,
+                endpoint_id=requested_endpoint_id,
+                device_id=device_id,
+            )
+        except ValueError as err:
+            raise web.HTTPNotFound(text=str(err)) from err
         if not requested_call_id:
             raise web.HTTPBadRequest(text="call_id is required")
 
-        session = _active_softphone_media_session(hass)
-        if session is None or requested_call_id != session.call_id:
-            raise web.HTTPConflict(text="HA softphone has no matching SIP/RTP dialog")
+        from .local_softphone_runtime import local_softphone_bridge
+
+        local_bridge = local_softphone_bridge(hass)
+        local_call = (
+            local_bridge.get_call(requested_call_id)
+            if local_bridge is not None
+            else None
+        )
+        if local_call is not None:
+            try:
+                local_state = local_call.state_for(endpoint_id)
+            except (ValueError, LocalCallStateError) as err:
+                raise web.HTTPConflict(text=str(err)) from err
+            if local_state.value != "in_call":
+                raise web.HTTPConflict(text="local phone call has not been answered")
+            session = None
+        else:
+            session = _active_softphone_media_session(hass, endpoint_id)
+            if session is None or requested_call_id != session.call_id:
+                raise web.HTTPConflict(
+                    text="HA softphone has no matching SIP/RTP dialog"
+                )
         registry = hass.data.get(DOMAIN, {}).get("call_registry")
         if not isinstance(registry, CallRegistry):
             raise web.HTTPConflict(text="HA softphone call registry is unavailable")
@@ -363,6 +395,7 @@ class VoipAudioWebSocketView(HomeAssistantView):
             registry,
             requested_call_id,
             request.get("hass_user"),
+            endpoint_id=endpoint_id,
         )
 
         ws = web.WebSocketResponse(max_msg_size=_MAX_BROWSER_AUDIO_MESSAGE_BYTES)
@@ -373,38 +406,72 @@ class VoipAudioWebSocketView(HomeAssistantView):
             client_id=client_id,
         )
         bucket = hass.data.setdefault(DOMAIN, {})
-        owners = bucket.setdefault("audio_ws_owners", {})
-        owner_lock = bucket.setdefault("audio_ws_owner_lock", asyncio.Lock())
         shutdown_event = bucket.setdefault("media_shutdown", asyncio.Event())
         try:
-            await async_claim_media_owner(
-                owners,
-                owner_lock,
+            owners, owner_lock, owner_key = await async_claim_call_media_owner(
+                bucket,
+                registry,
                 requested_call_id,
+                endpoint_id,
                 owner,
+                channel="audio",
                 timeout=_AUDIO_OWNER_HANDOFF_TIMEOUT,
                 shutdown_event=shutdown_event,
+                pin_client_identity=local_call is None,
+                local_bridge=(local_bridge if local_call is not None else None),
             )
         except WebSocketOwnerBusyError as err:
             raise web.HTTPConflict(text="HA softphone media is already attached") from err
 
+        lease = None
         try:
             # The old owner may have consumed and released RTP resources while
             # this request waited. Resolve the live dialog again after the
             # ownership barrier instead of reusing a stale session snapshot.
-            session = _active_softphone_media_session(hass)
-            if session is None or requested_call_id != session.call_id:
-                raise web.HTTPConflict(text="HA softphone has no matching SIP/RTP dialog")
-            await ws.prepare(request)
-            await _run_audio_session(
-                hass,
-                ws,
-                session,
-                request.transport,
-                handoff_requested=owner.handoff_requested,
+            local_call = (
+                local_bridge.get_call(requested_call_id)
+                if local_bridge is not None
+                else None
             )
+            if local_call is not None:
+                from .local_softphone_bridge import LocalBridgeError
+
+                try:
+                    lease = local_bridge.acquire_media(
+                        requested_call_id, endpoint_id, client_id
+                    )
+                except LocalBridgeError as err:
+                    raise web.HTTPConflict(text=str(err)) from err
+                await ws.prepare(request)
+                await _run_local_audio_session(
+                    hass,
+                    ws,
+                    local_bridge,
+                    lease,
+                )
+            else:
+                session = _active_softphone_media_session(hass, endpoint_id)
+                if session is None or requested_call_id != session.call_id:
+                    raise web.HTTPConflict(
+                        text="HA softphone has no matching SIP/RTP dialog"
+                    )
+                await ws.prepare(request)
+                await _run_audio_session(
+                    hass,
+                    ws,
+                    session,
+                    request.transport,
+                    handoff_requested=owner.handoff_requested,
+                    endpoint_id=endpoint_id,
+                )
         finally:
-            await async_release_media_owner(owners, owner_lock, requested_call_id, owner)
+            await async_release_media_owner(owners, owner_lock, owner_key, owner)
+            if lease is not None:
+                await async_release_local_media_if_unowned(
+                    bucket,
+                    local_bridge,
+                    lease,
+                )
         return ws
 
 
@@ -419,6 +486,7 @@ def async_register_audio_ws_view(hass: HomeAssistant) -> None:
 def _listen_for_call_end(
     hass: HomeAssistant,
     call_id: str,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
 ) -> tuple[asyncio.Event, Any]:
     """Return a lifetime event and listener remover for one softphone call."""
 
@@ -432,7 +500,7 @@ def _listen_for_call_end(
             call_ended.set()
 
     remove_listener = hass.bus.async_listen(CALL_EVENT, on_call_event)
-    current_store = _ha_softphone_store(hass)
+    current_store = _ha_softphone_store(hass, endpoint_id)
     if (
         str(current_store.get("call_id") or "") != call_id
         or str(current_store.get("state") or "").lower()
@@ -442,8 +510,11 @@ def _listen_for_call_end(
     return call_ended, remove_listener
 
 
-def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSession | None:
-    store = _ha_softphone_store(hass)
+def _active_softphone_media_session(
+    hass: HomeAssistant,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+) -> _SoftphoneMediaSession | None:
+    store = _ha_softphone_store(hass, endpoint_id)
     call_id = str(store.get("call_id") or "").strip()
     state = str(store.get("state") or "").strip().lower()
     if state not in {"connecting", "in_call"}:
@@ -517,6 +588,109 @@ def _active_softphone_media_session(hass: HomeAssistant) -> _SoftphoneMediaSessi
     return None
 
 
+async def _run_local_audio_session(
+    hass: HomeAssistant,
+    ws: web.WebSocketResponse,
+    bridge,
+    lease,
+) -> None:
+    """Relay browser PCM between two logical phones without an RTP hop."""
+    audio_format = HA_SIP_PCM_FORMATS[0]
+    expected_bytes = int(audio_format.nominal_frame_bytes)
+    counters = {
+        "ws_rx": 0,
+        "ws_tx": 0,
+        "drop_payload_size": 0,
+        "drop_tx_queue": 0,
+        "tx_error": 0,
+    }
+    await ws.send_json(
+        {
+            "state": "in_call",
+            "call_id": lease.call_id,
+            "tx_format": audio_format.wire_token(),
+            "rx_format": audio_format.wire_token(),
+            "selected_tx_format": audio_format.wire_token(),
+            "selected_rx_format": audio_format.wire_token(),
+            "selected_tx_rtp_format": "local/websocket",
+            "selected_rx_rtp_format": "local/websocket",
+            "audio_direction": "sendrecv",
+            "remote_connection_held": False,
+            "media_transport": "local_websocket",
+        }
+    )
+
+    async def peer_to_browser() -> None:
+        while True:
+            pcm = await bridge.receive_audio(
+                lease.call_id,
+                lease.endpoint_id,
+                lease.token,
+            )
+            await ws.send_bytes(encode_audio_frame(pcm))
+            counters["ws_tx"] += 1
+
+    async def browser_to_peer() -> None:
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY:
+                try:
+                    pcm = decode_audio_frame(bytes(msg.data))
+                    if len(pcm) != expected_bytes:
+                        counters["drop_payload_size"] += 1
+                        continue
+                    if bridge.send_audio(
+                        lease.call_id,
+                        lease.endpoint_id,
+                        lease.token,
+                        pcm,
+                    ):
+                        counters["drop_tx_queue"] += 1
+                    counters["ws_rx"] += 1
+                except Exception:  # noqa: BLE001 - isolate malformed media.
+                    counters["tx_error"] += 1
+                    _LOGGER.debug(
+                        "Local softphone browser audio frame rejected call_id=%s endpoint=%s",
+                        lease.call_id,
+                        lease.endpoint_id,
+                        exc_info=True,
+                    )
+            elif msg.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                return
+
+    peer_task = asyncio.create_task(peer_to_browser())
+    browser_task = asyncio.create_task(browser_to_peer())
+    lifetime_task = asyncio.create_task(bridge.wait_closed(lease.call_id))
+    tasks = (peer_task, browser_task, lifetime_task)
+    try:
+        done, _pending = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if lifetime_task in done:
+            ws.force_close()
+        for task in done:
+            if task is lifetime_task or task.cancelled():
+                continue
+            error = task.exception()
+            if error is not None:
+                _LOGGER.debug(
+                    "Local softphone audio session ended call_id=%s endpoint=%s: %s",
+                    lease.call_id,
+                    lease.endpoint_id,
+                    error,
+                )
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        store = _ha_softphone_store(hass, lease.endpoint_id)
+        if str(store.get("call_id") or store.get("last_terminal_call_id") or "") == lease.call_id:
+            store.update(counters)
+            store["last_sip_event"] = "local_audio_detached"
+            _publish_ha_softphone_state(hass, endpoint_id=lease.endpoint_id)
+
+
 async def _run_audio_session(
     hass: HomeAssistant,
     ws: web.WebSocketResponse,
@@ -524,6 +698,7 @@ async def _run_audio_session(
     websocket_transport: asyncio.BaseTransport | None = None,
     *,
     handoff_requested: asyncio.Event | None = None,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
 ) -> None:
     if session.conference_queue is not None:
         await _run_conference_audio_session(
@@ -531,6 +706,7 @@ async def _run_audio_session(
             ws,
             session,
             handoff_requested=handoff_requested,
+            endpoint_id=endpoint_id,
         )
         return
     frame_ms = max(1, int(session.recv_format.audio_format.frame_ms))
@@ -603,7 +779,7 @@ async def _run_audio_session(
         if not force and now - last_counter_event < publish_interval:
             return
         last_counter_event = now
-        store = _ha_softphone_store(hass)
+        store = _ha_softphone_store(hass, endpoint_id)
         current_call_id = str(store.get("call_id") or "")
         if current_call_id:
             if current_call_id != session.call_id:
@@ -645,7 +821,7 @@ async def _run_audio_session(
         # Media telemetry belongs to the high-frequency softphone snapshot.
         # Re-emitting the SIP lifecycle event here would turn every counter
         # tick into another synthetic ``answered`` automation occurrence.
-        _publish_ha_softphone_state(hass)
+        _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
 
     def negotiation_payload(*, message_type: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -912,7 +1088,9 @@ async def _run_audio_session(
 
     rx_task = asyncio.create_task(rtp_to_ws())
     tx_task = asyncio.create_task(ws_to_rtp())
-    call_ended, remove_call_listener = _listen_for_call_end(hass, session.call_id)
+    call_ended, remove_call_listener = _listen_for_call_end(
+        hass, session.call_id, endpoint_id
+    )
     active_sessions = hass.data.setdefault(DOMAIN, {}).setdefault("active_audio_sessions", {})
     active_sessions[session.call_id] = session
 
@@ -1034,6 +1212,7 @@ async def _run_conference_audio_session(
     session: _SoftphoneMediaSession,
     *,
     handoff_requested: asyncio.Event | None = None,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
 ) -> None:
     conference_queue = session.conference_queue
     if conference_queue is None:
@@ -1089,7 +1268,7 @@ async def _run_conference_audio_session(
                         )
                     manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
                     if manager is not None:
-                        manager.push_ha_audio(session.conference_room, pcm)
+                        manager.push_ha_audio(session.call_id, pcm)
                     counters["ws_rx"] += 1
                 except Exception as err:  # noqa: BLE001 - keep media path alive.
                     counters["tx_error"] += 1
@@ -1099,7 +1278,9 @@ async def _run_conference_audio_session(
 
     rx_task = asyncio.create_task(room_to_ws())
     browser_task = asyncio.create_task(browser_to_room())
-    call_ended, remove_call_listener = _listen_for_call_end(hass, session.call_id)
+    call_ended, remove_call_listener = _listen_for_call_end(
+        hass, session.call_id, endpoint_id
+    )
     lifetime_task = asyncio.create_task(call_ended.wait())
     try:
         done, _pending = await asyncio.wait(
@@ -1142,7 +1323,7 @@ async def _run_conference_audio_session(
         # A browser media WebSocket is not the conference call controller.
         # Reloading a dashboard (or handing ownership to a new card instance)
         # must only detach this consumer; explicit hangup owns room teardown.
-        store = _ha_softphone_store(hass)
+        store = _ha_softphone_store(hass, endpoint_id)
         if str(store.get("call_id") or "") == session.call_id:
             store.update(
                 {
@@ -1154,6 +1335,6 @@ async def _run_conference_audio_session(
                     **counters,
                 }
             )
-            _publish_ha_softphone_state(hass)
+            _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
         if caller_cancelled:
             raise asyncio.CancelledError

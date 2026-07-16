@@ -28,12 +28,14 @@ def _install_ha_fakes() -> None:
         config_entries = types.ModuleType("homeassistant.config_entries")
         core.HomeAssistant = type("HomeAssistant", (), {})
         config_entries.ConfigEntry = type("ConfigEntry", (), {})
+        config_entries.ConfigSubentry = type("ConfigSubentry", (), {})
         sys.modules["homeassistant"] = ha
         sys.modules["homeassistant.core"] = core
         sys.modules["homeassistant.config_entries"] = config_entries
     elif "homeassistant.config_entries" not in sys.modules:
         config_entries = types.ModuleType("homeassistant.config_entries")
         config_entries.ConfigEntry = type("ConfigEntry", (), {})
+        config_entries.ConfigSubentry = type("ConfigSubentry", (), {})
         sys.modules["homeassistant.config_entries"] = config_entries
 
 

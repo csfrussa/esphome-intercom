@@ -59,7 +59,10 @@ def build_account_service_handlers(
             if str(item.get("username") or "").lower() != username.lower()
         ]
         accounts.append(dump_account(account))
-        update_sip_accounts(hass, accounts)
+        try:
+            update_sip_accounts(hass, accounts)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
         await refresh_and_push_phonebook(hass)
         response: dict[str, Any] = {
             "username": username,

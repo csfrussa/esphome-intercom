@@ -7,6 +7,7 @@ import hmac
 import logging
 from secrets import token_hex, token_urlsafe
 import time
+from collections.abc import Callable
 from typing import Any
 
 from . import sip
@@ -211,7 +212,15 @@ def _contact_for_source_flow(
 
 
 class SipRegistrar:
-    def __init__(self, *, enabled: bool, accounts: list[SipAccount], local_ip: str, local_sip_port: int) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        accounts: list[SipAccount],
+        local_ip: str,
+        local_sip_port: int,
+        on_registration_change: Callable[[str, bool], None] | None = None,
+    ) -> None:
         self.enabled = bool(enabled)
         self.local_ip = local_ip
         self.local_sip_port = int(local_sip_port)
@@ -226,11 +235,25 @@ class SipRegistrar:
         self.last_sip_event = ""
         self.last_sip_status_code = 0
         self.last_sip_reason = ""
+        self.on_registration_change = on_registration_change
+
+    def _notify_registration_change(self, username: str, registered: bool) -> None:
+        if self.on_registration_change is None:
+            return
+        try:
+            self.on_registration_change(str(username), bool(registered))
+        except Exception:  # pragma: no cover - runtime observer isolation
+            _LOGGER.exception(
+                "SIP registrar registration observer failed user=%s registered=%s",
+                username,
+                registered,
+            )
 
     def update_accounts(self, accounts: list[SipAccount]) -> None:
         previous_accounts = self.accounts
         self.accounts = {account.username.lower(): account for account in accounts}
         registrations: dict[str, SipRegistration] = {}
+        retained_usernames: set[str] = set()
         for registration in self.registrations.values():
             key = registration.username.lower()
             account = self.accounts.get(key)
@@ -244,7 +267,15 @@ class SipRegistrar:
                 continue
             registration.username = account.username
             registrations[account.username] = registration
+            retained_usernames.add(account.username.lower())
+        removed = {
+            registration.username
+            for registration in self.registrations.values()
+            if registration.username.lower() not in retained_usernames
+        }
         self.registrations = registrations
+        for username in removed:
+            self._notify_registration_change(username, False)
 
     def _registration(self, username: str) -> SipRegistration | None:
         wanted = str(username or "").lower()
@@ -259,10 +290,14 @@ class SipRegistrar:
 
     def remove_registration(self, username: str) -> None:
         wanted = str(username or "").lower()
+        removed_username = ""
         for key in list(self.registrations):
             registration = self.registrations[key]
             if key.lower() == wanted or registration.username.lower() == wanted:
                 self.registrations.pop(key, None)
+                removed_username = registration.username
+        if removed_username:
+            self._notify_registration_change(removed_username, False)
 
     def registration_matches_source(
         self,
@@ -441,7 +476,13 @@ class SipRegistrar:
                 )
             except (TypeError, ValueError, sip.SipError):
                 return self._result(400, "Bad Request")
-            self.remove_registration(account.username)
+            wanted = account.username.lower()
+            for key in list(self.registrations):
+                if (
+                    key.lower() == wanted
+                    or self.registrations[key].username.lower() == wanted
+                ):
+                    self.registrations.pop(key, None)
             self.registrations[account.username] = SipRegistration(
                 username=account.username,
                 contact_uri=contact_uri,
@@ -452,6 +493,7 @@ class SipRegistrar:
                 advertised_contact_uri=advertised_contact_uri,
                 user_agent=request.header("User-Agent"),
             )
+            self._notify_registration_change(account.username, True)
             _LOGGER.info(
                 "SIP registrar registered user=%s transport=%s expires=%ss contact=%s contacts=%s",
                 account.username,
@@ -504,6 +546,7 @@ class SipRegistrar:
         expired = old - set(self.registrations)
         for username in expired:
             _LOGGER.info("SIP registrar expired user=%s", username)
+            self._notify_registration_change(username, False)
         return bool(expired)
 
     def roster_entries(self) -> list[RosterEntry]:

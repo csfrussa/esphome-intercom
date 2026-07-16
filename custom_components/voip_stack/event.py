@@ -6,20 +6,34 @@ from homeassistant.components.event import EventEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .automation_routing import AUTOMATION_EVENT_TYPES, automation_event_type
 from .const import DOMAIN
+from .endpoint_device import async_link_endpoint_entity, endpoint_device_info
+from .endpoint_entity_manager import EndpointEntityManager, event_matches_endpoint
 from .websocket_api import CALL_EVENT, SIP_DTMF_EVENT
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the single integration-owned call event entity."""
     async_add_entities([VoipStackCallEvent(hass, entry)])
+    endpoint_manager = EndpointEntityManager(
+        hass,
+        entry,
+        async_add_entities,
+        PhoneEndpointCallEvent,
+    )
+    endpoint_manager.async_setup()
+    bucket = hass.data.setdefault(DOMAIN, {})
+    bucket["endpoint_call_event_entity_manager"] = endpoint_manager
+    entry.async_on_unload(
+        lambda: bucket.pop("endpoint_call_event_entity_manager", None)
+    )
 
 
 class VoipStackCallEvent(EventEntity):
@@ -68,6 +82,63 @@ class VoipStackCallEvent(EventEntity):
         payload = dict(event.data)
         payload.setdefault("schema_version", 1)
         payload["event"] = "dtmf"
+        self.async_set_context(event.context)
+        self._trigger_event("dtmf", payload)
+        self.async_write_ha_state()
+
+
+class PhoneEndpointCallEvent(EventEntity):
+    """Publish only call lifecycle events involving one logical phone."""
+
+    _attr_event_types = AUTOMATION_EVENT_TYPES
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "phone_endpoint_call"
+    _unrecorded_attributes = VoipStackCallEvent._unrecorded_attributes
+
+    def __init__(self, hass, endpoint, registry) -> None:
+        self.endpoint = endpoint
+        self.registry = registry
+        self._attr_unique_id = f"phone_endpoint_{endpoint.endpoint_id}_call_event"
+        self._attr_device_info = endpoint_device_info(endpoint)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        async_link_endpoint_entity(
+            self.registry, self.endpoint.endpoint_id, self.entity_id
+        )
+        self.async_on_remove(self.hass.bus.async_listen(CALL_EVENT, self._on_call_event))
+        self.async_on_remove(self.hass.bus.async_listen(SIP_DTMF_EVENT, self._on_dtmf_event))
+
+    @callback
+    def apply_endpoint(self, endpoint) -> None:
+        self.endpoint = endpoint
+
+    @callback
+    def _on_call_event(self, event: Event) -> None:
+        payload = dict(event.data)
+        if not event_matches_endpoint(
+            payload,
+            self.endpoint,
+            self.registry,
+            owner_scoped=str(payload.get("scope") or "") == "session",
+        ):
+            return
+        event_type = automation_event_type(payload)
+        payload["event"] = event_type
+        payload["endpoint_id"] = self.endpoint.endpoint_id
+        self.async_set_context(event.context)
+        self._trigger_event(event_type, payload)
+        self.async_write_ha_state()
+
+    @callback
+    def _on_dtmf_event(self, event: Event) -> None:
+        payload = dict(event.data)
+        if not event_matches_endpoint(payload, self.endpoint, self.registry):
+            return
+        payload.setdefault("schema_version", 1)
+        payload["event"] = "dtmf"
+        payload["endpoint_id"] = self.endpoint.endpoint_id
         self.async_set_context(event.context)
         self._trigger_event("dtmf", payload)
         self.async_write_ha_state()

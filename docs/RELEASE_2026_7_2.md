@@ -1,4 +1,4 @@
-# 2026.7.2-dev: Automation-Native Routing And Experimental SIP Video
+# 2026.7.2-dev: Multiple HA Phones, Room-to-Room Video And Automation-Native Routing
 
 <!-- Canonical source for the v2026.7.2-dev GitHub pre-release body. -->
 
@@ -12,6 +12,39 @@ stable `2026.7.1` are becoming real: Home Assistant automations can now steer
 live calls, and yes, we appear to be getting rather close to a real native
 Home Assistant video phone. This is still a development build, so install it
 when you actually want to test the new toys and tell us what breaks.
+
+## ☎️ One Home Assistant, Multiple Real Phones
+
+The old singleton HA softphone is now the backward-compatible default phone,
+not a permanent architectural limit. Add Kitchen, Reception, Office or any
+other logical phone from the VoIP Stack integration entry, then bind a
+`ha_softphone` card to each native Home Assistant Device. This makes multiple
+kiosk tablets separately callable while preserving the zero-YAML default.
+
+- Phones are native config subentries. Browser phones and registrar accounts
+  become service Devices with call-state, connectivity, DND and call-event
+  entities. ESP phones remain their existing ESPHome Devices; there is no
+  duplicate Device and no HA Core patch.
+- Every phone has a stable routing identity, unique aliases, independent
+  presence, extension, groups, DND, video capability and call state.
+- All phones share the existing SIP UDP/TCP listener and dynamic RTP pool.
+  Logical phones do not each reserve new ports.
+- Browser-to-browser calls use a local in-memory signaling/media bridge.
+  External legs remain normal SIP/SDP/RTP, so the optimization cannot leak into
+  interoperability with phones, door stations or PBXs.
+- One endpoint owns one call. A concurrent call receives `486 Busy Here`.
+  Several cards can observe the same endpoint, but the first answer owns media
+  and a late answer cannot steal microphone, speaker or camera.
+- Browser presence supports immediate unavailable, bounded wait (60 seconds by
+  default) and loop-safe forwarding. Disabled/DND/offline endpoints return
+  explicit SIP outcomes instead of silently ringing the wrong card.
+- Local video keeps audio fallback, direction negotiation and camera consent
+  independent on both sides. An ESP or other audio-only endpoint stays audio
+  only when a video-capable caller dials it.
+- Each physical tablet or kiosk uses its own logical phone, Lovelace view and
+  browser session. Two cards in one browser may observe state, but they do not
+  simulate two rooms because one tab owns one microphone, speaker and camera
+  pipeline.
 
 ## 🎥 Experimental SIP Video For The HA Softphone
 
@@ -74,8 +107,10 @@ main character; identity, duration and hang-up move into the bottom bar._
   owners, cleanup tasks and the optional transcode slot all return to zero.
 
 This remains an experimental HA-softphone feature, not a general video PBX.
-There is no ESP, Assist, ring-group or conference video, cross-codec endpoint
-transcoding, SRTP, ICE/STUN/TURN or recording. HA accepts compatible
+There is no ESP, Assist, conference or SIP/RTP ring-group video, cross-codec
+endpoint transcoding, SRTP, ICE/STUN/TURN or recording. A local HA browser
+caller can retain direct browser video when another local browser phone wins a
+ring group. HA accepts compatible
 peer-initiated UPDATE/re-INVITE hold, direction and RTP-endpoint changes for an
 established stream, but it does not add/remove video, change its codec or
 originate renegotiation.
@@ -195,10 +230,14 @@ conditional-forward and unanswered-call-to-Assist examples.
 - Cancelling a ring-group or conference dialing task no longer destroys the SIP
   transaction owner. Losing legs finish their standard teardown in the
   background without delaying the winning call.
+- Reapplying an unchanged negotiated audio direction no longer emits a
+  recursive engine event. This fixes Chrome's `Maximum call stack size
+  exceeded`, the occasional “page is not responding” prompt and a card left on
+  `Ending call…` after a fast hangup.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 396 tests plus 39 subtests passing,
+- Full backend and frontend test suite: 832 tests plus 95 subtests passing,
   including a real FFmpeg codec matrix.
 - Python compilation, JavaScript syntax and repository diff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
@@ -228,6 +267,12 @@ conditional-forward and unanswered-call-to-Assist examples.
   extension, invalid extension rejection, native state `for:` forwarding and
   caller cancellation during digit collection. Every case captured the full
   WebSocket transition sequence and restored the original HA configuration.
+- A live two-browser room-to-room call used separate `Casa` and `Test` HA
+  phones. Both legs remained `in_call` while each direction carried roughly
+  495 audio frames with zero drops and 148 VP8 frames sent, received and
+  rendered with zero decode errors. Both entities returned to `idle` after
+  hangup. A separate fast Test-to-ESP hangup completed in 32 ms with
+  `_stopping=false` and no browser page errors.
 
 ## Known Follow-Up Areas
 

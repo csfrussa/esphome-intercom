@@ -106,6 +106,31 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("_eventConcernsThisCard", softphone)
         self.assertNotIn("_onSipStateEvent", self.source)
 
+    def test_logical_softphone_wire_contract_is_endpoint_scoped(self) -> None:
+        engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        subscription = _method_body(engine, "_ensureSoftphoneScopeSubscription")
+        state_match = _method_body(engine, "_softphoneStateMatches")
+        start = _method_body(engine, "async startHaSoftphone")
+        audio_url = _method_body(engine, "async _wsUrl")
+        video = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-video.js").read_text()
+
+        self.assertIn("request.endpoint_id = record.selector.endpoint_id", subscription)
+        self.assertIn("request.device_id = record.selector.device_id", subscription)
+        self.assertIn("stateEndpoint === wanted.endpoint_id", state_match)
+        self.assertIn("wanted.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID", state_match)
+        self.assertIn('target_device_id: target.device_id || ""', start)
+        self.assertIn("request.endpoint_id = endpointId", start)
+        self.assertIn("request.device_id = deviceId", start)
+        self.assertIn("endpoint_id=${encodeURIComponent", audio_url)
+        self.assertIn("endpoint_id=${encodeURIComponent", video)
+
+        card_state = _method_body(self.source, "_onSoftphoneState")
+        loader = _method_body(self.source, "async _loadSoftphoneState")
+        self.assertIn("this._softphoneSnapshotMatches(state)", card_state)
+        self.assertIn("...this._softphoneRequestScope()", loader)
+        attach = _method_body(self.source, "_ensureHaSoftphoneAudioPath")
+        self.assertIn("voipStackEngine.endpointId !== endpointId", attach)
+
     def test_engine_retries_startup_subscriptions_until_integration_is_ready(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         configure = _method_body(engine, "configure")
@@ -113,9 +138,12 @@ class FrontendCardContractTest(unittest.TestCase):
         retry = _method_body(engine, "_scheduleBusSubscriptionRetry")
 
         self.assertIn("this._ensureBusSubscriptions(conn)", configure)
-        self.assertIn("this._scheduleBusSubscriptionRetry(conn)", ensure)
+        self.assertIn("this._ensureSoftphoneScopeSubscription(conn, record)", ensure)
         self.assertIn("this._busSubscribePending", ensure)
-        self.assertIn("this._softphoneBusSubscribePending", ensure)
+        scoped = _method_body(engine, "_ensureSoftphoneScopeSubscription")
+        self.assertIn("this._softphoneBusSubscribePending", scoped)
+        self.assertIn("this._scheduleBusSubscriptionRetry(conn)", scoped)
+        self.assertIn("request.endpoint_id", scoped)
         self.assertIn("setTimeout", retry)
         self.assertIn("this._ensureBusSubscriptions(conn)", retry)
 
@@ -164,6 +192,8 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_ha_softphone_group_controls_are_dynamic_backend_state(self) -> None:
         load = _method_body(self.source, "_loadSharedRoster")
         groups = _method_body(self.source, "_availableSoftphoneGroups")
+        render = _method_body(self.source, "_render")
+        permission = _method_body(self.source, "_canConfigureHaSoftphone")
         setter = _method_body(self.source, "async _setHaSoftphoneSettings")
         dnd = _method_body(self.source, "async _toggleDnd")
         self.assertIn("roster_json", load)
@@ -180,6 +210,18 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("_populateGroupSelect", self.source)
         self.assertNotIn("conference_manager", self.source)
         self.assertNotIn("_ringConference", self.source)
+        self.assertIn("this._hass?.user?.is_admin === true", permission)
+        self.assertIn("this._canConfigureHaSoftphone()", render)
+        self.assertIn("if (!this._canConfigureHaSoftphone())", setter)
+
+    def test_disabled_logical_phone_is_not_rendered_as_callable(self) -> None:
+        render = _method_body(self.source, "_render")
+        self.assertIn("this._softphoneSnapshot?.enabled !== false", render)
+        self.assertIn('statusText = "Phone unavailable"', render)
+        disabled = render.split("if (!softphoneEnabled)", 1)[1].split(
+            "else if", 1
+        )[0]
+        self.assertNotIn("showCall = true", disabled)
 
     def test_esp_mirror_settings_write_exposed_esp_entities(self) -> None:
         finder = _method_body(self.source, "async _findEntityIds")
@@ -423,7 +465,7 @@ class FrontendCardContractTest(unittest.TestCase):
         disconnect = _method_body(self.source, "disconnectedCallback")
         self.assertIn("this.isConnected", controller)
         self.assertIn('oldMode === "ha_softphone" && newMode !== "ha_softphone"', config)
-        self.assertIn("voipStackEngine.releaseSoftphoneController(this)", config)
+        self.assertIn("voipStackEngine.releaseSoftphoneController(", config)
         self.assertIn("voipStackEngine.releaseVideoCanvas(this)", config)
         self.assertIn("this._unsubSoftphoneState()", config)
         start = _method_body(self.source, "async _startHaSoftphoneCall")
@@ -505,12 +547,19 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._callId !== wantedCallId", engine)
         self.assertIn("Audio WebSocket superseded before connect", engine)
         self.assertIn("const callId = String(reply?.call_id || \"\")", engine)
-        self.assertIn("await this._connect(deviceId, callId)", engine)
+        self.assertIn("await this._connect(deviceId, callId, endpointId)", engine)
         setup = _method_body(engine, "async _setupAudioOrAbort")
         self.assertIn("let connected = false", setup)
         self.assertIn("connected = true", setup)
-        self.assertIn("connected &&", setup)
-        self.assertIn("deviceId === HA_SOFTPHONE_DEVICE_ID &&", setup)
+        self.assertIn("if (!connected)", setup)
+        self.assertIn("this.releaseSoftphoneSession(callId, endpointId)", setup)
+        self.assertIn('await this.close("media_attach_conflict")', setup)
+        self.assertLess(
+            setup.index("if (!connected)"),
+            setup.index('reason: "media_incompatible"'),
+        )
+        self.assertIn("deviceId === HA_SOFTPHONE_DEVICE_ID || !!endpointId", setup)
+        self.assertIn("this._endpointId === endpointId", setup)
         self.assertIn("this._callId === callId", setup)
         self.assertNotIn("raw.slice(1)", engine)
         self.assertIn("byteOffset: 1", engine)
@@ -520,7 +569,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('pcmFormat === "s24le_in_s32") return view.getInt32(offset, true) / 8388608', playback)
         self.assertIn("s * 0x800000 : s * 0x7fffff", capture)
         self.assertNotIn("0x7fffff00", capture)
-        self.assertIn("await this.resumeSession(mediaInfo, HA_SOFTPHONE_DEVICE_ID, reply)", engine)
+        self.assertIn("await this.resumeSession(mediaInfo, deviceId", engine)
         self.assertNotIn("const previousAttach = this._sessionAttachPromise", engine)
         self.assertNotIn("if (previousAttach) await previousAttach.catch", engine)
         self.assertIn("if (this._sessionAttachKey !== attachKey) return", engine)
@@ -580,9 +629,18 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("color: CanvasText;", source)
         self.assertIn("background-color: Canvas;", source)
 
-    def test_editor_only_lists_esps_and_cleans_retry_timer(self) -> None:
+    def test_editor_lists_mirrors_and_logical_softphones_and_cleans_retry_timer(self) -> None:
         editor = self.source[self.source.index("class VoipStackCardEditor") :]
-        self.assertIn("const mirrorDevices = this._devices.filter(d => !d.softphone)", editor)
+        self.assertIn("const selectableDevices = this._devices.filter", editor)
+        self.assertIn("this._isSoftphoneDevice(d)", editor)
+        self.assertIn("newConfig.endpoint_id = selected.endpoint_id", editor)
+        self.assertIn("Default Home Assistant softphone", editor)
+        self.assertIn(
+            'String(d.endpoint_id || "") !== DEFAULT_SOFTPHONE_ENDPOINT_ID',
+            editor,
+        )
+        self.assertIn("const configuredMissingPhone = softphoneMode", editor)
+        self.assertIn("Missing phone:", editor)
         self.assertIn("disconnectedCallback()", editor)
         self.assertIn("clearTimeout(this._devicesRetryTimer)", editor)
         self.assertIn(
@@ -593,15 +651,18 @@ class FrontendCardContractTest(unittest.TestCase):
     def test_softphone_media_ownership_survives_card_recreation_in_same_tab(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
         self.assertIn('const SOFTPHONE_MEDIA_SESSION_KEY = "voip_stack_owned_softphone_call"', engine)
-        self.assertIn('const MEDIA_CLIENT_SESSION_KEY = "voip_stack_media_client_id"', engine)
-        self.assertIn("sessionStorage.getItem(MEDIA_CLIENT_SESSION_KEY)", engine)
-        self.assertIn("sessionStorage.setItem(MEDIA_CLIENT_SESSION_KEY", engine)
+        self.assertIn('const SOFTPHONE_MEDIA_SESSIONS_KEY = "voip_stack_owned_softphone_calls"', engine)
+        self.assertIn('const MEDIA_CLIENT_GLOBAL_KEY = "__voipStackMediaClientId"', engine)
+        self.assertIn("globalThis[MEDIA_CLIENT_GLOBAL_KEY]", engine)
+        self.assertNotIn("sessionStorage.getItem(MEDIA_CLIENT_SESSION_KEY)", engine)
+        self.assertNotIn("sessionStorage.setItem(MEDIA_CLIENT_SESSION_KEY", engine)
+        self.assertIn("sessionStorage is cloned by browsers", engine)
         self.assertIn("client_id=${encodeURIComponent(this._mediaClientId)}", engine)
         self.assertIn("sessionStorage.getItem(SOFTPHONE_MEDIA_SESSION_KEY)", engine)
         self.assertIn("sessionStorage.setItem(SOFTPHONE_MEDIA_SESSION_KEY", engine)
         self.assertIn("sessionStorage.removeItem(SOFTPHONE_MEDIA_SESSION_KEY)", engine)
-        self.assertIn("ownsSoftphoneSession(callId)", engine)
-        self.assertIn("releaseSoftphoneSession(callId = \"\")", engine)
+        self.assertIn("ownsSoftphoneSession(callId, endpointId", engine)
+        self.assertIn("releaseSoftphoneSession(callId = \"\", endpointId", engine)
         self.assertIn("_cleanupAfterTerminalSession(snapshot)", self.source)
         state_loader = self.source.split("async _loadSoftphoneState()", 1)[1].split(
             "_cycleSoftphoneTarget(", 1

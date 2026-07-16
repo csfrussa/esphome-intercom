@@ -122,6 +122,42 @@ shapes that central data into the compact roster pushed to each ESP.
 - `voip_stack.destination_is` (`destination`)
 - `voip_stack.is_ha_destination`
 
+## HA Logical Phones
+
+The integration entry always owns a backward-compatible default Home Assistant
+phone. Add more under **Settings > Devices & services > VoIP Stack > Add
+phone**. Each phone is stored as a native Home Assistant config subentry and is
+addressable by stable `endpoint_id`, Device ID, one of its Entity IDs, unique
+name, extension or SIP username.
+
+| Phone kind | HA representation | Transport behavior |
+| --- | --- | --- |
+| Home Assistant browser phone | Integration-owned `DeviceEntryType.SERVICE` Device with call-state sensor, connectivity binary sensor, DND switch and call event entity. | One or more cards attach through authenticated WebSockets. Browser-to-browser calls use HA's in-memory local bridge. |
+| SIP account | Integration-owned `DeviceEntryType.SERVICE` Device with the same logical state surface. | A normal SIP UA registers to HA. The Device persists while its Contact is offline. |
+| ESPHome phone | The existing ESPHome physical Device and its standard VoIP entity surface. | VoIP Stack discovers and routes it but does not merge, adopt or duplicate the ESPHome Device. |
+
+There is no custom `phone` entity platform. Home Assistant's Device Registry is
+the phone/container and standard sensor, binary sensor, switch and event
+entities expose its state and controls. This preserves native areas, Device
+automations, entity ownership and config-subentry removal semantics without a
+private HA Core patch.
+
+Common phone options are name, extension, enabled, DND, ring/conference group,
+conference ringing, video capability and offline behavior. Browser offline
+policies are `unavailable` (immediate `480`), `wait` (ring for the configured
+window, default 60 seconds) and loop-safe `forward` to another dial-plan
+target. Each phone owns at most one call; concurrent calls receive `486 Busy
+Here`.
+
+One HA phone may be displayed by several cards. The first browser that answers
+atomically owns its audio/video media; later answers cannot steal it. Create a
+separate phone when a tablet must behave as a separately callable handset. A
+dashboard reload may reclaim its still-active call only after every old media
+socket has closed; a second live tab cannot preempt the owner. Audio-only
+destinations remain audio-only even if the caller requests video. For
+video-capable browser calls, offer/answer direction and each browser's camera
+permission are independent.
+
 ## HA Services
 
 - `voip_stack.call`
@@ -152,12 +188,20 @@ phonebook name, extension, ring group, conference group, SIP URI, direct
 `user@host` target or external number. Set `ha_bridge: true` to force the HA
 bridge path.
 
+`call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
+`set_ha_softphone_settings` accept an optional logical-phone selector:
+`endpoint_id`, `device_id` or `entity_id`. If omitted, the original default HA
+phone is used. `source_device_id` remains the physical-source selector used by
+ESP mirror calls and is not interchangeable with the logical HA phone.
+
 `route` applies an automation decision to a pending inbound SIP route. Use
 `action: answer_ha`, `decline`, `busy`, `cancel`, `forward`, `bridge`, or
 `default`.
 
-`forward` with `call_id` is shorthand for `route` with
-`action: forward`; without `call_id` it originates a new HA bridged SIP call.
+`forward` moves an existing HA-owned call to another dial-plan destination.
+Pass `call_id` when more than one call could be eligible; when exactly one call
+is forwardable for the selected logical phone, HA infers it. Use `call` to
+originate a new call.
 
 `add_contact` requires only `name`. Optional fields are `id`,
 `address`, `sip_uri`, `extension`, `number`, `ha_bridge`, `transport`, `port`,
@@ -175,13 +219,12 @@ baresip, pjsua, a VoIP desk phone or another standard SIP endpoint registering
 directly to HA. The `username` is the SIP username and central roster ID;
 `display_name`, `password`, `enabled`, `replace`, `extension`, `ring_group`,
 `conference_group` and `conference_ring` are optional. If `password` is omitted,
-HA generates one and shows it once in a persistent notification and in the
-`voip_stack.call_event` stream with `state: sip_account_created`. If a password
-is supplied manually, HA preserves it exactly and still reports account
-creation without echoing the secret. Registered clients appear in the central
-phonebook and are pushed to ESPs.
-Use `list_accounts` or `export_accounts` to emit the configured accounts
-without passwords in the call event stream.
+HA generates one and returns it once in the action response. Capture that
+response in an automation with `response_variable`, or copy it from Developer
+Tools immediately. A caller-supplied password is preserved but deliberately
+not echoed. Registered clients appear in the central phonebook and are pushed
+to ESPs. `list_accounts` and `export_accounts` return configured accounts
+without passwords.
 
 Ring groups and conference groups are dynamic phonebook entries. A ring group
 forks a call to all callable members except the caller and bridges the first
@@ -202,12 +245,18 @@ The setup flow has two layers:
 | `assist_endpoint_enabled` | Publish a native HA Assist pipeline as a callable phonebook destination. Disabled by default. |
 | `assist_extension` | Explicit 1-8 digit extension for the Assist destination. No extension is assumed or reserved. |
 | `assist_pipeline` | HA pipeline ID, or `preferred` to resolve HA's preferred pipeline. The pipeline's existing STT, conversation agent, TTS, language and voice settings are used. |
+| `assist_advanced_call_context` | Disabled by default. Appends caller ID, phonebook match, source and called extension once to the initial `Incoming SIP call from ...` user message. These values are untrusted metadata; a phonebook match is not authentication. |
 | `debug_mode` | Opt-in detailed diagnostics plus private WAV/JSON call captures under `~/.cache/voip_stack_debug`: up to 15 s per HA-softphone direction and 8 s per relay leg, retained at most 24 files / 64 MiB with directory mode `0700`. Leave disabled for normal operation and remove artifacts according to your privacy policy. |
 | `experimental_sip_video` | Experimental and disabled by default. Allows the HA softphone to negotiate SIP video with standard phones and door stations. Direct H.264, VP8 and JPEG require a secure context and compatible browser. ESP endpoints remain audio-only. |
 | `video_transcoding_enabled` | Shown only after experimental video is enabled. Uses Home Assistant's available FFmpeg binary for bounded receive-only H.263, H.263-1998 or H.265 to VP8 conversion. Direct codecs never use it. |
 | `video_camera_send_enabled` | Shown only after experimental video is enabled. Exposes the card's per-browser **Send Camera** choice for negotiated H.264 or VP8 transmit media. Receiving video never needs camera permission. |
 | `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
+
+`sip_port` and `rtp_port` belong to the integration runtime, not to individual
+phones. Every logical phone shares the same SIP listeners and dynamic RTP pool;
+adding ten kiosk phones does not require ten signaling ports or ten fixed RTP
+ranges.
 
 When `assist_endpoint_enabled` is true, the setup flow asks for
 `assist_extension` and `assist_pipeline`. The resulting contact is part of the
@@ -263,7 +312,8 @@ The payload includes the canonical SIP fields when available: `state`,
 `sip_state`, `type`, `call_id`, `sequence`, `previous_state`, `route_history`,
 `automation_control`, `caller`, `callee`, `peer_name`, `direction`,
 `local_name`, `target`, `sip_uri`, `route_kind`, `sip_transport`,
-`sip_status_code`, `terminal_reason`, selected media formats, and RTP counters.
+`sip_status_code`, `terminal_reason`, `endpoint_id`, source/destination endpoint
+and Device IDs, selected media formats, and RTP counters.
 With SIP/RTP debug enabled, the HA softphone snapshot also exposes `sip_trunk`
 when a trunk client exists,
 including registration status, last SIP status and last trunk SIP event.

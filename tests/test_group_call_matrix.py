@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import types
@@ -50,7 +51,13 @@ def _install_ha_fakes() -> None:
     if "homeassistant.config_entries" not in sys.modules:
         config_entries = types.ModuleType("homeassistant.config_entries")
         config_entries.ConfigEntry = object
+        config_entries.ConfigSubentry = object
         sys.modules["homeassistant.config_entries"] = config_entries
+    else:
+        config_entries = sys.modules["homeassistant.config_entries"]
+        config_entries.ConfigSubentry = getattr(
+            config_entries, "ConfigSubentry", object
+        )
     exceptions = sys.modules.setdefault(
         "homeassistant.exceptions", types.ModuleType("homeassistant.exceptions")
     )
@@ -61,6 +68,11 @@ def _install_ha_fakes() -> None:
         exceptions, "Unauthorized", _FakeUnauthorized
     )
     exceptions.UnknownUser = getattr(exceptions, "UnknownUser", _FakeUnauthorized)
+    exceptions.ServiceValidationError = getattr(
+        exceptions,
+        "ServiceValidationError",
+        type("ServiceValidationError", (ValueError,), {}),
+    )
     if "homeassistant.components" not in sys.modules:
         components = types.ModuleType("homeassistant.components")
         components.__path__ = []
@@ -119,6 +131,7 @@ websocket_api = _load_module("websocket_api")
 fsm = _load_module("fsm")
 const = _load_module("const")
 conference = _load_module("conference")
+route_decisions = _load_module("route_decisions")
 
 
 class _FakeConfig:
@@ -143,6 +156,108 @@ class _FakeHass:
 
 
 class GroupCallMatrixTest(unittest.TestCase):
+    def test_call_event_preserves_explicit_local_leg_owner(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "local-call",
+            state="ringing",
+            owner="local_bridge",
+            endpoint_id="office",
+            source_endpoint_id="office",
+            dest_endpoint_id="kitchen",
+        )
+
+        event = websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "local-call",
+                "state": "ringing",
+                "endpoint_id": "kitchen",
+                "device_id": "kitchen-device",
+                "direction": "incoming",
+            },
+            "session",
+        )
+
+        self.assertEqual(event["endpoint_id"], "kitchen")
+        self.assertEqual(event["device_id"], "kitchen-device")
+        self.assertEqual(event["source_endpoint_id"], "office")
+        self.assertEqual(event["dest_endpoint_id"], "kitchen")
+
+    def test_ring_group_decline_is_per_phone_and_cannot_be_reversed(self) -> None:
+        async def scenario() -> None:
+            hass = _FakeHass()
+            registry = websocket_api.call_registry(hass)
+            registry.upsert(
+                "group-call",
+                state="ringing",
+                owner="router",
+                caller="Door",
+                callee="All rooms",
+                route_kind="ring",
+            )
+            future = asyncio.get_running_loop().create_future()
+            registry.pending_routes["group-call"] = {
+                "future": future,
+                "invite": types.SimpleNamespace(
+                    caller="Door",
+                    target="All rooms",
+                    send_format=conference.CONFERENCE_RTP_FORMAT,
+                    recv_format=conference.CONFERENCE_RTP_FORMAT,
+                ),
+                "ring_group_endpoint_ids": ("kitchen", "hall"),
+                "declined_endpoint_ids": set(),
+            }
+
+            route_decisions.set_pending_route_decision(
+                hass,
+                {
+                    "call_id": "group-call",
+                    "action": "decline",
+                    "endpoint_id": "kitchen",
+                },
+            )
+            self.assertFalse(future.done())
+            self.assertEqual(
+                hass.data[const.DOMAIN]["ha_softphones"]["kitchen"]["state"],
+                "idle",
+            )
+            self.assertEqual(
+                hass.data[const.DOMAIN]["ha_softphones"]["kitchen"][
+                    "terminal_reason"
+                ],
+                "declined",
+            )
+            with self.assertRaises(
+                sys.modules["homeassistant.exceptions"].ServiceValidationError
+            ):
+                route_decisions.set_pending_route_decision(
+                    hass,
+                    {
+                        "call_id": "group-call",
+                        "action": "answer_ha",
+                        "endpoint_id": "kitchen",
+                    },
+                )
+
+            route_decisions.set_pending_route_decision(
+                hass,
+                {
+                    "call_id": "group-call",
+                    "action": "answer_ha",
+                    "endpoint_id": "hall",
+                    "media_client_id": "hall-card",
+                    "send_video": True,
+                },
+            )
+            decision = await future
+            self.assertEqual(decision["endpoint_id"], "hall")
+            self.assertEqual(decision["media_client_id"], "hall-card")
+            self.assertTrue(decision["send_video"])
+
+        asyncio.run(scenario())
+
     def test_call_and_softphone_events_preserve_the_initiating_ha_context(self) -> None:
         hass = _FakeHass()
         registry = websocket_api.call_registry(hass)

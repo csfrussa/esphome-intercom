@@ -103,6 +103,78 @@
       "already_configured": "VoIP Stack is already configured."
     }
   },
+  "config_subentries": {
+    "phone": {
+      "title": "Phone endpoint",
+      "step": {
+        "user": {
+          "title": "Add phone",
+          "description": "Create another Home Assistant browser softphone or a standard SIP account. Every phone shares the same SIP listener and RTP pool.",
+          "data": {
+            "kind": "Phone type"
+          }
+        },
+        "browser": {
+          "title": "Home Assistant softphone",
+          "description": "Create a logical phone for one or more Lovelace cards. Cards bound to the same phone ring together; the first one to answer owns the media.",
+          "data": {
+            "name": "Name",
+            "extension": "Extension",
+            "enabled": "Enabled",
+            "dnd": "Do not disturb",
+            "ring_group": "Ring group",
+            "conference_group": "Conference group",
+            "conference_ring": "Ring for conference calls",
+            "video_enabled": "Allow video",
+            "offline_policy": "When no card is connected",
+            "offline_forward_target": "Forward destination",
+            "offline_wait_seconds": "Wait time"
+          },
+          "data_description": {
+            "name": "Required phone name used by the card, phonebook and call routing.",
+            "extension": "Optional unique dialable extension.",
+            "offline_policy": "Return unavailable, wait for a card to connect, or forward with loop protection.",
+            "offline_forward_target": "Required only for Forward. Use another phonebook name or extension.",
+            "offline_wait_seconds": "Maximum seconds to wait for a browser card before the call is unavailable."
+          }
+        },
+        "sip_account": {
+          "title": "Standard SIP account",
+          "description": "Create credentials for any standard SIP/RTP phone or softphone. No vendor-specific behavior is used.",
+          "data": {
+            "name": "Name",
+            "extension": "Extension",
+            "username": "SIP username",
+            "password": "SIP password",
+            "enabled": "Enabled",
+            "dnd": "Do not disturb",
+            "ring_group": "Ring group",
+            "conference_group": "Conference group",
+            "conference_ring": "Ring for conference calls",
+            "video_enabled": "Allow video negotiation",
+            "offline_policy": "When not registered",
+            "offline_forward_target": "Forward destination",
+            "offline_wait_seconds": "Wait time"
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure phone"
+        }
+      },
+      "error": {
+        "phone_name_required": "A phone name is required.",
+        "phone_username_invalid": "Use only letters, numbers, dots, underscores or hyphens.",
+        "phone_password_required": "A SIP password is required.",
+        "phone_forward_target_required": "A forward destination is required for the Forward policy.",
+        "phone_offline_policy_unsupported": "SIP accounts cannot use the Wait-for-browser policy.",
+        "phone_alias_conflict": "The name, extension or username is already used by another phone."
+      },
+      "abort": {
+        "reconfigure_successful": "Phone reconfigured successfully.",
+        "already_configured": "This phone already exists."
+      }
+    }
+  },
   "selector": {
     "trunk_inbound_mode": {
       "options": {
@@ -115,11 +187,38 @@
     "event": {
       "voip_stack_call_event": {
         "name": "VoIP Stack Call"
+      },
+      "phone_endpoint_call": {
+        "name": "Call"
       }
     },
     "sensor": {
       "voip_stack_ha_softphone_call_state": {
         "name": "VoIP Stack Call State"
+      },
+      "phone_endpoint_call_state": {
+        "name": "Call state",
+        "state": {
+          "offline": "Offline",
+          "idle": "Idle",
+          "calling": "Calling",
+          "remote_ringing": "Remote ringing",
+          "ringing": "Ringing",
+          "connecting": "Connecting",
+          "in_call": "In call",
+          "held": "Held",
+          "terminating": "Terminating"
+        }
+      }
+    },
+    "switch": {
+      "phone_endpoint_dnd": {
+        "name": "Do not disturb"
+      }
+    },
+    "binary_sensor": {
+      "phone_endpoint_connectivity": {
+        "name": "Connectivity"
       }
     }
   }

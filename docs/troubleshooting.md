@@ -87,8 +87,9 @@ leg to a compatible PCM format.
 - Enable the HA SIP TCP or UDP listener used by the softphone.
 - Enable the local registrar in VoIP Stack setup.
 - Create an account with `voip_stack.create_account`.
-- If no password is supplied, read it from the `sip_account_created` event or
-  the persistent notification. The generated password is shown only once.
+- If no password is supplied, copy it from the administrator-only action
+  response or capture that response with `response_variable`. The generated
+  password is returned only once.
 - Configure the softphone with HA advertised host, SIP port, username and
   password. Do not configure an external PBX/outbound proxy for local HA
   registration.

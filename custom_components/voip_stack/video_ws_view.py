@@ -31,6 +31,8 @@ from .const import (
     DOMAIN,
 )
 from .queue_utils import put_drop_oldest
+from .phone_endpoint import DEFAULT_ENDPOINT_ID
+from .local_softphone_bridge import LocalCallStateError
 from .media_debug import merge_media_debug
 from .session_cleanup import async_wait_for_cleanup
 from .sip_client import SipCallClient
@@ -64,7 +66,8 @@ from .websocket_api import (
 from .websocket_owner import (
     MediaWebSocketOwner,
     WebSocketOwnerBusyError,
-    async_claim_media_owner,
+    async_claim_call_media_owner,
+    async_release_local_media_if_unowned,
     async_release_media_owner,
 )
 
@@ -224,12 +227,45 @@ class VoipVideoWebSocketView(HomeAssistantView):
         except ValueError as err:
             raise web.HTTPBadRequest(text=str(err)) from err
         hass: HomeAssistant = request.app["hass"]
-        session = _active_video_session(hass)
+        device_id = str(request.query.get("device_id") or "")
+        requested_endpoint_id = str(request.query.get("endpoint_id") or "")
+        from .websocket_api import _endpoint_id_from_selector
+
+        try:
+            endpoint_id = _endpoint_id_from_selector(
+                hass,
+                endpoint_id=requested_endpoint_id,
+                device_id=device_id,
+            )
+        except ValueError as err:
+            raise web.HTTPNotFound(text=str(err)) from err
         requested_call_id = str(request.query.get("call_id") or "").strip()
         if not requested_call_id:
             raise web.HTTPBadRequest(text="call_id is required")
-        if session is None or requested_call_id != session.call_id:
-            raise web.HTTPConflict(text="HA softphone has no matching video dialog")
+        from .local_softphone_runtime import local_softphone_bridge
+
+        local_bridge = local_softphone_bridge(hass)
+        local_call = (
+            local_bridge.get_call(requested_call_id)
+            if local_bridge is not None
+            else None
+        )
+        if local_call is not None:
+            try:
+                local_state = local_call.state_for(endpoint_id)
+            except (ValueError, LocalCallStateError) as err:
+                raise web.HTTPConflict(text=str(err)) from err
+            if local_state.value != "in_call":
+                raise web.HTTPConflict(text="local phone call has not been answered")
+            if not local_call.video_enabled:
+                raise web.HTTPConflict(text="local phone call is audio-only")
+            session = None
+        else:
+            session = _active_video_session(hass, endpoint_id)
+            if session is None or requested_call_id != session.call_id:
+                raise web.HTTPConflict(
+                    text="HA softphone has no matching video dialog"
+                )
         registry = hass.data.get(DOMAIN, {}).get("call_registry")
         if not isinstance(registry, CallRegistry):
             raise web.HTTPConflict(text="HA softphone call registry is unavailable")
@@ -238,6 +274,7 @@ class VoipVideoWebSocketView(HomeAssistantView):
             registry,
             requested_call_id,
             request.get("hass_user"),
+            endpoint_id=endpoint_id,
         )
 
         ws = web.WebSocketResponse(max_msg_size=MAX_ACCESS_UNIT_BYTES + _VIDEO_HEADER.size)
@@ -248,32 +285,71 @@ class VoipVideoWebSocketView(HomeAssistantView):
             client_id=client_id,
         )
         bucket = hass.data.setdefault(DOMAIN, {})
-        owners = bucket.setdefault("video_ws_owners", {})
-        owner_lock = bucket.setdefault("video_ws_owner_lock", asyncio.Lock())
         shutdown_event = bucket.setdefault("media_shutdown", asyncio.Event())
         try:
-            await async_claim_media_owner(
-                owners,
-                owner_lock,
+            owners, owner_lock, owner_key = await async_claim_call_media_owner(
+                bucket,
+                registry,
                 requested_call_id,
+                endpoint_id,
                 owner,
+                channel="video",
                 timeout=_VIDEO_OWNER_HANDOFF_TIMEOUT,
                 shutdown_event=shutdown_event,
+                pin_client_identity=local_call is None,
+                local_bridge=(local_bridge if local_call is not None else None),
             )
         except WebSocketOwnerBusyError as err:
             raise web.HTTPConflict(text="HA softphone video is already attached") from err
 
+        lease = None
         try:
             # Re-resolve after the previous owner's teardown barrier: it may
             # have consumed/closed a pre-bound socket or applied a re-INVITE.
-            session = _active_video_session(hass)
-            if session is None or requested_call_id != session.call_id:
-                raise web.HTTPConflict(text="HA softphone has no matching video dialog")
-            await ws.prepare(request)
-            _detach_video_socket(hass, session)
-            await _run_video_session(hass, ws, session, request.transport)
+            local_call = (
+                local_bridge.get_call(requested_call_id)
+                if local_bridge is not None
+                else None
+            )
+            if local_call is not None:
+                from .local_softphone_bridge import LocalBridgeError
+
+                try:
+                    lease = local_bridge.acquire_media(
+                        requested_call_id, endpoint_id, client_id
+                    )
+                except LocalBridgeError as err:
+                    raise web.HTTPConflict(text=str(err)) from err
+                await ws.prepare(request)
+                await _run_local_video_session(
+                    hass,
+                    ws,
+                    local_bridge,
+                    lease,
+                )
+            else:
+                session = _active_video_session(hass, endpoint_id)
+                if session is None or requested_call_id != session.call_id:
+                    raise web.HTTPConflict(
+                        text="HA softphone has no matching video dialog"
+                    )
+                await ws.prepare(request)
+                _detach_video_socket(hass, session)
+                await _run_video_session(
+                    hass,
+                    ws,
+                    session,
+                    request.transport,
+                    endpoint_id=endpoint_id,
+                )
         finally:
-            await async_release_media_owner(owners, owner_lock, requested_call_id, owner)
+            await async_release_media_owner(owners, owner_lock, owner_key, owner)
+            if lease is not None:
+                await async_release_local_media_if_unowned(
+                    bucket,
+                    local_bridge,
+                    lease,
+                )
         return ws
 
 
@@ -286,8 +362,11 @@ def async_register_video_ws_view(hass: HomeAssistant) -> None:
     _LOGGER.info("Experimental SIP video websocket ready on %s", VoipVideoWebSocketView.url)
 
 
-def _active_video_session(hass: HomeAssistant) -> _VideoMediaSession | None:
-    store = _ha_softphone_store(hass)
+def _active_video_session(
+    hass: HomeAssistant,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+) -> _VideoMediaSession | None:
+    store = _ha_softphone_store(hass, endpoint_id)
     call_id = str(store.get("call_id") or "").strip()
     if str(store.get("state") or "").lower() not in {"connecting", "in_call"} or not call_id:
         return None
@@ -391,6 +470,179 @@ def _detach_video_socket(hass: HomeAssistant, session: _VideoMediaSession) -> No
         client.video_rtcp_socket = None
 
 
+async def _run_local_video_session(
+    hass: HomeAssistant,
+    ws: web.WebSocketResponse,
+    bridge,
+    lease,
+) -> None:
+    """Relay browser VP8 access units between two local logical phones."""
+    snapshot = bridge.require_call(lease.call_id)
+    direction = snapshot.video_direction_for(lease.endpoint_id)
+    can_send = direction in {"sendonly", "sendrecv"}
+    can_receive = direction in {"recvonly", "sendrecv"}
+    format_payload = {
+        "codec": "vp8",
+        "encoding": "VP8",
+        "clock_rate": 90000,
+        "payload_type": 103,
+        "fmtp": "",
+        "profile_level_id": "",
+        "packetization_mode": 0,
+        "format": "pt=103:VP8/90000",
+    }
+    await ws.send_json(
+        {
+            "state": "in_call",
+            "call_id": lease.call_id,
+            **format_payload,
+            "send": dict(format_payload),
+            "receive": dict(format_payload),
+            "source_format": "local/VP8/90000",
+            "sip_send_format": "local/VP8/90000",
+            "sip_receive_format": "local/VP8/90000",
+            "direction": direction,
+            "can_send": can_send,
+            "can_receive": can_receive,
+            "remote_connection_held": False,
+            "camera_send_enabled": can_send,
+            "transcoding_enabled": False,
+            "debug": bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False)),
+            "media_generation": 0,
+            "media_transport": "local_websocket",
+        }
+    )
+    counters = {
+        "video_access_units_tx": 0,
+        "video_access_units_rx": 0,
+        "video_drop_error": 0,
+        "video_drop_direction": 0,
+        "video_access_unit_queue_drops": 0,
+        "video_browser_keyframe_requests": 0,
+        "video_keyframe_requests_to_browser": 0,
+    }
+    ws_send_lock = asyncio.Lock()
+
+    async def peer_to_browser() -> None:
+        if not can_receive:
+            await bridge.wait_closed(lease.call_id)
+            return
+        while True:
+            frame = await bridge.receive_video(
+                lease.call_id,
+                lease.endpoint_id,
+                lease.token,
+            )
+            async with ws_send_lock:
+                await ws.send_bytes(frame)
+            counters["video_access_units_rx"] += 1
+
+    async def controls_to_browser() -> None:
+        while True:
+            control = await bridge.receive_video_control(
+                lease.call_id,
+                lease.endpoint_id,
+                lease.token,
+            )
+            if control == "force_key_frame":
+                async with ws_send_lock:
+                    await ws.send_json(
+                        {"type": "force_key_frame", "feedback": "local"}
+                    )
+                counters["video_keyframe_requests_to_browser"] += 1
+
+    async def browser_to_peer() -> None:
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY:
+                if not can_send:
+                    counters["video_drop_direction"] += 1
+                    continue
+                frame = bytes(msg.data)
+                if (
+                    len(frame) <= _VIDEO_HEADER.size
+                    or len(frame) > MAX_ACCESS_UNIT_BYTES + _VIDEO_HEADER.size
+                ):
+                    counters["video_drop_error"] += 1
+                    continue
+                frame_type, _flags, _timestamp = _VIDEO_HEADER.unpack_from(frame)
+                if frame_type != _VIDEO_ACCESS_UNIT:
+                    counters["video_drop_error"] += 1
+                    continue
+                try:
+                    if bridge.send_video(
+                        lease.call_id,
+                        lease.endpoint_id,
+                        lease.token,
+                        frame,
+                    ):
+                        counters["video_access_unit_queue_drops"] += 1
+                    counters["video_access_units_tx"] += 1
+                except Exception:  # noqa: BLE001 - video must not stop audio.
+                    counters["video_drop_error"] += 1
+                    _LOGGER.debug(
+                        "Local softphone browser video frame rejected call_id=%s endpoint=%s",
+                        lease.call_id,
+                        lease.endpoint_id,
+                        exc_info=True,
+                    )
+            elif msg.type == WSMsgType.TEXT:
+                try:
+                    control = (
+                        json.loads(msg.data)
+                        if len(str(msg.data)) <= 256
+                        else {}
+                    )
+                except (TypeError, ValueError):
+                    control = {}
+                if control.get("type") == "request_key_frame":
+                    counters["video_browser_keyframe_requests"] += 1
+                    bridge.send_video_control(
+                        lease.call_id,
+                        lease.endpoint_id,
+                        lease.token,
+                        "force_key_frame",
+                    )
+            elif msg.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                return
+
+    peer_task = asyncio.create_task(peer_to_browser())
+    control_task = asyncio.create_task(controls_to_browser())
+    browser_task = asyncio.create_task(browser_to_peer())
+    lifetime_task = asyncio.create_task(bridge.wait_closed(lease.call_id))
+    tasks = (peer_task, control_task, browser_task, lifetime_task)
+    try:
+        done, _pending = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if lifetime_task in done:
+            ws.force_close()
+        for task in done:
+            if task is lifetime_task or task.cancelled():
+                continue
+            error = task.exception()
+            if error is not None:
+                _LOGGER.debug(
+                    "Local softphone video session ended call_id=%s endpoint=%s: %s",
+                    lease.call_id,
+                    lease.endpoint_id,
+                    error,
+                )
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        store = _ha_softphone_store(hass, lease.endpoint_id)
+        current_call_id = str(
+            store.get("call_id") or store.get("last_terminal_call_id") or ""
+        )
+        if current_call_id == lease.call_id:
+            store.update(counters)
+            store["last_sip_event"] = "local_video_detached"
+            _publish_ha_softphone_state(hass, endpoint_id=lease.endpoint_id)
+
+
 def _sdp_parameter_sets(video_format: sdp.RtpVideoFormat) -> list[bytes]:
     out: list[bytes] = []
     for value in str(video_format.sprop_parameter_sets or "").split(","):
@@ -411,6 +663,8 @@ async def _run_video_session(
     ws: web.WebSocketResponse,
     session: _VideoMediaSession,
     websocket_transport: asyncio.BaseTransport | None = None,
+    *,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
 ) -> None:
     queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue(maxsize=256)
     protocol = _RtpVideoProtocol(queue)
@@ -759,7 +1013,7 @@ async def _run_video_session(
         if not force and now - last_counter_event < interval:
             return
         last_counter_event = now
-        store = _ha_softphone_store(hass)
+        store = _ha_softphone_store(hass, endpoint_id)
         current_call_id = str(store.get("call_id") or "")
         if current_call_id:
             if current_call_id != session.call_id:
@@ -797,7 +1051,7 @@ async def _run_video_session(
                     ],
                 },
             )
-        _publish_ha_softphone_state(hass)
+        _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
 
     def record_rtcp_send_error(context: str, err: BaseException) -> None:
         """Count persistent RTCP send failures without flooding HA logs."""
@@ -1265,7 +1519,7 @@ async def _run_video_session(
             call_ended.set()
 
     remove_call_listener = hass.bus.async_listen(CALL_EVENT, on_call_event)
-    current_store = _ha_softphone_store(hass)
+    current_store = _ha_softphone_store(hass, endpoint_id)
     if (
         str(current_store.get("call_id") or "") != session.call_id
         or str(current_store.get("state") or "").lower() not in {"connecting", "in_call"}

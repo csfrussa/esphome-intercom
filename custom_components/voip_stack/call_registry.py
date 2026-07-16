@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-LegRole = Literal["caller", "callee", "trunk", "ha_softphone", "esp", "softphone", "router", "assist"]
-CallOwner = Literal["", "ha_softphone", "router", "bridge", "assist", "terminal"]
+LegRole = Literal["caller", "callee", "trunk", "ha_softphone", "esp", "softphone", "router", "assist", "local_phone"]
+CallOwner = Literal["", "ha_softphone", "router", "bridge", "assist", "local_bridge", "terminal"]
 TERMINAL_STATES = {
     "idle",
     "busy",
@@ -73,6 +73,99 @@ class CallRegistry:
         self.relays: dict[str, Any] = {}
         self.bridge_clients: dict[str, str] = {}
         self.event_contexts: dict[str, CallEventContext] = {}
+        self.endpoint_claims: dict[str, dict[str, str]] = {}
+        self._endpoint_registry: Any | None = None
+
+    def bind_endpoint_registry(self, registry: Any | None) -> None:
+        """Bind the logical endpoint registry used for atomic busy claims.
+
+        The call registry deliberately depends only on the tiny ``claim_call`` /
+        ``release_call`` protocol.  This keeps the SIP session model reusable in
+        pure tests while making teardown the single owner of endpoint release.
+        """
+        if registry is self._endpoint_registry:
+            return
+        if self.endpoint_claims:
+            self._release_all_endpoint_claims()
+        self._endpoint_registry = registry
+
+    def claim_endpoint(
+        self,
+        call_id: str,
+        endpoint_id: str,
+        *,
+        role: str = "endpoint",
+        adopt_transport: bool = False,
+    ) -> bool:
+        """Atomically reserve an endpoint for this logical call.
+
+        Returns ``False`` only when no endpoint registry is configured (the
+        supported YAML-only compatibility mode).  Busy errors from the bound
+        registry remain authoritative and are intentionally propagated.
+        ``adopt_transport`` may replace only the provisional ``physical:``
+        claim emitted by an ESP state entity; it can never steal a real call.
+        """
+        registry = self._endpoint_registry
+        endpoint_id = str(endpoint_id or "").strip()
+        if registry is None or not endpoint_id:
+            return False
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        if not session_id:
+            raise ValueError("call_id must not be empty")
+        if adopt_transport and hasattr(registry, "adopt_transport_call"):
+            registry.adopt_transport_call(endpoint_id, session_id)
+        else:
+            registry.claim_call(endpoint_id, session_id)
+        claims = self.endpoint_claims.setdefault(session_id, {})
+        previous = claims.get(endpoint_id)
+        claims[endpoint_id] = str(role or "endpoint")
+        if previous != claims[endpoint_id]:
+            session = self.sessions.get(session_id)
+            if session is not None:
+                session.revision += 1
+        return True
+
+    def release_endpoint_claims(self, call_id: str) -> None:
+        """Release every logical endpoint owned by a call or one of its legs."""
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        claims = self.endpoint_claims.get(session_id, {})
+        registry = self._endpoint_registry
+        if registry is None:
+            self.endpoint_claims.pop(session_id, None)
+            return
+        for endpoint_id in tuple(claims):
+            # Config removal may have already detached the endpoint from a
+            # third-party registry implementation. Teardown must continue and
+            # release every remaining participant rather than leak a session.
+            if not hasattr(registry, "get") or registry.get(endpoint_id) is not None:
+                registry.release_call(endpoint_id, session_id)
+            claims.pop(endpoint_id, None)
+        self.endpoint_claims.pop(session_id, None)
+
+    def release_endpoint_claim(self, call_id: str, endpoint_id: str) -> bool:
+        """Release one losing/finished endpoint leg without ending the call."""
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        endpoint_id = str(endpoint_id or "").strip()
+        claims = self.endpoint_claims.get(session_id)
+        if not endpoint_id or claims is None or endpoint_id not in claims:
+            return False
+        registry = self._endpoint_registry
+        released = False
+        if registry is not None and (
+            not hasattr(registry, "get") or registry.get(endpoint_id) is not None
+        ):
+            released = bool(registry.release_call(endpoint_id, session_id))
+        claims.pop(endpoint_id, None)
+        if not claims:
+            self.endpoint_claims.pop(session_id, None)
+        session = self.sessions.get(session_id)
+        if session is not None:
+            session.revision += 1
+        return released
+
+    def _release_all_endpoint_claims(self) -> None:
+        for session_id in tuple(self.endpoint_claims):
+            self.release_endpoint_claims(session_id)
 
     def event_fields(self, call_id: str, state: str) -> dict[str, Any]:
         """Return stable automation fields, advancing only on a state change."""
@@ -99,7 +192,7 @@ class CallRegistry:
             context.state = state
             context.sequence += 1
         session = self.sessions.get(call_id)
-        return {
+        fields = {
             "schema_version": 1,
             "sequence": context.sequence,
             "revision": session.revision if session is not None else 0,
@@ -107,6 +200,47 @@ class CallRegistry:
             "previous_state": context.previous_state,
             "route_history": [dict(item) for item in context.route_history],
         }
+        if session is None:
+            return fields
+
+        # Event entities must be attributed from call ownership, never by
+        # resolving a caller-controlled display name. Preserve the explicit
+        # source/destination metadata and include every atomically claimed
+        # phone for ring groups and conferences.
+        identity_keys = (
+            "endpoint_id",
+            "source_endpoint_id",
+            "dest_endpoint_id",
+            "target_endpoint_id",
+            "device_id",
+            "source_device_id",
+            "dest_device_id",
+            "target_device_id",
+        )
+        fields.update(
+            {
+                key: value
+                for key in identity_keys
+                if (value := session.metadata.get(key)) not in (None, "")
+            }
+        )
+        participant_endpoint_ids = {
+            str(value).strip()
+            for key in (
+                "endpoint_id",
+                "source_endpoint_id",
+                "dest_endpoint_id",
+                "target_endpoint_id",
+            )
+            if (value := session.metadata.get(key)) not in (None, "")
+        }
+        participant_endpoint_ids.update(self.endpoint_claims.get(call_id, {}))
+        participant_endpoint_ids.discard("")
+        if participant_endpoint_ids:
+            fields["participant_endpoint_ids"] = sorted(
+                participant_endpoint_ids
+            )
+        return fields
 
     def event_context(self, call_id: str) -> CallEventContext | None:
         """Return the current automation event context for a call or leg."""
@@ -283,14 +417,18 @@ class CallRegistry:
         *,
         context: Any | None = None,
         user_id: str = "",
+        endpoint_id: str = "",
     ) -> CallSession:
         """Bind one logical call to its initiating HA user and context.
 
         The user identity is deliberately sticky for the whole call.  A later
         browser reconnect may reclaim media only as that same user; it cannot
         silently transfer a microphone or camera to another authenticated HA
-        session.  Internal automations still retain their original HA Context
-        so lifecycle events preserve trace/parent provenance.
+        session.  A local browser-to-browser call instead owns one sticky user
+        per endpoint leg, allowing two tablets with different HA users to talk
+        without granting either user access to the other leg. Internal
+        automations still retain their original HA Context so lifecycle events
+        preserve trace/parent provenance.
         """
 
         session_id = self.resolve_session_id(str(call_id or "").strip())
@@ -300,16 +438,35 @@ class CallRegistry:
         requested_user_id = str(
             user_id or getattr(context, "user_id", "") or ""
         ).strip()
-        current_user_id = str(
-            session.metadata.get("controller_user_id") or ""
-        ).strip()
+        requested_endpoint_id = str(endpoint_id or "").strip()
+        scoped = bool(
+            requested_endpoint_id and session.metadata.get("local_bridge")
+        )
+        if scoped:
+            controllers = session.metadata.setdefault("controller_user_ids", {})
+            current_user_id = str(
+                controllers.get(requested_endpoint_id) or ""
+            ).strip()
+        else:
+            current_user_id = str(
+                session.metadata.get("controller_user_id") or ""
+            ).strip()
         if current_user_id and requested_user_id and current_user_id != requested_user_id:
             raise ValueError(
-                f"call_id {session_id} is already controlled by another HA user"
+                f"call_id {session_id}"
+                + (
+                    f" endpoint {requested_endpoint_id}"
+                    if scoped
+                    else ""
+                )
+                + " is already controlled by another HA user"
             )
         changed = False
         if requested_user_id and not current_user_id:
-            session.metadata["controller_user_id"] = requested_user_id
+            if scoped:
+                controllers[requested_endpoint_id] = requested_user_id
+            else:
+                session.metadata["controller_user_id"] = requested_user_id
             changed = True
         if context is not None and session.metadata.get("ha_context") is None:
             session.metadata["ha_context"] = context
@@ -341,6 +498,7 @@ class CallRegistry:
     def pop(self, call_id: str) -> CallSession | None:
         call_id = str(call_id or "").strip()
         session_id = self.resolve_session_id(call_id)
+        self.release_endpoint_claims(session_id)
         session = self.sessions.pop(session_id, None)
         event_context_ids = {call_id, session_id}
         if session is not None:
@@ -438,6 +596,7 @@ class CallRegistry:
         return session
 
     def clear_runtime(self) -> None:
+        self._release_all_endpoint_claims()
         self.sessions.clear()
         self.leg_index.clear()
         self.pending_routes.clear()
@@ -468,4 +627,8 @@ class CallRegistry:
             "pending_call_ids": sorted(self.pending_invites),
             "media_call_ids": sorted(self.softphone_media),
             "bridge_call_ids": sorted(self.bridge_clients),
+            "endpoint_claims": {
+                call_id: dict(claims)
+                for call_id, claims in sorted(self.endpoint_claims.items())
+            },
         }

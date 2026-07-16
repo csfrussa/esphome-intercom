@@ -30,6 +30,8 @@ from .const import (
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
     CONF_EXPERIMENTAL_VIDEO,
+    CONF_PHONEBOOK_CONTACTS,
+    CONF_SIP_ACCOUNTS,
     CONF_VIDEO_CAMERA_SEND,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_TRUNK_DTMF_ENABLED,
@@ -53,6 +55,7 @@ from .const import (
 )
 from .device_resolver import get_resolver, parse_voip_endpoint
 from .endpoint_lifecycle import call_registry as _call_registry, create_runtime_task
+from .endpoint_registry import EndpointBusyError
 from .endpoint_routing import (
     device_formats as _device_formats,
     roster_entry_formats as _roster_entry_formats,
@@ -70,9 +73,28 @@ from .media_ports import (
     reserve_sip_video_media,
 )
 from .session_cleanup import async_cleanup_sip_runtime
-from .audio_format import HA_TRUNK_AUDIO_FORMATS
-from .authorization import async_require_service_admin
+from .audio_format import HA_SIP_PCM_FORMATS, HA_TRUNK_AUDIO_FORMATS
+from .authorization import (
+    async_require_service_admin,
+    async_require_service_entity_control,
+    async_require_service_endpoint_control,
+)
 from .peer import Peer
+from .phone_endpoint import (
+    DEFAULT_ENDPOINT_ID,
+    EndpointAvailability,
+    EndpointKind,
+    OfflinePolicy,
+    PhoneEndpoint,
+)
+from .phone_config import (
+    async_ensure_phone_subentries,
+    async_load_legacy_default_phone_overrides,
+    async_setup_endpoint_registry,
+    phone_subentries,
+    restore_default_phone_subentry,
+    sync_registry_from_entry,
+)
 from .phonebook_runtime import push_roster_json_to_esps as _push_roster_json_to_esps
 from .router import (
     RouteAction,
@@ -89,35 +111,51 @@ from .websocket_api import (
     _async_load_ha_softphone_store,
     _get_voip_devices,
     _fire_call_event,
-    _async_save_ha_softphone_store,
     async_set_ha_softphone_settings,
     _ha_softphone_store,
     _publish_ha_softphone_state,
     _set_ha_softphone_call_state,
     _set_sip_bridge_call_state,
+    _endpoint_id_from_selector,
 )
 
-PLATFORMS: list[Platform] = [Platform.EVENT, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.EVENT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate inbound routing options without changing existing behavior."""
-    if config_entry.version >= 2:
-        return True
-    data = dict(config_entry.data)
-    raw_timeout = data.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)
-    timeout_ms = int(raw_timeout or 0)
-    if 0 <= timeout_ms <= 10:
-        timeout_ms *= 1000
-    legacy_dtmf = bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)) and timeout_ms > 0
-    mode = TRUNK_INBOUND_MODE_DTMF if legacy_dtmf else TRUNK_INBOUND_MODE_DIRECT
-    data[CONF_TRUNK_INBOUND_MODE] = mode
-    data[CONF_AUTOMATION_ROUTING_ENABLED] = False
-    data[CONF_TRUNK_DTMF_ENABLED] = legacy_dtmf
-    data[CONF_TRUNK_DTMF_TIMEOUT_MS] = timeout_ms
-    hass.config_entries.async_update_entry(config_entry, data=data, version=2)
-    _LOGGER.info("Migrated VoIP Stack inbound routing mode to %s", mode)
+    if config_entry.version < 2:
+        data = dict(config_entry.data)
+        raw_timeout = data.get(CONF_TRUNK_DTMF_TIMEOUT_MS, 3000)
+        timeout_ms = int(raw_timeout or 0)
+        if 0 <= timeout_ms <= 10:
+            timeout_ms *= 1000
+        legacy_dtmf = bool(data.get(CONF_TRUNK_DTMF_ENABLED, False)) and timeout_ms > 0
+        mode = TRUNK_INBOUND_MODE_DTMF if legacy_dtmf else TRUNK_INBOUND_MODE_DIRECT
+        data[CONF_TRUNK_INBOUND_MODE] = mode
+        data[CONF_AUTOMATION_ROUTING_ENABLED] = False
+        data[CONF_TRUNK_DTMF_ENABLED] = legacy_dtmf
+        data[CONF_TRUNK_DTMF_TIMEOUT_MS] = timeout_ms
+        hass.config_entries.async_update_entry(config_entry, data=data, version=2)
+        _LOGGER.info("Migrated VoIP Stack inbound routing mode to %s", mode)
+    if config_entry.version < 3:
+        legacy_phone_data = await async_load_legacy_default_phone_overrides(
+            hass,
+            config_entry,
+        )
+        async_ensure_phone_subentries(
+            hass,
+            config_entry,
+            default_overrides=legacy_phone_data,
+        )
+        hass.config_entries.async_update_entry(config_entry, version=3)
+        _LOGGER.info("Migrated VoIP Stack phones to config subentries")
     return True
 
 
@@ -150,24 +188,91 @@ async def _mark_sip_account_unreachable(hass: HomeAssistant, username: str) -> N
     for key, registration in list(getattr(registrar, "registrations", {}).items()):
         reg_user = str(getattr(registration, "username", key) or key).strip().lower()
         if reg_user == wanted or str(key).strip().lower() == wanted:
-            registrar.registrations.pop(key, None)
             removed = True
     if removed:
+        # Go through the registrar API so its observer also marks the logical
+        # endpoint offline. Directly popping Contact state left HA's connected
+        # binary sensor stale even though routing already returned 480.
+        registrar.remove_registration(username)
         _LOGGER.info("SIP registrar contact marked unreachable user=%s", username)
-        await _refresh_and_push_phonebook(hass)
 
 
-def _ha_softphone_has_active_call(hass: HomeAssistant, *, ignore_call_id: str = "") -> bool:
-    store = _ha_softphone_store(hass)
+def _ha_softphone_has_active_call(
+    hass: HomeAssistant,
+    *,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+    ignore_call_id: str = "",
+) -> bool:
+    store = _ha_softphone_store(hass, endpoint_id)
     if ignore_call_id and str(store.get("call_id") or "") == ignore_call_id:
         return False
     state = str(store.get("state") or CallState.IDLE.value)
     return bool(store.get("session_device_id") or state in HA_SOFTPHONE_ACTIVE_STATES)
 
 
-def _single_pending_route_call_id(hass: HomeAssistant) -> str:
-    routes = _pending_routes(hass)
-    return next(iter(routes)) if len(routes) == 1 else ""
+def _call_endpoint_id(registry, call_id: str) -> str:
+    """Return the browser endpoint owning a logical call.
+
+    Sessions created before multi-endpoint support intentionally resolve to the
+    original master endpoint. This is the only compatibility fallback; newly
+    routed calls always persist an explicit endpoint identifier.
+    """
+    session_id = registry.resolve_session_id(str(call_id or "").strip())
+    session = registry.sessions.get(session_id)
+    return str(
+        ((session.metadata if session is not None else {}) or {}).get("endpoint_id")
+        or DEFAULT_ENDPOINT_ID
+    ).strip()
+
+
+def _call_endpoint_ids(registry, call_id: str) -> frozenset[str]:
+    """Return every logical phone participating in one call.
+
+    Ordinary SIP calls keep the historical singular ``endpoint_id``. Local
+    browser calls add source/destination identities so either endpoint can
+    answer, decline, hang up, and attach its own media WebSocket.
+    """
+    session_id = registry.resolve_session_id(str(call_id or "").strip())
+    session = registry.sessions.get(session_id)
+    metadata = ((session.metadata if session is not None else {}) or {})
+    endpoint_ids = {
+        str(metadata.get(key) or "").strip()
+        for key in (
+            "endpoint_id",
+            "source_endpoint_id",
+            "dest_endpoint_id",
+            "target_endpoint_id",
+        )
+    }
+    endpoint_ids.update(
+        str(value or "").strip()
+        for value in (metadata.get("ring_endpoint_ids") or ())
+    )
+    endpoint_ids.discard("")
+    if not endpoint_ids:
+        endpoint_ids.add(DEFAULT_ENDPOINT_ID)
+    return frozenset(endpoint_ids)
+
+
+def _call_belongs_to_endpoint(registry, call_id: str, endpoint_id: str) -> bool:
+    return str(endpoint_id or "").strip() in _call_endpoint_ids(registry, call_id)
+
+
+def _endpoint_call_ids(registry, call_ids, endpoint_id: str) -> list[str]:
+    return [
+        str(call_id)
+        for call_id in call_ids
+        if _call_belongs_to_endpoint(registry, str(call_id), endpoint_id)
+    ]
+
+
+def _single_pending_route_call_id(
+    hass: HomeAssistant,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+) -> str:
+    registry = _call_registry(hass)
+    routes = _endpoint_call_ids(registry, _pending_routes(hass), endpoint_id)
+    return routes[0] if len(routes) == 1 else ""
 
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
@@ -252,11 +357,13 @@ async def _terminate_sip_bridge(
     hass: HomeAssistant,
     call_id: str,
     *,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+    session_device_id: str = HA_SOFTPHONE_DEVICE_ID,
     terminal_reason: str = TerminalReason.LOCAL_HANGUP.value,
 ) -> tuple[bool, str, str, bool, bool]:
     from .bridge_manager import async_terminate_sip_bridge
 
-    softphone = _ha_softphone_store(hass)
+    softphone = _ha_softphone_store(hass, endpoint_id)
     softphone_call_id = str(softphone.get("call_id") or "")
     result = await async_terminate_sip_bridge(
         hass,
@@ -270,7 +377,8 @@ async def _terminate_sip_bridge(
         _set_ha_softphone_call_state(
             hass,
             CallState.IDLE.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id,
+            session_device_id=session_device_id,
             caller=str(softphone.get("caller") or ""),
             callee=str(softphone.get("callee") or ""),
             peer_name=str(softphone.get("peer_name") or ""),
@@ -290,12 +398,48 @@ async def _async_emit_esp_state_event(
     state: str,
     old_state: str,
     delay: float = 0.0,
+    *,
+    generation: int = 0,
+    expected_endpoint_id: str = "",
+    expected_call_id: str = "",
 ) -> None:
     """Mirror ESP-published voip_state changes onto the public call bus."""
     if delay > 0:
         import asyncio
 
         await asyncio.sleep(delay)
+    bucket = hass.data.setdefault(DOMAIN, {})
+    if generation and int(
+        bucket.setdefault("esp_state_event_generations", {}).get(entity_id, 0)
+    ) != int(generation):
+        return
+    endpoint_registry = bucket.get("endpoint_registry")
+    guarded_endpoint = (
+        endpoint_registry.get(expected_endpoint_id)
+        if endpoint_registry is not None and expected_endpoint_id
+        else None
+    )
+    raw_state = state.strip().lower()
+    terminal_state = raw_state in {
+        "idle",
+        "ended",
+        "busy",
+        "declined",
+        "cancelled",
+        "local_hangup",
+        "remote_hangup",
+        "not_in_call",
+        "timeout",
+        "error",
+    }
+    if (
+        terminal_state
+        and guarded_endpoint is not None
+        and guarded_endpoint.active_call_id != expected_call_id
+    ):
+        # The delayed terminal event belongs to an earlier dialog. Never emit
+        # it as the state of, or release, a newer call (classic ABA race).
+        return
     devices = await _get_voip_devices(hass)
     device = next(
         (
@@ -314,12 +458,56 @@ async def _async_emit_esp_state_event(
     }
     if device is not None:
         entities = device.get("entities") or {}
+        endpoint = (
+            guarded_endpoint
+            or endpoint_registry.by_device_id(device.get("device_id"))
+            if endpoint_registry is not None
+            else None
+        )
+        canonical_state = (
+            CallState.RINGING.value
+            if raw_state == "incoming"
+            else _sip_public_state(raw_state)
+        )
+        if endpoint is not None and (
+            canonical_state in HA_SOFTPHONE_ACTIVE_STATES
+            or raw_state
+            in {
+                "idle",
+                "ended",
+                "busy",
+                "declined",
+                "cancelled",
+                "local_hangup",
+                "remote_hangup",
+                "not_in_call",
+                "timeout",
+                "error",
+            }
+        ):
+            active = canonical_state in HA_SOFTPHONE_ACTIVE_STATES
+            transport_call_id = expected_call_id or endpoint.active_call_id or (
+                f"physical:{endpoint.endpoint_id}" if active else ""
+            )
+            if active:
+                endpoint = endpoint_registry.sync_transport_call(
+                    endpoint.endpoint_id,
+                    active=True,
+                    fallback_call_id=f"physical:{endpoint.endpoint_id}",
+                )
+            elif transport_call_id:
+                endpoint_registry.release_call(
+                    endpoint.endpoint_id, transport_call_id
+                )
+                endpoint = endpoint_registry.require(endpoint.endpoint_id)
+            payload["call_id"] = transport_call_id
         caller = _device_entity_state(hass, device, "incoming_caller")
         destination = _device_entity_state(hass, device, "destination")
         reason = _device_entity_state(hass, device, "last_reason")
         payload.update(
             {
                 "device_id": device.get("device_id", ""),
+                "endpoint_id": str(getattr(endpoint, "endpoint_id", "") or ""),
                 "peer_name": device.get("name", ""),
                 "local_name": device.get("name", ""),
                 "caller": caller,
@@ -332,9 +520,9 @@ async def _async_emit_esp_state_event(
                 "last_reason_entity_id": entities.get("last_reason", ""),
             }
         )
-        if state.strip().lower() in ("ringing", "incoming"):
+        if raw_state in ("ringing", "incoming"):
             payload["direction"] = "incoming"
-        elif state.strip().lower() in ("calling", "remote_ringing"):
+        elif raw_state in ("calling", "remote_ringing"):
             payload["direction"] = "outgoing"
     _fire_call_event(hass, payload, "esp")
 
@@ -360,10 +548,32 @@ def _register_esp_state_event_bridge(hass: HomeAssistant) -> None:
             return
         if new_value.lower() in ("unknown", "unavailable"):
             return
+        generations = bucket.setdefault("esp_state_event_generations", {})
+        generation = int(generations.get(entity_id, 0) or 0) + 1
+        generations[entity_id] = generation
+        endpoint_registry = bucket.get("endpoint_registry")
+        endpoint = (
+            endpoint_registry.by_entity_id(entity_id)
+            if endpoint_registry is not None
+            else None
+        )
         terminal_delay = 0.2 if new_value.strip().lower() in ("idle", "ended", "declined") else 0.0
         create_runtime_task(
             hass,
-            _async_emit_esp_state_event(hass, entity_id, new_value, old_value, terminal_delay)
+            _async_emit_esp_state_event(
+                hass,
+                entity_id,
+                new_value,
+                old_value,
+                terminal_delay,
+                generation=generation,
+                expected_endpoint_id=str(
+                    getattr(endpoint, "endpoint_id", "") or ""
+                ),
+                expected_call_id=str(
+                    getattr(endpoint, "active_call_id", "") or ""
+                ),
+            )
         )
 
     bucket["esp_state_event_bridge_unsub"] = hass.bus.async_listen(
@@ -390,13 +600,26 @@ def _device_is_phonebook_available(hass: HomeAssistant, device: dict) -> bool:
     return True
 
 
-async def _press_device_button(hass: HomeAssistant, device: dict, key: str, label: str) -> bool:
+async def _press_device_button(
+    hass: HomeAssistant,
+    device: dict,
+    key: str,
+    label: str,
+    *,
+    context=None,
+) -> bool:
     button_eid = (device.get("entities") or {}).get(key)
     if not button_eid:
         _LOGGER.warning("Cannot press %s for %s: entity not found", label, device.get("name"))
         return False
     try:
-        await hass.services.async_call("button", "press", {"entity_id": button_eid}, blocking=True)
+        await hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": button_eid},
+            blocking=True,
+            context=context,
+        )
         _LOGGER.info("Pressed %s for %s via voip_stack service", button_eid, device.get("name"))
         return True
     except Exception:
@@ -404,7 +627,14 @@ async def _press_device_button(hass: HomeAssistant, device: dict, key: str, labe
         return False
 
 
-async def _call_esphome_action(hass: HomeAssistant, device: dict, action: str, data: dict | None = None) -> None:
+async def _call_esphome_action(
+    hass: HomeAssistant,
+    device: dict,
+    action: str,
+    data: dict | None = None,
+    *,
+    context=None,
+) -> None:
     """Invoke a native ESPHome action exposed by the selected SIP phone."""
     from homeassistant.exceptions import ServiceValidationError
 
@@ -414,7 +644,13 @@ async def _call_esphome_action(hass: HomeAssistant, device: dict, action: str, d
     service = f"{route_id}_{action}"
     if not hass.services.has_service("esphome", service):
         raise ServiceValidationError(f"ESPHome service esphome.{service} is not available")
-    await hass.services.async_call("esphome", service, data or {}, blocking=True)
+    await hass.services.async_call(
+        "esphome",
+        service,
+        data or {},
+        blocking=True,
+        context=context,
+    )
     _LOGGER.info("ESP SIP phone %s action=%s data=%s", device.get("name"), action, data or {})
 
 
@@ -430,6 +666,24 @@ async def _resolve_command_phone(hass: HomeAssistant, call: ServiceCall) -> dict
     source/source_device_id/source_name or the usual HA target fields means the
     command is a mirror action on that ESP SIP phone.
     """
+    # A logical browser endpoint is also represented by an HA Device. Resolve
+    # it before the legacy ESP device resolver so that a card bound to that
+    # Device controls its own browser phone instead of being treated as an ESP.
+    endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    selector = str(
+        call.data.get("endpoint_id")
+        or call.data.get("source_device_id")
+        or call.data.get("device_id")
+        or ""
+    ).strip()
+    resolve_endpoint = getattr(endpoint_registry, "resolve", None)
+    if selector and callable(resolve_endpoint):
+        try:
+            endpoint = resolve_endpoint(selector)
+        except (KeyError, ValueError):
+            endpoint = None
+        if endpoint is not None and getattr(endpoint, "kind", None) is EndpointKind.BROWSER:
+            return None
     source = await _resolve_source_device_from_call(hass, call)
     if source is not None:
         return source
@@ -463,6 +717,9 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             device=d,
             name=name,
             host=host,
+            endpoint_id=str(d.get("endpoint_id") or ""),
+            endpoint_kind=EndpointKind.ESPHOME.value,
+            capabilities=("audio", "dtmf"),
             sip_port=int(d.get("sip_port") or cfg["sip_port"]),
             rtp_port=int(d.get("rtp_port") or cfg["rtp_port"]),
             extension=str(d.get("extension") or ""),
@@ -475,6 +732,49 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
         ))
         d["sip_transport"] = sip_transport
 
+    endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    local_ip = await _ha_advertise_host(hass)
+    browser_endpoints = (
+        [
+            endpoint
+            for endpoint in endpoint_registry.endpoints
+            if endpoint.kind is EndpointKind.BROWSER
+            and endpoint.availability is not EndpointAvailability.UNAVAILABLE
+        ]
+        if endpoint_registry is not None
+        else []
+    )
+    for endpoint in browser_endpoints:
+        formats = [fmt.wire_token() for fmt in HA_SIP_PCM_FORMATS[:8]]
+        out.append(
+            Peer(
+                device={
+                    "device_id": endpoint.device_id,
+                    "endpoint_id": endpoint.endpoint_id,
+                    "endpoint_type": EndpointKind.BROWSER.value,
+                    "sip_transport": "tcp",
+                    "capabilities": sorted(endpoint.capabilities),
+                },
+                name=endpoint.name,
+                host=local_ip or "",
+                endpoint_id=endpoint.endpoint_id,
+                endpoint_kind=EndpointKind.BROWSER.value,
+                capabilities=tuple(sorted(endpoint.capabilities)),
+                local_ha=True,
+                sip_port=int(cfg["sip_port"]),
+                rtp_port=int(cfg["rtp_port"]),
+                extension=endpoint.extension,
+                conference_group=endpoint.conference_group,
+                conference_ring=endpoint.conference_ring,
+                ring_group=endpoint.ring_group,
+                audio_mode="full_duplex",
+                tx_formats=formats,
+                rx_formats=formats,
+            )
+        )
+
+    # Compatibility fallback for YAML-only or partially migrated setups where
+    # no logical endpoint registry exists yet.
     ha_endpoint_state = hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)
     ha_endpoint_payload = ""
     ha_endpoint_attrs = {}
@@ -482,11 +782,14 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
         ha_endpoint_attrs = ha_endpoint_state.attributes or {}
         ha_endpoint_payload = str(ha_endpoint_attrs.get("endpoint") or ha_endpoint_state.state or "")
     ha_endpoint = parse_voip_endpoint(ha_endpoint_payload)
-    if ha_endpoint is not None:
+    if not browser_endpoints and ha_endpoint is not None:
         out.append(Peer(
             device=None,
             name=ha_endpoint["name"],
             host=ha_endpoint["host"],
+            endpoint_id=DEFAULT_ENDPOINT_ID,
+            endpoint_kind=EndpointKind.BROWSER.value,
+            capabilities=("audio", "dtmf"),
             local_ha=True,
             sip_port=int(ha_endpoint.get("sip_port") or cfg["sip_port"]),
             rtp_port=int(ha_endpoint.get("rtp_port") or cfg["rtp_port"]),
@@ -498,7 +801,7 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
             tx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("tx_formats") or []],
             rx_formats=[fmt.wire_token() for fmt in ha_endpoint.get("rx_formats") or []],
         ))
-    else:
+    elif not browser_endpoints:
         # The SIP endpoint is intentionally started before config-entry
         # platforms are forwarded.  During that short startup window the HA
         # endpoint sensor does not exist yet; the deferred phonebook sync will
@@ -577,6 +880,229 @@ async def _resolve_source_device_from_call(hass: HomeAssistant, call: ServiceCal
     return None
 
 
+def _service_browser_endpoint(
+    hass: HomeAssistant,
+    call: ServiceCall,
+    *,
+    strict: bool = False,
+):
+    """Resolve the logical HA/browser phone originating a service action."""
+    registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    explicit_endpoint_id = call.data.get("endpoint_id")
+    source_device_id = call.data.get("source_device_id")
+
+    def _values(raw: object) -> tuple[str, ...]:
+        if isinstance(raw, (list, tuple, set, frozenset)):
+            values = raw
+        else:
+            values = (raw,)
+        return tuple(
+            text
+            for value in values
+            if (text := str(value or "").strip())
+        )
+
+    def _browser_selectors(raw: object, lookup_name: str) -> tuple[str, ...]:
+        lookup = getattr(registry, lookup_name, None)
+        selected: list[str] = []
+        for value in _values(raw):
+            if value in {HA_SOFTPHONE_DEVICE_ID, HA_SOFTPHONE_ENDPOINT_ENTITY_ID}:
+                selected.append(value)
+                continue
+            endpoint = lookup(value) if callable(lookup) else None
+            if endpoint is None and lookup_name == "by_entity_id" and registry is not None:
+                try:
+                    from homeassistant.helpers import entity_registry as er
+
+                    entity_entry = er.async_get(hass).async_get(value)
+                except (AttributeError, ImportError):
+                    entity_entry = None
+                device_id = str(getattr(entity_entry, "device_id", "") or "")
+                endpoint = registry.by_device_id(device_id) if device_id else None
+            if getattr(endpoint, "kind", None) is EndpointKind.BROWSER:
+                selected.append(value)
+        return tuple(selected)
+
+    selected_device_ids = _browser_selectors(source_device_id, "by_device_id")
+    if not selected_device_ids:
+        # ``device_id`` is also Home Assistant's historical target selector.
+        # Treat it as the browser source only when it actually resolves to a
+        # browser phone. This keeps an ESPHome Device target from being
+        # mistaken for the logical HA phone originating the command.
+        selected_device_ids = _browser_selectors(
+            call.data.get("device_id"), "by_device_id"
+        )
+    selected_entity_ids = _browser_selectors(
+        call.data.get("entity_id"), "by_entity_id"
+    )
+    if strict and not explicit_endpoint_id:
+        supplied_device_ids = _values(
+            source_device_id or call.data.get("device_id")
+        )
+        supplied_entity_ids = _values(call.data.get("entity_id"))
+        if (
+            supplied_device_ids
+            and not selected_device_ids
+            or supplied_entity_ids
+            and not selected_entity_ids
+        ):
+            from homeassistant.exceptions import ServiceValidationError
+
+            raise ServiceValidationError(
+                "The selected Device or Entity is not a Home Assistant browser phone"
+            )
+    try:
+        endpoint_id = _endpoint_id_from_selector(
+            hass,
+            endpoint_id=explicit_endpoint_id,
+            device_id=selected_device_ids,
+            entity_id=selected_entity_ids,
+        )
+    except ValueError as err:
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(str(err)) from err
+    endpoint = None
+    get_endpoint = getattr(registry, "get", None)
+    if callable(get_endpoint):
+        try:
+            endpoint = get_endpoint(endpoint_id)
+        except (KeyError, ValueError):
+            endpoint = None
+    if endpoint is not None and getattr(endpoint, "kind", None) is not EndpointKind.BROWSER:
+        endpoint = None
+    return endpoint_id, endpoint
+
+
+def _service_configured_endpoint(hass: HomeAssistant, call: ServiceCall):
+    """Resolve one integration-owned browser or registrar-account phone."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+
+    def _values(raw: object) -> tuple[str, ...]:
+        if isinstance(raw, (list, tuple, set, frozenset)):
+            values = raw
+        else:
+            values = (raw,)
+        return tuple(
+            text
+            for value in values
+            if (text := str(value or "").strip())
+        )
+
+    explicit = str(call.data.get("endpoint_id") or "").strip()
+    selected: dict[str, object] = {}
+    unresolved: list[str] = []
+    if explicit:
+        endpoint = registry.get(explicit) if registry is not None else None
+        if endpoint is None and explicit.casefold() == DEFAULT_ENDPOINT_ID:
+            endpoint = registry.get(DEFAULT_ENDPOINT_ID) if registry is not None else None
+        if endpoint is None and registry is not None:
+            unresolved.append(explicit)
+        elif endpoint is not None:
+            selected[endpoint.endpoint_id] = endpoint
+
+    for lookup_name, raw, legacy in (
+        ("by_device_id", call.data.get("device_id"), HA_SOFTPHONE_DEVICE_ID),
+        (
+            "by_entity_id",
+            call.data.get("entity_id"),
+            HA_SOFTPHONE_ENDPOINT_ENTITY_ID,
+        ),
+    ):
+        lookup = getattr(registry, lookup_name, None)
+        for value in _values(raw):
+            if value == legacy:
+                if registry is None:
+                    continue
+                endpoint = registry.get(DEFAULT_ENDPOINT_ID)
+            else:
+                endpoint = lookup(value) if callable(lookup) else None
+                if endpoint is None and lookup_name == "by_entity_id" and registry is not None:
+                    try:
+                        from homeassistant.helpers import entity_registry as er
+
+                        entity_entry = er.async_get(hass).async_get(value)
+                    except (AttributeError, ImportError):
+                        entity_entry = None
+                    device_id = str(getattr(entity_entry, "device_id", "") or "")
+                    endpoint = registry.by_device_id(device_id) if device_id else None
+            if endpoint is None:
+                unresolved.append(value)
+                continue
+            selected[endpoint.endpoint_id] = endpoint
+
+    if registry is None:
+        if unresolved or (explicit and explicit.casefold() != DEFAULT_ENDPOINT_ID):
+            raise ServiceValidationError("Unknown Home Assistant phone selector")
+        return DEFAULT_ENDPOINT_ID, None
+    if unresolved:
+        raise ServiceValidationError(
+            "Unknown Home Assistant phone selector: " + ", ".join(unresolved)
+        )
+    if not selected:
+        endpoint = registry.get(DEFAULT_ENDPOINT_ID)
+        if endpoint is None:
+            raise ServiceValidationError("The default Home Assistant phone is unavailable")
+        selected[endpoint.endpoint_id] = endpoint
+    if len(selected) != 1:
+        raise ServiceValidationError(
+            "Selected endpoint, Device and Entity do not identify the same phone"
+        )
+    endpoint = next(iter(selected.values()))
+    if endpoint.kind not in {EndpointKind.BROWSER, EndpointKind.SIP_ACCOUNT}:
+        raise ServiceValidationError(
+            "The selected Device or Entity is not an integration-owned phone"
+        )
+    return endpoint.endpoint_id, endpoint
+
+
+def _browser_endpoint_name(hass: HomeAssistant, endpoint_id: str, endpoint=None) -> str:
+    return str(getattr(endpoint, "name", "") or _ha_peer_name(hass)).strip()
+
+
+async def _require_phone_service_control(
+    hass: HomeAssistant,
+    call: ServiceCall,
+    *,
+    endpoint=None,
+    device: dict | None = None,
+    action_entity_ids: tuple[str, ...] | None = None,
+) -> None:
+    """Apply per-phone HA permissions after the integration-wide boundary."""
+    if endpoint is None and device is not None:
+        registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        endpoint = (
+            registry.by_device_id(str(device.get("device_id") or ""))
+            if registry is not None
+            else None
+        )
+        if endpoint is None:
+            device_id = str(device.get("device_id") or "").strip()
+            entities = frozenset(
+                str(value)
+                for value in (device.get("entities") or {}).values()
+                if isinstance(value, str) and "." in value
+            )
+            # Device resolution can precede roster discovery, so the volatile
+            # registry may not contain this ESP yet. Authorize against an
+            # ephemeral phone descriptor instead of falling back to the
+            # integration-wide event entity (which would be fail-open).
+            endpoint = PhoneEndpoint(
+                endpoint_id=str(device.get("endpoint_id") or f"esphome:{device_id}"),
+                name=str(device.get("name") or device_id or "ESP phone"),
+                kind=EndpointKind.ESPHOME,
+                device_id=device_id,
+                entity_ids=entities,
+                capabilities=frozenset({"audio", "dtmf"}),
+            )
+    if endpoint is not None:
+        await async_require_service_endpoint_control(hass, call, endpoint)
+    if action_entity_ids is not None:
+        await async_require_service_entity_control(hass, call, action_entity_ids)
+
+
 async def _track_outbound_sip_client(
     hass: HomeAssistant,
     *,
@@ -584,12 +1110,22 @@ async def _track_outbound_sip_client(
     result: str,
     target: str,
     sip_uri: str = "",
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+    local_name: str = "",
+    session_device_id: str = HA_SOFTPHONE_DEVICE_ID,
 ) -> None:
     """Keep an outbound SIP client alive and complete early-dialog INVITEs."""
     registry = _call_registry(hass)
+    local_name = local_name or _ha_peer_name(hass)
     if result not in {"ringing", "in_call"}:
         if registry.sip_clients.get(client.dialog_ids.call_id) is client:
             registry.detach_client(client.dialog_ids.call_id)
+        public_result = _sip_public_state(result)
+        registry.finish_and_pop(
+            client.dialog_ids.call_id,
+            reason=_sip_terminal_reason(result, public_result),
+            state=public_result,
+        )
         await client.close()
         return
 
@@ -598,9 +1134,10 @@ async def _track_outbound_sip_client(
         client.dialog_ids.call_id,
         state=CallState.REMOTE_RINGING.value if result == "ringing" else CallState.IN_CALL.value,
         owner="ha_softphone",
-        caller=_ha_peer_name(hass),
+        caller=local_name,
         callee=target,
         route_kind="direct",
+        endpoint_id=endpoint_id,
     )
     registry.add_leg(client.dialog_ids.call_id, client.dialog_ids.call_id, role="ha_softphone", state=result)
 
@@ -629,9 +1166,10 @@ async def _track_outbound_sip_client(
                 client.dialog_ids.call_id,
                 state=CallState.IN_CALL.value,
                 owner="ha_softphone",
-                caller=_ha_peer_name(hass),
+                caller=local_name,
                 callee=target,
                 route_kind="direct",
+                endpoint_id=endpoint_id,
             )
             registry.add_leg(
                 client.dialog_ids.call_id,
@@ -642,8 +1180,9 @@ async def _track_outbound_sip_client(
             _set_ha_softphone_call_state(
                 hass,
                 CallState.IN_CALL.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=_ha_peer_name(hass),
+                endpoint_id=endpoint_id,
+                session_device_id=session_device_id,
+                caller=local_name,
                 callee=target,
                 peer_name=target,
                 direction="outgoing",
@@ -683,8 +1222,9 @@ async def _track_outbound_sip_client(
             _set_ha_softphone_call_state(
                 hass,
                 public_final,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=_ha_peer_name(hass),
+                endpoint_id=endpoint_id,
+                session_device_id=session_device_id,
+                caller=local_name,
                 callee=target,
                 peer_name=target,
                 direction="outgoing",
@@ -719,8 +1259,9 @@ async def _track_outbound_sip_client(
             _set_ha_softphone_call_state(
                 hass,
                 CallState.IDLE.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=_ha_peer_name(hass),
+                endpoint_id=endpoint_id,
+                session_device_id=session_device_id,
+                caller=local_name,
                 callee=target,
                 peer_name=target,
                 direction="outgoing",
@@ -738,19 +1279,29 @@ async def _track_outbound_sip_client(
     registry.client_watchers[client.dialog_ids.call_id] = task
 
 
-async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
+async def _async_prepare_ha_outbound_call(
+    hass: HomeAssistant, endpoint_id: str = DEFAULT_ENDPOINT_ID
+) -> None:
     """Close stale HA softphone SIP clients before creating a new dialog."""
     from homeassistant.exceptions import ServiceValidationError
 
     bucket = hass.data.setdefault(DOMAIN, {})
-    start_lock: asyncio.Lock = bucket.setdefault("ha_softphone_start_lock", asyncio.Lock())
+    start_locks = bucket.setdefault("ha_softphone_start_locks", {})
+    start_lock: asyncio.Lock = start_locks.setdefault(endpoint_id, asyncio.Lock())
     async with start_lock:
         registry = _call_registry(hass)
-        store = _ha_softphone_store(hass)
+        store = _ha_softphone_store(hass, endpoint_id)
         if str(store.get("state") or "").strip().lower() in HA_SOFTPHONE_ACTIVE_STATES:
             raise ServiceValidationError("HA softphone already has an active SIP call")
 
         for call_id, client in list(registry.sip_clients.items()):
+            session = registry.sessions.get(registry.resolve_session_id(call_id))
+            session_endpoint_id = str(
+                (session.metadata if session is not None else {}).get("endpoint_id")
+                or DEFAULT_ENDPOINT_ID
+            )
+            if session_endpoint_id != endpoint_id:
+                continue
             _client, watcher = registry.detach_client(call_id)
             try:
                 await async_cleanup_sip_runtime(client=client, watcher=watcher, terminate_client=True)
@@ -759,13 +1310,23 @@ async def _async_prepare_ha_outbound_call(hass: HomeAssistant) -> None:
             registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
 
 
-def _bind_service_call_controller(registry, call_id: str, call: ServiceCall) -> None:
+def _bind_service_call_controller(
+    registry,
+    call_id: str,
+    call: ServiceCall,
+    *,
+    endpoint_id: str = "",
+) -> None:
     """Persist the initiating HA Context before publishing call events."""
 
     from homeassistant.exceptions import ServiceValidationError
 
     try:
-        registry.bind_controller(call_id, context=getattr(call, "context", None))
+        registry.bind_controller(
+            call_id,
+            context=getattr(call, "context", None),
+            endpoint_id=endpoint_id,
+        )
     except ValueError as err:
         raise ServiceValidationError(str(err)) from err
 
@@ -810,18 +1371,75 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     device = await _resolve_command_phone(hass, call)
     if device is not None:
+        call_button = str((device.get("entities") or {}).get("call") or "").strip()
+        await _require_phone_service_control(
+            hass,
+            call,
+            device=device,
+            action_entity_ids=(call_button,) if call_button else (),
+        )
         # On ESP phones the Call button is the local answer control while ringing.
-        if not await _press_device_button(hass, device, "call", "SIP answer"):
+        if not await _press_device_button(
+            hass,
+            device,
+            "call",
+            "SIP answer",
+            context=call.context,
+        ):
             from homeassistant.exceptions import ServiceValidationError
 
             raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no answer/call button")
         return
+    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call, strict=True)
+    await _require_phone_service_control(
+        hass,
+        call,
+        endpoint=browser_endpoint,
+    )
+    local_name = _browser_endpoint_name(hass, endpoint_id, browser_endpoint)
+    endpoint_device_id = str(
+        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+    )
     call_id = str(call.data.get("call_id") or "").strip()
     if not call_id:
-        call_id = _single_pending_route_call_id(hass)
+        call_id = _single_pending_route_call_id(hass, endpoint_id) or str(
+            _ha_softphone_store(hass, endpoint_id).get("call_id") or ""
+        ).strip()
     registry = _call_registry(hass)
+    if call_id and not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"call_id {call_id} belongs to another phone endpoint"
+        )
     if call_id and registry.resolve_session_id(call_id) in registry.sessions:
-        _bind_service_call_controller(registry, call_id, call)
+        _bind_service_call_controller(
+            registry,
+            call_id,
+            call,
+            endpoint_id=endpoint_id,
+        )
+    camera_send_requested = bool(
+        _get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)
+    ) and bool(call.data.get("send_video", False))
+    from .local_softphone_runtime import local_softphone_bridge
+
+    local_bridge = local_softphone_bridge(hass)
+    if local_bridge is not None and local_bridge.get_call(call_id) is not None:
+        from homeassistant.exceptions import ServiceValidationError
+
+        from .local_softphone_bridge import LocalBridgeError
+
+        try:
+            local_bridge.answer(
+                call_id,
+                endpoint_id,
+                str(call.data.get("media_client_id") or ""),
+                enable_video_send=camera_send_requested,
+            )
+        except LocalBridgeError as err:
+            raise ServiceValidationError(str(err)) from err
+        return
     bucket = hass.data.setdefault(DOMAIN, {})
     forward_task = bucket.get("forward_tasks", {}).get(call_id)
     forward_claimed = call_id in bucket.get("forward_claims", set())
@@ -830,35 +1448,62 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
 
         raise ServiceValidationError(f"call_id {call_id} is being forwarded")
     if call_id and call_id in _pending_routes(hass):
-        _set_pending_route_decision(hass, {"call_id": call_id, "action": "answer_ha"})
+        _set_pending_route_decision(
+            hass,
+            {
+                "call_id": call_id,
+                "action": "answer_ha",
+                "endpoint_id": endpoint_id,
+                "media_client_id": str(
+                    call.data.get("media_client_id") or ""
+                ),
+                "send_video": camera_send_requested,
+            },
+        )
         return
     if call_id.startswith("conference:"):
-        room_name = call_id.split(":", 1)[1]
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
-        queue = manager.join_ha_softphone(room_name) if manager is not None else None
-        if queue is None:
+        resolved = manager.resolve_ha_call(call_id) if manager is not None else None
+        if resolved is None or resolved[1] != endpoint_id:
+            from homeassistant.exceptions import ServiceValidationError
+
+            raise ServiceValidationError(
+                f"conference call {call_id} does not belong to phone {endpoint_id}"
+            )
+        room_name = resolved[0]
+        joined = manager.join_ha_softphone(
+            room_name,
+            endpoint_id=endpoint_id,
+            call_id=call_id,
+        )
+        if joined is None:
             _LOGGER.warning("sip_answer: conference room not found or full for %s", call_id)
             return
+        _joined_call_id, queue = joined
         registry.softphone_media[call_id] = {
             "conference_room": room_name,
             "conference_queue": queue,
+            "endpoint_id": endpoint_id,
+            "media_client_id": str(call.data.get("media_client_id") or ""),
         }
         registry.upsert(
             call_id,
             state=CallState.IN_CALL.value,
             owner="ha_softphone",
             caller=room_name,
-            callee=_ha_peer_name(hass),
+            callee=local_name,
             route_kind="conference",
+            endpoint_id=endpoint_id,
         )
         _bind_service_call_controller(registry, call_id, call)
         registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
         _set_ha_softphone_call_state(
             hass,
             CallState.IN_CALL.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
             caller=room_name,
-            callee=_ha_peer_name(hass),
+            callee=local_name,
             peer_name=room_name,
             direction="incoming",
             call_id=call_id,
@@ -871,13 +1516,17 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         )
         return
     pending = registry.pending_invites
-    if not call_id and len(pending) == 1:
-        call_id = next(iter(pending))
+    endpoint_pending = _endpoint_call_ids(registry, pending, endpoint_id)
+    if not call_id and len(endpoint_pending) == 1:
+        call_id = endpoint_pending[0]
         _bind_service_call_controller(registry, call_id, call)
     invite = pending.pop(call_id, None) if call_id else None
     if invite is None:
-        _LOGGER.warning("sip_answer: no pending SIP call %s", call_id or "(current)")
-        return
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"SIP call {call_id or '(current)'} was already answered or is no longer ringing"
+        )
 
     preanswered = registry.preanswered.pop(call_id, None)
     from .sdp import (
@@ -891,14 +1540,19 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     video_rtp_socket = None
     video_rtcp_socket = None
     media_reservation = (preanswered or {}).get("rtp_reservation")
+    endpoint_video_enabled = (
+        browser_endpoint is None or browser_endpoint.supports("video")
+    )
     # Camera transmission is opt-in for each answer.  The integration option
     # is the administrator-level capability gate; ``send_video`` is the
     # browser/user choice for this dialog.  A receive-only answer can still
     # display the remote stream without advertising media that the browser did
     # not authorize HA to send.
-    camera_send_enabled = bool(
-        _get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)
-    ) and bool(call.data.get("send_video", False))
+    camera_send_enabled = (
+        endpoint_video_enabled
+        and bool(_get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False))
+        and bool(call.data.get("send_video", False))
+    )
     video_direction = (
         constrained_video_direction(
             invite.video_format.direction,
@@ -906,14 +1560,14 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             and browser_video_send_supported(invite.video_format)
             and not invite.remote_video_connection_held,
         )
-        if invite.video_format is not None
+        if invite.video_format is not None and endpoint_video_enabled
         else "inactive"
     )
     if local_rtp_port:
         _LOGGER.info("SIP answered pre-answered trunk call_id=%s", call_id)
     else:
         local_ip = await _ha_advertise_host(hass)
-        if invite.video_format is not None:
+        if invite.video_format is not None and endpoint_video_enabled:
             try:
                 (
                     media_reservation,
@@ -938,7 +1592,9 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             invite.recv_format,
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
-            video_format=invite.answer_video_format,
+            video_format=(
+                invite.answer_video_format if endpoint_video_enabled else None
+            ),
             video_direction=video_direction,
         )
         if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
@@ -949,7 +1605,11 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             if media_reservation is not None and hasattr(media_reservation, "release"):
                 media_reservation.release()
             _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
-            return
+            from homeassistant.exceptions import ServiceValidationError
+
+            raise ServiceValidationError(
+                f"SIP transaction for call_id {call_id} is no longer available"
+            )
 
     registry.softphone_media[call_id] = {
         "invite": invite,
@@ -964,6 +1624,8 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         "video_rtp_socket": video_rtp_socket,
         "video_rtcp_socket": video_rtcp_socket,
         "rtp_reservation": media_reservation,
+        "endpoint_id": endpoint_id,
+        "media_client_id": str(call.data.get("media_client_id") or ""),
     }
     registry.upsert(
         call_id,
@@ -972,13 +1634,16 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         caller=invite.caller,
         callee=invite.target,
         route_kind="ha_softphone",
+        endpoint_id=endpoint_id,
+        media_client_id=str(call.data.get("media_client_id") or ""),
     )
     registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
     _LOGGER.info("SIP answered call_id=%s", call_id)
     _set_ha_softphone_call_state(
         hass,
         CallState.IN_CALL.value,
-        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        endpoint_id=endpoint_id,
+        session_device_id=endpoint_device_id,
         caller=invite.caller,
         callee=invite.target,
         peer_name=invite.caller,
@@ -1021,14 +1686,44 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     device = await _resolve_command_phone(hass, call)
     if device is not None:
+        decline_button = str(
+            (device.get("entities") or {}).get("decline") or ""
+        ).strip()
+        await _require_phone_service_control(
+            hass,
+            call,
+            device=device,
+            action_entity_ids=(decline_button,) if decline_button else (),
+        )
         reason = str(call.data.get("reason") or call.data.get("decline_reason") or "").strip()
         if _has_esphome_action(hass, device, "decline_call"):
-            await _call_esphome_action(hass, device, "decline_call", {"reason": reason})
-        elif not await _press_device_button(hass, device, "decline", "SIP decline"):
+            await _call_esphome_action(
+                hass,
+                device,
+                "decline_call",
+                {"reason": reason},
+                context=call.context,
+            )
+        elif not await _press_device_button(
+            hass,
+            device,
+            "decline",
+            "SIP decline",
+            context=call.context,
+        ):
             from homeassistant.exceptions import ServiceValidationError
 
             raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no decline control")
         return
+    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call, strict=True)
+    await _require_phone_service_control(
+        hass,
+        call,
+        endpoint=browser_endpoint,
+    )
+    endpoint_device_id = str(
+        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+    )
     call_id = str(call.data.get("call_id") or "").strip()
     status = int(call.data.get("status") or 486)
     reason = str(call.data.get("reason") or "Busy Here").strip() or "Busy Here"
@@ -1043,7 +1738,42 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
         else:
             app_reason = reason or TerminalReason.DECLINED.value
     if not call_id:
-        call_id = _single_pending_route_call_id(hass)
+        call_id = _single_pending_route_call_id(hass, endpoint_id) or str(
+            _ha_softphone_store(hass, endpoint_id).get("call_id") or ""
+        ).strip()
+    registry = _call_registry(hass)
+    if call_id and not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"call_id {call_id} belongs to another phone endpoint"
+        )
+    from .local_softphone_runtime import local_softphone_bridge
+
+    local_bridge = local_softphone_bridge(hass)
+    if local_bridge is not None and local_bridge.get_call(call_id) is not None:
+        from homeassistant.exceptions import ServiceValidationError
+
+        from .local_softphone_bridge import LocalBridgeError
+
+        try:
+            local_bridge.decline(call_id, endpoint_id)
+        except LocalBridgeError as err:
+            raise ServiceValidationError(str(err)) from err
+        return
+    if call_id.startswith("conference:"):
+        manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
+        if manager is not None and await manager.decline_ha_softphone(
+            call_id,
+            endpoint_id,
+            reason=app_reason,
+        ):
+            return
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"conference call {call_id} is no longer ringing on phone {endpoint_id}"
+        )
     forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
     if forward_task is not None and not forward_task.done():
         forward_task.cancel()
@@ -1057,13 +1787,14 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
                 "status": status,
                 "reason": reason,
                 "decline_reason": app_reason,
+                "endpoint_id": endpoint_id,
             },
         )
         return
-    registry = _call_registry(hass)
     pending = registry.pending_invites
-    if not call_id and len(pending) == 1:
-        call_id = next(iter(pending))
+    endpoint_pending = _endpoint_call_ids(registry, pending, endpoint_id)
+    if not call_id and len(endpoint_pending) == 1:
+        call_id = endpoint_pending[0]
     pending.pop(call_id, None)
     preanswered_item = registry.preanswered.pop(call_id, None) if call_id else None
     if preanswered_item is not None:
@@ -1073,7 +1804,8 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
         _set_ha_softphone_call_state(
             hass,
             "declined",
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
             reason=app_reason,
             call_id=call_id,
             sip_status_code=status,
@@ -1095,7 +1827,8 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     _set_ha_softphone_call_state(
         hass,
         "declined",
-        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        endpoint_id=endpoint_id,
+        session_device_id=endpoint_device_id,
         reason=app_reason,
         call_id=call_id,
         sip_status_code=status,
@@ -1108,17 +1841,69 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
     device = await _resolve_command_phone(hass, call)
     if device is not None:
+        decline_button = str(
+            (device.get("entities") or {}).get("decline") or ""
+        ).strip()
+        await _require_phone_service_control(
+            hass,
+            call,
+            device=device,
+            action_entity_ids=(decline_button,) if decline_button else (),
+        )
         reason = str(call.data.get("reason") or "local_hangup").strip()
         if _has_esphome_action(hass, device, "decline_call"):
-            await _call_esphome_action(hass, device, "decline_call", {"reason": reason})
-        elif not await _press_device_button(hass, device, "decline", "SIP hangup"):
+            await _call_esphome_action(
+                hass,
+                device,
+                "decline_call",
+                {"reason": reason},
+                context=call.context,
+            )
+        elif not await _press_device_button(
+            hass,
+            device,
+            "decline",
+            "SIP hangup",
+            context=call.context,
+        ):
             from homeassistant.exceptions import ServiceValidationError
 
             raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no hangup/decline control")
         return
+    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call, strict=True)
+    await _require_phone_service_control(
+        hass,
+        call,
+        endpoint=browser_endpoint,
+    )
+    endpoint_device_id = str(
+        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+    )
     call_id = str(call.data.get("call_id") or "").strip()
     if not call_id:
-        call_id = _single_pending_route_call_id(hass)
+        call_id = _single_pending_route_call_id(hass, endpoint_id) or str(
+            _ha_softphone_store(hass, endpoint_id).get("call_id") or ""
+        ).strip()
+    registry = _call_registry(hass)
+    if call_id and not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"call_id {call_id} belongs to another phone endpoint"
+        )
+    from .local_softphone_runtime import local_softphone_bridge
+
+    local_bridge = local_softphone_bridge(hass)
+    if local_bridge is not None and local_bridge.get_call(call_id) is not None:
+        from homeassistant.exceptions import ServiceValidationError
+
+        from .local_softphone_bridge import LocalBridgeError
+
+        try:
+            local_bridge.hangup(call_id, endpoint_id)
+        except LocalBridgeError as err:
+            raise ServiceValidationError(str(err)) from err
+        return
     forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
     if forward_task is not None and not forward_task.done():
         forward_task.cancel()
@@ -1135,24 +1920,30 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
                     "action": "cancel",
                     "reason": "Request Terminated",
                     "decline_reason": TerminalReason.LOCAL_HANGUP.value,
+                    "endpoint_id": endpoint_id,
                 },
             )
             return
-    registry = _call_registry(hass)
     clients = registry.sip_clients
     relays = registry.relays
     pending = registry.pending_invites
     media_sessions = registry.softphone_media
     preanswered = registry.preanswered
-    softphone_store = _ha_softphone_store(hass)
-    if not call_id and len(registry.bridge_clients) == 1:
-        call_id = next(iter(registry.bridge_clients))
-    if not call_id and len(clients) == 1:
-        call_id = next(iter(clients))
-    if not call_id and len(pending) == 1:
-        call_id = next(iter(pending))
-    if not call_id and len(media_sessions) == 1:
-        call_id = next(iter(media_sessions))
+    softphone_store = _ha_softphone_store(hass, endpoint_id)
+    endpoint_bridge_calls = _endpoint_call_ids(
+        registry, registry.bridge_clients, endpoint_id
+    )
+    endpoint_clients = _endpoint_call_ids(registry, clients, endpoint_id)
+    endpoint_pending = _endpoint_call_ids(registry, pending, endpoint_id)
+    endpoint_media = _endpoint_call_ids(registry, media_sessions, endpoint_id)
+    if not call_id and len(endpoint_bridge_calls) == 1:
+        call_id = endpoint_bridge_calls[0]
+    if not call_id and len(endpoint_clients) == 1:
+        call_id = endpoint_clients[0]
+    if not call_id and len(endpoint_pending) == 1:
+        call_id = endpoint_pending[0]
+    if not call_id and len(endpoint_media) == 1:
+        call_id = endpoint_media[0]
     if not call_id:
         call_id = str(softphone_store.get("call_id") or "").strip()
     active_session = (
@@ -1182,7 +1973,12 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         or ("incoming" if active_session is not None else "")
         or ""
     )
-    bridge_handled, bridge_source_call_id, bridge_dest_call_id, bridge_client, bridge_server_bye = await _terminate_sip_bridge(hass, call_id)
+    bridge_handled, bridge_source_call_id, bridge_dest_call_id, bridge_client, bridge_server_bye = await _terminate_sip_bridge(
+        hass,
+        call_id,
+        endpoint_id=endpoint_id,
+        session_device_id=endpoint_device_id,
+    )
     if bridge_handled:
         call_id = bridge_source_call_id
         _set_sip_bridge_call_state(
@@ -1219,8 +2015,16 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     if conference_room:
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
         if manager is not None:
-            await manager.leave_ha_softphone(conference_room)
-    pending_ids = [call_id] if call_id and call_id in pending else ([] if call_id else list(pending))
+            await manager.leave_ha_softphone(
+                conference_room,
+                call_id=call_id,
+                reason=TerminalReason.LOCAL_HANGUP.value,
+            )
+    pending_ids = (
+        [call_id]
+        if call_id and call_id in pending
+        else ([] if call_id else endpoint_pending)
+    )
     server_bye = False
     pending_closed = 0
     await async_cleanup_sip_runtime(
@@ -1250,7 +2054,8 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
         _set_ha_softphone_call_state(
             hass,
             CallState.IDLE.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id,
+            session_device_id=endpoint_device_id,
             caller=invite.caller,
             callee=invite.target,
             peer_name=invite.caller,
@@ -1273,7 +2078,8 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     _set_ha_softphone_call_state(
         hass,
         CallState.IDLE.value,
-        session_device_id=HA_SOFTPHONE_DEVICE_ID,
+        endpoint_id=endpoint_id,
+        session_device_id=endpoint_device_id,
         caller=caller,
         callee=callee,
         peer_name=peer_name,
@@ -1326,6 +2132,142 @@ async def _deferred_phonebook_sync(hass: HomeAssistant) -> None:
         await _refresh_and_push_phonebook(hass)
 
 
+def _entry_runtime_signature(entry: ConfigEntry) -> dict:
+    """Return parent-entry fields whose mutation requires a transport reload."""
+    return {
+        key: value
+        for key, value in entry.data.items()
+        if key not in {CONF_PHONEBOOK_CONTACTS, CONF_SIP_ACCOUNTS}
+    }
+
+
+def _entry_phone_signature(entry: ConfigEntry) -> tuple:
+    """Return an equality-stable snapshot of native logical-phone subentries."""
+    return tuple(
+        (
+            subentry.subentry_id,
+            subentry.title,
+            dict(subentry.data),
+        )
+        for subentry in sorted(phone_subentries(entry), key=lambda item: item.subentry_id)
+    )
+
+
+async def _async_config_entry_updated(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Apply native config/subentry changes as soon as HA persists them."""
+    bucket = hass.data.setdefault(DOMAIN, {})
+    if not any(
+        str(subentry.data.get("endpoint_id") or "").strip()
+        == DEFAULT_ENDPOINT_ID
+        for subentry in phone_subentries(entry)
+    ):
+        previous_records = bucket.get("entry_phone_records", {})
+        restore_default_phone_subentry(
+            hass,
+            entry,
+            previous_records.get(DEFAULT_ENDPOINT_ID),
+        )
+        bucket["entry_phone_signature"] = _entry_phone_signature(entry)
+        bucket["entry_phone_records"] = {
+            str(subentry.data.get("endpoint_id") or "").strip(): dict(
+                subentry.data
+            )
+            for subentry in phone_subentries(entry)
+        }
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+    runtime_signature = _entry_runtime_signature(entry)
+    phone_signature = _entry_phone_signature(entry)
+    contacts_signature = tuple(
+        dict(item)
+        for item in entry.data.get(CONF_PHONEBOOK_CONTACTS, [])
+        if isinstance(item, dict)
+    )
+    previous_runtime = bucket.get("entry_runtime_signature")
+    previous_phones = bucket.get("entry_phone_signature")
+    previous_contacts = bucket.get("entry_contacts_signature")
+    bucket["entry_runtime_signature"] = runtime_signature
+    bucket["entry_phone_signature"] = phone_signature
+    bucket["entry_phone_records"] = {
+        str(subentry.data.get("endpoint_id") or "").strip(): dict(subentry.data)
+        for subentry in phone_subentries(entry)
+    }
+    bucket["entry_contacts_signature"] = contacts_signature
+
+    if previous_runtime is not None and previous_runtime != runtime_signature:
+        # Listener-owned reload keeps ConfigFlow and ConfigSubentryFlow on the
+        # non-reloading HA API and avoids duplicate/racing reload requests.
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+
+    phones_changed = previous_phones is not None and previous_phones != phone_signature
+    contacts_changed = (
+        previous_contacts is not None and previous_contacts != contacts_signature
+    )
+    if phones_changed:
+        previous_browser_ids = {
+            endpoint.endpoint_id
+            for endpoint in tuple(
+                getattr(bucket.get("endpoint_registry"), "endpoints", ())
+            )
+            if endpoint.kind is EndpointKind.BROWSER
+        }
+        sync_registry_from_entry(hass, entry)
+        for subentry in phone_subentries(entry):
+            endpoint_id = str(subentry.data.get("endpoint_id") or "").strip()
+            endpoint_registry = bucket.get("endpoint_registry")
+            endpoint = (
+                endpoint_registry.get(endpoint_id)
+                if endpoint_registry is not None and endpoint_id
+                else None
+            )
+            if endpoint is None or endpoint.kind is not EndpointKind.BROWSER:
+                continue
+            await _async_load_ha_softphone_store(
+                hass,
+                entry,
+                endpoint_id=endpoint.endpoint_id,
+                endpoint_data=dict(subentry.data),
+            )
+        endpoint_registry = bucket.get("endpoint_registry")
+        current_browser_ids = {
+            endpoint.endpoint_id
+            for endpoint in tuple(getattr(endpoint_registry, "endpoints", ()))
+            if endpoint.kind is EndpointKind.BROWSER
+        }
+        removed_browser_ids = previous_browser_ids - current_browser_ids
+        presence = bucket.setdefault("ha_softphone_presence", {})
+        waiters = bucket.setdefault("ha_softphone_presence_events", {})
+        for endpoint_id in removed_browser_ids:
+            presence.pop(endpoint_id, None)
+            waiter = waiters.get(endpoint_id)
+            if waiter is not None:
+                waiter.clear()
+        # Existing websocket subscriptions survive subentry updates. Push the
+        # new name/groups/capabilities/availability immediately instead of
+        # waiting for a card reconnect or an unrelated call-state transition.
+        for endpoint_id in sorted(previous_browser_ids | current_browser_ids):
+            _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
+        endpoint_sensor = bucket.get("ha_softphone_endpoint_sensor")
+        if endpoint_sensor is not None:
+            # This legacy compatibility entity is non-polling. Keep the
+            # default phone's extension/groups current after native subentry
+            # reconfiguration just as the old settings service did.
+            await endpoint_sensor.async_update()
+        from .store import sip_accounts
+
+        registrar = bucket.get("sip_registrar")
+        if registrar is not None:
+            registrar.update_accounts(sip_accounts(hass))
+
+    if contacts_changed:
+        bucket["manual_roster_entries"] = _manual_roster_entries(hass)
+    if phones_changed or contacts_changed:
+        await _refresh_and_push_phonebook(hass)
+
+
 def _register_phonebook_service_event_sync(hass: HomeAssistant) -> None:
     """Refresh the phonebook when an ESPHome roster service appears."""
     bucket = hass.data.setdefault(DOMAIN, {})
@@ -1349,23 +2291,117 @@ def _register_phonebook_service_event_sync(hass: HomeAssistant) -> None:
 
 async def _handle_set_dnd_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
+    endpoint_id, _endpoint = _service_configured_endpoint(hass, call)
+    dnd_entities = tuple(
+        entity_id
+        for entity_id in getattr(_endpoint, "entity_ids", ())
+        if str(entity_id).startswith("switch.")
+    )
+    await _require_phone_service_control(
+        hass,
+        call,
+        endpoint=_endpoint,
+        action_entity_ids=dnd_entities,
+    )
     enabled = bool(call.data.get("dnd"))
-    store = _ha_softphone_store(hass)
-    store["dnd"] = enabled
-    await _async_save_ha_softphone_store(hass)
-    _publish_ha_softphone_state(hass)
-    _LOGGER.info("HA softphone DND set to %s via service", enabled)
+    from .switch import async_set_endpoint_dnd
+
+    await async_set_endpoint_dnd(hass, endpoint_id, enabled)
+    _LOGGER.info(
+        "HA softphone endpoint=%s DND set to %s via service",
+        endpoint_id,
+        enabled,
+    )
 
 
 async def _handle_set_ha_softphone_settings_service(call: ServiceCall) -> None:
     hass = call.hass
+    endpoint_id, _endpoint = _service_browser_endpoint(hass, call, strict=True)
     await async_set_ha_softphone_settings(
         hass,
+        endpoint_id=endpoint_id,
         extension=call.data.get("extension"),
         ring_group=call.data.get("ring_group"),
         conference_group=call.data.get("conference_group"),
         conference_ring=call.data.get("conference_ring"),
     )
+    await _refresh_and_push_phonebook(hass)
+
+
+async def _async_resolve_browser_destination(
+    hass: HomeAssistant,
+    *,
+    route,
+    target: str,
+    contacts: list,
+    trunk_ready: bool,
+    source_endpoint_id: str,
+):
+    """Apply browser availability policy and return the effective route."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    if endpoint_registry is None:
+        return route, target, None
+
+    visited: set[str] = set()
+    effective_target = target
+    while route.action is RouteAction.ANSWER_HA and route.entry is not None:
+        endpoint_id = str((route.entry.metadata or {}).get("endpoint_id") or "").strip()
+        endpoint = endpoint_registry.get(endpoint_id) if endpoint_id else None
+        if endpoint is None or endpoint.kind is not EndpointKind.BROWSER:
+            return route, effective_target, None
+        if endpoint.endpoint_id == source_endpoint_id:
+            raise ServiceValidationError("a Home Assistant phone cannot call itself")
+        if endpoint.endpoint_id in visited:
+            raise ServiceValidationError("browser phone offline-forward loop detected")
+        if endpoint.dnd or endpoint.active_call_id:
+            raise ServiceValidationError(f"{endpoint.name} is busy")
+        if endpoint.availability is EndpointAvailability.AVAILABLE:
+            return route, effective_target, endpoint
+
+        if (
+            endpoint.availability is EndpointAvailability.OFFLINE
+            and endpoint.offline_policy is OfflinePolicy.WAIT
+        ):
+            waiters = hass.data.setdefault(DOMAIN, {}).setdefault(
+                "ha_softphone_presence_events", {}
+            )
+            event = waiters.setdefault(endpoint.endpoint_id, asyncio.Event())
+            try:
+                await asyncio.wait_for(
+                    event.wait(), timeout=float(endpoint.offline_wait_seconds)
+                )
+            except TimeoutError as err:
+                raise ServiceValidationError(
+                    f"{endpoint.name} did not come online within "
+                    f"{endpoint.offline_wait_seconds} seconds"
+                ) from err
+            continue
+
+        if endpoint.offline_policy is OfflinePolicy.FORWARD:
+            visited.add(endpoint.endpoint_id)
+            effective_target = endpoint.offline_forward_target
+            route = resolve_ha_router(
+                effective_target,
+                contacts,
+                trunk_ready=trunk_ready,
+            )
+            continue
+
+        raise ServiceValidationError(f"{endpoint.name} is unavailable")
+
+    return route, effective_target, None
+
+
+def _logical_endpoint_for_route(hass: HomeAssistant, route):
+    """Return the configured logical endpoint carried by a roster route."""
+    entry = getattr(route, "entry", None)
+    endpoint_id = str(
+        ((getattr(entry, "metadata", None) or {}).get("endpoint_id")) or ""
+    ).strip()
+    registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    return registry.get(endpoint_id) if registry is not None and endpoint_id else None
 
 
 async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge: bool = False) -> None:
@@ -1387,13 +2423,39 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     if not target:
         raise ServiceValidationError("target is required")
     if source is not None:
-        await _call_esphome_action(hass, source, "start_call", {"dest": target})
+        call_button = str((source.get("entities") or {}).get("call") or "").strip()
+        await _require_phone_service_control(
+            hass,
+            call,
+            device=source,
+            action_entity_ids=(call_button,) if call_button else (),
+        )
+        await _call_esphome_action(
+            hass,
+            source,
+            "start_call",
+            {"dest": target},
+            context=call.context,
+        )
         _LOGGER.info("ESP SIP phone %s originating call to %s", source.get("name"), target)
         return
+    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call)
+    await _require_phone_service_control(
+        hass,
+        call,
+        endpoint=browser_endpoint,
+    )
+    if (
+        browser_endpoint is not None
+        and browser_endpoint.availability is EndpointAvailability.UNAVAILABLE
+    ):
+        raise ServiceValidationError(f"{browser_endpoint.name} is disabled")
+    local_name = _browser_endpoint_name(hass, endpoint_id, browser_endpoint)
+    source_device_id = str(
+        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+    )
+    _ha_softphone_store(hass, endpoint_id)["device_id"] = source_device_id
     cfg = _get_transport_config(hass)
-    local_ip = await _ha_advertise_host(hass)
-    if not local_ip:
-        raise ServiceValidationError("HA advertise IP is unknown")
     trunk = hass.data.get(DOMAIN, {}).get("sip_trunk")
     trunk_cfg = _get_trunk_config(hass)
     trunk_ready = _trunk_enabled(trunk_cfg) and bool(getattr(trunk, "registered", False))
@@ -1401,6 +2463,62 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     roster_json = str(sensor.attributes.get("roster_json") or "") if sensor is not None else ""
     contacts = parse_roster_json(roster_json) if roster_json else []
     route = resolve_ha_router(target, contacts, trunk_ready=trunk_ready)
+    route, target, browser_destination = await _async_resolve_browser_destination(
+        hass,
+        route=route,
+        target=target,
+        contacts=contacts,
+        trunk_ready=trunk_ready,
+        source_endpoint_id=endpoint_id,
+    )
+    if browser_destination is not None:
+        from .local_softphone_bridge import LocalBridgeError
+        from .local_softphone_runtime import start_local_softphone_call
+
+        await _async_prepare_ha_outbound_call(hass, endpoint_id)
+        try:
+            snapshot = start_local_softphone_call(
+                hass,
+                endpoint_id,
+                browser_destination.endpoint_id,
+                request_video=bool(
+                    browser_endpoint is not None
+                    and browser_endpoint.supports("video")
+                ),
+                enable_caller_video_send=bool(
+                    cfg.get(CONF_VIDEO_CAMERA_SEND, False)
+                    and call.data.get("send_video", False)
+                ),
+                caller_owner_id=str(
+                    call.data.get("media_client_id") or ""
+                ),
+                context=getattr(call, "context", None),
+            )
+        except LocalBridgeError as err:
+            raise ServiceValidationError(str(err)) from err
+        _LOGGER.info(
+            "HA local phone call started call_id=%s source=%s destination=%s video=%s",
+            snapshot.call_id,
+            endpoint_id,
+            browser_destination.endpoint_id,
+            snapshot.video_enabled,
+        )
+        return
+    target_endpoint = _logical_endpoint_for_route(hass, route)
+    if (
+        target_endpoint is not None
+        and target_endpoint.kind is not EndpointKind.BROWSER
+    ):
+        if target_endpoint.dnd or target_endpoint.active_call_id:
+            raise ServiceValidationError(f"{target_endpoint.name} is busy")
+        if target_endpoint.availability is not EndpointAvailability.AVAILABLE:
+            raise ServiceValidationError(f"{target_endpoint.name} is unavailable")
+    # Browser-to-browser calls use the in-memory logical bridge and must not
+    # depend on SIP network discovery.  Resolve the advertised address only
+    # after that path has been exhausted, for conference or external SIP/RTP.
+    local_ip = await _ha_advertise_host(hass)
+    if not local_ip:
+        raise ServiceValidationError("HA advertise IP is unknown")
     if route.reason is RouteReason.DIRECT_URI:
         # Entity CONTROL permits ordinary phone operation, but an ad-hoc SIP
         # URI also chooses an arbitrary network host/port.  Keep that SSRF and
@@ -1431,10 +2549,20 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             start_ring_group = hass.data.setdefault(DOMAIN, {}).get("async_start_ring_group_from_ha")
             if start_ring_group is None:
                 raise ServiceValidationError(f"{target} is not available yet")
-            await _async_prepare_ha_outbound_call(hass)
+            await _async_prepare_ha_outbound_call(hass, endpoint_id)
             await start_ring_group(
                 route.entry,
                 context=getattr(call, "context", None),
+                endpoint_id=endpoint_id,
+                media_client_id=str(call.data.get("media_client_id") or ""),
+                request_video=bool(
+                    browser_endpoint is not None
+                    and browser_endpoint.supports("video")
+                ),
+                enable_caller_video_send=bool(
+                    cfg.get(CONF_VIDEO_CAMERA_SEND, False)
+                    and call.data.get("send_video", False)
+                ),
             )
             _LOGGER.info("HA softphone started ring group=%s", route.entry.display_name)
             return
@@ -1442,32 +2570,41 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             room_name = route.entry.name or route.entry.id or target
             from .conference import conference_manager
 
-            await _async_prepare_ha_outbound_call(hass)
+            await _async_prepare_ha_outbound_call(hass, endpoint_id)
             manager = conference_manager(hass, local_ip=local_ip)
-            queue = manager.start_ha_softphone(room_name)
-            if queue is None:
+            joined = manager.start_ha_softphone(
+                room_name,
+                endpoint_id=endpoint_id,
+            )
+            if joined is None:
                 raise ServiceValidationError(f"Conference {room_name} is full")
-            call_id = f"conference:{room_name}"
+            call_id, queue = joined
             registry = _call_registry(hass)
             registry.softphone_media[call_id] = {
                 "conference_room": room_name,
                 "conference_queue": queue,
+                "endpoint_id": endpoint_id,
+                "media_client_id": str(call.data.get("media_client_id") or ""),
             }
             registry.upsert(
                 call_id,
                 state=CallState.IN_CALL.value,
                 owner="ha_softphone",
-                caller=_ha_peer_name(hass),
+                caller=local_name,
                 callee=room_name,
                 route_kind="conference",
+                endpoint_id=endpoint_id,
+                source_endpoint_id=endpoint_id,
+                media_client_id=str(call.data.get("media_client_id") or ""),
             )
             _bind_service_call_controller(registry, call_id, call)
             registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
             _set_ha_softphone_call_state(
                 hass,
                 CallState.IN_CALL.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=_ha_peer_name(hass),
+                endpoint_id=endpoint_id,
+                session_device_id=source_device_id,
+                caller=local_name,
                 callee=room_name,
                 peer_name=room_name,
                 direction="outgoing",
@@ -1485,7 +2622,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             )
             ring_members = hass.data.setdefault(DOMAIN, {}).get("async_ring_conference_members")
             if ring_members is not None:
-                create_runtime_task(hass, ring_members(route.entry))
+                create_runtime_task(
+                    hass,
+                    ring_members(route.entry, owner_call_id=call_id),
+                )
             _LOGGER.info("HA softphone joined conference room=%s", room_name)
             return
     route_uri = route.sip_uri
@@ -1499,7 +2639,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         )
     if not use_trunk and (route.action not in {RouteAction.DIRECT, RouteAction.FORWARD, RouteAction.BRIDGE, RouteAction.GROUP} or not route_uri):
         raise ServiceValidationError(f"cannot resolve SIP target: {target}")
-    await _async_prepare_ha_outbound_call(hass)
+    await _async_prepare_ha_outbound_call(hass, endpoint_id)
     uri = parse_sip_uri(route_uri)
     remote_tx_formats = _roster_entry_formats(route.entry, "tx_formats") or _device_formats(dest_device, "tx_formats")
     remote_rx_formats = _roster_entry_formats(route.entry, "rx_formats") or _device_formats(dest_device, "rx_formats")
@@ -1516,10 +2656,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         entry_metadata.get("local_ha")
         or entry_metadata.get("virtual_endpoint")
         or entry_metadata.get("group_type")
-        or (
-            "audio_mode" in entry_metadata
-            and ("tx_formats" in entry_metadata or "rx_formats" in entry_metadata)
-        )
+        or str(entry_metadata.get("endpoint_kind") or "").strip().lower()
+        == EndpointKind.ESPHOME.value
     )
     # SIP video is HA/browser-owned.  Native ESP audio endpoints deliberately
     # stay outside this path, while direct SIP URIs, trunk calls, registered
@@ -1527,8 +2665,17 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     # A phonebook entry may carry ESP-style audio capability metadata while
     # its resolved route still exits through the SIP trunk.  The final route,
     # not those contact hints, decides whether browser-owned video is valid.
-    video_enabled = bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)) and (
-        use_trunk or not native_audio_endpoint
+    source_video_enabled = (
+        browser_endpoint is None or browser_endpoint.supports("video")
+    )
+    target_video_enabled = (
+        target_endpoint is None or target_endpoint.supports("video")
+    )
+    video_enabled = (
+        bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False))
+        and source_video_enabled
+        and target_video_enabled
+        and (use_trunk or not native_audio_endpoint)
     )
     video_reservation = None
     video_rtp_socket = None
@@ -1560,8 +2707,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     # Camera transmission is opt-in for each call.  Keep offering a receive
     # path when it is off, but never advertise send capability solely because
     # the administrator enabled the experimental camera feature globally.
-    camera_send_enabled = bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False)) and bool(
-        call.data.get("send_video", False)
+    camera_send_enabled = (
+        video_enabled
+        and bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False))
+        and bool(call.data.get("send_video", False))
     )
     offered_video_formats = (
         tuple(item for item in DEFAULT_VIDEO_FORMATS if browser_video_send_supported(item))
@@ -1572,9 +2721,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     client = SipCallClient(
         local_ip=local_ip,
         local_name=(
-            str(trunk_cfg.get(CONF_TRUNK_USERNAME) or _ha_peer_name(hass))
+            str(trunk_cfg.get(CONF_TRUNK_USERNAME) or local_name)
             if use_trunk
-            else _ha_peer_name(hass)
+            else local_name
         ),
         local_sip_port=int(cfg["sip_port"]),
         local_rtp_port=local_rtp_port,
@@ -1656,7 +2805,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 )
                 video_session.media_generation += 1
                 video_session.update_event.set()
-            store = _ha_softphone_store(hass)
+            store = _ha_softphone_store(hass, endpoint_id)
             if str(store.get("call_id") or "") == call_id:
                 store.update(
                     {
@@ -1690,7 +2839,11 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 )
                 _fire_call_event(
                     hass,
-                    dict(store, device_id=HA_SOFTPHONE_DEVICE_ID),
+                    dict(
+                        store,
+                        endpoint_id=endpoint_id,
+                        device_id=source_device_id,
+                    ),
                     "session",
                 )
 
@@ -1710,17 +2863,46 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         client.dialog_ids.call_id,
         state=CallState.CALLING.value,
         owner="ha_softphone",
-        caller=_ha_peer_name(hass),
+        caller=local_name,
         callee=display_target,
         route_kind="direct",
         direction="outgoing",
+        endpoint_id=endpoint_id,
+        media_client_id=str(call.data.get("media_client_id") or ""),
+        target_endpoint_id=(
+            target_endpoint.endpoint_id if target_endpoint is not None else ""
+        ),
     )
+    try:
+        registry.claim_endpoint(
+            client.dialog_ids.call_id,
+            endpoint_id,
+            role="source",
+        )
+        if (
+            target_endpoint is not None
+            and target_endpoint.kind is not EndpointKind.BROWSER
+        ):
+            registry.claim_endpoint(
+                client.dialog_ids.call_id,
+                target_endpoint.endpoint_id,
+                role="destination",
+            )
+    except EndpointBusyError as err:
+        registry.finish_and_pop(
+            client.dialog_ids.call_id,
+            reason=TerminalReason.BUSY.value,
+            state=CallState.BUSY.value,
+        )
+        await client.close()
+        raise ServiceValidationError(str(err)) from err
     _bind_service_call_controller(registry, client.dialog_ids.call_id, call)
     _set_ha_softphone_call_state(
         hass,
         CallState.CALLING.value,
-        session_device_id=HA_SOFTPHONE_DEVICE_ID,
-        caller=_ha_peer_name(hass),
+        endpoint_id=endpoint_id,
+        session_device_id=source_device_id,
+        caller=local_name,
         callee=display_target,
         peer_name=display_target,
         direction="outgoing",
@@ -1730,13 +2912,40 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         sip_uri=route_uri,
     )
     registry.sip_clients[client.dialog_ids.call_id] = client
-    result = await client.invite(
-        target=uri.user,
-        remote_host=uri.host,
-        remote_sip_port=uri.port or int(cfg["sip_port"]),
-        request_uri=str(uri),
-        timeout=SIP_TIMER_B if use_trunk else 8.0,
-    )
+    try:
+        result = await client.invite(
+            target=uri.user,
+            remote_host=uri.host,
+            remote_sip_port=uri.port or int(cfg["sip_port"]),
+            request_uri=str(uri),
+            timeout=SIP_TIMER_B if use_trunk else 8.0,
+        )
+    except Exception as err:  # noqa: BLE001 - isolate one outbound SIP leg.
+        registry.detach_client(client.dialog_ids.call_id)
+        await client.close()
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.TRANSPORT_UNREACHABLE.value,
+            endpoint_id=endpoint_id,
+            session_device_id=source_device_id,
+            caller=local_name,
+            callee=display_target,
+            peer_name=display_target,
+            direction="outgoing",
+            call_id=client.dialog_ids.call_id,
+            reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+            terminal_reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+            last_sip_event="INVITE_ERROR",
+            sip_uri=route_uri,
+        )
+        registry.finish_and_pop(
+            client.dialog_ids.call_id,
+            reason=TerminalReason.TRANSPORT_UNREACHABLE.value,
+            state=CallState.TRANSPORT_UNREACHABLE.value,
+        )
+        raise ServiceValidationError(
+            f"could not start SIP call to {display_target}"
+        ) from err
     if registry.sip_clients.get(client.dialog_ids.call_id) is not client:
         await client.close()
         return
@@ -1753,8 +2962,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         _set_ha_softphone_call_state(
             hass,
             CallState.REMOTE_RINGING.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=_ha_peer_name(hass),
+            endpoint_id=endpoint_id,
+            session_device_id=source_device_id,
+            caller=local_name,
             callee=display_target,
             peer_name=display_target,
             direction="outgoing",
@@ -1767,8 +2977,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         _set_ha_softphone_call_state(
             hass,
             CallState.IN_CALL.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=_ha_peer_name(hass),
+            endpoint_id=endpoint_id,
+            session_device_id=source_device_id,
+            caller=local_name,
             callee=display_target,
             peer_name=display_target,
             direction="outgoing",
@@ -1804,8 +3015,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         _set_ha_softphone_call_state(
             hass,
             public_result,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
-            caller=_ha_peer_name(hass),
+            endpoint_id=endpoint_id,
+            session_device_id=source_device_id,
+            caller=local_name,
             callee=display_target,
             peer_name=display_target,
             direction="outgoing",
@@ -1822,6 +3034,9 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         result=result,
         target=target,
         sip_uri=route_uri,
+        endpoint_id=endpoint_id,
+        local_name=local_name,
+        session_device_id=source_device_id,
     )
     _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route_uri, result)
 
@@ -1838,14 +3053,36 @@ async def _handle_sip_forward_service(call: ServiceCall) -> None:
 
     data = dict(call.data)
     registry = _call_registry(call.hass)
+    endpoint_id, _endpoint = _service_browser_endpoint(
+        call.hass, call, strict=True
+    )
+    await _require_phone_service_control(
+        call.hass,
+        call,
+        endpoint=_endpoint,
+    )
+    pending_routes = {
+        call_id: route
+        for call_id, route in registry.pending_routes.items()
+        if _call_belongs_to_endpoint(registry, call_id, endpoint_id)
+    }
+    pending_invites = {
+        call_id: invite
+        for call_id, invite in registry.pending_invites.items()
+        if _call_belongs_to_endpoint(registry, call_id, endpoint_id)
+    }
     try:
         call_id = resolve_forward_call_id(
             str(data.get("call_id") or ""),
-            registry.pending_routes,
-            registry.pending_invites,
+            pending_routes,
+            pending_invites,
         )
     except ValueError as err:
         raise ServiceValidationError(str(err)) from err
+    if not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
+        raise ServiceValidationError(
+            f"call_id {call_id} belongs to another phone endpoint"
+        )
     if not data.get("call_id"):
         context = registry.event_context(call_id)
         data["call_id"] = call_id
@@ -1996,6 +3233,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up VoIP Stack from a config entry (UI setup)."""
+    async_ensure_phone_subentries(hass, entry)
+    endpoint_registry = async_setup_endpoint_registry(hass, entry)
+    from .local_softphone_runtime import async_setup_local_softphone_bridge
+
+    async_setup_local_softphone_bridge(hass)
     cfg = _entry_transport_config(entry)
     assist_cfg = _entry_assist_config(entry)
     trunk_cfg = _entry_trunk_config(entry)
@@ -2006,7 +3248,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][CONF_DEBUG_MODE] = bool(entry.data.get(CONF_DEBUG_MODE, False))
     hass.data[DOMAIN]["manual_roster_entries"] = _manual_roster_entries(hass)
     await _async_setup_shared(hass)
-    await _async_load_ha_softphone_store(hass, entry)
+    for subentry in phone_subentries(entry):
+        endpoint = endpoint_registry.get(
+            str(subentry.data.get("endpoint_id") or "")
+        )
+        if endpoint is None or endpoint.kind is not EndpointKind.BROWSER:
+            continue
+        await _async_load_ha_softphone_store(
+            hass,
+            entry,
+            endpoint_id=endpoint.endpoint_id,
+            endpoint_data=dict(subentry.data),
+        )
     await _async_apply_assist_intents(
         hass,
         bool(entry.data.get(CONF_ASSIST_INTENTS, False)),
@@ -2027,6 +3280,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     await _async_start_sip_trunk(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    bucket = hass.data.setdefault(DOMAIN, {})
+    bucket["entry_runtime_signature"] = _entry_runtime_signature(entry)
+    bucket["entry_phone_signature"] = _entry_phone_signature(entry)
+    bucket["entry_phone_records"] = {
+        str(subentry.data.get("endpoint_id") or "").strip(): dict(subentry.data)
+        for subentry in phone_subentries(entry)
+    }
+    bucket["entry_contacts_signature"] = tuple(
+        dict(item)
+        for item in entry.data.get(CONF_PHONEBOOK_CONTACTS, [])
+        if isinstance(item, dict)
+    )
+    entry.async_on_unload(entry.add_update_listener(_async_config_entry_updated))
     create_runtime_task(hass, _deferred_phonebook_sync(hass))
     return True
 
@@ -2052,8 +3318,119 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unsub = hass.data.get(DOMAIN, {}).pop("phonebook_service_event_unsub", None)
     if unsub is not None:
         unsub()
+    unsub = hass.data.get(DOMAIN, {}).pop("pending_endpoint_removal_unsub", None)
+    if unsub is not None:
+        unsub()
+    hass.data.get(DOMAIN, {}).pop("pending_endpoint_removals", None)
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok
+
+
+_REMOVED_ENTRY_RUNTIME_KEYS = (
+    # Configured endpoint graph and its dynamic HA entity adapters.
+    "endpoint_registry",
+    "endpoint_subentry_ids",
+    "pending_endpoint_removals",
+    "endpoint_connectivity_entity_manager",
+    "endpoint_call_event_entity_manager",
+    "endpoint_call_state_entity_manager",
+    "endpoint_dnd_entity_manager",
+    # Per-entry browser-phone state. A later entry must start from its own
+    # subentries instead of inheriting a removed kiosk or its page presence.
+    "ha_softphone",
+    "ha_softphones",
+    "ha_softphone_presence",
+    "ha_softphone_presence_events",
+    "ha_softphone_start_locks",
+    "ha_softphone_endpoint_sensor",
+    "ha_softphone_call_state_sensor",
+    "phonebook_sensor",
+    # SIP/B2BUA and local logical-phone runtime.
+    "call_registry",
+    "sip_bridge_state",
+    "sip_registrar",
+    "sip_endpoint",
+    "sip_server",
+    "sip_tcp_server",
+    "sip_trunk",
+    "sip_rtp_port_pool",
+    "sip_rtp_next_port",
+    "trunk_info_queues",
+    "trunk_closed_calls",
+    "active_audio_sessions",
+    "active_video_sessions",
+    "audio_ws_owners",
+    "audio_ws_owner_lock",
+    "video_ws_owners",
+    "video_ws_owner_lock",
+    "media_identity_lock",
+    "media_controller_lock",
+    "local_softphone_bridge",
+    "local_softphone_bridge_unsub",
+    "conference_manager",
+    "async_forward_call",
+    "async_ring_conference_members",
+    "async_start_ring_group_from_ha",
+    "forward_tasks",
+    "forward_claims",
+    "call_deadlines",
+    "runtime_tasks",
+    "video_transcoder_active",
+    "video_transcoder_lock",
+    # Entry-derived configuration and resolver caches.
+    "transport_config",
+    "assist_config",
+    "trunk_config",
+    "sip_port",
+    CONF_DEBUG_MODE,
+    "manual_roster_entries",
+    "device_resolver",
+    "esp_state_event_generations",
+    "entry_runtime_signature",
+    "entry_phone_signature",
+    "entry_phone_records",
+    "entry_contacts_signature",
+)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Forget all runtime state owned by a permanently removed entry.
+
+    Services, websocket commands and HTTP views are process-wide Home
+    Assistant registrations and intentionally survive. ``initialized`` and
+    the view-registration sentinels therefore remain in the domain bucket so
+    adding the integration again cannot attempt duplicate registrations.
+    """
+    bucket = hass.data.get(DOMAIN)
+    if not isinstance(bucket, dict):
+        return
+
+    # Wake any bounded offline wait before discarding its Event object. The
+    # normal unload has already cancelled runtime tasks, but this keeps the
+    # final-removal hook safe when called by a minimal HA test harness too.
+    waiters = bucket.get("ha_softphone_presence_events")
+    if isinstance(waiters, dict):
+        for waiter in tuple(waiters.values()):
+            set_waiter = getattr(waiter, "set", None)
+            if callable(set_waiter):
+                set_waiter()
+
+    registry = bucket.get("call_registry")
+    clear_runtime = getattr(registry, "clear_runtime", None)
+    if callable(clear_runtime):
+        clear_runtime()
+
+    unsubscribe = bucket.pop("local_softphone_bridge_unsub", None)
+    if callable(unsubscribe):
+        unsubscribe()
+
+    pending_unsubscribe = bucket.pop("pending_endpoint_removal_unsub", None)
+    if callable(pending_unsubscribe):
+        pending_unsubscribe()
+
+    for key in _REMOVED_ENTRY_RUNTIME_KEYS:
+        bucket.pop(key, None)
+    bucket.pop(entry.entry_id, None)
 
 
 async def _async_start_sip_trunk(hass: HomeAssistant) -> bool:

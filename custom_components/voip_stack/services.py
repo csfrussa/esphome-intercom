@@ -37,7 +37,8 @@ SEQUENCE = vol.All(vol.Coerce(int), vol.Range(min=0, max=2**31 - 1))
 
 
 async def async_register_services(hass: HomeAssistant, handlers: dict[str, object]) -> None:
-    target_fields = {
+    browser_target_fields = {
+        vol.Optional("endpoint_id"): IDENTIFIER_TEXT,
         vol.Optional("device_id"): TARGET_IDS,
         vol.Optional("entity_id"): vol.Any(
             vol.All(cv.entity_id, vol.Length(max=256)),
@@ -46,6 +47,9 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
                 vol.Length(max=64),
             ),
         ),
+    }
+    target_fields = {
+        **browser_target_fields,
         vol.Optional("name"): SHORT_TEXT,
         vol.Optional("friendly_name"): SHORT_TEXT,
     }
@@ -66,6 +70,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("source_name"): SHORT_TEXT,
             vol.Optional("call_id", default=""): SHORT_TEXT,
             vol.Optional("send_video", default=False): cv.boolean,
+            vol.Optional("media_client_id", default=""): IDENTIFIER_TEXT,
         },
         extra=vol.PREVENT_EXTRA,
     )
@@ -105,6 +110,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("call"): URI_TEXT,
             vol.Optional("ha_bridge", default=False): cv.boolean,
             vol.Optional("send_video", default=False): cv.boolean,
+            vol.Optional("media_client_id", default=""): IDENTIFIER_TEXT,
         },
         extra=vol.PREVENT_EXTRA,
     )
@@ -189,9 +195,16 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     phonebook_set_schema = vol.Schema(
         {vol.Required("roster_json"): ROSTER_JSON_TEXT}, extra=vol.PREVENT_EXTRA
     )
-    set_dnd_schema = vol.Schema({vol.Required("dnd"): cv.boolean}, extra=vol.PREVENT_EXTRA)
+    set_dnd_schema = vol.Schema(
+        {
+            **browser_target_fields,
+            vol.Required("dnd"): cv.boolean,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
     set_ha_softphone_settings_schema = vol.Schema(
         {
+            **browser_target_fields,
             vol.Optional("extension"): IDENTIFIER_TEXT,
             vol.Optional("ring_group"): SHORT_TEXT,
             vol.Optional("conference_group"): SHORT_TEXT,
@@ -234,6 +247,12 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         "disable_account",
         "list_accounts",
         "export_accounts",
+        # These mutate routing/timers without a phone selector. Internal HA
+        # automations remain allowed; authenticated callers must be admins so
+        # global event-entity control cannot affect another user's call.
+        "route",
+        "set_deadline",
+        "cancel_deadline",
     }
 
     def handler_for(name: str):

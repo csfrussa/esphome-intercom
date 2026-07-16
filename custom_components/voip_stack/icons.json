@@ -1,4 +1,26 @@
 {
+  "entity": {
+    "sensor": {
+      "phone_endpoint_call_state": {
+        "default": "mdi:phone-in-talk"
+      }
+    },
+    "event": {
+      "phone_endpoint_call": {
+        "default": "mdi:phone-sync"
+      }
+    },
+    "switch": {
+      "phone_endpoint_dnd": {
+        "default": "mdi:minus-circle"
+      }
+    },
+    "binary_sensor": {
+      "phone_endpoint_connectivity": {
+        "default": "mdi:phone-check"
+      }
+    }
+  },
   "services": {
     "purge_devices": {
       "service": "mdi:phone-remove"

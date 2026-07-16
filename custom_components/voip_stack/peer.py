@@ -12,6 +12,9 @@ class Peer:
 
     name: str
     host: str
+    endpoint_id: str = ""
+    endpoint_kind: str = ""
+    capabilities: tuple[str, ...] = ()
     local_ha: bool = False
     sip_port: int | None = None
     rtp_port: int | None = None

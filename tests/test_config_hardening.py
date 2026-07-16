@@ -21,6 +21,7 @@ SERVICES_YAML = ROOT / "custom_components" / "voip_stack" / "services.yaml"
 STRINGS = ROOT / "custom_components" / "voip_stack" / "strings.json"
 TRANSLATIONS = ROOT / "custom_components" / "voip_stack" / "translations"
 CONFIG = ROOT / "custom_components" / "voip_stack" / "config.py"
+INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 
 
 def _load_disabled_trunk_data():
@@ -118,6 +119,43 @@ def _load_service_schemas() -> dict[str, vol.Schema]:
     return schemas
 
 
+def _load_remove_entry_hook():
+    """Load the pure final-removal hook without importing Home Assistant."""
+
+    tree = ast.parse(INIT.read_text())
+    nodes = [
+        node
+        for node in tree.body
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "_REMOVED_ENTRY_RUNTIME_KEYS"
+                for target in node.targets
+            )
+        )
+        or (
+            isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "async_remove_entry"
+        )
+    ]
+    namespace = {
+        "HomeAssistant": object,
+        "ConfigEntry": object,
+        "DOMAIN": "voip_stack",
+        "CONF_DEBUG_MODE": "debug_mode",
+    }
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])),
+            str(INIT),
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace["async_remove_entry"]
+
+
 @pytest.mark.parametrize("legacy_value", [None, ""])
 def test_disabled_trunk_uses_safe_defaults_for_empty_legacy_values(
     legacy_value: object,
@@ -163,6 +201,86 @@ def test_create_account_password_service_field_is_masked() -> None:
     assert document["create_account"]["fields"]["password"]["selector"] == {
         "text": {"type": "password"}
     }
+
+
+@pytest.mark.parametrize(
+    ("service", "expected_integrations"),
+    [
+        ("answer", {"voip_stack", "esphome"}),
+        ("decline", {"voip_stack", "esphome"}),
+        ("call", {"voip_stack", "esphome"}),
+        ("hangup", {"voip_stack", "esphome"}),
+        ("forward", {"voip_stack"}),
+        ("set_dnd", {"voip_stack"}),
+        ("set_ha_softphone_settings", {"voip_stack"}),
+    ],
+)
+def test_phone_service_pickers_expose_only_compatible_integrations(
+    service: str,
+    expected_integrations: set[str],
+) -> None:
+    document = yaml.safe_load(SERVICES_YAML.read_text())
+
+    for field, selector_name in (("device_id", "device"), ("entity_id", "entity")):
+        selector = document[service]["fields"][field]["selector"]
+        assert selector_name in selector
+        filters = (selector.get(selector_name) or {}).get("filter") or []
+        assert {item["integration"] for item in filters} == expected_integrations
+
+
+def test_purge_picker_is_limited_to_esphome_devices() -> None:
+    document = yaml.safe_load(SERVICES_YAML.read_text())
+    selector = document["purge_devices"]["fields"]["device_id"]["selector"]
+
+    assert selector["device"]["filter"] == [{"integration": "esphome"}]
+
+
+def test_final_entry_removal_forgets_runtime_but_preserves_global_views() -> None:
+    hook = _load_remove_entry_hook()
+    wakeups: list[str] = []
+    unsubscribed: list[str] = []
+
+    class Registry:
+        cleared = False
+
+        def clear_runtime(self) -> None:
+            self.cleared = True
+
+    registry = Registry()
+    bucket = {
+        "initialized": True,
+        "audio_ws_view_registered": True,
+        "video_ws_view_registered": True,
+        "media_shutdown": object(),
+        "debug_capture_tasks": {"finishing-write"},
+        "endpoint_registry": object(),
+        "call_registry": registry,
+        "ha_softphones": {"kitchen": {"state": "in_call"}},
+        "ha_softphone_presence": {"kitchen": 1},
+        "ha_softphone_presence_events": {
+            "kitchen": SimpleNamespace(set=lambda: wakeups.append("kitchen"))
+        },
+        "local_softphone_bridge_unsub": lambda: unsubscribed.append("local"),
+        "pending_endpoint_removal_unsub": lambda: unsubscribed.append("pending"),
+        "entry-id": {"legacy": True},
+    }
+    hass = SimpleNamespace(data={"voip_stack": bucket})
+    entry = SimpleNamespace(entry_id="entry-id")
+
+    asyncio.run(hook(hass, entry))
+
+    assert registry.cleared
+    assert wakeups == ["kitchen"]
+    assert unsubscribed == ["local", "pending"]
+    assert "endpoint_registry" not in bucket
+    assert "call_registry" not in bucket
+    assert "ha_softphones" not in bucket
+    assert "ha_softphone_presence" not in bucket
+    assert "entry-id" not in bucket
+    assert bucket["initialized"] is True
+    assert bucket["audio_ws_view_registered"] is True
+    assert bucket["video_ws_view_registered"] is True
+    assert bucket["debug_capture_tasks"] == {"finishing-write"}
 
 
 @pytest.mark.parametrize(
@@ -270,6 +388,30 @@ def test_advanced_assist_context_is_opt_in_and_persisted_by_config_flow() -> Non
     assert "BooleanSelector()" in flow_source
     assert "user_input.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)" in flow_source
     assert "data = dict(self._base_input)" in flow_source
+
+
+def test_phone_and_assist_flows_share_one_complete_route_namespace() -> None:
+    flow_source = CONFIG_FLOW.read_text()
+    mappings = flow_source[
+        flow_source.index("def _entry_route_mappings(") :
+        flow_source.index("def _port_selector(")
+    ]
+    assist = flow_source[
+        flow_source.index("async def async_step_assist(") :
+        flow_source.index("async def async_step_trunk(")
+    ]
+    phone_aliases = flow_source[
+        flow_source.index("    def _validate_aliases(") :
+        flow_source.index("    def _normalized_common(")
+    ]
+
+    assert "include_assist: bool = True" in mappings
+    assert "phone_subentries(entry)" in mappings
+    assert "CONF_PHONEBOOK_CONTACTS" in mappings
+    assert 'data.get("sip_accounts"' in mappings
+    assert "include_assist=False" in assist
+    assert "_entry_route_mappings(" in phone_aliases
+    assert "include_assist=False" not in phone_aliases
 
 
 @pytest.mark.parametrize(

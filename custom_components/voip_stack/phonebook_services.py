@@ -2,18 +2,95 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 import logging
 from typing import Any
 
 from homeassistant.core import ServiceCall
 
-from .const import DOMAIN
+from .config_validation import route_namespace_conflicts
+from .const import (
+    CONF_ASSIST_ENDPOINT_ENABLED,
+    CONF_ASSIST_EXTENSION,
+    DOMAIN,
+)
 from .phonebook_runtime import push_roster_json_to_esps
-from .roster import RosterEntry, parse_roster_json
+from .roster import RosterEntry, normalize_roster_key, parse_roster_json
 from .store import manual_roster_entries, store_manual_roster_entries
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _entry_mapping(entry: RosterEntry) -> dict[str, Any]:
+    return {
+        "id": entry.id,
+        "name": entry.name,
+        "extension": entry.extension,
+        "number": entry.number,
+        "metadata": dict(entry.metadata or {}),
+    }
+
+
+def _runtime_route_mappings(hass: Any) -> list[Mapping[str, Any]]:
+    mappings: list[Mapping[str, Any]] = []
+    registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    if registry is not None:
+        mappings.extend(
+            {
+                "id": endpoint.endpoint_id,
+                "name": endpoint.name,
+                "extension": endpoint.extension,
+                "username": endpoint.username,
+                "ring_group": endpoint.ring_group,
+                "conference_group": endpoint.conference_group,
+            }
+            for endpoint in registry.endpoints
+        )
+    assist = hass.data.get(DOMAIN, {}).get("assist_config") or {}
+    assist_extension = str(assist.get(CONF_ASSIST_EXTENSION) or "").strip()
+    if assist.get(CONF_ASSIST_ENDPOINT_ENABLED) and assist_extension:
+        mappings.append(
+            {
+                "id": "assist",
+                "name": str(assist.get("name") or "Assist"),
+                "extension": assist_extension,
+            }
+        )
+    return mappings
+
+
+def _validate_contact_namespace(
+    hass: Any,
+    entries: list[RosterEntry],
+    *,
+    existing_manual: list[RosterEntry] | None = None,
+) -> None:
+    existing = _runtime_route_mappings(hass)
+    existing.extend(_entry_mapping(item) for item in existing_manual or [])
+    accepted: list[Mapping[str, Any]] = []
+    for entry in entries:
+        metadata = entry.metadata or {}
+        groups = tuple(
+            part.strip()
+            for field in ("ring_group", "conference_group")
+            for part in str(metadata.get(field) or "").split(",")
+            if part.strip()
+        )
+        if route_namespace_conflicts(
+            candidate_routes=(
+                entry.id,
+                entry.name,
+                entry.extension,
+                entry.number,
+            ),
+            candidate_groups=groups,
+            existing=(*existing, *accepted),
+        ):
+            raise ValueError(
+                f"phonebook route for {entry.display_name!r} conflicts with an "
+                "existing phone, contact, Assist extension, or group"
+            )
+        accepted.append(_entry_mapping(entry))
 
 
 def build_phonebook_service_handlers(
@@ -64,11 +141,21 @@ def build_phonebook_service_handlers(
             ha_bridge=bool(call.data.get("ha_bridge", False)),
             metadata=metadata,
         )
+        entry_keys = {
+            normalize_roster_key(entry.id),
+            normalize_roster_key(entry.name),
+        }
+        entry_keys.discard("")
         entries = [
-            item for item in manual_roster_entries(hass)
-            if getattr(item, "id", "").lower() != entry.id.lower()
-            and getattr(item, "name", "").lower() != entry.name.lower()
+            item
+            for item in manual_roster_entries(hass)
+            if not entry_keys
+            & {
+                normalize_roster_key(getattr(item, "id", "")),
+                normalize_roster_key(getattr(item, "name", "")),
+            }
         ]
+        _validate_contact_namespace(hass, [entry], existing_manual=entries)
         entries.append(entry)
         store_manual_roster_entries(hass, entries)
         await refresh_and_push_phonebook(hass)
@@ -95,6 +182,7 @@ def build_phonebook_service_handlers(
     async def set_contacts(call: ServiceCall) -> None:
         hass = call.hass
         entries = parse_roster_json(str(call.data.get("roster_json") or "[]"))
+        _validate_contact_namespace(hass, entries)
         store_manual_roster_entries(hass, entries)
         await refresh_and_push_phonebook(hass)
         _LOGGER.info("Phonebook manual contacts replaced: %d entries", len(entries))

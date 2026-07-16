@@ -155,7 +155,9 @@ informational, not legal advice.
 This experimental profile does not claim support for:
 
 - video on ESPHome endpoints;
-- video through Assist, ring groups or conference rooms;
+- video through Assist, conference rooms or ring-group legs that traverse
+  standard SIP/RTP endpoints (a local HA browser caller can retain direct
+  browser video when another local browser phone wins the ring group);
 - cross-codec transcoding between two standard SIP endpoints;
 - VP9, AV1, MxPEG or other proprietary payloads;
 - more than one simultaneous server-side transcode;

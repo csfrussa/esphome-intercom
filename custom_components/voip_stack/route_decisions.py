@@ -7,7 +7,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
-from .const import HA_SOFTPHONE_DEVICE_ID
+from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .endpoint_lifecycle import call_registry
 from .fsm import CallState, TerminalReason
 from .websocket_api import _set_ha_softphone_call_state, _set_sip_bridge_call_state
@@ -50,6 +50,72 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
     future = route.get("future")
     if future is None or future.done():
         raise ServiceValidationError(f"SIP route for call_id {call_id} is no longer decidable")
+    endpoint_id = str(data.get("endpoint_id") or "").strip()
+    ring_endpoint_ids = tuple(
+        str(value or "").strip()
+        for value in (route.get("ring_group_endpoint_ids") or ())
+        if str(value or "").strip()
+    )
+    if ring_endpoint_ids and action in {"answer_ha", "default"}:
+        if endpoint_id not in ring_endpoint_ids:
+            raise ServiceValidationError(
+                "ring-group answer requires one of its ringing phone endpoints"
+            )
+        if endpoint_id in route.get("declined_endpoint_ids", set()):
+            raise ServiceValidationError(
+                "this phone endpoint has already declined the ring-group call"
+            )
+    if (
+        ring_endpoint_ids
+        and endpoint_id in ring_endpoint_ids
+        and action in {"decline", "busy", "cancel"}
+    ):
+        declined = route.setdefault("declined_endpoint_ids", set())
+        declined.add(endpoint_id)
+        registry.record_route(
+            call_id,
+            action="decline" if action == "cancel" else action,
+            source=f"phone:{endpoint_id}",
+        )
+        registry.release_endpoint_claim(call_id, endpoint_id)
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None
+            else None
+        )
+        app_reason = str(data.get("decline_reason") or "").strip() or (
+            TerminalReason.BUSY.value
+            if action == "busy"
+            else TerminalReason.DECLINED.value
+        )
+        _set_ha_softphone_call_state(
+            hass,
+            CallState.BUSY.value if action == "busy" else "declined",
+            endpoint_id=endpoint_id,
+            session_device_id=str(
+                getattr(endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
+            ),
+            caller=getattr(route.get("invite"), "caller", ""),
+            callee=getattr(route.get("invite"), "target", ""),
+            peer_name=getattr(route.get("invite"), "caller", ""),
+            direction="incoming",
+            call_id=call_id,
+            reason=app_reason,
+            terminal_reason=app_reason,
+            origin="self",
+            sip_status_code=486 if action == "busy" else 603,
+            last_sip_event="SIP_RESPONSE",
+        )
+        if set(ring_endpoint_ids).issubset(declined):
+            future.set_result(
+                {
+                    "action": "decline",
+                    "endpoint_id": endpoint_id,
+                    "decline_reason": app_reason,
+                }
+            )
+        return
     registry.record_route(
         call_id,
         action=action,
@@ -74,6 +140,9 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             "status": int(data.get("status") or 0),
             "reason": str(data.get("reason") or "").strip(),
             "decline_reason": str(data.get("decline_reason") or "").strip(),
+            "endpoint_id": str(data.get("endpoint_id") or "").strip(),
+            "media_client_id": str(data.get("media_client_id") or "").strip(),
+            "send_video": bool(data.get("send_video", False)),
         }
     )
     invite = route.get("invite")
@@ -92,10 +161,20 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             status = status or 603
             app_reason = app_reason or TerminalReason.DECLINED.value
             state = "declined"
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        selected_endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None and endpoint_id
+            else None
+        )
         _set_ha_softphone_call_state(
             hass,
             state,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id or "default",
+            session_device_id=str(
+                getattr(selected_endpoint, "device_id", "")
+                or HA_SOFTPHONE_DEVICE_ID
+            ),
             caller=getattr(invite, "caller", ""),
             callee=getattr(invite, "target", ""),
             peer_name=getattr(invite, "caller", ""),
@@ -108,10 +187,20 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
             last_sip_event="SIP_RESPONSE",
         )
     elif action in {"answer_ha", "default"} and invite is not None:
+        endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+        selected_endpoint = (
+            endpoint_registry.get(endpoint_id)
+            if endpoint_registry is not None and endpoint_id
+            else None
+        )
         _set_ha_softphone_call_state(
             hass,
             CallState.CONNECTING.value,
-            session_device_id=HA_SOFTPHONE_DEVICE_ID,
+            endpoint_id=endpoint_id or "default",
+            session_device_id=str(
+                getattr(selected_endpoint, "device_id", "")
+                or HA_SOFTPHONE_DEVICE_ID
+            ),
             caller=getattr(invite, "caller", ""),
             callee=getattr(invite, "target", ""),
             peer_name=getattr(invite, "caller", ""),
