@@ -1159,6 +1159,14 @@ def _set_ha_softphone_call_state(
     previous_call_id = str(store.get("call_id") or "")
     next_call_id = str(canonical.get("call_id") or "")
     previous_state = str(store.get("state") or "").strip().lower()
+    registry = call_registry(hass)
+    if not terminal and next_call_id and registry.is_terminated(next_call_id):
+        _LOGGER.info(
+            "Ignoring stale HA softphone state=%s for terminated call_id=%s",
+            state,
+            next_call_id,
+        )
+        return
     if state == CallState.IN_CALL.value:
         if next_call_id != previous_call_id or previous_state != CallState.IN_CALL.value:
             extra.setdefault("connected_at", time.time())

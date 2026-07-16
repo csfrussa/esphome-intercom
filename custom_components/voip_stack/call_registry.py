@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,6 +20,7 @@ TERMINAL_STATES = {
     "protocol_error",
     "error",
 }
+MAX_TERMINATED_CALL_IDS = 512
 
 
 @dataclass(slots=True)
@@ -35,6 +37,7 @@ class CallLeg:
 @dataclass(slots=True)
 class CallSession:
     id: str
+    generation: int = 0
     revision: int = 0
     state: str = "new"
     owner: CallOwner = ""
@@ -74,8 +77,43 @@ class CallRegistry:
         self.bridge_clients: dict[str, str] = {}
         self.event_contexts: dict[str, CallEventContext] = {}
         self.endpoint_claims: dict[str, dict[str, str]] = {}
-        self.terminated_call_ids: set[str] = set()
+        self.terminated_call_ids: OrderedDict[str, int] = OrderedDict()
+        self._generation = 0
         self._endpoint_registry: Any | None = None
+
+    def _remember_terminated(
+        self,
+        *call_ids: str,
+        generation: int = 0,
+    ) -> None:
+        """Remember terminal calls with deterministic oldest-first eviction."""
+
+        for call_id in call_ids:
+            clean_call_id = str(call_id or "").strip()
+            if not clean_call_id:
+                continue
+            self.terminated_call_ids[clean_call_id] = int(generation)
+            self.terminated_call_ids.move_to_end(clean_call_id)
+        while len(self.terminated_call_ids) > MAX_TERMINATED_CALL_IDS:
+            self.terminated_call_ids.popitem(last=False)
+
+    def is_terminated(
+        self,
+        call_id: str,
+        *,
+        generation: int | None = None,
+    ) -> bool:
+        """Return whether a call generation has already reached terminal state."""
+
+        call_id = str(call_id or "").strip()
+        session_id = self.resolve_session_id(call_id)
+        for candidate in (call_id, session_id):
+            if candidate not in self.terminated_call_ids:
+                continue
+            terminal_generation = self.terminated_call_ids[candidate]
+            if generation is None or terminal_generation == int(generation):
+                return True
+        return False
 
     def begin_termination(self, call_id: str) -> bool:
         """Atomically claim teardown ownership for a call or one of its legs.
@@ -88,11 +126,14 @@ class CallRegistry:
         if not call_id:
             return False
         session_id = self.resolve_session_id(call_id)
-        if call_id in self.terminated_call_ids or session_id in self.terminated_call_ids:
+        if self.is_terminated(call_id):
             return False
-        if len(self.terminated_call_ids) >= 512:
-            self.terminated_call_ids.pop()
-        self.terminated_call_ids.update((call_id, session_id))
+        session = self.sessions.get(session_id)
+        self._remember_terminated(
+            call_id,
+            session_id,
+            generation=session.generation if session is not None else 0,
+        )
         return True
 
     def bind_endpoint_registry(self, registry: Any | None) -> None:
@@ -306,7 +347,8 @@ class CallRegistry:
     ) -> CallSession:
         session = self.sessions.get(call_id)
         if session is None:
-            session = CallSession(id=call_id)
+            self._generation += 1
+            session = CallSession(id=call_id, generation=self._generation)
             self.sessions[call_id] = session
         changed = False
         for attribute, value in (
@@ -341,6 +383,7 @@ class CallRegistry:
         callee: str = "",
         route_kind: str = "",
         expected_revision: int | None = None,
+        expected_generation: int | None = None,
         expected_owner: CallOwner | None = None,
         **metadata: Any,
     ) -> CallSession | None:
@@ -351,7 +394,11 @@ class CallRegistry:
             return None
         if expected_revision is not None and session.revision != int(expected_revision):
             return None
+        if expected_generation is not None and session.generation != int(expected_generation):
+            return None
         if expected_owner is not None and session.owner != expected_owner:
+            return None
+        if session.owner == "terminal" or session.state in TERMINAL_STATES:
             return None
         if state:
             session.state = state
@@ -376,6 +423,7 @@ class CallRegistry:
         call_id: str,
         *,
         revision: int,
+        generation: int | None = None,
         owner: CallOwner | None = None,
     ) -> bool:
         """Return whether an asynchronous callback still owns this revision."""
@@ -383,6 +431,7 @@ class CallRegistry:
         return bool(
             session is not None
             and session.revision == int(revision)
+            and (generation is None or session.generation == int(generation))
             and (owner is None or session.owner == owner)
         )
 
@@ -396,7 +445,21 @@ class CallRegistry:
         sip_call_id: str = "",
         **metadata: Any,
     ) -> CallLeg:
-        session = self.upsert(call_id, state=state or "active", **metadata)
+        session = self.sessions.get(call_id)
+        if session is None:
+            session = self.upsert(call_id, state=state or "active", **metadata)
+        else:
+            clean_metadata = {
+                key: value
+                for key, value in metadata.items()
+                if value not in (None, "")
+            }
+            if any(
+                session.metadata.get(key) != value
+                for key, value in clean_metadata.items()
+            ):
+                session.metadata.update(clean_metadata)
+                session.revision += 1
         leg = session.legs.get(leg_id)
         changed = False
         if leg is None:
@@ -565,9 +628,12 @@ class CallRegistry:
     def finish_and_pop(self, call_id: str, *, reason: str = "", state: str = "idle") -> CallSession | None:
         session_id = self.resolve_session_id(str(call_id or "").strip())
         if session_id:
-            if len(self.terminated_call_ids) >= 512:
-                self.terminated_call_ids.pop()
-            self.terminated_call_ids.update((str(call_id or "").strip(), session_id))
+            session = self.sessions.get(session_id)
+            self._remember_terminated(
+                str(call_id or "").strip(),
+                session_id,
+                generation=session.generation if session is not None else 0,
+            )
         self.finish(call_id, reason=reason, state=state)
         return self.pop(call_id)
 
@@ -648,6 +714,7 @@ class CallRegistry:
         return {
             "sessions": len(self.sessions),
             "active_sessions": self.active_count(),
+            "terminated_calls": len(self.terminated_call_ids),
             "call_ids": sorted(self.sessions),
             "pending_call_ids": sorted(self.pending_invites),
             "media_call_ids": sorted(self.softphone_media),

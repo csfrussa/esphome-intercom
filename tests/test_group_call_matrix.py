@@ -563,6 +563,47 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(idle["dialed_target"], "666")
         self.assertEqual(idle["terminal_reason"], "local_hangup")
 
+    def test_late_state_cannot_resurrect_terminated_softphone_call(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "finished-call",
+            state=fsm.CallState.IN_CALL.value,
+            owner="ha_softphone",
+        )
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="finished-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+        )
+        registry.finish_and_pop("finished-call", reason="remote_hangup")
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IDLE.value,
+            call_id="finished-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            reason="remote_hangup",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="finished-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+        )
+
+        state = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(state["state"], fsm.CallState.IDLE.value)
+        self.assertEqual(state["call_id"], "finished-call")
+        self.assertEqual(state["terminal_reason"], "remote_hangup")
+
     def test_virtual_endpoint_phonebook_push_matrix(self) -> None:
         pbx = self._mini_pbx()
         first = pbx.phonebook

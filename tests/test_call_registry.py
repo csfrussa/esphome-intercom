@@ -286,6 +286,52 @@ class CallRegistryEventContextTest(unittest.TestCase):
         self.assertEqual(session.owner, "terminal")
         self.assertEqual(session.outcome, "remote_hangup")
 
+    def test_leg_state_never_regresses_aggregate_session_state(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="in_call", owner="bridge")
+
+        registry.add_leg("call-1", "late-ringing-leg", role="callee", state="ringing")
+
+        self.assertEqual(session.state, "in_call")
+        self.assertEqual(session.legs["late-ringing-leg"].state, "ringing")
+
+    def test_terminal_tombstones_evict_oldest_deterministically(self) -> None:
+        registry = call_registry.CallRegistry()
+        for index in range(call_registry.MAX_TERMINATED_CALL_IDS + 1):
+            self.assertTrue(registry.begin_termination(f"call-{index}"))
+
+        self.assertFalse(registry.is_terminated("call-0"))
+        self.assertTrue(registry.is_terminated("call-1"))
+        self.assertTrue(
+            registry.is_terminated(
+                f"call-{call_registry.MAX_TERMINATED_CALL_IDS}"
+            )
+        )
+
+    def test_generation_guards_async_transition_and_terminal_tombstone(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="ringing", owner="ha_softphone")
+
+        self.assertIsNone(
+            registry.transition(
+                "call-1",
+                state="in_call",
+                expected_generation=session.generation + 1,
+            )
+        )
+        self.assertIsNotNone(
+            registry.transition(
+                "call-1",
+                state="in_call",
+                expected_generation=session.generation,
+            )
+        )
+        generation = session.generation
+        registry.finish_and_pop("call-1", reason="remote_hangup")
+
+        self.assertTrue(registry.is_terminated("call-1", generation=generation))
+        self.assertFalse(registry.is_current("call-1", revision=session.revision))
+
     def test_terminal_pop_removes_event_context_and_pending_indexes(self) -> None:
         registry = call_registry.CallRegistry()
         registry.upsert("call-1", state="ringing", owner="ha_softphone")
