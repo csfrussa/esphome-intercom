@@ -64,6 +64,16 @@ class _EndpointRegistryStub:
 
 
 class CallRegistryEventContextTest(unittest.TestCase):
+    def test_only_one_terminal_observer_owns_teardown(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert("source", state="in_call", owner="bridge")
+        registry.add_leg("source", "destination", role="callee", state="in_call")
+
+        self.assertTrue(registry.begin_termination("destination"))
+        self.assertFalse(registry.begin_termination("source"))
+        registry.finish_and_pop("source", reason="remote_hangup")
+        self.assertFalse(registry.begin_termination("destination"))
+
     def test_sequence_advances_only_for_canonical_state_changes(self) -> None:
         registry = call_registry.CallRegistry()
 

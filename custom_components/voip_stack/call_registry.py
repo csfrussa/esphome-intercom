@@ -74,7 +74,26 @@ class CallRegistry:
         self.bridge_clients: dict[str, str] = {}
         self.event_contexts: dict[str, CallEventContext] = {}
         self.endpoint_claims: dict[str, dict[str, str]] = {}
+        self.terminated_call_ids: set[str] = set()
         self._endpoint_registry: Any | None = None
+
+    def begin_termination(self, call_id: str) -> bool:
+        """Atomically claim teardown ownership for a call or one of its legs.
+
+        SIP transports, client watchers and local UI actions may all observe
+        the same terminal event.  Exactly one of them may perform teardown;
+        later notifications are acknowledgements, not new state transitions.
+        """
+        call_id = str(call_id or "").strip()
+        if not call_id:
+            return False
+        session_id = self.resolve_session_id(call_id)
+        if call_id in self.terminated_call_ids or session_id in self.terminated_call_ids:
+            return False
+        if len(self.terminated_call_ids) >= 512:
+            self.terminated_call_ids.pop()
+        self.terminated_call_ids.update((call_id, session_id))
+        return True
 
     def bind_endpoint_registry(self, registry: Any | None) -> None:
         """Bind the logical endpoint registry used for atomic busy claims.
@@ -544,6 +563,11 @@ class CallRegistry:
         return source_call_id, dest_call_id, relay, client, watcher, called_by_dest
 
     def finish_and_pop(self, call_id: str, *, reason: str = "", state: str = "idle") -> CallSession | None:
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        if session_id:
+            if len(self.terminated_call_ids) >= 512:
+                self.terminated_call_ids.pop()
+            self.terminated_call_ids.update((str(call_id or "").strip(), session_id))
         self.finish(call_id, reason=reason, state=state)
         return self.pop(call_id)
 
@@ -609,6 +633,7 @@ class CallRegistry:
         self.relays.clear()
         self.bridge_clients.clear()
         self.event_contexts.clear()
+        self.terminated_call_ids.clear()
 
     def active_count(self, *, include_ha_softphone: bool = True) -> int:
         count = 0

@@ -246,7 +246,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         video_answer_contract,
         video_offer_answer_directional,
         video_formats_passthrough_compatible,
-        directional_video_renegotiation_compatible,
+    )
+    from .media_offer_answer import (
+        validate_bridged_video_reoffer,
+        validate_direct_video_reoffer,
     )
     from .sip import parse_sip_uri, sip_endpoints_equal, sip_uri_targets_listener
     from .sip_client import SIP_TIMER_B, SipCallClient
@@ -5911,14 +5914,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             previous_video = previous.video_format
             updated_video = updated.video_format
-            if (previous_video is None) != (updated_video is None):
-                return SipInviteResult(488, "Not Acceptable Here")
             video_session = (
                 hass.data.setdefault(DOMAIN, {})
                 .setdefault("active_video_sessions", {})
                 .get(call_id)
             )
-            if previous_video is not None and updated_video is not None:
+            video_offer = validate_direct_video_reoffer(
+                previous_video,
+                previous.recv_video_format,
+                updated_video,
+                updated.recv_video_format,
+            )
+            if not video_offer.accepted:
                 # A direction change can activate a media path which had no
                 # live codec contract in the previous offer.  A common SIP
                 # camera flow starts with ``recvonly`` and later sends a
@@ -5926,31 +5933,30 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 # not compare the previously *inactive* receive candidate
                 # with the newly active receive format: RFC 3264 permits that
                 # path to be negotiated by the new offer.
-                previous_remote_direction = str(previous_video.direction)
-                updated_remote_direction = str(updated_video.direction)
-                compatible_video = directional_video_renegotiation_compatible(
-                    previous_video,
-                    previous.recv_video_format,
-                    updated_video,
-                    updated.recv_video_format,
+                previous_remote_direction = (
+                    str(previous_video.direction) if previous_video else "none"
                 )
-                if not compatible_video:
-                    _LOGGER.info(
-                        "SIP video re-INVITE rejected call_id=%s old_direction=%s "
-                        "new_direction=%s old_tx=%s new_tx=%s old_rx=%s new_rx=%s",
-                        call_id,
-                        previous_remote_direction,
-                        updated_remote_direction,
-                        previous_video.wire_token(),
-                        updated_video.wire_token(),
-                        previous.recv_video_format.wire_token()
-                        if previous.recv_video_format is not None
-                        else "none",
-                        updated.recv_video_format.wire_token()
-                        if updated.recv_video_format is not None
-                        else "none",
-                    )
-                    return SipInviteResult(488, "Not Acceptable Here")
+                updated_remote_direction = (
+                    str(updated_video.direction) if updated_video else "none"
+                )
+                _LOGGER.info(
+                    "SIP video re-INVITE rejected call_id=%s reason=%s "
+                    "old_direction=%s new_direction=%s old_tx=%s new_tx=%s "
+                    "old_rx=%s new_rx=%s",
+                    call_id,
+                    video_offer.reason,
+                    previous_remote_direction,
+                    updated_remote_direction,
+                    previous_video.wire_token() if previous_video else "none",
+                    updated_video.wire_token() if updated_video else "none",
+                    previous.recv_video_format.wire_token()
+                    if previous.recv_video_format is not None
+                    else "none",
+                    updated.recv_video_format.wire_token()
+                    if updated.recv_video_format is not None
+                    else "none",
+                )
+                return SipInviteResult(488, "Not Acceptable Here")
             local_video_rtp_port = int(media.get("local_video_rtp_port") or 0)
             # Per-call camera consent is immutable across hold/resume.  The
             # current negotiated direction may temporarily be recvonly and
@@ -6081,8 +6087,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             allow_receive=bool(right_peer.can_receive),
         )
         video_relay = getattr(relay, "video_relay", None)
-        if (previous.video_format is None) != (updated.video_format is None):
-            return SipInviteResult(488, "Not Acceptable Here")
         video_direction = "inactive"
         local_video_port = 0
         if updated.video_format is not None:
@@ -6097,46 +6101,26 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     updated.video_format.direction,
                 )
                 return SipInviteResult(488, "Not Acceptable Here")
-            # Validate only paths which will actually carry RTP.  A normal
-            # recvonly -> sendrecv re-offer activates the caller-to-browser
-            # path for the first time; the inactive candidate from the old
-            # offer is not an established bitstream contract and must not
-            # veto that direction change (RFC 3264 section 8.4).
-            right_can_send = remote_can_send(video_relay.right.video_format)
-            right_can_receive = remote_can_receive(
-                video_relay.right.video_format,
-                connection_held=video_relay.right.connection_held,
-            )
-            updated_sends = remote_can_send(updated.video_format)
-            updated_receives = remote_can_receive(
+            video_offer = validate_bridged_video_reoffer(
+                previous.video_format,
                 updated.video_format,
-                connection_held=updated.remote_video_connection_held,
+                updated.recv_video_format,
+                peer_send=video_relay.right.send_format,
+                peer_recv=video_relay.right.recv_format,
+                peer_direction=video_relay.right.video_format,
+                peer_held=video_relay.right.connection_held,
+                updated_held=updated.remote_video_connection_held,
             )
-            receive_path_compatible = bool(
-                not (updated_sends and right_can_receive)
-                or video_formats_passthrough_compatible(
-                    updated.recv_video_format,
-                    video_relay.right.send_format,
-                )
-            )
-            send_path_compatible = bool(
-                not (updated_receives and right_can_send)
-                or video_formats_passthrough_compatible(
-                    video_relay.right.recv_format,
-                    updated.send_video_format,
-                )
-            )
-            if not (receive_path_compatible and send_path_compatible):
+            if not video_offer.accepted:
                 _LOGGER.warning(
                     "SIP video relay update rejected call_id=%s old_direction=%s "
-                    "new_direction=%s receive_path=%s send_path=%s",
+                    "new_direction=%s reason=%s",
                     call_id,
                     previous.video_format.direction
                     if previous.video_format is not None
                     else "none",
                     updated.video_format.direction,
-                    receive_path_compatible,
-                    send_path_compatible,
+                    video_offer.reason,
                 )
                 return SipInviteResult(488, "Not Acceptable Here")
             video_direction = constrained_video_direction(
@@ -6187,12 +6171,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
     async def _on_terminated(call_id: str, reason: str = "remote_hangup") -> None:
         bucket = hass.data.setdefault(DOMAIN, {})
+        registry = _call_registry(hass)
+        if not registry.begin_termination(call_id):
+            _LOGGER.debug(
+                "Ignoring duplicate SIP termination call_id=%s reason=%s",
+                call_id,
+                reason,
+            )
+            return
         forward_task = bucket.setdefault("forward_tasks", {}).get(call_id)
         if forward_task is not None and forward_task is not asyncio.current_task():
             forward_task.cancel()
             await asyncio.gather(forward_task, return_exceptions=True)
         bucket.setdefault("trunk_info_queues", {}).pop(call_id, None)
-        registry = _call_registry(hass)
         route = _pending_routes(hass).pop(call_id, None)
         closed_calls = bucket.setdefault("trunk_closed_calls", set())
         if len(closed_calls) >= 256:
