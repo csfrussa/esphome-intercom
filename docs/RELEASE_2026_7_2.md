@@ -13,6 +13,28 @@ live calls, and yes, we appear to be getting rather close to a real native
 Home Assistant video phone. This is still a development build, so install it
 when you actually want to test the new toys and tell us what breaks.
 
+## Latest Development Refresh
+
+- Wildix and other registered TCP trunks can now activate, remove or change
+  video during an established audio call. Inbound requests received on the
+  persistent registration connection use the same atomic media-update policy
+  as the normal SIP listeners instead of incorrectly returning `488 Not
+  Acceptable Here`.
+- SIP dialogs survive a peer opening a replacement TCP connection for an
+  in-dialog request. Media changes are staged, committed only after a valid
+  response and rolled back cleanly on failure or concurrent teardown.
+- Local HA phones carry independent bidirectional VP8 media and call ownership.
+  Real qualification kept a video call to extension `667` active while a
+  second simultaneous video call used the default HA phone, with separate RTP
+  ports and independent hangup state.
+- Manual video calls once again use actual `getUserMedia()` acquisition as the
+  camera-permission authority. This restores camera transmission in Companion
+  WebViews whose Permissions API reports an unreliable `denied` state;
+  auto-answer remains prompt-free and requires an already granted permission.
+- Video teardown diagnostics are now per logical HA phone and direction,
+  making receive-only intent distinguishable from a missing or stalled media
+  path.
+
 ## ☎️ One Home Assistant, Multiple Real Phones
 
 The old singleton HA softphone is now the backward-compatible default phone,
