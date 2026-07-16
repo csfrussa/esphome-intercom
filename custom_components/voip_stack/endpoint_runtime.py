@@ -5919,6 +5919,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 .setdefault("active_video_sessions", {})
                 .get(call_id)
             )
+            new_video_reservation = None
+            new_video_rtp_socket = None
+            new_video_rtcp_socket = None
             video_offer = validate_direct_video_reoffer(
                 previous_video,
                 previous.recv_video_format,
@@ -5958,6 +5961,25 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 return SipInviteResult(488, "Not Acceptable Here")
             local_video_rtp_port = int(media.get("local_video_rtp_port") or 0)
+            if (
+                previous_video is None
+                and updated_video is not None
+                and not local_video_rtp_port
+            ):
+                try:
+                    (
+                        new_video_reservation,
+                        new_video_rtp_socket,
+                        new_video_rtcp_socket,
+                    ) = reserve_sip_video_media(hass)
+                    local_video_rtp_port = int(new_video_reservation.ports[1])
+                except (OSError, RuntimeError) as err:
+                    _LOGGER.warning(
+                        "SIP video re-INVITE could not allocate RTP call_id=%s: %s",
+                        call_id,
+                        err,
+                    )
+                    return SipInviteResult(488, "Not Acceptable Here")
             # Per-call camera consent is immutable across hold/resume.  The
             # current negotiated direction may temporarily be recvonly and
             # must not erase the user's original authorization to send when
@@ -5986,6 +6008,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
 
             async def _commit_softphone_update() -> None:
+                if new_video_reservation is not None:
+                    media["local_video_rtp_port"] = local_video_rtp_port
+                    media["video_rtp_reservation"] = new_video_reservation
+                    media["video_rtp_socket"] = new_video_rtp_socket
+                    media["video_rtcp_socket"] = new_video_rtcp_socket
                 media["invite"] = updated
                 media["video_direction"] = video_direction
                 if audio_session is not None:

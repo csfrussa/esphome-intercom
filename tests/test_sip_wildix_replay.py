@@ -88,17 +88,14 @@ class VideoOfferPolicyTest(unittest.TestCase):
         )
         self.assertTrue(decision.accepted)
 
-    def test_bridge_rejects_stream_added_mid_dialog(self) -> None:
-        decision = validate_bridged_video_reoffer(
+    def test_direct_call_accepts_video_added_mid_dialog(self) -> None:
+        decision = validate_direct_video_reoffer(
+            None,
             None,
             _video(),
             _video(),
-            peer_send=_video(110),
-            peer_recv=_video(110),
-            peer_direction=_video(110),
         )
-        self.assertFalse(decision.accepted)
-        self.assertEqual(decision.reason, "video_stream_presence_changed")
+        self.assertTrue(decision.accepted)
 
 
 class WildixVideoReinviteReplayTest(unittest.IsolatedAsyncioTestCase):

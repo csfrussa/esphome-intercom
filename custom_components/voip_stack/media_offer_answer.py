@@ -34,9 +34,11 @@ def validate_direct_video_reoffer(
 ) -> VideoOfferDecision:
     """Validate a re-offer without changing the committed media contract."""
 
-    if (previous_send is None) != (updated_send is None):
-        return VideoOfferDecision(False, "video_stream_presence_changed")
-    if previous_send is None:
+    # RFC 3264 section 8 permits a new media stream to be added by a later
+    # offer.  Its codec contract is negotiated from scratch, so there is no
+    # previous video format to compare.  Likewise, port-zero/removal is a
+    # valid update and must not invalidate the established audio dialog.
+    if previous_send is None or updated_send is None:
         return VideoOfferDecision(True)
     if directional_video_renegotiation_compatible(
         previous_send,
