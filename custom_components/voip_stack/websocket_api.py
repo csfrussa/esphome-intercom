@@ -51,6 +51,7 @@ from .phone_config import (
     update_browser_phone_subentry,
 )
 from .debug_capture import debug_capture_pending_writes
+from .runtime_diagnostics import runtime_resource_snapshot
 from .websocket_owner import async_revoke_media_owners
 
 if TYPE_CHECKING:
@@ -815,6 +816,7 @@ def _sip_runtime_snapshot(
         "sip_trunk": {},
         "sip_registrar": {},
         "media_debug": {},
+        "runtime_resources": {},
     }
     if endpoint is None:
         endpoint = None
@@ -915,6 +917,11 @@ def _sip_runtime_snapshot(
             )
     data["pending_call_ids"] = sorted(set(data["pending_call_ids"]))
     data["active_call_ids"] = sorted(set(data["active_call_ids"]))
+    data["runtime_resources"] = runtime_resource_snapshot(
+        bucket,
+        registry,
+        detailed=detailed,
+    )
     return data
 
 
@@ -957,6 +964,7 @@ def _ha_softphone_state(
         media_debug.update(
             {
                 "call_registry": registry.snapshot(),
+                "runtime_resources": runtime["runtime_resources"],
                 "audio_ws_owner_call_ids": sorted(bucket.get("audio_ws_owners", {})),
                 "video_ws_owner_call_ids": sorted(bucket.get("video_ws_owners", {})),
                 "video_transcoder_call_id": str(
