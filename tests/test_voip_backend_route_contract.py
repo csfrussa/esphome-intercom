@@ -1264,6 +1264,24 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
         self.assertIn("_run_trunk_inbound_route_guarded(", creator)
 
+    def test_unknown_dtmf_route_finishes_the_preanswered_session(self) -> None:
+        runner = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") :
+            self.source.index("async def _async_forward_existing_call(")
+        ]
+        rejected = runner[
+            runner.index("elif decision.action is RouteAction.REJECT:") :
+            runner.index("else:\n            destination =", runner.index("elif decision.action is RouteAction.REJECT:"))
+        ]
+        self.assertIn("_sip_send_bye(hass, invite.call_id)", rejected)
+        self.assertIn("bridge_ports.release()", rejected)
+        self.assertIn("registry.finish_and_pop(", rejected)
+        self.assertIn("state=CallState.TRANSPORT_UNREACHABLE.value", rejected)
+        self.assertLess(
+            rejected.index("bridge_ports.release()"),
+            rejected.index("registry.finish_and_pop("),
+        )
+
     def test_answer_ha_keeps_an_explicit_dtmf_extension(self) -> None:
         runner = self.source[
             self.source.index("async def _run_trunk_inbound_route(") :

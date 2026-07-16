@@ -69,6 +69,7 @@ from .media_ports import (
     RtpPortReservation,
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
     release_media_reservation as _release_media_reservation,
+    release_video_media_reservation as _release_video_media_reservation,
     release_sip_rtp_port_pair as _release_sip_rtp_port_pair,
     reserve_sip_video_media,
     reserve_sip_video_relay_media,
@@ -1277,7 +1278,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if automation_action in {"decline", "busy", "cancel"}:
             registry = _call_registry(hass)
             registry.pending_invites.pop(invite.call_id, None)
-            registry.preanswered.pop(invite.call_id, None)
+            preanswered = registry.preanswered.pop(invite.call_id, None)
+            _release_media_reservation(preanswered)
             status = 486 if automation_action == "busy" else 603
             reason = (
                 TerminalReason.BUSY.value
@@ -1333,7 +1335,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         elif decision.action is RouteAction.REJECT:
             registry = _call_registry(hass)
             registry.pending_invites.pop(invite.call_id, None)
-            registry.preanswered.pop(invite.call_id, None)
+            preanswered = registry.preanswered.pop(invite.call_id, None)
+            _release_media_reservation(preanswered)
+            terminal_reason = RouteReason.ROUTE_NOT_FOUND.value
             _LOGGER.info(
                 "SIP trunk route not found call_id=%s digits=%s hint=%s",
                 invite.call_id,
@@ -1349,13 +1353,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 peer_name=invite.caller,
                 call_id=invite.call_id,
                 direction="incoming",
-                reason="route_not_found",
-                terminal_reason="route_not_found",
+                reason=terminal_reason,
+                terminal_reason=terminal_reason,
                 origin="self",
                 sip_status_code=404,
                 last_sip_event="BYE",
             )
             bridge_ports.release()
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=terminal_reason,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
             return
         else:
             destination = decision.target or route_hint or default_target
@@ -1372,7 +1381,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         if decision.action is RouteAction.ASSIST:
             registry = _call_registry(hass)
             registry.pending_invites.pop(invite.call_id, None)
-            registry.preanswered.pop(invite.call_id, None)
+            preanswered = registry.preanswered.pop(invite.call_id, None)
+            _release_video_media_reservation(preanswered)
             try:
                 await _start_local_assist_bridge(
                     invite,
@@ -1468,7 +1478,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             return
         registry = _call_registry(hass)
         registry.pending_invites.pop(invite.call_id, None)
-        registry.preanswered.pop(invite.call_id, None)
+        preanswered = registry.preanswered.pop(invite.call_id, None)
+        _release_video_media_reservation(preanswered)
         peer_target = _peer_for_target(decision.target or destination, peers)
         bridge_uri = None
         try:

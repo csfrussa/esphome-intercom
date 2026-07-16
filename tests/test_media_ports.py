@@ -156,6 +156,36 @@ class MediaPortPoolTest(unittest.TestCase):
                 hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set()
             )
 
+    def test_release_video_media_preserves_audio_bridge_ownership(self) -> None:
+        hass = FakeHass()
+        with patch.object(media_ports, "rtp_port_available", return_value=True):
+            audio = media_ports.RtpPortReservation.allocate(hass)
+            video = media_ports.RtpPortReservation.allocate(hass)
+            rtp_socket = Mock()
+            rtcp_socket = Mock()
+            item = {
+                "rtp_reservation": audio,
+                "video_rtp_reservation": video,
+                "video_rtp_socket": rtp_socket,
+                "video_rtcp_socket": rtcp_socket,
+            }
+
+            media_ports.release_video_media_reservation(item)
+            media_ports.release_video_media_reservation(item)
+
+            rtp_socket.close.assert_called_once_with()
+            rtcp_socket.close.assert_called_once_with()
+            self.assertEqual(
+                hass.data["voip_stack"]["sip_rtp_port_pool"]["used"],
+                set(audio.ports),
+            )
+            self.assertIn("rtp_reservation", item)
+            self.assertNotIn("video_rtp_reservation", item)
+            media_ports.release_media_reservation(item)
+            self.assertEqual(
+                hass.data["voip_stack"]["sip_rtp_port_pool"]["used"], set()
+            )
+
     def test_bound_video_socket_is_nonblocking_and_closed_with_reservation(self) -> None:
         hass = FakeHass()
         with patch.object(media_ports, "rtp_port_available", return_value=True):

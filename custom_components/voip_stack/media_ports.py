@@ -36,19 +36,27 @@ class RtpPortReservation:
         self.released = True
 
 
-def release_media_reservation(item) -> None:
-    """Release an owned RTP reservation stored in runtime dict metadata."""
-    if isinstance(item, dict):
-        for key in ("video_rtp_socket", "video_rtcp_socket"):
-            video_socket = item.pop(key, None)
-            if video_socket is not None and hasattr(video_socket, "close"):
-                video_socket.close()
+def release_video_media_reservation(item) -> None:
+    """Release only video resources stored in runtime dict metadata."""
     if not isinstance(item, dict):
         return
-    for key in ("rtp_reservation", "video_rtp_reservation"):
-        reservation = item.get(key)
-        if reservation is not None and hasattr(reservation, "release"):
-            reservation.release()
+    for key in ("video_rtp_socket", "video_rtcp_socket"):
+        video_socket = item.pop(key, None)
+        if video_socket is not None and hasattr(video_socket, "close"):
+            video_socket.close()
+    reservation = item.pop("video_rtp_reservation", None)
+    if reservation is not None and hasattr(reservation, "release"):
+        reservation.release()
+
+
+def release_media_reservation(item) -> None:
+    """Release all owned RTP resources stored in runtime dict metadata."""
+    if not isinstance(item, dict):
+        return
+    release_video_media_reservation(item)
+    reservation = item.pop("rtp_reservation", None)
+    if reservation is not None and hasattr(reservation, "release"):
+        reservation.release()
 
 
 def rtp_port_available(port: int) -> bool:
