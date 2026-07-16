@@ -344,6 +344,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         """Bind remote re-offers on an outbound dialog to its live relay leg."""
 
         async def _prepare(previous, updated, method):
+            registry = _call_registry(hass)
+            session = registry.sessions.get(
+                registry.resolve_session_id(source_call_id)
+            )
+            if session is None:
+                return None
+            call_generation = session.generation
             try:
                 commit_audio = relay.prepare_peer_reconfiguration(
                     "right", dialog_rtp_peer(updated)
@@ -374,6 +381,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     return None
 
             async def _commit() -> None:
+                if not registry.is_generation_current(
+                    source_call_id, call_generation
+                ):
+                    raise RuntimeError(
+                        "SIP bridge media update belongs to a terminated call"
+                    )
                 commit_audio()
                 if video_relay is not None and next_video_peer is not None:
                     video_relay.reconfigure_peer("right", next_video_peer)
@@ -2435,6 +2448,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                 )
                 video_dest_port = 0
+                video_failure_reason = ""
                 if forward_video_enabled:
                     video_reservation = None
                     sockets = ()
@@ -2471,6 +2485,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             video_reservation.release()
                         video_relay = None
                         video_dest_port = 0
+                        video_failure_reason = (
+                            "local_video_resources_unavailable"
+                        )
                         _LOGGER.warning(
                             "SIP forward video relay unavailable; continuing audio-only: %s",
                             err,
@@ -2625,6 +2642,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         )
                         await video_relay.stop()
                         video_relay = None
+                        video_failure_reason = "remote_video_rejected"
 
                 relay = build_invite_client_relay(
                     invite=invite,
@@ -2701,6 +2719,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     route_kind=decision.action.value,
                     sip_uri=str(bridge_uri),
                     video_active=bool(video_relay is not None),
+                    video_requested=forward_video_enabled,
+                    video_negotiated=bool(video_relay is not None),
+                    video_status=(
+                        "degraded"
+                        if video_failure_reason
+                        == "local_video_resources_unavailable"
+                        else "rejected"
+                        if video_failure_reason
+                        else "active"
+                        if video_relay is not None
+                        else "inactive"
+                    ),
+                    video_failure_reason=video_failure_reason,
                     video_format=(
                         selected_video.wire_token() if selected_video else ""
                     ),
@@ -4559,6 +4590,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 video_rtp_socket = None
                 video_rtcp_socket = None
                 source_video_port = 0
+                video_failure_reason = ""
                 if (
                     invite.video_format is not None
                     and cfg.get(CONF_EXPERIMENTAL_VIDEO, False)
@@ -4573,6 +4605,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             video_media_reservation.ports
                         )
                     except (OSError, RuntimeError) as err:
+                        video_failure_reason = (
+                            "local_video_resources_unavailable"
+                        )
                         _LOGGER.warning(
                             "SIP trunk DTMF video socket unavailable; collecting digits audio-only: %s",
                             err,
@@ -4588,6 +4623,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "video_rtp_reservation": video_media_reservation,
                     "video_rtp_socket": video_rtp_socket,
                     "video_rtcp_socket": video_rtcp_socket,
+                    "video_failure_reason": video_failure_reason,
                 }
                 registry.upsert(
                     invite.call_id,
@@ -4655,6 +4691,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     source_host=invite.source_host,
                     expires_at=expires_at,
                     decision_timeout_ms=dtmf_timeout_ms,
+                    video_requested=bool(invite.video_format is not None),
+                    video_negotiated=bool(source_video_port),
+                    video_status=(
+                        "degraded"
+                        if video_failure_reason
+                        else "active"
+                        if source_video_port
+                        else "rejected"
+                        if invite.video_format is not None
+                        else "inactive"
+                    ),
+                    video_failure_reason=video_failure_reason,
                 )
                 create_runtime_task(
                     hass,
@@ -5053,6 +5101,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     sip_recv_formats = list(HA_TRUNK_AUDIO_FORMATS)
                 video_bridge_ports = None
                 video_relay = None
+                video_failure_reason = ""
                 source_video_enabled = (
                     source_endpoint is None or source_endpoint.supports("video")
                 )
@@ -5100,6 +5149,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             video_bridge_ports.release()
                         video_bridge_ports = None
                         video_relay = None
+                        video_failure_reason = (
+                            "local_video_resources_unavailable"
+                        )
                         _LOGGER.warning(
                             "SIP video relay ports unavailable; bridge remains audio-only: %s",
                             err,
@@ -5328,7 +5380,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
 
                 async def _finish_bridge(initial_result: str) -> None:
-                    nonlocal video_relay
+                    nonlocal video_failure_reason, video_relay
                     final = initial_result
                     if final == "ringing":
                         final = await client.wait_for_final()
@@ -5439,6 +5491,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             )
                             await video_relay.stop()
                             video_relay = None
+                            video_failure_reason = "remote_video_rejected"
                     try:
                         relay = build_invite_client_relay(
                             invite=invite,
@@ -5541,6 +5594,19 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         route_kind=decision.action.value,
                         sip_uri=str(decision_uri),
                         video_active=bool(video_relay is not None),
+                        video_requested=bool(invite.video_format is not None),
+                        video_negotiated=bool(video_relay is not None),
+                        video_status=(
+                            "degraded"
+                            if video_failure_reason
+                            == "local_video_resources_unavailable"
+                            else "rejected"
+                            if video_failure_reason
+                            else "active"
+                            if video_relay is not None
+                            else "inactive"
+                        ),
+                        video_failure_reason=video_failure_reason,
                         video_format=(
                             selected_video.wire_token() if selected_video else ""
                         ),
@@ -5751,6 +5817,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         local_video_rtp_port = 0
         video_rtp_socket = None
         video_rtcp_socket = None
+        video_failure_reason = ""
         endpoint_video_enabled = (
             browser_endpoint is None or browser_endpoint.supports("video")
         )
@@ -5767,6 +5834,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     "SIP video socket unavailable, answering audio-only: %s", err
                 )
                 media_reservation = None
+                video_failure_reason = "local_video_resources_unavailable"
                 local_rtp_port = _allocate_sip_rtp_port(hass)
                 local_video_rtp_port = 0
         else:
@@ -5806,6 +5874,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             "video_rtcp_socket": video_rtcp_socket,
             "rtp_reservation": media_reservation,
             "endpoint_id": endpoint_id,
+            "video_failure_reason": video_failure_reason,
         }
         registry.upsert(
             invite.call_id,
@@ -5823,6 +5892,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             role="ha_softphone",
             state=CallState.IN_CALL.value,
         )
+        video_active = bool(
+            invite.video_format is not None
+            and local_video_rtp_port
+            and video_direction != "inactive"
+        )
         _set_ha_softphone_call_state(
             hass,
             CallState.IN_CALL.value,
@@ -5839,11 +5913,21 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             selected_rx_rtp_format=invite.recv_format.wire_token(),
             audio_direction=invite.local_audio_direction,
             audio_connection_held=invite.remote_audio_connection_held,
-            video_active=bool(
-                invite.video_format is not None
-                and local_video_rtp_port
-                and video_direction != "inactive"
+            video_active=video_active,
+            video_requested=bool(invite.video_format is not None),
+            video_negotiated=bool(
+                invite.video_format is not None and local_video_rtp_port
             ),
+            video_status=(
+                "degraded"
+                if video_failure_reason
+                else "active"
+                if video_active
+                else "rejected"
+                if invite.video_format is not None
+                else "inactive"
+            ),
+            video_failure_reason=video_failure_reason,
             video_format=(
                 invite.video_format.wire_token() if invite.video_format else ""
             ),
@@ -5885,6 +5969,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         media = registry.softphone_media.get(call_id)
         if isinstance(media, dict) and media.get("invite") is not None:
             session = registry.sessions.get(registry.resolve_session_id(call_id))
+            if session is None:
+                return SipInviteResult(481, "Call/Transaction Does Not Exist")
+            call_generation = session.generation
             media_endpoint_id = str(
                 media.get("endpoint_id")
                 or (
@@ -6025,6 +6112,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
             async def _commit_softphone_update() -> None:
                 nonlocal new_video_media_committed
+                if not registry.is_generation_current(call_id, call_generation):
+                    raise RuntimeError(
+                        "SIP softphone media update belongs to a terminated call"
+                    )
                 if new_video_reservation is not None:
                     media["local_video_rtp_port"] = local_video_rtp_port
                     media["video_rtp_reservation"] = new_video_reservation
@@ -6083,6 +6174,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     if reservation is not None:
                         reservation.release()
                     media["local_video_rtp_port"] = 0
+                media["video_failure_reason"] = ""
                 store = _ha_softphone_store(hass, media_endpoint_id)
                 if str(store.get("call_id") or "") == call_id:
                     store.update(
@@ -6093,6 +6185,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                                 updated_video is not None
                                 and video_direction != "inactive"
                             ),
+                            "video_requested": bool(updated_video is not None),
+                            "video_negotiated": bool(updated_video is not None),
+                            "video_status": (
+                                "active"
+                                if updated_video is not None
+                                and video_direction != "inactive"
+                                else "inactive"
+                            ),
+                            "video_failure_reason": "",
                             "video_format": (
                                 updated_video.wire_token()
                                 if updated_video is not None

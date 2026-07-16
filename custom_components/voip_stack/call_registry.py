@@ -435,6 +435,19 @@ class CallRegistry:
             and (owner is None or session.owner == owner)
         )
 
+    def is_generation_current(self, call_id: str, generation: int) -> bool:
+        """Return whether an async operation still belongs to a live call."""
+
+        session_id = self.resolve_session_id(str(call_id or "").strip())
+        session = self.sessions.get(session_id)
+        return bool(
+            session is not None
+            and session.generation == int(generation)
+            and session.owner != "terminal"
+            and session.state not in TERMINAL_STATES
+            and not self.is_terminated(call_id, generation=generation)
+        )
+
     def add_leg(
         self,
         call_id: str,

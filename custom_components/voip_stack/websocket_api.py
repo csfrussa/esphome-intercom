@@ -970,6 +970,21 @@ def _ha_softphone_state(
         )
     session = registry.sessions.get(registry.resolve_session_id(str(call_id or "")))
     event_context = registry.event_context(str(call_id or ""))
+    video_active = bool(store.get("video_active", False))
+    video_offered = bool(store.get("video_offered", False))
+    video_requested = bool(store.get("video_requested", video_offered))
+    video_negotiated = bool(store.get("video_negotiated", video_active))
+    video_status = str(store.get("video_status") or "").strip().lower()
+    if not video_status:
+        video_status = (
+            "active"
+            if video_active
+            else "offered"
+            if video_offered
+            else "requested"
+            if video_requested
+            else "inactive"
+        )
     phone = sip_phone_state(
         state=store.get("state", CallState.IDLE.value),
         call_id=call_id,
@@ -1043,8 +1058,12 @@ def _ha_softphone_state(
         "audio_mode": store.get("audio_mode", ""),
         "audio_direction": store.get("audio_direction", "sendrecv"),
         "audio_connection_held": bool(store.get("audio_connection_held", False)),
-        "video_active": bool(store.get("video_active", False)),
-        "video_offered": bool(store.get("video_offered", False)),
+        "video_active": video_active,
+        "video_offered": video_offered,
+        "video_requested": video_requested,
+        "video_negotiated": video_negotiated,
+        "video_status": video_status,
+        "video_failure_reason": str(store.get("video_failure_reason") or ""),
         "video_format": store.get("video_format", ""),
         "video_send_format": store.get(
             "video_send_format", store.get("video_format", "")
@@ -1172,6 +1191,20 @@ def _set_ha_softphone_call_state(
             extra.setdefault("connected_at", time.time())
         elif store.get("connected_at"):
             extra.setdefault("connected_at", store["connected_at"])
+    if not terminal:
+        if "video_requested" not in extra and "video_offered" in extra:
+            extra["video_requested"] = bool(extra.get("video_offered"))
+        if "video_negotiated" not in extra and "video_active" in extra:
+            extra["video_negotiated"] = bool(extra.get("video_active"))
+        if "video_status" not in extra:
+            if extra.get("video_failure_reason"):
+                extra["video_status"] = "degraded"
+            elif extra.get("video_active"):
+                extra["video_status"] = "active"
+            elif extra.get("video_offered"):
+                extra["video_status"] = "offered"
+            elif extra.get("video_requested"):
+                extra["video_status"] = "requested"
     if (
         previous_call_id
         and next_call_id
@@ -1239,6 +1272,10 @@ def _set_ha_softphone_call_state(
             "audio_connection_held",
             "video_active",
             "video_offered",
+            "video_requested",
+            "video_negotiated",
+            "video_status",
+            "video_failure_reason",
             "video_format",
             "video_send_format",
             "video_receive_format",
@@ -1271,7 +1308,9 @@ def _set_ha_softphone_call_state(
         store["sip_state"] = state
         store["terminal_reason"] = ""
         for key, value in extra.items():
-            if value not in (None, ""):
+            if key == "video_failure_reason":
+                store[key] = str(value or "")
+            elif value not in (None, ""):
                 store[key] = value
 
     payload = {

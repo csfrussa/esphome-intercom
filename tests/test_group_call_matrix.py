@@ -156,6 +156,57 @@ class _FakeHass:
 
 
 class GroupCallMatrixTest(unittest.TestCase):
+    def test_video_degradation_is_explicit_and_can_recover(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="video-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            video_offered=True,
+        )
+        offered = websocket_api._ha_softphone_state(hass)
+        self.assertTrue(offered["video_requested"])
+        self.assertFalse(offered["video_negotiated"])
+        self.assertEqual(offered["video_status"], "offered")
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="video-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            video_active=False,
+            video_negotiated=False,
+            video_status="degraded",
+            video_failure_reason="local_video_resources_unavailable",
+        )
+        degraded = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(degraded["video_status"], "degraded")
+        self.assertEqual(
+            degraded["video_failure_reason"],
+            "local_video_resources_unavailable",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="video-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            video_active=True,
+            video_negotiated=True,
+            video_status="active",
+            video_failure_reason="",
+        )
+        recovered = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(recovered["video_status"], "active")
+        self.assertEqual(recovered["video_failure_reason"], "")
+
     def test_call_event_preserves_explicit_local_leg_owner(self) -> None:
         hass = _FakeHass()
         registry = websocket_api.call_registry(hass)

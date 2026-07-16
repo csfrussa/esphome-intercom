@@ -117,6 +117,18 @@ class CallRegistryEventContextTest(unittest.TestCase):
         registry.finish_and_pop("source", reason="remote_hangup")
         self.assertFalse(registry.begin_termination("destination"))
 
+    def test_async_generation_stops_owning_call_at_begin_termination(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("call-1", state="in_call", owner="bridge")
+
+        self.assertTrue(
+            registry.is_generation_current("call-1", session.generation)
+        )
+        self.assertTrue(registry.begin_termination("call-1"))
+        self.assertFalse(
+            registry.is_generation_current("call-1", session.generation)
+        )
+
     def test_sequence_advances_only_for_canonical_state_changes(self) -> None:
         registry = call_registry.CallRegistry()
 

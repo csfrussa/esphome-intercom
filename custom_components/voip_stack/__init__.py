@@ -1113,6 +1113,8 @@ async def _track_outbound_sip_client(
     endpoint_id: str = DEFAULT_ENDPOINT_ID,
     local_name: str = "",
     session_device_id: str = HA_SOFTPHONE_DEVICE_ID,
+    video_requested: bool = False,
+    video_failure_reason: str = "",
 ) -> None:
     """Keep an outbound SIP client alive and complete early-dialog INVITEs."""
     registry = _call_registry(hass)
@@ -1162,6 +1164,24 @@ async def _track_outbound_sip_client(
             # response must never resurrect a detached call in the HA store.
             return
         if public_final == CallState.IN_CALL.value and client.dialog is not None:
+            video_active = bool(
+                client.dialog.video_format is not None
+                and client.dialog.local_video_direction != "inactive"
+            )
+            video_status = (
+                "degraded"
+                if video_failure_reason
+                else "active"
+                if video_active
+                else "rejected"
+                if video_requested
+                else "inactive"
+            )
+            final_video_failure_reason = video_failure_reason or (
+                "remote_video_rejected"
+                if video_requested and not video_active
+                else ""
+            )
             registry.upsert(
                 client.dialog_ids.call_id,
                 state=CallState.IN_CALL.value,
@@ -1193,10 +1213,11 @@ async def _track_outbound_sip_client(
                 selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
                 audio_direction=client.dialog.local_audio_direction,
                 audio_connection_held=client.dialog.remote_audio_connection_held,
-                video_active=bool(
-                    client.dialog.video_format is not None
-                    and client.dialog.local_video_direction != "inactive"
-                ),
+                video_active=video_active,
+                video_requested=video_requested,
+                video_negotiated=video_active,
+                video_status=video_status,
+                video_failure_reason=final_video_failure_reason,
                 video_format=(
                     client.dialog.video_format.wire_token()
                     if client.dialog.video_format is not None
@@ -1543,6 +1564,9 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     video_rtcp_socket = (preanswered or {}).get("video_rtcp_socket")
     media_reservation = (preanswered or {}).get("rtp_reservation")
     video_media_reservation = (preanswered or {}).get("video_rtp_reservation")
+    video_failure_reason = str(
+        (preanswered or {}).get("video_failure_reason") or ""
+    )
     endpoint_video_enabled = (
         browser_endpoint is None or browser_endpoint.supports("video")
     )
@@ -1596,6 +1620,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
                     "SIP video socket unavailable, answering audio-only: %s", err
                 )
                 media_reservation = None
+                video_failure_reason = "local_video_resources_unavailable"
                 local_rtp_port = _allocate_sip_rtp_port(hass)
                 local_video_rtp_port = 0
         else:
@@ -1647,6 +1672,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         "video_rtp_reservation": video_media_reservation,
         "endpoint_id": endpoint_id,
         "media_client_id": str(call.data.get("media_client_id") or ""),
+        "video_failure_reason": video_failure_reason,
     }
     registry.upsert(
         call_id,
@@ -1660,6 +1686,11 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     )
     registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
     _LOGGER.info("SIP answered call_id=%s", call_id)
+    video_active = bool(
+        invite.video_format is not None
+        and local_video_rtp_port
+        and video_direction != "inactive"
+    )
     _set_ha_softphone_call_state(
         hass,
         CallState.IN_CALL.value,
@@ -1679,11 +1710,19 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         selected_rx_rtp_format=invite.recv_format.wire_token(),
         audio_direction=invite.local_audio_direction,
         audio_connection_held=invite.remote_audio_connection_held,
-        video_active=bool(
-            invite.video_format is not None
-            and local_video_rtp_port
-            and video_direction != "inactive"
+        video_active=video_active,
+        video_requested=bool(invite.video_format is not None),
+        video_negotiated=bool(invite.video_format is not None and local_video_rtp_port),
+        video_status=(
+            "degraded"
+            if video_failure_reason
+            else "active"
+            if video_active
+            else "rejected"
+            if invite.video_format is not None
+            else "inactive"
         ),
+        video_failure_reason=video_failure_reason,
         video_format=(invite.video_format.wire_token() if invite.video_format else ""),
         video_send_format=(
             invite.send_video_format.wire_token()
@@ -2701,6 +2740,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     video_reservation = None
     video_rtp_socket = None
     video_rtcp_socket = None
+    video_failure_reason = ""
     if video_enabled:
         try:
             (
@@ -2714,6 +2754,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 "SIP video socket unavailable, originating audio-only: %s", err
             )
             video_reservation = None
+            video_failure_reason = "local_video_resources_unavailable"
             local_rtp_port = _allocate_sip_rtp_port(hass)
             local_video_rtp_port = 0
     else:
@@ -2768,6 +2809,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         """Stage one peer re-offer for the live HA browser media owner."""
 
         call_id = client.dialog_ids.call_id
+        session = registry.sessions.get(registry.resolve_session_id(call_id))
+        if session is None:
+            return None
+        call_generation = session.generation
         bucket = hass.data.setdefault(DOMAIN, {})
         audio_session = bucket.setdefault("active_audio_sessions", {}).get(call_id)
         previous_video = previous.video_format
@@ -2789,6 +2834,10 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 return None
 
         async def _commit() -> None:
+            if not registry.is_generation_current(call_id, call_generation):
+                raise RuntimeError(
+                    "SIP softphone media update belongs to a terminated call"
+                )
             if audio_session is not None:
                 audio_session.send_format = updated.send_format
                 audio_session.recv_format = updated.recv_format
@@ -2836,6 +2885,15 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                             updated_video is not None
                             and updated.local_video_direction != "inactive"
                         ),
+                        "video_requested": bool(updated_video is not None),
+                        "video_negotiated": bool(updated_video is not None),
+                        "video_status": (
+                            "active"
+                            if updated_video is not None
+                            and updated.local_video_direction != "inactive"
+                            else "inactive"
+                        ),
+                        "video_failure_reason": "",
                         "video_format": (
                             updated_video.wire_token() if updated_video else ""
                         ),
@@ -2931,6 +2989,16 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         sip_transport=_sip_uri_transport(uri).lower(),
         last_sip_event="INVITE",
         sip_uri=route_uri,
+        video_requested=video_enabled,
+        video_negotiated=False,
+        video_status=(
+            "degraded"
+            if video_failure_reason
+            else "requested"
+            if video_enabled
+            else "inactive"
+        ),
+        video_failure_reason=video_failure_reason,
     )
     registry.sip_clients[client.dialog_ids.call_id] = client
     try:
@@ -2995,6 +3063,22 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             sip_uri=route_uri,
         )
     elif public_result == CallState.IN_CALL.value and client.dialog is not None:
+        video_active = bool(
+            client.dialog.video_format is not None
+            and client.dialog.local_video_direction != "inactive"
+        )
+        video_status = (
+            "degraded"
+            if video_failure_reason
+            else "active"
+            if video_active
+            else "rejected"
+            if video_enabled
+            else "inactive"
+        )
+        final_video_failure_reason = video_failure_reason or (
+            "remote_video_rejected" if video_enabled and not video_active else ""
+        )
         _set_ha_softphone_call_state(
             hass,
             CallState.IN_CALL.value,
@@ -3011,10 +3095,11 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             selected_rx_rtp_format=client.dialog.recv_format.wire_token(),
             audio_direction=client.dialog.local_audio_direction,
             audio_connection_held=client.dialog.remote_audio_connection_held,
-            video_active=bool(
-                client.dialog.video_format is not None
-                and client.dialog.local_video_direction != "inactive"
-            ),
+            video_active=video_active,
+            video_requested=video_enabled,
+            video_negotiated=video_active,
+            video_status=video_status,
+            video_failure_reason=final_video_failure_reason,
             video_format=(client.dialog.video_format.wire_token() if client.dialog.video_format else ""),
             video_send_format=(
                 client.dialog.send_video_format.wire_token()
@@ -3058,6 +3143,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         endpoint_id=endpoint_id,
         local_name=local_name,
         session_device_id=source_device_id,
+        video_requested=video_enabled,
+        video_failure_reason=video_failure_reason,
     )
     _LOGGER.info("SIP call target=%s uri=%s result=%s", target, route_uri, result)
 

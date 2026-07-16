@@ -441,6 +441,10 @@ class VoipStackCard extends HTMLElement {
       connected_at: Number(payload.connected_at || 0),
       debug_mode: !!payload.debug_mode,
       video_camera_send_enabled: !!payload.video_camera_send_enabled,
+      video_requested: !!payload.video_requested,
+      video_negotiated: !!payload.video_negotiated,
+      video_status: String(payload.video_status || "inactive").toLowerCase(),
+      video_failure_reason: String(payload.video_failure_reason || ""),
       capabilities: Array.isArray(payload.capabilities)
         ? payload.capabilities.map((item) => String(item).toLowerCase())
         : [],
@@ -660,6 +664,19 @@ class VoipStackCard extends HTMLElement {
       case "protocol_error": return "Protocol error";
       case "bridge_error": return "Bridge error";
       default: return "";
+    }
+  }
+
+  _formatVideoFailureReason(reason) {
+    switch (String(reason || "").trim().toLowerCase()) {
+      case "local_video_resources_unavailable":
+        return "Home Assistant could not allocate video media.";
+      case "remote_video_rejected":
+        return "The remote endpoint rejected video.";
+      case "endpoint_video_unsupported":
+        return "This endpoint does not support video.";
+      default:
+        return reason ? String(reason).replaceAll("_", " ") : "";
     }
   }
 
@@ -1700,6 +1717,19 @@ class VoipStackCard extends HTMLElement {
       showHangup = true;
     }
     if (this._stopping) statusText = "Ending call...";
+    const videoFailureReason = this._formatVideoFailureReason(
+      this._softphoneSnapshot?.video_failure_reason,
+    );
+    if (
+      !statusReason &&
+      this._isHaSoftphoneMode() &&
+      ["degraded", "failed", "rejected"].includes(
+        String(this._softphoneSnapshot?.video_status || "").toLowerCase(),
+      ) &&
+      videoFailureReason
+    ) {
+      statusReason = `Video unavailable: ${videoFailureReason}`;
+    }
     this._syncRingtoneRequest(espState);
 
     els.headerName.textContent = this._formatHeaderTitle(displayName);
