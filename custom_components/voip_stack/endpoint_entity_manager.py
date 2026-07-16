@@ -28,6 +28,23 @@ _LOGGER = logging.getLogger(__name__)
 _EntityT = TypeVar("_EntityT", bound=Entity)
 
 
+@callback
+def register_endpoint_entity_manager(
+    entry: ConfigEntry,
+    bucket: dict,
+    key: str,
+    manager: "EndpointEntityManager",
+) -> None:
+    """Store a platform manager and remove it with a void unload callback."""
+    bucket[key] = manager
+
+    @callback
+    def _remove_manager() -> None:
+        bucket.pop(key, None)
+
+    entry.async_on_unload(_remove_manager)
+
+
 class EndpointEntityManager(Generic[_EntityT]):
     """Add and update one entity per integration-owned phone endpoint."""
 

@@ -1536,10 +1536,13 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     )
 
     local_rtp_port = int((preanswered or {}).get("local_rtp_port") or 0)
-    local_video_rtp_port = 0
-    video_rtp_socket = None
-    video_rtcp_socket = None
+    local_video_rtp_port = int(
+        (preanswered or {}).get("local_video_rtp_port") or 0
+    )
+    video_rtp_socket = (preanswered or {}).get("video_rtp_socket")
+    video_rtcp_socket = (preanswered or {}).get("video_rtcp_socket")
     media_reservation = (preanswered or {}).get("rtp_reservation")
+    video_media_reservation = (preanswered or {}).get("video_rtp_reservation")
     endpoint_video_enabled = (
         browser_endpoint is None or browser_endpoint.supports("video")
     )
@@ -1563,6 +1566,19 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         if invite.video_format is not None and endpoint_video_enabled
         else "inactive"
     )
+    if preanswered is not None:
+        # The DTMF routing 200 OK already fixed the offer/answer direction.
+        # Stay within that contract while retaining the card's explicit
+        # camera permission as the gate for actual browser-to-RTP media.
+        negotiated_video_direction = str(
+            preanswered.get("video_direction") or "inactive"
+        )
+        video_direction = constrained_video_direction(
+            negotiated_video_direction,
+            allow_send=camera_send_enabled
+            and browser_video_send_supported(invite.video_format)
+            and not invite.remote_video_connection_held,
+        )
     if local_rtp_port:
         _LOGGER.info("SIP answered pre-answered trunk call_id=%s", call_id)
     else:
@@ -1611,6 +1627,10 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
                 f"SIP transaction for call_id {call_id} is no longer available"
             )
 
+    session = registry.sessions.get(registry.resolve_session_id(call_id))
+    resolved_callee = str(
+        (session.callee if session is not None else "") or local_name
+    )
     registry.softphone_media[call_id] = {
         "invite": invite,
         "local_rtp_port": local_rtp_port,
@@ -1624,6 +1644,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         "video_rtp_socket": video_rtp_socket,
         "video_rtcp_socket": video_rtcp_socket,
         "rtp_reservation": media_reservation,
+        "video_rtp_reservation": video_media_reservation,
         "endpoint_id": endpoint_id,
         "media_client_id": str(call.data.get("media_client_id") or ""),
     }
@@ -1632,7 +1653,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         state=CallState.IN_CALL.value,
         owner="ha_softphone",
         caller=invite.caller,
-        callee=invite.target,
+        callee=resolved_callee,
         route_kind="ha_softphone",
         endpoint_id=endpoint_id,
         media_client_id=str(call.data.get("media_client_id") or ""),
@@ -1645,7 +1666,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         endpoint_id=endpoint_id,
         session_device_id=endpoint_device_id,
         caller=invite.caller,
-        callee=invite.target,
+        callee=resolved_callee,
         peer_name=invite.caller,
         direction="incoming",
         call_id=call_id,

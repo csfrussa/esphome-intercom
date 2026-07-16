@@ -300,6 +300,22 @@ def test_dynamic_entity_creation_is_not_reentered_by_device_id_update(
     assert manager.entities["kitchen"] is added[0][0][0]
 
 
+def test_manager_bucket_unload_callback_returns_none() -> None:
+    """HA unload callbacks must never leak the removed manager as a job."""
+    callbacks = []
+    entry = types.SimpleNamespace(async_on_unload=callbacks.append)
+    manager = object()
+    bucket = {}
+
+    entity_manager.register_endpoint_entity_manager(
+        entry, bucket, "endpoint_manager", manager
+    )
+
+    assert bucket["endpoint_manager"] is manager
+    assert callbacks[0]() is None
+    assert "endpoint_manager" not in bucket
+
+
 def test_dynamic_entities_leave_hass_ownership_to_entity_platform() -> None:
     """Disabled or not-yet-added entities must retain HA's ``hass=None`` state."""
     modules_and_classes = {

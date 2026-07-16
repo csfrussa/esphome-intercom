@@ -590,6 +590,52 @@ resolveVideo({{
 await staleVideoAttach;
 assert.equal(videoStarts, 0);
 assert.equal(videoCloses, 0);
+
+// Once a previous video dialog is already closed, an audio-only state update
+// is a strict no-op. Calling close() again emits state and would otherwise
+// create an endless reconcile -> close -> emit loop in the renderer.
+const audioOnlyReconcile = new Engine();
+audioOnlyReconcile._callId = "audio-after-video";
+let redundantVideoCloses = 0;
+audioOnlyReconcile._video = {{
+  active: false,
+  callId: "",
+  async close() {{ redundantVideoCloses++; audioOnlyReconcile._emit(); }},
+}};
+await audioOnlyReconcile._ensureVideo({{
+  call_id: "audio-after-video",
+  video_active: false,
+}});
+assert.equal(redundantVideoCloses, 0);
+
+// Starting the next audio-only call must wait until camera/encoder teardown
+// from the previous video call has completed in the browser process.
+const serialized = new Engine();
+let releaseVideoCleanup;
+let outboundStarts = 0;
+serialized._video = {{
+  configure() {{}},
+  close: () => new Promise((resolve) => {{ releaseVideoCleanup = resolve; }}),
+}};
+serialized.configure({{
+  callWS: async () => {{
+    outboundStarts++;
+    return {{ state: "idle", call_id: "" }};
+  }},
+}});
+const closingVideo = serialized.close("terminal");
+await Promise.resolve();
+const startingAudio = serialized.startHaSoftphone(
+  {{ name: "Audio endpoint", device_id: "audio-device" }},
+  {{ endpoint_id: "default" }},
+  {{ endpoint_id: "default", sendVideo: false }},
+);
+await Promise.resolve();
+assert.equal(outboundStarts, 0);
+releaseVideoCleanup();
+await closingVideo;
+await startingAudio;
+assert.equal(outboundStarts, 1);
 """
     completed = subprocess.run(
         [

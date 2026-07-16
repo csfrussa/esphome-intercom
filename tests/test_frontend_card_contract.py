@@ -433,6 +433,7 @@ class FrontendCardContractTest(unittest.TestCase):
 
         self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", answer)
         self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", start)
+        self.assertIn("this._targetSupportsVideo(target)", start)
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", answer)
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", start)
         self.assertIn("persistentOnly: true", auto_answer)
@@ -443,6 +444,15 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('permission.state === "denied" || persistentOnly', permission)
         self.assertIn("navigator.mediaDevices.getUserMedia", permission)
         self.assertIn("track.stop()", permission)
+
+    def test_outbound_video_preflight_respects_target_capabilities(self) -> None:
+        target = _method_body(self.source, "_targetFromRosterEntry")
+        supports = _method_body(self.source, "_targetSupportsVideo")
+
+        self.assertIn("metadata.endpoint_kind", target)
+        self.assertIn("metadata.capabilities", target)
+        self.assertIn('capabilities.includes("video")', supports)
+        self.assertIn('!== "esphome"', supports)
 
     def test_deep_link_answer_is_not_part_of_esp_mirror_state_updates(self) -> None:
         setter = _method_body(self.source, "set hass")
@@ -610,6 +620,9 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("if (this._sessionAttachPromise !== trackedPromise) return", engine)
         self.assertIn("const audioCleanup = this._cleanupAudio", engine)
         self.assertIn("await Promise.allSettled([audioCleanup, videoCleanup])", engine)
+        self.assertIn("await this._waitForMediaCleanup()", engine)
+        self.assertIn("this._mediaCleanupPromise = currentCleanup", engine)
+        self.assertIn("(this._video.active || this._video.callId)", engine)
 
     def test_browser_audio_applies_negotiated_direction_and_media_updates(self) -> None:
         engine = (

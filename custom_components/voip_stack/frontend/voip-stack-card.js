@@ -1287,6 +1287,9 @@ class VoipStackCard extends HTMLElement {
       extension: entry.extension || "",
       number: entry.number || "",
       ha_bridge: !!entry.ha_bridge,
+      endpoint_kind: String(metadata.endpoint_kind || "").trim().toLowerCase(),
+      capabilities: this._formatListFromMetadata(metadata.capabilities)
+        .map(value => value.toLowerCase()),
       audio_mode: metadata.audio_mode || "full_duplex",
       tx_formats: this._formatListFromMetadata(metadata.tx_formats),
       rx_formats: this._formatListFromMetadata(metadata.rx_formats),
@@ -1295,6 +1298,18 @@ class VoipStackCard extends HTMLElement {
       max_payload_bytes: metadata.max_payload_bytes,
       roster: true,
     };
+  }
+
+  _targetSupportsVideo(target) {
+    const capabilities = Array.isArray(target?.capabilities)
+      ? target.capabilities.map(value => String(value).trim().toLowerCase()).filter(Boolean)
+      : [];
+    if (capabilities.length) return capabilities.includes("video");
+
+    // ESPHome endpoints are explicitly audio-only. Unknown/manual SIP targets
+    // remain eligible for standards-based video negotiation because their
+    // remote capabilities can only be discovered through SDP.
+    return String(target?.endpoint_kind || "").trim().toLowerCase() !== "esphome";
   }
 
   _normaliseTransport(value) {
@@ -2087,7 +2102,7 @@ class VoipStackCard extends HTMLElement {
         gap: 12px;
         justify-content: flex-start;
         overflow: hidden;
-        background: linear-gradient(90deg, rgba(122, 5, 5, .62), rgba(230, 35, 35, .52));
+        background: linear-gradient(90deg, rgba(122, 5, 5, .40), rgba(230, 35, 35, .32));
         -webkit-backdrop-filter: blur(8px) saturate(1.12);
         backdrop-filter: blur(8px) saturate(1.12);
         box-shadow: 0 -1px 0 rgba(255,255,255,.18), 0 -8px 30px rgba(0,0,0,.24);
@@ -2906,6 +2921,7 @@ class VoipStackCard extends HTMLElement {
     this._activeDeviceInfo = sessionInfo;
     let sendVideo = Boolean(
       this._softphoneSupportsVideo() &&
+      this._targetSupportsVideo(target) &&
       this._softphoneSnapshot?.video_camera_send_enabled &&
       (
         voipStackEngine.videoCameraEnabledFor

@@ -123,6 +123,7 @@ class VoipStackEngine extends EventTarget {
     this._videoAttachGeneration = 0;
     this._videoAttachPromise = null;
     this._videoAttachCallId = "";
+    this._mediaCleanupPromise = null;
     this._pageHiding = false;
 
     window.addEventListener("pagehide", () => {
@@ -1267,6 +1268,7 @@ class VoipStackEngine extends EventTarget {
   }
 
   async startHaSoftphone(target, softphoneInfo, context = {}) {
+    await this._waitForMediaCleanup();
     this._resetStats();
     let endpointId = String(context.endpoint_id || softphoneInfo?.endpoint_id || "").trim();
     let deviceId = String(context.device_id || softphoneInfo?.device_id || "").trim();
@@ -1371,6 +1373,8 @@ class VoipStackEngine extends EventTarget {
   }
 
   async _resumeSessionLocked(deviceInfo, deviceId, statePayload, attachKey) {
+    await this._waitForMediaCleanup();
+    if (attachKey && this._sessionAttachKey !== attachKey) return;
     const callId = String(statePayload?.call_id || "");
     const endpointId = String(statePayload?.endpoint_id || deviceInfo?.endpoint_id || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     if (
@@ -1411,6 +1415,7 @@ class VoipStackEngine extends EventTarget {
       this._videoAttachCallId = "";
       if (
         this._video &&
+        (this._video.active || this._video.callId) &&
         (!wantedCallId || !this._video.callId || this._video.callId === wantedCallId)
       ) await this._video.close();
       return;
@@ -1466,23 +1471,37 @@ class VoipStackEngine extends EventTarget {
   }
 
   async close(_reason = "", preserveAttach = false, preserveConnect = false) {
-    if (!preserveConnect) this._connectGeneration++;
-    this._videoAttachGeneration++;
-    this._videoAttachPromise = null;
-    this._videoAttachCallId = "";
-    if (!preserveAttach) this._sessionAttachKey = "";
-    const ws = this._ws;
-    this._ws = null;
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-      try { ws.close(); } catch (_) {}
+    const previousCleanup = this._mediaCleanupPromise;
+    let finishCleanup;
+    const currentCleanup = new Promise((resolve) => { finishCleanup = resolve; });
+    this._mediaCleanupPromise = currentCleanup;
+    try {
+      if (previousCleanup) await previousCleanup.catch(() => {});
+      if (!preserveConnect) this._connectGeneration++;
+      this._videoAttachGeneration++;
+      this._videoAttachPromise = null;
+      this._videoAttachCallId = "";
+      if (!preserveAttach) this._sessionAttachKey = "";
+      const ws = this._ws;
+      this._ws = null;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        try { ws.close(); } catch (_) {}
+      }
+      this._callId = "";
+      // New sessions wait on the page-level cleanup gate and cannot overlap
+      // camera/encoder/AudioContext destruction from the previous call.
+      const audioCleanup = this._cleanupAudio("close");
+      const videoCleanup = this._video ? this._video.close() : Promise.resolve();
+      await Promise.allSettled([audioCleanup, videoCleanup]);
+    } finally {
+      finishCleanup();
+      if (this._mediaCleanupPromise === currentCleanup) this._mediaCleanupPromise = null;
     }
-    this._callId = "";
-    // Detach audio resources before the first await. A new call may start
-    // while video/AudioContext teardown for the old call is still pending;
-    // that old continuation must never close or null the new pipeline.
-    const audioCleanup = this._cleanupAudio("close");
-    const videoCleanup = this._video ? this._video.close() : Promise.resolve();
-    await Promise.allSettled([audioCleanup, videoCleanup]);
+  }
+
+  async _waitForMediaCleanup() {
+    const cleanup = this._mediaCleanupPromise;
+    if (cleanup) await cleanup.catch(() => {});
   }
 
   _detachAudioResources() {

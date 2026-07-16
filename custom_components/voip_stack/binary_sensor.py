@@ -18,7 +18,10 @@ from .endpoint_device import (
     endpoint_public_attributes,
     enum_value,
 )
-from .endpoint_entity_manager import EndpointEntityManager
+from .endpoint_entity_manager import (
+    EndpointEntityManager,
+    register_endpoint_entity_manager,
+)
 
 
 ONLINE_AVAILABILITY = frozenset({"online", "available", "registered", "connected"})
@@ -37,9 +40,8 @@ async def async_setup_entry(
     )
     manager.async_setup()
     bucket = hass.data.setdefault(DOMAIN, {})
-    bucket["endpoint_connectivity_entity_manager"] = manager
-    entry.async_on_unload(
-        lambda: bucket.pop("endpoint_connectivity_entity_manager", None)
+    register_endpoint_entity_manager(
+        entry, bucket, "endpoint_connectivity_entity_manager", manager
     )
 
 

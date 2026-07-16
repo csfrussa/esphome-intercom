@@ -1528,6 +1528,49 @@ class H264SdpTest(unittest.TestCase):
             "recvonly",
         )
 
+    def test_recvonly_offer_may_enable_camera_with_sendrecv_reinvite(self) -> None:
+        previous_send = sdp.RtpVideoFormat(
+            payload_type=104,
+            encoding="VP8",
+            fmtp="max-fr=20;max-fs=3600",
+            direction="recvonly",
+        )
+        # The unused local receive candidate may differ before the remote
+        # camera is enabled. It was not part of a live receive path.
+        previous_recv = sdp.RtpVideoFormat(
+            payload_type=105,
+            encoding="H264",
+            direction="recvonly",
+        )
+        updated = sdp.RtpVideoFormat(
+            payload_type=104,
+            encoding="VP8",
+            fmtp="max-fr=30;max-fs=3600",
+            direction="sendrecv",
+        )
+
+        self.assertTrue(
+            sdp.directional_video_renegotiation_compatible(
+                previous_send,
+                previous_recv,
+                updated,
+                updated,
+            )
+        )
+
+    def test_active_video_codec_change_still_requires_compatibility(self) -> None:
+        previous = sdp.RtpVideoFormat(encoding="VP8", direction="sendrecv")
+        updated = sdp.RtpVideoFormat(encoding="H264", direction="sendrecv")
+
+        self.assertFalse(
+            sdp.directional_video_renegotiation_compatible(
+                previous,
+                previous,
+                updated,
+                updated,
+            )
+        )
+
     def test_unsupported_media_level_connection_does_not_break_audio(self) -> None:
         offer = (
             "v=0\r\no=- 1 2 IN IP4 192.168.1.48\r\ns=-\r\n"

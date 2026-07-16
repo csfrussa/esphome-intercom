@@ -77,6 +77,9 @@ assert.deepEqual(
 // Decoder output without a currently-owned canvas is a dropped frame, not a
 // rendered frame. This keeps debug counters truthful during card handoff.
 const noCanvas = new Video();
+noCanvas._active = true;
+noCanvas._canReceive = true;
+assert.equal(noCanvas.visible, false);
 let noCanvasClosed = false;
 noCanvas._queueDecodedFrame({{
   timestamp: 1,
@@ -88,6 +91,8 @@ assert.equal(noCanvasClosed, true);
 assert.equal(noCanvas._stats.rendered, 0);
 assert.equal(noCanvas._stats.dropped, 1);
 assert.equal(noCanvas._stats.dropped_no_canvas, 1);
+noCanvas._stats.rendered = 1;
+assert.equal(noCanvas.visible, true);
 const wrapped = new Video();
 wrapped._clockRate = 90000;
 assert.deepEqual(

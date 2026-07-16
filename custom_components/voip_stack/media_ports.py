@@ -43,9 +43,12 @@ def release_media_reservation(item) -> None:
             video_socket = item.pop(key, None)
             if video_socket is not None and hasattr(video_socket, "close"):
                 video_socket.close()
-    reservation = (item or {}).get("rtp_reservation") if isinstance(item, dict) else None
-    if reservation is not None and hasattr(reservation, "release"):
-        reservation.release()
+    if not isinstance(item, dict):
+        return
+    for key in ("rtp_reservation", "video_rtp_reservation"):
+        reservation = item.get(key)
+        if reservation is not None and hasattr(reservation, "release"):
+            reservation.release()
 
 
 def rtp_port_available(port: int) -> bool:

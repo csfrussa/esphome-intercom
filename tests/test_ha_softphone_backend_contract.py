@@ -574,6 +574,16 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("endpoint_id=media_endpoint_id", media_update)
         self.assertNotIn("_ha_softphone_store(hass)", media_update)
 
+    def test_inbound_answer_preserves_logical_phone_as_callee(self) -> None:
+        answer = _function_body(self.source, "_handle_sip_answer_service")
+        self.assertIn(
+            "session = registry.sessions.get(registry.resolve_session_id(call_id))",
+            answer,
+        )
+        self.assertIn("resolved_callee = str(", answer)
+        self.assertIn("callee=resolved_callee", answer)
+        self.assertIn("dialed_target=invite.target", answer)
+
     def test_call_membership_accepts_both_destination_metadata_spellings(self) -> None:
         body = _function_body(self.source, "_call_endpoint_ids")
         self.assertIn('"source_endpoint_id"', body)

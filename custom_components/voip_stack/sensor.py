@@ -34,7 +34,11 @@ from .endpoint_device import (
     endpoint_public_attributes,
     enum_value,
 )
-from .endpoint_entity_manager import EndpointEntityManager, event_matches_endpoint
+from .endpoint_entity_manager import (
+    EndpointEntityManager,
+    event_matches_endpoint,
+    register_endpoint_entity_manager,
+)
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -115,9 +119,8 @@ async def async_setup_entry(
     bucket["ha_softphone_endpoint_sensor"] = ha_endpoint_sensor
     bucket["ha_softphone_call_state_sensor"] = call_state_sensor
     bucket["phonebook_sensor"] = unified_sensor
-    bucket["endpoint_call_state_entity_manager"] = endpoint_manager
-    entry.async_on_unload(
-        lambda: bucket.pop("endpoint_call_state_entity_manager", None)
+    register_endpoint_entity_manager(
+        entry, bucket, "endpoint_call_state_entity_manager", endpoint_manager
     )
 
 

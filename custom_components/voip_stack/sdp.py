@@ -324,6 +324,43 @@ def video_formats_renegotiation_compatible(
     return _fmtp_parameters(previous.fmtp) == _fmtp_parameters(updated.fmtp)
 
 
+def directional_video_renegotiation_compatible(
+    previous_send: RtpVideoFormat | None,
+    previous_recv: RtpVideoFormat | None,
+    updated_send: RtpVideoFormat | None,
+    updated_recv: RtpVideoFormat | None,
+) -> bool:
+    """Validate only codec paths active before and after a new offer.
+
+    Direction changes are normal offer/answer renegotiation, not transcoding.
+    In particular, ``recvonly`` -> ``sendrecv`` activates a receive path for
+    the first time, so its previous inactive candidate cannot veto the offer.
+    """
+
+    if previous_send is None or updated_send is None:
+        return False
+    previous_direction = normalize_direction(previous_send.direction)
+    updated_direction = normalize_direction(updated_send.direction)
+    send_was_active = previous_direction in {"sendrecv", "recvonly"}
+    send_is_active = updated_direction in {"sendrecv", "recvonly"}
+    recv_was_active = previous_direction in {"sendrecv", "sendonly"}
+    recv_is_active = updated_direction in {"sendrecv", "sendonly"}
+    return bool(
+        (
+            not (send_was_active and send_is_active)
+            or video_formats_renegotiation_compatible(
+                previous_send, updated_send
+            )
+        )
+        and (
+            not (recv_was_active and recv_is_active)
+            or video_formats_renegotiation_compatible(
+                previous_recv, updated_recv
+            )
+        )
+    )
+
+
 def video_answer_contract(
     offered: RtpVideoFormat,
     answered: RtpVideoFormat,

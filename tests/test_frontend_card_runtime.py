@@ -464,6 +464,32 @@ assert.equal(endpointOnlyStart.session.endpoint_id, "kitchen");
 assert.equal(endpointOnlyStart.session.device_id, "");
 engine.releaseSoftphoneSession("endpoint-only", "kitchen");
 
+// An audio-only roster target must never initialize the browser camera. The
+// backend already suppresses video in SDP; doing the same before getUserMedia
+// prevents needless camera/driver work while calling ESPHome endpoints.
+const audioOnly = makeCard();
+audioOnly._rosterEntries = [{{
+  id: "waveshare-s3", name: "Waveshare S3 Audio", enabled: true,
+  metadata: {{ endpoint_kind: "esphome", capabilities: ["audio", "dtmf"] }},
+}}];
+audioOnly._softphoneSnapshot = {{
+  state: "idle", capabilities: ["audio", "video"],
+  video_camera_send_enabled: true,
+}};
+engine.videoCameraEnabled = true;
+let audioOnlyStart;
+engine.startHaSoftphone = async (target, session, options) => {{
+  audioOnlyStart = {{ target, session, options }};
+  return {{ state: "calling", call_id: "audio-only", sequence: 1 }};
+}};
+const cameraChecksBeforeAudioOnly = cameraPermissionChecks;
+await audioOnly._startCall();
+assert.equal(audioOnlyStart.target.endpoint_kind, "esphome");
+assert.deepEqual(audioOnlyStart.target.capabilities, ["audio", "dtmf"]);
+assert.equal(audioOnlyStart.options.sendVideo, false);
+assert.equal(cameraPermissionChecks, cameraChecksBeforeAudioOnly);
+engine.releaseSoftphoneSession("audio-only", "default");
+
 // The local Call action may publish only the backend's provisional result.
 // It must not optimistically promote the card to in_call.
 const outbound = makeCard();

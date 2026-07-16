@@ -11,7 +11,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .automation_routing import AUTOMATION_EVENT_TYPES, automation_event_type
 from .const import DOMAIN
 from .endpoint_device import async_link_endpoint_entity, endpoint_device_info
-from .endpoint_entity_manager import EndpointEntityManager, event_matches_endpoint
+from .endpoint_entity_manager import (
+    EndpointEntityManager,
+    event_matches_endpoint,
+    register_endpoint_entity_manager,
+)
 from .websocket_api import CALL_EVENT, SIP_DTMF_EVENT
 
 
@@ -30,9 +34,8 @@ async def async_setup_entry(
     )
     endpoint_manager.async_setup()
     bucket = hass.data.setdefault(DOMAIN, {})
-    bucket["endpoint_call_event_entity_manager"] = endpoint_manager
-    entry.async_on_unload(
-        lambda: bucket.pop("endpoint_call_event_entity_manager", None)
+    register_endpoint_entity_manager(
+        entry, bucket, "endpoint_call_event_entity_manager", endpoint_manager
     )
 
 

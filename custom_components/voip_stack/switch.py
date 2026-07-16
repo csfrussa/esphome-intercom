@@ -12,7 +12,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN
 from .endpoint_device import async_link_endpoint_entity, endpoint_device_info
-from .endpoint_entity_manager import EndpointEntityManager
+from .endpoint_entity_manager import (
+    EndpointEntityManager,
+    register_endpoint_entity_manager,
+)
 
 
 async def async_set_endpoint_dnd(
@@ -80,8 +83,9 @@ async def async_setup_entry(
     )
     manager.async_setup()
     bucket = hass.data.setdefault(DOMAIN, {})
-    bucket["endpoint_dnd_entity_manager"] = manager
-    entry.async_on_unload(lambda: bucket.pop("endpoint_dnd_entity_manager", None))
+    register_endpoint_entity_manager(
+        entry, bucket, "endpoint_dnd_entity_manager", manager
+    )
 
 
 class PhoneEndpointDndSwitch(SwitchEntity):

@@ -246,7 +246,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         video_answer_contract,
         video_offer_answer_directional,
         video_formats_passthrough_compatible,
-        video_formats_renegotiation_compatible,
+        directional_video_renegotiation_compatible,
     )
     from .sip import parse_sip_uri, sip_endpoints_equal, sip_uri_targets_listener
     from .sip_client import SIP_TIMER_B, SipCallClient
@@ -1107,6 +1107,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     ) -> None:
         source_relay_port, dest_relay_port = bridge_ports.ports
         bucket = hass.data.setdefault(DOMAIN, {})
+        registry = _call_registry(hass)
         trunk_cfg = _get_trunk_config(hass)
         dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
         dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
@@ -1308,7 +1309,11 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             trunk_ready=False,
         )
         if decision.action is RouteAction.ANSWER_HA:
-            destination = default_target
+            # ANSWER_HA identifies the endpoint *kind*, not necessarily the
+            # default browser phone. Preserve an explicit DTMF extension so a
+            # second routing pass can select the corresponding logical HA
+            # softphone (for example 667 -> Test).
+            destination = route_hint or decision.target or default_target
         elif decision.action is RouteAction.REJECT:
             registry = _call_registry(hass)
             registry.pending_invites.pop(invite.call_id, None)
@@ -1382,46 +1387,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             return
 
         if _is_ha_target(destination):
-            registry = _call_registry(hass)
-            registry.pending_invites[invite.call_id] = invite
-            registry.preanswered[invite.call_id] = {
-                "local_rtp_port": source_relay_port,
-                "rtp_reservation": bridge_ports,
-            }
-            registry.upsert(
-                invite.call_id,
-                state=CallState.RINGING.value,
-                owner="ha_softphone",
-                caller=invite.caller,
-                callee=_ha_peer_name(hass),
+            _defer_invite_to_ha_softphone(
+                invite,
                 route_kind="trunk",
-            )
-            registry.add_leg(
-                invite.call_id,
-                invite.call_id,
-                role="ha_softphone",
-                state=CallState.RINGING.value,
-            )
-            _set_ha_softphone_call_state(
-                hass,
-                CallState.RINGING.value,
-                session_device_id=HA_SOFTPHONE_DEVICE_ID,
-                caller=invite.caller,
+                endpoint_id=DEFAULT_ENDPOINT_ID,
+                endpoint_device_id=HA_SOFTPHONE_DEVICE_ID,
                 callee=_ha_peer_name(hass),
-                peer_name=invite.caller,
-                direction="incoming",
-                call_id=invite.call_id,
-                selected_tx_format=invite.send_format.audio_format.wire_token(),
-                selected_rx_format=invite.recv_format.audio_format.wire_token(),
-                selected_tx_rtp_format=invite.send_format.wire_token(),
-                selected_rx_rtp_format=invite.recv_format.wire_token(),
-                audio_mode="full_duplex",
-                route_kind="trunk",
-                sip_status_code=200,
-                last_sip_event="INVITE",
-                scope="sip_trunk",
-                dtmf_digits=digits,
-                target=destination,
+                last_sip_event="DTMF_ROUTE",
             )
             return
 
@@ -1429,6 +1401,55 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             destination,
             _roster_from_peers(hass, peers, _registered_roster_entries(hass)),
         )
+        if decision.action is RouteAction.ANSWER_HA:
+            roster = _roster_from_peers(
+                hass, peers, _registered_roster_entries(hass)
+            )
+            target_endpoint = _logical_endpoint_for_member(
+                decision.target or destination,
+                peers,
+                roster,
+            )
+            session = registry.sessions.get(
+                registry.resolve_session_id(invite.call_id)
+            )
+            current_endpoint_id = str(
+                ((session.metadata if session is not None else {}) or {}).get(
+                    "endpoint_id"
+                )
+                or DEFAULT_ENDPOINT_ID
+            ).strip()
+            if (
+                target_endpoint is not None
+                and target_endpoint.kind is EndpointKind.BROWSER
+                and target_endpoint.endpoint_id == current_endpoint_id
+            ):
+                # The pre-answered trunk dialog is initially parked on the
+                # master HA phone. Routing 666/default back to that same phone
+                # is an assignment, not a forward. Treating it as a forward
+                # trips the loop guard and leaves the async route task failed
+                # while the caller remains answered but unowned.
+                _defer_invite_to_ha_softphone(
+                    invite,
+                    route_kind="trunk",
+                    endpoint_id=target_endpoint.endpoint_id,
+                    endpoint_device_id=(
+                        target_endpoint.device_id or HA_SOFTPHONE_DEVICE_ID
+                    ),
+                    callee=target_endpoint.name,
+                    last_sip_event="DTMF_ROUTE",
+                )
+                return
+            # DTMF extensions are canonical phonebook destinations, including
+            # additional browser softphones. Reuse the normal forwarding path
+            # so endpoint ownership, offline policy and the selected device
+            # are handled exactly like an automation forward.
+            await _async_forward_existing_call(
+                call_id=invite.call_id,
+                destination=destination,
+                on_failure="resume",
+            )
+            return
         registry = _call_registry(hass)
         registry.pending_invites.pop(invite.call_id, None)
         registry.preanswered.pop(invite.call_id, None)
@@ -1930,8 +1951,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     call_id,
                     status,
                     "Busy Here" if status == 486 else "Temporarily Unavailable",
-                    decline_reason=reason,
-                )
+                decline_reason=reason,
+            )
+
             terminal_state = (
                 CallState.BUSY.value
                 if on_failure == "busy"
@@ -2738,6 +2760,47 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
         task = create_runtime_task(hass, _run_forward())
         forward_tasks[call_id] = task
+
+    async def _run_trunk_inbound_route_guarded(
+        invite: SipInvite,
+        *,
+        bridge_ports: RtpPortReservation,
+    ) -> None:
+        """Fail one detached trunk route closed and release all ownership."""
+
+        try:
+            await _run_trunk_inbound_route(invite, bridge_ports=bridge_ports)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - detached call boundary.
+            _LOGGER.exception(
+                "SIP trunk inbound routing failed call_id=%s", invite.call_id
+            )
+            registry = _call_registry(hass)
+            registry.pending_invites.pop(invite.call_id, None)
+            preanswered = registry.preanswered.pop(invite.call_id, None)
+            _release_media_reservation(preanswered)
+            bridge_ports.release()
+            _sip_send_bye(hass, invite.call_id)
+            _set_sip_bridge_call_state(
+                hass,
+                CallState.TRANSPORT_UNREACHABLE.value,
+                caller=invite.caller,
+                callee=invite.target,
+                peer_name=invite.caller,
+                call_id=invite.call_id,
+                direction="incoming",
+                reason=str(err),
+                terminal_reason=RouteReason.TARGET_UNREACHABLE.value,
+                origin="self",
+                sip_status_code=500,
+                last_sip_event="BYE",
+            )
+            registry.finish_and_pop(
+                invite.call_id,
+                reason=RouteReason.TARGET_UNREACHABLE.value,
+                state=CallState.TRANSPORT_UNREACHABLE.value,
+            )
 
     async def _run_ring_group_call(
         invite: SipInvite,
@@ -4453,12 +4516,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 trunk_cfg.get(CONF_TRUNK_INBOUND_MODE) == TRUNK_INBOUND_MODE_DTMF
                 and trunk_cfg.get(CONF_TRUNK_DTMF_ENABLED)
                 and dtmf_timeout_ms > 0
-                # A 200 OK used to collect routing digits establishes the
-                # dialog's media contract.  Answering that leg audio-only and
-                # adding video after the user accepts is not valid SIP offer/
-                # answer.  Preserve the original video offer by routing it
-                # through the normal ringing/final-answer path.
-                and invite.video_format is None
             )
             if not dtmf_preanswer:
                 _LOGGER.info(
@@ -4495,10 +4552,39 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                     return SipInviteResult(503, "Service Unavailable", to_tag="")
                 source_relay_port, _dest_relay_port = bridge_ports.ports
+                video_media_reservation = None
+                video_rtp_socket = None
+                video_rtcp_socket = None
+                source_video_port = 0
+                if (
+                    invite.video_format is not None
+                    and cfg.get(CONF_EXPERIMENTAL_VIDEO, False)
+                ):
+                    try:
+                        (
+                            video_media_reservation,
+                            video_rtp_socket,
+                            video_rtcp_socket,
+                        ) = reserve_sip_video_media(hass)
+                        _unused_audio_port, source_video_port = (
+                            video_media_reservation.ports
+                        )
+                    except (OSError, RuntimeError) as err:
+                        _LOGGER.warning(
+                            "SIP trunk DTMF video socket unavailable; collecting digits audio-only: %s",
+                            err,
+                        )
                 registry.pending_invites[invite.call_id] = invite
                 registry.preanswered[invite.call_id] = {
                     "local_rtp_port": source_relay_port,
+                    "local_video_rtp_port": source_video_port,
+                    "video_direction": (
+                        "recvonly" if source_video_port else "inactive"
+                    ),
                     "rtp_reservation": bridge_ports,
+                    "video_rtp_reservation": video_media_reservation,
+                    "video_rtp_socket": video_rtp_socket,
+                    "video_rtcp_socket": video_rtcp_socket,
                 }
                 registry.upsert(
                     invite.call_id,
@@ -4514,6 +4600,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 dtmf_format = None
                 dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
                 dtmf_format = dtmf_formats[0] if dtmf_formats else None
+                preanswer_video_direction = (
+                    constrained_video_direction(
+                        invite.video_format.direction,
+                        allow_send=True,
+                    )
+                    if source_video_port and invite.video_format is not None
+                    else "inactive"
+                )
+                registry.preanswered[invite.call_id]["video_direction"] = (
+                    preanswer_video_direction
+                )
                 answer = build_answer_directional(
                     local_ip,
                     local_ip,
@@ -4522,6 +4619,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     invite.recv_format,
                     dtmf=dtmf_format,
                     remote_sdp=invite.remote_sdp,
+                    video_port=source_video_port,
+                    video_format=(
+                        invite.answer_video_format if source_video_port else None
+                    ),
+                    # Advertising the supported direction establishes a
+                    # standards-valid media contract; it does not grant
+                    # browser camera access. Actual camera RTP remains gated
+                    # by the explicit per-card answer choice.
+                    video_direction=preanswer_video_direction,
                 )
                 _set_sip_bridge_call_state(
                     hass,
@@ -4549,7 +4655,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 create_runtime_task(
                     hass,
-                    _run_trunk_inbound_route(
+                    _run_trunk_inbound_route_guarded(
                         invite,
                         bridge_ports=bridge_ports,
                     ),
@@ -5813,16 +5919,37 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 .get(call_id)
             )
             if previous_video is not None and updated_video is not None:
-                compatible_video = bool(
-                    video_formats_renegotiation_compatible(
-                        previous_video, updated_video
-                    )
-                    and video_formats_renegotiation_compatible(
-                        previous.recv_video_format,
-                        updated.recv_video_format,
-                    )
+                # A direction change can activate a media path which had no
+                # live codec contract in the previous offer.  A common SIP
+                # camera flow starts with ``recvonly`` and later sends a
+                # sendrecv re-INVITE when the user enables their camera.  Do
+                # not compare the previously *inactive* receive candidate
+                # with the newly active receive format: RFC 3264 permits that
+                # path to be negotiated by the new offer.
+                previous_remote_direction = str(previous_video.direction)
+                updated_remote_direction = str(updated_video.direction)
+                compatible_video = directional_video_renegotiation_compatible(
+                    previous_video,
+                    previous.recv_video_format,
+                    updated_video,
+                    updated.recv_video_format,
                 )
                 if not compatible_video:
+                    _LOGGER.info(
+                        "SIP video re-INVITE rejected call_id=%s old_direction=%s "
+                        "new_direction=%s old_tx=%s new_tx=%s old_rx=%s new_rx=%s",
+                        call_id,
+                        previous_remote_direction,
+                        updated_remote_direction,
+                        previous_video.wire_token(),
+                        updated_video.wire_token(),
+                        previous.recv_video_format.wire_token()
+                        if previous.recv_video_format is not None
+                        else "none",
+                        updated.recv_video_format.wire_token()
+                        if updated.recv_video_format is not None
+                        else "none",
+                    )
                     return SipInviteResult(488, "Not Acceptable Here")
             local_video_rtp_port = int(media.get("local_video_rtp_port") or 0)
             # Per-call camera consent is immutable across hold/resume.  The
@@ -5937,6 +6064,13 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
 
         relay = registry.relays.get(call_id)
         if relay is None:
+            _LOGGER.warning(
+                "SIP media update rejected without media owner call_id=%s "
+                "softphone=%s relay=%s",
+                call_id,
+                call_id in registry.softphone_media,
+                call_id in registry.relays,
+            )
             return SipInviteResult(488, "Not Acceptable Here")
         right_peer = relay.right
         audio_direction = constrained_media_direction(
@@ -5953,17 +6087,57 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         local_video_port = 0
         if updated.video_format is not None:
             if video_relay is None:
+                _LOGGER.warning(
+                    "SIP video media update rejected without video relay call_id=%s "
+                    "old_direction=%s new_direction=%s",
+                    call_id,
+                    previous.video_format.direction
+                    if previous.video_format is not None
+                    else "none",
+                    updated.video_format.direction,
+                )
                 return SipInviteResult(488, "Not Acceptable Here")
-            if not (
-                video_formats_passthrough_compatible(
+            # Validate only paths which will actually carry RTP.  A normal
+            # recvonly -> sendrecv re-offer activates the caller-to-browser
+            # path for the first time; the inactive candidate from the old
+            # offer is not an established bitstream contract and must not
+            # veto that direction change (RFC 3264 section 8.4).
+            right_can_send = remote_can_send(video_relay.right.video_format)
+            right_can_receive = remote_can_receive(
+                video_relay.right.video_format,
+                connection_held=video_relay.right.connection_held,
+            )
+            updated_sends = remote_can_send(updated.video_format)
+            updated_receives = remote_can_receive(
+                updated.video_format,
+                connection_held=updated.remote_video_connection_held,
+            )
+            receive_path_compatible = bool(
+                not (updated_sends and right_can_receive)
+                or video_formats_passthrough_compatible(
                     updated.recv_video_format,
                     video_relay.right.send_format,
                 )
-                and video_formats_passthrough_compatible(
+            )
+            send_path_compatible = bool(
+                not (updated_receives and right_can_send)
+                or video_formats_passthrough_compatible(
                     video_relay.right.recv_format,
                     updated.send_video_format,
                 )
-            ):
+            )
+            if not (receive_path_compatible and send_path_compatible):
+                _LOGGER.warning(
+                    "SIP video relay update rejected call_id=%s old_direction=%s "
+                    "new_direction=%s receive_path=%s send_path=%s",
+                    call_id,
+                    previous.video_format.direction
+                    if previous.video_format is not None
+                    else "none",
+                    updated.video_format.direction,
+                    receive_path_compatible,
+                    send_path_compatible,
+                )
                 return SipInviteResult(488, "Not Acceptable Here")
             video_direction = constrained_video_direction(
                 updated.video_format.direction,

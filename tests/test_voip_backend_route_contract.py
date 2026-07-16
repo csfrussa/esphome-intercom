@@ -1205,14 +1205,74 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertNotIn("RtpPortReservation.allocate", no_dtmf_branch)
         self.assertIn("RtpPortReservation.allocate(hass)", dtmf_branch)
 
-    def test_video_invites_skip_audio_only_dtmf_preanswer(self) -> None:
+    def test_video_invites_preserve_video_during_dtmf_preanswer(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
         trunk_branch = on_invite[
             on_invite.index("if trunk_invite:") : on_invite.index(
-                "if not dtmf_preanswer:"
+                "loop = asyncio.get_running_loop()"
             )
         ]
-        self.assertIn("and invite.video_format is None", trunk_branch)
+        self.assertNotIn("and invite.video_format is None", trunk_branch)
+        self.assertIn("reserve_sip_video_media(hass)", trunk_branch)
+        self.assertIn('"local_video_rtp_port": source_video_port', trunk_branch)
+        self.assertIn("video_port=source_video_port", trunk_branch)
+        self.assertIn("preanswer_video_direction = (", trunk_branch)
+        self.assertIn("allow_send=True", trunk_branch)
+        self.assertIn("video_direction=preanswer_video_direction", trunk_branch)
+
+    def test_dtmf_can_route_to_an_additional_ha_softphone(self) -> None:
+        runner = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") :
+            self.source.index("async def _async_forward_existing_call(")
+        ]
+        browser_route = runner[runner.index("decision = _ha_router_decision(") :]
+        self.assertIn("if decision.action is RouteAction.ANSWER_HA:", browser_route)
+        self.assertIn("await _async_forward_existing_call(", browser_route)
+        self.assertIn("destination=destination", browser_route)
+
+    def test_dtmf_route_to_current_master_is_assignment_not_self_forward(self) -> None:
+        runner = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") :
+            self.source.index("async def _async_forward_existing_call(")
+        ]
+        same_endpoint = runner[
+            runner.index("current_endpoint_id = str(") :
+            runner.index("# DTMF extensions are canonical", runner.index("current_endpoint_id = str("))
+        ]
+        self.assertIn("target_endpoint.endpoint_id == current_endpoint_id", same_endpoint)
+        self.assertIn("_defer_invite_to_ha_softphone(", same_endpoint)
+        self.assertIn('last_sip_event="DTMF_ROUTE"', same_endpoint)
+        self.assertIn("registry = _call_registry(hass)", runner.split("trunk_cfg =", 1)[0])
+
+    def test_detached_dtmf_route_failure_releases_call_and_sends_bye(self) -> None:
+        guarded = self.source[
+            self.source.index("async def _run_trunk_inbound_route_guarded(") :
+            self.source.index(
+                "async def _run_ring_group_call(",
+                self.source.index("async def _run_trunk_inbound_route_guarded("),
+            )
+        ]
+        self.assertIn("except asyncio.CancelledError:", guarded)
+        self.assertIn("registry.pending_invites.pop", guarded)
+        self.assertIn("registry.preanswered.pop", guarded)
+        self.assertIn("_release_media_reservation(preanswered)", guarded)
+        self.assertIn("_sip_send_bye(hass, invite.call_id)", guarded)
+        self.assertIn("registry.finish_and_pop(", guarded)
+        creator = self.source[
+            self.source.index("create_runtime_task(", self.source.index("if trunk_invite:")) :
+            self.source.index("return SipInviteResult(200", self.source.index("if trunk_invite:"))
+        ]
+        self.assertIn("_run_trunk_inbound_route_guarded(", creator)
+
+    def test_answer_ha_keeps_an_explicit_dtmf_extension(self) -> None:
+        runner = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") :
+            self.source.index("async def _async_forward_existing_call(")
+        ]
+        self.assertIn(
+            "destination = route_hint or decision.target or default_target",
+            runner,
+        )
 
     def test_remote_bridge_termination_closes_winning_leg_and_relay(self) -> None:
         terminated = self.source[self.source.index("async def _on_terminated(") :]

@@ -93,7 +93,10 @@ export class VoipStackVideo extends EventTarget {
   }
 
   get visible() {
-    return this._active && this._canReceive;
+    // SDP only tells us that the peer may send video. Some PBXs advertise a
+    // recvonly/sendrecv video line even for an audio-first call and never send
+    // a frame. Keep the audio UI compact until an actual frame is rendered.
+    return this._active && this._canReceive && this._stats.rendered > 0;
   }
 
   get stats() {
@@ -1097,7 +1100,9 @@ export class VoipStackVideo extends EventTarget {
     }
     this._lastRenderedAt = now;
     this._lastRenderedTimestamp = timestamp;
+    const firstRenderedFrame = this._stats.rendered === 0;
     this._stats.rendered++;
+    if (firstRenderedFrame) this._emit();
   }
 
   _drawFrame(frame) {
