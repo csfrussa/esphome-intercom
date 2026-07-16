@@ -1489,9 +1489,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ).read_text()
         start = self.source.index("async def _commit_softphone_update()")
         commit = self.source[
-            start : self.source.index(
-                'return SipInviteResult(200, "OK", answer_sdp=answer', start
-            )
+            start : self.source.index("return SipInviteResult(", start)
         ]
         self.assertIn("registry.video_parameter_sets.pop(call_id, None)", commit)
         self.assertIn("video_session.remote_video_payload_types = tuple(", commit)

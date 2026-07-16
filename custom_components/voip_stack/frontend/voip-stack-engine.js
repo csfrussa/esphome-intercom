@@ -504,20 +504,22 @@ class VoipStackEngine extends EventTarget {
     endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID,
   } = {}) {
     if (!this.videoCameraEnabledFor(endpointId) || !navigator.mediaDevices?.getUserMedia) return false;
-    if (navigator.permissions?.query) {
+    if (persistentOnly) {
+      if (!navigator.permissions?.query) return false;
       try {
         const permission = await navigator.permissions.query({ name: "camera" });
-        // Do not open and immediately close an already-authorised camera.
-        // The video sender will acquire it once after media negotiation. This
-        // removes a costly duplicate device start from every outgoing call.
         if (permission.state === "granted") return true;
-        if (permission.state === "denied" || persistentOnly) return false;
+        return false;
       } catch (_) {
-        if (persistentOnly) return false;
+        return false;
       }
-    } else if (persistentOnly) {
-      return false;
     }
+    // A manual call is allowed to request camera permission.  In particular,
+    // Android/iOS companion WebViews may report `denied` or an unsupported
+    // state through the Permissions API while getUserMedia() can still open
+    // the camera through the native application permission.  The real media
+    // acquisition is authoritative here, as it was before multi-phone
+    // per-endpoint camera preferences were introduced.
     let stream = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({

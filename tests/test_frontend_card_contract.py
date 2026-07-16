@@ -441,7 +441,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", auto_answer)
         self.assertIn("navigator.permissions?.query", permission)
         self.assertIn('permission.state === "granted"', permission)
-        self.assertIn('permission.state === "denied" || persistentOnly', permission)
+        self.assertIn("if (persistentOnly)", permission)
         self.assertIn("navigator.mediaDevices.getUserMedia", permission)
         self.assertIn("track.stop()", permission)
 

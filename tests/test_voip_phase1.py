@@ -3285,6 +3285,7 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
     async def test_listener_bye_invalidates_pending_reinvite_before_media_commit(self) -> None:
         sent: list[bytes] = []
         commits: list[int] = []
+        rollbacks: list[int] = []
         started = asyncio.Event()
         release = asyncio.Event()
         fmt = audio_format.AudioFormat(16000, "s16le", 1, 20)
@@ -3306,7 +3307,16 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             async def commit() -> None:
                 commits.append(updated.remote_rtp_port)
 
-            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer, commit=commit)
+            async def rollback() -> None:
+                rollbacks.append(updated.remote_rtp_port)
+
+            return sip_listener.SipInviteResult(
+                200,
+                "OK",
+                answer_sdp=answer,
+                commit=commit,
+                rollback=rollback,
+            )
 
         endpoint = sip_listener.SipUdpEndpoint(
             local_ip="192.0.2.20",
@@ -3379,11 +3389,13 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             [(200, "3 BYE"), (487, "2 INVITE")],
         )
         self.assertEqual(commits, [])
+        self.assertEqual(rollbacks, [41000])
         self.assertNotIn("bye-during-reinvite", endpoint.active_dialogs)
 
         await endpoint._handle_datagram(reinvite, addr)
         self.assertEqual(sip.parse_message(sent[-1]).status_code, 487)
         self.assertEqual(commits, [])
+        self.assertEqual(rollbacks, [41000])
 
     async def test_listener_update_requires_dialog_and_commits_once(self) -> None:
         sent: list[bytes] = []
@@ -6719,6 +6731,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
             supported_recv_formats=[audio],
             on_invite=lambda _invite: None,
             on_terminated=None,
+            on_media_update=object(),
             enable_video=True,
             enable_video_transcoding=True,
             prefer_browser_video_send=True,
@@ -6732,6 +6745,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(endpoint.enable_video)
         self.assertTrue(endpoint.enable_video_transcoding)
         self.assertTrue(endpoint.prefer_browser_video_send)
+        self.assertIs(endpoint.on_media_update, manager.on_media_update)
         self.assertEqual(endpoint.signaling_transport, "TCP")
         self.assertTrue(endpoint.trusted_trunk)
         request = sip.parse_message(
@@ -8720,6 +8734,129 @@ class SipTcpProfileTest(unittest.IsolatedAsyncioTestCase):
         finally:
             writer.close()
             await writer.wait_closed()
+            await server.stop()
+
+    async def test_tcp_dialog_survives_connection_replacement_for_reinvite(self) -> None:
+        """An in-dialog offer may arrive on a new RFC 3261 TCP connection."""
+
+        local = "127.0.0.1"
+        with _reserved_udp_ports(2) as ports:
+            sip_port, rtp_port = ports
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        updates: list[tuple[int, str]] = []
+
+        def answer(invite):
+            return sdp.build_answer_directional(
+                local,
+                local,
+                rtp_port,
+                invite.send_format,
+                invite.recv_format,
+                remote_sdp=invite.remote_sdp,
+                video_port=rtp_port + 2,
+                video_format=invite.answer_video_format,
+                video_direction=sdp.local_direction_for_offer(
+                    invite.video_format.direction
+                    if invite.video_format is not None
+                    else "inactive"
+                ),
+            )
+
+        async def on_invite(invite):
+            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer(invite))
+
+        async def on_media_update(_previous, updated, _method):
+            updates.append((updated.remote_rtp_port, updated.video_format.direction))
+            return sip_listener.SipInviteResult(200, "OK", answer_sdp=answer(updated))
+
+        server = sip_listener.SipTcpServer(
+            host=local,
+            port=sip_port,
+            local_ip=local,
+            local_rtp_port=rtp_port,
+            supported_formats=[audio],
+            on_invite=on_invite,
+            on_media_update=on_media_update,
+            enable_video=True,
+            max_connections_per_host=2,
+        )
+        self.assertTrue(await server.start())
+
+        def invite(
+            cseq: int,
+            branch: str,
+            remote_rtp: int,
+            to_tag: str = "",
+            video_direction: str = "recvonly",
+        ) -> bytes:
+            headers = [
+                ("Via", f"SIP/2.0/TCP {local}:43210;branch={branch};rport"),
+                ("From", f"<sip:Wildix@{local}:43210>;tag=remote"),
+                ("To", f"<sip:HA@{local}:{sip_port}>" + (f";tag={to_tag}" if to_tag else "")),
+                ("Call-ID", "tcp-reconnect-reinvite"),
+                ("CSeq", f"{cseq} INVITE"),
+                ("Contact", f"<sip:Wildix@{local}:43210>"),
+                ("Content-Type", "application/sdp"),
+            ]
+            body = sdp.build_offer_directional(
+                local,
+                local,
+                remote_rtp,
+                [audio],
+                [audio],
+                video_port=remote_rtp + 2,
+                video_formats=sdp.DEFAULT_VIDEO_FORMATS,
+                video_direction=video_direction,
+            ).encode()
+            return sip.build_request("INVITE", f"sip:HA@{local}:{sip_port}", headers, body)
+
+        first_reader, first_writer = await asyncio.open_connection(local, sip_port)
+        second_writer = None
+        try:
+            first_writer.write(invite(1, "z9hG4bKinitial", 41000))
+            await first_writer.drain()
+            responses = []
+            while 200 not in [item.status_code for item in responses]:
+                raw = await asyncio.wait_for(
+                    sip_listener._read_sip_stream_message(first_reader), timeout=1
+                )
+                assert raw is not None
+                responses.append(sip.parse_message(raw))
+            final = next(item for item in responses if item.status_code == 200)
+            local_tag = sip.extract_tag(final.header("To"))
+            self.assertTrue(local_tag)
+
+            first_writer.close()
+            await first_writer.wait_closed()
+            await asyncio.sleep(0)
+
+            second_reader, second_writer = await asyncio.open_connection(local, sip_port)
+            second_writer.write(
+                invite(
+                    2,
+                    "z9hG4bKvideo-on",
+                    42000,
+                    local_tag,
+                    video_direction="sendrecv",
+                )
+            )
+            await second_writer.drain()
+            responses = []
+            while 200 not in [item.status_code for item in responses]:
+                raw = await asyncio.wait_for(
+                    sip_listener._read_sip_stream_message(second_reader), timeout=1
+                )
+                assert raw is not None
+                responses.append(sip.parse_message(raw))
+            self.assertEqual(updates, [(42000, "sendrecv")])
+            self.assertEqual(len(server.endpoint.active_dialogs), 1)
+        finally:
+            if second_writer is not None:
+                second_writer.close()
+                await second_writer.wait_closed()
+            if not first_writer.is_closing():
+                first_writer.close()
+                await first_writer.wait_closed()
             await server.stop()
 
     async def test_tcp_client_establishes_pcm_dialog(self) -> None:

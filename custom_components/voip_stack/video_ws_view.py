@@ -109,6 +109,7 @@ class _VideoMediaSession:
     rtp_socket: socket.socket | None = None
     rtcp_socket: socket.socket | None = None
     media_generation: int = 0
+    removed: bool = False
     update_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     @property
@@ -521,6 +522,15 @@ async def _run_local_video_session(
         "video_browser_keyframe_requests": 0,
         "video_keyframe_requests_to_browser": 0,
     }
+    _LOGGER.info(
+        "HA local softphone video websocket attached call_id=%s endpoint=%s "
+        "direction=%s can_send=%s can_receive=%s",
+        lease.call_id,
+        lease.endpoint_id,
+        direction,
+        can_send,
+        can_receive,
+    )
     ws_send_lock = asyncio.Lock()
 
     async def peer_to_browser() -> None:
@@ -641,6 +651,14 @@ async def _run_local_video_session(
             store.update(counters)
             store["last_sip_event"] = "local_video_detached"
             _publish_ha_softphone_state(hass, endpoint_id=lease.endpoint_id)
+        _LOGGER.info(
+            "HA local softphone video websocket detached call_id=%s endpoint=%s "
+            "direction=%s counters=%s",
+            lease.call_id,
+            lease.endpoint_id,
+            direction,
+            counters,
+        )
 
 
 def _sdp_parameter_sets(video_format: sdp.RtpVideoFormat) -> list[bytes]:
@@ -1541,6 +1559,8 @@ async def _run_video_session(
             generation = int(session.media_generation)
             if generation == observed_generation:
                 continue
+            if session.removed:
+                return
             if not await refresh_media_state(generation):
                 return
             observed_generation = generation

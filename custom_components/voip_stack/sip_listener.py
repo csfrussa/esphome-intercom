@@ -88,6 +88,7 @@ class SipInviteResult:
     defer_final: bool = False
     decline_reason: str = ""
     commit: Callable[[], Awaitable[None]] | None = None
+    rollback: Callable[[], Awaitable[None]] | None = None
 
 
 @dataclass(slots=True)
@@ -1075,6 +1076,8 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 finally:
                     existing_dialog.update_in_progress = False
                 if self.active_dialogs.get(call_id) is not existing_dialog:
+                    if result.rollback is not None:
+                        await result.rollback()
                     terminated = _PendingInvite(
                         request,
                         addr,
@@ -1132,6 +1135,8 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 to_tag=existing_dialog.to_tag,
                 decline_reason=result.decline_reason,
             )
+            if not sent and result.rollback is not None:
+                await result.rollback()
             if sent:
                 existing_dialog.last_request = request
                 existing_dialog.last_status = status
@@ -1168,6 +1173,8 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                                 call_id,
                                 request.method,
                             )
+                            if result.rollback is not None:
+                                await result.rollback()
                             # The 2xx has committed the offer/answer exchange on
                             # the wire. If the local media owner cannot commit,
                             # terminate the now-confirmed dialog explicitly.
@@ -1867,6 +1874,7 @@ class SipTcpServer:
         self.initial_message_timeout = max(0.1, float(initial_message_timeout))
         self.frame_timeout = max(0.1, float(frame_timeout))
         self.server: asyncio.AbstractServer | None = None
+        self.endpoint: SipUdpEndpoint | None = None
         self.endpoints: set[SipUdpEndpoint] = set()
         self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
         self._tcp_writers: dict[tuple[str, int], SipTcpWriter] = {}
@@ -1882,6 +1890,34 @@ class SipTcpServer:
         except OSError as err:
             _LOGGER.error("Failed to bind SIP TCP %s:%s: %s", self.host, self.port, err)
             return False
+        # A SIP dialog belongs to the listening user agent, not to one TCP
+        # connection.  RFC 3261 explicitly allows subsequent in-dialog
+        # requests to arrive over a different connection.  Keep one logical
+        # endpoint for the whole TCP listener and select the current writer by
+        # the source address of each request.
+        def _send(data: bytes, addr: tuple[str, int]) -> bool:
+            tx = self._tcp_writers.get((str(addr[0]), int(addr[1])))
+            return tx is not None and tx.send_nowait(data)
+
+        self.endpoint = SipUdpEndpoint(
+            local_ip=self.local_ip,
+            local_sip_port=self.port,
+            local_rtp_port=self.local_rtp_port,
+            supported_formats=self.supported_formats,
+            supported_send_formats=self.supported_send_formats,
+            supported_recv_formats=self.supported_recv_formats,
+            on_invite=self.on_invite,
+            on_terminated=self.on_terminated,
+            on_register=self.on_register,
+            on_info=self.on_info,
+            on_media_update=self.on_media_update,
+            send_override=_send,
+            signaling_transport="TCP",
+            enable_video=self.enable_video,
+            enable_video_transcoding=self.enable_video_transcoding,
+            prefer_browser_video_send=self.prefer_browser_video_send,
+        )
+        self.endpoints.add(self.endpoint)
         _LOGGER.info("SIP TCP listener ready on %s:%s", self.host, self.port)
         return True
 
@@ -1913,28 +1949,11 @@ class SipTcpServer:
         tx = SipTcpWriter(writer, label=f"listener {addr[0]}:{addr[1]}")
         self._tcp_writers[addr] = tx
 
-        def _send(data: bytes, _addr) -> bool:
-            return tx.send_nowait(data)
-
-        endpoint = SipUdpEndpoint(
-            local_ip=self.local_ip,
-            local_sip_port=self.port,
-            local_rtp_port=self.local_rtp_port,
-            supported_formats=self.supported_formats,
-            supported_send_formats=self.supported_send_formats,
-            supported_recv_formats=self.supported_recv_formats,
-            on_invite=self.on_invite,
-            on_terminated=self.on_terminated,
-            on_register=self.on_register,
-            on_info=self.on_info,
-            on_media_update=self.on_media_update,
-            send_override=_send,
-            signaling_transport="TCP",
-            enable_video=self.enable_video,
-            enable_video_transcoding=self.enable_video_transcoding,
-            prefer_browser_video_send=self.prefer_browser_video_send,
-        )
-        self.endpoints.add(endpoint)
+        endpoint = self.endpoint
+        if endpoint is None:
+            await tx.close()
+            writer.close()
+            return
         first_message = True
         try:
             while not reader.at_eof():
@@ -1960,22 +1979,17 @@ class SipTcpServer:
                         continue
                 endpoint.submit_datagram(raw, addr)
         finally:
-            disconnected_calls = set(endpoint.pending_invites) | set(endpoint.active_dialogs)
-            endpoint.cancel_request_tasks()
-            await endpoint.wait_closed()
-            endpoint.pending_invites.clear()
-            endpoint.completed_invites.clear()
-            endpoint.active_dialogs.clear()
-            endpoint.completed_byes.clear()
-            if endpoint.on_terminated is not None:
-                for call_id in disconnected_calls:
-                    with contextlib.suppress(Exception):
-                        await endpoint.on_terminated(call_id, "transport_closed")
-            self.endpoints.discard(endpoint)
-            self._writers.pop(addr, None)
-            self._tcp_writers.pop(addr, None)
-            for key in [key for key in self._dialog_queues if key[0] == addr]:
-                self._dialog_queues.pop(key, None)
+            # Closing one TCP connection must not destroy dialogs owned by
+            # the listener; the peer may already have opened the replacement
+            # connection used for a re-INVITE, ACK or BYE.
+            # A reconnect can reuse the same advertised/source address before
+            # this connection's cleanup callback runs.  Never let the stale
+            # connection remove the replacement writer or its dialog queues.
+            if self._writers.get(addr) is writer:
+                self._writers.pop(addr, None)
+                self._tcp_writers.pop(addr, None)
+                for key in [key for key in self._dialog_queues if key[0] == addr]:
+                    self._dialog_queues.pop(key, None)
             await tx.close()
             writer.close()
             with contextlib.suppress(Exception):
@@ -2050,6 +2064,21 @@ class SipTcpServer:
         client_tasks = tuple(task for task in self._client_tasks if task is not current)
         if client_tasks:
             await asyncio.gather(*client_tasks, return_exceptions=True)
+        endpoint = self.endpoint
+        self.endpoint = None
+        if endpoint is not None:
+            disconnected_calls = set(endpoint.pending_invites) | set(endpoint.active_dialogs)
+            endpoint.cancel_request_tasks()
+            await endpoint.wait_closed()
+            if endpoint.on_terminated is not None:
+                for call_id in disconnected_calls:
+                    with contextlib.suppress(Exception):
+                        await endpoint.on_terminated(call_id, "transport_closed")
+            endpoint.pending_invites.clear()
+            endpoint.completed_invites.clear()
+            endpoint.active_dialogs.clear()
+            endpoint.completed_byes.clear()
+            endpoint.completed_infos.clear()
         self.endpoints.clear()
         self._writers.clear()
         self._tcp_writers.clear()

@@ -5922,6 +5922,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             new_video_reservation = None
             new_video_rtp_socket = None
             new_video_rtcp_socket = None
+            new_video_media_committed = False
             video_offer = validate_direct_video_reoffer(
                 previous_video,
                 previous.recv_video_format,
@@ -5995,24 +5996,41 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 if updated_video is not None and local_video_rtp_port
                 else "inactive"
             )
-            answer = build_answer_directional(
-                local_ip,
-                local_ip,
-                local_rtp_port,
-                updated.send_format,
-                updated.recv_format,
-                remote_sdp=updated.remote_sdp,
-                video_port=local_video_rtp_port,
-                video_format=updated.answer_video_format,
-                video_direction=video_direction,
-            )
+
+            def _release_staged_video() -> None:
+                nonlocal new_video_reservation
+                if new_video_reservation is None or new_video_media_committed:
+                    return
+                for sock in (new_video_rtp_socket, new_video_rtcp_socket):
+                    if sock is not None:
+                        sock.close()
+                new_video_reservation.release()
+                new_video_reservation = None
+
+            try:
+                answer = build_answer_directional(
+                    local_ip,
+                    local_ip,
+                    local_rtp_port,
+                    updated.send_format,
+                    updated.recv_format,
+                    remote_sdp=updated.remote_sdp,
+                    video_port=local_video_rtp_port,
+                    video_format=updated.answer_video_format,
+                    video_direction=video_direction,
+                )
+            except Exception:
+                _release_staged_video()
+                raise
 
             async def _commit_softphone_update() -> None:
+                nonlocal new_video_media_committed
                 if new_video_reservation is not None:
                     media["local_video_rtp_port"] = local_video_rtp_port
                     media["video_rtp_reservation"] = new_video_reservation
                     media["video_rtp_socket"] = new_video_rtp_socket
                     media["video_rtcp_socket"] = new_video_rtcp_socket
+                    new_video_media_committed = True
                 media["invite"] = updated
                 media["video_direction"] = video_direction
                 if audio_session is not None:
@@ -6049,6 +6067,22 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                     video_session.media_generation += 1
                     video_session.update_event.set()
+                elif video_session is not None:
+                    # RFC 3264 section 8.2: a port-zero re-offer removes the
+                    # stream.  Wake the media owner so RTP/RTCP and the video
+                    # WebSocket are closed without ending the audio dialog.
+                    video_session.removed = True
+                    video_session.media_generation += 1
+                    video_session.update_event.set()
+                if updated_video is None:
+                    for key in ("video_rtp_socket", "video_rtcp_socket"):
+                        sock = media.pop(key, None)
+                        if sock is not None and video_session is None:
+                            sock.close()
+                    reservation = media.pop("video_rtp_reservation", None)
+                    if reservation is not None:
+                        reservation.release()
+                    media["local_video_rtp_port"] = 0
                 store = _ha_softphone_store(hass, media_endpoint_id)
                 if str(store.get("call_id") or "") == call_id:
                     store.update(
@@ -6093,7 +6127,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         "session",
                     )
 
-            return SipInviteResult(200, "OK", answer_sdp=answer, commit=_commit_softphone_update)
+            async def _rollback_softphone_update() -> None:
+                _release_staged_video()
+
+            return SipInviteResult(
+                200,
+                "OK",
+                answer_sdp=answer,
+                commit=_commit_softphone_update,
+                rollback=_rollback_softphone_update,
+            )
 
         relay = registry.relays.get(call_id)
         if relay is None:

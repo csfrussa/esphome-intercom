@@ -434,6 +434,12 @@ class SipTrunkClient:
             on_terminated=manager.on_terminated,
             on_register=getattr(manager, "on_register", None),
             on_info=getattr(manager, "on_info", None),
+            # Inbound requests received on the persistent trunk connection
+            # use this endpoint rather than the UDP/TCP listening servers.
+            # Keep its in-dialog media policy identical or an audio call can
+            # be established but a later audio->video re-INVITE is rejected
+            # with 488 before the endpoint runtime can stage the new media.
+            on_media_update=getattr(manager, "on_media_update", None),
             send_override=self.send_response,
             signaling_transport=self.transport_name,
             enable_video=bool(getattr(manager, "enable_video", False)),
