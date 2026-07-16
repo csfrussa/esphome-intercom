@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS
 from .const import VOIP_STACK_RTP_PORT
 from . import sdp, sip
+from .sip_dialog import uas_request_matches_dialog
 from .sip_tcp_io import SipTcpWriter, read_sip_stream_message as _read_sip_stream_message
 from .queue_utils import put_drop_oldest
 
@@ -218,22 +219,19 @@ def _same_request_transaction(
     )
 
 
-def _same_dialog_request(request: sip.SipMessage, dialog: _ActiveDialog, addr: tuple[str, int]) -> bool:
+def _same_dialog_request(request: sip.SipMessage, dialog: _ActiveDialog, _addr: tuple[str, int]) -> bool:
     """Match a new in-dialog request, not an INVITE retransmission."""
     try:
         cseq = sip.parse_cseq(request.header("CSeq"))
-        from_tag = sip.extract_tag(request.header("From"))
-        to_tag = sip.extract_tag(request.header("To"))
-        remote_tag = sip.extract_tag(dialog.request.header("From"))
     except (TypeError, ValueError, sip.SipError):
         return False
     return bool(
-        dialog.addr[0] == addr[0]
-        and cseq.number >= dialog.cseq
-        and from_tag
-        and from_tag == remote_tag
-        and to_tag
-        and to_tag == dialog.to_tag
+        cseq.number >= dialog.cseq
+        and uas_request_matches_dialog(
+            request,
+            dialog.request,
+            local_tag=dialog.to_tag,
+        )
     )
 
 

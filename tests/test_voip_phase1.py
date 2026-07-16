@@ -7381,6 +7381,270 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
                 await task
             sip_trunk._read_sip_stream_message = original_read
 
+    async def test_trunk_transport_loss_preserves_confirmed_dialog_for_new_flow(self) -> None:
+        """A confirmed trunk dialog must outlive the TCP flow that carried it."""
+
+        config = sip_trunk.SipTrunkConfig(
+            enabled=True,
+            transport="tcp",
+            server="pbx.example",
+            port=5060,
+            domain="pbx.example",
+            username="ha",
+            auth_username="ha",
+            password="",
+            expires=300,
+        )
+        trunk = sip_trunk.SipTrunkClient(
+            config=config,
+            local_ip="127.0.0.1",
+            local_sip_port=5060,
+        )
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        terminated: list[tuple[str, str]] = []
+        media_updates: list[tuple[int, str]] = []
+
+        def answer(invite):
+            return sdp.build_answer_directional(
+                "127.0.0.1",
+                "127.0.0.1",
+                41000,
+                invite.send_format,
+                invite.recv_format,
+                remote_sdp=invite.remote_sdp,
+                video_port=41002,
+                video_format=invite.answer_video_format,
+                video_direction=sdp.local_direction_for_offer(
+                    invite.video_format.direction
+                    if invite.video_format is not None
+                    else "inactive"
+                ),
+            )
+
+        async def on_invite(invite):
+            return sip_listener.SipInviteResult(
+                200,
+                "OK",
+                answer_sdp=answer(invite),
+            )
+
+        async def on_media_update(_previous, updated, _method):
+            media_updates.append(
+                (
+                    updated.remote_rtp_port,
+                    updated.video_format.direction
+                    if updated.video_format is not None
+                    else "",
+                )
+            )
+            return sip_listener.SipInviteResult(
+                200,
+                "OK",
+                answer_sdp=answer(updated),
+            )
+
+        async def on_terminated(call_id: str, reason: str) -> None:
+            terminated.append((call_id, reason))
+
+        manager = types.SimpleNamespace(
+            local_ip="127.0.0.1",
+            port=5060,
+            local_rtp_port=41000,
+            supported_formats=[audio],
+            supported_send_formats=[audio],
+            supported_recv_formats=[audio],
+            on_invite=on_invite,
+            on_terminated=on_terminated,
+            on_register=None,
+            on_info=None,
+            on_media_update=on_media_update,
+            enable_video=True,
+            enable_video_transcoding=False,
+            prefer_browser_video_send=True,
+        )
+        trunk.attach_endpoint_manager(manager)
+        endpoint = trunk.inbound_endpoint
+        assert endpoint is not None
+
+        call_id = "trunk-flow-replacement"
+        remote_tag = "remote-dialog-tag"
+
+        def invite(
+            cseq: int,
+            branch: str,
+            remote_rtp_port: int,
+            *,
+            to_tag: str = "",
+            source_ip: str = "192.0.2.10",
+            video: bool = False,
+        ) -> bytes:
+            headers = [
+                (
+                    "Via",
+                    f"SIP/2.0/TCP {source_ip}:5060;branch={branch};rport",
+                ),
+                ("From", f"<sip:caller@pbx.example>;tag={remote_tag}"),
+                (
+                    "To",
+                    "<sip:ha@pbx.example>" + (f";tag={to_tag}" if to_tag else ""),
+                ),
+                ("Call-ID", call_id),
+                ("CSeq", f"{cseq} INVITE"),
+                ("Contact", f"<sip:caller@{source_ip}:5060;transport=tcp>"),
+                ("Content-Type", "application/sdp"),
+            ]
+            body = sdp.build_offer_directional(
+                source_ip,
+                source_ip,
+                remote_rtp_port,
+                [audio],
+                [audio],
+                video_port=remote_rtp_port + 2 if video else None,
+                video_formats=sdp.DEFAULT_VIDEO_FORMATS if video else (),
+                video_direction="sendrecv" if video else "inactive",
+            ).encode()
+            return sip.build_request(
+                "INVITE",
+                "sip:ha@pbx.example",
+                headers,
+                body,
+            )
+
+        class StreamWriter:
+            def __init__(self, peer: tuple[str, int]) -> None:
+                self.peer = peer
+                self.closed = False
+
+            def is_closing(self) -> bool:
+                return self.closed
+
+            def get_extra_info(self, name: str):
+                return self.peer if name == "peername" else None
+
+            def close(self) -> None:
+                self.closed = True
+
+            async def wait_closed(self) -> None:
+                return None
+
+        final_response = asyncio.Event()
+
+        class TrunkWriter:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+                self.closed = False
+
+            def send_nowait(self, raw: bytes) -> bool:
+                self.sent.append(raw)
+                message = sip.parse_message(raw)
+                if message.status_code == 200 and message.header("CSeq") == "1 INVITE":
+                    final_response.set()
+                return True
+
+            async def close(self) -> None:
+                self.closed = True
+
+        first_reader = asyncio.StreamReader()
+        first_stream_writer = StreamWriter(("192.0.2.10", 5060))
+        first_tx = TrunkWriter()
+        trunk.reader = first_reader
+        trunk.writer = first_stream_writer  # type: ignore[assignment]
+        trunk._tcp_writer = first_tx  # type: ignore[assignment]
+        trunk._reader_ready.set()
+        first_invite = invite(1, "z9hG4bKinitial", 42000)
+        read_count = 0
+
+        async def read_first_flow(_reader):
+            nonlocal read_count
+            read_count += 1
+            if read_count == 1:
+                return first_invite
+            if read_count == 2:
+                await asyncio.wait_for(final_response.wait(), timeout=1)
+                local_tag = sip.extract_tag(
+                    next(
+                        sip.parse_message(raw)
+                        for raw in first_tx.sent
+                        if sip.parse_message(raw).status_code == 200
+                    ).header("To")
+                )
+                return sip.build_request(
+                    "ACK",
+                    "sip:ha@pbx.example",
+                    [
+                        (
+                            "Via",
+                            "SIP/2.0/TCP 192.0.2.10:5060;branch=z9hG4bKack;rport",
+                        ),
+                        ("From", f"<sip:caller@pbx.example>;tag={remote_tag}"),
+                        ("To", f"<sip:ha@pbx.example>;tag={local_tag}"),
+                        ("Call-ID", call_id),
+                        ("CSeq", "1 ACK"),
+                    ],
+                    b"",
+                )
+            for _ in range(100):
+                dialog = endpoint.active_dialogs.get(call_id)
+                if dialog is not None and dialog.pending_ack_cseq == 0:
+                    break
+                await asyncio.sleep(0)
+            return None
+
+        original_read = sip_trunk._read_sip_stream_message
+        sip_trunk._read_sip_stream_message = read_first_flow
+        receive_task = asyncio.create_task(trunk._receive_loop())
+        try:
+            for _ in range(200):
+                if trunk.reader is None:
+                    break
+                await asyncio.sleep(0)
+            self.assertIsNone(trunk.reader)
+            self.assertTrue(trunk._refresh_wakeup.is_set())
+        finally:
+            receive_task.cancel()
+            await asyncio.gather(receive_task, return_exceptions=True)
+            sip_trunk._read_sip_stream_message = original_read
+
+        self.assertIn(call_id, endpoint.active_dialogs)
+        self.assertEqual(terminated, [])
+        local_tag = endpoint.active_dialogs[call_id].to_tag
+
+        replacement_tx = TrunkWriter()
+        trunk._tcp_writer = replacement_tx  # type: ignore[assignment]
+        reinvite = invite(
+            2,
+            "z9hG4bKvideo",
+            43000,
+            to_tag=local_tag,
+            source_ip="198.51.100.20",
+            video=True,
+        )
+        await endpoint._handle_datagram(reinvite, ("198.51.100.20", 5090))
+        self.assertEqual(media_updates, [(43000, "sendrecv")])
+        self.assertIn(
+            200,
+            [sip.parse_message(raw).status_code for raw in replacement_tx.sent],
+        )
+
+        bye = sip.build_request(
+            "BYE",
+            "sip:ha@pbx.example",
+            [
+                (
+                    "Via",
+                    "SIP/2.0/TCP 198.51.100.20:5090;branch=z9hG4bKbye;rport",
+                ),
+                ("From", f"<sip:caller@pbx.example>;tag={remote_tag}"),
+                ("To", f"<sip:ha@pbx.example>;tag={local_tag}"),
+                ("Call-ID", call_id),
+                ("CSeq", "3 BYE"),
+            ],
+            b"",
+        )
+        await endpoint._handle_datagram(bye, ("198.51.100.20", 5090))
+        self.assertNotIn(call_id, endpoint.active_dialogs)
+        self.assertEqual(terminated, [(call_id, "remote_hangup")])
+
     async def test_udp_endpoint_caps_concurrent_handler_tasks(self) -> None:
         async def on_invite(_invite):
             raise AssertionError("not used")

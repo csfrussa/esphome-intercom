@@ -77,6 +77,7 @@ class SipTrunkClient:
         self._tcp_writer: SipTcpWriter | None = None
         self._tcp_connect_lock = asyncio.Lock()
         self._reader_ready = asyncio.Event()
+        self._refresh_wakeup = asyncio.Event()
         self._request_tasks: set[asyncio.Task[None]] = set()
         self._invite_tasks: set[asyncio.Task[None]] = set()
         self.call_id = sip.make_call_id("trunk-register")
@@ -194,6 +195,7 @@ class SipTrunkClient:
 
     async def _stop(self) -> None:
         self._stopped = True
+        self._refresh_wakeup.set()
         start_task = self._start_task
         if start_task is not None and start_task is not asyncio.current_task() and not start_task.done():
             start_task.cancel()
@@ -257,7 +259,14 @@ class SipTrunkClient:
                 )
             else:
                 delay = retry_delay
-            await asyncio.sleep(delay)
+            try:
+                await asyncio.wait_for(
+                    self._refresh_wakeup.wait(),
+                    timeout=delay,
+                )
+            except asyncio.TimeoutError:
+                pass
+            self._refresh_wakeup.clear()
             if self._stopped:
                 return
             try:
@@ -481,6 +490,54 @@ class SipTrunkClient:
                 with contextlib.suppress(Exception):
                     await endpoint.on_terminated(call_id, reason)
 
+    async def _close_early_inbound_transactions(self, reason: str) -> None:
+        """End only unconfirmed inbound calls after a trunk flow loss.
+
+        Confirmed dialogs are identified by Call-ID and tags. They do not
+        belong to the TCP connection that happened to carry their initial
+        INVITE and must remain available on a replacement flow.
+        """
+
+        endpoint = self.inbound_endpoint
+        if endpoint is None:
+            return
+        call_ids = set(endpoint.pending_invites)
+        endpoint.pending_invites.clear()
+        if endpoint.on_terminated is not None:
+            for call_id in call_ids:
+                with contextlib.suppress(Exception):
+                    await endpoint.on_terminated(call_id, reason)
+
+    async def _detach_tcp_flow(
+        self,
+        reader: asyncio.StreamReader,
+        *,
+        reason: str,
+    ) -> None:
+        """Detach one failed TCP flow without destroying confirmed dialogs."""
+
+        if reader is not self.reader:
+            return
+        self.registered = False
+        self.status_code = 0
+        self.status_reason = reason
+        self._reader_ready.clear()
+        writer = self.writer
+        tx = self._tcp_writer
+        self.reader = None
+        self.writer = None
+        self._tcp_writer = None
+        if tx is not None:
+            await tx.close()
+        if writer is not None and not writer.is_closing():
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        await self._cancel_request_tasks()
+        await self._close_early_inbound_transactions("transport_closed")
+        if not self._stopped:
+            self._refresh_wakeup.set()
+
     async def _cancel_request_tasks(self) -> None:
         tasks = tuple(self._request_tasks)
         for task in tasks:
@@ -534,7 +591,6 @@ class SipTrunkClient:
         self._invite_tasks.discard(task)
 
     async def _receive_loop(self) -> None:
-        active_reader: asyncio.StreamReader | None = None
         try:
             while True:
                 if self.transport_name == "TCP":
@@ -542,11 +598,35 @@ class SipTrunkClient:
                         await self._reader_ready.wait()
                         continue
                     active_reader = self.reader
-                    raw = await _read_sip_stream_message(active_reader)
+                    try:
+                        raw = await _read_sip_stream_message(active_reader)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as err:
+                        if active_reader is not self.reader:
+                            continue
+                        _LOGGER.warning(
+                            "SIP trunk TCP flow lost server=%s error=%s",
+                            self.config.server,
+                            err,
+                        )
+                        await self._detach_tcp_flow(
+                            active_reader,
+                            reason=str(err),
+                        )
+                        continue
                     if raw is None:
                         if active_reader is not self.reader:
                             continue
-                        raise ConnectionError("SIP trunk TCP connection closed")
+                        _LOGGER.warning(
+                            "SIP trunk TCP flow closed server=%s; preserving confirmed dialogs",
+                            self.config.server,
+                        )
+                        await self._detach_tcp_flow(
+                            active_reader,
+                            reason="SIP trunk TCP connection closed",
+                        )
+                        continue
                     addr = self._remote_addr()
                 else:
                     raw, addr = await self.queue.get()
@@ -583,24 +663,6 @@ class SipTrunkClient:
             self.status_code = 0
             self.status_reason = str(err)
             _LOGGER.warning("SIP trunk receive loop stopped server=%s transport=%s error=%s", self.config.server, self.transport_name, err)
-        finally:
-            if self.transport_name == "TCP" and active_reader is self.reader:
-                self._reader_ready.clear()
-                writer = self.writer
-                tx = self._tcp_writer
-                self.reader = None
-                self.writer = None
-                self._tcp_writer = None
-                if tx is not None:
-                    await tx.close()
-                if writer is not None and not writer.is_closing():
-                    writer.close()
-                    with contextlib.suppress(Exception):
-                        await writer.wait_closed()
-                await self._cancel_request_tasks()
-                await self._close_inbound_transactions(
-                    "local_hangup" if self._stopped else "transport_closed"
-                )
 
     async def register(self, *, expires: int | None = None, timeout: float = 2.0) -> str:
         expires_value = int(self.config.expires if expires is None else expires)
