@@ -465,13 +465,24 @@ class VoipAudioWebSocketView(HomeAssistantView):
                     endpoint_id=endpoint_id,
                 )
         finally:
-            await async_release_media_owner(owners, owner_lock, owner_key, owner)
-            if lease is not None:
-                await async_release_local_media_if_unowned(
-                    bucket,
-                    local_bridge,
-                    lease,
+            try:
+                await async_release_media_owner(
+                    owners,
+                    owner_lock,
+                    owner_key,
+                    owner,
                 )
+            finally:
+                if lease is not None:
+                    await async_release_local_media_if_unowned(
+                        bucket,
+                        local_bridge,
+                        lease,
+                    )
+                # The terminal call event is emitted before the media request
+                # unwinds. Publish once more after ownership is actually gone
+                # so diagnostics do not preserve a stale post-call owner.
+                _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
         return ws
 
 
