@@ -15,14 +15,14 @@ when you actually want to test the new toys and tell us what breaks.
 
 ## Latest Development Refresh
 
-- Wildix and other registered TCP trunks can now activate, remove or change
-  video during an established audio call. Inbound requests received on the
-  persistent registration connection use the same atomic media-update policy
-  as the normal SIP listeners instead of incorrectly returning `488 Not
-  Acceptable Here`.
+- Wildix and other registered TCP trunks can now add or remove compatible
+  video on a direct HA-browser dialog during an established audio call.
+  Inbound requests received on the persistent registration connection use the
+  same media-update callback as the normal SIP listeners instead of
+  incorrectly returning `488 Not Acceptable Here`.
 - SIP dialogs survive a peer opening a replacement TCP connection for an
-  in-dialog request. Media changes are staged, committed only after a valid
-  response and rolled back cleanly on failure or concurrent teardown.
+  in-dialog request. Dialog identity follows Call-ID and tags rather than the
+  lifetime or source port of one TCP flow.
 - Local HA phones carry independent bidirectional VP8 media and call ownership.
   Real qualification kept a video call to extension `667` active while a
   second simultaneous video call used the default HA phone, with separate RTP
@@ -31,9 +31,18 @@ when you actually want to test the new toys and tell us what breaks.
   camera-permission authority. This restores camera transmission in Companion
   WebViews whose Permissions API reports an unreliable `denied` state;
   auto-answer remains prompt-free and requires an already granted permission.
-- Video teardown diagnostics are now per logical HA phone and direction,
-  making receive-only intent distinguishable from a missing or stalled media
-  path.
+- Call-state updates are monotonic per Call-ID/generation, terminal cleanup is
+  idempotent and browser handoff locks are scoped per endpoint/call. A stale
+  callback can no longer resurrect a terminated card or block an unrelated
+  phone while a media owner is being replaced.
+- Video teardown diagnostics are now per logical HA phone and direction. The
+  debug snapshot also reports call sessions, legs, pending routes, media
+  owners, active audio/video sessions and allocated RTP ports, with an
+  explicit `call_scoped_quiescent` result after teardown.
+- A real registered-trunk call to `427`, followed by DTMF extension `667`,
+  negotiated bidirectional VP8 and OPUS with the `Test` browser phone. The
+  final snapshot returned every call-scoped count and all four RTP/RTCP ports
+  to zero.
 
 ## ☎️ One Home Assistant, Multiple Real Phones
 
@@ -96,8 +105,10 @@ main character; identity, duration and hang-up move into the bottom bar._
   endpoints remain audio-only.
 - Video is supported both on direct SIP routes and through a video-capable
   trunk or PBX. Authenticated trunk retries preserve the complete audio/video
-  offer; inbound trunk video uses Direct routing because DTMF pre-answer is an
-  audio-only decision stage.
+  offer. DTMF routing may pre-negotiate video on the trunk leg and preserve the
+  reserved sockets when the selected extension is an HA browser phone; routes
+  to ESP, Assist or another audio-only target release that video leg and keep
+  the compatible audio call.
 - H.264 Baseline and Constrained Baseline, VP8 and RFC 2435 JPEG use bounded
   RTP reorder and depacketization before the authenticated card WebSocket.
   H.264 and VP8 can also carry the browser camera when both the global option
@@ -149,8 +160,9 @@ endpoint transcoding, SRTP, ICE/STUN/TURN or recording. A local HA browser
 caller can retain direct browser video when another local browser phone wins a
 ring group. HA accepts compatible
 peer-initiated UPDATE/re-INVITE hold, direction and RTP-endpoint changes for an
-established stream, but it does not add/remove video, change its codec or
-originate renegotiation.
+established stream. A direct HA-browser dialog also accepts a compatible
+peer-initiated video add/remove. SIP-to-SIP relay bridges retain their existing
+topology, and HA does not originate media renegotiation.
 Read the complete [Experimental SIP Video profile](EXPERIMENTAL_SIP_VIDEO.md)
 before enabling it.
 
@@ -277,9 +289,9 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 834 tests plus 95 subtests passing,
-  including a real FFmpeg codec matrix.
-- Python compilation, JavaScript syntax and repository diff checks clean.
+- The complete backend/frontend suite, Ruff and JavaScript parsing pass on the
+  candidate. These are regression gates, not a substitute for the real
+  browser, trunk and RTP checks below.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
 - Call state remained idle after cancellation and the remote leg stopped
@@ -313,6 +325,11 @@ conditional-forward and unanswered-call-to-Assist examples.
   rendered with zero decode errors. Both entities returned to `idle` after
   hangup. A separate fast Test-to-ESP hangup completed in 32 ms with
   `_stopping=false` and no browser page errors.
+- The post-consolidation trunk test used registered baresip `418`, dialled PBX
+  entry `427`, entered `667`, answered on the `Test` card and carried
+  bidirectional OPUS and VP8. Exactly one audio and one video WebSocket owned
+  the call; Hangup returned sessions, legs, owners and allocated RTP ports to
+  zero.
 
 ## Known Follow-Up Areas
 
@@ -321,3 +338,8 @@ being kept separate from the transaction fix: digest nonce-count replay
 protection, NAT-aware registered Contact routing and optional multiple Contact
 bindings per account. They are not claimed as completed until implemented and
 qualified.
+
+On an RTP/AVP trunk with no negotiated PLI/FIR feedback, a browser attaching
+after DTMF collection may have to wait for the sender's next video keyframe.
+VoIP Stack does not send unnegotiated RTCP feedback or vendor-specific SIP
+commands to hide that interoperability limit.

@@ -62,11 +62,17 @@ trunk or a video-capable PBX. An authenticated `401` or `407` retry preserves
 the complete audio/video SDP offer, including media direction and codec
 parameters.
 
-For inbound trunk video, use **Direct to default destination** and route the
-call to the HA softphone. The DTMF extension-selection mode currently
-pre-answers the trunk as an audio call to collect digits. HA supports compatible
-in-dialog direction and endpoint updates, but intentionally does not add a new
-video stream to an audio-only dialog, so this path cannot add video later.
+For inbound trunk video, **Direct to default destination** reaches the selected
+phone without digit-collection delay. **DTMF extension selection** can also
+preserve video when the initial trunk offer contains a compatible video stream:
+HA pre-binds and advertises the audio/video ports while collecting digits, then
+hands those exact sockets to the selected HA browser phone. Selecting an ESP,
+Assist or another audio-only target releases the unused video resources.
+
+With RTP/AVP there may be no negotiated key-frame feedback. A browser that
+attaches after DTMF collection can therefore wait until the remote sender's
+next natural keyframe. VoIP Stack deliberately does not send unnegotiated PLI,
+FIR or proprietary SIP picture-update messages.
 
 End-to-end success still depends on every provider or PBX in the route keeping
 the `m=video` section and forwarding the negotiated RTP/RTCP ports. A normal
@@ -161,18 +167,19 @@ This experimental profile does not claim support for:
 - cross-codec transcoding between two standard SIP endpoints;
 - VP9, AV1, MxPEG or other proprietary payloads;
 - more than one simultaneous server-side transcode;
-- more than one browser owning an active HA video stream;
+- more than one browser owning the same active HA video stream;
 - SRTP, DTLS, ICE, STUN or TURN;
 - RTCP multiplexing, generic NACK retransmission or bandwidth adaptation;
 - recording, snapshots or a camera entity;
-- adding/removing video or changing its codec in an established dialog;
+- adding/removing video on an established SIP-to-SIP relay bridge, or changing
+  the codec contract of an established video stream;
 - locally initiated media renegotiation or REFER/NOTIFY transfer;
 - IPv6 RTP media.
 
 Unsupported video is rejected in the SDP answer with a zero media port while
-a compatible audio section remains active. The DTMF pre-answer trunk path also
-remains audio-only because it answers before the final phonebook destination
-is known.
+a compatible audio section remains active. A direct HA-browser dialog can
+stage and commit a compatible peer-initiated video add/remove; rejected or
+stale updates preserve the previous media contract.
 
 ## Qualification
 
@@ -230,6 +237,12 @@ Qualification for this implementation covered:
   authorization and compatible directional codec contracts;
 - repeated mixed-codec calls with zero post-call owners or RTP sockets;
 - compact, default, wide and tall Home Assistant card sizes.
+
+The real trunk matrix also includes DTMF extension selection into a logical HA
+browser phone: one audio and one video WebSocket, bidirectional OPUS/VP8, local
+Hangup and a final call-scoped resource snapshot with zero sessions, owners and
+allocated RTP ports. Automated source/protocol tests and real lab evidence are
+reported separately; a green unit suite alone is not treated as media proof.
 
 The protocol work follows
 [RFC 3264 offer/answer](https://www.rfc-editor.org/rfc/rfc3264),

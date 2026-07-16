@@ -162,6 +162,13 @@ softphone, bridges, ring groups and conference invitations. It remains
 available while connecting, sends a proper CANCEL and cannot be undone by a
 late ringing response.
 
+The latest consolidation separates SIP dialog identity from its TCP socket,
+so a PBX may replace a connection without destroying the established call.
+Call state is monotonic per Call-ID/generation, terminal callbacks are
+idempotent, and browser media ownership is scoped per phone and call. Debug
+snapshots now expose every call-scoped session, leg, owner, media task and RTP
+port, making “the card looks idle” an observation rather than a cleanup test.
+
 And yes, we appear to be getting rather close to a real native Home Assistant
 video phone. From the safety of your sealed fortress of misanthropy and despair,
 you can watch exactly how ugly the person ringing the doorbell is. I do not own
@@ -317,8 +324,10 @@ The current boundaries matter when upgrading an earlier version:
 - ESP endpoints reject a hold or media-changing in-dialog re-INVITE with `488`
   while the established call remains active. HA-owned dialogs accept compatible
   peer-initiated re-INVITE or UPDATE offers, including direction, RTP endpoint
-  and audio-format changes. HA does not add, remove or change the codec of an
-  established video stream, and it does not originate renegotiation.
+  and audio-format changes. A direct HA-browser dialog can also accept a
+  compatible peer-initiated video add/remove; SIP-to-SIP bridges keep their
+  established media topology and reject incompatible changes without dropping
+  the call. HA does not originate media renegotiation.
 - Trunk digit routing accepts standard RTP `telephone-event` and compatible
   legacy SIP INFO DTMF; acoustic in-band tones are not decoded.
 - **Experimental:** established calls bridged by HA expose one

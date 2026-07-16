@@ -95,10 +95,12 @@ HA-owned dialogs accept a compatible peer-initiated re-INVITE or UPDATE. The
 new offer may change direction, RTP destination, payload type, packet duration
 or another audio format already supported on that leg. An established video
 stream may be held and resumed or move its RTP endpoint only while its codec
-contract remains compatible; video cannot be added, removed or changed to a
-different codec in-dialog. HA stages the replacement, sends the SDP answer and
-commits the media owner once. Rejected updates leave the original session
-usable, and a later BYE still terminates it normally.
+contract remains compatible. A direct HA-browser dialog may also add or remove
+a compatible video stream. A SIP-to-SIP bridge keeps its established topology
+and rejects incompatible additions, removals or codec changes. HA stages the
+replacement resources, sends the SDP answer and commits only the current call
+generation. Rejected or stale updates leave the original session usable, and
+a later BYE still terminates it normally.
 
 Confirmed dialogs retain the remote Contact and every Record-Route value. UAC
 route sets reverse the response order, UAS route sets preserve request order,
@@ -271,7 +273,10 @@ Every SIP/TCP connection has one governed writer task. Producers enqueue SIP
 messages through `SipTcpWriter`; the writer owns `StreamWriter.write()` and
 `drain()`. Queue pressure is explicit and logged instead of spawning ad-hoc
 drain tasks or writing from multiple call paths. Closing or reconnecting a TCP
-leg first closes the governed writer and only then replaces the stream.
+flow first closes the governed writer and only then replaces the stream. A
+confirmed dialog is not owned by that flow: Call-ID and local/remote tags keep
+it addressable when an authenticated peer sends the next in-dialog request on
+a replacement connection.
 
 This applies to outbound SIP clients, the TCP SIP listener and trunk
 registration/call legs. UDP signaling still sends datagrams directly.
@@ -308,4 +313,8 @@ carry SIP/SDP/RTP details useful for protocol investigation.
 
 Snapshots expose listener readiness, active dialogs, pending transactions,
 selected formats, RTP packet/byte counters, last SIP event/status and terminal
-reason. Debug mode increases snapshot and log detail for live investigation.
+reason. Debug mode additionally exposes one bounded call-resource snapshot:
+sessions, legs, routes, SIP clients, browser owners, active audio/video
+sessions, media locks, transcoders and allocated RTP ports. A terminal lab test
+must return `call_scoped_quiescent` to `true`; an idle card alone is not proof
+that teardown completed.

@@ -122,8 +122,9 @@ receive. Use network policy when an installation needs that restriction.
    compatible audio change or direction/hold/resume update is answered and
    committed once without rerunning the dial plan or creating a second call.
 5. An established HA video stream may change direction or RTP endpoint while
-   keeping a compatible codec contract. Adding, removing or changing the video
-   codec is rejected with `488`, leaving the original media usable.
+   keeping a compatible codec contract. A direct HA-browser dialog may also
+   add/remove compatible video; a SIP-to-SIP bridge rejects topology or codec
+   changes with `488`, leaving the original media usable.
 6. A successful re-INVITE follows the normal 2xx/ACK transaction. If ACK never
    arrives, HA terminates the uncertain dialog; UPDATE needs no ACK.
 7. Either peer can later send BYE and both sides clean up the active call.
@@ -215,13 +216,16 @@ There is no DTMF collection and no pre-answer delay in Direct mode.
 
 ## Trunk Inbound: DTMF Mode
 
-1. HA answers the trunk leg with its negotiated audio and telephone-event
-   formats.
+1. HA answers the trunk leg with its negotiated audio, telephone-event and,
+   when offered and enabled, compatible video formats. Video sockets are
+   pre-bound before the answer.
 2. HA collects RTP telephone-event and SIP INFO digits for the configured
    timeout.
 3. Explicit digits are resolved only as canonical phonebook extensions.
-4. A valid extension routes to its entry. An unknown explicit extension ends
-   as `route_not_found`; it never falls back to another destination.
+4. A valid extension routes to its entry. An HA browser phone inherits the
+   pre-bound video sockets; an audio-only target releases them. An unknown
+   explicit extension ends as `route_not_found`, releases every reservation
+   and never falls back to another destination.
 5. If the caller enters no digits, HA follows the configured default target.
 
 The initial extension digits are route selection, not established-call DTMF

@@ -13,6 +13,19 @@ cd <checkout>/esphome-intercom
 ./.venv/bin/python -m pytest tests -q
 ```
 
+The complete local gate also runs Ruff and parses every shipped JavaScript
+module:
+
+```bash
+./.venv/bin/python -m ruff check custom_components scripts tests
+find custom_components/voip_stack/frontend -name '*.js' -print0 \
+  | xargs -0 -n1 node --check
+```
+
+Some tests deliberately lock down source-level routing contracts; they catch
+accidental branch removal but do not prove a real SIP transaction, browser
+codec or RTP path. Release evidence must include the real matrix below.
+
 Important groups:
 
 - `tests/test_voip_backend_route_contract.py`: static contracts for SIP route
@@ -103,11 +116,20 @@ least:
 - RTP/AVP compatibility plus RTP/AVPF compound RR/SDES and negotiated PLI/FIR
   recovery after attach;
 - exact-codec RTP and RTCP relay between two standard SIP legs;
+- trunk DTMF selection into a video-capable logical HA phone, including a
+  missing-extension rejection with no retained session or RTP reservation;
 - compact 6-column, default, wide and tall card geometry with long caller text;
 - clean local and remote hangup with the video RTP port and browser owner
   released;
 - caller CANCEL while ringing and repeated mixed-codec calls with zero active
   sessions, dialogs, media owners, transcoders and cleanup tasks afterwards.
+
+With backend debug enabled, record
+`media_debug.runtime_resources.resource_counts` before, during and after the
+call. The final snapshot must set `call_scoped_quiescent: true` and report zero
+sessions, legs, pending routes/invites, media owners, active audio/video
+sessions and allocated RTP ports. Compare long-lived listener/trunk task counts
+to the idle baseline rather than assuming they should disappear.
 
 The Playwright probe records runtime evidence rather than relying on a source
 string check:
@@ -277,8 +299,9 @@ When testing real devices, cover:
 - unknown, unregistered SIP endpoint to each ESP;
 - ESP in-dialog hold/re-INVITE receives `488` while the established call and
   later BYE remain functional;
-- HA-owned UPDATE/re-INVITE hold/resume and supported audio changes commit once
-  while incompatible video additions/removals leave existing media untouched;
+- HA-owned UPDATE/re-INVITE hold/resume and supported audio changes commit once;
+  direct browser dialogs cover compatible video add/remove, while bridge
+  topology/codec changes are rejected without disturbing existing media;
 - ring group caller cancel before answer;
 - ring group first-answer-wins;
 - conference join/leave;
