@@ -247,6 +247,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    timeout: 1s
 
 # =============================================================================
 # MEDIA, ASSIST AND VOIP

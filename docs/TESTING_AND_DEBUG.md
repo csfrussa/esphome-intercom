@@ -289,6 +289,44 @@ For ESP debug:
 - keep volumes low for automated tests, but do not set them to zero when
   validating real audio paths.
 
+For AFE or I2S lifecycle work, keep the production hot path event-driven:
+
+- the ESP-SR feed task supplies complete input/reference frames;
+- the fetch task blocks on the feed semaphore and then calls ESP-SR fetch;
+- stop or reconfigure explicitly wakes the blocked task;
+- I2S reads/writes block on DMA/backpressure;
+- finite timeouts are reserved for lifecycle and fault bounds, not periodic
+  checks for possible audio work.
+
+This follows Espressif's documented
+[ESP-SR feed/fetch model](https://docs.espressif.com/projects/esp-sr/en/latest/esp32p4/audio_front_end/README.html),
+[ESP-ADF event/ring-buffer pipeline](https://docs.espressif.com/projects/esp-adf/en/latest/api-reference/framework/audio_pipeline.html)
+and [blocking I2S API](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/i2s.html).
+Search for `vTaskDelay`, short timed semaphore waits and periodic wake loops
+before accepting an audio-path change.
+
+Physical ESPHome speakers should have a bounded `timeout` when a mixer is the
+upstream producer. A mixer can drain and stop its source tasks without an
+immediate final stop reaching the hardware speaker; an unbounded physical
+speaker then keeps the I2S TX side and full-duplex AFE reference alive on
+silence. The timeout is ESPHome's documented bus-release contract, not an
+audio scheduler. Verify after stopping media that the audio stack returns from
+duplex to microphone-only and that subsequent telemetry windows report no
+silent speaker-underrun fills.
+
+Use targeted runtime snapshots for counters and JTAG/GDB snapshots for task
+state, core ownership and stack margin. JTAG halts disturb real-time audio, so
+never treat a JTAG capture as an audio-quality test. Full SystemView/AppTrace
+instrumentation must be memory-qualified first; if it consumes enough internal
+or DMA RAM to cause AFE, SPI or I2S failures, those failures are instrumentation
+artifacts until reproduced on the production firmware.
+
+On ESPHome 2026.7 and newer native ESP-IDF builds, custom partition tables use
+`esp32.partitions`; `board_build.partitions` under `platformio_options` is not
+the authoritative native-build setting. A partition-layout change on an
+installed device is a separate migration from a normal application OTA and
+must be planned and validated explicitly.
+
 When testing real devices, cover:
 
 - HA to ESP;

@@ -7,6 +7,20 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 YAMLS = ROOT / "yamls"
 
+PHYSICAL_AUDIO_STACK_PROFILES = (
+    "experimental/waveshare-s3-touch-lcd-1.85c/waveshare-s3-touch-lcd-1.85c-box-full-afe.yaml",
+    "full-experience/dual-bus/generic-s3-full-aec.yaml",
+    "full-experience/single-bus/generic-s3-full-aec.yaml",
+    "full-experience/single-bus/spotpear-ball-v2-full-afe.yaml",
+    "full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml",
+    "full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml",
+    "full-experience/single-bus/waveshare-s3-full-afe.yaml",
+    "untested/generic-s3-full-afe.yaml",
+    "voip-only/dual-bus/generic-s3-voip.yaml",
+    "voip-only/single-bus/generic-s3-voip.yaml",
+    "voip-only/single-bus/spotpear-ball-v2-voip.yaml",
+)
+
 
 def _voip_stack_block(text: str) -> str:
     match = re.search(r"(?m)^voip_stack:\n", text)
@@ -54,3 +68,33 @@ def test_resampling_profiles_accept_direct_esp_16khz_10ms() -> None:
         "VoIP profiles with explicit rx_formats must retain the direct ESP-to-ESP "
         "16000/s16le/mono/10ms compatibility floor:\n" + "\n".join(missing)
     )
+
+
+def test_physical_audio_stack_speakers_bound_silent_tx_lifecycle() -> None:
+    """Mixer drain must eventually release the physical I2S output."""
+    missing: list[str] = []
+    for relative in PHYSICAL_AUDIO_STACK_PROFILES:
+        text = (YAMLS / relative).read_text()
+        if not re.search(
+            r"(?ms)^  - platform: esp_audio_stack\n"
+            r"(?:(?!^  - platform:).)*?^    timeout:\s*1s\s*$",
+            text,
+        ):
+            missing.append(relative)
+
+    assert not missing, (
+        "Physical esp_audio_stack speakers behind mixer/resampler sources need a "
+        "bounded lifecycle timeout:\n" + "\n".join(missing)
+    )
+
+
+def test_ws3_uses_native_esp32_partition_configuration() -> None:
+    """ESPHome 2026.7 native IDF builds ignore the legacy PlatformIO key."""
+    relative = (
+        "experimental/waveshare-s3-touch-lcd-1.85c/"
+        "waveshare-s3-touch-lcd-1.85c-box-full-afe.yaml"
+    )
+    text = (YAMLS / relative).read_text()
+
+    assert "partitions: partitions_16mb_huge_factory.csv" in text
+    assert not re.search(r"(?m)^\s*board_build\.partitions:\s*", text)

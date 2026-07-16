@@ -336,6 +336,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    timeout: 1s
     # Full-duplex profiles must not let the upstream ESPHome mixer prefill the
     # final hardware sink for 500 ms. Mixer transfers 50 ms chunks every 25 ms;
     # keep the hardware backlog short so backpressure reaches media/TTS quickly.
