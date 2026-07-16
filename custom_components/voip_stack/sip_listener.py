@@ -82,6 +82,14 @@ class SipInvite:
 
 @dataclass(frozen=True, slots=True)
 class SipInviteResult:
+    """Prepared SIP response with an optional atomic media transition.
+
+    Handlers may reserve resources while building this result, but must defer
+    mutations of the active media contract to ``commit``.  ``rollback`` must
+    release every prepared resource when signaling fails, the dialog ends, or
+    the commit cannot complete.
+    """
+
     status: int
     reason: str
     answer_sdp: str = ""

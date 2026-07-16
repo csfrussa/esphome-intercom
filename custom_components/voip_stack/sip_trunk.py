@@ -425,9 +425,15 @@ class SipTrunkClient:
         """Route inbound trunk SIP requests through the HA SIP endpoint policy."""
         from .sip_listener import SipUdpEndpoint
 
+        enable_video = bool(getattr(manager, "enable_video", False))
+        media_update_handler = getattr(manager, "on_media_update", None)
+        if enable_video and not callable(media_update_handler):
+            raise ValueError(
+                "video-enabled trunk endpoints require an explicit media-update handler"
+            )
         _LOGGER.info(
             "SIP trunk inbound media policy video=%s transcode=%s browser_send=%s",
-            bool(getattr(manager, "enable_video", False)),
+            enable_video,
             bool(getattr(manager, "enable_video_transcoding", False)),
             bool(getattr(manager, "prefer_browser_video_send", False)),
         )
@@ -448,10 +454,10 @@ class SipTrunkClient:
             # Keep its in-dialog media policy identical or an audio call can
             # be established but a later audio->video re-INVITE is rejected
             # with 488 before the endpoint runtime can stage the new media.
-            on_media_update=getattr(manager, "on_media_update", None),
+            on_media_update=media_update_handler,
             send_override=self.send_response,
             signaling_transport=self.transport_name,
-            enable_video=bool(getattr(manager, "enable_video", False)),
+            enable_video=enable_video,
             enable_video_transcoding=bool(
                 getattr(manager, "enable_video_transcoding", False)
             ),

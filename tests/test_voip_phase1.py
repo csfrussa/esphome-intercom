@@ -2026,6 +2026,23 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(client.protocol)
         self.assertTrue(client._closed)
 
+    def test_video_endpoint_manager_requires_media_update_handler(self) -> None:
+        async def on_invite(_invite):
+            return None
+
+        with self.assertRaisesRegex(ValueError, "media-update handler"):
+            sip_endpoint.SipEndpointManager(
+                host="0.0.0.0",
+                port=5060,
+                local_ip="127.0.0.1",
+                local_rtp_port=41000,
+                supported_formats=[
+                    audio_format.AudioFormat(16000, "s16le", 1, 20)
+                ],
+                on_invite=on_invite,
+                enable_video=True,
+            )
+
     async def test_endpoint_manager_cancelled_partial_start_stops_both_servers(self) -> None:
         class Server:
             def __init__(self, *, blocked: bool = False) -> None:
@@ -6704,6 +6721,44 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    def test_video_trunk_endpoint_rejects_missing_media_update_handler(self) -> None:
+        config = sip_trunk.SipTrunkConfig(
+            enabled=True,
+            transport="tcp",
+            server="pbx.example",
+            port=5060,
+            domain="pbx.example",
+            username="ha",
+            auth_username="ha",
+            password="",
+            expires=300,
+        )
+        trunk = sip_trunk.SipTrunkClient(
+            config=config,
+            local_ip="127.0.0.1",
+            local_sip_port=5060,
+        )
+        audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        manager = types.SimpleNamespace(
+            local_ip="127.0.0.1",
+            port=5060,
+            local_rtp_port=41000,
+            supported_formats=[audio],
+            supported_send_formats=[audio],
+            supported_recv_formats=[audio],
+            on_invite=lambda _invite: None,
+            on_terminated=None,
+            on_media_update=None,
+            enable_video=True,
+            enable_video_transcoding=False,
+            prefer_browser_video_send=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "media-update handler"):
+            trunk.attach_endpoint_manager(manager)
+
+        self.assertIsNone(trunk.inbound_endpoint)
+
     def test_trunk_inbound_endpoint_inherits_video_policy(self) -> None:
         config = sip_trunk.SipTrunkConfig(
             enabled=True,
@@ -6731,7 +6786,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
             supported_recv_formats=[audio],
             on_invite=lambda _invite: None,
             on_terminated=None,
-            on_media_update=object(),
+            on_media_update=lambda _old, _new, _method: None,
             enable_video=True,
             enable_video_transcoding=True,
             prefer_browser_video_send=True,

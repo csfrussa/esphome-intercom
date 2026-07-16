@@ -85,6 +85,10 @@ class SipEndpointManager:
         self.enable_video = bool(enable_video)
         self.enable_video_transcoding = bool(enable_video_transcoding)
         self.prefer_browser_video_send = bool(prefer_browser_video_send)
+        if self.enable_video and not callable(self.on_media_update):
+            raise ValueError(
+                "video-enabled SIP endpoints require an explicit media-update handler"
+            )
         self.udp_server: SipUdpServer | None = None
         self.tcp_server: SipTcpServer | None = None
         self._lifecycle_lock = asyncio.Lock()
