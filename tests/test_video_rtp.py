@@ -163,6 +163,7 @@ class H264RtpTest(unittest.TestCase):
         self.assertEqual(depacketizer.sequence_gaps, 1)
         self.assertEqual(depacketizer.dropped_access_units, 1)
 
+
     def test_fu_a_contract_cannot_mutate_or_nest_packetization_units(self) -> None:
         cases = {
             "changed-nri": (b"\x7c\x85aa", b"\x5c\x45bb"),
@@ -218,6 +219,30 @@ class H264RtpTest(unittest.TestCase):
                 ssrc=0,
                 max_payload=2,
             )
+
+
+class RtpSenderStateTest(unittest.TestCase):
+    def test_keepalive_preserves_source_and_wraps_sequence(self) -> None:
+        source = video_rtp.RtpSenderState(
+            sequence=0xFFFF,
+            ssrc=0x12345678,
+            clock=video_rtp.RtpTimestampClock(
+                clock_rate=90000,
+                origin_timestamp=1234,
+                origin_time=10.0,
+            ),
+        )
+
+        first = rtp.parse_packet(source.build_keepalive(127, now=10.0))
+        second = rtp.parse_packet(source.build_keepalive(127, now=10.1))
+
+        self.assertEqual((first.sequence, second.sequence), (0xFFFF, 0))
+        self.assertEqual((first.ssrc, second.ssrc), (0x12345678, 0x12345678))
+        self.assertEqual((first.payload_type, second.payload_type), (127, 127))
+        self.assertEqual((first.payload, second.payload), (b"", b""))
+        self.assertGreater(second.timestamp, first.timestamp)
+        self.assertEqual(source.sequence, 1)
+        self.assertEqual(source.keepalives, 2)
 
 
 class VideoTransportTest(unittest.TestCase):

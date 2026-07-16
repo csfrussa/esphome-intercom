@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import secrets
 import struct
 from typing import Generic, TypeVar
 
@@ -17,6 +18,7 @@ MAX_ACCESS_UNIT_NALS = 512
 MAX_ACCESS_UNIT_FRAGMENTS = 4096
 DEFAULT_REORDER_DELAY = 0.020
 DEFAULT_REORDER_PACKETS = 128
+_DYNAMIC_RTP_PAYLOAD_TYPES = tuple(range(127, 95, -1))
 
 _T = TypeVar("_T")
 
@@ -73,6 +75,60 @@ class RtpTimestampClock:
 
         self._browser_source_base = None
         self._browser_clock_base = None
+
+
+@dataclass(slots=True)
+class RtpSenderState:
+    """Persistent RTP source identity across browser media handoffs."""
+
+    sequence: int
+    ssrc: int
+    clock: RtpTimestampClock
+    keepalives: int = 0
+
+    @classmethod
+    def create(cls, *, clock_rate: int, now: float) -> "RtpSenderState":
+        return cls(
+            sequence=secrets.randbelow(0x10000),
+            ssrc=secrets.randbelow(0xFFFFFFFF) + 1,
+            clock=RtpTimestampClock(
+                clock_rate=int(clock_rate),
+                origin_timestamp=secrets.randbelow(0x100000000),
+                origin_time=float(now),
+            ),
+        )
+
+    def build_keepalive(self, payload_type: int, *, now: float) -> bytes:
+        """Build one RFC 6263 section 4.6 packet and advance the source."""
+
+        packet = rtp.build_packet(
+            rtp.RtpPacket(
+                payload_type=int(payload_type),
+                sequence=int(self.sequence),
+                timestamp=self.clock.current(float(now)),
+                ssrc=int(self.ssrc),
+                payload=b"",
+            )
+        )
+        self.sequence = rtp.next_sequence(self.sequence)
+        self.keepalives += 1
+        return packet
+
+
+def unknown_dynamic_payload_type(
+    payload_types: set[int] | tuple[int, ...],
+) -> int | None:
+    """Return a dynamic RTP payload type absent from the negotiated media."""
+
+    negotiated = {int(payload_type) for payload_type in payload_types}
+    return next(
+        (
+            payload_type
+            for payload_type in _DYNAMIC_RTP_PAYLOAD_TYPES
+            if payload_type not in negotiated
+        ),
+        None,
+    )
 
 
 @dataclass(slots=True)

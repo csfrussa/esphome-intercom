@@ -106,6 +106,7 @@ from .route_decisions import set_pending_route_decision as _set_pending_route_de
 from .store import (
     manual_roster_entries as _manual_roster_entries,
 )
+from .video_rtp import RtpSenderState
 from .websocket_api import (
     async_register_websocket_api,
     _async_load_ha_softphone_store,
@@ -1562,6 +1563,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     )
     video_rtp_socket = (preanswered or {}).get("video_rtp_socket")
     video_rtcp_socket = (preanswered or {}).get("video_rtcp_socket")
+    video_rtp_source = (preanswered or {}).get("video_rtp_source")
     media_reservation = (preanswered or {}).get("rtp_reservation")
     video_media_reservation = (preanswered or {}).get("video_rtp_reservation")
     video_failure_reason = str(
@@ -1625,6 +1627,11 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
                 local_video_rtp_port = 0
         else:
             local_rtp_port = _allocate_sip_rtp_port(hass)
+        if local_video_rtp_port and invite.video_format is not None:
+            video_rtp_source = RtpSenderState.create(
+                clock_rate=int(invite.video_format.clock_rate),
+                now=asyncio.get_running_loop().time(),
+            )
         answer = build_answer_directional(
             local_ip,
             local_ip,
@@ -1668,6 +1675,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         ),
         "video_rtp_socket": video_rtp_socket,
         "video_rtcp_socket": video_rtcp_socket,
+        "video_rtp_source": video_rtp_source,
         "rtp_reservation": media_reservation,
         "video_rtp_reservation": video_media_reservation,
         "endpoint_id": endpoint_id,

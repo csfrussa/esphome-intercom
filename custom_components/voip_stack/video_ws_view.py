@@ -8,7 +8,6 @@ import contextlib
 from dataclasses import dataclass, field
 import json
 import logging
-import secrets
 import socket
 import struct
 import time
@@ -52,11 +51,12 @@ from .video_rtp import (
     MAX_ACCESS_UNIT_BYTES,
     RtpExtendedSequenceTracker,
     RtpReorderBuffer,
-    RtpTimestampClock,
+    RtpSenderState,
     VideoAccessUnit,
     Vp8Depacketizer,
     packetize_annex_b,
     packetize_vp8,
+    unknown_dynamic_payload_type,
 )
 from .websocket_api import (
     CALL_EVENT,
@@ -82,9 +82,6 @@ _KEYFRAME_FEEDBACK_INTERVAL = 1.0
 _SYMMETRIC_RTP_KEEPALIVE_INTERVAL = 0.25
 _SYMMETRIC_RTP_KEEPALIVE_ATTEMPTS = 8
 _SYMMETRIC_RTP_REFRESH_INTERVAL = 15.0
-_DYNAMIC_RTP_PAYLOAD_TYPES = tuple(range(127, 95, -1))
-
-
 @dataclass(slots=True)
 class _VideoMediaSession:
     call_id: str
@@ -105,7 +102,7 @@ class _VideoMediaSession:
     camera_send_enabled: bool = False
     transcoding_enabled: bool = False
     debug_mode: bool = False
-    local_ssrc: int = 0
+    rtp_source: RtpSenderState | None = None
     rtp_socket: socket.socket | None = None
     rtcp_socket: socket.socket | None = None
     media_generation: int = 0
@@ -384,6 +381,13 @@ def _active_video_session(
         video_format = getattr(invite, "video_format", None)
         local_port = int(item.get("local_video_rtp_port") or 0)
         if invite is not None and video_format is not None and local_port:
+            rtp_source = item.get("video_rtp_source")
+            if not isinstance(rtp_source, RtpSenderState):
+                rtp_source = RtpSenderState.create(
+                    clock_rate=int(video_format.clock_rate),
+                    now=asyncio.get_running_loop().time(),
+                )
+                item["video_rtp_source"] = rtp_source
             return _VideoMediaSession(
                 call_id=call_id,
                 local_rtp_port=local_port,
@@ -413,7 +417,7 @@ def _active_video_session(
                 ),
                 transcoding_enabled=transcode,
                 debug_mode=debug,
-                local_ssrc=int(item.get("video_local_ssrc") or 0),
+                rtp_source=rtp_source,
                 rtp_socket=item.get("video_rtp_socket"),
                 rtcp_socket=item.get("video_rtcp_socket"),
             )
@@ -780,13 +784,15 @@ async def _run_video_session(
 
     closed = asyncio.Event()
     ws_send_lock = asyncio.Lock()
-    sequence = secrets.randbelow(0x10000)
-    ssrc = int(session.local_ssrc) or secrets.randbelow(0xFFFFFFFF) + 1
-    outbound_clock = RtpTimestampClock(
+    rtp_source = session.rtp_source or RtpSenderState.create(
         clock_rate=int(session.send_video_format.clock_rate),
-        origin_timestamp=secrets.randbelow(0x100000000),
-        origin_time=asyncio.get_running_loop().time(),
+        now=loop.time(),
     )
+    session.rtp_source = rtp_source
+    sequence = int(rtp_source.sequence)
+    ssrc = int(rtp_source.ssrc)
+    outbound_clock = rtp_source.clock
+    outbound_clock.reset_browser()
     remote_host = str(session.remote_rtp_host)
     remote_port = int(session.remote_rtp_port)
     remote_rtcp_host = str(session.remote_rtcp_host or remote_host)
@@ -859,7 +865,7 @@ async def _run_video_session(
         "video_lost_packets": 0,
         "video_duplicate_packets": 0,
         "video_keyframe_requests": 0,
-        "video_symmetric_rtp_keepalives": 0,
+        "video_symmetric_rtp_keepalives": int(rtp_source.keepalives),
         "video_symmetric_rtp_keepalive_payload_type": 0,
         "video_access_unit_queue_max": 0,
         "video_access_unit_queue_drops": 0,
@@ -1627,6 +1633,7 @@ async def _run_video_session(
                         counters["video_rtp_tx_bytes"] += len(raw)
                         counters["video_rtp_tx_payload_bytes"] += len(packet.payload)
                     sequence = rtp.next_sequence(packets[-1].sequence)
+                    rtp_source.sequence = sequence
                     last_regular_rtp_tx_at = loop.time()
                     counters["video_access_units_tx"] += 1
                     if counters["video_access_units_tx"] % 30 == 0:
@@ -1678,13 +1685,8 @@ async def _run_video_session(
                     session.send_video_format.payload_type,
                     session.recv_video_format.payload_type,
                 }
-                keepalive_payload_type = next(
-                    (
-                        payload_type
-                        for payload_type in _DYNAMIC_RTP_PAYLOAD_TYPES
-                        if payload_type not in negotiated_payload_types
-                    ),
-                    None,
+                keepalive_payload_type = unknown_dynamic_payload_type(
+                    negotiated_payload_types
                 )
                 counters["video_symmetric_rtp_keepalive_payload_type"] = int(
                     keepalive_payload_type or 0
@@ -1736,14 +1738,9 @@ async def _run_video_session(
                     and loop.time() - last_regular_rtp_tx_at < interval
                 ):
                     continue
-            keepalive = rtp.build_packet(
-                rtp.RtpPacket(
-                    payload_type=keepalive_payload_type,
-                    sequence=sequence,
-                    timestamp=outbound_clock.current(loop.time()),
-                    ssrc=ssrc,
-                    payload=b"",
-                )
+            keepalive = rtp_source.build_keepalive(
+                keepalive_payload_type,
+                now=loop.time(),
             )
             try:
                 transport.sendto(keepalive, (remote_host, remote_port))
@@ -1768,7 +1765,7 @@ async def _run_video_session(
                 except TimeoutError:
                     pass
                 continue
-            sequence = rtp.next_sequence(sequence)
+            sequence = int(rtp_source.sequence)
             counters["video_symmetric_rtp_keepalives"] += 1
             attempt += 1
             if probing:
