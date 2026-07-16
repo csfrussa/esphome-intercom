@@ -94,7 +94,22 @@ main character; identity, duration and hang-up move into the bottom bar._
   compatible audio call and other usable media directions alive.
 - Received video fills the card behind the call identity. The call state,
   duration and hang-up action become a responsive full-width bottom bar;
-  codec diagnostics remain hidden unless debug mode is enabled.
+  codec diagnostics remain hidden unless both backend debug and the card's
+  **Extended information** option are enabled. The counters then stay inside
+  that bar instead of covering the video.
+- The video surface now preserves its native aspect ratio inside the exact
+  Lovelace slot selected by the user. Narrow cards use black letter/pillarbox
+  space when needed; they never widen into a neighbouring grid column or
+  shrink a configured tall card when the call connects.
+- **Send Camera** is stored independently for every logical HA phone and is
+  used by outgoing, manual-answer and auto-answer paths. Reloading the
+  dashboard or restarting HA no longer makes one kiosk borrow the master
+  phone's choice. Already-authorised cameras are opened once, after media
+  negotiation, rather than probed and reopened during every call.
+- Unchanged phonebook data and destination `<option>` nodes are cached across
+  global HA state updates. A live Test-to-ESP profile reached `in_call` with
+  zero roster rebuilds, zero destination-list rebuilds and only a few
+  milliseconds of total card rendering during the transition.
 - Video ownership survives dashboard reloads during ringing or an active call.
   H.264 parameter sets are retained for the replacement decoder, catch-up is
   bounded, and the old browser WebSocket is released before the new one owns
@@ -156,12 +171,15 @@ helper timer or Jinja plumbing is required for the normal single-call case.
 - Experimental automation routing is a separate, disabled-by-default option.
   It may override the Direct decision or the no-digits DTMF fallback, but never
   an explicit DTMF extension.
-- A native `event.voip_stack_call` entity exposes incoming/outgoing calls,
-  ringing, answer/connection, terminal results, explicit timeout requests and
-  in-call DTMF in Home Assistant's entity and automation UI.
-- `sensor.voip_stack_call_state` exposes the durable HA phone state. A native
-  state trigger with `for:` can implement no-answer routing without templates,
-  helper timers or a second automation.
+- Every integration-owned phone Device exposes its own call Event Entity and
+  durable enum state Sensor, so a Kitchen or Reception automation can trigger
+  on that handset without filtering the PBX-wide stream. The migrated default
+  phone keeps `sensor.voip_stack_call_state` for compatibility.
+- Aggregate `event.voip_stack_call` remains available for PBX-wide inspection,
+  initial `route_requested` decisions, incoming/outgoing calls, terminal
+  results, explicit timeout requests and in-call DTMF.
+- A native per-phone state trigger with `for:` can implement no-answer routing
+  without templates, helper timers or a second automation.
 - Every HA-owned call carries a stable Call-ID, one logical owner, monotonic
   control revision, state sequence and bounded route history. Ownership and
   destination changes advance the revision even when the visible state name
@@ -237,7 +255,7 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🧪 Qualification So Far
 
-- Full backend and frontend test suite: 832 tests plus 95 subtests passing,
+- Full backend and frontend test suite: 834 tests plus 95 subtests passing,
   including a real FFmpeg codec matrix.
 - Python compilation, JavaScript syntax and repository diff checks clean.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183

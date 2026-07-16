@@ -108,11 +108,46 @@ If multiple calls are simultaneously forwardable, an advanced automation must
 identify the intended `call_id`. Ambiguous requests fail explicitly instead of
 guessing.
 
+With multiple logical phones, select the call-state entity attached to the
+phone that owns the ringing leg. The migrated default phone deliberately keeps
+the compatibility entity ID `sensor.voip_stack_call_state`; additional phones
+receive normal generated IDs such as `sensor.test_call_state` (localized HA
+installations may use a translated form). Always select the entity from the
+phone Device in the automation editor instead of guessing its ID.
+
+For example, the Casa phone can fall through to the Cucina tablet without
+matching caller names or inspecting the global event stream:
+
+```yaml
+alias: VoIP - Casa unanswered to Cucina
+mode: parallel
+max: 10
+triggers:
+  - trigger: state
+    entity_id: sensor.voip_stack_call_state  # Call state entity on Device Casa
+    to: ringing
+    for: "00:00:30"
+conditions:
+  - condition: template
+    value_template: "{{ trigger.to_state.attributes.direction == 'incoming' }}"
+actions:
+  - action: voip_stack.forward
+    data:
+      destination: Cucina
+      on_failure: resume
+```
+
 ## Native Automation Entities
 
 ### Event Entity
 
-`event.voip_stack_call` publishes stateless occurrences:
+Every integration-owned phone Device exposes its own call Event Entity, for
+example `event.casa_call` or `event.test_call` (the visible/entity names are
+localized). It publishes only occurrences involving that phone. Use it for a
+doorbell notification, a missed-call log, or behavior specific to one room.
+
+`event.voip_stack_call` remains the aggregate PBX-wide surface and publishes
+stateless occurrences for every HA-owned call:
 
 - `route_requested`, `incoming_call`, `outgoing_call`, `calling`
 - `ringing`, `remote_ringing`, `forwarding`
@@ -124,12 +159,15 @@ guessing.
 Select these through the `event.received` trigger in the automation editor.
 Each occurrence includes call metadata such as caller, callee, direction,
 route kind, owner and controllability. The aggregate entity is useful for
-initial route decisions and advanced inspection.
+initial `route_requested` decisions and advanced inspection; prefer the phone's
+own Event Entity for room-specific logic.
 
 ### Durable State Sensor
 
-`sensor.voip_stack_call_state` follows the current HA-controlled logical call
-through the softphone, a bridge and Assist. Its stable states are:
+Each logical browser/SIP-account phone exposes an enum call-state Sensor Entity.
+The default phone keeps `sensor.voip_stack_call_state` for backward
+compatibility. Each sensor follows only its phone through ringing, bridging and
+Assist. Its stable states are:
 
 - `idle`
 - `ringing`
@@ -143,8 +181,10 @@ Attributes include `call_id`, `caller`, `callee`, `direction`, `dialed_target`,
 `peer_name`, `sequence`, `revision`, `owner` and `terminal_reason`. Ordinary
 single-call automations do not need to read them.
 
-The event entity, durable sensor, WebSocket stream and card are all derived
-from the same backend call session.
+The phone Device itself is the Home Assistant registry container; entities are
+its triggerable state/event surfaces. The per-phone Event Entity, durable
+sensor, WebSocket stream and card are all derived from the same backend call
+session.
 
 ## DTMF During A Connected Call
 

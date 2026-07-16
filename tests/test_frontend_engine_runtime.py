@@ -212,19 +212,28 @@ assert.equal(missingStates.at(-1).terminal_reason, "unknown_endpoint");
 // Auto-answer permission probing is fail-closed and never opens a camera
 // prompt when persistent camera access is absent.
 storage.set("voip_stack_video_camera_enabled", "true");
+storage.set("voip_stack_video_camera_enabled:kitchen", "false");
 let mediaRequests = 0;
 context.navigator.permissions = {{ query: async () => ({{ state: "prompt" }}) }};
 context.navigator.mediaDevices = {{
   getUserMedia: async () => {{ mediaRequests++; throw new Error("must not prompt"); }},
 }};
 const permission = new Engine();
+assert.equal(permission.videoCameraEnabledFor("default"), true);
+assert.equal(permission.videoCameraEnabledFor("kitchen"), false);
 assert.equal(
   await permission.prepareVideoCameraPermission({{ persistentOnly: true }}),
   false,
 );
 assert.equal(mediaRequests, 0);
+assert.equal(
+  await permission.prepareVideoCameraPermission({{ persistentOnly: true, endpointId: "kitchen" }}),
+  false,
+);
+assert.equal(mediaRequests, 0);
 
-// A granted preflight acquires and immediately releases the probe stream.
+// A granted preflight does not start the camera twice. The negotiated sender
+// performs the single real acquisition after the call is established.
 let stopped = 0;
 context.navigator.permissions = {{ query: async () => ({{ state: "granted" }}) }};
 context.navigator.mediaDevices = {{
@@ -238,6 +247,17 @@ assert.equal(
   await permission.prepareVideoCameraPermission({{ persistentOnly: true }}),
   true,
 );
+assert.equal(mediaRequests, 0);
+assert.equal(stopped, 0);
+
+// An explicit user action with a prompt-state permission still probes the
+// camera, then releases that one temporary stream.
+context.navigator.permissions = {{ query: async () => ({{ state: "prompt" }}) }};
+assert.equal(
+  await permission.prepareVideoCameraPermission({{ persistentOnly: false }}),
+  true,
+);
+assert.equal(mediaRequests, 1);
 assert.equal(stopped, 1);
 
 // A rejected WebSocket ownership claim did not attach media, so it must not

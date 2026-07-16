@@ -248,6 +248,14 @@ routing deadlines and in-call DTMF. Its state is the last occurrence timestamp;
 the occurrence type and call envelope are attributes. The legacy event-bus
 events remain available for compatibility.
 
+Each integration-owned phone Device also exposes a scoped call Event Entity
+and an enum call-state Sensor Entity. Prefer those entities for automations
+about one room/handset, such as “Casa has rung for 30 seconds” or “Test missed
+an incoming call”. Use the aggregate entity for PBX-wide logic and
+`route_requested`. The default phone's state sensor keeps the historical
+`sensor.voip_stack_call_state` entity ID for compatibility even though it is
+now attached to that phone Device.
+
 ## Experimental: In-call DTMF Automation Event
 
 This event surface is experimental in `2026.7.1`. Automations that operate

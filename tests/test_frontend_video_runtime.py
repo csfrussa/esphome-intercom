@@ -29,6 +29,7 @@ import vm from "vm";
 import assert from "assert/strict";
 
 const source = fs.readFileSync({json.dumps(str(VIDEO_ENGINE))}, "utf8");
+const cameraStorage = new Map();
 const context = vm.createContext({{
   EventTarget,
   performance,
@@ -37,7 +38,10 @@ const context = vm.createContext({{
   CustomEvent: class CustomEvent extends Event {{
     constructor(type, init) {{ super(type); this.detail = init?.detail; }}
   }},
-  localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+  localStorage: {{
+    getItem(key) {{ return cameraStorage.has(key) ? cameraStorage.get(key) : null; }},
+    setItem(key, value) {{ cameraStorage.set(key, String(value)); }},
+  }},
   WebSocket: {{ OPEN: 1, CONNECTING: 0 }},
   EncodedVideoChunk: class EncodedVideoChunk {{ constructor(init) {{ Object.assign(this, init); }} }},
 }});
@@ -45,6 +49,21 @@ const module = new vm.SourceTextModule(source, {{ context }});
 await module.link(() => {{ throw new Error("unexpected import"); }});
 await module.evaluate();
 const Video = module.namespace.VoipStackVideo;
+
+// Camera transmission is a browser preference per logical phone. The legacy
+// global choice is inherited until that endpoint writes its own value.
+cameraStorage.set("voip_stack_video_camera_enabled", "true");
+const preferences = new Video();
+assert.equal(preferences.cameraEnabledFor("default"), true);
+assert.equal(preferences.cameraEnabledFor("kitchen"), true);
+await preferences.setCameraEnabled(false, "kitchen");
+assert.equal(preferences.cameraEnabledFor("kitchen"), false);
+assert.equal(preferences.cameraEnabledFor("default"), true);
+await preferences.setCameraEnabled(true, "test-phone");
+assert.equal(cameraStorage.get("voip_stack_video_camera_enabled:test-phone"), "true");
+const restoredPreferences = new Video();
+assert.equal(restoredPreferences.cameraEnabledFor("kitchen"), false);
+assert.equal(restoredPreferences.cameraEnabledFor("test-phone"), true);
 
 // RFC 6184 Main/High streams can arrive in decode order with non-monotonic
 // presentation timestamps (I00, R03, N01, N02). Preserve those timestamps.

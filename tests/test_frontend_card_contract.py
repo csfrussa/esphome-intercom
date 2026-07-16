@@ -189,6 +189,23 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertNotIn("entry.address || entry.sip_uri", self.source)
         self.assertNotIn("_isCallableRosterEntry", self.source)
 
+    def test_shared_roster_is_not_reparsed_on_unrelated_hass_updates(self) -> None:
+        load = _method_body(self.source, "_loadSharedRoster")
+        self.assertIn("this._rosterSourceKey === sourceKey", load)
+        self.assertIn("this._rosterSourceKey = sourceKey", load)
+        self.assertLess(
+            load.index("this._rosterSourceKey === sourceKey"),
+            load.index("JSON.parse(raw)"),
+        )
+
+    def test_softphone_destination_options_are_not_rebuilt_on_call_state_renders(self) -> None:
+        render = _method_body(self.source, "_renderSoftphoneDestinationSelect")
+        self.assertIn("this._softphoneTargetOptionsKey === optionsKey", render)
+        self.assertLess(
+            render.index("this._softphoneTargetOptionsKey === optionsKey"),
+            render.index("select.replaceChildren(...options)"),
+        )
+
     def test_ha_softphone_group_controls_are_dynamic_backend_state(self) -> None:
         load = _method_body(self.source, "_loadSharedRoster")
         groups = _method_body(self.source, "_availableSoftphoneGroups")
@@ -407,16 +424,23 @@ class FrontendCardContractTest(unittest.TestCase):
 
     def test_video_answer_preflights_camera_and_auto_answer_never_prompts(self) -> None:
         answer = _method_body(self.source, "async _answer")
+        start = _method_body(self.source, "async _startHaSoftphoneCall")
         auto_answer = _method_body(self.source, "async _tryAutoAnswer")
         engine = (
             ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js"
         ).read_text()
         permission = _method_body(engine, "async prepareVideoCameraPermission")
 
-        self.assertIn("await voipStackEngine.prepareVideoCameraPermission()", answer)
+        self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", answer)
+        self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", start)
+        self.assertIn("endpointId: this._getSoftphoneEndpointId()", answer)
+        self.assertIn("endpointId: this._getSoftphoneEndpointId()", start)
         self.assertIn("persistentOnly: true", auto_answer)
-        self.assertIn("if (!navigator.permissions?.query) return false", permission)
-        self.assertIn('permission.state !== "granted"', permission)
+        self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", auto_answer)
+        self.assertIn("endpointId: this._getSoftphoneEndpointId()", auto_answer)
+        self.assertIn("navigator.permissions?.query", permission)
+        self.assertIn('permission.state === "granted"', permission)
+        self.assertIn('permission.state === "denied" || persistentOnly', permission)
         self.assertIn("navigator.mediaDevices.getUserMedia", permission)
         self.assertIn("track.stop()", permission)
 
@@ -719,9 +743,16 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("min-width: 0;", self.source)
         self.assertIn(".video-active .hangup-peer {", self.source)
         self.assertIn("text-overflow: ellipsis;", self.source)
-        self.assertIn(".video-active .stats.video-debug {", self.source)
-        self.assertIn("position: relative;", self.source)
-        self.assertIn("max-height: min(22%, 92px);", self.source)
+        self.assertIn("object-fit: contain", self.source)
+        self.assertIn("max-width: 100%", self.source)
+        self.assertNotIn("video-auto-height", self.source)
+        self.assertNotIn("aspect-ratio: 16 / 9", self.source)
+        self.assertIn(".video-active .hangup-stats:not([hidden]) {", self.source)
+        self.assertIn("text-overflow: ellipsis;", self.source)
+        self.assertNotIn(".video-active .stats.video-debug {", self.source)
+        render = _method_body(self.source, "_render")
+        self.assertIn("this.config?.show_extended_info", render)
+        self.assertIn("els.hangupStats.hidden = !showVideoStats", render)
 
     def test_video_hangup_bar_tracks_the_real_call_phase(self) -> None:
         render = _method_body(self.source, "_render")
@@ -732,7 +763,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('? "Ringing"', render)
         self.assertIn(': "In call"', render)
         self.assertIn(
-            "answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupDuration",
+            "answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupStats, hangupDuration",
             self.source,
         )
 

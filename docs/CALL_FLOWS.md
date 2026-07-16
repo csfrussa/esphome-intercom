@@ -259,14 +259,20 @@ The decision point is not expected for:
 ## Unanswered HA Forward
 
 1. The default route places the HA-owned logical call in `ringing`.
-2. `sensor.voip_stack_call_state` publishes the same state and Call-ID as the
-   softphone/card stream.
+2. The call-state Sensor Entity attached to the destination phone publishes
+   the same state and Call-ID as its softphone/card stream. The migrated
+   default phone retains `sensor.voip_stack_call_state` for compatibility;
+   additional phones have their own generated entity IDs.
 3. A native HA state trigger may wait with `for:`, for example 30 seconds.
 4. `voip_stack.forward` resolves the only forwardable call and claims a new
    routing revision.
 5. HA releases the softphone, publishes its terminal `forwarded` transition,
    and attaches the replacement destination to the still-open source call.
 6. On route failure, `on_failure: resume` restores HA ringing exactly once.
+
+Room-specific automations should use the destination phone's state Sensor or
+call Event Entity. Reserve aggregate `event.voip_stack_call` triggers for
+PBX-wide inspection and the initial `route_requested` decision.
 
 Callbacks from the previous revision cannot resurrect the released HA ringing
 state. The card only renders these authoritative backend transitions.

@@ -69,7 +69,7 @@ CARD_SAMPLE = r"""
   const canvas = deep("canvas.video-canvas", card.shadowRoot || card)[0] || null;
   const hangup = deep("button.hangup", root)[0] || null;
   const header = deep(".header", root)[0] || null;
-  const stats = deep(".stats.video-debug", root)[0] || null;
+  const stats = deep(".hangup-stats", root)[0] || null;
   const rect = (element, relativeTo = null) => {
     if (!element || element.hidden) return null;
     const value = element.getBoundingClientRect();
@@ -142,10 +142,16 @@ CARD_SAMPLE = r"""
       canvas: canvasRect,
       hangup: hangupRect,
       header: headerRect,
-      stats: statsRect,
+    stats: statsRect,
       horizontal_overflow: surface.scrollWidth > surface.clientWidth + 1,
       vertical_overflow: surface.scrollHeight > surface.clientHeight + 1,
-      header_stats_overlap: overlaps(headerRect, statsRect),
+    header_stats_overlap: overlaps(headerRect, statsRect),
+    stats_outside_hangup: Boolean(
+      statsRect && hangupRect && (
+        statsRect.x < hangupRect.x || statsRect.right > hangupRect.right
+          || statsRect.y < hangupRect.y || statsRect.bottom > hangupRect.bottom
+      )
+    ),
       usable_video_height: Math.max(
         0,
         Number(hangupRect?.y || surface.clientHeight)
@@ -579,6 +585,8 @@ def main() -> int:
                     raise RuntimeError(f"video card has horizontal overflow: {active}")
                 if layout.get("header_stats_overlap"):
                     raise RuntimeError(f"video debug overlay covers the card title: {active}")
+                if layout.get("stats_outside_hangup"):
+                    raise RuntimeError(f"video diagnostics escape the hangup bar: {active}")
                 if abs(float(canvas_layout.get("width", 0)) - float(surface.get("width", 0))) > 2:
                     raise RuntimeError(f"video canvas does not fill card width: {active}")
                 if abs(float(canvas_layout.get("height", 0)) - float(surface.get("height", 0))) > 2:

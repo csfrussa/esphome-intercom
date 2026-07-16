@@ -475,26 +475,47 @@ class VoipStackEngine extends EventTarget {
   }
 
   get videoCameraEnabled() {
-    if (this._video) return Boolean(this._video.cameraEnabled);
-    try { return localStorage.getItem(VIDEO_CAMERA_STORAGE_KEY) === "true"; }
-    catch (_) { return false; }
+    return this.videoCameraEnabledFor(this._endpointId);
   }
 
-  async setVideoCameraEnabled(enabled) {
+  videoCameraEnabledFor(endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
+      DEFAULT_SOFTPHONE_ENDPOINT_ID;
+    if (this._video?.cameraEnabledFor) return Boolean(this._video.cameraEnabledFor(endpoint));
+    try {
+      const scoped = localStorage.getItem(
+        `${VIDEO_CAMERA_STORAGE_KEY}:${encodeURIComponent(endpoint)}`,
+      );
+      if (scoped !== null) return scoped === "true";
+      return localStorage.getItem(VIDEO_CAMERA_STORAGE_KEY) === "true";
+    } catch (_) { return false; }
+  }
+
+  async setVideoCameraEnabled(enabled, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
+    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
+      DEFAULT_SOFTPHONE_ENDPOINT_ID;
     const video = await this._loadVideo();
-    await video.setCameraEnabled(enabled);
+    await video.setCameraEnabled(enabled, endpoint);
   }
 
-  async prepareVideoCameraPermission({ persistentOnly = false } = {}) {
-    if (!this.videoCameraEnabled || !navigator.mediaDevices?.getUserMedia) return false;
-    if (persistentOnly) {
-      if (!navigator.permissions?.query) return false;
+  async prepareVideoCameraPermission({
+    persistentOnly = false,
+    endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID,
+  } = {}) {
+    if (!this.videoCameraEnabledFor(endpointId) || !navigator.mediaDevices?.getUserMedia) return false;
+    if (navigator.permissions?.query) {
       try {
         const permission = await navigator.permissions.query({ name: "camera" });
-        if (permission.state !== "granted") return false;
+        // Do not open and immediately close an already-authorised camera.
+        // The video sender will acquire it once after media negotiation. This
+        // removes a costly duplicate device start from every outgoing call.
+        if (permission.state === "granted") return true;
+        if (permission.state === "denied" || persistentOnly) return false;
       } catch (_) {
-        return false;
+        if (persistentOnly) return false;
       }
+    } else if (persistentOnly) {
+      return false;
     }
     let stream = null;
     try {

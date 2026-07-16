@@ -176,7 +176,13 @@ or PBX; it is not restricted to a shared LAN or VPN.
 The responsive card keeps video as the main view, moves call information and
 hang-up into a bottom bar and can return the browser camera on compatible H.264
 or VP8 calls. Audio remains independent, camera transmission has global and
-per-browser gates, and ESPHome endpoints remain audio-only. See the
+per-phone browser gates, and ESPHome endpoints remain audio-only. Video keeps
+the exact Lovelace slot dimensions and native aspect ratio instead of growing
+into adjacent columns; detailed media counters appear inside the compact
+bottom bar only when **Extended information** is enabled. Outbound call setup
+also caches unchanged phonebook/destination DOM and avoids starting an already
+authorised camera twice, keeping kiosk controls responsive through
+calling/ringing. See the
 [experimental SIP video profile](docs/EXPERIMENTAL_SIP_VIDEO.md) for the less
 funny codec, security and qualification details.
 
@@ -282,6 +288,15 @@ For every scenario, the endpoint call-state entity is the automation-safe
 source of truth. Its normal progression is `idle` -> `calling`/`ringing` ->
 `in_call` -> `idle`; an unregistered SIP account reports `offline`. Do not use
 the card's visible label as an automation trigger.
+
+The phone Device is the registry container, not a state by itself. Its
+call-state Sensor Entity is the correct trigger while a call is active; its
+call Event Entity is the correct trigger for `missed`, `failed`, `ended` and
+other occurrences. The default Casa/HA phone retains
+`sensor.voip_stack_call_state` for compatibility, while additional phones get
+their own localized entity IDs. Select them from the intended Device in the
+automation editor. Use aggregate `event.voip_stack_call` only for PBX-wide
+inspection or the initial `route_requested` decision.
 
 _Live SIP video demo: the incoming stream becomes the card background while
 call identity, duration and hang-up remain accessible in the bottom bar._

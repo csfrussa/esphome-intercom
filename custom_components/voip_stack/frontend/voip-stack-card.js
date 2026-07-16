@@ -99,6 +99,8 @@ class VoipStackCard extends HTMLElement {
     this._availableDevicesLoading = false;
     this._availableDevicesRetryTimer = null;
     this._rosterEntries = [];
+    this._rosterSourceKey = null;
+    this._softphoneTargetOptionsKey = null;
 
     // Entity IDs (discovered once)
     this._voipStateEntityId = null;
@@ -1219,6 +1221,15 @@ class VoipStackCard extends HTMLElement {
   _loadSharedRoster() {
     const attr = this._hass?.states?.["sensor.voip_phonebook"]?.attributes || {};
     const raw = attr.roster_json || "";
+    const phonebook = attr.phonebook || "";
+    const sourceKey = `${raw}\u0000${phonebook}`;
+    // Home Assistant assigns `hass` to every Lovelace card for every global
+    // state update. Re-parsing the full shared roster on each assignment made
+    // bursts of SIP/ESP entity updates visibly stall softphone controls while
+    // an outbound call moved through calling/ringing. Only rebuild when the
+    // actual phonebook payload changes.
+    if (this._rosterSourceKey === sourceKey) return false;
+    this._rosterSourceKey = sourceKey;
     let contacts = [];
     if (raw) {
       try {
@@ -1250,6 +1261,7 @@ class VoipStackCard extends HTMLElement {
     if (this._isHaSoftphoneMode() && !this._getSoftphoneTargetDevice()) {
       this._softphoneTargetDeviceId = this._softphoneTargets()[0]?.device_id || null;
     }
+    return true;
   }
 
   _formatListFromMetadata(value) {
@@ -1691,10 +1703,6 @@ class VoipStackCard extends HTMLElement {
       espState.toLowerCase() === "in_call" &&
       voipStackEngine.videoVisible;
     els.card.classList.toggle("video-active", videoVisible);
-    els.card.classList.toggle(
-      "video-auto-height",
-      videoVisible && String(this.config?.grid_options?.rows || "auto").toLowerCase() === "auto",
-    );
     els.videoCanvas.hidden = !videoVisible;
     els.videoShade.hidden = !videoVisible;
     this._syncVideoDurationTimer(videoVisible);
@@ -1789,7 +1797,9 @@ class VoipStackCard extends HTMLElement {
         this._softphoneSupportsVideo() &&
         !!this._softphoneSnapshot?.video_camera_send_enabled;
       els.videoCameraRow.hidden = !(showSettingsPanel && cameraAvailable);
-      els.videoCameraCheckbox.checked = voipStackEngine.videoCameraEnabled;
+      els.videoCameraCheckbox.checked = voipStackEngine.videoCameraEnabledFor
+        ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
+        : voipStackEngine.videoCameraEnabled;
     }
     if (els.dndRow) {
       const dndAvailable = softphoneMode || !!this._dndSwitchEntityId;
@@ -1809,11 +1819,24 @@ class VoipStackCard extends HTMLElement {
       if (showGroups) this._renderGroupControls();
     }
 
-    // Stats line
+    // Stats line: diagnostics stay out of the video plane. In video mode they are a
+    // compact, single-line item in the bottom call bar and only appear when
+    // the card explicitly opted into Extended information.
     const debugMode = !!this._softphoneSnapshot?.debug_mode;
-    els.stats.classList.toggle("video-debug", videoVisible && debugMode);
-    if (this._isHaSoftphoneMode() && this._hasBrowserAudioPath() && debugMode) {
-      els.stats.textContent = voipStackEngine.statsText();
+    const statsText = this._isHaSoftphoneMode() &&
+      this._hasBrowserAudioPath() && debugMode
+      ? voipStackEngine.statsText()
+      : "";
+    const showVideoStats = videoVisible &&
+      !!this.config?.show_extended_info &&
+      !!statsText;
+    if (els.hangupStats) {
+      els.hangupStats.hidden = !showVideoStats;
+      els.hangupStats.textContent = showVideoStats ? statsText : "";
+      els.hangupStats.title = showVideoStats ? statsText : "";
+    }
+    if (!videoVisible && statsText) {
+      els.stats.textContent = statsText;
     } else {
       els.stats.textContent = "";
     }
@@ -1863,13 +1886,19 @@ class VoipStackCard extends HTMLElement {
   _buildSkeletonMain() {
     const root = this.shadowRoot;
     root.replaceChildren();
+    this._softphoneTargetOptionsKey = null;
 
     const style = document.createElement("style");
     style.textContent = `
       :host {
         display: block;
+        box-sizing: border-box;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
         height: 100%;
         min-height: 0;
+        overflow: hidden;
         --voip-stack-card-surface: var(--ha-card-background, var(--card-background-color, white));
         --voip-control-surface: transparent;
         --voip-control-hover-surface: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
@@ -1879,6 +1908,9 @@ class VoipStackCard extends HTMLElement {
         display: flex;
         flex-direction: column;
         height: 100%;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
         min-height: 0;
         overflow-x: hidden;
         overflow-y: auto;
@@ -1896,7 +1928,8 @@ class VoipStackCard extends HTMLElement {
       .card > :not(.video-canvas):not(.video-shade) { position: relative; z-index: 2; }
       .video-canvas {
         position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%;
-        object-fit: cover; background: #000; border-radius: inherit; pointer-events: none;
+        max-width: 100%; max-height: 100%; object-fit: contain; background: #000;
+        border-radius: inherit; pointer-events: none;
       }
       .video-canvas[hidden], .video-shade[hidden] { display: none; }
       .video-shade {
@@ -1904,16 +1937,10 @@ class VoipStackCard extends HTMLElement {
         border-radius: inherit;
         background: linear-gradient(to bottom, rgba(0,0,0,.42), rgba(0,0,0,.08) 42%, rgba(0,0,0,.60));
       }
-      .card.video-active { overflow: hidden; background: #000; }
-      /* Absolutely positioned video and call controls do not contribute to
-       * intrinsic height. Reserve a real 16:9 surface when a Sections card is
-       * configured with rows:auto; fixed-grid cards continue using the height
-       * assigned by Home Assistant. */
-      .card.video-active.video-auto-height {
-        height: auto;
-        min-height: 280px;
-        aspect-ratio: 16 / 9;
-      }
+      /* Keep the exact Lovelace slot geometry when video appears. Absolute
+       * media/control layers do not provide intrinsic height, so retain the
+       * configured 100% height and only use 280px as the auto-row fallback. */
+      .card.video-active { overflow: hidden; background: #000; min-height: 280px; }
       .video-active .header,
       .video-active .destination-label,
       .video-active .destination-value,
@@ -1927,8 +1954,8 @@ class VoipStackCard extends HTMLElement {
         right: 0;
         bottom: 0;
         width: 100%;
-        min-height: 66px;
-        height: 66px;
+        min-height: 50px;
+        height: clamp(50px, 16%, 58px);
         margin: 0;
         padding: 0;
         align-items: stretch;
@@ -2053,16 +2080,16 @@ class VoipStackCard extends HTMLElement {
       .video-active .voip-button.hangup {
         box-sizing: border-box;
         width: 100%;
-        height: 66px;
-        min-height: 66px;
+        height: 100%;
+        min-height: 50px;
         border-radius: 0;
         padding: 0 18px;
         gap: 12px;
         justify-content: flex-start;
         overflow: hidden;
-        background: linear-gradient(90deg, rgba(122, 5, 5, .80), rgba(230, 35, 35, .72));
-        -webkit-backdrop-filter: blur(12px) saturate(1.2);
-        backdrop-filter: blur(12px) saturate(1.2);
+        background: linear-gradient(90deg, rgba(122, 5, 5, .62), rgba(230, 35, 35, .52));
+        -webkit-backdrop-filter: blur(8px) saturate(1.12);
+        backdrop-filter: blur(8px) saturate(1.12);
         box-shadow: 0 -1px 0 rgba(255,255,255,.18), 0 -8px 30px rgba(0,0,0,.24);
       }
       .video-active .hangup-label { display: none; }
@@ -2100,6 +2127,21 @@ class VoipStackCard extends HTMLElement {
         font-size: 1rem;
         letter-spacing: .03em;
       }
+      .hangup-stats { display: none; }
+      .video-active .hangup-stats:not([hidden]) {
+        display: block;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: center;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: clamp(.56rem, 1.5vw, .68rem);
+        font-weight: 500;
+        opacity: .9;
+      }
       .voip-button:disabled { opacity: 0.5; cursor: not-allowed; animation: none; }
       @keyframes ring-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 
@@ -2116,25 +2158,6 @@ class VoipStackCard extends HTMLElement {
 
       .stats { font-size: 0.75em; color: #666; margin-top: 8px; text-align: center; }
       .video-active .stats { display: none; }
-      .video-active .stats.video-debug {
-        display: block;
-        position: relative;
-        align-self: stretch;
-        margin: 0;
-        padding: 5px 7px;
-        border-radius: 5px;
-        background: rgba(0,0,0,.52);
-        color: #fff;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: .66rem;
-        line-height: 1.25;
-        max-height: min(22%, 92px);
-        overflow: auto;
-        scrollbar-width: thin;
-        text-align: left;
-        word-break: break-word;
-        text-shadow: none;
-      }
       .error { color: #f44336; font-size: 0.85em; text-align: center; margin-top: 8px; }
       .settings-btn {
         display: block;
@@ -2363,9 +2386,13 @@ class VoipStackCard extends HTMLElement {
     const hangupDuration = document.createElement("span");
     hangupDuration.className = "hangup-duration";
     hangupDuration.textContent = "00:00";
+    const hangupStats = document.createElement("span");
+    hangupStats.className = "hangup-stats";
+    hangupStats.hidden = true;
     hangupBtn.appendChild(hangupLabel);
     hangupBtn.appendChild(hangupIcon);
     hangupBtn.appendChild(hangupCopy);
+    hangupBtn.appendChild(hangupStats);
     hangupBtn.appendChild(hangupDuration);
     const callBtn = document.createElement("button");
     callBtn.type = "button";
@@ -2563,7 +2590,7 @@ class VoipStackCard extends HTMLElement {
       header, headerName,
       destRow, destValueWrap, destValue, destSelect, prevBtn, nextBtn, offlinePanel,
       keypadPanel, keypadInput, keypadKeys,
-      answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupDuration, callBtn, placeholderBtn,
+      answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupStats, hangupDuration, callBtn, placeholderBtn,
       statusIndicator, statusText, statusReason,
       runtimeControls, keypadBtn, settingsBtn, settingsPanel,
       autoAnswerRow, autoAnswerCheckbox, dndRow, dndCheckbox, ringtoneRow, ringtoneCheckbox, videoCameraRow, videoCameraCheckbox,
@@ -2690,6 +2717,16 @@ class VoipStackCard extends HTMLElement {
   _renderSoftphoneDestinationSelect(select) {
     const targets = this._softphoneTargets();
     const current = this._getSoftphoneTargetDevice();
+    const optionsKey = JSON.stringify({
+      selected: current?.device_id || "",
+      targets: targets.map((device) => [device.device_id, device.name || device.device_id]),
+    });
+    select.disabled = this._starting || this._stopping || targets.length === 0;
+    // Active SIP state transitions may render several times in a fraction of
+    // a second. The destination list is hidden then and normally unchanged;
+    // rebuilding all <option> nodes needlessly invalidates Lovelace layout.
+    if (this._softphoneTargetOptionsKey === optionsKey) return;
+    this._softphoneTargetOptionsKey = optionsKey;
     const options = [];
     if (targets.length === 0) {
       const opt = document.createElement("option");
@@ -2706,7 +2743,6 @@ class VoipStackCard extends HTMLElement {
       }
     }
     select.replaceChildren(...options);
-    select.disabled = this._starting || this._stopping || targets.length === 0;
   }
 
   _setSoftphoneTarget(deviceId) {
@@ -2871,10 +2907,16 @@ class VoipStackCard extends HTMLElement {
     let sendVideo = Boolean(
       this._softphoneSupportsVideo() &&
       this._softphoneSnapshot?.video_camera_send_enabled &&
-      voipStackEngine.videoCameraEnabled
+      (
+        voipStackEngine.videoCameraEnabledFor
+          ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
+          : voipStackEngine.videoCameraEnabled
+      )
     );
     if (sendVideo) {
-      sendVideo = await voipStackEngine.prepareVideoCameraPermission();
+      sendVideo = await voipStackEngine.prepareVideoCameraPermission({
+        endpointId: this._getSoftphoneEndpointId(),
+      });
     }
     if (operationId !== this._callOperationId) return;
     const reply = await voipStackEngine.startHaSoftphone(target, sessionInfo, {
@@ -2933,12 +2975,18 @@ class VoipStackCard extends HTMLElement {
           this._softphoneSupportsVideo() &&
           this._softphoneSnapshot?.video_offered &&
           this._softphoneSnapshot?.video_camera_send_enabled &&
-          voipStackEngine.videoCameraEnabled
+          (
+            voipStackEngine.videoCameraEnabledFor
+              ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
+              : voipStackEngine.videoCameraEnabled
+          )
         );
         const sendVideo = wantsVideo
           ? typeof options.videoPermission === "boolean"
             ? options.videoPermission
-            : await voipStackEngine.prepareVideoCameraPermission()
+            : await voipStackEngine.prepareVideoCameraPermission({
+                endpointId: this._getSoftphoneEndpointId(),
+              })
           : false;
         if (
           operationId !== this._callOperationId ||
@@ -3155,10 +3203,15 @@ class VoipStackCard extends HTMLElement {
         this._softphoneSupportsVideo() &&
         this._softphoneSnapshot?.video_offered &&
         this._softphoneSnapshot?.video_camera_send_enabled &&
-        voipStackEngine.videoCameraEnabled
+        (
+          voipStackEngine.videoCameraEnabledFor
+            ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
+            : voipStackEngine.videoCameraEnabled
+        )
       ) {
         videoPermission = await voipStackEngine.prepareVideoCameraPermission({
           persistentOnly: true,
+          endpointId: this._getSoftphoneEndpointId(),
         });
         if (lifecycleGeneration !== this._lifecycleGeneration) return;
       }
@@ -3254,7 +3307,10 @@ class VoipStackCard extends HTMLElement {
     this._settingsOpen = true;
     this._render();
     try {
-      await voipStackEngine.setVideoCameraEnabled(Boolean(enabled));
+      await voipStackEngine.setVideoCameraEnabled(
+        Boolean(enabled),
+        this._getSoftphoneEndpointId(),
+      );
     } catch (err) {
       this._showError(err.message || String(err));
     }
