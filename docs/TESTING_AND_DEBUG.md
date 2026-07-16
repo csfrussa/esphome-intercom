@@ -118,6 +118,8 @@ least:
 - exact-codec RTP and RTCP relay between two standard SIP legs;
 - trunk DTMF selection into a video-capable logical HA phone, including a
   missing-extension rejection with no retained session or RTP reservation;
+- per-phone state isolation: the selected phone reaches `in_call`, unrelated
+  phones remain idle and every involved phone returns to idle after teardown;
 - compact 6-column, default, wide and tall card geometry with long caller text;
 - clean local and remote hangup with the video RTP port and browser owner
   released;

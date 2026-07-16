@@ -35,6 +35,9 @@ when you actually want to test the new toys and tell us what breaks.
   idempotent and browser handoff locks are scoped per endpoint/call. A stale
   callback can no longer resurrect a terminated card or block an unrelated
   phone while a media owner is being replaced.
+- Routing and DTMF bridge events no longer become a logical phone's durable
+  state. A call routed to `Test` leaves `Casa` idle, drives only `Test` through
+  ringing/in-call and returns that endpoint to idle on hangup.
 - Video teardown diagnostics are now per logical HA phone and direction. The
   debug snapshot also reports call sessions, legs, pending routes, media
   owners, active audio/video sessions and allocated RTP ports, with an
@@ -328,8 +331,9 @@ conditional-forward and unanswered-call-to-Assist examples.
 - The post-consolidation trunk test used registered baresip `418`, dialled PBX
   entry `427`, entered `667`, answered on the `Test` card and carried
   bidirectional OPUS and VP8. Exactly one audio and one video WebSocket owned
-  the call; Hangup returned sessions, legs, owners and allocated RTP ports to
-  zero.
+  the call; `Casa` remained idle while `Test` was in-call, and Hangup returned
+  both phone entities to idle plus sessions, legs, owners and allocated RTP
+  ports to zero.
 
 ## Known Follow-Up Areas
 
