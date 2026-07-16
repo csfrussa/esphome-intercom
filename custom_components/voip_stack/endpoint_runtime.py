@@ -6345,10 +6345,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 origin="remote",
                 last_sip_event="BYE",
             )
-            registry.finish_and_pop(
-                call_id, reason=terminal_reason, state=terminal_state
-            )
-        if (
+        elif (
             relay is None
             and client is None
             and (invite is not None or (call_id and softphone_call_id == call_id))
@@ -6366,9 +6363,14 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 reason=terminal_reason,
                 origin="remote",
             )
-            registry.finish_and_pop(
-                call_id, reason=terminal_reason, state=terminal_state
-            )
+        # ``begin_termination`` makes this callback the sole teardown owner.
+        # Finalize exactly once even when the transport reports a call which
+        # has no remaining relay, client, pending INVITE or matching browser
+        # store.  Leaving that tombstoned session in the registry held endpoint
+        # busy forever and made subsequent calls look unrelatedly occupied.
+        registry.finish_and_pop(
+            call_id, reason=terminal_reason, state=terminal_state
+        )
         if relay is not None or client is not None:
             _LOGGER.info(
                 "SIP bridge terminated call_id=%s reason=%s relay=%s dest_client=%s",

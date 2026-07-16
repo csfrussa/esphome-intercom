@@ -64,6 +64,49 @@ class _EndpointRegistryStub:
 
 
 class CallRegistryEventContextTest(unittest.TestCase):
+    def test_snapshot_exposes_every_owned_runtime_resource(self) -> None:
+        registry = call_registry.CallRegistry()
+        registry.upsert("call-1", state="in_call", owner="bridge")
+        registry.add_leg("call-1", "source", role="caller", state="in_call")
+        registry.add_leg("call-1", "destination", role="callee", state="in_call")
+        registry.pending_routes["call-1"] = {}
+        registry.pending_invites["call-1"] = object()
+        registry.preanswered["call-1"] = {}
+        registry.softphone_media["call-1"] = {}
+        registry.sip_clients["destination"] = object()
+        registry.client_watchers["destination"] = object()
+        registry.relays["call-1"] = object()
+        registry.bridge_clients["call-1"] = "destination"
+        registry.endpoint_claims["call-1"] = {
+            "office": "source",
+            "kitchen": "destination",
+        }
+
+        self.assertEqual(
+            registry.snapshot()["resource_counts"],
+            {
+                "sessions": 1,
+                "legs": 2,
+                "pending_routes": 1,
+                "pending_invites": 1,
+                "preanswered": 1,
+                "softphone_media": 1,
+                "sip_clients": 1,
+                "client_watchers": 1,
+                "relays": 1,
+                "bridges": 1,
+                "endpoint_claims": 2,
+            },
+        )
+
+        registry.clear_runtime()
+        self.assertTrue(
+            all(
+                count == 0
+                for count in registry.snapshot()["resource_counts"].values()
+            )
+        )
+
     def test_only_one_terminal_observer_owns_teardown(self) -> None:
         registry = call_registry.CallRegistry()
         registry.upsert("source", state="in_call", owner="bridge")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import inspect
 import logging
@@ -42,6 +43,35 @@ class MediaWebSocketOwner:
                 self.transport.close()
             except Exception:  # noqa: BLE001 - teardown must continue.
                 _LOGGER.debug("Failed to close replaced media transport", exc_info=True)
+
+
+@dataclass(slots=True)
+class _MediaIdentityLock:
+    """One short-lived serialization point for a logical call endpoint."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+@asynccontextmanager
+async def _media_identity_guard(bucket: dict[str, Any], owner_key: str):
+    """Serialize one call without head-of-line blocking unrelated calls."""
+
+    locks: dict[str, _MediaIdentityLock] = bucket.setdefault(
+        "media_identity_locks", {}
+    )
+    entry = locks.get(owner_key)
+    if entry is None:
+        entry = _MediaIdentityLock()
+        locks[owner_key] = entry
+    entry.users += 1
+    try:
+        async with entry.lock:
+            yield
+    finally:
+        entry.users -= 1
+        if entry.users == 0 and locks.get(owner_key) is entry:
+            locks.pop(owner_key, None)
 
 
 def _call_media_client_id(registry: Any, call_id: str) -> str:
@@ -86,8 +116,8 @@ async def async_claim_call_media_owner(
 ) -> tuple[dict[str, object], asyncio.Lock, str]:
     """Claim one media channel and safely recover a disconnected browser.
 
-    Every audio/video claim for a call is serialized by a shared identity
-    lock. A different browser document may replace the pinned client ID only
+    Every audio/video claim for the same endpoint/call is serialized by a
+    keyed identity lock. A different browser document may replace the pinned client ID only
     after *all* media sockets for that endpoint/call have disappeared. User
     authorization is deliberately performed by the HTTP view before calling
     this helper, so a takeover remains restricted to the call's sticky HA
@@ -98,15 +128,12 @@ async def async_claim_call_media_owner(
     call_id = str(call_id or "").strip()
     endpoint_id = str(endpoint_id or "").strip()
     owner_key = f"{endpoint_id}|{call_id}"
-    identity_lock: asyncio.Lock = bucket.setdefault(
-        "media_identity_lock", asyncio.Lock()
-    )
     owners_key = f"{channel}_ws_owners"
     owner_lock_key = f"{channel}_ws_owner_lock"
     owners = bucket.setdefault(owners_key, {})
     owner_lock: asyncio.Lock = bucket.setdefault(owner_lock_key, asyncio.Lock())
 
-    async with identity_lock:
+    async with _media_identity_guard(bucket, owner_key):
         live_owners = [
             candidate_owner
             for candidate in ("audio", "video")
@@ -173,10 +200,7 @@ async def async_release_local_media_if_unowned(
 ) -> bool:
     """Release a local-call lease after its last audio/video socket closes."""
     owner_key = f"{lease.endpoint_id}|{lease.call_id}"
-    identity_lock: asyncio.Lock = bucket.setdefault(
-        "media_identity_lock", asyncio.Lock()
-    )
-    async with identity_lock:
+    async with _media_identity_guard(bucket, owner_key):
         if any(
             bucket.setdefault(f"{channel}_ws_owners", {}).get(owner_key)
             is not None

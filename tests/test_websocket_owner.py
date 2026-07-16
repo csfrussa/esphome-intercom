@@ -72,8 +72,77 @@ class _CallRegistry:
     def resolve_session_id(call_id: str) -> str:
         return call_id
 
+    def add_call(self, call_id: str, client_id: str = "") -> None:
+        self.sessions[call_id] = types.SimpleNamespace(
+            metadata={"media_client_id": client_id},
+            revision=1,
+        )
+        self.softphone_media[call_id] = {"media_client_id": client_id}
+
 
 class WebSocketOwnerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_handoff_for_one_call_does_not_block_an_unrelated_call(
+        self,
+    ) -> None:
+        bucket: dict[str, object] = {}
+        registry = _CallRegistry("document-a")
+        registry.add_call("call-2", "document-b")
+        previous = MediaWebSocketOwner(
+            user_id="user-a",
+            client_id="document-a",
+        )
+        await async_claim_call_media_owner(
+            bucket,
+            registry,
+            "call-1",
+            "kitchen",
+            previous,
+            channel="audio",
+            timeout=1.0,
+        )
+
+        handoff = asyncio.create_task(
+            async_claim_call_media_owner(
+                bucket,
+                registry,
+                "call-1",
+                "kitchen",
+                MediaWebSocketOwner(
+                    user_id="user-a",
+                    client_id="document-a",
+                ),
+                channel="audio",
+                timeout=1.0,
+            )
+        )
+        await asyncio.wait_for(previous.handoff_requested.wait(), timeout=0.2)
+
+        unrelated = MediaWebSocketOwner(
+            user_id="user-b",
+            client_id="document-b",
+        )
+        owners, _lock, owner_key = await asyncio.wait_for(
+            async_claim_call_media_owner(
+                bucket,
+                registry,
+                "call-2",
+                "office",
+                unrelated,
+                channel="audio",
+                timeout=1.0,
+            ),
+            timeout=0.2,
+        )
+        self.assertIs(owners[owner_key], unrelated)
+
+        await async_release_media_owner(
+            bucket["audio_ws_owners"],
+            bucket["audio_ws_owner_lock"],
+            "kitchen|call-1",
+            previous,
+        )
+        await handoff
+
     async def test_disconnected_same_user_document_can_rebind_call_identity(
         self,
     ) -> None:

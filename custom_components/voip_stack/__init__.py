@@ -3384,7 +3384,7 @@ _REMOVED_ENTRY_RUNTIME_KEYS = (
     "audio_ws_owner_lock",
     "video_ws_owners",
     "video_ws_owner_lock",
-    "media_identity_lock",
+    "media_identity_locks",
     "media_controller_lock",
     "local_softphone_bridge",
     "local_softphone_bridge_unsub",

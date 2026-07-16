@@ -711,10 +711,26 @@ class CallRegistry:
         return count
 
     def snapshot(self) -> dict[str, Any]:
+        resource_counts = {
+            "sessions": len(self.sessions),
+            "legs": sum(len(session.legs) for session in self.sessions.values()),
+            "pending_routes": len(self.pending_routes),
+            "pending_invites": len(self.pending_invites),
+            "preanswered": len(self.preanswered),
+            "softphone_media": len(self.softphone_media),
+            "sip_clients": len(self.sip_clients),
+            "client_watchers": len(self.client_watchers),
+            "relays": len(self.relays),
+            "bridges": len(self.bridge_clients),
+            "endpoint_claims": sum(
+                len(claims) for claims in self.endpoint_claims.values()
+            ),
+        }
         return {
             "sessions": len(self.sessions),
             "active_sessions": self.active_count(),
             "terminated_calls": len(self.terminated_call_ids),
+            "resource_counts": resource_counts,
             "call_ids": sorted(self.sessions),
             "pending_call_ids": sorted(self.pending_invites),
             "media_call_ids": sorted(self.softphone_media),
