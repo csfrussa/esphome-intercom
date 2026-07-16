@@ -168,6 +168,26 @@ await initialAttach;
 await reentrantAttach;
 assert.equal(attachRuns, 1);
 
+// HA may publish a canonical device ID shortly after the initial answer. The
+// endpoint and Call-ID still identify the same media leg, so metadata churn
+// must neither supersede an in-flight attach nor reconnect a healthy socket.
+const stableMetadata = new Engine();
+stableMetadata._state = "IN_CALL";
+stableMetadata._endpointId = "kitchen";
+stableMetadata._deviceId = "fallback-device";
+stableMetadata._callId = "stable-call";
+stableMetadata._audioReady = true;
+stableMetadata._ws = {{ readyState: context.WebSocket.OPEN }};
+let metadataReconnects = 0;
+stableMetadata._setupAudioOrAbort = async () => {{ metadataReconnects++; return true; }};
+await stableMetadata.resumeSession(
+  {{ endpoint_id: "kitchen" }},
+  "canonical-device",
+  {{ state: "in_call", endpoint_id: "kitchen", call_id: "stable-call" }},
+);
+assert.equal(metadataReconnects, 0);
+assert.equal(stableMetadata._callId, "stable-call");
+
 // A brand-new page has no sessionStorage claim, but an authoritative in-call
 // snapshot may recover that exact endpoint once. A newer call on the same
 // logical phone replaces a stale, unattached claim instead of becoming a

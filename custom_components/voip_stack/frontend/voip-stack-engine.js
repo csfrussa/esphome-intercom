@@ -1335,7 +1335,12 @@ class VoipStackEngine extends EventTarget {
     const deviceId = sessionDeviceId || statePayload?.session_device_id || statePayload?.device_id || this._deviceId;
     const endpointId = String(statePayload?.endpoint_id || deviceInfo?.endpoint_id || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     if (!deviceId) return;
-    const attachKey = `${endpointId}|${deviceId}|${statePayload?.call_id || ""}`;
+    // Endpoint + Call-ID identify the logical browser media leg. The device
+    // metadata can legitimately settle from a fallback ID to the registered
+    // HA device after answer; treating that metadata update as a new attach
+    // tears down a healthy RTP/WebSocket pipeline and loses the first video
+    // keyframe.
+    const attachKey = `${endpointId}|${statePayload?.call_id || ""}`;
     if (this._sessionAttachPromise && this._sessionAttachKey === attachKey) {
       return this._sessionAttachPromise;
     }
@@ -1381,7 +1386,6 @@ class VoipStackEngine extends EventTarget {
     const endpointId = String(statePayload?.endpoint_id || deviceInfo?.endpoint_id || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     if (
       this._ws &&
-      this._deviceId === deviceId &&
       this._endpointId === endpointId &&
       this._callId === callId &&
       this._ws.readyState === WebSocket.OPEN &&
