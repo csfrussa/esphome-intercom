@@ -15,6 +15,21 @@ when you actually want to test the new toys and tell us what breaks.
 
 ## Latest Development Refresh
 
+- Inbound targets selected by configuration or Home Assistant automations now
+  re-enter the same canonical PBX dispatcher as normal dial-plan destinations.
+  Ring groups ring every eligible member, apply first-answer-wins, cancel
+  losing legs and preserve bidirectional audio/video instead of being mistaken
+  for one generic endpoint or implicitly answered by the HA card.
+- Route events expose stable `ingress` and `origin` provenance (`trunk` or
+  `extension`) independently from the internal call-state owner. Automations
+  can use a normal Home Assistant state condition on the event entity's
+  `ingress` attribute, so external calls can be redirected without hijacking
+  ESP or room-to-room calls.
+- A logical HA phone remains a valid ringing destination while its browser card
+  is offline. Presence controls who can answer; it no longer erases the phone
+  from the dial plan or prevents timeout and forwarding automations.
+- Ring-group fan-out excludes the originating endpoint when it is also a group
+  member, matching normal PBX anti-loop behaviour.
 - Wildix and other registered TCP trunks can now add or remove compatible
   video on a direct HA-browser dialog during an established audio call.
   Inbound requests received on the persistent registration connection use the
@@ -292,9 +307,13 @@ conditional-forward and unanswered-call-to-Assist examples.
 
 ## 🧪 Qualification So Far
 
-- The complete backend/frontend suite, Ruff and JavaScript parsing pass on the
-  candidate. These are regression gates, not a substitute for the real
-  browser, trunk and RTP checks below.
+- The complete backend/frontend suite passes with 882 tests and 95 subtests;
+  Ruff and JavaScript parsing also pass on the candidate. These are regression
+  gates, not a substitute for the real browser, trunk and RTP checks below.
+- A production-automation matrix exercised inbound trunk routing to `RG Casa`
+  with either HA phone answering, either member declining, caller cancellation
+  and the ESP member winning. Audio and bidirectional video were validated and
+  every endpoint returned to idle.
 - Real outbound Wildix call: `407`, authenticated INVITE, `100 Trying`, `183
   Session Progress`, local hangup, CANCEL, `487 Request Terminated`, ACK.
 - Call state remained idle after cancellation and the remote leg stopped
