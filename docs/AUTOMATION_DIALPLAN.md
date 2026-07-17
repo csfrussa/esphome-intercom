@@ -71,6 +71,41 @@ can route to an indoor ESP only while someone is home. If the condition is
 false, no action runs and the default target takes over when the short decision
 window expires.
 
+### Route Only Provider/PBX Trunk Calls To A Ring Group
+
+`route_requested` may also describe an HA-owned extension call. Filter on the
+stable `ingress` attribute when an automation must affect only calls entering
+from the configured provider/PBX trunk:
+
+```yaml
+alias: VoIP - Inbound trunk to RG Casa
+mode: parallel
+max: 10
+triggers:
+  - trigger: event.received
+    target:
+      entity_id: event.voip_stack_call
+    options:
+      event_type:
+        - route_requested
+conditions:
+  - condition: state
+    entity_id: event.voip_stack_call
+    attribute: ingress
+    state: trunk
+actions:
+  - action: voip_stack.select_inbound_destination
+    data:
+      destination: RG Casa
+```
+
+Use `state: extension` for calls originating from a local ESP, browser phone or
+registered SIP endpoint. Do not filter on `scope`: scope identifies the
+internal state owner, while `ingress`/`origin` describe where the call entered
+the PBX. A ring group uses normal PBX semantics: eligible members ring, the
+first answer wins, losing legs are cancelled, and the caller is excluded when
+it is itself a member of the destination group.
+
 This action is only for the initial `route_requested` decision. When exactly
 one route is waiting, no Call-ID template is required. With concurrent pending
 routes, pass the `call_id` from the event explicitly. The configured fallback
@@ -136,14 +171,36 @@ triggers:
     to: ringing
     for: "00:00:30"
 conditions:
-  - condition: template
-    value_template: "{{ trigger.to_state.attributes.direction == 'incoming' }}"
+  - condition: state
+    entity_id: sensor.voip_stack_call_state
+    attribute: direction
+    state: incoming
 actions:
   - action: voip_stack.forward
     data:
       destination: Cucina
       on_failure: resume
 ```
+
+## Common Automation Recipes
+
+Keep the initial destination decision and later call handling separate. These
+are the most common patterns:
+
+| Goal | Trigger/condition | Action |
+| --- | --- | --- |
+| Ring the whole house for an external call | Aggregate `route_requested` with `ingress: trunk` | `select_inbound_destination` to a ring group |
+| Route differently when nobody is home | Same initial event plus a normal person/presence state condition | Select an ESP, HA phone, Assist or another group; otherwise let the configured fallback run |
+| Use an office-hours destination | Same initial event plus a time condition | Select Reception during opening hours; allow the fallback or select Assist outside them |
+| Send an unanswered room phone elsewhere | That phone's call-state sensor remains `ringing` for a duration | `forward` to another room, group or Assist |
+| Notify on a missed call | That phone's Event Entity receives `missed` | Send a normal HA notification; no routing action is required |
+| React to keypad input during a connected call | The phone or aggregate Event Entity receives `dtmf` | Run a gate, light or other HA action |
+
+An explicit DTMF extension entered during initial trunk collection remains
+authoritative and bypasses the automation override. This prevents a broad
+automation from replacing a destination deliberately dialled by the caller.
+Likewise, a false condition should normally perform no action: after the short
+decision window, VoIP Stack follows the configured fallback transparently.
 
 ## Native Automation Entities
 
