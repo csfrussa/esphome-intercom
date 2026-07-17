@@ -19,7 +19,7 @@ from .authorization import (
     require_websocket_read,
     websocket_can_control_endpoint,
 )
-from .call_registry import CallRegistry
+from .call_registry import TERMINAL_STATES, CallRegistry
 from .const import (
     CONF_DEBUG_MODE,
     CONF_HA_SOFTPHONE_CONFERENCE_GROUP,
@@ -399,6 +399,32 @@ def _endpoint_call_claim(
             terminal,
             err,
         )
+
+
+def _registry_call_is_active(registry: CallRegistry, call_id: str) -> bool:
+    """Return whether a projected call still owns live backend state."""
+    call_id = str(call_id or "").strip()
+    if not call_id or registry.is_terminated(call_id):
+        return False
+    session_id = registry.resolve_session_id(call_id)
+    session = registry.sessions.get(session_id)
+    if session is not None and str(session.state or "").strip().lower() not in TERMINAL_STATES:
+        return True
+    # A route or media resource may exist briefly before its canonical session
+    # is materialised.  These are live ownership records, unlike a stale HA
+    # projection left behind after an interrupted teardown.
+    for resources in (
+        registry.pending_routes,
+        registry.pending_invites,
+        registry.preanswered,
+        registry.softphone_media,
+        registry.sip_clients,
+        registry.client_watchers,
+        registry.relays,
+    ):
+        if call_id in resources or session_id in resources:
+            return True
+    return False
 
 
 def _release_ha_softphone_claim(
@@ -1187,6 +1213,7 @@ def _set_ha_softphone_call_state(
     next_call_id = str(canonical.get("call_id") or "")
     previous_state = str(store.get("state") or "").strip().lower()
     registry = call_registry(hass)
+    previous_call_is_active = _registry_call_is_active(registry, previous_call_id)
     if not terminal and next_call_id and registry.is_terminated(next_call_id):
         _LOGGER.info(
             "Ignoring stale HA softphone state=%s for terminated call_id=%s",
@@ -1226,6 +1253,7 @@ def _set_ha_softphone_call_state(
             CallState.IN_CALL.value,
             CallState.TERMINATING.value,
         }
+        and previous_call_is_active
     ):
         _LOGGER.info(
             "Ignoring stale HA softphone state=%s call_id=%s; active call_id=%s state=%s",
@@ -1235,6 +1263,23 @@ def _set_ha_softphone_call_state(
             previous_state,
         )
         return
+    if (
+        previous_call_id
+        and next_call_id
+        and next_call_id != previous_call_id
+        and not previous_call_is_active
+    ):
+        _LOGGER.warning(
+            "Replacing orphaned HA softphone call_id=%s state=%s with call_id=%s state=%s",
+            previous_call_id,
+            previous_state,
+            next_call_id,
+            state,
+        )
+        registry.release_endpoint_claims(previous_call_id)
+        endpoint_registry = _endpoint_registry(hass)
+        if endpoint_registry is not None and endpoint_registry.get(endpoint_id) is not None:
+            endpoint_registry.release_call(endpoint_id, previous_call_id)
     _endpoint_call_claim(
         hass,
         endpoint_id,

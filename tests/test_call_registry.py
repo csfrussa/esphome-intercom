@@ -585,6 +585,24 @@ class AutomationEventTypeTest(unittest.TestCase):
                 "", {"call-1": {}}, {"call-2": object()}
             )
 
+    def test_initial_destination_call_id_is_inferred_only_for_one_pending_route(self) -> None:
+        self.assertEqual(
+            automation_routing.resolve_pending_route_call_id("", {"call-1": {}}),
+            "call-1",
+        )
+        self.assertEqual(
+            automation_routing.resolve_pending_route_call_id(
+                "chosen", {"call-1": {}, "call-2": {}}
+            ),
+            "chosen",
+        )
+        with self.assertRaisesRegex(ValueError, "No inbound route"):
+            automation_routing.resolve_pending_route_call_id("", {})
+        with self.assertRaisesRegex(ValueError, "More than one inbound route"):
+            automation_routing.resolve_pending_route_call_id(
+                "", {"call-1": {}, "call-2": {}}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 
@@ -231,6 +232,26 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('if str(entity_id).startswith("switch.")', set_dnd)
         self.assertIn("action_entity_ids=dnd_entities", set_dnd)
 
+    def test_ring_group_answer_resolves_route_before_forward_guard(self) -> None:
+        answer = self.init_source[
+            self.init_source.index("async def _handle_sip_answer_service(") :
+            self.init_source.index("async def _handle_sip_decline_service(")
+        ]
+        pending_route = answer.index("if call_id and call_id in _pending_routes(hass):")
+        forward_guard = answer.index('raise ServiceValidationError(f"call_id {call_id} is being forwarded")')
+        self.assertLess(pending_route, forward_guard)
+
+    def test_ring_group_decline_resolves_leg_before_forward_cancellation(self) -> None:
+        decline = self.init_source[
+            self.init_source.index("async def _handle_sip_decline_service(") :
+            self.init_source.index("async def _handle_sip_hangup_service(")
+        ]
+        pending_route = decline.index(
+            "if call_id and call_id in _pending_routes(hass):"
+        )
+        forward_cancel = decline.index("forward_task.cancel()")
+        self.assertLess(pending_route, forward_cancel)
+
     def test_mid_call_dtmf_is_an_event_not_a_second_dialplan(self) -> None:
         websocket_source = WEBSOCKET_API.read_text()
         self.assertIn('SIP_DTMF_EVENT = "voip_stack.dtmf"', websocket_source)
@@ -351,6 +372,51 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             "await asyncio.wait_for(future, timeout=SIP_ROUTE_DECISION_TIMEOUT)",
             route_requested_branch,
         )
+
+    def test_initial_destination_has_a_dedicated_service(self) -> None:
+        services = SERVICES.read_text()
+        services_yaml = SERVICES_YAML.read_text()
+        init_source = self.init_source
+        self.assertIn('"select_inbound_destination"', services)
+        self.assertIn("select_inbound_destination_schema", services)
+        self.assertIn("select_inbound_destination:", services_yaml)
+        self.assertIn(
+            "async def _handle_select_inbound_destination_service", init_source
+        )
+        self.assertIn(
+            'data["action"] = "forward"',
+            init_source[
+                init_source.index(
+                    "async def _handle_select_inbound_destination_service"
+                ) : init_source.index("async def _handle_sip_forward_service")
+            ],
+        )
+
+    def test_route_requested_exposes_fallback_and_deadline(self) -> None:
+        self.assertGreaterEqual(self.source.count("fallback_destination="), 2)
+        self.assertGreaterEqual(self.source.count("decision_deadline="), 2)
+        self.assertIn(
+            '"Inbound route selected call_id=%s source=%s destination=%s fallback=%s"',
+            self.source,
+        )
+
+    def test_inbound_config_describes_one_priority_order(self) -> None:
+        strings = json.loads(STRINGS_JSON.read_text())
+        step = strings["config"]["step"]["trunk"]
+        self.assertEqual(
+            step["data"]["trunk_inbound_default_target"],
+            "Fallback destination",
+        )
+        self.assertEqual(
+            strings["selector"]["trunk_inbound_mode"]["options"],
+            {
+                "direct": "Route immediately",
+                "dtmf": "Collect extension with DTMF",
+            },
+        )
+        automation_help = step["data_description"]["automation_routing_enabled"]
+        self.assertIn("Before using the fallback destination", automation_help)
+        self.assertIn("Explicit DTMF digits always keep priority", automation_help)
 
     def test_forward_to_registered_account_keeps_contact_uri(self) -> None:
         call_service = self.init_source[
@@ -961,6 +1027,40 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('if result == "in_call_browser"', ring_group)
         self.assertIn("registry.softphone_media[invite.call_id]", ring_group)
 
+    def test_initial_automation_group_selection_keeps_ha_members(self) -> None:
+        forward = self.source[
+            self.source.index("async def _async_forward_existing_call(") : self.source.index(
+                "async def _run_trunk_inbound_route_guarded("
+            )
+        ]
+        trunk_route = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") : self.source.index(
+                "async def _run_ring_group_call("
+            )
+        ]
+        self.assertIn("initial_selection: bool = False", forward)
+        self.assertIn("if not initial_selection:", forward)
+        self.assertIn("_browser_endpoint_can_ring(endpoint)", forward)
+        self.assertIn("browser_legs: list[BrowserLeg]", forward)
+        self.assertIn('role="group_candidate"', forward)
+        self.assertIn("_publish_pending_ha_softphone_ringing(", forward)
+        self.assertIn("async def _wait_browser_group_member", forward)
+        self.assertIn('result == "in_call_browser"', forward)
+        self.assertIn('"answer",', forward)
+        self.assertIn("initial_selection=True", trunk_route)
+
+        browser_policy = self.source[
+            self.source.index("def _browser_endpoint_can_ring(") : self.source.index(
+                "def _logical_endpoint_for_member("
+            )
+        ]
+        self.assertIn("not endpoint.dnd", browser_policy)
+        self.assertIn(
+            "endpoint.availability is not EndpointAvailability.UNAVAILABLE",
+            browser_policy,
+        )
+        self.assertNotIn("EndpointAvailability.AVAILABLE", browser_policy)
+
     def test_ring_group_simultaneous_results_are_deterministic(self) -> None:
         ring_group = self.source[
             self.source.index("async def _run_ring_group_call(") : self.source.index(
@@ -1204,6 +1304,40 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         dtmf_branch = trunk_branch[trunk_branch.index("else:") :]
         self.assertNotIn("RtpPortReservation.allocate", no_dtmf_branch)
         self.assertIn("RtpPortReservation.allocate(hass)", dtmf_branch)
+
+    def test_route_requests_expose_pbx_ingress_provenance(self) -> None:
+        on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
+        self.assertIn(
+            'ingress="trunk" if trunk_invite else "extension"',
+            on_invite,
+        )
+        self.assertIn(
+            'origin="trunk" if trunk_invite else "extension"',
+            on_invite,
+        )
+
+    def test_automation_group_destination_reenters_canonical_dispatch(self) -> None:
+        on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
+        override = on_invite[on_invite.index("fallback_destination =") :]
+        group_dispatch = override[
+            override.index("if decision.action is RouteAction.GROUP:") :
+            override.index('return SipInviteResult(480, "Temporarily Unavailable"')
+        ]
+        self.assertIn("_run_ring_group_call(", group_dispatch)
+        self.assertIn("conference_manager(", group_dispatch)
+        self.assertIn("replace(\n                                invite,", group_dispatch)
+
+    def test_offline_browser_remains_a_logical_ringing_destination(self) -> None:
+        on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
+        target_checks = on_invite[
+            on_invite.index("if target_endpoint is not None:") :
+            on_invite.index("if not force_ha_softphone and decision.action is RouteAction.REJECT:")
+        ]
+        self.assertNotIn(
+            "target_endpoint.offline_policy is OfflinePolicy.UNAVAILABLE",
+            target_checks,
+        )
+        self.assertIn("target_endpoint.kind is not EndpointKind.BROWSER", target_checks)
 
     def test_video_invites_preserve_video_during_dtmf_preanswer(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]

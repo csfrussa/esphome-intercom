@@ -17,10 +17,10 @@ Reconfigure VoIP Stack and choose one **Incoming routing** mode:
 
 | Mode | What the caller experiences | Normal route |
 | --- | --- | --- |
-| **Direct to default destination** | No DTMF collection or pre-answer delay. | The call immediately follows **Inbound default target**. |
-| **DTMF extension selection** | HA answers the trunk call and collects negotiated telephone-event or SIP INFO digits for the configured timeout. | A valid extension selects its phonebook entry. With no digits, the call follows **Inbound default target**. |
+| **Route immediately** | No DTMF collection or pre-answer delay. | The call follows the fallback destination unless an automation selects another destination. |
+| **Collect extension with DTMF** | HA answers the trunk leg and collects negotiated telephone-event or SIP INFO digits for the configured timeout. | A valid extension wins. With no digits, automation gets a decision point before the fallback. |
 
-**Inbound default target** accepts the same values as the rest of the dial
+**Fallback destination** accepts the same values as the rest of the dial
 plan: a phonebook name, HA, an extension, a group, a registered SIP phone, an
 Assist extension, a SIP URI or a routable number.
 
@@ -60,10 +60,9 @@ triggers:
       event_type:
         - route_requested
 actions:
-  - action: voip_stack.forward
+  - action: voip_stack.select_inbound_destination
     data:
       destination: Waveshare S3 Audio
-      on_failure: resume
 ```
 
 Use ordinary Home Assistant conditions between the trigger and action for
@@ -72,9 +71,11 @@ can route to an indoor ESP only while someone is home. If the condition is
 false, no action runs and the default target takes over when the short decision
 window expires.
 
-`on_failure: resume` returns to the original default route if the replacement
-destination is unavailable. `terminate` ends the call and `busy` returns a busy
-result.
+This action is only for the initial `route_requested` decision. When exactly
+one route is waiting, no Call-ID template is required. With concurrent pending
+routes, pass the `call_id` from the event explicitly. The configured fallback
+remains authoritative when no automation acts. Use `voip_stack.forward` only
+after a call has already been delivered to a ringing or connected endpoint.
 
 ## Forward An Unanswered HA Call To Assist
 
@@ -114,6 +115,13 @@ the compatibility entity ID `sensor.voip_stack_call_state`; additional phones
 receive normal generated IDs such as `sensor.test_call_state` (localized HA
 installations may use a translated form). Always select the entity from the
 phone Device in the automation editor instead of guessing its ID.
+
+Logical ringing is independent from browser connectivity. A browser softphone
+that belongs to a ring group is allowed to enter `ringing` while its
+connectivity entity says `Disconnected`; no physical card rings, but state
+timers and missed-call automations still run. Opening the matching card during
+that window makes the call answerable. DND and administratively disabled phones
+are not ring candidates.
 
 For example, the Casa phone can fall through to the Cucina tablet without
 matching caller names or inspecting the global event stream:

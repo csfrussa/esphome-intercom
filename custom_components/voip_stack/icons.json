@@ -40,6 +40,9 @@
     "route": {
       "service": "mdi:routes"
     },
+    "select_inbound_destination": {
+      "service": "mdi:sign-direction"
+    },
     "hangup": {
       "service": "mdi:phone-hangup"
     },

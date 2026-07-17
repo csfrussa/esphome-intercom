@@ -1463,12 +1463,11 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             raise ServiceValidationError(str(err)) from err
         return
     bucket = hass.data.setdefault(DOMAIN, {})
-    forward_task = bucket.get("forward_tasks", {}).get(call_id)
-    forward_claimed = call_id in bucket.get("forward_claims", set())
-    if forward_claimed or (forward_task is not None and not forward_task.done()):
-        from homeassistant.exceptions import ServiceValidationError
-
-        raise ServiceValidationError(f"call_id {call_id} is being forwarded")
+    # A browser member answering a ring group resolves the pending route that
+    # is owned by the forward task itself.  Handle that decision before the
+    # generic forward guard; otherwise every legitimate group answer is
+    # rejected merely because the group coordinator is still waiting for its
+    # winner.
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(
             hass,
@@ -1483,6 +1482,15 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             },
         )
         return
+    forward_task = bucket.get("forward_tasks", {}).get(call_id)
+    forward_claimed = call_id in bucket.get("forward_claims", set())
+    group_answer_commit = call_id in bucket.get("ring_group_answer_commits", set())
+    if not group_answer_commit and (
+        forward_claimed or (forward_task is not None and not forward_task.done())
+    ):
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(f"call_id {call_id} is being forwarded")
     if call_id.startswith("conference:"):
         manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
         resolved = manager.resolve_ha_call(call_id) if manager is not None else None
@@ -1555,6 +1563,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         browser_video_send_supported,
         build_answer_directional,
         constrained_video_direction,
+        offered_dtmf_formats,
     )
 
     local_rtp_port = int((preanswered or {}).get("local_rtp_port") or 0)
@@ -1592,10 +1601,9 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         if invite.video_format is not None and endpoint_video_enabled
         else "inactive"
     )
-    if preanswered is not None:
-        # The DTMF routing 200 OK already fixed the offer/answer direction.
-        # Stay within that contract while retaining the card's explicit
-        # camera permission as the gate for actual browser-to-RTP media.
+    if preanswered is not None and preanswered.get("final_response_sent", True):
+        # Compatibility with calls created by older runtimes which already
+        # sent a final response before routing completed.
         negotiated_video_direction = str(
             preanswered.get("video_direction") or "inactive"
         )
@@ -1606,7 +1614,39 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             and not invite.remote_video_connection_held,
         )
     if local_rtp_port:
-        _LOGGER.info("SIP answered pre-answered trunk call_id=%s", call_id)
+        if not bool((preanswered or {}).get("final_response_sent", True)):
+            local_ip = await _ha_advertise_host(hass)
+            dtmf_formats = offered_dtmf_formats(invite.remote_sdp)
+            answer = build_answer_directional(
+                local_ip,
+                local_ip,
+                local_rtp_port,
+                invite.send_format,
+                invite.recv_format,
+                dtmf=dtmf_formats[0] if dtmf_formats else None,
+                remote_sdp=invite.remote_sdp,
+                video_port=local_video_rtp_port,
+                video_format=(
+                    invite.answer_video_format
+                    if local_video_rtp_port and endpoint_video_enabled
+                    else None
+                ),
+                video_direction=video_direction,
+            )
+            if not _sip_send_final_response(
+                hass,
+                call_id,
+                200,
+                "OK",
+                answer_sdp=answer,
+            ):
+                _release_media_reservation(preanswered)
+                from homeassistant.exceptions import ServiceValidationError
+
+                raise ServiceValidationError(
+                    f"SIP transaction for call_id {call_id} is no longer available"
+                )
+        _LOGGER.info("SIP answered early-media trunk call_id=%s", call_id)
     else:
         local_ip = await _ha_advertise_host(hass)
         if invite.video_format is not None and endpoint_video_enabled:
@@ -1842,10 +1882,12 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
         raise ServiceValidationError(
             f"conference call {call_id} is no longer ringing on phone {endpoint_id}"
         )
-    forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
-    if forward_task is not None and not forward_task.done():
-        forward_task.cancel()
-        await asyncio.gather(forward_task, return_exceptions=True)
+    # A decline from one browser fork is a leg decision, not a request to
+    # cancel the ring-group coordinator which owns every other candidate.
+    # Let the pending-route primitive record that endpoint as declined and
+    # resolve the aggregate decision only when all candidates have declined.
+    # Generic forwarding is cancelled below only when there is no active
+    # per-leg route decision to consume this command.
     if call_id and call_id in _pending_routes(hass):
         _set_pending_route_decision(
             hass,
@@ -1859,6 +1901,10 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
             },
         )
         return
+    forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
+    if forward_task is not None and not forward_task.done():
+        forward_task.cancel()
+        await asyncio.gather(forward_task, return_exceptions=True)
     pending = registry.pending_invites
     endpoint_pending = _endpoint_call_ids(registry, pending, endpoint_id)
     if not call_id and len(endpoint_pending) == 1:
@@ -1867,8 +1913,28 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     preanswered_item = registry.preanswered.pop(call_id, None) if call_id else None
     if preanswered_item is not None:
         _release_media_reservation(preanswered_item)
-        _sip_send_bye(hass, call_id)
-        _LOGGER.info("SIP declined pre-answered trunk call_id=%s reason=%s", call_id, app_reason)
+        final_response_sent = bool(
+            preanswered_item.get("final_response_sent", True)
+        )
+        if final_response_sent:
+            _sip_send_bye(hass, call_id)
+        elif not _sip_send_final_response(
+            hass,
+            call_id,
+            status,
+            reason,
+            decline_reason=app_reason,
+        ):
+            _LOGGER.warning(
+                "sip_decline: early SIP transaction no longer exists for %s",
+                call_id,
+            )
+        _LOGGER.info(
+            "SIP declined %s trunk call_id=%s reason=%s",
+            "answered" if final_response_sent else "early-media",
+            call_id,
+            app_reason,
+        )
         _set_ha_softphone_call_state(
             hass,
             "declined",
@@ -1877,7 +1943,7 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
             reason=app_reason,
             call_id=call_id,
             sip_status_code=status,
-            last_sip_event="BYE",
+            last_sip_event="BYE" if final_response_sent else "SIP_RESPONSE",
         )
         registry.finish_and_pop(call_id, reason=app_reason, state="declined")
         return
@@ -3161,6 +3227,25 @@ async def _handle_sip_route_service(call: ServiceCall) -> None:
     _set_pending_route_decision(call.hass, dict(call.data))
 
 
+async def _handle_select_inbound_destination_service(call: ServiceCall) -> None:
+    """Select the initial destination of one pending inbound route request."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    from .automation_routing import resolve_pending_route_call_id
+
+    data = dict(call.data)
+    registry = _call_registry(call.hass)
+    try:
+        call_id = resolve_pending_route_call_id(
+            str(data.get("call_id") or ""), registry.pending_routes
+        )
+    except ValueError as err:
+        raise ServiceValidationError(str(err)) from err
+    data["call_id"] = call_id
+    data["action"] = "forward"
+    _set_pending_route_decision(call.hass, data)
+
+
 async def _handle_sip_forward_service(call: ServiceCall) -> None:
     """Forward a SIP call through HA's dial plan/B2BUA path."""
     from homeassistant.exceptions import ServiceValidationError
@@ -3206,9 +3291,31 @@ async def _handle_sip_forward_service(call: ServiceCall) -> None:
             data.setdefault("expected_state", context.state)
             data.setdefault("expected_sequence", context.sequence)
     if call_id and call_id in _pending_routes(call.hass):
-        data["action"] = "forward"
-        _set_pending_route_decision(call.hass, data)
-        return
+        route = _pending_routes(call.hass)[call_id]
+        if route.get("ring_group_endpoint_ids"):
+            # A ring-group coordinator currently owns the candidate legs.
+            # Request an explicit handoff and wait until it has cancelled and
+            # released those legs before the normal forwarding primitive
+            # claims the same source dialog.
+            handoff = asyncio.get_running_loop().create_future()
+            route["forward_handoff"] = handoff
+            data["action"] = "forward"
+            _set_pending_route_decision(call.hass, data)
+            try:
+                await asyncio.wait_for(handoff, timeout=5.0)
+            except TimeoutError as err:
+                raise ServiceValidationError(
+                    f"ring-group route for call_id {call_id} did not release ownership"
+                ) from err
+            previous_coordinator = call.hass.data.get(DOMAIN, {}).get(
+                "forward_tasks", {}
+            ).get(call_id)
+            if previous_coordinator is not None and not previous_coordinator.done():
+                await asyncio.gather(previous_coordinator, return_exceptions=True)
+        else:
+            data["action"] = "forward"
+            _set_pending_route_decision(call.hass, data)
+            return
     if call_id:
         callback = call.hass.data.get(DOMAIN, {}).get("async_forward_call")
         if callback is None:
@@ -3264,6 +3371,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "call": _handle_sip_call_target_service,
             "forward": _handle_sip_forward_service,
             "route": _handle_sip_route_service,
+            "select_inbound_destination": _handle_select_inbound_destination_service,
             "set_deadline": _handle_sip_set_deadline_service,
             "cancel_deadline": _handle_sip_cancel_deadline_service,
             **account_handlers,

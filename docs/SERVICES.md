@@ -241,6 +241,20 @@ Fields:
 Use this only for the automation fallback path. Known roster targets should be
 handled by the central dial plan without waiting for this service.
 
+### `voip_stack.select_inbound_destination`
+
+Select the initial destination while an inbound `route_requested` decision is
+pending. This is the normal automation action for initial trunk routing.
+
+- `destination`: required phonebook name, group, extension, registered phone,
+  Assist extension, SIP URI or routable number.
+- `call_id`: optional when exactly one inbound route is pending; required when
+  several calls are waiting concurrently.
+- `expected_state` / `expected_sequence`: optional stale-event guards.
+
+This action does not forward an already-ringing call. Use
+`voip_stack.forward` for that later lifecycle operation.
+
 ## Native Call Event Entity
 
 `event.voip_stack_call` is the browsable automation surface for call lifecycle,

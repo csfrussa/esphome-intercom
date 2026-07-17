@@ -1353,7 +1353,15 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
             pending.reason = str(result.reason)
             pending.answer_sdp = answer_sdp
             pending.decline_reason = result.decline_reason
-            self._send_response(request, addr, result.status, result.reason, to_tag=to_tag)
+            body = answer_sdp.encode("utf-8") if answer_sdp else b""
+            self._send_response(
+                request,
+                addr,
+                result.status,
+                result.reason,
+                body=body,
+                to_tag=to_tag,
+            )
             self._arm_pending_expiry(invite.call_id, pending)
             return
 

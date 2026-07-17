@@ -443,6 +443,8 @@ async def wait_runtime(ctx: LiveContext, predicate: Callable[[dict[str, Any]], b
 
 
 async def set_baseline(ctx: LiveContext) -> dict[str, Any]:
+    ha_phone = await ctx.ws.softphone_state()
+    ha_groups = dict(ha_phone.get("groups") or {})
     original = {
         "extension": str(ctx.esp.values.get("voip_extension") or ""),
         "ring_groups": str(ctx.esp.values.get("voip_ring_groups") or ""),
@@ -450,6 +452,10 @@ async def set_baseline(ctx: LiveContext) -> dict[str, Any]:
         "ring_on_conference": norm(ctx.esp.values.get("voip_ring_on_conference")) == "on",
         "dnd": norm(ctx.esp.values.get("do_not_disturb")) == "on",
         "auto_answer": norm(ctx.esp.values.get("auto_answer")) == "on",
+        "ha_extension": str(ha_phone.get("extension") or ""),
+        "ha_ring_group": str(ha_groups.get("ring_group") or ""),
+        "ha_conference_group": str(ha_groups.get("conference_group") or ""),
+        "ha_conference_ring": bool(ha_groups.get("conference_ring", False)),
     }
     await ctx.esp.text("voip_extension", ctx.args.esp_extension)
     await ctx.esp.text("voip_ring_groups", ctx.args.ring_group)
@@ -482,6 +488,16 @@ async def restore_baseline(ctx: LiveContext, original: dict[str, Any]) -> None:
     await ctx.esp.switch("voip_ring_on_conference", bool(original["ring_on_conference"]))
     await ctx.esp.switch("do_not_disturb", bool(original["dnd"]))
     await ctx.esp.switch("auto_answer", bool(original["auto_answer"]))
+    await ctx.ha.service(
+        "voip_stack",
+        "set_ha_softphone_settings",
+        {
+            "extension": original["ha_extension"],
+            "ring_group": original["ha_ring_group"],
+            "conference_group": original["ha_conference_group"],
+            "conference_ring": bool(original["ha_conference_ring"]),
+        },
+    )
 
 
 async def scenario_ha_to_esp_extension_answer_hangup(ctx: LiveContext) -> None:

@@ -214,11 +214,14 @@ async () => {
     .find((item) => (item.config?.mode || item.config?.card_mode || "") === "ha_softphone");
   if (!card) return false;
   if (globalThis.__voipStackEngine?.videoCameraEnabled) return true;
-  const root = card.shadowRoot || card;
+  let root = card.shadowRoot || card;
   const settings = deep("button", root).find((item) => item.textContent.trim() === "Options");
   if (settings && !card._settingsOpen) {
     settings.click();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (let attempt = 0; attempt < 20 && !card._settingsOpen; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    root = card.shadowRoot || card;
   }
   const checkbox = deep("#ha-softphone-video-camera-cb", root)[0];
   if (!checkbox || checkbox.closest("[hidden]")) return false;
@@ -226,7 +229,10 @@ async () => {
     checkbox.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return Boolean(globalThis.__voipStackEngine?.videoCameraEnabled && checkbox.checked);
+  // Additional logical phones do not own the page-global engine while idle;
+  // their camera preference is nevertheless authoritative on the card and is
+  // handed to the engine when that endpoint starts or answers a call.
+  return Boolean(checkbox.checked);
 }
 """
 
@@ -361,6 +367,7 @@ def main() -> int:
                 "--use-fake-ui-for-media-stream",
                 "--use-fake-device-for-media-stream",
                 "--autoplay-policy=no-user-gesture-required",
+                f"--unsafely-treat-insecure-origin-as-secure={origin}",
             ],
         }
         if args.chromium:

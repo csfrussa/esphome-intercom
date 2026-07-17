@@ -66,9 +66,9 @@
           "trunk_password": "Password",
           "trunk_register_expires": "REGISTER expires",
           "trunk_outbound_proxy": "Outbound proxy",
-          "trunk_inbound_default_target": "Inbound default target",
-          "trunk_inbound_mode": "Incoming routing",
-          "automation_routing_enabled": "Allow experimental automation routing overrides",
+          "trunk_inbound_default_target": "Fallback destination",
+          "trunk_inbound_mode": "Incoming call handling",
+          "automation_routing_enabled": "Allow automations to select the inbound destination",
           "trunk_dtmf_timeout_ms": "DTMF timeout (seconds)",
           "trunk_dtmf_terminator": "DTMF terminator"
         },
@@ -82,9 +82,9 @@
           "trunk_password": "Digest auth password.",
           "trunk_register_expires": "REGISTER expiration in seconds.",
           "trunk_outbound_proxy": "Optional proxy host or sip:host:port used as signaling next hop.",
-          "trunk_inbound_default_target": "Phonebook name, SIP URI, extension or number used when direct routing is selected, or when DTMF mode receives no digits and no automation overrides the call.",
-          "trunk_inbound_mode": "Direct routes immediately to the default target. DTMF answers first and lets explicit digits select a phonebook extension.",
-          "automation_routing_enabled": "Experimental. Allows a matching Home Assistant automation to override direct routing or the no-digits DTMF fallback. Explicit DTMF digits always keep priority.",
+          "trunk_inbound_default_target": "Phonebook name, SIP URI, extension or number used only when no DTMF extension or automation selects another destination.",
+          "trunk_inbound_mode": "Route immediately skips digit collection. Collect extension with DTMF answers the trunk leg first and lets explicit digits select a phonebook extension.",
+          "automation_routing_enabled": "Before using the fallback destination, publish a short routing request that an automation may answer. Explicit DTMF digits always keep priority.",
           "trunk_dtmf_timeout_ms": "Digit collection window used only in DTMF mode. Default is 3 seconds, maximum is 10 seconds.",
           "trunk_dtmf_terminator": "Optional terminator digit such as #. Empty means timeout or exact phonebook extension match decides."
         }
@@ -182,8 +182,8 @@
   "selector": {
     "trunk_inbound_mode": {
       "options": {
-        "direct": "Direct to default destination",
-        "dtmf": "DTMF extension selection"
+        "direct": "Route immediately",
+        "dtmf": "Collect extension with DTMF"
       }
     }
   },

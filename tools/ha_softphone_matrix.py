@@ -8,6 +8,7 @@ import json
 import os
 import pty
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ from playwright.sync_api import sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_CAPTURE_DIR = ROOT / "test_captures"
 sys.path.insert(0, str(ROOT / "test_runs"))
 from ha_playwright_auth import context_kwargs, ha_token  # noqa: E402
 
@@ -32,7 +34,10 @@ HA_URL = f"{HA_BASE}/lovelace/default_view"
 # missing card.
 os.environ["HA_URL"] = HA_BASE
 AUTOMATION = "automation.voip_ha_non_risponde_inoltra_ad_assist"
-WILDIX_CONFIG = Path("/home/codex/.baresip-wildix-426")
+INBOUND_AUTOMATION = "automation.voip_inbound_trunk_to_rg_casa"
+WILDIX_CONFIG = Path(
+    os.environ.get("WILDIX_CONFIG", "/home/codex/.baresip-wildix-426")
+)
 LOCAL_CONFIG = Path("/home/codex/.baresip-codex")
 
 CARD_STATE = r"""
@@ -45,19 +50,27 @@ async () => {
   const card = deep("voip-stack-card, intercom-card")
     .find((item) => (item.config?.mode || item.config?.card_mode || "") === "ha_softphone");
   if (!card) return null;
-  const backend = await card._hass.connection.sendMessagePromise({type: "voip_stack/ha_softphone_state"});
+  const endpointId = card._getSoftphoneEndpointId?.() || card.config?.endpoint_id || "default";
+  const backend = await card._hass.connection.sendMessagePromise({
+    type: "voip_stack/ha_softphone_state", endpoint_id: endpointId,
+  });
   const snapshot = card._softphoneSnapshot || {};
   return {
     backend: {
       state: backend?.state || "", call_id: backend?.call_id || "", caller: backend?.caller || "",
       callee: backend?.callee || "", terminal_reason: backend?.terminal_reason || "",
+      video_direction: backend?.video_direction || "inactive",
+      video_rtp_tx_packets: Number(backend?.video_rtp_tx_packets || 0),
+      video_rtp_rx_packets: Number(backend?.video_rtp_rx_packets || 0),
     },
     card: {
       state: snapshot.state || "", call_id: snapshot.call_id || "", caller: snapshot.caller || "",
       callee: snapshot.callee || "", terminal_reason: snapshot.terminal_reason || "",
+      video_direction: snapshot.video_direction || "inactive",
     },
     text: (card.shadowRoot?.innerText || card.shadowRoot?.textContent || "").replace(/\s+/g, " ").trim(),
     auto_answer: !!card._autoAnswer,
+    endpoint_id: endpointId,
     softphone_subscribers: window.__voipStackEngine?._softphoneSubscribers?.size ?? -1,
     call_subscribers: window.__voipStackEngine?._callSubscribers?.size ?? -1,
   };
@@ -100,9 +113,28 @@ SET_AUTO_ANSWER = r"""
 }
 """
 
+SET_SEND_VIDEO = r"""
+async (enabled) => {
+  const deep = (selector, root = document) => {
+    const found = [...root.querySelectorAll(selector)];
+    for (const node of root.querySelectorAll("*")) if (node.shadowRoot) found.push(...deep(selector, node.shadowRoot));
+    return found;
+  };
+  const card = deep("voip-stack-card, intercom-card")
+    .find((item) => (item.config?.mode || item.config?.card_mode || "") === "ha_softphone");
+  if (!card?._toggleVideoCamera) return false;
+  const endpointId = card._getSoftphoneEndpointId?.() || card.config?.endpoint_id || "default";
+  await card._toggleVideoCamera(!!enabled);
+  return window.__voipStackEngine?.videoCameraEnabledFor
+    ? !!window.__voipStackEngine.videoCameraEnabledFor(endpointId) === !!enabled
+    : !!window.__voipStackEngine?.videoCameraEnabled === !!enabled;
+}
+"""
+
 
 class BareSip:
     def __init__(self, config: Path) -> None:
+        TEST_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
         self.master, slave = pty.openpty()
         self.proc = subprocess.Popen(
             ["baresip", "-f", str(config)],
@@ -110,11 +142,20 @@ class BareSip:
             stdout=slave,
             stderr=slave,
             close_fds=True,
+            cwd=TEST_CAPTURE_DIR,
+            start_new_session=True,
         )
         os.close(slave)
         os.set_blocking(self.master, False)
         self.output = ""
-        self.wait_for("registered successfully", 8)
+        try:
+            self.wait_for("registered successfully", 8)
+        except BaseException:
+            # Construction failures occur before callers can append this
+            # instance to their cleanup list. Own the child from the moment it
+            # is spawned so auth/config errors cannot orphan a busy process.
+            self.close()
+            raise
 
     def read(self) -> str:
         while True:
@@ -159,9 +200,15 @@ class BareSip:
             try:
                 self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self.proc.terminate()
-                with suppress(subprocess.TimeoutExpired):
+                with suppress(ProcessLookupError):
+                    os.killpg(self.proc.pid, signal.SIGTERM)
+                try:
                     self.proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    with suppress(ProcessLookupError):
+                        os.killpg(self.proc.pid, signal.SIGKILL)
+                    with suppress(subprocess.TimeoutExpired):
+                        self.proc.wait(timeout=2)
         with suppress(OSError):
             os.close(self.master)
 
@@ -219,7 +266,9 @@ def matching(page, state: str) -> dict[str, Any]:
 
 def dial_trunk() -> BareSip:
     caller = BareSip(WILDIX_CONFIG)
-    caller.dial("427")
+    # The inbound call must remain in an early dialog until a destination
+    # actually answers.  Treat 183+SDP as progress, never as establishment.
+    caller.dial("427", wait_for="183 Session Progress")
     return caller
 
 
@@ -232,7 +281,10 @@ def main() -> int:
     args = parser.parse_args()
     results: list[dict[str, Any]] = []
     active: list[BareSip] = []
-    automation_was_on = ha_request(f"/api/states/{AUTOMATION}")["state"] == "on"
+    automation_states = {
+        entity_id: ha_request(f"/api/states/{entity_id}")["state"] == "on"
+        for entity_id in (AUTOMATION, INBOUND_AUTOMATION)
+    }
 
     def case(name: str, run: Callable[[], dict[str, Any]]) -> None:
         if args.only and name not in args.only:
@@ -262,7 +314,17 @@ def main() -> int:
                 active.pop().close()
             time.sleep(0.5)
 
-    service("automation", "turn_off", {"entity_id": AUTOMATION, "stop_actions": True})
+    disabled_automations = [AUTOMATION]
+    if os.environ.get("KEEP_INBOUND_AUTOMATION", "") != "1":
+        disabled_automations.append(INBOUND_AUTOMATION)
+    service(
+        "automation",
+        "turn_off",
+        {
+            "entity_id": disabled_automations,
+            "stop_actions": True,
+        },
+    )
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
@@ -303,6 +365,9 @@ def main() -> int:
                 "initial idle",
             )
             page.evaluate(SET_AUTO_ANSWER, False)
+            if os.environ.get("EXPECT_VIDEO", "") == "1":
+                if not page.evaluate(SET_SEND_VIDEO, True):
+                    raise RuntimeError("failed to enable Send Camera")
 
             def remote_hangup() -> dict[str, Any]:
                 caller = dial_trunk()
@@ -310,7 +375,11 @@ def main() -> int:
                 ringing = matching(page, "ringing")
                 caller.hangup()
                 idle = matching(page, "idle")
-                if idle["card"]["terminal_reason"] != "remote_hangup":
+                # The caller hangs up before a final 200/ACK dialog exists,
+                # therefore SIP terminates the early INVITE with CANCEL/487.
+                # ``remote_hangup`` is reserved for an established dialog
+                # ended by BYE.
+                if idle["card"]["terminal_reason"] != "cancelled":
                     raise RuntimeError(f"wrong terminal reason: {idle}")
                 return {
                     "call_id": ringing["card"]["call_id"],
@@ -341,6 +410,19 @@ def main() -> int:
                 if not page.evaluate(CLICK, "Answer"):
                     raise RuntimeError("Answer button unavailable")
                 answered = matching(page, "in_call")
+                caller.wait_for("Call established", 5)
+                if os.environ.get("EXPECT_VIDEO", "") == "1":
+                    answered = wait_card(
+                        page,
+                        lambda item: (
+                            item["backend"]["state"] == "in_call"
+                            and item["backend"]["video_direction"] == "sendrecv"
+                            and item["backend"]["video_rtp_tx_packets"] > 0
+                            and item["backend"]["video_rtp_rx_packets"] > 0
+                        ),
+                        8,
+                        "bidirectional video RTP",
+                    )
                 caller.hangup()
                 matching(page, "idle")
                 return {
@@ -517,17 +599,17 @@ def main() -> int:
             context.close()
             browser.close()
     finally:
-        restore_data: dict[str, Any] = {"entity_id": AUTOMATION}
-        if not automation_was_on:
-            restore_data["stop_actions"] = True
-        service(
-            "automation", "turn_on" if automation_was_on else "turn_off", restore_data
-        )
+        for entity_id, was_on in automation_states.items():
+            restore_data: dict[str, Any] = {"entity_id": entity_id}
+            if not was_on:
+                restore_data["stop_actions"] = True
+            service(
+                "automation", "turn_on" if was_on else "turn_off", restore_data
+            )
         for caller in active:
             caller.close()
-        for directory in (Path("/home/codex"), ROOT):
-            for path in directory.glob("dump-sip:*.wav"):
-                path.unlink(missing_ok=True)
+        for path in TEST_CAPTURE_DIR.glob("dump-sip:*.wav"):
+            path.unlink(missing_ok=True)
 
     Path(args.out).write_text(json.dumps(results, indent=2, ensure_ascii=False))
     print(json.dumps(results, indent=2, ensure_ascii=False))

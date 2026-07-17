@@ -82,3 +82,21 @@ def resolve_forward_call_id(
             "More than one forwardable SIP call is active; provide call_id"
         )
     return candidates[0]
+
+
+def resolve_pending_route_call_id(
+    requested_call_id: str,
+    pending_routes: object,
+) -> str:
+    """Resolve exactly one initial inbound decision without guessing."""
+    requested = str(requested_call_id or "").strip()
+    if requested:
+        return requested
+    candidates = sorted(set(pending_routes))
+    if not candidates:
+        raise ValueError("No inbound route is waiting for a destination")
+    if len(candidates) > 1:
+        raise ValueError(
+            "More than one inbound route is waiting; provide call_id"
+        )
+    return candidates[0]

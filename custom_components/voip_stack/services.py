@@ -166,6 +166,15 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         },
         extra=vol.PREVENT_EXTRA,
     )
+    select_inbound_destination_schema = vol.Schema(
+        {
+            vol.Optional("call_id", default=""): SHORT_TEXT,
+            vol.Required("destination"): URI_TEXT,
+            vol.Optional("expected_state", default=""): IDENTIFIER_TEXT,
+            vol.Optional("expected_sequence", default=0): SEQUENCE,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
     phonebook_add_schema = vol.Schema(
         {
             vol.Required("name"): SHORT_TEXT,
@@ -251,6 +260,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         # automations remain allowed; authenticated callers must be admins so
         # global event-entity control cannot affect another user's call.
         "route",
+        "select_inbound_destination",
         "set_deadline",
         "cancel_deadline",
     }
@@ -272,6 +282,12 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     hass.services.async_register(DOMAIN, "call", handler_for("call"), schema=sip_call_schema)
     hass.services.async_register(DOMAIN, "forward", handler_for("forward"), schema=sip_forward_schema)
     hass.services.async_register(DOMAIN, "route", handler_for("route"), schema=sip_route_schema)
+    hass.services.async_register(
+        DOMAIN,
+        "select_inbound_destination",
+        handler_for("select_inbound_destination"),
+        schema=select_inbound_destination_schema,
+    )
     hass.services.async_register(
         DOMAIN, "set_deadline", handler_for("set_deadline"), schema=sip_deadline_schema
     )

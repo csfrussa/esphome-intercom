@@ -13,8 +13,11 @@
 # Workflow:
 # - Local development: working tree in local mode. `esphome compile` picks up sibling
 #   checkouts directly.
-# - Publish: set each repo independently, for example
-#   `./yaml_paths.sh remote --intercom main --voip main --audio main --runtime main`.
+# - Remote main: `./yaml_paths.sh --remote main`.
+# - Remote development: `./yaml_paths.sh --remote dev`.
+# - Immutable release refs: `./yaml_paths.sh --remote tag --tag TAG`, or set
+#   each repository independently when their release versions differ.
+# - Advanced/custom remote refs remain available through `remote`.
 #
 # ─── How it works ───
 # Rewrite targets per YAML:
@@ -410,6 +413,36 @@ cmd_remote() {
   done < <(find_yamls "$root")
 }
 
+cmd_remote_profile() {
+  local profile="$1"
+  case "$profile" in
+    main|dev)
+      INTERCOM_REF_ARG="${INTERCOM_REF_ARG:-$profile}"
+      VOIP_STACK_REF_ARG="${VOIP_STACK_REF_ARG:-$profile}"
+      AUDIO_STACK_REF_ARG="${AUDIO_STACK_REF_ARG:-$profile}"
+      RUNTIME_CONTROLLER_REF_ARG="${RUNTIME_CONTROLLER_REF_ARG:-$profile}"
+      ;;
+    tag)
+      if [[ -n "$GLOBAL_TAG_ARG" ]]; then
+        INTERCOM_REF_ARG="${INTERCOM_REF_ARG:-$GLOBAL_TAG_ARG}"
+        VOIP_STACK_REF_ARG="${VOIP_STACK_REF_ARG:-$GLOBAL_TAG_ARG}"
+        AUDIO_STACK_REF_ARG="${AUDIO_STACK_REF_ARG:-$GLOBAL_TAG_ARG}"
+        RUNTIME_CONTROLLER_REF_ARG="${RUNTIME_CONTROLLER_REF_ARG:-$GLOBAL_TAG_ARG}"
+      fi
+      [[ -n "$INTERCOM_REF_ARG" ]] \
+        || err "tag mode requires --tag REF or --intercom REF"
+      [[ -n "$VOIP_STACK_REF_ARG" ]] \
+        || err "tag mode requires --tag REF or --voip REF"
+      [[ -n "$AUDIO_STACK_REF_ARG" ]] \
+        || err "tag mode requires --tag REF or --audio REF"
+      [[ -n "$RUNTIME_CONTROLLER_REF_ARG" ]] \
+        || err "tag mode requires --tag REF or --runtime REF"
+      ;;
+    *) err "unknown remote profile: $profile" ;;
+  esac
+  cmd_remote
+}
+
 cmd_check() {
   local root rc=0
   root=$(repo_root)
@@ -435,17 +468,26 @@ usage() {
 yaml_paths.sh - switch device YAML paths between local checkout and remote release refs.
 
 Usage:
+  $(basename "$0") --local [options]
+  $(basename "$0") --remote main [options]
+  $(basename "$0") --remote dev [options]
+  $(basename "$0") --remote tag [tag options]
   $(basename "$0") <command> [options]
 
 Commands:
   status                          Print mode (local/remote/mixed) per YAML
-  local                           Rewrite all YAMLs to LOCAL mode
+  --local                         Rewrite all YAMLs to LOCAL mode
+  --remote main                   Use remote @main for every project repo
+  --remote dev                    Use remote @dev for every project repo
+  --remote tag                    Use immutable refs supplied through --tag,
+                                  or one explicit ref for every project repo
   remote [options]                Rewrite all YAMLs to REMOTE mode
   check                           Lint: fail on mixed paths or nested list !include
 
 Options:
   --url URL       e.g. github://n-IA-hane/esphome-intercom (default)
   --branch B      legacy alias for --intercom B
+  --tag REF       In --remote tag mode, use the same immutable ref for all repos
   --intercom REF  intercom/VoIP repo branch/tag (default: main)
   --voip-stack-url URL
                   e.g. github://n-IA-hane/esphome-voip-stack (default)
@@ -472,8 +514,12 @@ Options:
 
 Examples:
   $(basename "$0") status
-  $(basename "$0") local
-  $(basename "$0") remote
+  $(basename "$0") --local
+  $(basename "$0") --remote main
+  $(basename "$0") --remote dev
+  $(basename "$0") --remote tag --tag TAG
+  $(basename "$0") --remote tag --intercom INTERCOM_TAG --voip VOIP_TAG \
+    --audio AUDIO_TAG --runtime RUNTIME_TAG
   $(basename "$0") remote --intercom main --voip main --audio main --runtime main
   $(basename "$0") remote --url github://my-fork/esphome-intercom --branch main
   $(basename "$0") remote --file yamls/voip-only/single-bus/generic-s3-voip.yaml --branch main
@@ -483,7 +529,27 @@ EOF
 # ────────── Arg parsing ──────────
 [[ $# -lt 1 ]] && { usage; exit 1; }
 
-cmd="$1"; shift
+REMOTE_PROFILE=""
+case "$1" in
+  --local)
+    cmd="local"
+    shift
+    ;;
+  --remote)
+    [[ $# -ge 2 ]] || err "--remote requires one of: main, dev, tag"
+    cmd="remote-profile"
+    REMOTE_PROFILE="$2"
+    shift 2
+    case "$REMOTE_PROFILE" in
+      main|dev|tag) ;;
+      *) err "--remote requires one of: main, dev, tag" ;;
+    esac
+    ;;
+  *)
+    cmd="$1"
+    shift
+    ;;
+esac
 URL_ARG=""
 BRANCH_ARG=""
 INTERCOM_REF_ARG=""
@@ -500,11 +566,13 @@ RUNTIME_CONTROLLER_BRANCH_ARG=""
 RUNTIME_CONTROLLER_REF_ARG=""
 RUNTIME_CONTROLLER_ROOT_ARG=""
 ONLY_FILE=""
+GLOBAL_TAG_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --url)    URL_ARG="$2"; shift 2 ;;
     --branch) BRANCH_ARG="$2"; shift 2 ;;
+    --tag) GLOBAL_TAG_ARG="$2"; shift 2 ;;
     --intercom) INTERCOM_REF_ARG="$2"; shift 2 ;;
     --voip-stack-url) VOIP_STACK_URL_ARG="$2"; shift 2 ;;
     --voip-stack-branch) VOIP_STACK_BRANCH_ARG="$2"; shift 2 ;;
@@ -527,6 +595,7 @@ done
 case "$cmd" in
   status) cmd_status ;;
   local)  cmd_local ;;
+  remote-profile) cmd_remote_profile "$REMOTE_PROFILE" ;;
   remote) cmd_remote ;;
   check)  cmd_check ;;
   -h|--help) usage ;;

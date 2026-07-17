@@ -305,6 +305,14 @@ their own localized entity IDs. Select them from the intended Device in the
 automation editor. Use aggregate `event.voip_stack_call` only for PBX-wide
 inspection or the initial `route_requested` decision.
 
+A browser phone is logical, not identical to one open card. In a ring group it
+can therefore report `ringing` even when its connectivity entity is
+`Disconnected` and no card can currently play the ringtone. This lets kiosk
+and wall-tablet installations trigger missed-call, timeout and fallback
+automations reliably. If a card reconnects during the ring window, it can
+recover the current call and answer it. DND and disabled phones are still
+excluded.
+
 _Live SIP video demo: the incoming stream becomes the card background while
 call identity, duration and hang-up remain accessible in the bottom bar._
 
@@ -413,6 +421,7 @@ Useful services:
 - `voip_stack.create_account`
 - `voip_stack.list_accounts`
 - `voip_stack.call`
+- `voip_stack.select_inbound_destination`
 - `voip_stack.forward`
 - `voip_stack.route`
 
@@ -687,17 +696,16 @@ Recommended first setup:
 When trunk is enabled, the next step asks for provider/PBX credentials. The
 same step separates normal routing from optional automation overrides:
 
-- **Inbound default target** is a phonebook name, HA, extension, group,
+- **Fallback destination** is a phonebook name, HA, extension, group,
   registered SIP phone, Assist extension, SIP URI or routable number.
-- **Direct to default destination** skips DTMF collection and resolves that
-  target immediately.
-- **DTMF extension selection** answers the trunk call and collects negotiated
+- **Route immediately** skips DTMF collection. An enabled automation gets one
+  short decision point before the fallback is resolved.
+- **Collect extension with DTMF** answers the trunk leg and collects negotiated
   telephone-event or SIP INFO digits for 1 to 10 seconds. A valid extension
-  selects its phonebook entry; no digits use the default target; an unknown
+  selects its phonebook entry; no digits offer automation before fallback; an unknown
   explicit extension ends as `route_not_found`.
-- **Allow experimental automation routing overrides** is independent and off
-  by default. It allows an automation to replace the Direct decision or the
-  no-digits DTMF fallback. Explicit DTMF digits always keep priority.
+- **Allow automations to select the inbound destination** is independent and
+  off by default. Explicit DTMF digits always keep priority.
 
 Existing entries migrate transparently: previous DTMF-enabled configurations
 retain DTMF mode, other configurations become Direct, and automation routing
@@ -1481,7 +1489,7 @@ external SIP leg, codec negotiation, RTP bridge and terminal reason propagation.
 #### Standard inbound dial plan
 
 The phonebook is always the canonical default dial plan. In Direct mode an
-incoming trunk call immediately follows the configured default target. In DTMF
+incoming trunk call immediately follows the configured fallback destination. In DTMF
 mode explicit digits select a phonebook extension; no digits fall back to the
 configured target. An unknown explicit extension terminates the leg with a
 route error instead of silently ringing somewhere else.
@@ -1494,8 +1502,12 @@ phonebook destination. No automation is required for this path.
 
 When explicitly enabled, automations can override only the bounded decision
 points exposed by the backend. Direct mode offers the decision before its
-default target; DTMF mode offers it only when the caller entered no digits. If
+fallback destination; DTMF mode offers it only when the caller entered no digits. If
 no automation acts within 1.5 seconds, the normal phonebook route continues.
+
+Use `voip_stack.select_inbound_destination` for this initial decision. Reserve
+`voip_stack.forward` for a call that has already been delivered and is ringing
+or connected.
 
 After HA starts ringing, a separate state-trigger automation can forward the
 same unanswered call to Assist or another phonebook destination. The backend

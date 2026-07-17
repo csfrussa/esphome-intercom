@@ -29,6 +29,7 @@ import requests
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_CAPTURE_DIR = ROOT / "test_captures"
 sys.path.insert(0, str(ROOT / "test_runs"))
 from ha_playwright_auth import ha_token  # noqa: E402
 
@@ -102,6 +103,7 @@ class BareSip:
     """Run one real SIP user agent with deterministic keypad timing."""
 
     def __init__(self, config: Path = WILDIX_CONFIG) -> None:
+        TEST_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
         self.master, slave = pty.openpty()
         self.proc = subprocess.Popen(
             ["baresip", "-f", str(config)],
@@ -109,6 +111,7 @@ class BareSip:
             stdout=slave,
             stderr=slave,
             close_fds=True,
+            cwd=TEST_CAPTURE_DIR,
         )
         os.close(slave)
         os.set_blocking(self.master, False)
@@ -840,9 +843,8 @@ def main() -> int:
             snapshot.apply(api)
         with suppress(Exception):
             set_automation(api, OLD_AUTOMATION, old_automation_was_on)
-        for directory in (Path("/home/codex"), ROOT):
-            for path in directory.glob("dump-sip:*.wav"):
-                path.unlink(missing_ok=True)
+        for path in TEST_CAPTURE_DIR.glob("dump-sip:*.wav"):
+            path.unlink(missing_ok=True)
 
     Path(args.out).write_text(json.dumps(results, indent=2, ensure_ascii=False))
     print(json.dumps(results, indent=2, ensure_ascii=False))

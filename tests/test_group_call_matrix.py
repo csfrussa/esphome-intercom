@@ -655,6 +655,55 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(state["call_id"], "finished-call")
         self.assertEqual(state["terminal_reason"], "remote_hangup")
 
+    def test_new_call_replaces_orphaned_ringing_projection(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="orphaned-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="current-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        state = websocket_api._ha_softphone_state(hass, "test")
+        self.assertEqual(state["state"], fsm.CallState.RINGING.value)
+        self.assertEqual(state["call_id"], "current-call")
+
+    def test_new_call_cannot_replace_live_ringing_projection(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "live-call",
+            state=fsm.CallState.RINGING.value,
+            owner="ha_softphone",
+        )
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="live-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="competing-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        state = websocket_api._ha_softphone_state(hass, "test")
+        self.assertEqual(state["call_id"], "live-call")
+
     def test_virtual_endpoint_phonebook_push_matrix(self) -> None:
         pbx = self._mini_pbx()
         first = pbx.phonebook

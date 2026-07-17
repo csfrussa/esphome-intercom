@@ -2813,6 +2813,55 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(origin[2], "0")
         self.assertEqual(calls, 1)
 
+    async def test_listener_sends_sdp_in_deferred_183_early_media_response(self) -> None:
+        sent: list[bytes] = []
+        fmt = audio_format.AudioFormat(16000, "s16le", 1, 20)
+        rtp_fmt = sdp.audio_format_to_rtp(fmt, 96)
+        offer = sdp.build_offer(
+            "192.168.1.48", "192.168.1.48", 40900, [fmt]
+        ).encode()
+        answer = sdp.build_answer_directional(
+            "192.168.1.10", "192.168.1.10", 40000, rtp_fmt, rtp_fmt
+        )
+
+        async def on_invite(_invite):
+            return sip_listener.SipInviteResult(
+                183,
+                "Session Progress",
+                answer_sdp=answer,
+                defer_final=True,
+            )
+
+        endpoint = sip_listener.SipUdpEndpoint(
+            local_ip="192.168.1.10",
+            local_rtp_port=40000,
+            supported_formats=[fmt],
+            on_invite=on_invite,
+            send_override=lambda data, _addr: sent.append(data),
+        )
+        invite = sip.build_request(
+            "INVITE",
+            "sip:Casa@192.168.1.10:5060",
+            [
+                ("Via", "SIP/2.0/UDP 192.168.1.48:5060;branch=z9hG4bKearly"),
+                ("From", "<sip:test@192.168.1.48>;tag=remote"),
+                ("To", "<sip:Casa@192.168.1.10>"),
+                ("Call-ID", "early-media-call"),
+                ("CSeq", "1 INVITE"),
+                ("Content-Type", "application/sdp"),
+            ],
+            offer,
+        )
+
+        await endpoint._handle_datagram(invite, ("192.168.1.48", 5060))
+
+        progress = sip.parse_message(sent[-1])
+        self.assertEqual(progress.status_code, 183)
+        self.assertEqual(progress.header("Content-Type"), "application/sdp")
+        self.assertIn(b"m=audio 40000", progress.body)
+        self.assertIn("early-media-call", endpoint.pending_invites)
+        self.assertNotIn("early-media-call", endpoint.active_dialogs)
+
     async def test_listener_response_preserves_complete_via_chain(self) -> None:
         sent: list[bytes] = []
         endpoint = sip_listener.SipUdpEndpoint(

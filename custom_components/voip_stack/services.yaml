@@ -384,6 +384,39 @@ route:
       selector:
         text:
 
+select_inbound_destination:
+  name: Select inbound call destination
+  description: Select the initial destination before the fallback route starts. When exactly one route request is pending, call_id is optional.
+  fields:
+    destination:
+      name: Destination
+      description: Phonebook name, group, extension, registered phone, Assist extension, SIP URI or routable number.
+      required: true
+      selector:
+        text:
+    call_id:
+      name: Call ID
+      description: Optional for the normal single pending inbound call. Required only when several route requests are pending concurrently.
+      required: false
+      selector:
+        text:
+    expected_state:
+      name: Expected state
+      description: Optional stale-automation guard copied from the call event.
+      required: false
+      selector:
+        text:
+    expected_sequence:
+      name: Expected sequence
+      description: Optional stale-automation guard copied from the call event.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          step: 1
+          mode: box
+
 hangup:
   name: SIP Hang Up
   description: Send BYE and stop any SIP RTP relay for an active SIP call.
