@@ -26,7 +26,11 @@ from .debug_capture import (
     try_reserve_debug_capture_write,
     wav_pcm_payload,
 )
-from .dtmf import RtpDtmfDecoder
+from .dtmf import (
+    RtpDtmfDecoder,
+    build_telephone_event_payload,
+    telephone_event_code,
+)
 from .sdp import RtpPcmFormat, audio_format_to_rtp
 from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
@@ -34,6 +38,7 @@ from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder
 _LOGGER = logging.getLogger(__name__)
 _DEBUG_CAPTURE_SECONDS = 8
 _RTP_IP_TOS = 0xB8
+_DTMF_UPDATE_SECONDS = 0.05
 
 
 @dataclass(slots=True)
@@ -47,6 +52,8 @@ class RtpPeer:
     send_audio_format: AudioFormat | None = None
     send_rtp_format: RtpPcmFormat | None = None
     dtmf_payload_type: int | None = None
+    dtmf_clock_rate: int = 8000
+    dtmf_events: frozenset[int] = frozenset(range(16))
     can_send: bool = True
     can_receive: bool = True
     connection_held: bool = False
@@ -56,6 +63,9 @@ class RtpPeer:
     sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
     timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
     ssrc: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
+    dtmf_sequence: int = field(default_factory=lambda: secrets.randbelow(0x10000))
+    dtmf_timestamp: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
+    dtmf_ssrc: int = field(default_factory=lambda: secrets.randbelow(0x100000000))
 
     def __post_init__(self) -> None:
         if not self.advertised_host:
@@ -135,6 +145,8 @@ class SipRtpRelay:
         self._start_task: asyncio.Task[None] | None = None
         self._stop_task: asyncio.Task[None] | None = None
         self._stop_requested = False
+        self._dtmf_tasks: set[asyncio.Task[None]] = set()
+        self._dtmf_locks = {"left": asyncio.Lock(), "right": asyncio.Lock()}
         self.video_relay: Any | None = None
         self.forwarded = 0
         self.dropped = 0
@@ -148,6 +160,8 @@ class SipRtpRelay:
         self.right_rx_bytes = 0
         self.right_tx_packets = 0
         self.right_tx_bytes = 0
+        self.left_dtmf_tx_events = 0
+        self.right_dtmf_tx_events = 0
         self._configure_media(left, right)
         self._capture_buffers: dict[str, bytearray] = {}
         self._capture_paths: dict[str, Path] = {}
@@ -232,6 +246,9 @@ class SipRtpRelay:
             peer.timestamp = current.timestamp
             peer.ssrc = current.ssrc
             peer.rx_ssrc = None
+            peer.dtmf_sequence = current.dtmf_sequence
+            peer.dtmf_timestamp = current.dtmf_timestamp
+            peer.dtmf_ssrc = current.dtmf_ssrc
             self._apply_media_state(commit_left, commit_right, commit_state)
             if side in self._capture_buffers:
                 self._capture_buffers[side].clear()
@@ -443,12 +460,17 @@ class SipRtpRelay:
         )
         video_relay = self.video_relay
         self.video_relay = None
+        dtmf_tasks = tuple(self._dtmf_tasks)
+        for task in dtmf_tasks:
+            task.cancel()
         self._close_audio_resources()
         self._detach_debug_capture_snapshot()
         # Port ownership is independent from optional diagnostics and video
         # cleanup. Release it before the first await so a slow filesystem or a
         # broken video relay cannot starve subsequent calls.
         self._release_ports()
+        if dtmf_tasks:
+            await asyncio.gather(*dtmf_tasks, return_exceptions=True)
         if video_relay is not None:
             try:
                 await video_relay.stop()
@@ -514,6 +536,178 @@ class SipRtpRelay:
             raise RuntimeError("video relay already attached")
         self.video_relay = relay
 
+    def relay_dtmf(
+        self,
+        source_side: str,
+        digit: str,
+        *,
+        duration_ms: int = 160,
+    ) -> bool:
+        """Translate one detected digit to the opposite negotiated RTP leg."""
+
+        if source_side not in {"left", "right"} or self._stop_requested:
+            return False
+        destination_side = "right" if source_side == "left" else "left"
+        destination = self.right if destination_side == "right" else self.left
+        event = telephone_event_code(digit)
+        if (
+            event is None
+            or destination.dtmf_payload_type is None
+            or event not in destination.dtmf_events
+            or not destination.can_receive
+            or destination.connection_held
+        ):
+            _LOGGER.info(
+                "RTP DTMF not relayed source=%s destination=%s digit=%s negotiated=%s",
+                source_side,
+                destination_side,
+                digit,
+                destination.dtmf_payload_type is not None,
+            )
+            return False
+
+        async def _run() -> None:
+            try:
+                await self._send_dtmf_event(
+                    destination_side,
+                    destination,
+                    str(digit).upper(),
+                    duration_ms=max(40, int(duration_ms)),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception(
+                    "RTP DTMF relay failed destination=%s digit=%s",
+                    destination_side,
+                    digit,
+                )
+
+        task = asyncio.create_task(
+            _run(),
+            name=f"voip-rtp-dtmf-{destination_side}-{digit}",
+        )
+        self._dtmf_tasks.add(task)
+        task.add_done_callback(self._dtmf_tasks.discard)
+        return True
+
+    async def _send_dtmf_event(
+        self,
+        destination_side: str,
+        destination: RtpPeer,
+        digit: str,
+        *,
+        duration_ms: int,
+    ) -> None:
+        """Originate one RFC 4733 event with three final reports."""
+
+        async with self._dtmf_locks[destination_side]:
+            if self._stop_requested:
+                return
+            event_rate = max(1, int(destination.dtmf_clock_rate))
+            audio_rate = max(1, int(destination.outbound_rtp_format.sample_rate))
+            shared_clock = event_rate == audio_rate
+            event_timestamp = (
+                destination.timestamp
+                if shared_clock
+                else destination.dtmf_timestamp
+            )
+            audio_timestamp_at_start = destination.timestamp
+
+            def _send(*, elapsed_ms: int, marker: bool, end: bool) -> bool:
+                current = self.right if destination_side == "right" else self.left
+                transport = (
+                    self.right_transport
+                    if destination_side == "right"
+                    else self.left_transport
+                )
+                if (
+                    current is not destination
+                    or transport is None
+                    or self._stop_requested
+                    or not destination.can_receive
+                    or destination.connection_held
+                ):
+                    return False
+                duration = max(1, round(elapsed_ms * event_rate / 1000))
+                if shared_clock:
+                    sequence = destination.sequence
+                    ssrc = destination.ssrc
+                    destination.sequence = rtp.next_sequence(destination.sequence)
+                else:
+                    sequence = destination.dtmf_sequence
+                    ssrc = destination.dtmf_ssrc
+                    destination.dtmf_sequence = rtp.next_sequence(
+                        destination.dtmf_sequence
+                    )
+                packet = rtp.build_packet(
+                    rtp.RtpPacket(
+                        payload_type=int(destination.dtmf_payload_type),
+                        sequence=sequence,
+                        timestamp=event_timestamp,
+                        ssrc=ssrc,
+                        payload=build_telephone_event_payload(
+                            digit,
+                            duration=min(duration, 0xFFFF),
+                            end=end,
+                        ),
+                        marker=marker,
+                    )
+                )
+                transport.sendto(packet, (destination.host, destination.port))
+                if destination_side == "left":
+                    self.left_tx_packets += 1
+                    self.left_tx_bytes += len(packet)
+                else:
+                    self.right_tx_packets += 1
+                    self.right_tx_bytes += len(packet)
+                return True
+
+            if not _send(elapsed_ms=1, marker=True, end=False):
+                return
+            elapsed_ms = 0
+            while elapsed_ms < duration_ms:
+                step_ms = min(round(_DTMF_UPDATE_SECONDS * 1000), duration_ms - elapsed_ms)
+                await asyncio.sleep(step_ms / 1000)
+                elapsed_ms += step_ms
+                if not _send(
+                    elapsed_ms=elapsed_ms,
+                    marker=False,
+                    end=elapsed_ms >= duration_ms,
+                ):
+                    return
+            for _repeat in range(2):
+                await asyncio.sleep(_DTMF_UPDATE_SECONDS)
+                if not _send(elapsed_ms=duration_ms, marker=False, end=True):
+                    return
+
+            if shared_clock:
+                expected_audio_delta = round(duration_ms * audio_rate / 1000)
+                actual_audio_delta = (
+                    destination.timestamp - audio_timestamp_at_start
+                ) & 0xFFFFFFFF
+                if actual_audio_delta < expected_audio_delta:
+                    destination.timestamp = rtp.next_timestamp(
+                        audio_timestamp_at_start,
+                        expected_audio_delta,
+                    )
+            else:
+                destination.dtmf_timestamp = rtp.next_timestamp(
+                    event_timestamp,
+                    round((duration_ms + 50) * event_rate / 1000),
+                )
+            if destination_side == "left":
+                self.left_dtmf_tx_events += 1
+            else:
+                self.right_dtmf_tx_events += 1
+            _LOGGER.info(
+                "RTP DTMF relayed destination=%s digit=%s payload=%s rate=%s",
+                destination_side,
+                digit,
+                destination.dtmf_payload_type,
+                event_rate,
+            )
+
     def handle_packet(self, side: str, data: bytes, addr) -> None:
         source = self.left if side == "left" else self.right
         dest = self.right if side == "left" else self.left
@@ -535,12 +729,25 @@ class SipRtpRelay:
             _LOGGER.debug("RTP relay rejected packet: media direction is not negotiated")
             return
         dtmf_decoder = self._dtmf_decoders[side]
-        if dtmf_decoder is not None and (digit := dtmf_decoder.decode(data, expected_ssrc=source.rx_ssrc)):
-            if source.rx_ssrc is None:
+        shared_dtmf_clock = (
+            source.dtmf_clock_rate == source.inbound_rtp_format.sample_rate
+        )
+        if dtmf_decoder is not None and (
+            digit := dtmf_decoder.decode(
+                data,
+                expected_ssrc=source.rx_ssrc if shared_dtmf_clock else None,
+            )
+        ):
+            if source.rx_ssrc is None and shared_dtmf_clock:
                 source.rx_ssrc = dtmf_decoder.ssrc
                 source.host = str(addr[0])
                 source.port = int(addr[1])
-            elif (str(addr[0]), int(addr[1])) != (source.host, int(source.port)):
+            elif (
+                source.rx_ssrc is not None
+                and shared_dtmf_clock
+                and (str(addr[0]), int(addr[1]))
+                != (source.host, int(source.port))
+            ):
                 source.host = str(addr[0])
                 source.port = int(addr[1])
             if self.on_dtmf is not None:
@@ -548,6 +755,7 @@ class SipRtpRelay:
                     self.on_dtmf(side, digit, "rtp_event")
                 except Exception as err:  # noqa: BLE001 - event consumers cannot break RTP.
                     _LOGGER.warning("RTP relay DTMF callback failed: %s", err)
+            self.relay_dtmf(side, digit)
             return
         try:
             packet = rtp.parse_packet(data)
@@ -634,6 +842,8 @@ class SipRtpRelay:
             "right_rx_bytes": self.right_rx_bytes,
             "right_tx_packets": self.right_tx_packets,
             "right_tx_bytes": self.right_tx_bytes,
+            "left_dtmf_tx_events": self.left_dtmf_tx_events,
+            "right_dtmf_tx_events": self.right_dtmf_tx_events,
             "left_rx_format": self.left.audio_format.wire_token(),
             "left_tx_format": self.left.outbound_audio_format.wire_token(),
             "right_rx_format": self.right.audio_format.wire_token(),

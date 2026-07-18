@@ -122,7 +122,7 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-### `2026.7.2` In Development
+### `2026.8.0-dev` In Development
 
 Home Assistant can now host more than one logical phone. Keep the migrated
 default phone, then use **Settings > Devices & services > VoIP Stack > Add

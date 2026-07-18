@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import hmac
 import logging
+import math
 from secrets import token_hex, token_urlsafe
 import time
 from collections.abc import Callable
@@ -48,6 +49,9 @@ class SipRegistration:
     expires_at: float
     advertised_contact_uri: str = ""
     user_agent: str = ""
+    call_id: str = ""
+    cseq: int = 0
+    q: float = 1.0
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -59,6 +63,9 @@ class SipRegistration:
             "transport": self.transport.lower(),
             "expires_at": self.expires_at,
             "user_agent": self.user_agent,
+            "call_id": self.call_id,
+            "cseq": self.cseq,
+            "q": self.q,
         }
 
 
@@ -170,6 +177,26 @@ def _same_contact(left: str, right: str) -> bool:
     return _extract_uri(left).strip().lower() == _extract_uri(right).strip().lower()
 
 
+def _register_cseq(request: sip.SipMessage) -> int:
+    parts = request.header("CSeq").split()
+    if len(parts) != 2 or parts[1].upper() != "REGISTER":
+        raise ValueError("invalid REGISTER CSeq")
+    value = int(parts[0])
+    if value < 0:
+        raise ValueError("invalid REGISTER CSeq")
+    return value
+
+
+def _contact_q(raw_contact: str) -> float:
+    raw = _header_param(raw_contact, "q")
+    if not raw:
+        return 1.0
+    value = float(raw)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError("invalid Contact q value")
+    return value
+
+
 def _contact_for_source_flow(
     contact_uri: str,
     addr: tuple[str, int],
@@ -252,7 +279,7 @@ class SipRegistrar:
     def update_accounts(self, accounts: list[SipAccount]) -> None:
         previous_accounts = self.accounts
         self.accounts = {account.username.lower(): account for account in accounts}
-        registrations: dict[str, SipRegistration] = {}
+        retained: dict[str, list[SipRegistration]] = {}
         retained_usernames: set[str] = set()
         for registration in self.registrations.values():
             key = registration.username.lower()
@@ -266,27 +293,67 @@ class SipRegistrar:
             ):
                 continue
             registration.username = account.username
-            registrations[account.username] = registration
+            retained.setdefault(account.username.lower(), []).append(registration)
             retained_usernames.add(account.username.lower())
         removed = {
             registration.username
             for registration in self.registrations.values()
             if registration.username.lower() not in retained_usernames
         }
+        registrations: dict[str, SipRegistration] = {}
+        for wanted, bindings in retained.items():
+            account = self.accounts[wanted]
+            for index, registration in enumerate(bindings):
+                key = account.username if index == 0 else f"{account.username}#{index + 1}"
+                registrations[key] = registration
         self.registrations = registrations
         for username in removed:
             self._notify_registration_change(username, False)
 
     def _registration(self, username: str) -> SipRegistration | None:
+        registrations = self._registrations(username)
+        return registrations[0] if registrations else None
+
+    def _registrations(self, username: str) -> list[SipRegistration]:
         wanted = str(username or "").lower()
-        return next(
-            (
-                registration
-                for key, registration in self.registrations.items()
-                if key.lower() == wanted or registration.username.lower() == wanted
-            ),
-            None,
+        return [
+            registration
+            for key, registration in self.registrations.items()
+            if key.lower() == wanted or registration.username.lower() == wanted
+        ]
+
+    def registered_contacts(self, username: str) -> tuple[SipRegistration, ...]:
+        """Return every live Contact for one logical SIP account."""
+
+        self.expire()
+        return tuple(
+            sorted(
+                self._registrations(username),
+                key=lambda registration: (-registration.q, registration.contact_uri),
+            )
         )
+
+    def _binding_key(self, username: str, contact_uri: str) -> str | None:
+        wanted = str(username or "").lower()
+        for key, registration in self.registrations.items():
+            if registration.username.lower() == wanted and _same_contact(
+                contact_uri,
+                registration.advertised_contact_uri or registration.contact_uri,
+            ):
+                return key
+        return None
+
+    @staticmethod
+    def _new_binding_key(
+        registrations: dict[str, SipRegistration],
+        username: str,
+    ) -> str:
+        if username not in registrations:
+            return username
+        index = 2
+        while f"{username}#{index}" in registrations:
+            index += 1
+        return f"{username}#{index}"
 
     def remove_registration(self, username: str) -> None:
         wanted = str(username or "").lower()
@@ -309,12 +376,11 @@ class SipRegistrar:
         """Authenticate an in-dialog origin against its live REGISTER flow."""
 
         self.expire()
-        registration = self._registration(username)
-        return bool(
-            registration is not None
-            and registration.source_host == str(host or "")
+        return any(
+            registration.source_host == str(host or "")
             and int(registration.source_port) == int(port)
             and registration.transport.upper() == str(transport or "").upper()
+            for registration in self._registrations(username)
         )
 
     def _prune_nonces(self) -> None:
@@ -460,79 +526,190 @@ class SipRegistrar:
             _nonce, challenge = self._challenge(source_key)
             return self._result(401, "Unauthorized", (("WWW-Authenticate", challenge),))
 
-        contacts = _register_contacts(request)
-        if not contacts:
+        try:
+            cseq = _register_cseq(request)
+        except (TypeError, ValueError):
             return self._result(400, "Bad Request")
-        active_contacts = [contact for contact in contacts if contact[0] != "*" and contact[1] > 0]
-        remove_contacts = [contact for contact in contacts if contact[0] == "*" or contact[1] <= 0]
+        call_id = request.header("Call-ID").strip()
+        if not call_id:
+            return self._result(400, "Bad Request")
 
-        if active_contacts:
-            advertised_contact_uri, expires, raw_contact = active_contacts[-1]
+        self.expire()
+        raw_contacts = [
+            value.strip() for value in request.header_values("Contact") if value.strip()
+        ]
+        if not raw_contacts:
+            return self._result(
+                200,
+                "OK",
+                self._contact_response_headers(account.username),
+            )
+
+        contacts = _register_contacts(request)
+        # Contact parsing is atomic at the registrar boundary. The public
+        # helper remains tolerant for phonebook parsing, but a REGISTER cannot
+        # partially apply only its syntactically valid bindings.
+        if not contacts or len(contacts) != len(raw_contacts):
+            return self._result(400, "Bad Request")
+        wildcard = [contact for contact in contacts if contact[0] == "*"]
+        if wildcard and (
+            len(contacts) != 1
+            or request.header("Expires").strip() != "0"
+        ):
+            return self._result(400, "Bad Request")
+
+        prepared: list[tuple[str, int, str, str, float]] = []
+        seen_contacts: set[str] = set()
+        for advertised_contact_uri, expires, raw_contact in contacts:
+            if advertised_contact_uri == "*":
+                prepared.append(("*", 0, raw_contact, "", 1.0))
+                continue
+            identity = advertised_contact_uri.lower()
+            if identity in seen_contacts:
+                return self._result(400, "Bad Request")
+            seen_contacts.add(identity)
             try:
-                contact_uri = _contact_for_source_flow(
-                    advertised_contact_uri,
-                    addr,
-                    transport,
+                q = _contact_q(raw_contact)
+                contact_uri = (
+                    _contact_for_source_flow(
+                        advertised_contact_uri,
+                        addr,
+                        transport,
+                    )
+                    if expires > 0
+                    else ""
                 )
             except (TypeError, ValueError, sip.SipError):
                 return self._result(400, "Bad Request")
-            wanted = account.username.lower()
-            for key in list(self.registrations):
-                if (
-                    key.lower() == wanted
-                    or self.registrations[key].username.lower() == wanted
-                ):
-                    self.registrations.pop(key, None)
-            self.registrations[account.username] = SipRegistration(
-                username=account.username,
-                contact_uri=contact_uri,
-                source_host=addr[0],
-                source_port=int(addr[1]),
-                transport=transport,
-                expires_at=time.time() + expires,
-                advertised_contact_uri=advertised_contact_uri,
-                user_agent=request.header("User-Agent"),
+            prepared.append(
+                (advertised_contact_uri, expires, raw_contact, contact_uri, q)
             )
-            self._notify_registration_change(account.username, True)
+
+        current_bindings = self._registrations(account.username)
+        for advertised_contact_uri, _expires, _raw, _contact, _q in prepared:
+            if advertised_contact_uri == "*":
+                continue
+            current = next(
+                (
+                    registration
+                    for registration in current_bindings
+                    if _same_contact(
+                        advertised_contact_uri,
+                        registration.advertised_contact_uri
+                        or registration.contact_uri,
+                    )
+                ),
+                None,
+            )
+            if current is None or current.call_id != call_id:
+                continue
+            if cseq < current.cseq:
+                return self._result(
+                    500,
+                    "Server Internal Error",
+                    (("Retry-After", "0"),),
+                )
+            if cseq == current.cseq:
+                # An authenticated retransmission returns the current complete
+                # binding set without extending expiration or re-notifying HA.
+                return self._result(
+                    200,
+                    "OK",
+                    self._contact_response_headers(account.username),
+                )
+
+        was_registered = bool(current_bindings)
+        next_registrations = dict(self.registrations)
+        wanted = account.username.lower()
+        if wildcard:
+            next_registrations = {
+                key: registration
+                for key, registration in next_registrations.items()
+                if registration.username.lower() != wanted
+            }
+        else:
+            now = time.time()
+            for (
+                advertised_contact_uri,
+                expires,
+                _raw_contact,
+                contact_uri,
+                q,
+            ) in prepared:
+                key = next(
+                    (
+                        candidate_key
+                        for candidate_key, registration in next_registrations.items()
+                        if registration.username.lower() == wanted
+                        and _same_contact(
+                            advertised_contact_uri,
+                            registration.advertised_contact_uri
+                            or registration.contact_uri,
+                        )
+                    ),
+                    None,
+                )
+                if expires <= 0:
+                    if key is not None:
+                        next_registrations.pop(key, None)
+                    continue
+                if key is None:
+                    key = self._new_binding_key(
+                        next_registrations,
+                        account.username,
+                    )
+                next_registrations[key] = SipRegistration(
+                    username=account.username,
+                    contact_uri=contact_uri,
+                    source_host=addr[0],
+                    source_port=int(addr[1]),
+                    transport=transport,
+                    expires_at=now + expires,
+                    advertised_contact_uri=advertised_contact_uri,
+                    user_agent=request.header("User-Agent"),
+                    call_id=call_id,
+                    cseq=cseq,
+                    q=q,
+                )
+
+        self.registrations = next_registrations
+        is_registered = bool(self._registrations(account.username))
+        if was_registered != is_registered:
+            self._notify_registration_change(account.username, is_registered)
+        if is_registered:
             _LOGGER.info(
-                "SIP registrar registered user=%s transport=%s expires=%ss contact=%s contacts=%s",
+                "SIP registrar updated user=%s transport=%s active_contacts=%s request_contacts=%s",
                 account.username,
                 transport.upper(),
-                expires,
-                contact_uri,
-                len(contacts),
+                len(self._registrations(account.username)),
+                len(prepared),
             )
-            return self._result(200, "OK", (("Expires", str(expires)), ("Contact", raw_contact)))
+        else:
+            _LOGGER.info(
+                "SIP registrar unregistered final contact user=%s transport=%s",
+                account.username,
+                transport.upper(),
+            )
+        return self._result(
+            200,
+            "OK",
+            self._contact_response_headers(account.username),
+        )
 
-        if remove_contacts:
-            current = self._registration(account.username)
-            contact_uri, _expires_value, _raw_contact = remove_contacts[-1]
-            if contact_uri == "*" or (
-                current is not None
-                and contact_uri
-                and _same_contact(
-                    contact_uri,
-                    current.advertised_contact_uri or current.contact_uri,
-                )
-            ):
-                self.remove_registration(account.username)
-                _LOGGER.info(
-                    "SIP registrar unregistered user=%s transport=%s contact=%s contacts=%s",
-                    account.username,
-                    transport.upper(),
-                    contact_uri or "*",
-                    len(contacts),
-                )
-            else:
-                _LOGGER.info(
-                    "SIP registrar ignored unregister for stale contact user=%s transport=%s contact=%s active=%s",
-                    account.username,
-                    transport.upper(),
-                    contact_uri or "-",
-                    current.contact_uri if current is not None else "-",
-                )
-            return self._result(200, "OK", (("Expires", "0"),))
-        return self._result(400, "Bad Request")
+    def _contact_response_headers(
+        self,
+        username: str,
+    ) -> tuple[tuple[str, str], ...]:
+        now = time.time()
+        return tuple(
+            (
+                "Contact",
+                f"<{registration.advertised_contact_uri or registration.contact_uri}>"
+                f";expires={max(0, math.ceil(registration.expires_at - now))}"
+                f";q={registration.q:g}",
+            )
+            for registration in self.registered_contacts(username)
+        )
 
     def _result(self, status: int, reason: str, headers: tuple[tuple[str, str], ...] = ()) -> SipRegisterResult:
         self.last_sip_status_code = int(status)
@@ -541,12 +718,20 @@ class SipRegistrar:
 
     def expire(self) -> bool:
         now = time.time()
+        previously_registered = {
+            registration.username.lower(): registration.username
+            for registration in self.registrations.values()
+        }
         old = set(self.registrations)
         self.registrations = {key: reg for key, reg in self.registrations.items() if reg.expires_at > now}
         expired = old - set(self.registrations)
-        for username in expired:
-            _LOGGER.info("SIP registrar expired user=%s", username)
-            self._notify_registration_change(username, False)
+        still_registered = {
+            registration.username.lower() for registration in self.registrations.values()
+        }
+        for wanted, username in previously_registered.items():
+            if wanted not in still_registered:
+                _LOGGER.info("SIP registrar expired final binding user=%s", username)
+                self._notify_registration_change(username, False)
         return bool(expired)
 
     def roster_entries(self) -> list[RosterEntry]:
@@ -555,10 +740,17 @@ class SipRegistrar:
     def registered_roster_entries(self) -> list[RosterEntry]:
         self.expire()
         entries: list[RosterEntry] = []
-        for username, registration in sorted(self.registrations.items()):
-            account = self.accounts.get(username.lower())
+        registered_usernames = sorted(
+            {registration.username.lower() for registration in self.registrations.values()}
+        )
+        for username in registered_usernames:
+            account = self.accounts.get(username)
             if account is None or not account.enabled:
                 continue
+            registrations = self.registered_contacts(account.username)
+            if not registrations:
+                continue
+            registration = registrations[0]
             entries.append(
                 RosterEntry(
                     id=account.username,
@@ -572,6 +764,14 @@ class SipRegistrar:
                         "conference_group": account.conference_group,
                         "conference_ring": bool(account.conference_ring),
                         "ring_group": account.ring_group,
+                        "sip_contacts": [
+                            {
+                                "uri": binding.contact_uri,
+                                "transport": binding.transport.lower(),
+                                "q": binding.q,
+                            }
+                            for binding in registrations
+                        ],
                     },
                 )
             )
@@ -579,10 +779,14 @@ class SipRegistrar:
 
     def snapshot(self) -> dict[str, Any]:
         self.expire()
+        registered_users = {
+            registration.username.lower() for registration in self.registrations.values()
+        }
         return {
             "registrar_enabled": self.enabled,
             "registrar_accounts": len(self.accounts),
-            "registrar_registered": len(self.registrations),
+            "registrar_registered": len(registered_users),
+            "registrar_binding_count": len(self.registrations),
             "registrar_bindings": [reg.snapshot() for reg in self.registrations.values()],
             "registrar_last_sip_event": self.last_sip_event,
             "registrar_last_sip_status_code": self.last_sip_status_code,

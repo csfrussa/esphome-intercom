@@ -8,7 +8,11 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .automation_routing import AUTOMATION_EVENT_TYPES, automation_event_type
+from .automation_routing import (
+    AUTOMATION_EVENT_TYPES,
+    CALL_EVENT_SCHEMA_VERSION,
+    automation_event_type,
+)
 from .const import DOMAIN
 from .endpoint_device import async_link_endpoint_entity, endpoint_device_info
 from .endpoint_entity_manager import (
@@ -83,7 +87,7 @@ class VoipStackCallEvent(EventEntity):
     @callback
     def _on_dtmf_event(self, event: Event) -> None:
         payload = dict(event.data)
-        payload.setdefault("schema_version", 1)
+        payload.setdefault("schema_version", CALL_EVENT_SCHEMA_VERSION)
         payload["event"] = "dtmf"
         self.async_set_context(event.context)
         self._trigger_event("dtmf", payload)
@@ -139,7 +143,7 @@ class PhoneEndpointCallEvent(EventEntity):
         payload = dict(event.data)
         if not event_matches_endpoint(payload, self.endpoint, self.registry):
             return
-        payload.setdefault("schema_version", 1)
+        payload.setdefault("schema_version", CALL_EVENT_SCHEMA_VERSION)
         payload["event"] = "dtmf"
         payload["endpoint_id"] = self.endpoint.endpoint_id
         self.async_set_context(event.context)

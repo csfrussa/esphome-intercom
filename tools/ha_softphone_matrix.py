@@ -181,12 +181,40 @@ class BareSip:
             f"bareSIP timeout waiting for {needle}: {self.output[-2000:]}"
         )
 
+    def wait_for_any(self, needles: tuple[str, ...], timeout: float) -> str:
+        deadline = time.monotonic() + timeout
+        wanted = tuple(needle.lower() for needle in needles)
+        while time.monotonic() < deadline:
+            output = self.read().lower()
+            if any(needle in output for needle in wanted):
+                return self.output
+            time.sleep(0.05)
+        raise RuntimeError(
+            f"bareSIP timeout waiting for {' or '.join(needles)}: "
+            f"{self.output[-2000:]}"
+        )
+
     def command(self, command: str) -> None:
         os.write(self.master, f"{command}\n".encode())
 
-    def dial(self, target: str, *, wait_for: str = "Call established") -> None:
+    def dial(
+        self,
+        target: str,
+        *,
+        wait_for: str | tuple[str, ...] = "Call established",
+    ) -> None:
         self.command(f"/dial {target}")
-        self.wait_for(wait_for, 10)
+        if isinstance(wait_for, tuple):
+            self.wait_for_any(wait_for, 10)
+        else:
+            self.wait_for(wait_for, 10)
+
+    def digits(self, digits: str, interval: float = 0.45) -> None:
+        for digit in digits:
+            if digit not in "0123456789*#ABCD":
+                raise ValueError(f"unsupported DTMF digit: {digit}")
+            os.write(self.master, digit.encode())
+            time.sleep(interval)
 
     def hangup(self) -> None:
         self.command("/hangup")

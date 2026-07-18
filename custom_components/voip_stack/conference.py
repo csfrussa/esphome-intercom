@@ -682,7 +682,7 @@ class ConferenceRoom:
                 route_kind=GROUP_TYPE_CONFERENCE,
                 last_sip_event="BYE",
             )
-            registry.softphone_media.pop(softphone_call_id, None)
+            registry.take_media(softphone_call_id)
             registry.finish_and_pop(
                 softphone_call_id,
                 reason=reason,
@@ -806,7 +806,7 @@ class ConferenceManager:
                     call_id,
                 )
             finally:
-                registry.softphone_media.pop(call_id, None)
+                registry.take_media(call_id)
                 registry.finish_and_pop(call_id, reason=reason, state=state)
                 self.forget_ha_call(call_id)
                 if room is not None:
@@ -1054,7 +1054,7 @@ class ConferenceManager:
                 self.rooms.pop(room_key, None)
         else:
             registry = call_registry(self.hass)
-            registry.softphone_media.pop(call_id, None)
+            registry.take_media(call_id)
             registry.finish_and_pop(
                 call_id,
                 reason=reason,
@@ -1123,6 +1123,13 @@ def conference_manager(
             on_inbound_timeout=on_inbound_timeout,
         )
         bucket["conference_manager"] = manager
+        pbx_runtime = bucket.get("pbx_runtime")
+        if pbx_runtime is not None:
+            pbx_runtime.adopt_component(
+                "conference_manager",
+                manager,
+                closer=manager.close,
+            )
     elif on_inbound_timeout is not None:
         manager.on_inbound_timeout = on_inbound_timeout
         for room in manager.rooms.values():

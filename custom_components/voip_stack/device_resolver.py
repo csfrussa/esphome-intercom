@@ -188,6 +188,13 @@ class VoipDeviceResolver:
         for entity in entity_registry.entities.values():
             if entity.device_id is None:
                 continue
+            # This resolver is the legacy ESPHome transport inventory.  The
+            # integration also exposes logical browser-phone entities whose
+            # object ids intentionally contain ``voip_endpoint``; treating
+            # those as ESP devices produces a misleading "missing endpoint"
+            # warning and can hide the canonical logical endpoint path.
+            if str(getattr(entity, "platform", "") or "") == DOMAIN:
+                continue
             entities_by_device.setdefault(entity.device_id, []).append(entity)
             if "voip_endpoint" in entity.entity_id:
                 voip_device_ids.add(entity.device_id)

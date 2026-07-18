@@ -55,7 +55,11 @@ async def async_start_sip_trunk(hass: HomeAssistant, *, local_ip: str) -> bool:
     endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
     if endpoint is not None:
         trunk.attach_endpoint_manager(endpoint)
-    hass.data.setdefault(DOMAIN, {})["sip_trunk"] = trunk
+    bucket = hass.data.setdefault(DOMAIN, {})
+    bucket["sip_trunk"] = trunk
+    pbx_runtime = bucket.get("pbx_runtime")
+    if pbx_runtime is not None:
+        pbx_runtime.adopt_component("trunk", trunk, closer=trunk.stop)
     try:
         await trunk.start()
     except Exception as err:
@@ -89,5 +93,8 @@ async def _async_stop_sip_trunk(hass: HomeAssistant) -> None:
     except Exception:
         _LOGGER.debug("Ignoring SIP trunk stop error", exc_info=True)
         return
+    pbx_runtime = bucket.get("pbx_runtime")
+    if pbx_runtime is not None:
+        pbx_runtime.release_component("trunk", trunk)
     if bucket.get("sip_trunk") is trunk:
         bucket.pop("sip_trunk", None)

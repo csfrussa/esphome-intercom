@@ -33,6 +33,7 @@ from .queue_utils import put_drop_oldest
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
 from .local_softphone_bridge import LocalCallStateError
 from .media_debug import merge_media_debug
+from .media_ws_session import async_media_websocket_session
 from .session_cleanup import async_wait_for_cleanup
 from .sip_client import SipCallClient
 from .video_rtcp import (
@@ -66,9 +67,6 @@ from .websocket_api import (
 from .websocket_owner import (
     MediaWebSocketOwner,
     WebSocketOwnerBusyError,
-    async_claim_call_media_owner,
-    async_release_local_media_if_unowned,
-    async_release_media_owner,
 )
 
 
@@ -285,7 +283,7 @@ class VoipVideoWebSocketView(HomeAssistantView):
         bucket = hass.data.setdefault(DOMAIN, {})
         shutdown_event = bucket.setdefault("media_shutdown", asyncio.Event())
         try:
-            owners, owner_lock, owner_key = await async_claim_call_media_owner(
+            async with async_media_websocket_session(
                 bucket,
                 registry,
                 requested_call_id,
@@ -296,66 +294,51 @@ class VoipVideoWebSocketView(HomeAssistantView):
                 shutdown_event=shutdown_event,
                 pin_client_identity=local_call is None,
                 local_bridge=(local_bridge if local_call is not None else None),
-            )
-        except WebSocketOwnerBusyError as err:
-            raise web.HTTPConflict(text="HA softphone video is already attached") from err
+                publish_state=lambda: _publish_ha_softphone_state(
+                    hass, endpoint_id=endpoint_id
+                ),
+            ) as media_owner:
+                # Re-resolve after the previous owner's teardown barrier: it may
+                # have consumed/closed a pre-bound socket or applied a re-INVITE.
+                local_call = (
+                    local_bridge.get_call(requested_call_id)
+                    if local_bridge is not None
+                    else None
+                )
+                if local_call is not None:
+                    from .local_softphone_bridge import LocalBridgeError
 
-        lease = None
-        try:
-            # Re-resolve after the previous owner's teardown barrier: it may
-            # have consumed/closed a pre-bound socket or applied a re-INVITE.
-            local_call = (
-                local_bridge.get_call(requested_call_id)
-                if local_bridge is not None
-                else None
-            )
-            if local_call is not None:
-                from .local_softphone_bridge import LocalBridgeError
-
-                try:
-                    lease = local_bridge.acquire_media(
-                        requested_call_id, endpoint_id, client_id
-                    )
-                except LocalBridgeError as err:
-                    raise web.HTTPConflict(text=str(err)) from err
-                await ws.prepare(request)
-                await _run_local_video_session(
-                    hass,
-                    ws,
-                    local_bridge,
-                    lease,
-                )
-            else:
-                session = _active_video_session(hass, endpoint_id)
-                if session is None or requested_call_id != session.call_id:
-                    raise web.HTTPConflict(
-                        text="HA softphone has no matching video dialog"
-                    )
-                await ws.prepare(request)
-                _detach_video_socket(hass, session)
-                await _run_video_session(
-                    hass,
-                    ws,
-                    session,
-                    request.transport,
-                    endpoint_id=endpoint_id,
-                )
-        finally:
-            try:
-                await async_release_media_owner(
-                    owners,
-                    owner_lock,
-                    owner_key,
-                    owner,
-                )
-            finally:
-                if lease is not None:
-                    await async_release_local_media_if_unowned(
-                        bucket,
+                    try:
+                        lease = local_bridge.acquire_media(
+                            requested_call_id, endpoint_id, client_id
+                        )
+                    except LocalBridgeError as err:
+                        raise web.HTTPConflict(text=str(err)) from err
+                    media_owner.own_local_lease(local_bridge, lease)
+                    await ws.prepare(request)
+                    await _run_local_video_session(
+                        hass,
+                        ws,
                         local_bridge,
                         lease,
                     )
-                _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
+                else:
+                    session = _active_video_session(hass, endpoint_id)
+                    if session is None or requested_call_id != session.call_id:
+                        raise web.HTTPConflict(
+                            text="HA softphone has no matching video dialog"
+                        )
+                    await ws.prepare(request)
+                    _detach_video_socket(hass, session)
+                    await _run_video_session(
+                        hass,
+                        ws,
+                        session,
+                        request.transport,
+                        endpoint_id=endpoint_id,
+                    )
+        except WebSocketOwnerBusyError as err:
+            raise web.HTTPConflict(text="HA softphone video is already attached") from err
         return ws
 
 

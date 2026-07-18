@@ -30,7 +30,21 @@ Phonebook membership and HA registration are not inbound caller admission
 rules. Any peer that can reach an ESP or HA SIP listener may send an INVITE;
 normal routing, busy/DND and SDP checks then decide the result. Deploy SIP/RTP
 on a trusted LAN/VPN and enforce stricter admission with network controls or an
-SBC.
+SBC. This inbound openness does not make HA an anonymous PSTN gateway:
+external-trunk routes require a registered, roster-known, HA-local or trusted
+trunk origin.
+
+Configured local SIP accounts are retained by the PBX as logical endpoints so
+their group membership and settings survive disconnects. Cards expose such an
+account as a callable contact only while the registrar has at least one live
+Contact binding; expiry or explicit deregistration removes it from the card.
+
+Outbound audio/video offers remain video-capable. A standards-compliant answer
+retains rejected media sections with port zero. For PSTN interoperability, the
+outbound client also accepts a gateway answer that keeps the leading compatible
+audio section but omits only trailing video sections; those omitted sections
+are treated as rejected without disabling video offers or later video
+re-INVITE negotiation.
 
 ## SIP Core
 

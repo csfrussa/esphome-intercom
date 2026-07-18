@@ -15,6 +15,7 @@ INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 AUDIO_WS = ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
 CARD_JS = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
+SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 WEBSOCKET_API = ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
@@ -78,7 +79,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('current.owner == "ha_softphone"', ownership)
         self.assertIn('current.metadata.get("endpoint_id")', ownership)
         self.assertIn(
-            "registry.preanswered.pop(invite.call_id, None)", waiter
+            "registry.take_media(invite.call_id, provisional=True)", waiter
         )
         self.assertIn("_sip_send_bye(hass, invite.call_id)", waiter)
 
@@ -120,6 +121,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
         for field in (
             'endpoint.supports("video")',
+            "dialed_target=invite.target",
             "video_offered=video_enabled",
             "invite.video_format.wire_token()",
             "invite.send_video_format.wire_token()",
@@ -147,12 +149,19 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("cfg.get(CONF_EXPERIMENTAL_VIDEO, False)", video)
         self.assertIn('source_route_endpoint.supports("video")', video)
         self.assertIn('target_route_endpoint.supports("video")', video)
-        self.assertIn("SipVideoRtpRelay(", video)
+        self.assertIn("build_pending_invite_video_relay(", video)
+        self.assertIn("configure_answered_invite_video_relay(", video)
         self.assertIn("video_formats=(invite.video_format,)", video)
         self.assertIn("generic_video_relay=video_relay is not None", video)
-        self.assertEqual(video.count("video_formats_passthrough_compatible("), 2)
-        self.assertIn("video_answer_contract(invite.video_format, remote_video)", video)
-        self.assertIn("video_offer_answer_directional(", video)
+        bridge_video = SIP_BRIDGE.read_text()
+        self.assertEqual(
+            bridge_video.count("sdp.video_formats_passthrough_compatible("), 2
+        )
+        self.assertIn(
+            "sdp.video_answer_contract(invite.video_format, remote_video)",
+            bridge_video,
+        )
+        self.assertIn("sdp.video_offer_answer_directional(", bridge_video)
         self.assertIn("destination did not accept an exact codec", video)
 
     def test_browser_to_browser_call_uses_local_bridge_before_network_discovery(
@@ -259,6 +268,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"source_leg": "caller" if source_is_caller else "callee"', self.source)
         self.assertIn('client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")', self.source)
         self.assertIn('callback("left", digit, "sip_info")', self.source)
+        self.assertIn("relay.relay_dtmf(side, digit)", self.source)
+        self.assertNotIn("send_dtmf_info", self.source)
         # Definition plus four established bridge paths and both automation
         # forward paths (single target and ring group). Every HA-anchored
         # media bridge keeps in-call DTMF.
@@ -354,12 +365,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             "caller_roster_entry = _roster_entry_for_target(caller_identity, roster_entries)",
             pre_route,
         )
-        self.assertIn("if not caller_is_trusted_endpoint", pre_route)
-        self.assertNotIn(
-            "decision.action not in",
-            pre_route[pre_route.index("if not caller_is_trusted_endpoint") :],
-        )
-        self.assertIn('decline_reason="unauthenticated_origin"', pre_route)
+        self.assertIn("not caller_is_trusted_endpoint", pre_route)
+        self.assertIn("and decision.action is RouteAction.TRUNK", pre_route)
+        self.assertIn('decline_reason="unauthenticated_trunk"', pre_route)
         self.assertIn(
             "SIP caller uses central dialplan without automation window",
             registered_branch,
@@ -775,6 +783,21 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("endpoint_id: str = DEFAULT_ENDPOINT_ID", runtime)
         self.assertIn("origin_endpoint_id=endpoint_id", runtime)
 
+    def test_ha_softphone_routes_assist_through_local_pbx_listener(self) -> None:
+        init_py = INIT.read_text()
+        call_service = init_py[
+            init_py.index("async def _handle_sip_call_target_service") : init_py.index(
+                "async def _handle_sip_route_service"
+            )
+        ]
+        assist = call_service[
+            call_service.index("elif route.action is RouteAction.ASSIST:") :
+            call_service.index("if use_trunk:")
+        ]
+        self.assertIn("ha_uri_for(route.target or target, contacts)", assist)
+        self.assertIn("action=RouteAction.BRIDGE", assist)
+        self.assertIn("sip_uri=route_uri", assist)
+
     def test_ad_hoc_sip_uri_requires_admin_before_network_resolution(self) -> None:
         init_py = INIT.read_text()
         call_service = init_py[
@@ -1024,8 +1047,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('role="group_candidate"', ring_group)
         self.assertIn("_set_ha_softphone_call_state(", ring_group)
         self.assertIn("async def _wait_browser()", ring_group)
-        self.assertIn('if result == "in_call_browser"', ring_group)
-        self.assertIn("registry.softphone_media[invite.call_id]", ring_group)
+        self.assertIn('browser_candidate_id = "browser:route-control"', ring_group)
+        self.assertIn("DialCandidate(", ring_group)
+        self.assertIn("_dial_browser", ring_group)
+        self.assertIn("registry.attach_media(invite.call_id, media)", ring_group)
 
     def test_initial_automation_group_selection_keeps_ha_members(self) -> None:
         forward = self.source[
@@ -1061,24 +1086,41 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
         self.assertNotIn("EndpointAvailability.AVAILABLE", browser_policy)
 
+    def test_initial_automation_can_select_the_default_ha_phone(self) -> None:
+        forward = self.source[
+            self.source.index("async def _async_forward_existing_call(") : self.source.index(
+                "async def _run_trunk_inbound_route_guarded("
+            )
+        ]
+        self.assertIn(
+            "not initial_selection\n"
+            "                and target_browser_endpoint is not None\n"
+            "                and target_browser_endpoint.endpoint_id == session_endpoint_id",
+            forward,
+        )
+
     def test_ring_group_simultaneous_results_are_deterministic(self) -> None:
         ring_group = self.source[
             self.source.index("async def _run_ring_group_call(") : self.source.index(
                 "async def _ring_conference_members("
             )
         ]
-        self.assertIn("for task in tasks:", ring_group)
-        self.assertIn("if task not in done:", ring_group)
-        self.assertIn("control_cancel = next(", ring_group)
-        self.assertIn("and isinstance(attempt, dict)", ring_group)
-        self.assertLess(
-            ring_group.index("control_cancel = next("),
-            ring_group.index('result == "in_call"'),
-        )
+        fork_source = (
+            ROOT / "custom_components" / "voip_stack" / "dial_fork.py"
+        ).read_text()
+        self.assertIn("DialForkController(", ring_group)
+        self.assertIn("strategy=ring_policy.strategy", ring_group)
         self.assertIn(
-            "failure_priority.get(result, 1) > failure_priority.get(final_result, 0)",
-            ring_group,
+            "sorted(candidates, key=lambda item: (item.tier, item.order, item.candidate_id))",
+            fork_source,
         )
+        self.assertIn("completed_controls", fork_source)
+        self.assertIn("DialDisposition.SOURCE_CANCELLED", fork_source)
+        self.assertLess(
+            fork_source.index("completed_controls"),
+            fork_source.index("if branch_task.done():"),
+        )
+        self.assertIn("_reduce_failures(failures)", fork_source)
 
     def test_ring_group_winner_clears_pending_route_before_active_hangup(self) -> None:
         ring_group = self.source[
@@ -1188,6 +1230,30 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('SipInviteResult(486, "Busy Here"', self.source)
         self.assertIn("decline_reason=TerminalReason.BUSY.value", self.source)
 
+    def test_local_loop_detection_uses_host_and_listener_port(self) -> None:
+        helper = self.source[
+            self.source.index("def _is_local_listener_uri(") : self.source.index(
+                "def _roster_entry_for_target("
+            )
+        ]
+        self.assertIn("uri.host == local_ip", helper)
+        self.assertIn(
+            'int(uri.port or cfg["sip_port"]) == int(cfg["sip_port"])',
+            helper,
+        )
+        self.assertEqual(self.source.count("_is_local_listener_uri("), 3)
+
+    def test_early_router_cancel_publishes_one_terminal_event(self) -> None:
+        terminated = self.source[
+            self.source.index("async def _on_terminated(") : self.source.index(
+                "supported_formats = list(HA_SIP_PCM_FORMATS)"
+            )
+        ]
+        self.assertIn("elif session is not None:", terminated)
+        self.assertIn("the logical session still owes observers one terminal event", terminated)
+        self.assertIn('"CANCEL"', terminated)
+        self.assertIn("route_kind=session.route_kind", terminated)
+
     def test_softphone_settings_changes_do_not_emit_call_lifecycle_events(self) -> None:
         websocket = WEBSOCKET_API.read_text()
         group_update = websocket[
@@ -1293,10 +1359,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
 
     def test_trunk_without_dtmf_preanswer_does_not_allocate_relay_ports(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
+        loop_index = on_invite.index("loop = asyncio.get_running_loop()")
+        trunk_index = on_invite.rindex("if trunk_invite:", 0, loop_index)
         trunk_branch = on_invite[
-            on_invite.index("if trunk_invite:") : on_invite.index(
-                "loop = asyncio.get_running_loop()"
-            )
+            trunk_index:loop_index
         ]
         no_dtmf_branch = trunk_branch[
             trunk_branch.index("if not dtmf_preanswer:") : trunk_branch.index("else:")
@@ -1304,6 +1370,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         dtmf_branch = trunk_branch[trunk_branch.index("else:") :]
         self.assertNotIn("RtpPortReservation.allocate", no_dtmf_branch)
         self.assertIn("RtpPortReservation.allocate(hass)", dtmf_branch)
+
+        preprocess = on_invite[: on_invite.index("bucket = hass.data.setdefault")]
+        self.assertIn("trunk_direct_preprocessed = True", preprocess)
+        self.assertLess(
+            on_invite.index("trunk_direct_preprocessed = True"),
+            on_invite.index("if decision.action is RouteAction.GROUP:"),
+        )
 
     def test_route_requests_expose_pbx_ingress_provenance(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
@@ -1316,6 +1389,19 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             on_invite,
         )
 
+    def test_trunk_dtmf_route_request_preserves_trunk_provenance(self) -> None:
+        trunk_route = self.source[
+            self.source.index("async def _run_trunk_inbound_route(") :
+            self.source.index("async def _async_forward_existing_call(")
+        ]
+        route_request = trunk_route[
+            trunk_route.index("route_request=True") - 800 :
+            trunk_route.index("route_request=True") + 100
+        ]
+        self.assertIn('ingress="trunk"', route_request)
+        self.assertIn('origin="trunk"', route_request)
+        self.assertIn('route_kind="trunk"', route_request)
+
     def test_automation_group_destination_reenters_canonical_dispatch(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
         override = on_invite[on_invite.index("fallback_destination =") :]
@@ -1326,6 +1412,19 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_run_ring_group_call(", group_dispatch)
         self.assertIn("conference_manager(", group_dispatch)
         self.assertIn("replace(\n                                invite,", group_dispatch)
+
+    def test_ha_origin_ring_group_uses_local_media_without_sip_answer(self) -> None:
+        ring_group = self.source[
+            self.source.index("async def _run_ring_group_call(") :
+            self.source.index("async def _ring_conference_members(")
+        ]
+        winner_bridge = ring_group[
+            ring_group.index("if ha_origin:\n                    relay =") :
+            ring_group.index("_set_sip_bridge_call_state(", ring_group.index("if ha_origin:\n                    relay ="))
+        ]
+        self.assertIn("build_local_client_relay(", winner_bridge)
+        self.assertIn("else:\n                    relay = build_invite_client_relay(", winner_bridge)
+        self.assertIn("if not ha_origin:\n                answer = build_answer_directional(", winner_bridge)
 
     def test_offline_browser_remains_a_logical_ringing_destination(self) -> None:
         on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
@@ -1388,13 +1487,18 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         ]
         self.assertIn("except asyncio.CancelledError:", guarded)
         self.assertIn("registry.pending_invites.pop", guarded)
-        self.assertIn("registry.preanswered.pop", guarded)
+        self.assertIn(
+            "registry.take_media(invite.call_id, provisional=True)", guarded
+        )
         self.assertIn("_release_media_reservation(preanswered)", guarded)
         self.assertIn("_sip_send_bye(hass, invite.call_id)", guarded)
         self.assertIn("registry.finish_and_pop(", guarded)
-        creator = self.source[
-            self.source.index("create_runtime_task(", self.source.index("if trunk_invite:")) :
-            self.source.index("return SipInviteResult(200", self.source.index("if trunk_invite:"))
+        on_invite = self.source[self.source.index("async def _on_invite(invite:") :]
+        loop_index = on_invite.index("loop = asyncio.get_running_loop()")
+        trunk_index = on_invite.rindex("if trunk_invite:", 0, loop_index)
+        creator = on_invite[
+            on_invite.index("create_runtime_task(", trunk_index) :
+            on_invite.index("return SipInviteResult(200", trunk_index)
         ]
         self.assertIn("_run_trunk_inbound_route_guarded(", creator)
 
@@ -1523,7 +1627,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             self.source.index("def _invite_dtmf_format(")
         ]
         for field in (
-            '"schema_version": 1',
+            '"schema_version": CALL_EVENT_SCHEMA_VERSION',
+            '"actor": "sip_bridge"',
+            '"ingress": call_origin',
             '"event_type": "dtmf"',
             '"automation_control": "ha_anchored"',
             "registry.event_fields(call_id, state)",
@@ -1557,6 +1663,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         sensor = SENSOR.read_text()
         self.assertIn("and call_id != self._active_call_id", sensor)
         self.assertIn('if terminal and terminal_reason != "forwarded":', sensor)
+        self.assertIn(
+            "not terminal\n            and call_id == self._active_call_id",
+            sensor,
+        )
 
     def test_inbound_bridge_publishes_remote_ringing_with_direction(self) -> None:
         bridge = self.source[
@@ -1595,6 +1705,31 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             "if not digits and trunk_cfg.get(CONF_AUTOMATION_ROUTING_ENABLED):"
         )
         self.assertLess(cancellation, automation)
+
+    def test_dtmf_preanswer_selects_final_response_by_negotiated_transport(
+        self,
+    ) -> None:
+        invite = self.source[
+            self.source.index("dtmf_formats = sip_sdp.offered_dtmf_formats(") :
+            self.source.index("route_action = \"default\"", self.source.index("dtmf_formats = sip_sdp.offered_dtmf_formats("))
+        ]
+        self.assertIn("confirm_for_sip_info = dtmf_format is None", invite)
+        self.assertIn(
+            'return SipInviteResult(200, "OK", answer_sdp=answer, to_tag="")',
+            invite,
+        )
+        self.assertIn('183,\n                    "Session Progress"', invite)
+        self.assertIn("defer_final=True", invite)
+
+    def test_assist_handoff_preserves_session_transport_provenance(self) -> None:
+        assist = self.source[
+            self.source.index("async def _start_local_assist_bridge(") :
+            self.source.index("def _sip_uri_for_member(")
+        ]
+        self.assertIn('existing_metadata.get("ingress")', assist)
+        self.assertIn('existing_metadata.get("origin")', assist)
+        self.assertIn("ingress=call_ingress", assist)
+        self.assertIn("origin=call_ingress", assist)
 
     def test_route_override_publishes_resolved_callee(self) -> None:
         route = self.source[
@@ -1660,8 +1795,12 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         legacy = 'remote_video_rtcp_mux=(bool(remote_video["rtcp_mux"])'
         self.assertNotIn(legacy, listener)
         self.assertNotIn(legacy, client)
-        self.assertIn("remote_video_rtcp_mux=False", listener)
-        self.assertGreaterEqual(client.count("remote_video_rtcp_mux=False"), 2)
+        self.assertIn("RemoteMediaTarget.from_section(", listener)
+        self.assertIn("RemoteMediaTarget.from_section(", client)
+        self.assertIn("rtcp_mux=False", listener)
+        self.assertIn("rtcp_mux=False", client)
+        self.assertIn("as_remote_video_fields()", listener)
+        self.assertIn("as_remote_video_fields()", client)
 
 
 if __name__ == "__main__":

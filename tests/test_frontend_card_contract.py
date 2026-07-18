@@ -153,7 +153,10 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('"busy"', body)
         self.assertIn("data.terminal_reason || data.reason || state", body)
         self.assertIn("data.target || data.dialed_target || data.peer_name || data.callee", body)
-        self.assertIn('this._captureEndReason("terminal", reason, data.origin || "remote", peer)', body)
+        self.assertIn(
+            'this._captureEndReason("terminal", reason, data.actor || "remote", peer)',
+            body,
+        )
 
     def test_ha_softphone_terminal_label_prefers_dialed_target(self) -> None:
         apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
@@ -422,6 +425,11 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._sessionCallId() !== callId", auto_answer)
         self.assertIn("await this._answer({ callId, videoPermission })", auto_answer)
 
+    def test_terminal_snapshot_is_not_rejected_by_revision_guard(self) -> None:
+        apply_snapshot = _method_body(self.source, "_applySoftphoneSnapshot")
+        self.assertIn("const terminalSnapshot = [", apply_snapshot)
+        self.assertGreaterEqual(apply_snapshot.count("!terminalSnapshot &&"), 2)
+
     def test_video_answer_preflights_camera_and_auto_answer_never_prompts(self) -> None:
         answer = _method_body(self.source, "async _answer")
         start = _method_body(self.source, "async _startHaSoftphoneCall")
@@ -432,6 +440,10 @@ class FrontendCardContractTest(unittest.TestCase):
         permission = _method_body(engine, "async prepareVideoCameraPermission")
 
         self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", answer)
+        wants_video = answer.split("const wantsVideo = Boolean(", 1)[1].split(
+            ");", 1
+        )[0]
+        self.assertNotIn("video_offered", wants_video)
         self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", start)
         self.assertIn("this._targetSupportsVideo(target)", start)
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", answer)
@@ -779,6 +791,19 @@ class FrontendCardContractTest(unittest.TestCase):
             "answerBtn, declineBtn, hangupBtn, hangupState, hangupPeer, hangupStats, hangupDuration",
             self.source,
         )
+
+    def test_video_negotiation_failure_is_extended_information_only(self) -> None:
+        render = _method_body(self.source, "_render")
+        marker = 'statusReason = `Video unavailable: ${videoFailureReason}`;'
+        before_marker = render[: render.index(marker)]
+        condition = before_marker[before_marker.rfind("if (") :]
+        self.assertIn("this.config?.show_extended_info", condition)
+
+    def test_unregistered_sip_accounts_are_not_callable_card_contacts(self) -> None:
+        targets = _method_body(self.source, "_softphoneTargets")
+        self.assertIn('metadata.endpoint_kind || ""', targets)
+        self.assertIn('=== "sip_account"', targets)
+        self.assertIn("metadata.registered !== true", targets)
 
 
 if __name__ == "__main__":

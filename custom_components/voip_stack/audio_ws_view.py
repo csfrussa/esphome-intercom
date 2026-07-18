@@ -46,6 +46,7 @@ from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
 from .local_softphone_bridge import LocalCallStateError
+from .media_ws_session import async_media_websocket_session
 from .websocket_api import (
     CALL_EVENT,
     _ha_softphone_store,
@@ -54,9 +55,6 @@ from .websocket_api import (
 from .websocket_owner import (
     MediaWebSocketOwner,
     WebSocketOwnerBusyError,
-    async_claim_call_media_owner,
-    async_release_local_media_if_unowned,
-    async_release_media_owner,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -408,7 +406,7 @@ class VoipAudioWebSocketView(HomeAssistantView):
         bucket = hass.data.setdefault(DOMAIN, {})
         shutdown_event = bucket.setdefault("media_shutdown", asyncio.Event())
         try:
-            owners, owner_lock, owner_key = await async_claim_call_media_owner(
+            async with async_media_websocket_session(
                 bucket,
                 registry,
                 requested_call_id,
@@ -419,70 +417,52 @@ class VoipAudioWebSocketView(HomeAssistantView):
                 shutdown_event=shutdown_event,
                 pin_client_identity=local_call is None,
                 local_bridge=(local_bridge if local_call is not None else None),
-            )
-        except WebSocketOwnerBusyError as err:
-            raise web.HTTPConflict(text="HA softphone media is already attached") from err
+                publish_state=lambda: _publish_ha_softphone_state(
+                    hass, endpoint_id=endpoint_id
+                ),
+            ) as media_owner:
+                # The old owner may have consumed and released RTP resources while
+                # this request waited. Resolve the live dialog again after the
+                # ownership barrier instead of reusing a stale session snapshot.
+                local_call = (
+                    local_bridge.get_call(requested_call_id)
+                    if local_bridge is not None
+                    else None
+                )
+                if local_call is not None:
+                    from .local_softphone_bridge import LocalBridgeError
 
-        lease = None
-        try:
-            # The old owner may have consumed and released RTP resources while
-            # this request waited. Resolve the live dialog again after the
-            # ownership barrier instead of reusing a stale session snapshot.
-            local_call = (
-                local_bridge.get_call(requested_call_id)
-                if local_bridge is not None
-                else None
-            )
-            if local_call is not None:
-                from .local_softphone_bridge import LocalBridgeError
-
-                try:
-                    lease = local_bridge.acquire_media(
-                        requested_call_id, endpoint_id, client_id
-                    )
-                except LocalBridgeError as err:
-                    raise web.HTTPConflict(text=str(err)) from err
-                await ws.prepare(request)
-                await _run_local_audio_session(
-                    hass,
-                    ws,
-                    local_bridge,
-                    lease,
-                )
-            else:
-                session = _active_softphone_media_session(hass, endpoint_id)
-                if session is None or requested_call_id != session.call_id:
-                    raise web.HTTPConflict(
-                        text="HA softphone has no matching SIP/RTP dialog"
-                    )
-                await ws.prepare(request)
-                await _run_audio_session(
-                    hass,
-                    ws,
-                    session,
-                    request.transport,
-                    handoff_requested=owner.handoff_requested,
-                    endpoint_id=endpoint_id,
-                )
-        finally:
-            try:
-                await async_release_media_owner(
-                    owners,
-                    owner_lock,
-                    owner_key,
-                    owner,
-                )
-            finally:
-                if lease is not None:
-                    await async_release_local_media_if_unowned(
-                        bucket,
+                    try:
+                        lease = local_bridge.acquire_media(
+                            requested_call_id, endpoint_id, client_id
+                        )
+                    except LocalBridgeError as err:
+                        raise web.HTTPConflict(text=str(err)) from err
+                    media_owner.own_local_lease(local_bridge, lease)
+                    await ws.prepare(request)
+                    await _run_local_audio_session(
+                        hass,
+                        ws,
                         local_bridge,
                         lease,
                     )
-                # The terminal call event is emitted before the media request
-                # unwinds. Publish once more after ownership is actually gone
-                # so diagnostics do not preserve a stale post-call owner.
-                _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
+                else:
+                    session = _active_softphone_media_session(hass, endpoint_id)
+                    if session is None or requested_call_id != session.call_id:
+                        raise web.HTTPConflict(
+                            text="HA softphone has no matching SIP/RTP dialog"
+                        )
+                    await ws.prepare(request)
+                    await _run_audio_session(
+                        hass,
+                        ws,
+                        session,
+                        request.transport,
+                        handoff_requested=owner.handoff_requested,
+                        endpoint_id=endpoint_id,
+                    )
+        except WebSocketOwnerBusyError as err:
+            raise web.HTTPConflict(text="HA softphone media is already attached") from err
         return ws
 
 

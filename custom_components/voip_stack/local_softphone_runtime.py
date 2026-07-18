@@ -96,12 +96,7 @@ def _name(endpoint: PhoneEndpoint | None, fallback: str) -> str:
 
 
 def _state_value(state: LocalCallState) -> str:
-    return {
-        LocalCallState.CALLING: "calling",
-        LocalCallState.RINGING: "ringing",
-        LocalCallState.IN_CALL: "in_call",
-        LocalCallState.IDLE: "idle",
-    }[state]
+    return state.value
 
 
 def _terminal_state(
@@ -265,13 +260,13 @@ def _bridge_event(hass: HomeAssistant, event: LocalBridgeEvent) -> None:
             role="local_phone",
             state="ringing",
         )
-        registry.softphone_media[snapshot.call_id] = {
+        registry.attach_media(snapshot.call_id, {
             "local_bridge": True,
             "endpoint_ids": (
                 snapshot.caller_endpoint_id,
                 snapshot.callee_endpoint_id,
             ),
-        }
+        })
         _publish_leg(hass, snapshot, snapshot.caller_endpoint_id)
         _publish_leg(hass, snapshot, snapshot.callee_endpoint_id)
         return
@@ -311,7 +306,7 @@ def _bridge_event(hass: HomeAssistant, event: LocalBridgeEvent) -> None:
             snapshot.callee_endpoint_id,
             terminal=True,
         )
-        registry.softphone_media.pop(snapshot.call_id, None)
+        registry.take_media(snapshot.call_id)
         registry.finish_and_pop(
             snapshot.call_id,
             reason=(

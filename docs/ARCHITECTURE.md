@@ -63,6 +63,36 @@ Component ownership:
 - Cards never own the call FSM. They render state pushed by the owner and send
   user commands back to that owner.
 
+### HA Runtime Ownership Model
+
+The PBX ownership core is built alongside the existing SIP dispatcher as a
+migration seam; it is not a second router and a call never passes through two
+independent dial plans.
+
+- `SipEndpointRuntime` owns endpoint-wide components such as listeners,
+  registrar, trunk and conference manager.
+- `EndpointCallSession` is the authoritative owner of one logical call,
+  including its generation, legs, tasks, media reservations and cleanup
+  barrier.
+- `CallLeg` represents one SIP, browser, ESP, trunk or Assist participant.
+- `DialForkController` supplies the shared first-answer-wins primitive used by
+  ring groups and other parallel dial attempts.
+- `AnswerTransaction` implements prepare, final response and commit with
+  rollback of ports, sockets and optional video resources.
+- `CallRegistry` is the observable compatibility index/projection used by HA
+  entities, services and existing runtime adapters; it is not a second
+  lifecycle owner.
+
+Termination is generation-guarded, idempotent and cancellation-safe. The
+session enters `terminating` synchronously, then waits for a shielded cleanup
+barrier so late dial winners, media callbacks or duplicate BYE/CANCEL observers
+cannot resurrect the call.
+
+`endpoint_runtime.py` still contains the legacy dispatcher while flows are
+moved behind these ownership primitives. This is intentionally a transitional
+boundary: new routing policy must enter the canonical dispatcher and must not
+create a parallel code path in the ownership core.
+
 ## Call Control
 
 All call control is SIP:
@@ -137,10 +167,12 @@ negotiate different supported media shapes, HA decodes/converts/resamples and
 reframes between the formats. If conversion is not possible, the bridge fails
 with `media_incompatible`.
 
-Inbound provider trunk calls are also two-leg calls. HA answers the trunk leg to
-receive DTMF routing digits through RTP `telephone-event` or compatible legacy SIP INFO,
-then originates a normal SIP call to HA softphone or a local phonebook target
-and bridges RTP with the same relay.
+Inbound provider trunk calls are also two-leg calls. When SDP negotiates RTP
+`telephone-event`, HA may collect RFC 4733 digits using provisional `183`
+early media. When the offer has no named-event payload and legacy SIP INFO is
+the available compatibility transport, HA confirms the dialog with `200 OK`
+before collecting digits. It then originates a normal call to the selected HA
+softphone or local phonebook target and bridges RTP with the same relay.
 
 An Assist destination is local to the HA SIP endpoint, so it does not create a
 second SIP dialog or listener. VoIP Stack decodes the negotiated incoming RTP,
@@ -189,14 +221,14 @@ Terminal reasons are backend-owned and may contain exact SIP/application
 reasons. The frontend must display the supplied reason rather than mapping it
 through a private parallel FSM.
 
-HA runtime call ownership is centralized in `CallRegistry`. Pending routes,
-pending INVITEs, pre-answered trunk legs, HA softphone media, SIP clients,
-bridge clients, relays and client watcher tasks live behind that registry
-instead of separate mutable maps. Service handlers, inbound SIP callbacks,
-WebSocket audio and debug snapshots all derive active call information from the
-same session/leg registry. This avoids HA softphone state being polluted by
-router-only bridges and makes bridge teardown propagate BYE/cleanup through the
-same call session.
+HA runtime call ownership is centralized in `EndpointCallSession`; the
+`CallRegistry` projects and indexes that ownership for compatibility. Pending
+routes, pending INVITEs, pre-answered trunk legs, HA softphone media, SIP
+clients, bridge clients, relays and watcher tasks are generation-bound to the
+same logical session. Service handlers, inbound SIP callbacks, WebSocket media
+and debug snapshots therefore observe one lifecycle. This avoids HA softphone
+state being polluted by router-only bridges and makes bridge teardown propagate
+BYE and cleanup through the same call session.
 
 ## Routing
 

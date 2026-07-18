@@ -659,15 +659,18 @@ assert.match(engineErrorCard._errorMsg, /audio media update failed/i);
 // A standards-valid audio fallback must still tell the user why the offered
 // video stream was rejected instead of hiding the failure in backend logs.
 const degradedVideo = makeCard();
-degradedVideo._applySoftphoneSnapshot({{
+    degradedVideo._applySoftphoneSnapshot({{
   endpoint_id: "default", device_id: "__voip_stack_ha_softphone__",
   state: "in_call", direction: "incoming", call_id: "video-degraded",
   peer_name: "Door", sequence: 1, video_requested: true,
   video_negotiated: false, video_status: "degraded",
   video_failure_reason: "local_video_resources_unavailable",
-}});
-degradedVideo._render();
-assert.match(degradedVideo._els.statusReason.textContent, /Video unavailable/i);
+    }});
+    degradedVideo._render();
+    assert.equal(degradedVideo._els.statusReason.textContent, "");
+    degradedVideo.config.show_extended_info = true;
+    degradedVideo._render();
+    assert.match(degradedVideo._els.statusReason.textContent, /Video unavailable/i);
 assert.match(degradedVideo._els.statusReason.textContent, /allocate video media/i);
 
 // A rejected Hangup keeps the exact call claim and attached media available

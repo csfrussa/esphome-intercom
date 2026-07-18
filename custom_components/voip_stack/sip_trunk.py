@@ -12,7 +12,8 @@ from typing import Any, Awaitable, Callable
 
 from . import sip
 from .sip_auth import build_digest_authorization
-from .sip_client import SIP_T1, SIP_T2, _SipClientProtocol
+from .sip_transaction import SIP_T1, SIP_T2, SipClientTransaction
+from .sip_udp_io import SipDatagramQueueProtocol
 from .sip_tcp_io import SipTcpWriter, read_sip_stream_message as _read_sip_stream_message
 from .queue_utils import put_drop_oldest
 from .session_cleanup import async_wait_for_cleanup
@@ -70,7 +71,7 @@ class SipTrunkClient:
         self.transport_name = (config.transport or "udp").upper()
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue(maxsize=128)
         self.responses: asyncio.Queue[sip.SipMessage] = asyncio.Queue(maxsize=32)
-        self.protocol: _SipClientProtocol | None = None
+        self.protocol: SipDatagramQueueProtocol | None = None
         self.transport: asyncio.DatagramTransport | None = None
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
@@ -333,7 +334,7 @@ class SipTrunkClient:
         if self.transport is not None:
             return
         loop = asyncio.get_running_loop()
-        self.protocol = _SipClientProtocol(self.queue)
+        self.protocol = SipDatagramQueueProtocol(self.queue)
         transport, _ = await loop.create_datagram_endpoint(
             lambda: self.protocol,
             local_addr=("0.0.0.0", 0),
@@ -684,31 +685,25 @@ class SipTrunkClient:
             await self._send_raw(raw)
             self.last_sip_event = "REGISTER"
             _LOGGER.info("SIP trunk TX REGISTER %s expires=%s", self.domain, expires_value)
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + max(0.0, float(timeout))
-            retransmit_interval = SIP_T1
-            next_retransmit = loop.time() + retransmit_interval
+            transaction = SipClientTransaction[
+                sip.SipMessage
+            ](
+                transport=self.transport_name,
+                timeout=max(0.0, float(timeout)),
+                t1=SIP_T1,
+                t2=SIP_T2,
+            )
             try:
-                while True:
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        raise asyncio.TimeoutError
-                    read_timeout = remaining
-                    if self.transport_name != "TCP":
-                        read_timeout = min(read_timeout, max(0.0, next_retransmit - loop.time()))
-                    try:
-                        msg = await self._read_response(
-                            read_timeout,
-                            expected_cseq=self.cseq,
-                            expected_branch=expected_branch,
-                        )
-                        break
-                    except asyncio.TimeoutError:
-                        if self.transport_name == "TCP" or loop.time() >= deadline:
-                            raise
-                        await self._send_raw(raw)
-                        retransmit_interval = min(retransmit_interval * 2.0, SIP_T2)
-                        next_retransmit = loop.time() + retransmit_interval
+                msg = await transaction.receive(
+                    lambda read_timeout: self._read_response(
+                        read_timeout,
+                        expected_cseq=self.cseq,
+                        expected_branch=expected_branch,
+                    ),
+                    lambda: self._send_raw(raw),
+                )
+                if msg is None:
+                    raise asyncio.TimeoutError
             except asyncio.TimeoutError:
                 self.registered = False
                 self.status_code = 0

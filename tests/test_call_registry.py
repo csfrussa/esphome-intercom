@@ -64,6 +64,20 @@ class _EndpointRegistryStub:
 
 
 class CallRegistryEventContextTest(unittest.TestCase):
+    def test_event_v2_origin_is_transport_stable(self) -> None:
+        self.assertEqual(
+            automation_routing.canonical_call_origin("trunk", "ring_group"),
+            "trunk",
+        )
+        self.assertEqual(
+            automation_routing.canonical_call_origin("remote", "trunk"),
+            "trunk",
+        )
+        self.assertEqual(
+            automation_routing.canonical_call_origin("self", "direct"),
+            "extension",
+        )
+
     def test_snapshot_exposes_every_owned_runtime_resource(self) -> None:
         registry = call_registry.CallRegistry()
         registry.upsert("call-1", state="in_call", owner="bridge")
@@ -125,9 +139,52 @@ class CallRegistryEventContextTest(unittest.TestCase):
             registry.is_generation_current("call-1", session.generation)
         )
         self.assertTrue(registry.begin_termination("call-1"))
+        self.assertEqual(
+            registry.sessions["call-1"].metadata["pbx_phase"],
+            "terminating",
+        )
         self.assertFalse(
             registry.is_generation_current("call-1", session.generation)
         )
+
+    def test_stale_generation_cannot_register_or_resurrect_bridge(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("source", state="ringing", owner="router")
+        client = object()
+
+        self.assertTrue(registry.begin_termination("source"))
+        registry.finish_and_pop("source", reason="cancelled", state="cancelled")
+
+        attached = registry.register_bridge(
+            source_call_id="source",
+            dest_call_id="late-destination",
+            client=client,
+            state="connecting",
+            expected_generation=session.generation,
+        )
+
+        self.assertIsNone(attached)
+        self.assertNotIn("source", registry.sessions)
+        self.assertNotIn("source", registry.bridge_clients)
+        self.assertNotIn("late-destination", registry.sip_clients)
+        self.assertNotIn("late-destination", registry.leg_index)
+
+    def test_wrong_generation_rejects_bridge_before_mutating_indexes(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert("source", state="ringing", owner="router")
+
+        attached = registry.register_bridge(
+            source_call_id="source",
+            dest_call_id="destination",
+            client=object(),
+            state="connecting",
+            expected_generation=session.generation + 1,
+        )
+
+        self.assertIsNone(attached)
+        self.assertEqual(registry.bridge_clients, {})
+        self.assertEqual(registry.sip_clients, {})
+        self.assertEqual(session.legs, {})
 
     def test_sequence_advances_only_for_canonical_state_changes(self) -> None:
         registry = call_registry.CallRegistry()
@@ -141,6 +198,40 @@ class CallRegistryEventContextTest(unittest.TestCase):
         self.assertEqual(duplicate, first)
         self.assertEqual(answered["sequence"], 2)
         self.assertEqual(answered["previous_state"], "ringing")
+
+    def test_event_schema_v2_exposes_generation_phase_and_call_origin(self) -> None:
+        registry = call_registry.CallRegistry()
+        session = registry.upsert(
+            "call-1",
+            state="connecting",
+            owner="router",
+            ingress="trunk",
+            origin="trunk",
+        )
+
+        fields = registry.event_fields("call-1", "connecting")
+
+        self.assertEqual(fields["schema_version"], 2)
+        self.assertEqual(fields["generation"], session.generation)
+        self.assertEqual(fields["pbx_phase"], "connecting")
+        self.assertEqual(fields["ingress"], "trunk")
+        self.assertEqual(fields["origin"], "trunk")
+
+    def test_bridge_registration_preserves_transport_provenance(self) -> None:
+        registry = call_registry.CallRegistry()
+
+        registry.register_bridge(
+            source_call_id="source",
+            dest_call_id="destination",
+            client=object(),
+            state="connecting",
+            ingress="trunk",
+            origin="trunk",
+        )
+
+        fields = registry.event_fields("source", "connecting")
+        self.assertEqual(fields["ingress"], "trunk")
+        self.assertEqual(fields["origin"], "trunk")
 
     def test_route_history_is_bounded_and_returned_with_events(self) -> None:
         registry = call_registry.CallRegistry()

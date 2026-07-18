@@ -132,6 +132,7 @@ class RtpPcmFormat:
 class RtpDtmfFormat:
     payload_type: int
     sample_rate: int
+    events: frozenset[int] = frozenset(range(16))
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +223,64 @@ class RtpVideoDirection:
     @property
     def answer_format(self) -> RtpVideoFormat:
         return self.answer or self.recv
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteMediaTarget:
+    """Normalized RTP/RTCP target projected from one remote media section."""
+
+    rtp_host: str = ""
+    rtp_port: int = 0
+    rtcp_host: str = ""
+    rtcp_port: int = 0
+    rtcp_mux: bool = False
+    payload_types: tuple[int, ...] = ()
+    connection_held: bool = False
+
+    @classmethod
+    def from_section(
+        cls,
+        section: dict | None,
+        *,
+        rtcp_mux: bool | None = None,
+    ) -> "RemoteMediaTarget":
+        if section is None:
+            return cls()
+        rtp_host = str(section.get("connection_ip") or "")
+        rtp_port = int(section.get("media_port") or 0)
+        if not rtp_host or not 0 <= rtp_port <= 65535:
+            raise SdpError("remote media section has an invalid RTP target")
+        rtcp_host = str(section.get("rtcp_address") or rtp_host)
+        raw_rtcp_port = section.get("rtcp_port")
+        rtcp_port = int(raw_rtcp_port or (rtp_port + 1 if rtp_port else 0))
+        if not 0 <= rtcp_port <= 65535:
+            raise SdpError("remote media section has an invalid RTCP target")
+        return cls(
+            rtp_host=rtp_host,
+            rtp_port=rtp_port,
+            rtcp_host=rtcp_host,
+            rtcp_port=rtcp_port,
+            rtcp_mux=(
+                bool(section.get("rtcp_mux"))
+                if rtcp_mux is None
+                else bool(rtcp_mux)
+            ),
+            payload_types=tuple(
+                int(item) for item in section.get("payload_order") or ()
+            ),
+            connection_held=bool(section.get("connection_held")),
+        )
+
+    def as_remote_video_fields(self) -> dict[str, object]:
+        return {
+            "remote_video_rtp_host": self.rtp_host,
+            "remote_video_rtp_port": self.rtp_port,
+            "remote_video_rtcp_host": self.rtcp_host,
+            "remote_video_rtcp_port": self.rtcp_port,
+            "remote_video_rtcp_mux": self.rtcp_mux,
+            "remote_video_payload_types": self.payload_types,
+            "remote_video_connection_held": self.connection_held,
+        }
 
 
 # Kept as a public compatibility alias for integrations and tests that used
@@ -1206,7 +1265,7 @@ def build_offer_directional(
                 f"a=fmtp:{fmt.payload_type} stereo=1;sprop-stereo=1;maxaveragebitrate=28000"
             )
     lines.append(f"a=rtpmap:{dtmf_payload_type} telephone-event/8000")
-    lines.append(f"a=fmtp:{dtmf_payload_type} 0-16")
+    lines.append(f"a=fmtp:{dtmf_payload_type} 0-15")
     lines.append(f"a=ptime:{rtp_formats[0].frame_ms}")
     lines.append(f"a=maxptime:{rtp_formats[0].frame_ms}")
     lines.append(f"a={audio_direction}")
@@ -1539,7 +1598,12 @@ def _equivalent_rtp_payloads(
     return mappings
 
 
-def validate_sdp_answer(offer: str | bytes, answer: str | bytes) -> None:
+def validate_sdp_answer(
+    offer: str | bytes,
+    answer: str | bytes,
+    *,
+    allow_omitted_trailing_media: bool = False,
+) -> None:
     """Validate the RFC 3264 media-section and direction answer contract.
 
     An answer cannot add, remove, or reorder ``m=`` sections. Accepted media
@@ -1554,10 +1618,23 @@ def validate_sdp_answer(offer: str | bytes, answer: str | bytes) -> None:
     _answer_connection, _answer_direction, answered = _parse_media_sections(answer)
     if not offered:
         raise SdpError("SDP offer has no media sections")
-    if len(answered) != len(offered):
+    if len(answered) > len(offered) or (
+        len(answered) < len(offered) and not allow_omitted_trailing_media
+    ):
         raise SdpError(
             "SDP answer must preserve the offer's media-section count and order"
         )
+    if allow_omitted_trailing_media and len(answered) < len(offered):
+        # A few PSTN gateways return only the accepted leading audio section
+        # instead of retaining later rejected media with port zero.  This is
+        # not RFC 3264 compliant, but treating those *trailing* sections as
+        # rejected is unambiguous and preserves useful audio interoperability.
+        # Never allow an omitted leading/accepted audio section.
+        omitted = offered[len(answered) :]
+        if not answered or any(section["media"] == "audio" for section in omitted):
+            raise SdpError(
+                "SDP answer omitted a required audio media section"
+            )
     allowed_directions = {
         "sendrecv": {"sendrecv", "sendonly", "recvonly", "inactive"},
         "sendonly": {"recvonly", "inactive"},
@@ -1565,7 +1642,7 @@ def validate_sdp_answer(offer: str | bytes, answer: str | bytes) -> None:
         "inactive": {"inactive"},
     }
     for index, (offered_section, answered_section) in enumerate(
-        zip(offered, answered, strict=True)
+        zip(offered, answered, strict=False)
     ):
         media = str(offered_section["media"])
         if str(answered_section["media"]) != media:
@@ -1618,34 +1695,40 @@ def validate_sdp_answer(offer: str | bytes, answer: str | bytes) -> None:
             raise SdpError(
                 f"SDP answer media section {index} added unoffered rtcp-mux-only"
             )
-        offered_feedback = offered_section["rtcp_feedback"]
-        wildcard_feedback = _normalized_rtcp_feedback(
-            offered_feedback.get("*", [])
-        )
-        answered_payloads = {
-            int(value) for value in answered_formats if str(value).isdigit()
-        }
-        for key, values in answered_section["rtcp_feedback"].items():
-            answer_feedback = _normalized_rtcp_feedback(values)
-            if key == "*":
-                allowed_feedback = wildcard_feedback
-            else:
-                if int(key) not in answered_payloads:
-                    raise SdpError(
-                        f"SDP answer media section {index} attached RTCP feedback "
-                        "to an unselected payload type"
-                    )
-                allowed_feedback = set(wildcard_feedback)
-                for offered_payload in equivalent_payloads.get(int(key), ()):
-                    allowed_feedback.update(
-                        _normalized_rtcp_feedback(
-                            offered_feedback.get(offered_payload, [])
+        # RFC 4585 defines rtcp-fb only for RTP/AVPF. Some otherwise useful
+        # SIP peers serialize those attributes on RTP/AVP as well; they have
+        # no negotiated meaning there and are ignored, matching
+        # ``offered_video_formats``. AVPF remains strict offer/answer.
+        if transport == "RTP/AVPF":
+            offered_feedback = offered_section["rtcp_feedback"]
+            wildcard_feedback = _normalized_rtcp_feedback(
+                offered_feedback.get("*", [])
+            )
+            answered_payloads = {
+                int(value) for value in answered_formats if str(value).isdigit()
+            }
+            for key, values in answered_section["rtcp_feedback"].items():
+                answer_feedback = _normalized_rtcp_feedback(values)
+                if key == "*":
+                    allowed_feedback = wildcard_feedback
+                else:
+                    if int(key) not in answered_payloads:
+                        raise SdpError(
+                            f"SDP answer media section {index} attached RTCP "
+                            "feedback to an unselected payload type"
                         )
+                    allowed_feedback = set(wildcard_feedback)
+                    for offered_payload in equivalent_payloads.get(int(key), ()):
+                        allowed_feedback.update(
+                            _normalized_rtcp_feedback(
+                                offered_feedback.get(offered_payload, [])
+                            )
+                        )
+                if not answer_feedback.issubset(allowed_feedback):
+                    raise SdpError(
+                        f"SDP answer media section {index} added unoffered "
+                        "RTCP feedback"
                     )
-            if not answer_feedback.issubset(allowed_feedback):
-                raise SdpError(
-                    f"SDP answer media section {index} added unoffered RTCP feedback"
-                )
         offer_direction = normalize_direction(str(offered_section["direction"]))
         answer_direction = normalize_direction(str(answered_section["direction"]))
         if answer_direction not in allowed_directions[offer_direction]:
@@ -2019,15 +2102,6 @@ def negotiate_h264(remote_sdp: str | bytes) -> RtpH264Format | None:
     return offered[0] if offered else None
 
 
-def negotiate_h264_answer(
-    remote_sdp: str | bytes,
-    offered: RtpH264Format,
-) -> RtpH264Format | None:
-    """Accept a compatible H.264 answer, retaining its directional payload."""
-
-    return negotiate_video_answer(remote_sdp, offered)
-
-
 def _matching_offered_video_answer(
     selected: RtpVideoFormat,
     offered_formats: tuple[RtpVideoFormat, ...],
@@ -2065,7 +2139,7 @@ def _matching_offered_video_answer(
     return None
 
 
-def negotiate_video_answer(
+def _negotiate_video_answer(
     remote_sdp: str | bytes,
     offered: RtpVideoFormat | tuple[RtpVideoFormat, ...],
 ) -> RtpVideoFormat | None:
@@ -2094,7 +2168,7 @@ def negotiate_video_answer_directional(
     offered_formats = (
         (offered,) if isinstance(offered, RtpVideoFormat) else tuple(offered)
     )
-    selected = negotiate_video_answer(remote_sdp, offered_formats)
+    selected = _negotiate_video_answer(remote_sdp, offered_formats)
     if selected is None:
         return None
     candidate = _matching_offered_video_answer(selected, offered_formats)
@@ -2430,6 +2504,43 @@ def offered_pcm_formats(sdp: str | bytes) -> list[RtpPcmFormat]:
     return out
 
 
+def _dtmf_events_from_fmtp(value: str) -> frozenset[int]:
+    """Parse the RFC 4733 event list, defaulting to the DTMF range."""
+
+    if not str(value or "").strip():
+        return frozenset(range(16))
+    events: set[int] = set()
+    try:
+        for item in str(value).split(","):
+            bounds = item.strip().split("-", 1)
+            start = int(bounds[0])
+            end = int(bounds[-1])
+            if not 0 <= start <= end <= 255:
+                return frozenset()
+            events.update(range(start, end + 1))
+    except ValueError:
+        return frozenset()
+    return frozenset(events)
+
+
+def _format_dtmf_events(events: frozenset[int]) -> str:
+    """Render a compact RFC 4733 event list for SDP fmtp."""
+
+    values = sorted(int(event) for event in events if 0 <= int(event) <= 255)
+    if not values:
+        return ""
+    ranges: list[str] = []
+    start = previous = values[0]
+    for value in values[1:]:
+        if value == previous + 1:
+            previous = value
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = value
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ",".join(ranges)
+
+
 def offered_dtmf_formats(sdp: str | bytes) -> list[RtpDtmfFormat]:
     parsed = parse_sdp(sdp)
     out: list[RtpDtmfFormat] = []
@@ -2439,7 +2550,13 @@ def offered_dtmf_formats(sdp: str | bytes) -> list[RtpDtmfFormat]:
             continue
         encoding, rate, _channels = spec
         if encoding == "TELEPHONE-EVENT":
-            out.append(RtpDtmfFormat(pt, rate))
+            out.append(
+                RtpDtmfFormat(
+                    pt,
+                    rate,
+                    _dtmf_events_from_fmtp(parsed["fmtp"].get(pt, "")),
+                )
+            )
     return out
 
 
@@ -2459,7 +2576,13 @@ def negotiate_dtmf_answer(
     for answer_format in answered:
         for offer_format in offered:
             if answer_format.sample_rate == offer_format.sample_rate:
-                return offer_format
+                events = answer_format.events & offer_format.events
+                if events:
+                    return RtpDtmfFormat(
+                        offer_format.payload_type,
+                        offer_format.sample_rate,
+                        events,
+                    )
     return None
 
 
@@ -2490,12 +2613,6 @@ def _offered_audio_mapping(parsed: dict, payload_type: int):
             return None
         return static
     return explicit
-
-
-def negotiate(
-    remote_sdp: str | bytes, local_preferred: list[AudioFormat]
-) -> RtpPcmFormat | None:
-    return _best_offered_match(offered_pcm_formats(remote_sdp), local_preferred)
 
 
 def negotiate_directional(
@@ -2559,19 +2676,6 @@ def negotiate_answer_directional(
     )
 
 
-def build_answer(
-    origin_ip: str,
-    media_ip: str,
-    media_port: int,
-    selected: RtpPcmFormat,
-    *,
-    dtmf: RtpDtmfFormat | None = None,
-) -> str:
-    return build_answer_directional(
-        origin_ip, media_ip, media_port, selected, selected, dtmf=dtmf
-    )
-
-
 def build_answer_directional(
     origin_ip: str,
     media_ip: str,
@@ -2616,7 +2720,11 @@ def build_answer_directional(
             )
         selected = [send]
     payload_values = [str(fmt.payload_type) for fmt in selected]
-    if dtmf is not None and str(dtmf.payload_type) not in payload_values:
+    if (
+        dtmf is not None
+        and dtmf.events
+        and str(dtmf.payload_type) not in payload_values
+    ):
         payload_values.append(str(dtmf.payload_type))
     payloads = " ".join(payload_values)
     audio_lines = [f"m=audio {int(media_port)} RTP/AVP {payloads}"]
@@ -2624,11 +2732,13 @@ def build_answer_directional(
         audio_lines.append(
             f"a=rtpmap:{fmt.payload_type} {fmt.encoding}/{fmt.sample_rate}/{fmt.channels}"
         )
-    if dtmf is not None:
+    if dtmf is not None and dtmf.events:
         audio_lines.append(
             f"a=rtpmap:{dtmf.payload_type} telephone-event/{dtmf.sample_rate}"
         )
-        audio_lines.append(f"a=fmtp:{dtmf.payload_type} 0-16")
+        audio_lines.append(
+            f"a=fmtp:{dtmf.payload_type} {_format_dtmf_events(dtmf.events)}"
+        )
     audio_lines.extend(
         [
             f"a=ptime:{selected[0].frame_ms}",

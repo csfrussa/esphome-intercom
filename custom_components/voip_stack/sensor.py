@@ -177,6 +177,8 @@ class HaSoftphoneCallStateSensor(SensorEntity):
         elif str(snapshot.get("scope") or "") != "session":
             return
         call_id = str(snapshot.get("call_id") or "").strip()
+        state = str(snapshot.get("state") or "idle")
+        terminal = state in TERMINAL_CALL_STATES
         incoming_revision = int(snapshot.get("revision") or snapshot.get("sequence") or 0)
         if (
             call_id
@@ -185,7 +187,11 @@ class HaSoftphoneCallStateSensor(SensorEntity):
             and self._attr_native_value != "idle"
         ):
             return
-        if call_id == self._active_call_id and incoming_revision < self._revision:
+        if (
+            not terminal
+            and call_id == self._active_call_id
+            and incoming_revision < self._revision
+        ):
             return
         self.async_set_context(event.context)
         self._apply_snapshot(snapshot)

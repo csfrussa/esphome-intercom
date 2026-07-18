@@ -66,12 +66,8 @@ async def async_stop_sip_endpoint(hass: HomeAssistant) -> None:
 async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
     registry = call_registry(hass)
     bucket = hass.data.get(DOMAIN, {})
-    await cancel_runtime_tasks(hass)
-    bucket.pop("async_forward_call", None)
-    bucket.pop("forward_tasks", None)
-    bucket.pop("forward_claims", None)
-    bucket.pop("call_deadlines", None)
     endpoint = bucket.get("sip_endpoint")
+    pbx_runtime = bucket.get("pbx_runtime")
 
     if endpoint is not None:
         snapshot = endpoint.snapshot()
@@ -80,16 +76,35 @@ async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
         for call_id in snapshot.active_call_ids:
             endpoint.send_bye(call_id)
 
-    watchers = {task for task in registry.client_watchers.values() if isinstance(task, asyncio.Task)}
-    current = asyncio.current_task()
-    for task in watchers:
-        if task is not current:
-            task.cancel()
-    if watchers:
-        await asyncio.gather(*(task for task in watchers if task is not current), return_exceptions=True)
+    await cancel_runtime_tasks(hass)
+    bucket.pop("async_forward_call", None)
+    bucket.pop("forward_tasks", None)
+    bucket.pop("forward_claims", None)
+    bucket.pop("call_deadlines", None)
 
-    manager = bucket.pop("conference_manager", None)
-    if manager is not None:
+    if pbx_runtime is None:
+        watchers = {
+            task
+            for task in registry.client_watchers.values()
+            if isinstance(task, asyncio.Task)
+        }
+        current = asyncio.current_task()
+        for task in watchers:
+            if task is not current:
+                task.cancel()
+        if watchers:
+            await asyncio.gather(
+                *(task for task in watchers if task is not current),
+                return_exceptions=True,
+            )
+
+    manager = bucket.get("conference_manager")
+    runtime_owns_manager = bool(
+        pbx_runtime is not None
+        and pbx_runtime.component("conference_manager") is manager
+    )
+    if manager is not None and not runtime_owns_manager:
+        bucket.pop("conference_manager", None)
         try:
             await manager.close(reason="local_hangup")
         except Exception:
@@ -107,22 +122,43 @@ async def _async_stop_sip_endpoint(hass: HomeAssistant) -> None:
             terminate_client=True,
         )
 
-    relays = {id(relay): relay for relay in registry.relays.values()}.values()
-    clients = {id(client): client for client in registry.sip_clients.values()}.values()
-    await asyncio.gather(
-        *(_stop_relay(relay) for relay in relays),
-        *(_stop_client(client) for client in clients),
-    )
-    # Inbound HA-softphone calls own their audio/video reservation through
-    # registry metadata rather than SipCallClient. Release it explicitly on a
-    # config-entry reload before clear_runtime drops the ownership record.
-    for media in [*registry.softphone_media.values(), *registry.preanswered.values()]:
-        release_media_reservation(media)
-    if endpoint is not None:
+    if pbx_runtime is None:
+        relays = {id(relay): relay for relay in registry.relays.values()}.values()
+        clients = {
+            id(client): client for client in registry.sip_clients.values()
+        }.values()
+        await asyncio.gather(
+            *(_stop_relay(relay) for relay in relays),
+            *(_stop_client(client) for client in clients),
+        )
+        # Compatibility cleanup for a registry created without the new owner.
+        for media in [
+            *registry.softphone_media.values(),
+            *registry.preanswered.values(),
+        ]:
+            release_media_reservation(media)
+    if pbx_runtime is not None:
+        try:
+            await pbx_runtime.shutdown()
+        except Exception:
+            _LOGGER.debug("Ignoring authoritative PBX runtime stop error", exc_info=True)
+    elif endpoint is not None:
         try:
             await endpoint.stop()
         except Exception:
             _LOGGER.debug("Ignoring SIP endpoint stop error", exc_info=True)
+    registry.bind_session_owner(None)
+    if bucket.get("pbx_runtime") is pbx_runtime:
+        bucket.pop("pbx_runtime", None)
+    if pbx_runtime is not None:
+        for key, component_name in (
+            ("sip_trunk", "trunk"),
+            ("sip_registrar", "registrar"),
+            ("conference_manager", "conference_manager"),
+        ):
+            value = bucket.get(key)
+            if value is not None and pbx_runtime.component(component_name) is value:
+                bucket.pop(key, None)
     if bucket.get("sip_endpoint") is endpoint:
         bucket.pop("sip_endpoint", None)
     bucket.pop("sip_server", None)

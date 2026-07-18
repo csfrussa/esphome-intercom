@@ -14,6 +14,13 @@ from .const import VOIP_STACK_RTP_PORT
 from . import sdp, sip
 from .sip_dialog import uas_request_matches_dialog
 from .sip_tcp_io import SipTcpWriter, read_sip_stream_message as _read_sip_stream_message
+from .sip_transaction import (
+    SIP_T1 as _SIP_T1,
+    SIP_T2 as _SIP_T2,
+    SIP_TIMER_B as _INVITE_2XX_TIMEOUT,
+    SIP_TIMER_H as _INVITE_NON2XX_TIMEOUT,
+    async_run_server_transaction,
+)
 from .queue_utils import put_drop_oldest
 
 
@@ -22,10 +29,6 @@ _MAX_SIP_UDP_TASKS = 32
 _MAX_SIP_INVITE_TASKS = 24
 _MAX_PENDING_INVITES = 64
 _MAX_COMPLETED_TRANSACTIONS = 256
-_SIP_T1 = 0.5
-_SIP_T2 = 4.0
-_INVITE_2XX_TIMEOUT = 64 * _SIP_T1
-_INVITE_NON2XX_TIMEOUT = 64 * _SIP_T1
 _DEFERRED_INVITE_TIMEOUT = 60.0
 
 
@@ -625,30 +628,28 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         completed.final_retransmissions = 0
 
         async def _run() -> None:
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + _INVITE_NON2XX_TIMEOUT
-            interval = _SIP_T1
+            def _retransmit_final() -> bool:
+                sent = self._send_response(
+                    completed.request,
+                    completed.addr,
+                    completed.status,
+                    completed.reason,
+                    to_tag=completed.to_tag,
+                    decline_reason=completed.decline_reason,
+                )
+                if sent:
+                    completed.final_retransmissions += 1
+                return sent
+
             try:
-                while self.completed_invites.get(call_id) is completed:
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        break
-                    await asyncio.sleep(min(interval, remaining))
-                    if self.completed_invites.get(call_id) is not completed:
-                        return
-                    if loop.time() >= deadline:
-                        break
-                    if completed.transport == "UDP":
-                        if self._send_response(
-                            completed.request,
-                            completed.addr,
-                            completed.status,
-                            completed.reason,
-                            to_tag=completed.to_tag,
-                            decline_reason=completed.decline_reason,
-                        ):
-                            completed.final_retransmissions += 1
-                        interval = min(interval * 2, _SIP_T2)
+                await async_run_server_transaction(
+                    send=_retransmit_final,
+                    active=lambda: self.completed_invites.get(call_id) is completed,
+                    transport=completed.transport,
+                    timeout=_INVITE_NON2XX_TIMEOUT,
+                    t1=_SIP_T1,
+                    t2=_SIP_T2,
+                )
             except asyncio.CancelledError:
                 return
             finally:
@@ -685,30 +686,38 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
         body = answer_sdp.encode("utf-8") if answer_sdp else b""
 
         async def _retransmit() -> None:
-            interval = _SIP_T1
-            deadline = asyncio.get_running_loop().time() + _INVITE_2XX_TIMEOUT
-            try:
-                while dialog.pending_ack_cseq:
-                    await asyncio.sleep(interval)
-                    if not dialog.pending_ack_cseq or self.active_dialogs.get(call_id) is not dialog:
-                        return
-                    if asyncio.get_running_loop().time() >= deadline:
-                        dialog.pending_ack_cseq = 0
-                        if not self.send_bye(call_id):
-                            self.active_dialogs.pop(call_id, None)
-                        if self.on_terminated is not None:
-                            await self.on_terminated(call_id, "ack_timeout")
-                        return
-                    self._send_response(
-                        request,
-                        addr,
-                        status,
-                        reason,
-                        body=body,
-                        to_tag=dialog.to_tag,
-                    )
+            def _retransmit_final() -> bool:
+                sent = self._send_response(
+                    request,
+                    addr,
+                    status,
+                    reason,
+                    body=body,
+                    to_tag=dialog.to_tag,
+                )
+                if sent:
                     dialog.invite_2xx_retransmissions += 1
-                    interval = min(interval * 2, _SIP_T2)
+                return sent
+
+            try:
+                result = await async_run_server_transaction(
+                    send=_retransmit_final,
+                    active=lambda: bool(
+                        dialog.pending_ack_cseq
+                        and self.active_dialogs.get(call_id) is dialog
+                    ),
+                    transport=dialog.transport,
+                    timeout=_INVITE_2XX_TIMEOUT,
+                    t1=_SIP_T1,
+                    t2=_SIP_T2,
+                    retransmit_reliable=True,
+                )
+                if result.timed_out and dialog.pending_ack_cseq:
+                    dialog.pending_ack_cseq = 0
+                    if not self.send_bye(call_id):
+                        self.active_dialogs.pop(call_id, None)
+                    if self.on_terminated is not None:
+                        await self.on_terminated(call_id, "ack_timeout")
             finally:
                 if dialog.invite_2xx_task is asyncio.current_task():
                     dialog.invite_2xx_task = None
@@ -1669,6 +1678,10 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 else None
             )
             remote_video = sdp.parse_video_sdp(request.body) if video_format is not None else None
+            remote_video_target = sdp.RemoteMediaTarget.from_section(
+                remote_video,
+                rtcp_mux=False,
+            )
             _LOGGER.info(
                 "SIP INVITE video negotiation call_id=%s enabled=%s selected=%s remote=%s",
                 request.header("Call-ID"),
@@ -1709,32 +1722,12 @@ class SipUdpEndpoint(asyncio.DatagramProtocol):
                 video_format=video_format,
                 local_video_format=local_video_format,
                 video_answer_format=video_answer_format,
-                remote_video_rtp_host=(str(remote_video["connection_ip"]) if remote_video else ""),
-                remote_video_rtp_port=(int(remote_video["media_port"]) if remote_video else 0),
-                remote_video_rtcp_host=(
-                    str(remote_video["rtcp_address"] or remote_video["connection_ip"])
-                    if remote_video
-                    else ""
-                ),
-                remote_video_rtcp_port=(
-                    int(remote_video["rtcp_port"] or int(remote_video["media_port"]) + 1)
-                    if remote_video
-                    else 0
-                ),
                 # This UAS deliberately answers with separate RTP/RTCP ports.
                 # RFC 5761 requires the offerer to stop multiplexing when the
                 # answer omits a=rtcp-mux, regardless of the original offer.
-                remote_video_rtcp_mux=False,
-                remote_video_payload_types=(
-                    tuple(int(item) for item in remote_video["payload_order"])
-                    if remote_video
-                    else ()
-                ),
-                remote_video_connection_held=bool(
-                    remote_video and remote_video["connection_held"]
-                ),
                 signaling_transport=self.signaling_transport,
                 received_via_trunk=self.trusted_trunk,
+                **remote_video_target.as_remote_video_fields(),
             )
         except Exception as err:
             _LOGGER.info("SIP INVITE parse failed: %s", err)

@@ -214,6 +214,8 @@ class GroupCallMatrixTest(unittest.TestCase):
             "local-call",
             state="ringing",
             owner="local_bridge",
+            ingress="trunk",
+            origin="trunk",
             endpoint_id="office",
             source_endpoint_id="office",
             dest_endpoint_id="kitchen",
@@ -227,6 +229,7 @@ class GroupCallMatrixTest(unittest.TestCase):
                 "endpoint_id": "kitchen",
                 "device_id": "kitchen-device",
                 "direction": "incoming",
+                "origin": "remote",
             },
             "session",
         )
@@ -235,6 +238,12 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(event["device_id"], "kitchen-device")
         self.assertEqual(event["source_endpoint_id"], "office")
         self.assertEqual(event["dest_endpoint_id"], "kitchen")
+        self.assertEqual(event["schema_version"], 2)
+        self.assertGreater(event["generation"], 0)
+        self.assertEqual(event["pbx_phase"], "ringing")
+        self.assertEqual(event["actor"], "remote")
+        self.assertEqual(event["ingress"], "trunk")
+        self.assertEqual(event["origin"], "trunk")
 
     def test_ring_group_decline_is_per_phone_and_cannot_be_reversed(self) -> None:
         async def scenario() -> None:

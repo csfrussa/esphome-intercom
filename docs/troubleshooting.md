@@ -44,6 +44,11 @@ reach its listener, even when the caller is absent from the phonebook and has
 not registered to HA. The optional HA registrar authenticates `REGISTER`; it
 does not require every inbound caller to own an account.
 
+Unknown callers may reach local HA, ESP, registered-phone and group targets.
+They cannot use HA as an unauthenticated gateway to the configured external
+trunk; outbound trunk routes require a registered, roster-known, HA-local or
+trusted-trunk origin.
+
 - Check DND, busy state, Request-URI routing and SDP compatibility before
   treating an unknown caller as unauthorized.
 - Keep SIP/RTP on a trusted LAN or VPN. Use firewall, VLAN, VPN or an SBC when

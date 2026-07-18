@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import time
 from urllib.parse import urlsplit
 
@@ -22,6 +23,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_pla
 DEFAULT_URL = os.environ.get("HA_URL", "")
 DEFAULT_STORAGE_STATE = os.environ.get("PLAYWRIGHT_STORAGE_STATE", "")
 DEFAULT_CHROMIUM = os.environ.get("CHROMIUM_PATH", "")
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "test_runs"))
 
 
 class _ProbeComplete(Exception):
@@ -309,6 +312,11 @@ def main() -> int:
         help="require a working browser audio call with no active video path",
     )
     parser.add_argument(
+        "--expect-video-reinvite",
+        action="store_true",
+        help="allow audio-only ringing and require video to appear after answer",
+    )
+    parser.add_argument(
         "--screenshot",
         help="optional screenshot path captured while video is flowing",
     )
@@ -347,11 +355,16 @@ def main() -> int:
         args.send_camera = True
     if not args.url:
         parser.error("--url or HA_URL is required")
-    if not args.storage_state:
-        parser.error("--storage-state or PLAYWRIGHT_STORAGE_STATE is required")
-    storage_state = Path(args.storage_state).expanduser()
-    if not storage_state.is_file():
-        parser.error(f"Playwright storage state does not exist: {storage_state}")
+    context_options: dict = {}
+    if args.storage_state:
+        storage_state = Path(args.storage_state).expanduser()
+        if not storage_state.is_file():
+            parser.error(f"Playwright storage state does not exist: {storage_state}")
+        context_options["storage_state"] = str(storage_state)
+    else:
+        from ha_playwright_auth import context_kwargs
+
+        context_options.update(context_kwargs())
     parsed_url = urlsplit(args.url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         parser.error("--url must be an absolute HTTP(S) Home Assistant URL")
@@ -376,7 +389,7 @@ def main() -> int:
             **launch_options,
         )
         context = browser.new_context(
-            storage_state=str(storage_state),
+            **context_options,
             viewport={"width": args.viewport_width, "height": args.viewport_height},
         )
         context.grant_permissions(["camera", "microphone"], origin=origin)
@@ -503,7 +516,11 @@ def main() -> int:
                     timeout=int(args.ring_timeout * 1000),
                 )
                 ringing = sample("ringing")
-                if not args.expect_audio_only and not ringing.get("video_offered"):
+                if (
+                    not args.expect_audio_only
+                    and not args.expect_video_reinvite
+                    and not ringing.get("video_offered")
+                ):
                     raise RuntimeError(f"incoming call did not offer video: {ringing}")
                 if not page.evaluate(CLICK_ANSWER):
                     raise RuntimeError("visible Answer button not found")

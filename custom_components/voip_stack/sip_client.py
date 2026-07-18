@@ -13,17 +13,21 @@ from typing import Any, Awaitable, Callable
 from .audio_format import AudioFormat, HA_SIP_PCM_FORMATS, PcmFormat
 from . import g711
 from .opus_codec import OpusDecoder, OpusEncoder
-from .queue_utils import put_drop_oldest
 from .session_cleanup import async_wait_for_cleanup
 from . import sdp, sip
 from .sip_auth import build_digest_authorization
 from .sip_tcp_io import SipTcpWriter, read_sip_stream_message as _read_sip_stream_message
+from .sip_udp_io import SipDatagramQueueProtocol
+from .sip_transaction import (
+    SIP_T1,
+    SIP_T2,
+    SIP_TIMER_B,
+    SipClientTransaction,
+    async_run_server_transaction,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-SIP_T1 = 0.5
-SIP_T2 = 4.0
-SIP_TIMER_B = 64 * SIP_T1
 _S24_SIGN_EXTENSION = bytes(0xFF if value & 0x80 else 0x00 for value in range(256))
 
 
@@ -188,6 +192,8 @@ class SipDialog:
     remote_target_uri: str = ""
     route_set: tuple[str, ...] = ()
     dtmf_payload_type: int | None = None
+    dtmf_clock_rate: int = 8000
+    dtmf_events: frozenset[int] = frozenset(range(16))
     remote_audio_direction: str = "sendrecv"
     local_audio_direction: str = "sendrecv"
     remote_audio_connection_held: bool = False
@@ -239,18 +245,7 @@ class _InDialogResponse:
     body: bytes = b""
 
 
-class _SipClientProtocol(asyncio.DatagramProtocol):
-    def __init__(self, queue: asyncio.Queue[tuple[bytes, tuple[str, int]]]) -> None:
-        self.queue = queue
-        self.transport: asyncio.DatagramTransport | None = None
-        self.dropped_packets = 0
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        self.transport = transport  # type: ignore[assignment]
-
-    def datagram_received(self, data: bytes, addr) -> None:
-        if put_drop_oldest(self.queue, (data, addr)):
-            self.dropped_packets += 1
+_SipClientProtocol = SipDatagramQueueProtocol
 
 
 class SipCallClient:
@@ -326,7 +321,7 @@ class SipCallClient:
         self._sdp_session_id = secrets.randbits(63) or 1
         self._local_sdp_body = ""
         self.transport: asyncio.DatagramTransport | None = None
-        self.protocol: _SipClientProtocol | None = None
+        self.protocol: SipDatagramQueueProtocol | None = None
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self._tcp_writer: SipTcpWriter | None = None
@@ -359,6 +354,7 @@ class SipCallClient:
         self._closed = False
         self._bye_cseq = 0
         self._bye_branch = ""
+        self._local_dialog_cseq = self._invite_cseq
         self._remote_cseq = 0
         self._in_dialog_responses: list[_InDialogResponse] = []
         self._uas_invite_2xx_task: asyncio.Task[None] | None = None
@@ -385,7 +381,7 @@ class SipCallClient:
             if self._closing or self._closed:
                 raise RuntimeError("SIP client is already closed")
             loop = asyncio.get_running_loop()
-            protocol = _SipClientProtocol(self.queue)
+            protocol = SipDatagramQueueProtocol(self.queue)
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: protocol,
                 local_addr=("0.0.0.0", 0),
@@ -667,6 +663,14 @@ class SipCallClient:
             and response_branch == branch
         )
 
+    def _next_dialog_cseq(self) -> int:
+        self._local_dialog_cseq = max(
+            self._local_dialog_cseq,
+            self._invite_cseq,
+            self._bye_cseq,
+        ) + 1
+        return self._local_dialog_cseq
+
     def _ack_retransmitted_invite_2xx(self, message: sip.SipMessage) -> bool:
         dialog = self.dialog
         if (
@@ -775,35 +779,40 @@ class SipCallClient:
         )
 
     async def _run_uas_invite_2xx(self) -> None:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + SIP_TIMER_B
-        interval = SIP_T1
         try:
-            while self._uas_invite_2xx_request is not None:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(min(interval, remaining))
-                if self._uas_invite_2xx_request is None or loop.time() >= deadline:
-                    break
-                if self._send_response_to_request(
-                    self._uas_invite_2xx_request,
+            def _retransmit_final() -> bool:
+                request = self._uas_invite_2xx_request
+                if request is None:
+                    return False
+                sent = self._send_response_to_request(
+                    request,
                     self._uas_invite_2xx_host,
                     self._uas_invite_2xx_port,
                     self._uas_invite_2xx_status,
                     self._uas_invite_2xx_reason,
                     extra_headers=self._uas_invite_2xx_extra_headers,
                     body=self._uas_invite_2xx_body,
-                ):
+                )
+                if sent:
                     self._uas_invite_2xx_retransmissions += 1
-                interval = min(interval * 2, SIP_T2)
+                return sent
+
+            result = await async_run_server_transaction(
+                send=_retransmit_final,
+                active=lambda: self._uas_invite_2xx_request is not None,
+                transport=self.signaling_transport,
+                timeout=SIP_TIMER_B,
+                t1=SIP_T1,
+                t2=SIP_T2,
+                retransmit_reliable=True,
+            )
         except asyncio.CancelledError:
             return
         finally:
             if self._uas_invite_2xx_task is asyncio.current_task():
                 self._uas_invite_2xx_task = None
 
-        if self._uas_invite_2xx_request is None:
+        if self._uas_invite_2xx_request is None or not result.timed_out:
             return
         _LOGGER.warning(
             "SIP remote re-INVITE ACK timed out call_id=%s cseq=%s; terminating dialog",
@@ -968,6 +977,10 @@ class SipCallClient:
                 else None
             )
             remote_video = sdp.parse_video_sdp(request.body) if video is not None else None
+            remote_video_target = sdp.RemoteMediaTarget.from_section(
+                remote_video,
+                rtcp_mux=False,
+            )
             local_video_direction = (
                 sdp.constrained_video_direction(
                     video.direction,
@@ -1016,6 +1029,8 @@ class SipCallClient:
                 recv_format=selected.recv,
                 remote_target_uri=remote_target,
                 dtmf_payload_type=(dtmf_formats[0].payload_type if dtmf_formats else None),
+                dtmf_clock_rate=(dtmf_formats[0].sample_rate if dtmf_formats else 8000),
+                dtmf_events=(dtmf_formats[0].events if dtmf_formats else frozenset()),
                 remote_audio_direction=str(parsed["direction"]),
                 local_audio_direction=sdp.local_direction_for_offer(
                     parsed["direction"],
@@ -1024,32 +1039,12 @@ class SipCallClient:
                 remote_audio_connection_held=bool(parsed["connection_held"]),
                 video_format=video,
                 local_video_format=local_video,
-                remote_video_rtp_host=(str(remote_video["connection_ip"]) if remote_video else ""),
-                remote_video_rtp_port=(int(remote_video["media_port"]) if remote_video else 0),
-                remote_video_rtcp_host=(
-                    str(remote_video["rtcp_address"] or remote_video["connection_ip"])
-                    if remote_video
-                    else ""
-                ),
-                remote_video_rtcp_port=(
-                    int(remote_video["rtcp_port"] or int(remote_video["media_port"]) + 1)
-                    if remote_video
-                    else 0
-                ),
-                remote_video_rtcp_mux=False,
-                remote_video_payload_types=(
-                    tuple(int(item) for item in remote_video["payload_order"])
-                    if remote_video
-                    else ()
-                ),
-                remote_video_connection_held=bool(
-                    remote_video and remote_video["connection_held"]
-                ),
                 local_video_rtp_port=(self.local_video_rtp_port if video is not None else 0),
                 local_video_direction=local_video_direction,
                 local_sdp_session_id=session_id,
                 local_sdp_session_version=session_version,
                 local_sdp_body=answer,
+                **remote_video_target.as_remote_video_fields(),
             )
         except (TypeError, ValueError, sdp.SdpError, sip.SipError):
             return None
@@ -1212,39 +1207,37 @@ class SipCallClient:
             remote_sip_port,
             ", ".join(sdp.offered_media_descriptions(body)),
         )
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        retransmit_interval = SIP_T1
-        next_retransmit = loop.time() + retransmit_interval
-        udp_invite_retransmits = 0
+        transaction = SipClientTransaction[
+            tuple[sip.SipMessage, tuple[str, int]]
+        ](
+            transport=self.signaling_transport,
+            timeout=timeout,
+            t1=SIP_T1,
+            t2=SIP_T2,
+        )
         auth_retried = False
         received_provisional = False
+
+        async def _retransmit_invite() -> None:
+            await self._send_raw(raw, remote_host, int(remote_sip_port))
+            _LOGGER.debug(
+                "SIP UDP retransmit INVITE #%d %s@%s:%s",
+                transaction.retransmissions + 1,
+                target,
+                remote_host,
+                remote_sip_port,
+            )
+
         while True:
             if self._cancel_requested and received_provisional and not self._cancel_sent:
                 self._send_cancel()
-            now = loop.time()
-            remaining = deadline - now
-            if remaining <= 0:
-                return "timeout"
-            read_timeout = remaining
-            if self.signaling_transport != "TCP" and not received_provisional:
-                read_timeout = min(read_timeout, max(0.0, next_retransmit - now))
             try:
-                received = await self._read_response(read_timeout)
+                received = await transaction.receive(
+                    self._read_response,
+                    _retransmit_invite,
+                    retransmit_enabled=not received_provisional,
+                )
                 if received is None:
-                    if self.signaling_transport != "TCP" and not received_provisional and loop.time() < deadline:
-                        await self._send_raw(raw, remote_host, int(remote_sip_port))
-                        udp_invite_retransmits += 1
-                        _LOGGER.debug(
-                            "SIP UDP retransmit INVITE #%d %s@%s:%s",
-                            udp_invite_retransmits,
-                            target,
-                            remote_host,
-                            remote_sip_port,
-                        )
-                        retransmit_interval = min(retransmit_interval * 2, SIP_T2)
-                        next_retransmit = loop.time() + retransmit_interval
-                        continue
                     return "timeout"
                 msg, addr = received
             except (ConnectionError, OSError, RuntimeError) as err:
@@ -1331,8 +1324,7 @@ class SipCallClient:
                     await self._send_raw(raw, remote_host, int(remote_sip_port))
                 except (ConnectionError, OSError, RuntimeError) as err:
                     return self._transport_failure(err, target, remote_host, remote_sip_port)
-                retransmit_interval = SIP_T1
-                next_retransmit = loop.time() + retransmit_interval
+                transaction.restart_retransmissions()
                 received_provisional = False
                 continue
             if msg.status_code and msg.status_code >= 300:
@@ -1823,7 +1815,11 @@ class SipCallClient:
                 raise sdp.SdpError("SIP 200 OK body is not application/sdp")
             local_offer_direction = "sendrecv"
             if self._local_sdp_body:
-                sdp.validate_sdp_answer(self._local_sdp_body, msg.body)
+                sdp.validate_sdp_answer(
+                    self._local_sdp_body,
+                    msg.body,
+                    allow_omitted_trailing_media=True,
+                )
                 local_offer_direction = str(
                     sdp.parse_sdp(self._local_sdp_body)["direction"]
                 )
@@ -1900,6 +1896,8 @@ class SipCallClient:
             remote_target_uri=remote_target_uri,
             route_set=route_set,
             dtmf_payload_type=(dtmf_format.payload_type if dtmf_format else None),
+            dtmf_clock_rate=(dtmf_format.sample_rate if dtmf_format else 8000),
+            dtmf_events=(dtmf_format.events if dtmf_format else frozenset()),
             remote_audio_direction=str(parsed["direction"]),
             local_audio_direction=sdp.local_direction_for_offer(
                 parsed["direction"],
@@ -2068,7 +2066,7 @@ class SipCallClient:
             call_id=self.dialog_ids.call_id,
             local_tag=self.dialog_ids.local_tag,
             remote_tag=self.dialog_ids.remote_tag,
-            cseq=self._invite_cseq + 1,
+            cseq=self._next_dialog_cseq(),
             branch=sip.make_branch(),
         )
         headers = sip.dialog_headers(

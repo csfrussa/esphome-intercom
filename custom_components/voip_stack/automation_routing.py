@@ -5,6 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 
+CALL_EVENT_SCHEMA_VERSION = 2
+CALL_ORIGINS = frozenset({"trunk", "extension"})
+
+
+def canonical_call_origin(
+    ingress: object,
+    route_kind: object = "",
+) -> str:
+    """Return the stable transport origin used by event schema v2."""
+
+    value = str(ingress or "").strip().lower()
+    if value in CALL_ORIGINS:
+        return value
+    return "trunk" if str(route_kind or "").strip().lower() == "trunk" else "extension"
+
+
 AUTOMATION_EVENT_TYPES = [
     "route_requested",
     "incoming_call",

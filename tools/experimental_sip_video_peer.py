@@ -487,6 +487,10 @@ async def _start_video_receiver(
 
 
 async def async_main(args: argparse.Namespace) -> int:
+    add_video_mid_dialog = args.add_video_after >= 0
+    if add_video_mid_dialog and args.codec == "audio":
+        raise ValueError("--add-video-after requires a video codec")
+    initial_codec = "audio" if add_video_mid_dialog else args.codec
     local_ip = args.local_ip or _local_ip(args.host, args.port)
     sip_socket = _reserve_udp_socket(local_ip)
     audio_socket = _reserve_udp_socket(local_ip)
@@ -520,7 +524,7 @@ async def async_main(args: argparse.Namespace) -> int:
             local_ip=local_ip,
             audio_port=audio_port,
             video_port=video_port,
-            codec=args.codec,
+            codec=initial_codec,
             direction=args.direction,
             video_profile=args.video_profile,
         ),
@@ -528,6 +532,8 @@ async def async_main(args: argparse.Namespace) -> int:
     result: dict = {
         "ok": False,
         "codec": args.codec,
+        "initial_codec": initial_codec,
+        "add_video_after": args.add_video_after,
         "video_profile": args.video_profile,
         "call_id": call_id,
         "local_sip": f"{local_ip}:{sip_port}",
@@ -588,7 +594,12 @@ async def async_main(args: argparse.Namespace) -> int:
 
         answer_audio = sdp.parse_sdp(response.body)
         answer_video = sdp.offered_video_formats(response.body)
-        if args.codec != "audio" and not answer_video and not args.allow_audio_only:
+        if (
+            args.codec != "audio"
+            and not add_video_mid_dialog
+            and not answer_video
+            and not args.allow_audio_only
+        ):
             raise RuntimeError("HA answered without an active video media section")
         parsed_video = sdp.parse_video_sdp(response.body) if answer_video else None
         result["remote_audio_rtp"] = int(answer_audio["media_port"])
@@ -635,7 +646,12 @@ async def async_main(args: argparse.Namespace) -> int:
                 asyncio.create_task(_send_pcma(audio_socket, audio_destination, stopped, result)),
                 asyncio.create_task(_receive_audio(audio_socket, stopped, result)),
             ]
-        if parsed_video is not None and video_socket is not None and rtcp_socket is not None:
+        video_stderr: list[str] = []
+
+        async def _start_negotiated_video(parsed: dict | None) -> None:
+            nonlocal video_process, video_receiver_process
+            if parsed is None or video_socket is None or rtcp_socket is None:
+                return
             capture_destination = None
             if args.video_rx_file:
                 capture_probe = _reserve_udp_socket(local_ip)
@@ -652,15 +668,25 @@ async def async_main(args: argparse.Namespace) -> int:
                 await video_receiver_process.stdin.drain()
                 video_receiver_process.stdin.close()
                 capture_destination = (local_ip, capture_port)
-                tasks.append(asyncio.create_task(
-                    _drain_stderr(video_receiver_process, video_receiver_stderr)
-                ))
-            tasks.append(asyncio.create_task(_receive_rtcp(rtcp_socket, stopped, result)))
+                tasks.append(
+                    asyncio.create_task(
+                        _drain_stderr(
+                            video_receiver_process,
+                            video_receiver_stderr,
+                        )
+                    )
+                )
+            tasks.append(
+                asyncio.create_task(_receive_rtcp(rtcp_socket, stopped, result))
+            )
             tasks.append(
                 asyncio.create_task(
                     _relay_video(
                         video_socket,
-                        (str(parsed_video["connection_ip"]), int(parsed_video["media_port"])),
+                        (
+                            str(parsed["connection_ip"]),
+                            int(parsed["media_port"]),
+                        ),
                         stopped,
                         result,
                         send_enabled=args.direction in {"sendonly", "sendrecv"},
@@ -668,18 +694,141 @@ async def async_main(args: argparse.Namespace) -> int:
                     )
                 )
             )
-        video_stderr: list[str] = []
-        if parsed_video is not None and args.direction in {"sendonly", "sendrecv"}:
-            video_process = await _start_video_sender(
-                codec=args.codec,
-                destination=(local_ip, video_port),
-                duration=args.duration,
-                video_file=args.video_file,
-            )
-            tasks.append(asyncio.create_task(_drain_stderr(video_process, video_stderr)))
+            if args.direction in {"sendonly", "sendrecv"}:
+                video_process = await _start_video_sender(
+                    codec=args.codec,
+                    destination=(local_ip, video_port),
+                    duration=args.duration,
+                    video_file=args.video_file,
+                )
+                tasks.append(
+                    asyncio.create_task(
+                        _drain_stderr(video_process, video_stderr)
+                    )
+                )
+
+        await _start_negotiated_video(parsed_video)
 
         call_deadline = loop.time() + args.duration
+        reinvite_at = loop.time() + max(0.0, args.add_video_after)
+        reinvite_done = not add_video_mid_dialog
+        next_cseq = 2
+
+        async def _add_video() -> None:
+            nonlocal next_cseq, remote_bye
+            branch = f"z9hG4bK{secrets.token_hex(8)}"
+            request = sip.build_request(
+                "INVITE",
+                remote_uri,
+                _request_headers(
+                    method="INVITE",
+                    local_ip=local_ip,
+                    local_port=sip_port,
+                    local_user=args.user,
+                    remote_uri=remote_uri,
+                    remote_to=remote_to,
+                    call_id=call_id,
+                    local_tag=local_tag,
+                    cseq=next_cseq,
+                    branch=branch,
+                    content_type="application/sdp",
+                ),
+                _offer(
+                    local_ip=local_ip,
+                    audio_port=audio_port,
+                    video_port=video_port,
+                    codec=args.codec,
+                    direction=args.direction,
+                    video_profile=args.video_profile,
+                ),
+            )
+            await loop.sock_sendto(sip_socket, request, (args.host, args.port))
+            statuses: list[int] = []
+            final_response = None
+            async with asyncio.timeout(args.answer_timeout):
+                while final_response is None:
+                    raw, addr = await loop.sock_recvfrom(sip_socket, 65535)
+                    message = sip.parse_message(raw)
+                    if message.header("Call-ID") != call_id:
+                        continue
+                    if message.method == "BYE":
+                        await loop.sock_sendto(
+                            sip_socket,
+                            sip.build_response(
+                                200,
+                                "OK",
+                                _response_headers(message),
+                            ),
+                            addr,
+                        )
+                        remote_bye = True
+                        return
+                    if message.status_code is None:
+                        continue
+                    if message.header("CSeq") != f"{next_cseq} INVITE":
+                        continue
+                    status = int(message.status_code)
+                    statuses.append(status)
+                    print(f"re-INVITE SIP {status} {message.reason}", flush=True)
+                    if status >= 200:
+                        final_response = message
+            result["reinvite_statuses"] = statuses
+            result["reinvite_status"] = int(final_response.status_code)
+            result["reinvite_answer_sdp"] = final_response.body.decode(
+                errors="replace"
+            )
+            ack = sip.build_request(
+                "ACK",
+                remote_uri,
+                _request_headers(
+                    method="ACK",
+                    local_ip=local_ip,
+                    local_port=sip_port,
+                    local_user=args.user,
+                    remote_uri=remote_uri,
+                    remote_to=final_response.header("To") or remote_to,
+                    call_id=call_id,
+                    local_tag=local_tag,
+                    cseq=next_cseq,
+                    branch=branch,
+                ),
+            )
+            await loop.sock_sendto(sip_socket, ack, (args.host, args.port))
+            next_cseq += 1
+            expected = int(args.expect_reinvite_status or 0)
+            if expected and int(final_response.status_code) != expected:
+                raise RuntimeError(
+                    "unexpected re-INVITE response: "
+                    f"{final_response.status_code}, expected {expected}"
+                )
+            if int(final_response.status_code) >= 300:
+                result["reinvite_negotiated_video"] = ""
+                result["reinvite_video_direction"] = "inactive"
+                result["reinvite_remote_video_rtp"] = 0
+                return
+            formats = sdp.offered_video_formats(final_response.body)
+            parsed = sdp.parse_video_sdp(final_response.body) if formats else None
+            if not formats or parsed is None:
+                result["reinvite_negotiated_video"] = ""
+                result["reinvite_video_direction"] = "inactive"
+                result["reinvite_remote_video_rtp"] = 0
+                if not args.allow_audio_only:
+                    raise RuntimeError(
+                        "HA accepted the re-INVITE without active video"
+                    )
+                return
+            selected = formats[0]
+            result["reinvite_negotiated_video"] = selected.wire_token()
+            result["reinvite_video_direction"] = selected.direction
+            result["reinvite_remote_video_rtp"] = int(parsed["media_port"])
+            await _start_negotiated_video(parsed)
+
         while loop.time() < call_deadline:
+            if not reinvite_done and loop.time() >= reinvite_at:
+                await _add_video()
+                reinvite_done = True
+                if remote_bye:
+                    break
             if (
                 video_process is not None
                 and video_process.returncode is not None
@@ -722,12 +871,18 @@ async def async_main(args: argparse.Namespace) -> int:
                     remote_to=remote_to,
                     call_id=call_id,
                     local_tag=local_tag,
-                    cseq=2,
+                    cseq=next_cseq,
                     branch=f"z9hG4bK{secrets.token_hex(8)}",
                 ),
             )
             await loop.sock_sendto(sip_socket, bye, (args.host, args.port))
             bye_sent = True
+        if not reinvite_done:
+            raise RuntimeError("call ended before the video re-INVITE was sent")
+        if result["audio_tx_packets"] <= 0 or result["audio_rx_packets"] <= 0:
+            raise RuntimeError(
+                "established dialog did not retain bidirectional audio RTP"
+            )
         result["ok"] = True
     except BaseException as err:
         result["error"] = f"{type(err).__name__}: {err}"
@@ -768,7 +923,7 @@ async def async_main(args: argparse.Namespace) -> int:
                     remote_to=remote_to,
                     call_id=call_id,
                     local_tag=local_tag,
-                    cseq=2,
+                    cseq=next_cseq,
                     branch=f"z9hG4bK{secrets.token_hex(8)}",
                 ),
             )
@@ -849,6 +1004,22 @@ def main() -> int:
         "--allow-audio-only",
         action="store_true",
         help="accept an audio-only answer when an offered video codec is rejected",
+    )
+    parser.add_argument(
+        "--add-video-after",
+        type=float,
+        default=-1,
+        help=(
+            "start audio-only, then add the selected video codec with an "
+            "in-dialog re-INVITE after this many seconds"
+        ),
+    )
+    parser.add_argument(
+        "--expect-reinvite-status",
+        type=int,
+        choices=(200, 488),
+        default=0,
+        help="require this final response to the video-adding re-INVITE",
     )
     parser.add_argument("--duration", type=float, default=15.0)
     parser.add_argument("--video-file", default="")

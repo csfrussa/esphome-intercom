@@ -363,9 +363,9 @@ voice_assistant:
 voip_stack:
   task_stacks_in_psram: true   # save ~28KB internal heap on S3 PSRAM builds by placing task stacks in PSRAM
   buffers_in_psram: true # VoIP staging buffers in PSRAM; AEC/AFE buffers live in esp_audio_stack
-  conference_groups: "CG Casa"
+  conference_groups: ""
   conference_ring: false
-  ring_groups: "RG Casa"
+  ring_groups: ""
   audio:
     # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
     # with a 10 ms reframe available for peers that can drive the speaker at

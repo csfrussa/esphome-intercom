@@ -19,6 +19,7 @@ from .authorization import (
     require_websocket_read,
     websocket_can_control_endpoint,
 )
+from .automation_routing import CALL_ORIGINS, canonical_call_origin
 from .call_registry import TERMINAL_STATES, CallRegistry
 from .const import (
     CONF_DEBUG_MODE,
@@ -226,7 +227,7 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
     # Scope identifies the state owner publishing this occurrence. Transport
     # provenance belongs in origin/source and must not replace the owner.
     event["scope"] = scope
-    event.setdefault("origin", event["scope"])
+    occurrence_origin = str(event.get("origin") or event["scope"]).strip()
     event.setdefault("direction", "")
     event.setdefault("caller", "")
     event.setdefault("callee", "")
@@ -266,6 +267,20 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
         if event.get(owner_key) not in (None, ""):
             registry_fields.pop(owner_key, None)
     event.update(registry_fields)
+    call_origin = canonical_call_origin(
+        event.get("ingress") or event.get("origin"),
+        event.get("route_kind"),
+    )
+    event["actor"] = str(
+        event.get("actor")
+        or (
+            occurrence_origin
+            if occurrence_origin not in CALL_ORIGINS
+            else event["scope"]
+        )
+    )
+    event["ingress"] = call_origin
+    event["origin"] = call_origin
     context = registry.ha_context(call_id)
     _async_fire_with_context(hass, CALL_EVENT, event, context)
     _async_fire_with_context(hass, SIP_CALL_STATE_EVENT, event, context)

@@ -35,14 +35,16 @@ from ha_playwright_auth import ha_token  # noqa: E402
 
 
 HA_BASE = "http://192.168.1.10:8123"
-WILDIX_CONFIG = Path("/home/codex/.baresip-wildix-426")
+WILDIX_CONFIG = Path(os.environ.get("WILDIX_CONFIG", "/home/codex/.baresip-wildix-426"))
 OLD_AUTOMATION = "automation.voip_ha_non_risponde_inoltra_ad_assist"
+INBOUND_AUTOMATION = "automation.voip_inbound_trunk_to_rg_casa"
 ROUTE_AUTOMATION_ID = "codex_voip_route_override_matrix"
 ROUTE_AUTOMATION = f"automation.{ROUTE_AUTOMATION_ID}"
 TIMEOUT_AUTOMATION_ID = "codex_voip_no_answer_matrix"
 TIMEOUT_AUTOMATION = f"automation.{TIMEOUT_AUTOMATION_ID}"
 CALL_EVENT_ENTITY = "event.voip_stack_call"
 CALL_STATE_ENTITY = "sensor.voip_stack_call_state"
+WS3_AUTO_ANSWER = "switch.cucina_waveshare_s3_audio_auto_answer"
 TRUNK_NUMBER = "427"
 ROUTE_DESTINATION = "Waveshare S3 Audio"
 ASSIST_EXTENSION = "1666"
@@ -144,6 +146,25 @@ class BareSip:
             f"bareSIP timeout waiting for {needle}: {self.output[-2500:]}"
         )
 
+    def wait_for_any(self, needles: tuple[str, ...], timeout: float) -> str:
+        deadline = time.monotonic() + timeout
+        wanted = tuple(needle.lower() for needle in needles)
+        while time.monotonic() < deadline:
+            output = self.read().lower()
+            if any(needle in output for needle in wanted):
+                return self.output
+            if self.proc.poll() is not None:
+                break
+            time.sleep(0.03)
+        raise RuntimeError(
+            f"bareSIP timeout waiting for {' or '.join(needles)}: "
+            f"{self.output[-2500:]}"
+        )
+
+    def wait_for_dtmf_media(self, timeout: float = 10) -> str:
+        """Wait for provisional RFC 4733 media or a confirmed INFO dialog."""
+        return self.wait_for_any(("183 Session Progress", "Call established"), timeout)
+
     def command(self, command: str) -> None:
         os.write(self.master, f"{command}\n".encode())
 
@@ -222,7 +243,9 @@ class EventTrace:
                 await websocket.send_json({"type": "auth", "access_token": ha_token()})
                 authenticated = await websocket.receive_json(timeout=5)
                 if authenticated.get("type") != "auth_ok":
-                    raise RuntimeError(f"WebSocket authentication failed: {authenticated}")
+                    raise RuntimeError(
+                        f"WebSocket authentication failed: {authenticated}"
+                    )
                 await websocket.send_json(
                     {"id": 1, "type": "voip_stack/subscribe_call_events"}
                 )
@@ -271,11 +294,13 @@ class FlowSnapshot:
         *,
         entry_id: str,
         base: dict[str, Any],
+        video: dict[str, Any] | None,
         assist: dict[str, Any] | None,
         trunk: dict[str, Any] | None,
     ) -> None:
         self.entry_id = entry_id
         self.base = base
+        self.video = video
         self.assist = assist
         self.trunk = trunk
 
@@ -295,17 +320,25 @@ class FlowSnapshot:
         flow_id = str(result["flow_id"])
         base = schema_defaults(result)
         result = api.post(f"/api/config/config_entries/flow/{flow_id}", base)
+        video = None
+        if result.get("step_id") == "video":
+            video = schema_defaults(result)
+            result = api.post(f"/api/config/config_entries/flow/{flow_id}", video)
         assist = None
         if result.get("step_id") == "assist":
             assist = schema_defaults(result)
-            result = api.post(
-                f"/api/config/config_entries/flow/{flow_id}", assist
-            )
+            result = api.post(f"/api/config/config_entries/flow/{flow_id}", assist)
         if result.get("step_id") != "trunk":
             raise RuntimeError(f"unexpected flow while capturing trunk: {result}")
         trunk = schema_defaults(result)
         # Deliberately do not submit the last form: capture must not reload HA.
-        return cls(entry_id=entry_id, base=base, assist=assist, trunk=trunk)
+        return cls(
+            entry_id=entry_id,
+            base=base,
+            video=video,
+            assist=assist,
+            trunk=trunk,
+        )
 
     def apply(
         self,
@@ -317,9 +350,6 @@ class FlowSnapshot:
         timeout_seconds: int | None = None,
         terminator: str | None = None,
     ) -> None:
-        endpoint_before = api.state(
-            "sensor.voip_stack_ha_softphone_voip_endpoint"
-        ).get("last_updated")
         result = api.post(
             "/api/config/config_entries/flow",
             {
@@ -329,9 +359,12 @@ class FlowSnapshot:
             },
         )
         flow_id = str(result["flow_id"])
-        result = api.post(
-            f"/api/config/config_entries/flow/{flow_id}", dict(self.base)
-        )
+        result = api.post(f"/api/config/config_entries/flow/{flow_id}", dict(self.base))
+        if result.get("step_id") == "video":
+            result = api.post(
+                f"/api/config/config_entries/flow/{flow_id}",
+                dict(self.video or {}),
+            )
         if result.get("step_id") == "assist":
             result = api.post(
                 f"/api/config/config_entries/flow/{flow_id}",
@@ -351,7 +384,10 @@ class FlowSnapshot:
         if terminator is not None:
             trunk["trunk_dtmf_terminator"] = terminator
         result = api.post(f"/api/config/config_entries/flow/{flow_id}", trunk)
-        if result.get("type") != "abort" or result.get("reason") != "reconfigure_successful":
+        if (
+            result.get("type") != "abort"
+            or result.get("reason") != "reconfigure_successful"
+        ):
             raise RuntimeError(f"VoIP Stack reconfigure failed: {result}")
         wait_for(
             lambda: next(
@@ -366,24 +402,22 @@ class FlowSnapshot:
             "VoIP Stack reload",
         )
         # async_update_reload_and_abort returns before the integration reload
-        # necessarily reaches its entity platforms. Wait for the endpoint
-        # sensor to be rewritten, then give the trunk REGISTER transaction a
-        # small deterministic settling window.
+        # necessarily reaches its entity platforms. ``last_updated`` is not a
+        # generation marker when the replacement publishes the same value, so
+        # wait on the public readiness state instead.
         wait_for(
             lambda: (
                 state
                 if (
-                    (state := api.state(
-                        "sensor.voip_stack_ha_softphone_voip_endpoint"
-                    )).get("last_updated")
-                    != endpoint_before
-                    and state.get("state") == "online"
-                )
+                    state := api.state("sensor.voip_stack_ha_softphone_voip_endpoint")
+                ).get("state")
+                == "online"
                 else None
             ),
             15,
             "VoIP Stack endpoint reload",
         )
+        time.sleep(1.0)
         # event.received targets an EventEntity owned by this integration.
         # Re-attach automation triggers after that entity has returned instead
         # of relying on HA's periodic unavailable-target retry.
@@ -407,6 +441,12 @@ def call_state(api: HomeAssistantApi) -> dict[str, Any]:
     return {"state": state["state"], **dict(state.get("attributes") or {})}
 
 
+def event_state(api: HomeAssistantApi) -> dict[str, Any]:
+    """Return the transport-neutral call occurrence projected by HA."""
+    state = api.state(CALL_EVENT_ENTITY)
+    return dict(state.get("attributes") or {})
+
+
 def wait_call_state(
     api: HomeAssistantApi,
     expected: str,
@@ -425,6 +465,24 @@ def wait_call_state(
     return wait_for(_match, timeout, f"{CALL_STATE_ENTITY}={expected}/{callee}")
 
 
+def wait_event_state(
+    api: HomeAssistantApi,
+    expected: str,
+    timeout: float = 15,
+    *,
+    callee: str = "",
+) -> dict[str, Any]:
+    def _match() -> dict[str, Any] | None:
+        state = event_state(api)
+        if str(state.get("state") or "") != expected:
+            return None
+        if callee and str(state.get("callee") or "") != callee:
+            return None
+        return state
+
+    return wait_for(_match, timeout, f"{CALL_EVENT_ENTITY}={expected}/{callee}")
+
+
 def automation_last_triggered(api: HomeAssistantApi, entity_id: str) -> str:
     state = api.state(entity_id)
     return str((state.get("attributes") or {}).get("last_triggered") or "")
@@ -432,9 +490,7 @@ def automation_last_triggered(api: HomeAssistantApi, entity_id: str) -> str:
 
 def create_automations(api: HomeAssistantApi) -> None:
     for automation_id in (ROUTE_AUTOMATION_ID, TIMEOUT_AUTOMATION_ID):
-        api.delete(
-            f"/api/config/automation/config/{automation_id}", allow_missing=True
-        )
+        api.delete(f"/api/config/automation/config/{automation_id}", allow_missing=True)
     api.post(
         f"/api/config/automation/config/{ROUTE_AUTOMATION_ID}",
         {
@@ -508,9 +564,11 @@ def set_automation(api: HomeAssistantApi, entity_id: str, enabled: bool) -> None
         api.service("automation", "reload")
         api.service("automation", "turn_on", {"entity_id": entity_id})
     wait_for(
-        lambda: api.state(entity_id)
-        if api.state(entity_id).get("state") == ("on" if enabled else "off")
-        else None,
+        lambda: (
+            api.state(entity_id)
+            if api.state(entity_id).get("state") == ("on" if enabled else "off")
+            else None
+        ),
         10,
         f"{entity_id} {'on' if enabled else 'off'}",
     )
@@ -544,7 +602,9 @@ def trace_types(trace: EventTrace, call_id: str) -> list[str]:
         elif item.get("route_request"):
             types.append("route_requested")
         elif state == "in_call":
-            types.append("answered" if item.get("direction") != "outgoing" else "connected")
+            types.append(
+                "answered" if item.get("direction") != "outgoing" else "connected"
+            )
         elif state:
             types.append(state)
     return types
@@ -560,6 +620,7 @@ def main() -> int:
     api = HomeAssistantApi()
     snapshot = FlowSnapshot.capture(api)
     old_automation_was_on = api.state(OLD_AUTOMATION)["state"] == "on"
+    inbound_automation_was_on = api.state(INBOUND_AUTOMATION)["state"] == "on"
     results: list[dict[str, Any]] = []
     active: list[BareSip] = []
 
@@ -600,9 +661,11 @@ def main() -> int:
 
     create_automations(api)
     set_automation(api, OLD_AUTOMATION, False)
+    set_automation(api, INBOUND_AUTOMATION, False)
     set_automation(api, ROUTE_AUTOMATION, False)
     set_automation(api, TIMEOUT_AUTOMATION, False)
     try:
+
         def direct_default() -> dict[str, Any]:
             snapshot.apply(api, mode="direct", automation=False, default_target="HA")
             sip = caller()
@@ -613,11 +676,55 @@ def main() -> int:
                 time.sleep(0.15)
             if elapsed >= 1.3:
                 raise RuntimeError(f"direct route waited {elapsed:.3f}s")
-            if "route_requested" in trace_types(trace, str(ringing.get("call_id") or "")):
-                raise RuntimeError("direct route emitted route_requested while disabled")
+            if "route_requested" in trace_types(
+                trace, str(ringing.get("call_id") or "")
+            ):
+                raise RuntimeError(
+                    "direct route emitted route_requested while disabled"
+                )
             return {"elapsed": round(elapsed, 3), "call": ringing}
 
         case("direct_default_without_automation_window", direct_default)
+
+        def direct_ring_group_waits_for_member_answer() -> dict[str, Any]:
+            auto_answer_was_on = api.state(WS3_AUTO_ANSWER)["state"] == "on"
+            api.service("switch", "turn_off", {"entity_id": WS3_AUTO_ANSWER})
+            try:
+                snapshot.apply(
+                    api,
+                    mode="direct",
+                    automation=False,
+                    default_target="RG Casa",
+                )
+                sip = caller()
+                with EventTrace(api) as trace:
+                    sip.dial()
+                    ringing = wait_call_state(api, "ringing", 10, callee="RG Casa")
+                    # Reproduce issue #74 exactly: an immediate-mode trunk
+                    # route must remain provisional until a group member
+                    # explicitly answers.
+                    time.sleep(2.0)
+                    still_ringing = call_state(api)
+            finally:
+                if auto_answer_was_on:
+                    api.service(
+                        "switch", "turn_on", {"entity_id": WS3_AUTO_ANSWER}
+                    )
+            if still_ringing.get("state") != "ringing":
+                raise RuntimeError(
+                    f"ring group did not remain provisional: {still_ringing}"
+                )
+            types = trace_types(trace, str(ringing.get("call_id") or ""))
+            if "answered" in types or "in_call" in types:
+                raise RuntimeError(f"ring group auto-answered: {types}")
+            if "Call established" in sip.read():
+                raise RuntimeError("trunk received a final answer without a winner")
+            return {"events": types, "call": still_ringing}
+
+        case(
+            "direct_ring_group_waits_for_member_answer",
+            direct_ring_group_waits_for_member_answer,
+        )
 
         def direct_window_no_match() -> dict[str, Any]:
             snapshot.apply(api, mode="direct", automation=True, default_target="HA")
@@ -630,7 +737,9 @@ def main() -> int:
                 time.sleep(0.15)
             types = trace_types(trace, str(ringing.get("call_id") or ""))
             if elapsed < 1.3:
-                raise RuntimeError(f"enabled route window ended too early: {elapsed:.3f}s")
+                raise RuntimeError(
+                    f"enabled route window ended too early: {elapsed:.3f}s"
+                )
             if "route_requested" not in types:
                 raise RuntimeError(f"route_requested missing: {types}")
             return {"elapsed": round(elapsed, 3), "events": types, "call": ringing}
@@ -644,7 +753,7 @@ def main() -> int:
             sip = caller()
             with EventTrace(api) as trace:
                 sip.dial()
-                connected = wait_call_state(
+                connected = wait_event_state(
                     api, "in_call", 15, callee=ROUTE_DESTINATION
                 )
                 time.sleep(0.15)
@@ -670,7 +779,6 @@ def main() -> int:
             sip = caller()
             with EventTrace(api) as trace:
                 started = sip.dial()
-                sip.wait_for("Call established", 10)
                 ringing = wait_call_state(api, "ringing", 10)
                 elapsed = time.monotonic() - started
                 time.sleep(0.15)
@@ -678,7 +786,9 @@ def main() -> int:
             if not 1.7 <= elapsed <= 4.5:
                 raise RuntimeError(f"DTMF timeout was {elapsed:.3f}s")
             if "route_requested" in types:
-                raise RuntimeError(f"disabled automation emitted route request: {types}")
+                raise RuntimeError(
+                    f"disabled automation emitted route request: {types}"
+                )
             return {"elapsed": round(elapsed, 3), "events": types, "call": ringing}
 
         case("dtmf_no_digits_uses_default", dtmf_no_digits_default)
@@ -696,8 +806,7 @@ def main() -> int:
             sip = caller()
             with EventTrace(api) as trace:
                 started = sip.dial()
-                sip.wait_for("Call established", 10)
-                connected = wait_call_state(
+                connected = wait_event_state(
                     api, "in_call", 15, callee=ROUTE_DESTINATION
                 )
                 elapsed = time.monotonic() - started
@@ -725,10 +834,9 @@ def main() -> int:
             sip = caller()
             with EventTrace(api) as trace:
                 started = sip.dial()
-                sip.wait_for("Call established", 10)
-                time.sleep(0.2)
+                sip.wait_for_dtmf_media()
                 sip.digits(ASSIST_EXTENSION)
-                connected = wait_call_state(api, "in_call", 12, callee="Troiaio")
+                connected = wait_event_state(api, "in_call", 12, callee="Troiaio")
                 elapsed = time.monotonic() - started
                 time.sleep(0.15)
             triggered = automation_last_triggered(api, ROUTE_AUTOMATION)
@@ -738,7 +846,9 @@ def main() -> int:
             if "route_requested" in types:
                 raise RuntimeError(f"explicit DTMF emitted route_requested: {types}")
             if elapsed >= 4.5:
-                raise RuntimeError(f"exact extension did not terminate collection: {elapsed:.3f}s")
+                raise RuntimeError(
+                    f"exact extension did not terminate collection: {elapsed:.3f}s"
+                )
             return {"elapsed": round(elapsed, 3), "events": types, "call": connected}
 
         case("dtmf_valid_extension_bypasses_automation", dtmf_valid_digits)
@@ -756,7 +866,7 @@ def main() -> int:
             sip = caller()
             with EventTrace(api) as trace:
                 sip.dial()
-                sip.wait_for("Call established", 10)
+                sip.wait_for_dtmf_media()
                 sip.digits("9999")
                 terminal = wait_for(
                     lambda: (
@@ -773,7 +883,9 @@ def main() -> int:
                 time.sleep(0.15)
             triggered = automation_last_triggered(api, ROUTE_AUTOMATION)
             if triggered != previous:
-                raise RuntimeError("invalid explicit DTMF incorrectly triggered automation")
+                raise RuntimeError(
+                    "invalid explicit DTMF incorrectly triggered automation"
+                )
             types = trace_types(trace, str(terminal.get("call_id") or ""))
             if "route_requested" in types:
                 raise RuntimeError(f"invalid DTMF fell back to automation: {types}")
@@ -790,7 +902,7 @@ def main() -> int:
             with EventTrace(api) as trace:
                 sip.dial()
                 ringing = wait_call_state(api, "ringing", 10)
-                connected = wait_call_state(api, "in_call", 12, callee="Troiaio")
+                connected = wait_event_state(api, "in_call", 12, callee="Troiaio")
                 time.sleep(0.15)
             triggered = automation_last_triggered(api, TIMEOUT_AUTOMATION)
             if not triggered or triggered == previous:
@@ -816,7 +928,7 @@ def main() -> int:
             sip = caller()
             with EventTrace(api) as trace:
                 sip.dial()
-                sip.wait_for("Call established", 10)
+                sip.wait_for_dtmf_media()
                 time.sleep(0.35)
                 sip.hangup()
                 idle = wait_call_state(api, "idle", 8)
@@ -843,6 +955,8 @@ def main() -> int:
             snapshot.apply(api)
         with suppress(Exception):
             set_automation(api, OLD_AUTOMATION, old_automation_was_on)
+        with suppress(Exception):
+            set_automation(api, INBOUND_AUTOMATION, inbound_automation_was_on)
         for path in TEST_CAPTURE_DIR.glob("dump-sip:*.wav"):
             path.unlink(missing_ok=True)
 

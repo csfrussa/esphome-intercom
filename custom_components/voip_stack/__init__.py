@@ -67,6 +67,7 @@ from .fsm import (
     sip_public_state as _sip_public_state,
     sip_terminal_reason as _sip_terminal_reason,
 )
+from .inbound_answer import AnswerTransaction
 from .media_ports import (
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
     release_media_reservation as _release_media_reservation,
@@ -1132,7 +1133,6 @@ async def _track_outbound_sip_client(
         await client.close()
         return
 
-    registry.sip_clients[client.dialog_ids.call_id] = client
     registry.upsert(
         client.dialog_ids.call_id,
         state=CallState.REMOTE_RINGING.value if result == "ringing" else CallState.IN_CALL.value,
@@ -1143,6 +1143,13 @@ async def _track_outbound_sip_client(
         endpoint_id=endpoint_id,
     )
     registry.add_leg(client.dialog_ids.call_id, client.dialog_ids.call_id, role="ha_softphone", state=result)
+    registry.attach_sip_client(
+        client.dialog_ids.call_id,
+        client.dialog_ids.call_id,
+        client,
+        role="ha_softphone",
+        state=result,
+    )
 
     async def _watch_sip_lifecycle() -> None:
         try:
@@ -1298,7 +1305,7 @@ async def _track_outbound_sip_client(
             registry.finish_and_pop(client.dialog_ids.call_id, reason=terminal_reason)
 
     task = hass.async_create_task(_watch_sip_lifecycle())
-    registry.client_watchers[client.dialog_ids.call_id] = task
+    registry.attach_client_watcher(client.dialog_ids.call_id, task)
 
 
 async def _async_prepare_ha_outbound_call(
@@ -1510,7 +1517,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             _LOGGER.warning("sip_answer: conference room not found or full for %s", call_id)
             return
         _joined_call_id, queue = joined
-        registry.softphone_media[call_id] = {
+        conference_media = {
             "conference_room": room_name,
             "conference_queue": queue,
             "endpoint_id": endpoint_id,
@@ -1525,6 +1532,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             route_kind="conference",
             endpoint_id=endpoint_id,
         )
+        registry.attach_media(call_id, conference_media)
         _bind_service_call_controller(registry, call_id, call)
         registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
         _set_ha_softphone_call_state(
@@ -1550,7 +1558,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
     if not call_id and len(endpoint_pending) == 1:
         call_id = endpoint_pending[0]
         _bind_service_call_controller(registry, call_id, call)
-    invite = pending.pop(call_id, None) if call_id else None
+    invite = pending.get(call_id) if call_id else None
     if invite is None:
         from homeassistant.exceptions import ServiceValidationError
 
@@ -1558,7 +1566,24 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             f"SIP call {call_id or '(current)'} was already answered or is no longer ringing"
         )
 
-    preanswered = registry.preanswered.pop(call_id, None)
+    session = registry.sessions.get(registry.resolve_session_id(call_id))
+    pbx_runtime = bucket.get("pbx_runtime")
+    authoritative_session = (
+        pbx_runtime.get_session(
+            registry.resolve_session_id(call_id),
+            generation=session.generation if session is not None else None,
+        )
+        if pbx_runtime is not None
+        else None
+    )
+    if authoritative_session is None:
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"PBX session for call_id {call_id} is no longer available"
+        )
+
+    preanswered = registry.take_media(call_id, provisional=True)
     from .sdp import (
         browser_video_send_supported,
         build_answer_directional,
@@ -1613,6 +1638,10 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             and browser_video_send_supported(invite.video_format)
             and not invite.remote_video_connection_held,
         )
+    answer_sdp = ""
+    response_already_sent = bool(
+        preanswered is not None and preanswered.get("final_response_sent", True)
+    )
     if local_rtp_port:
         if not bool((preanswered or {}).get("final_response_sent", True)):
             local_ip = await _ha_advertise_host(hass)
@@ -1633,19 +1662,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
                 ),
                 video_direction=video_direction,
             )
-            if not _sip_send_final_response(
-                hass,
-                call_id,
-                200,
-                "OK",
-                answer_sdp=answer,
-            ):
-                _release_media_reservation(preanswered)
-                from homeassistant.exceptions import ServiceValidationError
-
-                raise ServiceValidationError(
-                    f"SIP transaction for call_id {call_id} is no longer available"
-                )
+            answer_sdp = answer
         _LOGGER.info("SIP answered early-media trunk call_id=%s", call_id)
     else:
         local_ip = await _ha_advertise_host(hass)
@@ -1685,34 +1702,22 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             ),
             video_direction=video_direction,
         )
-        if not _sip_send_final_response(hass, call_id, 200, "OK", answer_sdp=answer):
-            if video_rtp_socket is not None:
-                video_rtp_socket.close()
-            if video_rtcp_socket is not None:
-                video_rtcp_socket.close()
-            if media_reservation is not None and hasattr(media_reservation, "release"):
-                media_reservation.release()
-            _LOGGER.warning("sip_answer: SIP transaction not found for %s", call_id)
-            from homeassistant.exceptions import ServiceValidationError
+        answer_sdp = answer
 
-            raise ServiceValidationError(
-                f"SIP transaction for call_id {call_id} is no longer available"
-            )
-
-    session = registry.sessions.get(registry.resolve_session_id(call_id))
     resolved_callee = str(
         (session.callee if session is not None else "") or local_name
     )
-    registry.softphone_media[call_id] = {
+    softphone_media = {
         "invite": invite,
         "local_rtp_port": local_rtp_port,
         "local_video_rtp_port": local_video_rtp_port,
         "video_direction": video_direction,
-        "camera_send_authorized": bool(
-            camera_send_enabled
-            and invite.video_format is not None
-            and browser_video_send_supported(invite.video_format)
-        ),
+        # Preserve the explicit per-call camera consent even when the initial
+        # offer is audio-only.  A later re-INVITE may add video (the normal
+        # Wildix flow); codec support is evaluated against that new offer by
+        # the media-update path, while consent remains immutable for the
+        # lifetime of the dialog.
+        "camera_send_authorized": bool(camera_send_enabled),
         "video_rtp_socket": video_rtp_socket,
         "video_rtcp_socket": video_rtcp_socket,
         "video_rtp_source": video_rtp_source,
@@ -1722,16 +1727,69 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
         "media_client_id": str(call.data.get("media_client_id") or ""),
         "video_failure_reason": video_failure_reason,
     }
-    registry.upsert(
-        call_id,
-        state=CallState.IN_CALL.value,
-        owner="ha_softphone",
-        caller=invite.caller,
-        callee=resolved_callee,
-        route_kind="ha_softphone",
-        endpoint_id=endpoint_id,
-        media_client_id=str(call.data.get("media_client_id") or ""),
+    def _release_answer_media(_reason: str) -> None:
+        if registry.softphone_media.get(call_id) is softphone_media:
+            registry.softphone_media.pop(call_id, None)
+        _release_media_reservation(softphone_media)
+
+    transaction = AnswerTransaction(
+        authoritative_session,
+        lambda status, reason, sdp: (
+            True
+            if response_already_sent
+            else _sip_send_final_response(
+                hass,
+                call_id,
+                status,
+                reason,
+                answer_sdp=sdp,
+            )
+        ),
     )
+    transaction.add_resource(
+        f"softphone_media:{call_id}",
+        softphone_media,
+        _release_answer_media,
+    )
+
+    def _claim_answer() -> bool:
+        if pending.get(call_id) is not invite:
+            return False
+        claimed = registry.transition(
+            call_id,
+            state=CallState.IN_CALL.value,
+            owner="ha_softphone",
+            caller=invite.caller,
+            callee=resolved_callee,
+            route_kind="ha_softphone",
+            endpoint_id=endpoint_id,
+            media_client_id=str(call.data.get("media_client_id") or ""),
+            expected_generation=authoritative_session.generation,
+        )
+        if claimed is None:
+            return False
+        pending.pop(call_id, None)
+        return True
+
+    answer_result = await transaction.commit(
+        answer_sdp,
+        claim=_claim_answer,
+    )
+    if not answer_result.committed:
+        if response_already_sent:
+            _sip_send_bye(hass, call_id)
+        registry.finish_and_pop(
+            call_id,
+            reason=answer_result.reason or TerminalReason.PROTOCOL_ERROR.value,
+            state=CallState.CANCELLED.value,
+        )
+        from homeassistant.exceptions import ServiceValidationError
+
+        raise ServiceValidationError(
+            f"SIP answer transaction failed for call_id {call_id}: "
+            f"{answer_result.reason or 'unknown error'}"
+        )
+    registry.attach_media(call_id, softphone_media)
     registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
     _LOGGER.info("SIP answered call_id=%s", call_id)
     video_active = bool(
@@ -1910,7 +1968,9 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
     if not call_id and len(endpoint_pending) == 1:
         call_id = endpoint_pending[0]
     pending.pop(call_id, None)
-    preanswered_item = registry.preanswered.pop(call_id, None) if call_id else None
+    preanswered_item = (
+        registry.take_media(call_id, provisional=True) if call_id else None
+    )
     if preanswered_item is not None:
         _release_media_reservation(preanswered_item)
         final_response_sent = bool(
@@ -2714,7 +2774,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 raise ServiceValidationError(f"Conference {room_name} is full")
             call_id, queue = joined
             registry = _call_registry(hass)
-            registry.softphone_media[call_id] = {
+            conference_media = {
                 "conference_room": room_name,
                 "conference_queue": queue,
                 "endpoint_id": endpoint_id,
@@ -2731,6 +2791,7 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 source_endpoint_id=endpoint_id,
                 media_client_id=str(call.data.get("media_client_id") or ""),
             )
+            registry.attach_media(call_id, conference_media)
             _bind_service_call_controller(registry, call_id, call)
             registry.add_leg(call_id, call_id, role="ha_softphone", state=CallState.IN_CALL.value)
             _set_ha_softphone_call_state(
@@ -2765,6 +2826,14 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
     route_uri = route.sip_uri
     if route.action is RouteAction.GROUP:
         route_uri = ha_uri_for(route.target or target, contacts)
+    elif route.action is RouteAction.ASSIST:
+        # Assist is a PBX-local application.  Originate the browser media leg
+        # to this integration's listener so the canonical inbound dispatcher
+        # owns the Assist session and RTP pipeline; never fall through to the
+        # external-trunk resolver merely because the roster entry has no
+        # network address of its own.
+        route_uri = ha_uri_for(route.target or target, contacts)
+        route = replace(route, action=RouteAction.BRIDGE, sip_uri=route_uri)
     if use_trunk:
         trunk_target = route.target or target
         route_uri = (
@@ -3074,7 +3143,13 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
         ),
         video_failure_reason=video_failure_reason,
     )
-    registry.sip_clients[client.dialog_ids.call_id] = client
+    registry.attach_sip_client(
+        client.dialog_ids.call_id,
+        client.dialog_ids.call_id,
+        client,
+        role="ha_softphone",
+        state=CallState.CALLING.value,
+    )
     try:
         result = await client.invite(
             target=uri.user,
@@ -3533,8 +3608,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .websocket_api import _async_shutdown_all
     await _async_shutdown_all(hass)
 
-    await _async_stop_sip_trunk(hass)
-    hass.data.get(DOMAIN, {}).pop("sip_registrar", None)
+    # The authoritative PBX runtime stops calls, trunk and listeners in one
+    # ordered cleanup barrier.  Do not tear the trunk out from under live call
+    # sessions before that owner begins shutdown.
     await _async_stop_sip_endpoint(hass)
     unsub = hass.data.get(DOMAIN, {}).pop("esp_state_event_bridge_unsub", None)
     if unsub is not None:
@@ -3571,6 +3647,7 @@ _REMOVED_ENTRY_RUNTIME_KEYS = (
     "phonebook_sensor",
     # SIP/B2BUA and local logical-phone runtime.
     "call_registry",
+    "pbx_runtime",
     "sip_bridge_state",
     "sip_registrar",
     "sip_endpoint",

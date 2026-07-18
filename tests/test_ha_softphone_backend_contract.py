@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 ENDPOINT_RUNTIME = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
+SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
@@ -557,7 +558,13 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
 
     def test_video_hold_resume_keeps_per_call_camera_authorization(self) -> None:
         answer = _function_body(self.source, "_handle_sip_answer_service")
-        self.assertIn('"camera_send_authorized": bool(', answer)
+        self.assertIn(
+            '"camera_send_authorized": bool(camera_send_enabled)', answer
+        )
+        authorization = answer.split('"camera_send_authorized":', 1)[1].split(
+            ",", 1
+        )[0]
+        self.assertNotIn("invite.video_format", authorization)
 
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
         start = endpoint_runtime.index("    async def _on_media_update(")
@@ -686,18 +693,22 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
 
     def test_video_bridge_projects_destination_h264_level_to_source_leg(self) -> None:
         endpoint_runtime = ENDPOINT_RUNTIME.read_text()
-        self.assertIn("source_video = (", endpoint_runtime)
-        self.assertIn("video_answer_contract(", endpoint_runtime)
+        sip_bridge = SIP_BRIDGE.read_text()
+        self.assertIn("source_video = (", sip_bridge)
+        self.assertIn("video_answer_contract(", sip_bridge)
         self.assertIn(
-            "video_relay.left.video_format = source_directional.send",
-            endpoint_runtime,
+            "relay.left.video_format = source_directional.send",
+            sip_bridge,
         )
         self.assertIn(
-            "video_relay.left.local_video_format = (\n"
-            "                                source_directional.recv",
+            "relay.left.local_video_format = source_directional.recv",
+            sip_bridge,
+        )
+        self.assertIn("video_format=source_video", sip_bridge)
+        self.assertIn(
+            "video_answer = configure_answered_invite_video_relay(",
             endpoint_runtime,
         )
-        self.assertIn("selected_video = source_video", endpoint_runtime)
 
     def test_outbound_softphone_accepts_live_peer_media_updates(self) -> None:
         outbound = _function_body(self.source, "_handle_sip_call_target_service")
@@ -733,9 +744,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn('item.get("rtp_loopback")', audio_ws)
         self.assertIn("local_rtp_port=0", audio_ws)
         self.assertIn("int(session.local_ssrc) or secrets.randbelow", audio_ws)
-        self.assertIn(
-            "registry.softphone_media.pop(source_call_id, None)", bridge_manager
-        )
+        self.assertIn("registry.take_media(source_call_id)", bridge_manager)
+        self.assertIn("release_media_reservation(media)", bridge_manager)
 
     def test_conference_checks_softphone_busy_and_websocket_does_not_own_call(
         self,

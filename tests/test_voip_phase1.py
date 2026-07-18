@@ -57,6 +57,7 @@ sip_listener = _load_intercom_module("sip_listener")
 sip_registrar = _load_intercom_module("sip_registrar")
 sip_auth = _load_intercom_module("sip_auth")
 sip_rtp_bridge = _load_intercom_module("sip_rtp_bridge")
+sip_bridge = _load_intercom_module("sip_bridge")
 sip_trunk = _load_intercom_module("sip_trunk")
 sip_endpoint = _load_intercom_module("sip_endpoint")
 dtmf = _load_intercom_module("dtmf")
@@ -900,6 +901,10 @@ class SipProfileTest(unittest.TestCase):
         self.assertEqual(
             sip_transport.sip_failure_response("sip_500"),
             (480, "Temporarily Unavailable", "sip_500", "transport_unreachable"),
+        )
+        self.assertEqual(
+            sip_transport.sip_failure_response("dnd"),
+            (486, "Busy Here", "dnd", "declined"),
         )
 
 
@@ -1915,10 +1920,11 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
             for raw, _addr in transport.sent
         ):
             await asyncio.sleep(0)
-        answer = sdp.build_answer(
+        answer = sdp.build_answer_directional(
             "127.0.0.2",
             "127.0.0.2",
             42000,
+            negotiated,
             negotiated,
         ).encode()
         responses.put_nowait(response(200, "OK", "INVITE", body=answer))
@@ -4123,6 +4129,23 @@ class SdpPcmProfileTest(unittest.TestCase):
         self.assertIsNotNone(selected_dtmf)
         assert selected_dtmf is not None
         self.assertEqual(selected_dtmf.payload_type, offered_dtmf.payload_type)
+        self.assertEqual(selected_dtmf.events, frozenset(range(16)))
+
+    def test_dtmf_negotiation_restricts_events_to_remote_fmtp(self) -> None:
+        audio = audio_format.AudioFormat(8000, "s16le", 1, 20)
+        offer = sdp.build_offer("192.0.2.10", "192.0.2.10", 40000, [audio])
+        answer = (
+            "v=0\r\no=- 2 1 IN IP4 192.0.2.20\r\n"
+            "s=answer\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=audio 41000 RTP/AVP 96 97\r\n"
+            "a=rtpmap:96 L16/8000/1\r\n"
+            "a=rtpmap:97 telephone-event/8000\r\n"
+            "a=fmtp:97 1,3-4\r\na=sendrecv\r\n"
+        )
+        negotiated = sdp.negotiate_dtmf_answer(answer, offer)
+        self.assertIsNotNone(negotiated)
+        assert negotiated is not None
+        self.assertEqual(negotiated.events, frozenset({1, 3, 4}))
 
     def test_answer_cannot_add_rtcp_mux_or_feedback_capabilities(self) -> None:
         offer = (
@@ -4169,6 +4192,31 @@ class SdpPcmProfileTest(unittest.TestCase):
 
         sdp.validate_sdp_answer(offer, answer)
 
+    def test_avp_answer_feedback_is_ignored_as_inapplicable(self) -> None:
+        offer = (
+            "v=0\r\no=- 1 1 IN IP4 192.0.2.10\r\n"
+            "s=offer\r\nc=IN IP4 192.0.2.10\r\nt=0 0\r\n"
+            "m=video 40002 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 packetization-mode=1;profile-level-id=42801f\r\n"
+            "a=sendrecv\r\n"
+        )
+        answer = (
+            "v=0\r\no=- 2 1 IN IP4 192.0.2.20\r\n"
+            "s=answer\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n"
+            "m=video 41002 RTP/AVP 103\r\n"
+            "a=rtpmap:103 H264/90000\r\n"
+            "a=fmtp:103 packetization-mode=1;profile-level-id=42801f\r\n"
+            "a=rtcp-fb:103 nack pli\r\n"
+            "a=sendrecv\r\n"
+        )
+
+        sdp.validate_sdp_answer(offer, answer)
+        selected = sdp.offered_video_formats(answer)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].transport_profile, "RTP/AVP")
+        self.assertEqual(selected[0].rtcp_feedback, ())
+
     def test_answer_must_preserve_media_count_order_transport_and_formats(self) -> None:
         audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
         offer = sdp.build_offer_directional(
@@ -4208,6 +4256,41 @@ class SdpPcmProfileTest(unittest.TestCase):
         for name, invalid in cases.items():
             with self.subTest(name=name), self.assertRaises(sdp.SdpError):
                 sdp.validate_sdp_answer(offer, invalid)
+
+    def test_uac_interop_may_treat_omitted_trailing_video_as_rejected(self) -> None:
+        audio = audio_format.AudioFormat(8000, "s16le", 1, 20)
+        offer = sdp.build_offer_directional(
+            "192.0.2.10",
+            "192.0.2.10",
+            40000,
+            [audio],
+            [audio],
+            video_port=40002,
+            video_formats=(sdp.DEFAULT_H264_FORMAT,),
+        )
+        payload = sdp.offered_pcm_formats(offer)[0]
+        audio_only_answer = sdp.build_answer_directional(
+            "192.0.2.20",
+            "192.0.2.20",
+            41000,
+            payload,
+            payload,
+            remote_sdp=sdp.build_offer_directional(
+                "192.0.2.10",
+                "192.0.2.10",
+                40000,
+                [audio],
+                [audio],
+            ),
+        )
+
+        with self.assertRaisesRegex(sdp.SdpError, "count and order"):
+            sdp.validate_sdp_answer(offer, audio_only_answer)
+        sdp.validate_sdp_answer(
+            offer,
+            audio_only_answer,
+            allow_omitted_trailing_media=True,
+        )
 
     def test_answer_direction_matrix_matches_rfc3264(self) -> None:
         audio = audio_format.AudioFormat(16000, "s16le", 1, 20)
@@ -4390,17 +4473,22 @@ class SdpPcmProfileTest(unittest.TestCase):
         )
         self.assertNotIn("a=fmtp:96", offer)
         self.assertIn("telephone-event/8000", offer)
-        self.assertIn("a=fmtp:97 0-16", offer)
+        self.assertIn("a=fmtp:97 0-15", offer)
         self.assertIn("a=maxptime:10", offer)
-        selected = sdp.negotiate(
+        selected_direction = sdp.negotiate_directional(
             offer,
             [
                 audio_format.AudioFormat(16000, "s16le", 1, 20),
                 audio_format.AudioFormat(48000, "s16le", 1, 10),
             ],
+            [
+                audio_format.AudioFormat(16000, "s16le", 1, 20),
+                audio_format.AudioFormat(48000, "s16le", 1, 10),
+            ],
         )
-        self.assertIsNotNone(selected)
-        assert selected is not None
+        self.assertIsNotNone(selected_direction)
+        assert selected_direction is not None
+        selected = selected_direction.send
         self.assertEqual(selected.encoding, "L16")
         self.assertEqual(selected.sample_rate, 48000)
         self.assertEqual(selected.payload_type, 96)
@@ -4418,19 +4506,26 @@ class SdpPcmProfileTest(unittest.TestCase):
             "a=rtpmap:98 opus/48000/2\r\n"
             "a=sendrecv\r\n"
         )
-        selected = sdp.negotiate(
+        selected_direction = sdp.negotiate_directional(
             offer,
             [
                 audio_format.AudioFormat(48000, "s16le", 1, 10),
                 audio_format.AudioFormat(16000, "s16le", 1, 20),
             ],
+            [
+                audio_format.AudioFormat(48000, "s16le", 1, 10),
+                audio_format.AudioFormat(16000, "s16le", 1, 20),
+            ],
         )
-        self.assertIsNotNone(selected)
-        assert selected is not None
+        self.assertIsNotNone(selected_direction)
+        assert selected_direction is not None
+        selected = selected_direction.send
         self.assertEqual(selected.payload_type, 97)
         self.assertEqual(selected.audio_format, audio_format.AudioFormat(48000, "s16le", 1, 10))
 
-        answer = sdp.build_answer("192.168.1.10", "192.168.1.10", 40000, selected)
+        answer = sdp.build_answer_directional(
+            "192.168.1.10", "192.168.1.10", 40000, selected, selected
+        )
         self.assertIn("m=audio 40000 RTP/AVP 97", answer)
         self.assertIn("a=rtpmap:97 L16/48000/1", answer)
         self.assertIn("a=ptime:10", answer)
@@ -4727,9 +4822,11 @@ class SdpPcmProfileTest(unittest.TestCase):
             "a=rtpmap:96 opus/48000/2\r\n"
             "a=ptime:20\r\n"
         )
-        selected = sdp.negotiate(offer, [audio_format.AudioFormat(8000, "s16le", 1, 20)])
-        self.assertIsNotNone(selected)
-        assert selected is not None
+        preferred = [audio_format.AudioFormat(8000, "s16le", 1, 20)]
+        selected_direction = sdp.negotiate_directional(offer, preferred, preferred)
+        self.assertIsNotNone(selected_direction)
+        assert selected_direction is not None
+        selected = selected_direction.send
         self.assertEqual(selected.encoding, "PCMU")
         self.assertEqual(selected.payload_type, 0)
         self.assertEqual(selected.audio_format, audio_format.AudioFormat(8000, "s16le", 1, 20))
@@ -4745,15 +4842,18 @@ class SdpPcmProfileTest(unittest.TestCase):
             "a=rtpmap:96 L16/48000/1\r\n"
             "a=ptime:10\r\n"
         )
-        selected = sdp.negotiate(
+        preferred = [
+            audio_format.AudioFormat(48000, "s16le", 1, 10),
+            audio_format.AudioFormat(8000, "s16le", 1, 20),
+        ]
+        selected_direction = sdp.negotiate_directional(
             offer,
-            [
-                audio_format.AudioFormat(48000, "s16le", 1, 10),
-                audio_format.AudioFormat(8000, "s16le", 1, 20),
-            ],
+            preferred,
+            preferred,
         )
-        self.assertIsNotNone(selected)
-        assert selected is not None
+        self.assertIsNotNone(selected_direction)
+        assert selected_direction is not None
+        selected = selected_direction.send
         self.assertEqual(selected.encoding, "L16")
         self.assertEqual(selected.sample_rate, 48000)
 
@@ -5007,6 +5107,16 @@ class RtpProfileTest(unittest.TestCase):
         self.assertEqual(dtmf.parse_sip_info_digit("application/dtmf-relay", b"Signal=1\r\nDuration=160"), "1")
         self.assertEqual(dtmf.parse_sip_info_digit("application/dtmf-relay", b"Signal=10\r\nDuration=160"), "*")
         self.assertEqual(dtmf.parse_sip_info_digit("application/dtmf", b"#"), "#")
+
+    def test_rfc4733_payload_encodes_event_end_volume_and_duration(self) -> None:
+        self.assertEqual(
+            dtmf.build_telephone_event_payload("#", duration=1280, end=True),
+            bytes((11, 0x8A, 0x05, 0x00)),
+        )
+        self.assertEqual(dtmf.telephone_event_code("d"), 15)
+        self.assertIsNone(dtmf.telephone_event_code("x"))
+        with self.assertRaisesRegex(ValueError, "duration"):
+            dtmf.build_telephone_event_payload("1", duration=0)
 
     def test_relay_follows_same_ssrc_nat_port_rebind(self) -> None:
         class FakeTransport:
@@ -6439,10 +6549,11 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
             [pcm],
         )
         offered = sdp.offered_pcm_formats(client._local_sdp_body)[0]
-        answer = sdp.build_answer(
+        answer = sdp.build_answer_directional(
             "127.0.0.2",
             "127.0.0.2",
             42000,
+            offered,
             offered,
         ).encode()
         response = sip.parse_message(
@@ -7402,7 +7513,9 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         client._received_provisional = True
         call_id = client.dialog_ids.call_id
         rtp_fmt = sdp.audio_format_to_rtp(audio_format.AudioFormat(16000, "s16le", 1, 20), 96)
-        answer = sdp.build_answer("127.0.0.2", "127.0.0.2", 42000, rtp_fmt).encode()
+        answer = sdp.build_answer_directional(
+            "127.0.0.2", "127.0.0.2", 42000, rtp_fmt, rtp_fmt
+        ).encode()
 
         def response(status: int, reason: str, method: str, cseq: int, branch: str, body: bytes = b"") -> bytes:
             headers = [
@@ -7854,7 +7967,7 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("self.dialog_ids.branch = sip.make_branch()", auth_branch)
         self.assertIn("retry_headers = sip.dialog_headers(", auth_branch)
         self.assertIn("retry_headers.append((auth_header, auth_value))", auth_branch)
-        self.assertIn("next_retransmit = loop.time() + retransmit_interval", auth_branch)
+        self.assertIn("transaction.restart_retransmissions()", auth_branch)
         self.assertNotIn("retry_headers = list(headers)", auth_branch)
 
     async def test_proxy_auth_retry_uses_trunk_identity(self) -> None:
@@ -8083,6 +8196,44 @@ class SipProtocolBugFixAsyncTest(unittest.IsolatedAsyncioTestCase):
 
 
 class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _authorized_register(
+        registrar,
+        *,
+        username: str,
+        password: str,
+        call_id: str,
+        cseq: int,
+        contacts: list[str],
+        expires: int | None = 120,
+        host: str = "192.0.2.50",
+        port: int = 5062,
+        transport: str = "UDP",
+    ) -> sip.SipMessage:
+        request_uri = "sip:192.168.1.10"
+        challenge = registrar._challenge()[1]
+        authorization = sip_auth.build_digest_authorization(
+            challenge_header=challenge,
+            username=username,
+            password=password,
+            method="REGISTER",
+            uri=request_uri,
+        )
+        headers = [
+            ("Via", f"SIP/2.0/{transport} {host}:{port};branch=z9hG4bK{call_id};rport"),
+            ("From", f"<sip:{username}@192.168.1.10>;tag=a"),
+            ("To", f"<sip:{username}@192.168.1.10>"),
+            ("Call-ID", call_id),
+            ("CSeq", f"{cseq} REGISTER"),
+            *(("Contact", contact) for contact in contacts),
+            ("Authorization", authorization),
+        ]
+        if expires is not None:
+            headers.append(("Expires", str(expires)))
+        return sip.parse_message(
+            sip.build_request("REGISTER", request_uri, headers, b"")
+        )
+
     def test_digest_nonce_cache_is_bounded(self) -> None:
         registrar = sip_registrar.SipRegistrar(
             enabled=True,
@@ -8634,8 +8785,269 @@ class SipRegistrarTest(unittest.IsolatedAsyncioTestCase):
             "sip:SmartphoneDany@192.168.1.50:49258;transport=tcp",
         )
 
+    async def test_multiple_contacts_are_independent_and_all_returned(self) -> None:
+        changes: list[tuple[str, bool]] = []
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("Multi", "Multi", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+            on_registration_change=lambda username, registered: changes.append(
+                (username, registered)
+            ),
+        )
+        first = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-a",
+            cseq=1,
+            contacts=["<sip:Multi@192.0.2.51:5062>;q=0.2"],
+            host="192.0.2.51",
+        )
+        second = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-b",
+            cseq=1,
+            contacts=["<sip:Multi@192.0.2.52:5064>;q=0.9"],
+            host="192.0.2.52",
+            port=5064,
+        )
+
+        self.assertEqual(
+            (await registrar.handle_register(first, ("192.0.2.51", 5062), "UDP")).status,
+            200,
+        )
+        result = await registrar.handle_register(
+            second, ("192.0.2.52", 5064), "UDP"
+        )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(len(registrar.registered_contacts("Multi")), 2)
+        self.assertEqual(
+            len([value for name, value in result.headers if name == "Contact"]),
+            2,
+        )
+        roster = registrar.registered_roster_entries()
+        self.assertEqual(len(roster), 1)
+        self.assertEqual(len(roster[0].metadata["sip_contacts"]), 2)
+        self.assertEqual(roster[0].sip_uri, "sip:Multi@192.0.2.52:5064")
+        self.assertTrue(
+            registrar.registration_matches_source(
+                "Multi", "192.0.2.51", 5062, "UDP"
+            )
+        )
+        self.assertTrue(
+            registrar.registration_matches_source(
+                "Multi", "192.0.2.52", 5064, "UDP"
+            )
+        )
+        self.assertEqual(changes, [("Multi", True)])
+
+    async def test_unregister_one_contact_preserves_other_and_presence(self) -> None:
+        changes: list[tuple[str, bool]] = []
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("Multi", "Multi", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+            on_registration_change=lambda username, registered: changes.append(
+                (username, registered)
+            ),
+        )
+        for suffix in ("a", "b"):
+            port = 5061 + ord(suffix) - ord("a")
+            request = self._authorized_register(
+                registrar,
+                username="Multi",
+                password="secret",
+                call_id=f"device-{suffix}",
+                cseq=1,
+                contacts=[f"<sip:Multi@192.0.2.50:{port}>"],
+                port=port,
+            )
+            await registrar.handle_register(request, ("192.0.2.50", port), "UDP")
+
+        unregister = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-a",
+            cseq=2,
+            contacts=["<sip:Multi@192.0.2.50:5061>;expires=0"],
+            port=5061,
+        )
+        result = await registrar.handle_register(
+            unregister, ("192.0.2.50", 5061), "UDP"
+        )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(len(registrar.registered_contacts("Multi")), 1)
+        self.assertEqual(changes, [("Multi", True)])
+
+    async def test_register_query_and_wildcard_use_complete_binding_set(self) -> None:
+        changes: list[tuple[str, bool]] = []
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("Multi", "Multi", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+            on_registration_change=lambda username, registered: changes.append(
+                (username, registered)
+            ),
+        )
+        create = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-a",
+            cseq=1,
+            contacts=["<sip:Multi@192.0.2.50:5062>"],
+        )
+        await registrar.handle_register(create, ("192.0.2.50", 5062), "UDP")
+        query = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="query",
+            cseq=1,
+            contacts=[],
+            expires=None,
+        )
+
+        query_result = await registrar.handle_register(
+            query, ("192.0.2.50", 5062), "UDP"
+        )
+        self.assertEqual(query_result.status, 200)
+        self.assertEqual(
+            len([1 for name, _value in query_result.headers if name == "Contact"]),
+            1,
+        )
+
+        invalid_wildcard = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="wild-invalid",
+            cseq=1,
+            contacts=["*"],
+            expires=120,
+        )
+        self.assertEqual(
+            (
+                await registrar.handle_register(
+                    invalid_wildcard, ("192.0.2.50", 5062), "UDP"
+                )
+            ).status,
+            400,
+        )
+        wildcard = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="wild",
+            cseq=1,
+            contacts=["*"],
+            expires=0,
+        )
+        wildcard_result = await registrar.handle_register(
+            wildcard, ("192.0.2.50", 5062), "UDP"
+        )
+        self.assertEqual(wildcard_result.status, 200)
+        self.assertEqual(wildcard_result.headers, ())
+        self.assertEqual(changes, [("Multi", True), ("Multi", False)])
+
+    async def test_lower_cseq_and_invalid_batch_do_not_mutate_bindings(self) -> None:
+        registrar = sip_registrar.SipRegistrar(
+            enabled=True,
+            accounts=[sip_registrar.SipAccount("Multi", "Multi", "secret")],
+            local_ip="192.168.1.10",
+            local_sip_port=5060,
+        )
+        create = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-a",
+            cseq=10,
+            contacts=["<sip:Multi@192.0.2.50:5062>"],
+        )
+        await registrar.handle_register(create, ("192.0.2.50", 5062), "UDP")
+        before = [binding.snapshot() for binding in registrar.registrations.values()]
+        stale = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-a",
+            cseq=9,
+            contacts=["<sip:Multi@192.0.2.50:5062>"],
+        )
+        stale_result = await registrar.handle_register(
+            stale, ("192.0.2.50", 5062), "UDP"
+        )
+        self.assertEqual(stale_result.status, 500)
+        self.assertEqual(
+            [binding.snapshot() for binding in registrar.registrations.values()],
+            before,
+        )
+
+        invalid_batch = self._authorized_register(
+            registrar,
+            username="Multi",
+            password="secret",
+            call_id="device-b",
+            cseq=1,
+            contacts=[
+                "<sip:Multi@192.0.2.50:5064>",
+                "https://example.invalid/contact",
+            ],
+        )
+        invalid_result = await registrar.handle_register(
+            invalid_batch, ("192.0.2.50", 5064), "UDP"
+        )
+        self.assertEqual(invalid_result.status, 400)
+        self.assertEqual(
+            [binding.snapshot() for binding in registrar.registrations.values()],
+            before,
+        )
+
 
 class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
+    def test_local_client_relay_does_not_require_a_synthetic_sdp_offer(self) -> None:
+        local_to_relay = sdp.RtpPcmFormat(96, "L16", 16000, 1, 16)
+        relay_to_local = sdp.RtpPcmFormat(97, "L16", 48000, 1, 10)
+        dialog = sip_client.SipDialog(
+            target="ESP",
+            remote_host="192.0.2.20",
+            remote_sip_port=5060,
+            remote_rtp_host="192.0.2.20",
+            remote_rtp_port=41000,
+            local_rtp_port=42002,
+            call_id="dest-call",
+            local_uri="sip:HA@192.0.2.10",
+            remote_uri="sip:ESP@192.0.2.20",
+            send_format=local_to_relay,
+            recv_format=local_to_relay,
+        )
+        client = types.SimpleNamespace(dialog=dialog)
+
+        relay = sip_bridge.build_local_client_relay(
+            client=client,
+            local_host="127.0.0.1",
+            local_to_relay_format=local_to_relay,
+            relay_to_local_format=relay_to_local,
+            source_relay_port=42000,
+            dest_relay_port=42002,
+            capture_name="source_dest",
+        )
+
+        self.assertEqual((relay.left.host, relay.left.port), ("127.0.0.1", 0))
+        self.assertEqual(relay.left.inbound_rtp_format, local_to_relay)
+        self.assertEqual(relay.left.outbound_rtp_format, relay_to_local)
+        self.assertEqual((relay.right.host, relay.right.port), ("192.0.2.20", 41000))
+
     async def test_local_browser_loopback_latches_ephemeral_rtp_port_bidirectionally(self) -> None:
         local = "127.0.0.1"
         with _reserved_udp_ports(3) as ports:
@@ -8661,12 +9073,18 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             local_addr=(local, destination_port),
         )
         dtmf_events: list[tuple[str, str, str]] = []
+        dtmf_received = asyncio.Event()
+
+        def on_dtmf(side: str, digit: str, transport: str) -> None:
+            dtmf_events.append((side, digit, transport))
+            dtmf_received.set()
+
         relay = sip_rtp_bridge.SipRtpRelay(
             left=sip_rtp_bridge.RtpPeer(local, 0, 96, audio, dtmf_payload_type=101),
             right=sip_rtp_bridge.RtpPeer(local, destination_port, 96, audio, dtmf_payload_type=101),
             left_port=relay_left_port,
             right_port=relay_right_port,
-            on_dtmf=lambda side, digit, transport: dtmf_events.append((side, digit, transport)),
+            on_dtmf=on_dtmf,
         )
 
         def frame(*, sequence: int, ssrc: int) -> bytes:
@@ -8699,9 +9117,25 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             )
             browser_transport.sendto(dtmf_packet, (local, relay_left_port))
             browser_transport.sendto(dtmf_packet, (local, relay_left_port))
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(dtmf_received.wait(), timeout=1.0)
             self.assertEqual(dtmf_events, [("left", "1", "rtp_event")])
-            self.assertTrue(destination.queue.empty())
+            relayed_dtmf: list[rtp.RtpPacket] = []
+            while sum(bool(packet.payload[1] & 0x80) for packet in relayed_dtmf) < 3:
+                raw, _ = await asyncio.wait_for(destination.queue.get(), timeout=1.0)
+                relayed_dtmf.append(rtp.parse_packet(raw))
+            self.assertEqual({packet.payload_type for packet in relayed_dtmf}, {101})
+            self.assertEqual(
+                {packet.timestamp for packet in relayed_dtmf},
+                {relayed_dtmf[0].timestamp},
+            )
+            self.assertTrue(relayed_dtmf[0].marker)
+            self.assertFalse(any(packet.marker for packet in relayed_dtmf[1:]))
+            self.assertEqual([packet.payload[0] for packet in relayed_dtmf], [1] * 7)
+            self.assertEqual(
+                sum(bool(packet.payload[1] & 0x80) for packet in relayed_dtmf),
+                3,
+            )
+            self.assertEqual(relay.right_dtmf_tx_events, 1)
 
             destination_transport.sendto(frame(sequence=3, ssrc=202), (local, relay_right_port))
             returned, _ = await asyncio.wait_for(browser.queue.get(), timeout=1.0)
@@ -8882,7 +9316,13 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             return sip_listener.SipInviteResult(
                 200,
                 "OK",
-                answer_sdp=sdp.build_answer(local, local, dest_rtp, invite.selected_format),
+                answer_sdp=sdp.build_answer_directional(
+                    local,
+                    local,
+                    dest_rtp,
+                    invite.send_format,
+                    invite.recv_format,
+                ),
             )
 
         async def ha_invite(invite):
@@ -8928,7 +9368,13 @@ class SipBridgeTest(unittest.IsolatedAsyncioTestCase):
             return sip_listener.SipInviteResult(
                 200,
                 "OK",
-                answer_sdp=sdp.build_answer(local, local, ha_rtp_left, invite.selected_format),
+                answer_sdp=sdp.build_answer_directional(
+                    local,
+                    local,
+                    ha_rtp_left,
+                    invite.send_format,
+                    invite.recv_format,
+                ),
             )
 
         dest_server = sip_listener.SipUdpServer(

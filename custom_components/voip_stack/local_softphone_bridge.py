@@ -16,6 +16,7 @@ import logging
 import secrets
 
 from .endpoint_registry import EndpointRegistry
+from .fsm import CallState
 from .queue_utils import put_drop_oldest
 
 
@@ -66,13 +67,10 @@ class LocalMediaNotNegotiatedError(LocalBridgeError):
     """Raised when video is used on an audio-only logical call."""
 
 
-class LocalCallState(StrEnum):
-    """Per-endpoint state exposed by a local logical call."""
-
-    CALLING = "calling"
-    RINGING = "ringing"
-    IN_CALL = "in_call"
-    IDLE = "idle"
+# Public compatibility name; local and SIP/browser calls share one canonical
+# state vocabulary.  The bridge uses only the four phases valid for a local
+# two-party leg, while identity and serialization come from ``CallState``.
+LocalCallState = CallState
 
 
 class LocalCallEndReason(StrEnum):

@@ -9,6 +9,10 @@ from homeassistant.core import HomeAssistant
 
 from .config import transport_config
 from .const import DOMAIN
+from .media_reservation import (
+    release_media_reservation as release_media_reservation,
+    release_video_media_reservation as release_video_media_reservation,
+)
 
 RTP_RELAY_POOL_WIDTH = 400
 
@@ -34,29 +38,6 @@ class RtpPortReservation:
             return
         release_sip_rtp_port_pair(self.hass, self.ports)
         self.released = True
-
-
-def release_video_media_reservation(item) -> None:
-    """Release only video resources stored in runtime dict metadata."""
-    if not isinstance(item, dict):
-        return
-    for key in ("video_rtp_socket", "video_rtcp_socket"):
-        video_socket = item.pop(key, None)
-        if video_socket is not None and hasattr(video_socket, "close"):
-            video_socket.close()
-    reservation = item.pop("video_rtp_reservation", None)
-    if reservation is not None and hasattr(reservation, "release"):
-        reservation.release()
-
-
-def release_media_reservation(item) -> None:
-    """Release all owned RTP resources stored in runtime dict metadata."""
-    if not isinstance(item, dict):
-        return
-    release_video_media_reservation(item)
-    reservation = item.pop("rtp_reservation", None)
-    if reservation is not None and hasattr(reservation, "release"):
-        reservation.release()
 
 
 def rtp_port_available(port: int) -> bool:

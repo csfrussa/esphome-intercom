@@ -51,6 +51,40 @@ class QualificationMatrixTest(unittest.TestCase):
         self.assertTrue(any("caller_terminal_screen" in scenario.assertions for scenario in scenarios))
         self.assertTrue(all("debug_sip_trace" in scenario.assertions for scenario in scenarios))
 
+    def test_usage_matrix_covers_every_supported_behavior_axis(self) -> None:
+        scenarios = matrix.generate_usage_matrix()
+
+        self.assertGreaterEqual(len(scenarios), 200)
+        self.assertEqual(matrix.validate_usage_matrix(scenarios), [])
+
+    def test_usage_matrix_answers_no_automation_and_group_dnd_questions(self) -> None:
+        by_id = {scenario.id: scenario for scenario in matrix.generate_usage_matrix()}
+
+        no_automation = by_id["selection-trunk-ha_softphone-automation-off"]
+        self.assertEqual(no_automation.expected, "canonical_destination")
+        self.assertIn("no_route_request", no_automation.assertions)
+
+        mixed_dnd = by_id["ring-group-esp-ha_dnd_esp_answers"]
+        self.assertEqual(mixed_dnd.expected, "first_answer_wins")
+        all_dnd = by_id["ring-group-esp-all_dnd"]
+        self.assertEqual(all_dnd.expected, "486_dnd")
+
+    def test_explicit_dtmf_always_precedes_automation(self) -> None:
+        scenarios = matrix.generate_usage_matrix()
+        dtmf = [
+            scenario
+            for scenario in scenarios
+            if scenario.selection == "valid_extension_automation_ignored"
+        ]
+
+        self.assertEqual(
+            {scenario.destination for scenario in dtmf},
+            {"ha_softphone", "esp", "registered_sip", "assist"},
+        )
+        self.assertTrue(
+            all("dtmf_precedes_automation" in scenario.assertions for scenario in dtmf)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

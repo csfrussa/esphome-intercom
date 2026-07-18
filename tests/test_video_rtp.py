@@ -1125,7 +1125,11 @@ class H264SdpTest(unittest.TestCase):
             "a=rtpmap:103 H264/90000\r\n"
             "a=fmtp:103 packetization-mode=1;profile-level-id=42e01f\r\n"
         )
-        self.assertIsNone(sdp.negotiate_h264_answer(answer, sdp.DEFAULT_H264_FORMAT))
+        self.assertIsNone(
+            sdp.negotiate_video_answer_directional(
+                answer, sdp.DEFAULT_H264_FORMAT
+            )
+        )
 
     def test_answer_cannot_change_h264_packetization_or_profile_family(self) -> None:
         offered = sdp.DEFAULT_H264_FORMAT
@@ -1139,7 +1143,7 @@ class H264SdpTest(unittest.TestCase):
             )
 
         self.assertIsNone(
-            sdp.negotiate_video_answer(
+            sdp.negotiate_video_answer_directional(
                 answer(
                     f"packetization-mode=0;profile-level-id={offered.profile_level_id}"
                 ),
@@ -1147,22 +1151,22 @@ class H264SdpTest(unittest.TestCase):
             )
         )
         self.assertIsNone(
-            sdp.negotiate_video_answer(
+            sdp.negotiate_video_answer_directional(
                 answer("packetization-mode=1;profile-level-id=64001f"), offered
             )
         )
         self.assertIsNone(
-            sdp.negotiate_video_answer(
+            sdp.negotiate_video_answer_directional(
                 answer("packetization-mode=1;profile-level-id=428020"), offered
             )
         )
-        downgraded = sdp.negotiate_video_answer(
+        downgraded = sdp.negotiate_video_answer_directional(
             answer("packetization-mode=1;profile-level-id=42800a"), offered
         )
         self.assertIsNotNone(downgraded)
         assert downgraded is not None
-        self.assertEqual(downgraded.profile_level_id, "42800a")
-        selected = sdp.negotiate_video_answer(
+        self.assertEqual(downgraded.send.profile_level_id, "42800a")
+        selected = sdp.negotiate_video_answer_directional(
             answer(
                 "packetization-mode=1;profile-level-id=428015;level-asymmetry-allowed=1"
             ),
@@ -1170,7 +1174,7 @@ class H264SdpTest(unittest.TestCase):
         )
         self.assertIsNotNone(selected)
         assert selected is not None
-        self.assertEqual(selected.profile_level_id, "428015")
+        self.assertEqual(selected.send.profile_level_id, "428015")
 
     def test_h264_answer_accepts_rfc_level_1b_downgrade(self) -> None:
         offered = sdp.RtpVideoFormat(
@@ -1185,11 +1189,11 @@ class H264SdpTest(unittest.TestCase):
             "a=fmtp:98 profile-level-id=42b00b;packetization-mode=1\r\n"
         )
 
-        selected = sdp.negotiate_video_answer(answer, offered)
+        selected = sdp.negotiate_video_answer_directional(answer, offered)
 
         self.assertIsNotNone(selected)
         assert selected is not None
-        self.assertEqual(selected.profile_level_id, "42b00b")
+        self.assertEqual(selected.send.profile_level_id, "42b00b")
 
     def test_h264_passthrough_checks_directional_stream_level(self) -> None:
         high = sdp.RtpVideoFormat(

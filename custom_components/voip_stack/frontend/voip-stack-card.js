@@ -308,7 +308,7 @@ class VoipStackCard extends HTMLElement {
     this._mirroredConnectedPeer = "";
     const reason = data.terminal_reason || data.reason || state;
     const peer = data.target || data.dialed_target || data.peer_name || data.callee || "";
-    this._captureEndReason("terminal", reason, data.origin || "remote", peer);
+    this._captureEndReason("terminal", reason, data.actor || "remote", peer);
     this._render();
   }
 
@@ -457,14 +457,27 @@ class VoipStackCard extends HTMLElement {
   _applySoftphoneSnapshot(payload = {}) {
     const snapshot = this._normaliseSoftphoneSnapshot(payload);
     const current = this._softphoneSnapshot;
+    const terminalSnapshot = [
+      "idle",
+      "busy",
+      "declined",
+      "cancelled",
+      "media_incompatible",
+      "transport_unreachable",
+      "auth_required_unsupported",
+      "protocol_error",
+      "error",
+    ].includes(snapshot.state);
     if (snapshot.call_id && current?.call_id === snapshot.call_id) {
       const currentSequence = Number(current.sequence || 0);
       if (
+        !terminalSnapshot &&
         snapshot.sequence > 0 &&
         currentSequence > 0 &&
         snapshot.sequence < currentSequence
       ) return false;
       if (
+        !terminalSnapshot &&
         snapshot.sequence === currentSequence &&
         snapshot.revision > 0 &&
         Number(current.revision || 0) > snapshot.revision
@@ -1202,6 +1215,10 @@ class VoipStackCard extends HTMLElement {
     for (const entry of this._rosterEntries || []) {
       if (!entry || entry.enabled === false) continue;
       const metadata = entry.metadata || {};
+      if (
+        String(metadata.endpoint_kind || "").trim().toLowerCase() === "sip_account" &&
+        metadata.registered !== true
+      ) continue;
       const entryEndpointId = String(metadata.endpoint_id || "").trim();
       if (
         metadata.local_ha &&
@@ -1723,6 +1740,7 @@ class VoipStackCard extends HTMLElement {
     if (
       !statusReason &&
       this._isHaSoftphoneMode() &&
+      !!this.config?.show_extended_info &&
       ["degraded", "failed", "rejected"].includes(
         String(this._softphoneSnapshot?.video_status || "").toLowerCase(),
       ) &&
@@ -3019,7 +3037,6 @@ class VoipStackCard extends HTMLElement {
         ) return;
         const wantsVideo = Boolean(
           this._softphoneSupportsVideo() &&
-          this._softphoneSnapshot?.video_offered &&
           this._softphoneSnapshot?.video_camera_send_enabled &&
           (
             voipStackEngine.videoCameraEnabledFor
@@ -3027,6 +3044,10 @@ class VoipStackCard extends HTMLElement {
               : voipStackEngine.videoCameraEnabled
           )
         );
+        // A peer such as Wildix commonly establishes audio first and adds
+        // video with an in-dialog re-INVITE.  A manual answer must preserve
+        // the user's existing Send Camera choice for that later offer; auto
+        // answer still supplies its separately preflighted permission.
         const sendVideo = wantsVideo
           ? typeof options.videoPermission === "boolean"
             ? options.videoPermission
