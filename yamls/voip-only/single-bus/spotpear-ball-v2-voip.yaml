@@ -427,9 +427,9 @@ voip_stack:
   # devices; calls to the same extension become ambiguous and HA will use the
   # first matching phonebook entry.
   extension: "101"
-  conference_groups: ""
+  conference_groups: "CG Casa"
   conference_ring: false
-  ring_groups: ""
+  ring_groups: "RG Casa"
   audio:
     # Primary/preferred RTP profile: 48 kHz/10 ms toward the speaker, and a
     # matching 10 ms TX reframe of the 16 kHz mic for peers that negotiate

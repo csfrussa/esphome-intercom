@@ -549,9 +549,9 @@ voip_stack:
   # devices; calls to the same extension become ambiguous and HA will use the
   # first matching phonebook entry.
   extension: "101"
-  conference_groups: ""
+  conference_groups: "CG Casa"
   conference_ring: false
-  ring_groups: ""
+  ring_groups: "RG Casa"
   audio:
     # SIP/RTP prefers the highest UDP-safe quality. TX is the AFE mic format,
     # with a 10 ms reframe available for peers that can drive the speaker at
