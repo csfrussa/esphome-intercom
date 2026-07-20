@@ -342,7 +342,7 @@ class EndpointCallSession:
             reverse=True,
         )
         before_legs = [
-            resource for resource in ordered if resource.stage > CleanupStage.LEG
+            resource for resource in ordered if resource.stage >= CleanupStage.LEG
         ]
         after_legs = [
             resource for resource in ordered if resource.stage < CleanupStage.LEG

@@ -201,6 +201,21 @@ class EndpointCallSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, ["broken", "leg"])
         self.assertEqual(result.errors, ("resource:broken:OSError",))
 
+    async def test_leg_stage_resource_is_closed_with_the_leg_barrier(self) -> None:
+        events: list[str] = []
+        session = endpoint_session.EndpointCallSession("call-1", 1)
+        session.add_resource(
+            "leg-adjacent",
+            object(),
+            lambda reason: events.append(f"resource:{reason}"),
+            stage=endpoint_session.CleanupStage.LEG,
+        )
+
+        result = await session.terminate("remote_hangup")
+
+        self.assertEqual(events, ["resource:remote_hangup"])
+        self.assertEqual(result.closed_resources, ("leg-adjacent",))
+
     def test_generation_token_rejects_stale_owner(self) -> None:
         session = endpoint_session.EndpointCallSession("call-1", 3)
 

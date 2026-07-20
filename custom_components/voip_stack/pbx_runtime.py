@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 import inspect
+import logging
 from typing import Any, Protocol
 
 from .endpoint_session import (
@@ -19,6 +20,9 @@ from .endpoint_session import (
     SessionTerminationResult,
 )
 from .session_cleanup import async_wait_for_cleanup
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RuntimePhase(StrEnum):
@@ -203,7 +207,14 @@ class SipEndpointRuntime:
 
     def _publish(self, session: EndpointCallSession) -> None:
         if self._projection is not None:
-            self._projection.publish(self._snapshot(session))
+            try:
+                self._projection.publish(self._snapshot(session))
+            except Exception:
+                _LOGGER.exception(
+                    "PBX call projection publish failed call_id=%s generation=%s",
+                    session.call_id,
+                    session.generation,
+                )
 
     def _on_terminated(
         self,
@@ -215,7 +226,14 @@ class SipEndpointRuntime:
         snapshot = self._snapshot(session)
         self.calls.pop(session.call_id, None)
         if self._projection is not None:
-            self._projection.remove(snapshot)
+            try:
+                self._projection.remove(snapshot)
+            except Exception:
+                _LOGGER.exception(
+                    "PBX call projection removal failed call_id=%s generation=%s",
+                    session.call_id,
+                    session.generation,
+                )
 
     def create_session(
         self,
@@ -486,7 +504,10 @@ class SipEndpointRuntime:
             name for name in reversed(tuple(self._components)) if name not in ordered_names
         )
         for name in ordered_names:
-            await self._close_component(self._components[name])
+            try:
+                await self._close_component(self._components[name])
+            except BaseException:
+                _LOGGER.exception("PBX component cleanup failed component=%s", name)
         self.phase = RuntimePhase.STOPPED
 
     async def shutdown(self) -> None:

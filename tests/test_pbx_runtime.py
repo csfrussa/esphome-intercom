@@ -56,6 +56,14 @@ class _Projection:
         self.removed.append(snapshot)
 
 
+class _BrokenProjection:
+    def publish(self, _snapshot: CallProjectionSnapshot) -> None:
+        raise RuntimeError("publish failed")
+
+    def remove(self, _snapshot: CallProjectionSnapshot) -> None:
+        raise RuntimeError("remove failed")
+
+
 class SipEndpointRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_dark_runtime_has_no_io_and_rejects_calls(self) -> None:
         runtime = SipEndpointRuntime()
@@ -141,6 +149,38 @@ class SipEndpointRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, ["call", "trunk", "udp", "extra"])
         self.assertIs(runtime.phase, RuntimePhase.STOPPED)
         self.assertEqual(runtime.calls, {})
+
+    async def test_shutdown_continues_after_component_close_failure(self) -> None:
+        events: list[str] = []
+        runtime = SipEndpointRuntime()
+
+        async def broken() -> None:
+            events.append("trunk")
+            raise OSError("close failed")
+
+        async def close_udp() -> None:
+            events.append("udp")
+
+        runtime.attach_component("trunk", object(), closer=broken)
+        runtime.attach_component("udp_listener", object(), closer=close_udp)
+        runtime.activate()
+
+        await runtime.shutdown()
+
+        self.assertEqual(events, ["trunk", "udp"])
+        self.assertIs(runtime.phase, RuntimePhase.STOPPED)
+
+    async def test_projection_failure_cannot_break_call_lifecycle(self) -> None:
+        runtime = SipEndpointRuntime(projection=_BrokenProjection())
+        runtime.activate()
+
+        session = runtime.create_session("call-1")
+        session.transition(SessionPhase.RINGING)
+        result = await session.terminate("remote_hangup")
+
+        self.assertEqual(result.reason, "remote_hangup")
+        self.assertIs(session.phase, SessionPhase.TERMINATED)
+        self.assertIsNone(runtime.get_session("call-1"))
 
     async def test_shutdown_survives_repeated_waiter_cancellation(self) -> None:
         release = asyncio.Event()
