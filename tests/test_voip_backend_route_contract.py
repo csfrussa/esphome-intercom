@@ -34,6 +34,7 @@ ESPHOME_ACTIONS = ROOT / "custom_components" / "voip_stack" / "esphome_actions.p
 OUTBOUND_ATTEMPTS = (
     ROOT / "custom_components" / "voip_stack" / "outbound_attempts.py"
 )
+DTMF_EVENTS = ROOT / "custom_components" / "voip_stack" / "dtmf_events.py"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -44,6 +45,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         cls.esphome_actions = ESPHOME_ACTIONS.read_text()
         cls.outbound_attempts = OUTBOUND_ATTEMPTS.read_text()
+        cls.dtmf_events = DTMF_EVENTS.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -278,16 +280,20 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     def test_mid_call_dtmf_is_an_event_not_a_second_dialplan(self) -> None:
         websocket_source = WEBSOCKET_API.read_text()
         self.assertIn('SIP_DTMF_EVENT = "voip_stack.dtmf"', websocket_source)
-        self.assertIn("def _attach_dtmf_event_bridge(", self.source)
-        self.assertIn('"source_leg": "caller" if source_is_caller else "callee"', self.source)
-        self.assertIn('client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")', self.source)
+        self.assertIn("def attach_dtmf_event_bridge(", self.dtmf_events)
+        self.assertIn(
+            '"source_leg": "caller" if source_is_caller else "callee"',
+            self.dtmf_events,
+        )
+        self.assertIn(
+            'client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")',
+            self.dtmf_events,
+        )
         self.assertIn('callback("left", digit, "sip_info")', self.source)
-        self.assertIn("relay.relay_dtmf(side, digit)", self.source)
+        self.assertIn("relay.relay_dtmf(side, digit)", self.dtmf_events)
         self.assertNotIn("send_dtmf_info", self.source)
-        # Definition plus four established bridge paths and both automation
-        # forward paths (single target and ring group). Every HA-anchored
-        # media bridge keeps in-call DTMF.
-        self.assertEqual(self.source.count("_attach_dtmf_event_bridge("), 6)
+        # Five established HA-anchored bridge paths keep in-call DTMF.
+        self.assertEqual(self.source.count("_attach_dtmf_event_bridge("), 5)
         self.assertNotIn("dtmf_sequence", self.source)
 
     def test_logical_endpoint_busy_is_enforced_for_browser_and_sip_routes(self) -> None:
@@ -1645,10 +1651,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('last_sip_event="ROUTE_RESUME"', restore)
 
     def test_in_dialog_dtmf_uses_the_canonical_call_envelope(self) -> None:
-        bridge = self.source[
-            self.source.index("def _publish_dtmf_event(") :
-            self.source.index("def _invite_dtmf_format(")
-        ]
+        bridge = self.dtmf_events
         for field in (
             '"schema_version": CALL_EVENT_SCHEMA_VERSION',
             '"actor": "sip_bridge"',

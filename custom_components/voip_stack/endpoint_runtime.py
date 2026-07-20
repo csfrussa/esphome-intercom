@@ -20,7 +20,6 @@ from .audio_format import (
     HA_TRUNK_AUDIO_FORMATS,
 )
 from .automation_routing import (
-    CALL_EVENT_SCHEMA_VERSION,
     canonical_call_origin,
 )
 from .call_registry import TERMINAL_STATES
@@ -53,6 +52,10 @@ from .endpoint_lifecycle import (
     async_stop_sip_endpoint,
     call_registry as _call_registry,
     create_runtime_task,
+)
+from .dtmf_events import (
+    attach_dtmf_event_bridge as _attach_dtmf_event_bridge,
+    publish_dtmf_event as _publish_dtmf_event,
 )
 from .endpoint_routing import (
     peer_audio_formats as _peer_audio_formats,
@@ -113,7 +116,6 @@ from .sip_bridge import (
 )
 from .store import sip_accounts as _sip_accounts
 from .websocket_api import (
-    SIP_DTMF_EVENT,
     _ha_softphone_store,
     _release_ha_softphone_claim,
     _set_ha_softphone_call_state,
@@ -130,95 +132,6 @@ RING_GROUP_TIMEOUT_S = 30.0
 MAX_RING_GROUP_ATTEMPTS = 16
 MAX_TRUNK_INFO_DIGITS = 16
 MAX_PENDING_HA_INVITES = 64
-
-
-def _publish_dtmf_event(
-    hass: HomeAssistant,
-    *,
-    call_id: str,
-    dest_call_id: str,
-    caller: str,
-    callee: str,
-    side: str,
-    digit: str,
-    transport: str,
-) -> None:
-    """Publish one canonical in-dialog DTMF occurrence."""
-    source_is_caller = side == "left"
-    registry = _call_registry(hass)
-    context = registry.event_context(call_id)
-    state = context.state if context is not None else CallState.IN_CALL.value
-    session = registry.sessions.get(registry.resolve_session_id(call_id))
-    session_metadata = session.metadata if session is not None else {}
-    call_origin = canonical_call_origin(
-        session_metadata.get("ingress") or session_metadata.get("origin"),
-        session.route_kind if session is not None else "",
-    )
-    payload = {
-        "schema_version": CALL_EVENT_SCHEMA_VERSION,
-        "event_type": "dtmf",
-        "state": state,
-        "sip_state": state,
-        "call_id": call_id,
-        "dest_call_id": dest_call_id,
-        "caller": caller,
-        "callee": callee,
-        "source": caller if source_is_caller else callee,
-        "source_leg": "caller" if source_is_caller else "callee",
-        "side": side,
-        "digit": digit,
-        "transport": transport,
-        "direction": str(
-            session_metadata.get("direction")
-            or "incoming"
-        ),
-        "scope": "sip_bridge",
-        "actor": "sip_bridge",
-        "ingress": call_origin,
-        "origin": call_origin,
-        "route_kind": session.route_kind if session is not None else "",
-        "automation_control": "ha_anchored",
-    }
-    payload.update(registry.event_fields(call_id, state))
-    context = registry.ha_context(call_id)
-    if context is None:
-        hass.bus.async_fire(SIP_DTMF_EVENT, payload)
-    else:
-        hass.bus.async_fire(SIP_DTMF_EVENT, payload, context=context)
-
-
-def _attach_dtmf_event_bridge(
-    hass: HomeAssistant,
-    relay,
-    *,
-    call_id: str,
-    dest_call_id: str,
-    caller: str,
-    callee: str,
-    client=None,
-) -> None:
-    """Publish one HA event for each negotiated in-dialog DTMF press."""
-
-    def _emit(side: str, digit: str, transport: str) -> None:
-        _publish_dtmf_event(
-            hass,
-            call_id=call_id,
-            dest_call_id=dest_call_id,
-            caller=caller,
-            callee=callee,
-            side=side,
-            digit=digit,
-            transport=transport,
-        )
-        if transport == "sip_info":
-            # Accept legacy INFO as an ingress compatibility format, but
-            # originate only the negotiated RFC 4733 media event toward the
-            # opposite dialog leg.
-            relay.relay_dtmf(side, digit)
-
-    relay.on_dtmf = _emit
-    if client is not None:
-        client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")
 
 
 def _invite_dtmf_format(invite):
