@@ -23,6 +23,14 @@ const VOIP_STACK_MODULE_VERSION = (() => {
 const VOIP_STACK_CARD_VERSION = VOIP_STACK_MODULE_VERSION.replace(/-\d+$/, "") || "dev";
 await import(`./voip-phonebook-card.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
 const { voipStackEngine } = await import(`./voip-stack-engine.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
+const {
+  audioModeLabel,
+  formatListFromMetadata,
+  normaliseAudioMode,
+  normaliseTransport,
+  targetFromRosterEntry,
+  targetSupportsVideo,
+} = await import(`./voip-stack-card-model.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
 const HA_SOFTPHONE_DEVICE_ID = "__voip_stack_ha_softphone__";
 const DEFAULT_SOFTPHONE_ENDPOINT_ID = "default";
 
@@ -1299,58 +1307,19 @@ class VoipStackCard extends HTMLElement {
   }
 
   _formatListFromMetadata(value) {
-    if (Array.isArray(value)) return value.filter(Boolean).map(v => String(v));
-    if (typeof value === "string") {
-      return value.split(";").map(v => v.trim()).filter(Boolean);
-    }
-    return [];
+    return formatListFromMetadata(value);
   }
 
   _targetFromRosterEntry(entry) {
-    const metadata = entry.metadata || {};
-    const id = entry.id || entry.name;
-    const signaling = metadata.sip_transport || metadata.signaling_transport || "";
-    return {
-      endpoint_id: metadata.endpoint_id || "",
-      device_id: metadata.device_id || id,
-      name: entry.name || id,
-      route_id: id,
-      host: entry.address || "",
-      sip_transport: signaling,
-      sip_uri: entry.sip_uri || "",
-      extension: entry.extension || "",
-      number: entry.number || "",
-      ha_bridge: !!entry.ha_bridge,
-      endpoint_kind: String(metadata.endpoint_kind || "").trim().toLowerCase(),
-      capabilities: this._formatListFromMetadata(metadata.capabilities)
-        .map(value => value.toLowerCase()),
-      audio_mode: metadata.audio_mode || "full_duplex",
-      tx_formats: this._formatListFromMetadata(metadata.tx_formats),
-      rx_formats: this._formatListFromMetadata(metadata.rx_formats),
-      sip_port: entry.port || metadata.port || metadata.sip_port,
-      rtp_port: metadata.rtp_port,
-      max_payload_bytes: metadata.max_payload_bytes,
-      roster: true,
-    };
+    return targetFromRosterEntry(entry);
   }
 
   _targetSupportsVideo(target) {
-    const capabilities = Array.isArray(target?.capabilities)
-      ? target.capabilities.map(value => String(value).trim().toLowerCase()).filter(Boolean)
-      : [];
-    if (capabilities.length) return capabilities.includes("video");
-
-    // ESPHome endpoints are explicitly audio-only. Unknown/manual SIP targets
-    // remain eligible for standards-based video negotiation because their
-    // remote capabilities can only be discovered through SDP.
-    return String(target?.endpoint_kind || "").trim().toLowerCase() !== "esphome";
+    return targetSupportsVideo(target);
   }
 
   _normaliseTransport(value) {
-    const v = String(value || "").trim().toLowerCase();
-    return (v === "tcp" || v === "udp" || v === "sip_tcp" || v === "sip_udp")
-      ? v.replace(/^sip_/, "").toUpperCase()
-      : "";
+    return normaliseTransport(value);
   }
 
   _transportFromEntity(entityId) {
@@ -1364,19 +1333,11 @@ class VoipStackCard extends HTMLElement {
   }
 
   _normaliseAudioMode(value) {
-    const v = String(value || "").trim().toLowerCase();
-    return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v)
-      ? v
-      : "full_duplex";
+    return normaliseAudioMode(value);
   }
 
   _audioModeLabel(mode) {
-    switch (this._normaliseAudioMode(mode)) {
-      case "mic_only": return "MIC";
-      case "speaker_only": return "SPK";
-      case "control_only": return "CTRL";
-      default: return "FULL";
-    }
+    return audioModeLabel(mode);
   }
 
   _getOwnTransport() {
@@ -3664,19 +3625,11 @@ class VoipStackCardEditor extends HTMLElement {
   }
 
   _normaliseAudioMode(value) {
-    const v = String(value || "").trim().toLowerCase();
-    return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v)
-      ? v
-      : "full_duplex";
+    return normaliseAudioMode(value);
   }
 
   _audioModeLabel(mode) {
-    switch (this._normaliseAudioMode(mode)) {
-      case "mic_only": return "MIC";
-      case "speaker_only": return "SPK";
-      case "control_only": return "CTRL";
-      default: return "FULL";
-    }
+    return audioModeLabel(mode);
   }
 
   async _loadDevices() {

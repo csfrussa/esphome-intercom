@@ -19,6 +19,7 @@ CARD = (
     / "frontend"
     / "voip-stack-card.js"
 )
+CARD_MODEL = CARD.with_name("voip-stack-card-model.js")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
@@ -29,6 +30,9 @@ def test_card_runtime_follows_authoritative_sip_state_and_call_identity() -> Non
 import fs from "fs";
 import vm from "vm";
 import assert from "assert/strict";
+import {{ pathToFileURL }} from "url";
+
+const cardModel = await import(pathToFileURL({json.dumps(str(CARD_MODEL))}));
 
 let source = fs.readFileSync({json.dumps(str(CARD))}, "utf8");
 source = source
@@ -36,6 +40,13 @@ source = source
   .replace(
     /const \{{ voipStackEngine \}} = await import\(`\.\/voip-stack-engine\.js[^;]+;/,
     "const {{ voipStackEngine }} = globalThis.__engine;",
+  )
+  .replace(
+    /const \{{\s*audioModeLabel[\s\S]*?\}} = await import\(`\.\/voip-stack-card-model\.js[^;]+;/,
+    `const {{
+      audioModeLabel, formatListFromMetadata, normaliseAudioMode,
+      normaliseTransport, targetFromRosterEntry, targetSupportsVideo,
+    }} = globalThis.__cardModel;`,
   )
   .replace("class VoipStackCard extends HTMLElement", "export class VoipStackCard extends HTMLElement");
 
@@ -154,6 +165,7 @@ const storage = new Map();
 const registry = new Map();
 const context = vm.createContext({{
   __engine: {{ voipStackEngine: engine }},
+  __cardModel: cardModel,
   EventTarget,
   Event,
   CustomEvent: class CustomEvent extends Event {{
@@ -700,6 +712,57 @@ assert.match(rejectedHangup._errorMsg, /hangup denied/i);
             "-e",
             script,
         ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_card_model_normalises_roster_targets_and_media_capabilities() -> None:
+    """Exercise the shared pure model used by both the card and its editor."""
+
+    script = rf"""
+import assert from "assert/strict";
+import {{ pathToFileURL }} from "url";
+const model = await import(pathToFileURL({json.dumps(str(CARD_MODEL))}));
+
+assert.deepEqual(model.formatListFromMetadata("audio; video ;"), ["audio", "video"]);
+assert.deepEqual(model.formatListFromMetadata(["audio", 8, ""]), ["audio", "8"]);
+assert.deepEqual(model.formatListFromMetadata(null), []);
+
+const esp = model.targetFromRosterEntry({{
+  id: "ws3",
+  name: "Kitchen ESP",
+  address: "192.0.2.10",
+  port: 5060,
+  metadata: {{
+    endpoint_kind: " ESPHome ",
+    capabilities: "audio;dtmf",
+    sip_transport: "udp",
+    audio_mode: "speaker_only",
+  }},
+}});
+assert.equal(esp.route_id, "ws3");
+assert.equal(esp.endpoint_kind, "esphome");
+assert.deepEqual(esp.capabilities, ["audio", "dtmf"]);
+assert.equal(model.targetSupportsVideo(esp), false);
+assert.equal(model.targetSupportsVideo({{ endpoint_kind: "sip_account" }}), true);
+assert.equal(model.targetSupportsVideo({{ capabilities: ["audio", "VIDEO"] }}), true);
+assert.equal(model.targetSupportsVideo({{ capabilities: ["audio"] }}), false);
+
+assert.equal(model.normaliseTransport("sip_tcp"), "TCP");
+assert.equal(model.normaliseTransport(" UDP "), "UDP");
+assert.equal(model.normaliseTransport("ws"), "");
+assert.equal(model.normaliseAudioMode("mic_only"), "mic_only");
+assert.equal(model.normaliseAudioMode("invalid"), "full_duplex");
+assert.equal(model.audioModeLabel("speaker_only"), "SPK");
+assert.equal(model.audioModeLabel("invalid"), "FULL");
+"""
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
         cwd=ROOT,
         check=False,
         capture_output=True,

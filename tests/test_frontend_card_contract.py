@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
+CARD_MODEL = CARD.with_name("voip-stack-card-model.js")
 PHONEBOOK_CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-phonebook-card.js"
 
 
@@ -42,6 +43,7 @@ class FrontendCardContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = CARD.read_text()
+        cls.model_source = CARD_MODEL.read_text()
 
     def test_esp_contact_call_is_a_pure_button_press(self) -> None:
         body = _method_body(self.source, "async _startCall")
@@ -461,10 +463,12 @@ class FrontendCardContractTest(unittest.TestCase):
         target = _method_body(self.source, "_targetFromRosterEntry")
         supports = _method_body(self.source, "_targetSupportsVideo")
 
-        self.assertIn("metadata.endpoint_kind", target)
-        self.assertIn("metadata.capabilities", target)
-        self.assertIn('capabilities.includes("video")', supports)
-        self.assertIn('!== "esphome"', supports)
+        self.assertIn("targetFromRosterEntry(entry)", target)
+        self.assertIn("targetSupportsVideo(target)", supports)
+        self.assertIn("metadata.endpoint_kind", self.model_source)
+        self.assertIn("metadata.capabilities", self.model_source)
+        self.assertIn('capabilities.includes("video")', self.model_source)
+        self.assertIn('!== "esphome"', self.model_source)
 
     def test_deep_link_answer_is_not_part_of_esp_mirror_state_updates(self) -> None:
         setter = _method_body(self.source, "set hass")
