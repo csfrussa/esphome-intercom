@@ -535,6 +535,8 @@ def main() -> int:
                 call_id: str,
                 digit: str,
                 transport: str,
+                *,
+                source_leg: str = "caller",
             ) -> dict[str, Any]:
                 deadline = time.monotonic() + 5
                 observed = event_state()
@@ -549,7 +551,7 @@ def main() -> int:
                     raise RuntimeError(
                         f"in-dialog DTMF event was not published: {observed}"
                     )
-                if observed.get("source_leg") != "caller":
+                if observed.get("source_leg") != source_leg:
                     raise RuntimeError(f"DTMF source leg is not canonical: {observed}")
                 if observed.get("transport") != transport:
                     raise RuntimeError(
@@ -611,6 +613,69 @@ def main() -> int:
                 }
 
             case("in_call_rfc4733_dtmf_event", in_call_rfc4733_dtmf_event)
+
+            def outbound_dtmf_event(
+                *,
+                mode: str,
+                digit: str,
+                transport: str,
+            ) -> dict[str, Any]:
+                callee = BareSip(
+                    LOCAL_CONFIG,
+                    headless_audio=True,
+                    dtmf_mode=mode,
+                )
+                active.append(callee)
+                service(
+                    "voip_stack",
+                    "call",
+                    {"destination": "Codex", "endpoint_id": "default"},
+                )
+                calling = wait_card(
+                    page,
+                    lambda item: (
+                        item["backend"]["state"] in {"calling", "remote_ringing"}
+                        and item["card"]["state"]
+                        == item["backend"]["state"]
+                        and item["backend"]["call_id"]
+                        == item["card"]["call_id"]
+                    ),
+                    12,
+                    "outbound registered SIP ringing",
+                )
+                callee.wait_for("Incoming call", 8)
+                callee.command("/accept")
+                callee.wait_for("Call established", 8)
+                matching(page, "in_call")
+                callee.digits(digit)
+                observed = wait_dtmf_event(
+                    calling["backend"]["call_id"],
+                    digit,
+                    transport,
+                    source_leg="callee",
+                )
+                callee.hangup()
+                matching(page, "idle")
+                return {
+                    "call_id": calling["backend"]["call_id"],
+                    "digit": observed.get("digit"),
+                    "transport": observed.get("transport"),
+                    "source_leg": observed.get("source_leg"),
+                    "direction": observed.get("direction"),
+                }
+
+            case(
+                "outbound_sip_info_dtmf_event",
+                lambda: outbound_dtmf_event(
+                    mode="info", digit="8", transport="sip_info"
+                ),
+            )
+            case(
+                "outbound_rfc4733_dtmf_event",
+                lambda: outbound_dtmf_event(
+                    mode="rtp", digit="9", transport="rtp_event"
+                ),
+            )
 
             def decline_from_card() -> dict[str, Any]:
                 caller = dial_trunk()
