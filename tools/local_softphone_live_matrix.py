@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import argparse
+from contextlib import contextmanager, suppress
+import fcntl
 import json
 import os
 from pathlib import Path
 import sys
 import time
-from contextlib import suppress
 from typing import Any
 
 from playwright.sync_api import sync_playwright
@@ -29,6 +31,7 @@ from ha_softphone_matrix import (  # noqa: E402
 
 
 EXPECT_VIDEO = os.environ.get("EXPECT_VIDEO", "") == "1"
+RUN_LOCK = Path("/tmp/voip-stack-local-softphone-live-matrix.lock")
 CASA_URL = f"{HA_BASE}/lovelace/default_view"
 TEST_URL = f"{HA_BASE}/lovelace/test"
 
@@ -71,6 +74,41 @@ async () => {
 """
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the real two-browser local softphone matrix once."
+    )
+    parser.add_argument(
+        "--out",
+        default=os.environ.get(
+            "LOCAL_SOFTPHONE_MATRIX_OUT",
+            str(ROOT / "test_captures" / "local_softphone_live_matrix.json"),
+        ),
+    )
+    parser.add_argument(
+        "--expect-video",
+        action=argparse.BooleanOptionalAction,
+        default=EXPECT_VIDEO,
+    )
+    return parser.parse_args()
+
+
+@contextmanager
+def _exclusive_run():
+    descriptor = os.open(RUN_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as err:
+            raise RuntimeError(
+                "another local softphone live matrix is already running"
+            ) from err
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 def _state(page: Any, expected: str, label: str, timeout: float = 12) -> dict[str, Any]:
     return wait_card(
         page,
@@ -101,12 +139,8 @@ def _wait_video(page: Any, label: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    output = Path(
-        os.environ.get(
-            "LOCAL_SOFTPHONE_MATRIX_OUT",
-            ROOT / "test_captures" / "local_softphone_live_matrix.json",
-        )
-    )
+    arguments = _parse_args()
+    output = Path(arguments.out)
     results: list[dict[str, Any]] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -131,7 +165,7 @@ def main() -> int:
                 page.evaluate(HANGUP)
                 _state(page, "idle", f"{name} initial cleanup")
             page.evaluate(SET_AUTO_ANSWER, False)
-            if EXPECT_VIDEO and not page.evaluate(SET_SEND_VIDEO, True):
+            if arguments.expect_video and not page.evaluate(SET_SEND_VIDEO, True):
                 raise RuntimeError(f"failed to enable Send Camera on {name}")
 
         def run_case(
@@ -159,7 +193,7 @@ def main() -> int:
                 _state(caller, "in_call", f"{name}: caller in call")
                 _state(callee, "in_call", f"{name}: callee in call")
                 media: dict[str, Any] = {}
-                if EXPECT_VIDEO:
+                if arguments.expect_video:
                     media[caller_name] = _wait_video(caller, f"{caller_name} video")
                     media[callee_name] = _wait_video(callee, f"{callee_name} video")
                 if not hangup.evaluate(HANGUP):
@@ -206,4 +240,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with _exclusive_run():
+        raise SystemExit(main())
