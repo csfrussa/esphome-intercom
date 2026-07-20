@@ -30,6 +30,7 @@ CONFIG_FLOW = ROOT / "custom_components" / "voip_stack" / "config_flow.py"
 STRINGS_JSON = ROOT / "custom_components" / "voip_stack" / "strings.json"
 AUTOMATION_ROUTING = ROOT / "custom_components" / "voip_stack" / "automation_routing.py"
 SERVICE_ENDPOINTS = ROOT / "custom_components" / "voip_stack" / "service_endpoints.py"
+ESPHOME_ACTIONS = ROOT / "custom_components" / "voip_stack" / "esphome_actions.py"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -38,6 +39,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.source = BACKEND.read_text()
         cls.init_source = INIT.read_text()
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
+        cls.esphome_actions = ESPHOME_ACTIONS.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -222,13 +224,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     def test_nested_ha_actions_preserve_service_context_and_exact_entity_scope(
         self,
     ) -> None:
-        press = self.init_source[
-            self.init_source.index("async def _press_device_button(") :
-            self.init_source.index("async def _call_esphome_action(")
+        press = self.esphome_actions[
+            self.esphome_actions.index("async def async_press_device_button(") :
+            self.esphome_actions.index("async def async_call_action(")
         ]
-        action = self.init_source[
-            self.init_source.index("async def _call_esphome_action(") :
-            self.init_source.index("def _has_esphome_action(")
+        action = self.esphome_actions[
+            self.esphome_actions.index("async def async_call_action(") :
+            self.esphome_actions.index("def has_action(")
         ]
         answer = self.init_source[
             self.init_source.index("async def _handle_sip_answer_service(") :

@@ -57,7 +57,6 @@ from .const import (
     TRUNK_INBOUND_MODE_DIRECT,
     TRUNK_INBOUND_MODE_DTMF,
 )
-from .device_resolver import get_resolver
 from .endpoint_lifecycle import call_registry as _call_registry, create_runtime_task
 from .endpoint_registry import EndpointBusyError
 from .endpoint_routing import (
@@ -67,6 +66,14 @@ from .endpoint_routing import (
 )
 from .esphome_state_bridge import (
     register_state_event_bridge as _register_esp_state_event_bridge,
+)
+from .esphome_actions import (
+    async_call_action as _call_esphome_action,
+    async_press_device_button as _press_device_button,
+    async_resolve_command_phone as _resolve_command_phone,
+    async_resolve_source_device as _resolve_source_device_from_call,
+    async_resolve_target_device as _resolve_target_device,
+    has_action as _has_esphome_action,
 )
 from .fsm import (
     CallState,
@@ -268,123 +275,6 @@ async def _terminate_sip_bridge(
             last_sip_event="SIP_BYE",
         )
     return result
-
-
-async def _press_device_button(
-    hass: HomeAssistant,
-    device: dict,
-    key: str,
-    label: str,
-    *,
-    context=None,
-) -> bool:
-    button_eid = (device.get("entities") or {}).get(key)
-    if not button_eid:
-        _LOGGER.warning("Cannot press %s for %s: entity not found", label, device.get("name"))
-        return False
-    try:
-        await hass.services.async_call(
-            "button",
-            "press",
-            {"entity_id": button_eid},
-            blocking=True,
-            context=context,
-        )
-        _LOGGER.info("Pressed %s for %s via voip_stack service", button_eid, device.get("name"))
-        return True
-    except Exception:
-        _LOGGER.exception("Failed pressing %s for %s", button_eid, device.get("name"))
-        return False
-
-
-async def _call_esphome_action(
-    hass: HomeAssistant,
-    device: dict,
-    action: str,
-    data: dict | None = None,
-    *,
-    context=None,
-) -> None:
-    """Invoke a native ESPHome action exposed by the selected SIP phone."""
-    from homeassistant.exceptions import ServiceValidationError
-
-    route_id = str(device.get("route_id") or "").strip()
-    if not route_id:
-        raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no ESPHome service route")
-    service = f"{route_id}_{action}"
-    if not hass.services.has_service("esphome", service):
-        raise ServiceValidationError(f"ESPHome service esphome.{service} is not available")
-    await hass.services.async_call(
-        "esphome",
-        service,
-        data or {},
-        blocking=True,
-        context=context,
-    )
-    _LOGGER.info("ESP SIP phone %s action=%s data=%s", device.get("name"), action, data or {})
-
-
-def _has_esphome_action(hass: HomeAssistant, device: dict, action: str) -> bool:
-    route_id = str(device.get("route_id") or "").strip()
-    return bool(route_id and hass.services.has_service("esphome", f"{route_id}_{action}"))
-
-
-async def _resolve_command_phone(hass: HomeAssistant, call: ServiceCall) -> dict | None:
-    """Resolve an optional ESP phone selector for sip_* services.
-
-    No selector means the command targets the HA softphone. A selector in
-    source/source_device_id/source_name or the usual HA target fields means the
-    command is a mirror action on that ESP SIP phone.
-    """
-    # A logical browser endpoint is also represented by an HA Device. Resolve
-    # it before the legacy ESP device resolver so that a card bound to that
-    # Device controls its own browser phone instead of being treated as an ESP.
-    endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
-    selector = str(
-        call.data.get("endpoint_id")
-        or call.data.get("source_device_id")
-        or call.data.get("device_id")
-        or ""
-    ).strip()
-    resolve_endpoint = getattr(endpoint_registry, "resolve", None)
-    if selector and callable(resolve_endpoint):
-        try:
-            endpoint = resolve_endpoint(selector)
-        except (KeyError, ValueError):
-            endpoint = None
-        if endpoint is not None and getattr(endpoint, "kind", None) is EndpointKind.BROWSER:
-            return None
-    source = await _resolve_source_device_from_call(hass, call)
-    if source is not None:
-        return source
-    return await _resolve_target_device(hass, call)
-
-
-async def _resolve_target_device(hass: HomeAssistant, call: ServiceCall) -> dict | None:
-    """Thin wrapper over VoipDeviceResolver.resolve_target."""
-    return await get_resolver(hass).resolve_target(call)
-
-
-async def _resolve_source_device_from_call(hass: HomeAssistant, call: ServiceCall) -> dict | None:
-    source = str(
-        call.data.get("source")
-        or call.data.get("source_device_id")
-        or call.data.get("source_name")
-        or ""
-    ).strip()
-    if not source:
-        return None
-    devices = await _get_voip_devices(hass)
-    wanted = source.lower()
-    for device in devices:
-        if (
-            str(device.get("device_id") or "").lower() == wanted
-            or str(device.get("name") or "").lower() == wanted
-            or str(device.get("route_id") or "").lower() == wanted
-            or str(device.get("host") or "").lower() == wanted
-        ):
-            return device
-    return None
 
 
 def _bind_service_call_controller(
