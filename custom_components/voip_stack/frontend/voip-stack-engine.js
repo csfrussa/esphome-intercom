@@ -20,6 +20,11 @@ const {
   resolveSessionFormats,
   sameAudioFormat,
 } = await import(`./voip-stack-media-model.js?v=${encodeURIComponent(MODULE_VERSION)}`);
+const {
+  normaliseSoftphoneSelector,
+  softphoneScopeKey,
+  softphoneStateMatches,
+} = await import(`./voip-stack-session-model.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
 const AUDIO_NEGOTIATION_TIMEOUT_MS = 3000;
 const BUS_SUBSCRIBE_RETRY_MS = 2000;
@@ -200,37 +205,15 @@ class VoipStackEngine extends EventTarget {
   }
 
   _normaliseSoftphoneSelector(selector = {}) {
-    const deviceId = String(selector?.device_id || "").trim();
-    let endpointId = String(selector?.endpoint_id || "").trim();
-    if (!endpointId && !deviceId) endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID;
-    return { endpoint_id: endpointId, device_id: deviceId };
+    return normaliseSoftphoneSelector(selector);
   }
 
   _softphoneScopeKey(selector = {}) {
-    const normalised = this._normaliseSoftphoneSelector(selector);
-    return normalised.endpoint_id
-      ? `endpoint:${normalised.endpoint_id}`
-      : `device:${normalised.device_id}`;
+    return softphoneScopeKey(selector);
   }
 
   _softphoneStateMatches(state, selector = {}, subscriptionSelector = null) {
-    if (!state) return false;
-    const wanted = this._normaliseSoftphoneSelector(selector);
-    const source = this._normaliseSoftphoneSelector(subscriptionSelector || {});
-    const stateEndpoint = String(state.endpoint_id || "").trim();
-    const stateDevice = String(state.device_id || state.endpoint_device_id || "").trim();
-    if (wanted.endpoint_id) {
-      if (stateEndpoint) return stateEndpoint === wanted.endpoint_id;
-      // A legacy snapshot has no endpoint identity and belongs only to the
-      // historical master. Never leak it into another logical softphone.
-      return wanted.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID &&
-        (!source.endpoint_id || source.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID);
-    }
-    if (wanted.device_id) {
-      if (stateDevice) return stateDevice === wanted.device_id;
-      return source.device_id === wanted.device_id && !!stateEndpoint;
-    }
-    return false;
+    return softphoneStateMatches(state, selector, subscriptionSelector);
   }
 
   _isLegacySchemaError(err) {

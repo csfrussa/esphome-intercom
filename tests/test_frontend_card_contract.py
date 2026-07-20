@@ -110,6 +110,9 @@ class FrontendCardContractTest(unittest.TestCase):
 
     def test_logical_softphone_wire_contract_is_endpoint_scoped(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()
+        session_model = (
+            ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-session-model.js"
+        ).read_text()
         subscription = _method_body(engine, "_ensureSoftphoneScopeSubscription")
         state_match = _method_body(engine, "_softphoneStateMatches")
         start = _method_body(engine, "async startHaSoftphone")
@@ -118,8 +121,15 @@ class FrontendCardContractTest(unittest.TestCase):
 
         self.assertIn("request.endpoint_id = record.selector.endpoint_id", subscription)
         self.assertIn("request.device_id = record.selector.device_id", subscription)
-        self.assertIn("stateEndpoint === wanted.endpoint_id", state_match)
-        self.assertIn("wanted.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID", state_match)
+        self.assertIn(
+            "softphoneStateMatches(state, selector, subscriptionSelector)",
+            state_match,
+        )
+        self.assertIn("stateEndpoint === wanted.endpoint_id", session_model)
+        self.assertIn(
+            "wanted.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID",
+            session_model,
+        )
         self.assertIn('target_device_id: target.device_id || ""', start)
         self.assertIn("request.endpoint_id = endpointId", start)
         self.assertIn("request.device_id = deviceId", start)

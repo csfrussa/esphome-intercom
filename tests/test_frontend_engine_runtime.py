@@ -20,6 +20,7 @@ ENGINE = (
     / "voip-stack-engine.js"
 )
 MEDIA_MODEL = ENGINE.with_name("voip-stack-media-model.js")
+SESSION_MODEL = ENGINE.with_name("voip-stack-session-model.js")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
@@ -31,6 +32,7 @@ import assert from "assert/strict";
 import {{ pathToFileURL }} from "url";
 
 const mediaModel = await import(pathToFileURL({json.dumps(str(MEDIA_MODEL))}));
+const sessionModel = await import(pathToFileURL({json.dumps(str(SESSION_MODEL))}));
 
 let source = fs.readFileSync({json.dumps(str(ENGINE))}, "utf8");
 source = source.replace(
@@ -42,12 +44,18 @@ source = source.replace(
     desiredAudioPaths, normaliseAudioDirection, normaliseAudioMode,
     parsePcmFormat, resolveSessionFormats, sameAudioFormat,
   }} = globalThis.__mediaModel;`,
+).replace(
+  /const \{{\s*normaliseSoftphoneSelector[\s\S]*?\}} = await import\(`\.\/voip-stack-session-model\.js[^;]+;/,
+  `const {{
+    normaliseSoftphoneSelector, softphoneScopeKey, softphoneStateMatches,
+  }} = globalThis.__sessionModel;`,
 ).replace("class VoipStackEngine", "export class VoipStackEngine");
 
 const storage = new Map();
 const session = new Map();
 const context = vm.createContext({{
   __mediaModel: mediaModel,
+  __sessionModel: sessionModel,
   EventTarget,
   Event,
   CustomEvent: class CustomEvent extends Event {{
@@ -717,6 +725,57 @@ assert.deepEqual(model.desiredAudioPaths("control_only", "sendrecv"), {{ capture
 const format = model.parsePcmFormat("48000:s16le:2:20");
 assert.equal(model.sameAudioFormat(format, {{ ...format }}), true);
 assert.equal(model.sameAudioFormat(format, {{ ...format, channels: 1 }}), false);
+"""
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_softphone_session_model_isolates_logical_phone_state() -> None:
+    script = rf"""
+import assert from "assert/strict";
+import {{ pathToFileURL }} from "url";
+const model = await import(pathToFileURL({json.dumps(str(SESSION_MODEL))}));
+
+assert.deepEqual(model.normaliseSoftphoneSelector({{}}), {{
+  endpoint_id: "default", device_id: "",
+}});
+assert.deepEqual(model.normaliseSoftphoneSelector({{ device_id: " kiosk " }}), {{
+  endpoint_id: "", device_id: "kiosk",
+}});
+assert.equal(model.softphoneScopeKey({{ endpoint_id: "kitchen" }}), "endpoint:kitchen");
+assert.equal(model.softphoneScopeKey({{ device_id: "kiosk" }}), "device:kiosk");
+
+assert.equal(model.softphoneStateMatches(
+  {{ endpoint_id: "kitchen", call_id: "K" }},
+  {{ endpoint_id: "kitchen" }},
+), true);
+assert.equal(model.softphoneStateMatches(
+  {{ endpoint_id: "default", call_id: "D" }},
+  {{ endpoint_id: "kitchen" }},
+), false);
+assert.equal(model.softphoneStateMatches(
+  {{ call_id: "legacy" }},
+  {{ endpoint_id: "default" }},
+), true);
+assert.equal(model.softphoneStateMatches(
+  {{ call_id: "legacy" }},
+  {{ endpoint_id: "kitchen" }},
+), false);
+assert.equal(model.softphoneStateMatches(
+  {{ endpoint_id: "kitchen", endpoint_device_id: "device-kitchen" }},
+  {{ device_id: "device-kitchen" }},
+), true);
+assert.equal(model.softphoneStateMatches(
+  {{ endpoint_id: "kitchen", endpoint_device_id: "device-kitchen" }},
+  {{ device_id: "device-hall" }},
+), false);
 """
     completed = subprocess.run(
         ["node", "--input-type=module", "-e", script],
