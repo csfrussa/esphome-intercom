@@ -254,14 +254,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _trunk_enabled,
         _ha_advertise_host,
         _ha_peer_name,
-        _sip_send_bye,
-        _sip_send_final_response,
-        _sip_uri_transport,
-        _enable_reused_sip_tcp_connection,
         _async_build_peer_snapshot,
         _pending_routes,
         _refresh_and_push_phonebook,
         _terminate_sip_bridge,
+    )
+    from .sip_runtime import (
+        enable_reused_tcp_connection as _enable_reused_sip_tcp_connection,
+        send_bye as _sip_send_bye,
+        send_final_response as _sip_send_final_response,
+        uri_transport as _sip_uri_transport,
     )
     from .dtmf import DtmfCollector, collect_info_digits, parse_sip_info_digit
     from .dial_fork import (

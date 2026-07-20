@@ -79,6 +79,13 @@ from .outbound_lifecycle import (
     async_track_outbound_sip_client as _track_outbound_sip_client,
 )
 from .session_cleanup import async_cleanup_sip_runtime
+from .sip_runtime import (
+    enable_reused_tcp_connection as _enable_reused_sip_tcp_connection,
+    send_bye as _sip_send_bye,
+    send_final_response as _sip_send_final_response,
+    sip_servers as _sip_servers,
+    uri_transport as _sip_uri_transport,
+)
 from .audio_format import HA_SIP_PCM_FORMATS, HA_TRUNK_AUDIO_FORMATS
 from .authorization import (
     async_require_service_admin,
@@ -304,50 +311,6 @@ def _device_entity_state(hass: HomeAssistant, device: dict, key: str) -> str:
     state = hass.states.get(entity_id)
     value = (state.state if state is not None else "").strip()
     return "" if value.lower() in ("unknown", "unavailable") else value
-
-
-def _sip_servers(hass: HomeAssistant) -> list[object]:
-    bucket = hass.data.get(DOMAIN, {})
-    servers: list[object] = []
-    endpoint = bucket.get("sip_endpoint")
-    if endpoint is not None:
-        servers.append(endpoint)
-    else:
-        servers.extend(server for server in (bucket.get("sip_server"), bucket.get("sip_tcp_server")) if server is not None)
-    trunk_endpoint = getattr(bucket.get("sip_trunk"), "inbound_endpoint", None)
-    if trunk_endpoint is not None:
-        servers.append(trunk_endpoint)
-    return servers
-
-
-def _sip_send_final_response(
-    hass: HomeAssistant,
-    call_id: str,
-    status: int,
-    reason: str,
-    *,
-    answer_sdp: str = "",
-    decline_reason: str = "",
-) -> bool:
-    for server in _sip_servers(hass):
-        send = getattr(server, "send_final_response", None)
-        if callable(send) and send(
-            call_id,
-            status,
-            reason,
-            answer_sdp=answer_sdp,
-            decline_reason=decline_reason,
-        ):
-            return True
-    return False
-
-
-def _sip_send_bye(hass: HomeAssistant, call_id: str = "") -> bool:
-    for server in _sip_servers(hass):
-        send_bye = getattr(server, "send_bye", None)
-        if callable(send_bye) and send_bye(call_id):
-            return True
-    return False
 
 
 async def _terminate_sip_bridge(
@@ -812,42 +775,6 @@ async def _async_build_peer_snapshot(hass: HomeAssistant) -> list[Peer]:
                 "HA softphone endpoint sensor is unavailable; HA will not appear in the SIP phonebook"
             )
     return out
-
-
-def _sip_uri_transport(uri) -> str:
-    for key, value in getattr(uri, "params", ()) or ():
-        if str(key).lower() == "transport" and str(value or "").lower() in {"tcp", "udp"}:
-            return str(value).upper()
-    return "UDP"
-
-
-def _enable_reused_sip_tcp_connection(
-    hass: HomeAssistant,
-    client,
-    uri,
-    *,
-    target: str,
-    default_sip_port: int,
-) -> bool:
-    """Use the REGISTER TCP connection when a registered client contact points at it."""
-    if _sip_uri_transport(uri).upper() != "TCP":
-        return False
-    endpoint = hass.data.get(DOMAIN, {}).get("sip_endpoint")
-    tcp_server = getattr(endpoint, "tcp_server", None)
-    if tcp_server is None:
-        return False
-    remote_addr = (uri.host, int(uri.port or default_sip_port))
-    reuse = tcp_server.open_reused_dialog(remote_addr, client.dialog_ids.call_id)
-    if reuse is None:
-        return False
-    send, responses = reuse
-    client.use_reused_tcp_connection(
-        send=send,
-        responses=responses,
-        close=lambda addr=remote_addr, call_id=client.dialog_ids.call_id: tcp_server.close_reused_dialog(addr, call_id),
-    )
-    _LOGGER.info("SIP TCP connection reuse enabled for %s via %s:%s", target, remote_addr[0], remote_addr[1])
-    return True
 
 
 async def _resolve_target_device(hass: HomeAssistant, call: ServiceCall) -> dict | None:
