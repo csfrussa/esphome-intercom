@@ -40,6 +40,8 @@ from .endpoint_entity_manager import (
     register_endpoint_entity_manager,
 )
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
+from .peer_snapshot import async_advertise_host, async_build_peer_snapshot
+from .config import transport_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -253,10 +255,9 @@ class HaSoftphoneEndpointSensor(SensorEntity):
         )
 
     async def async_update(self) -> None:
-        from . import _get_transport_config, _ha_advertise_host
         from .websocket_api import _ha_peer_name, _ha_softphone_extension, _ha_softphone_groups
 
-        host = await _ha_advertise_host(self.hass)
+        host = await async_advertise_host(self.hass)
         if not host:
             self._attr_native_value = "unavailable"
             self._attr_extra_state_attributes = {"local_ha": True, "available": False, "endpoint": ""}
@@ -264,7 +265,7 @@ class HaSoftphoneEndpointSensor(SensorEntity):
                 self.async_write_ha_state()
             return
 
-        cfg = _get_transport_config(self.hass)
+        cfg = transport_config(self.hass)
         groups = _ha_softphone_groups(self.hass)
         extension = _ha_softphone_extension(self.hass)
         tx = ";".join(HA_ENDPOINT_AUDIO_FORMATS)
@@ -500,7 +501,6 @@ class VoipPhonebookSensor(SensorEntity):
         await self._schedule_and_wait_recompute()
 
     async def _recompute(self) -> None:
-        from . import _async_build_peer_snapshot
         from .phonebook_runtime import (
             format_entry_unified,
             push_roster_json_to_esps,
@@ -509,7 +509,7 @@ class VoipPhonebookSensor(SensorEntity):
         from .endpoint_routing import roster_from_peers
         from .roster import dump_roster_json
 
-        peers = await _async_build_peer_snapshot(self.hass)
+        peers = await async_build_peer_snapshot(self.hass)
         entries = [format_entry_unified(p) for p in peers]
         roster_entries = roster_from_peers(self.hass, peers, registered_roster_entries(self.hass))
         phonebook = ",".join(entries)

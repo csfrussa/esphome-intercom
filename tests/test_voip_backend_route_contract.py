@@ -20,6 +20,7 @@ CARD_JS = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-c
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
 SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
+PEER_SNAPSHOT = ROOT / "custom_components" / "voip_stack" / "peer_snapshot.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 WEBSOCKET_API = ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
 ACCOUNT_SERVICES = ROOT / "custom_components" / "voip_stack" / "account_services.py"
@@ -634,6 +635,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
         ).read_text()
         sensor = SENSOR.read_text()
+        peer_snapshot = PEER_SNAPSHOT.read_text()
         const = (ROOT / "custom_components" / "voip_stack" / "const.py").read_text()
 
         for token in (
@@ -683,10 +685,12 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("voip_conference_groups", sensor)
         self.assertIn("voip_ring_on_conference", sensor)
         self.assertIn("new_set.add(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)", sensor)
-        self.assertIn("hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)", init_py)
-        self.assertIn("ha_endpoint_state.attributes or {}", init_py)
-        self.assertIn('get("endpoint")', init_py)
-        self.assertIn("parse_voip_endpoint", init_py)
+        self.assertIn(
+            "hass.states.get(HA_SOFTPHONE_ENDPOINT_ENTITY_ID)", peer_snapshot
+        )
+        self.assertIn("ha_endpoint_state.attributes or {}", peer_snapshot)
+        self.assertIn('get("endpoint")', peer_snapshot)
+        self.assertIn("parse_voip_endpoint", peer_snapshot)
         self.assertNotIn("async_prune_ha_softphone_groups", sensor)
         self.assertNotIn("async_prune_ha_softphone_groups", websocket)
         self.assertNotIn("local_ha_seen = False", websocket)

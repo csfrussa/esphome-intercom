@@ -252,12 +252,14 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _get_transport_config,
         _get_trunk_config,
         _trunk_enabled,
-        _ha_advertise_host,
         _ha_peer_name,
-        _async_build_peer_snapshot,
         _pending_routes,
         _refresh_and_push_phonebook,
         _terminate_sip_bridge,
+    )
+    from .peer_snapshot import (
+        async_advertise_host as _ha_advertise_host,
+        async_build_peer_snapshot as _async_build_peer_snapshot,
     )
     from .sip_runtime import (
         enable_reused_tcp_connection as _enable_reused_sip_tcp_connection,
