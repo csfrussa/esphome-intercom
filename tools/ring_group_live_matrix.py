@@ -118,6 +118,30 @@ def _dial() -> BareSip:
     return caller
 
 
+def _wait_lab_ready(timeout: float = 45) -> tuple[HomeAssistantApi, dict[str, Any], dict[str, Any]]:
+    """Wait until HA auth, VoIP entities and the ESP mirror are all available."""
+
+    deadline = time.monotonic() + timeout
+    last_error = "Home Assistant did not answer"
+    while time.monotonic() < deadline:
+        try:
+            api = HomeAssistantApi()
+            esp_dnd = ha_request(f"/api/states/{ESP_DND_ENTITY}")
+            inbound_automation = ha_request(f"/api/states/{INBOUND_AUTOMATION}")
+            if esp_dnd.get("state") in {"on", "off"} and inbound_automation.get(
+                "state"
+            ) in {"on", "off"}:
+                return api, esp_dnd, inbound_automation
+            last_error = (
+                f"entities not ready: {ESP_DND_ENTITY}={esp_dnd.get('state')!r}, "
+                f"{INBOUND_AUTOMATION}={inbound_automation.get('state')!r}"
+            )
+        except Exception as err:  # noqa: BLE001 - bounded startup qualification
+            last_error = f"{type(err).__name__}: {err}"
+        time.sleep(0.5)
+    raise RuntimeError(f"HA laboratory not ready after {timeout:.0f}s ({last_error})")
+
+
 def main() -> int:
     output = Path(
         os.environ.get(
@@ -126,11 +150,9 @@ def main() -> int:
         )
     )
     results: list[dict[str, Any]] = []
-    api = HomeAssistantApi()
-    original_esp_dnd = ha_request(f"/api/states/{ESP_DND_ENTITY}")["state"] == "on"
-    original_inbound_automation = (
-        ha_request(f"/api/states/{INBOUND_AUTOMATION}")["state"] == "on"
-    )
+    api, esp_dnd_state, inbound_automation_state = _wait_lab_ready()
+    original_esp_dnd = esp_dnd_state["state"] == "on"
+    original_inbound_automation = inbound_automation_state["state"] == "on"
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
