@@ -37,6 +37,9 @@ SOFTPHONE_COMMANDS = (
 SOFTPHONE_TERMINATION = (
     ROOT / "custom_components" / "voip_stack" / "softphone_termination.py"
 )
+SOFTPHONE_ANSWER = (
+    ROOT / "custom_components" / "voip_stack" / "softphone_answer.py"
+)
 OUTBOUND_ATTEMPTS = (
     ROOT / "custom_components" / "voip_stack" / "outbound_attempts.py"
 )
@@ -54,6 +57,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         cls.esphome_actions = ESPHOME_ACTIONS.read_text()
         cls.softphone_commands = SOFTPHONE_COMMANDS.read_text()
+        cls.softphone_answer = SOFTPHONE_ANSWER.read_text()
         cls.outbound_attempts = OUTBOUND_ATTEMPTS.read_text()
         cls.dtmf_events = DTMF_EVENTS.read_text()
         cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
@@ -269,11 +273,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("action_entity_ids=dnd_entities", set_dnd)
 
     def test_ring_group_answer_resolves_route_before_forward_guard(self) -> None:
-        answer = self.init_source[
-            self.init_source.index("async def _handle_sip_answer_service(") :
-            self.init_source.index("async def _handle_sip_decline_service(")
-        ]
-        pending_route = answer.index("if call_id and call_id in _pending_routes(hass):")
+        answer = self.softphone_answer
+        pending_route = answer.index("if call_id and call_id in pending_routes(hass):")
         forward_guard = answer.index('raise ServiceValidationError(f"call_id {call_id} is being forwarded")')
         self.assertLess(pending_route, forward_guard)
 
@@ -480,11 +481,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
 
     def test_softphone_video_send_requires_global_and_per_call_opt_in(self) -> None:
         init_py = INIT.read_text()
-        answer_service = init_py[
-            init_py.index("async def _handle_sip_answer_service") : init_py.index(
-                "async def _handle_sip_decline_service"
-            )
-        ]
+        answer_service = SOFTPHONE_ANSWER.read_text()
         call_service = init_py[
             init_py.index("async def _handle_sip_call_target_service") : init_py.index(
                 "async def _handle_sip_route_service"
@@ -498,9 +495,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             'video_direction=("sendrecv" if camera_send_enabled else "recvonly")',
             call_service,
         )
-        self.assertIn("allow_send=camera_send_enabled", answer_service)
+        self.assertIn("allow_send=(", answer_service)
         self.assertIn(
-            "_get_transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)",
+            "camera_send_enabled\n                and browser_video_send_supported",
+            answer_service,
+        )
+        self.assertIn(
+            "transport_config(hass).get(CONF_VIDEO_CAMERA_SEND, False)",
             answer_service,
         )
         local_answer = answer_service[
@@ -893,15 +894,16 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self,
     ) -> None:
         init_py = INIT.read_text()
+        answer = SOFTPHONE_ANSWER.read_text()
         audio_ws = AUDIO_WS.read_text()
         termination = SOFTPHONE_TERMINATION.read_text()
 
-        self.assertIn('call_id.startswith("conference:")', init_py)
-        self.assertIn("manager.join_ha_softphone(", init_py)
-        self.assertIn("call_id=call_id", init_py)
+        self.assertIn('call_id.startswith("conference:")', answer)
+        self.assertIn("manager.join_ha_softphone(", answer)
+        self.assertIn("call_id=call_id", answer)
         self.assertIn("manager.start_ha_softphone(", init_py)
         self.assertIn("endpoint_id=endpoint_id", init_py)
-        self.assertIn('"conference_queue": queue', init_py)
+        self.assertIn('"conference_queue": queue', answer)
         self.assertIn('last_sip_event="LOCAL_CONFERENCE_JOIN"', init_py)
         self.assertIn('conference_queue = item.get("conference_queue")', audio_ws)
         self.assertIn("_run_conference_audio_session", audio_ws)

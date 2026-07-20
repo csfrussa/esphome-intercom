@@ -36,6 +36,9 @@ CONFIG_ENTRY_RUNTIME = (
 SOFTPHONE_TERMINATION = (
     ROOT / "custom_components" / "voip_stack" / "softphone_termination.py"
 )
+SOFTPHONE_ANSWER = (
+    ROOT / "custom_components" / "voip_stack" / "softphone_answer.py"
+)
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -61,6 +64,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
         cls.softphone_termination = SOFTPHONE_TERMINATION.read_text()
+        cls.softphone_answer = SOFTPHONE_ANSWER.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(
@@ -602,7 +606,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn('payload["call_id"] = transport_call_id', bridge)
 
     def test_video_hold_resume_keeps_per_call_camera_authorization(self) -> None:
-        answer = _function_body(self.source, "_handle_sip_answer_service")
+        answer = _function_body(self.softphone_answer, "async_answer_browser_call")
         self.assertIn(
             '"camera_send_authorized": bool(camera_send_enabled)', answer
         )
@@ -624,7 +628,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("_ha_softphone_store(hass)", media_update)
 
     def test_inbound_answer_preserves_logical_phone_as_callee(self) -> None:
-        answer = _function_body(self.source, "_handle_sip_answer_service")
+        answer = _function_body(self.softphone_answer, "async_answer_browser_call")
         self.assertIn(
             "session = registry.sessions.get(registry.resolve_session_id(call_id))",
             answer,
