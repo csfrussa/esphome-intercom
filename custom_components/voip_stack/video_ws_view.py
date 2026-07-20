@@ -15,7 +15,7 @@ import time
 from aiohttp import WSMsgType, web
 
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 
 from . import rtp, sdp
 from .authorization import (
@@ -33,6 +33,7 @@ from .queue_utils import put_drop_oldest
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
 from .local_softphone_bridge import LocalCallStateError
 from .media_debug import merge_media_debug
+from .media_call_lifetime import active_media_call, listen_for_media_call_end
 from .media_ws_session import async_media_websocket_session
 from .session_cleanup import async_wait_for_cleanup
 from .sip_client import SipCallClient
@@ -60,7 +61,6 @@ from .video_rtp import (
     unknown_dynamic_payload_type,
 )
 from .websocket_api import (
-    CALL_EVENT,
     _ha_softphone_store,
     _publish_ha_softphone_state,
 )
@@ -355,13 +355,12 @@ def _active_video_session(
     hass: HomeAssistant,
     endpoint_id: str = DEFAULT_ENDPOINT_ID,
 ) -> _VideoMediaSession | None:
-    store = _ha_softphone_store(hass, endpoint_id)
-    call_id = str(store.get("call_id") or "").strip()
-    if str(store.get("state") or "").lower() not in {"connecting", "in_call"} or not call_id:
+    active = active_media_call(hass, endpoint_id)
+    if active is None:
         return None
-    registry = hass.data.get(DOMAIN, {}).get("call_registry")
-    if not isinstance(registry, CallRegistry):
-        return None
+    store = active.store
+    call_id = active.call_id
+    registry = active.registry
     config = hass.data.get(DOMAIN, {}).get("transport_config", {})
     transcode = bool(config.get(CONF_VIDEO_TRANSCODING, False))
     debug = bool(hass.data.get(DOMAIN, {}).get(CONF_DEBUG_MODE, False))
@@ -1523,23 +1522,9 @@ async def _run_video_session(
         await close_setup_resources()
         raise
 
-    call_ended = asyncio.Event()
-
-    @callback
-    def on_call_event(event) -> None:
-        payload = event.data
-        if str(payload.get("call_id") or "") != session.call_id:
-            return
-        if str(payload.get("state") or "").lower() not in {"connecting", "in_call"}:
-            call_ended.set()
-
-    remove_call_listener = hass.bus.async_listen(CALL_EVENT, on_call_event)
-    current_store = _ha_softphone_store(hass, endpoint_id)
-    if (
-        str(current_store.get("call_id") or "") != session.call_id
-        or str(current_store.get("state") or "").lower() not in {"connecting", "in_call"}
-    ):
-        call_ended.set()
+    call_ended, remove_call_listener = listen_for_media_call_end(
+        hass, session.call_id, endpoint_id
+    )
 
     async def close_on_call_end() -> None:
         """Wake the media owner as soon as the authoritative call ends."""

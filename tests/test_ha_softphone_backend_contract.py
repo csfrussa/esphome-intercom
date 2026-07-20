@@ -299,13 +299,11 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("debug_capture = _DebugAudioCapture(", refresh)
 
         outbound = _function_body(self.softphone_originate, "async_originate_call")
-        self.assertIn("audio_session.send_format = updated.send_format", outbound)
-        self.assertIn("audio_session.recv_format = updated.recv_format", outbound)
+        self.assertIn("commit_audio_session_update(", outbound)
         self.assertNotIn("audio_contract_changed", outbound)
 
         inbound = MEDIA_RENEGOTIATION.read_text()
-        self.assertIn("audio_session.send_format = updated.send_format", inbound)
-        self.assertIn("audio_session.recv_format = updated.recv_format", inbound)
+        self.assertIn("commit_audio_session_update(", inbound)
         self.assertNotIn("audio_contract_changed", inbound)
         self.assertIn("protocol.reconfigure_frame_ms(", audio_ws)
 
@@ -771,8 +769,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             "client.on_media_update = _prepare_softphone_media_update",
             outbound,
         )
-        self.assertIn("audio_session.media_generation += 1", outbound)
-        self.assertIn("video_session.media_generation += 1", outbound)
+        self.assertIn("commit_audio_session_update(", outbound)
+        self.assertIn("commit_video_session_update(", outbound)
         self.assertIn('"video_active": bool(', outbound)
 
     def test_ha_originated_ring_group_exposes_browser_audio_through_existing_relay(

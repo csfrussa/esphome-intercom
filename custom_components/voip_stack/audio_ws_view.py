@@ -42,6 +42,10 @@ from .debug_capture import (
 )
 from .dtmf import RtpDtmfDecoder, telephone_event_code
 from .media_debug import merge_media_debug
+from .media_call_lifetime import (
+    active_media_call,
+    listen_for_media_call_end as _listen_for_call_end,
+)
 from .queue_utils import put_drop_oldest
 from .session_cleanup import async_wait_for_cleanup
 from .sip_client import RtpPayloadDecoder, RtpPayloadEncoder, SipCallClient
@@ -49,7 +53,6 @@ from .phone_endpoint import DEFAULT_ENDPOINT_ID
 from .local_softphone_bridge import LocalCallStateError
 from .media_ws_session import async_media_websocket_session
 from .websocket_api import (
-    CALL_EVENT,
     _ha_softphone_store,
     _publish_ha_softphone_state,
 )
@@ -478,45 +481,15 @@ def async_register_audio_ws_view(hass: HomeAssistant) -> None:
     _LOGGER.info("HA softphone browser audio websocket ready on %s", VoipAudioWebSocketView.url)
 
 
-def _listen_for_call_end(
-    hass: HomeAssistant,
-    call_id: str,
-    endpoint_id: str = DEFAULT_ENDPOINT_ID,
-) -> tuple[asyncio.Event, Any]:
-    """Return a lifetime event and listener remover for one softphone call."""
-
-    call_ended = asyncio.Event()
-
-    def on_call_event(event) -> None:
-        payload = event.data
-        if str(payload.get("call_id") or "") != call_id:
-            return
-        if str(payload.get("state") or "").lower() not in {"connecting", "in_call"}:
-            call_ended.set()
-
-    remove_listener = hass.bus.async_listen(CALL_EVENT, on_call_event)
-    current_store = _ha_softphone_store(hass, endpoint_id)
-    if (
-        str(current_store.get("call_id") or "") != call_id
-        or str(current_store.get("state") or "").lower()
-        not in {"connecting", "in_call"}
-    ):
-        call_ended.set()
-    return call_ended, remove_listener
-
-
 def _active_softphone_media_session(
     hass: HomeAssistant,
     endpoint_id: str = DEFAULT_ENDPOINT_ID,
 ) -> _SoftphoneMediaSession | None:
-    store = _ha_softphone_store(hass, endpoint_id)
-    call_id = str(store.get("call_id") or "").strip()
-    state = str(store.get("state") or "").strip().lower()
-    if state not in {"connecting", "in_call"}:
+    active = active_media_call(hass, endpoint_id)
+    if active is None:
         return None
-    registry = hass.data.get(DOMAIN, {}).get("call_registry")
-    if not isinstance(registry, CallRegistry):
-        return None
+    call_id = active.call_id
+    registry = active.registry
     inbound = registry.softphone_media
 
     def _dtmf_callback(side: str) -> Callable[[str], None]:

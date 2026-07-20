@@ -52,6 +52,10 @@ from .media_ports import (
     allocate_sip_rtp_port as _allocate_sip_rtp_port,
     reserve_sip_video_media,
 )
+from .media_session_updates import (
+    commit_audio_session_update,
+    commit_video_session_update,
+)
 from .outbound_lifecycle import (
     HA_SOFTPHONE_ACTIVE_STATES,
     async_prepare_ha_outbound_call as _async_prepare_ha_outbound_call,
@@ -621,41 +625,19 @@ async def async_originate_call(
                     "SIP softphone media update belongs to a terminated call"
                 )
             if audio_session is not None:
-                audio_session.send_format = updated.send_format
-                audio_session.recv_format = updated.recv_format
-                audio_session.remote_rtp_host = updated.remote_rtp_host
-                audio_session.remote_rtp_port = int(updated.remote_rtp_port)
-                audio_session.local_audio_direction = updated.local_audio_direction
-                audio_session.remote_audio_connection_held = bool(
-                    updated.remote_audio_connection_held
+                commit_audio_session_update(
+                    audio_session,
+                    updated,
+                    dtmf_payload_type=updated.dtmf_payload_type,
+                    dtmf_events=updated.dtmf_events,
                 )
-                audio_session.dtmf_payload_type = updated.dtmf_payload_type
-                audio_session.dtmf_events = updated.dtmf_events
-                audio_session.media_generation += 1
-                audio_session.update_event.set()
             if video_session is not None and updated_video is not None:
                 registry.video_parameter_sets.pop(call_id, None)
-                video_session.remote_rtp_host = updated.remote_video_rtp_host
-                video_session.remote_rtp_port = int(updated.remote_video_rtp_port)
-                video_session.remote_rtcp_host = (
-                    updated.remote_video_rtcp_host or updated.remote_video_rtp_host
+                commit_video_session_update(
+                    video_session,
+                    updated,
+                    local_direction=updated.local_video_direction,
                 )
-                video_session.remote_rtcp_port = int(
-                    updated.remote_video_rtcp_port
-                    or int(updated.remote_video_rtp_port) + 1
-                )
-                video_session.remote_rtcp_mux = bool(updated.remote_video_rtcp_mux)
-                video_session.remote_video_payload_types = tuple(
-                    updated.remote_video_payload_types
-                )
-                video_session.video_format = updated_video
-                video_session.local_video_format = updated.recv_video_format
-                video_session.local_direction = updated.local_video_direction
-                video_session.remote_connection_held = bool(
-                    updated.remote_video_connection_held
-                )
-                video_session.media_generation += 1
-                video_session.update_event.set()
             store = _ha_softphone_store(hass, endpoint_id)
             if str(store.get("call_id") or "") == call_id:
                 store.update(

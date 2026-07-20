@@ -16,6 +16,10 @@ from .media_ports import (
     release_video_media_reservation as _release_video_media_reservation,
     reserve_sip_video_media,
 )
+from .media_session_updates import (
+    commit_audio_session_update,
+    commit_video_session_update,
+)
 from .phone_endpoint import DEFAULT_ENDPOINT_ID
 from .sdp import (
     build_answer_directional,
@@ -324,46 +328,24 @@ async def async_prepare_media_update(
             media["invite"] = updated
             media["video_direction"] = video_direction
             if audio_session is not None:
-                audio_session.send_format = updated.send_format
-                audio_session.recv_format = updated.recv_format
-                audio_session.remote_rtp_host = updated.remote_rtp_host
-                audio_session.remote_rtp_port = int(updated.remote_rtp_port)
-                audio_session.local_audio_direction = updated.local_audio_direction
-                audio_session.remote_audio_connection_held = bool(
-                    updated.remote_audio_connection_held
-                )
                 dtmf_format = _invite_dtmf_format(updated)
-                audio_session.dtmf_payload_type = (
-                    dtmf_format.payload_type if dtmf_format is not None else None
+                commit_audio_session_update(
+                    audio_session,
+                    updated,
+                    dtmf_payload_type=(
+                        dtmf_format.payload_type if dtmf_format is not None else None
+                    ),
+                    dtmf_events=(
+                        dtmf_format.events if dtmf_format is not None else frozenset()
+                    ),
                 )
-                audio_session.dtmf_events = (
-                    dtmf_format.events if dtmf_format is not None else frozenset()
-                )
-                audio_session.media_generation += 1
-                audio_session.update_event.set()
             if video_session is not None and updated_video is not None:
                 registry.video_parameter_sets.pop(call_id, None)
-                video_session.remote_rtp_host = updated.remote_video_rtp_host
-                video_session.remote_rtp_port = int(updated.remote_video_rtp_port)
-                video_session.remote_rtcp_host = (
-                    updated.remote_video_rtcp_host or updated.remote_video_rtp_host
+                commit_video_session_update(
+                    video_session,
+                    updated,
+                    local_direction=video_direction,
                 )
-                video_session.remote_rtcp_port = int(
-                    updated.remote_video_rtcp_port
-                    or int(updated.remote_video_rtp_port) + 1
-                )
-                video_session.remote_rtcp_mux = bool(updated.remote_video_rtcp_mux)
-                video_session.remote_video_payload_types = tuple(
-                    updated.remote_video_payload_types
-                )
-                video_session.video_format = updated_video
-                video_session.local_video_format = updated.recv_video_format
-                video_session.local_direction = video_direction
-                video_session.remote_connection_held = bool(
-                    updated.remote_video_connection_held
-                )
-                video_session.media_generation += 1
-                video_session.update_event.set()
             elif video_session is not None:
                 # RFC 3264 section 8.2: a port-zero re-offer removes the
                 # stream.  Wake the media owner so RTP/RTCP and the video
