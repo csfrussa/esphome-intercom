@@ -19,6 +19,7 @@ ENGINE = (
     / "frontend"
     / "voip-stack-engine.js"
 )
+MEDIA_MODEL = ENGINE.with_name("voip-stack-media-model.js")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
@@ -27,16 +28,26 @@ def test_softphone_engine_runtime_ownership_and_permission_contracts() -> None:
 import fs from "fs";
 import vm from "vm";
 import assert from "assert/strict";
+import {{ pathToFileURL }} from "url";
+
+const mediaModel = await import(pathToFileURL({json.dumps(str(MEDIA_MODEL))}));
 
 let source = fs.readFileSync({json.dumps(str(ENGINE))}, "utf8");
 source = source.replace(
   /const \{{ RINGTONE_REPEAT_MS, playVoipRingtone \}} =\s*await import\([^;]+;/,
   "const RINGTONE_REPEAT_MS = 4000; const playVoipRingtone = () => {{}};",
+).replace(
+  /const \{{\s*desiredAudioPaths[\s\S]*?\}} = await import\(`\.\/voip-stack-media-model\.js[^;]+;/,
+  `const {{
+    desiredAudioPaths, normaliseAudioDirection, normaliseAudioMode,
+    parsePcmFormat, resolveSessionFormats, sameAudioFormat,
+  }} = globalThis.__mediaModel;`,
 ).replace("class VoipStackEngine", "export class VoipStackEngine");
 
 const storage = new Map();
 const session = new Map();
 const context = vm.createContext({{
+  __mediaModel: mediaModel,
   EventTarget,
   Event,
   CustomEvent: class CustomEvent extends Event {{
@@ -666,6 +677,49 @@ assert.equal(outboundStarts, 1);
             "-e",
             script,
         ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_browser_media_model_enforces_pcm_and_sdp_directions() -> None:
+    script = rf"""
+import assert from "assert/strict";
+import {{ pathToFileURL }} from "url";
+const model = await import(pathToFileURL({json.dumps(str(MEDIA_MODEL))}));
+
+assert.deepEqual(model.parsePcmFormat("48000:s16le:2:20"), {{
+  sampleRate: 48000, pcmFormat: "s16le", channels: 2, frameMs: 20,
+}});
+assert.throws(() => model.parsePcmFormat("48000:f32le:2:20"), /unsupported PCM/);
+assert.throws(() => model.parsePcmFormat("44100:s16le:2:16"), /whole PCM frames/);
+assert.deepEqual(model.resolveSessionFormats({{
+  selected_tx_format: "16000:s16le:1:10",
+  selected_rx_format: "48000:s24le_in_s32:2:20",
+}}), {{
+  tx: {{ sampleRate: 16000, pcmFormat: "s16le", channels: 1, frameMs: 10 }},
+  rx: {{ sampleRate: 48000, pcmFormat: "s24le_in_s32", channels: 2, frameMs: 20 }},
+}});
+assert.throws(() => model.resolveSessionFormats({{ tx_format: "16000:s16le:1:10" }}), /missing/);
+
+assert.deepEqual(model.desiredAudioPaths("full_duplex", "sendrecv"), {{ capture: true, playback: true }});
+assert.deepEqual(model.desiredAudioPaths("full_duplex", "sendonly"), {{ capture: true, playback: false }});
+assert.deepEqual(model.desiredAudioPaths("full_duplex", "recvonly"), {{ capture: false, playback: true }});
+assert.deepEqual(model.desiredAudioPaths("full_duplex", "inactive"), {{ capture: false, playback: false }});
+assert.deepEqual(model.desiredAudioPaths("mic_only", "sendrecv"), {{ capture: false, playback: true }});
+assert.deepEqual(model.desiredAudioPaths("speaker_only", "sendrecv"), {{ capture: true, playback: false }});
+assert.deepEqual(model.desiredAudioPaths("control_only", "sendrecv"), {{ capture: false, playback: false }});
+
+const format = model.parsePcmFormat("48000:s16le:2:20");
+assert.equal(model.sameAudioFormat(format, {{ ...format }}), true);
+assert.equal(model.sameAudioFormat(format, {{ ...format, channels: 1 }}), false);
+"""
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
         cwd=ROOT,
         check=False,
         capture_output=True,

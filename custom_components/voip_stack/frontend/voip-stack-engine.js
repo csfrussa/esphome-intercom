@@ -12,6 +12,14 @@ const MODULE_VERSION = (() => {
 })();
 const { RINGTONE_REPEAT_MS, playVoipRingtone } =
   await import(`./ringtone.js?v=${encodeURIComponent(MODULE_VERSION)}`);
+const {
+  desiredAudioPaths,
+  normaliseAudioDirection,
+  normaliseAudioMode,
+  parsePcmFormat,
+  resolveSessionFormats,
+  sameAudioFormat,
+} = await import(`./voip-stack-media-model.js?v=${encodeURIComponent(MODULE_VERSION)}`);
 const CONTROL_ACK_TIMEOUT_MS = 3000;
 const AUDIO_NEGOTIATION_TIMEOUT_MS = 3000;
 const BUS_SUBSCRIBE_RETRY_MS = 2000;
@@ -23,8 +31,6 @@ const MEDIA_RECONNECT_DELAY_MS = 250;
 const VIDEO_CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
-const PCM_FORMATS = Object.freeze(["s16le", "s24le", "s24le_in_s32", "s32le"]);
-const FRAME_MS = Object.freeze([10, 16, 20, 32]);
 
 function mediaClientInstanceId() {
   try {
@@ -967,32 +973,11 @@ class VoipStackEngine extends EventTarget {
   }
 
   _parseFormat(token, label = "audio format") {
-    const parts = String(token || "").split(":");
-    if (parts.length !== 4) throw new Error(`${label} missing negotiated PCM token`);
-    const sampleRate = Number(parts[0]);
-    const pcmFormat = parts[1];
-    const channels = Number(parts[2]);
-    const frameMs = Number(parts[3]);
-    if (!Number.isFinite(sampleRate) || !Number.isFinite(channels) || !Number.isFinite(frameMs)) {
-      throw new Error(`${label} has invalid numeric fields`);
-    }
-    if (!PCM_FORMATS.includes(pcmFormat)) throw new Error(`${label} has unsupported PCM format ${pcmFormat}`);
-    if (![1, 2].includes(channels)) throw new Error(`${label} has unsupported channel count ${channels}`);
-    if (!FRAME_MS.includes(frameMs)) throw new Error(`${label} has unsupported frame_ms ${frameMs}`);
-    if ((sampleRate * frameMs) % 1000 !== 0) throw new Error(`${label} does not form whole PCM frames`);
-    return { sampleRate, pcmFormat, channels, frameMs };
+    return parsePcmFormat(token, label);
   }
 
   _resolveSessionFormats(negotiated = null) {
-    const txFormat = negotiated?.selected_tx_format || negotiated?.tx_format;
-    const rxFormat = negotiated?.selected_rx_format || negotiated?.rx_format;
-    if (!txFormat || !rxFormat) {
-      throw new Error("SIP session missing selected_tx_format/selected_rx_format");
-    }
-    return {
-      tx: this._parseFormat(txFormat, "selected_tx_format"),
-      rx: this._parseFormat(rxFormat, "selected_rx_format"),
-    };
+    return resolveSessionFormats(negotiated);
   }
 
   async _setupAudio(deviceInfo, negotiated = null, attachKey = "") {
@@ -1104,34 +1089,19 @@ class VoipStackEngine extends EventTarget {
   }
 
   _normaliseAudioMode(value) {
-    const v = String(value || "").trim().toLowerCase();
-    return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(v) ? v : "full_duplex";
+    return normaliseAudioMode(value);
   }
 
   _normaliseAudioDirection(value) {
-    const direction = String(value || "sendrecv").trim().toLowerCase();
-    return ["sendrecv", "sendonly", "recvonly", "inactive"].includes(direction)
-      ? direction
-      : "sendrecv";
+    return normaliseAudioDirection(value);
   }
 
   _desiredAudioPaths(audioMode, audioDirection) {
-    const mode = this._normaliseAudioMode(audioMode);
-    const direction = this._normaliseAudioDirection(audioDirection);
-    const modeCanCapture = mode === "full_duplex" || mode === "speaker_only";
-    const modeCanPlayback = mode === "full_duplex" || mode === "mic_only";
-    return {
-      capture: modeCanCapture && ["sendrecv", "sendonly"].includes(direction),
-      playback: modeCanPlayback && ["sendrecv", "recvonly"].includes(direction),
-    };
+    return desiredAudioPaths(audioMode, audioDirection);
   }
 
   _sameAudioFormat(left, right) {
-    return Boolean(left && right) &&
-      left.sampleRate === right.sampleRate &&
-      left.pcmFormat === right.pcmFormat &&
-      left.channels === right.channels &&
-      left.frameMs === right.frameMs;
+    return sameAudioFormat(left, right);
   }
 
   async _reconcileAudioMedia(update = {}) {

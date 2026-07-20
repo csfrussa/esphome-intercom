@@ -644,14 +644,18 @@ class FrontendCardContractTest(unittest.TestCase):
         engine = (
             ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js"
         ).read_text()
+        media_model = (
+            ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-media-model.js"
+        ).read_text()
         self.assertIn('this._audioDirection = "sendrecv"', engine)
         self.assertIn("negotiated?.audio_direction", engine)
         self.assertIn("if (!this._canSendAudio()) return", engine)
         self.assertIn("!this._canReceiveAudio()", engine)
         self.assertIn("void this._reconcileAudioMedia(msg)", engine)
         self.assertIn("_desiredAudioPaths(audioMode, audioDirection)", engine)
+        self.assertIn("desiredAudioPaths(audioMode, audioDirection)", engine)
         self.assertIn("Audio WebSocket negotiation timed out", engine)
-        self.assertIn('"sendrecv", "sendonly", "recvonly", "inactive"', engine)
+        self.assertIn('"sendrecv", "sendonly", "recvonly", "inactive"', media_model)
 
     def test_dynamic_call_controls_expose_accessible_state(self) -> None:
         source = CARD.read_text()
