@@ -14,6 +14,9 @@ ENDPOINT_RUNTIME = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime
 MEDIA_RENEGOTIATION = (
     ROOT / "custom_components" / "voip_stack" / "media_renegotiation.py"
 )
+OUTBOUND_LIFECYCLE = (
+    ROOT / "custom_components" / "voip_stack" / "outbound_lifecycle.py"
+)
 SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
@@ -39,6 +42,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = INIT.read_text()
+        cls.outbound_lifecycle = OUTBOUND_LIFECYCLE.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
@@ -462,7 +466,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
     def test_softphone_start_is_serialized_and_ring_group_claims_state_before_io(
         self,
     ) -> None:
-        prepare = _function_body(self.source, "_async_prepare_ha_outbound_call")
+        prepare = _function_body(
+            self.outbound_lifecycle,
+            "async_prepare_ha_outbound_call",
+        )
         self.assertIn('setdefault("ha_softphone_start_locks", {})', prepare)
         self.assertIn(
             "start_locks.setdefault(endpoint_id, asyncio.Lock())", prepare
@@ -493,7 +500,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("fast peer can place 180 and 200", outbound)
 
     def test_final_200_commits_registry_before_publishing_in_call(self) -> None:
-        tracker = _function_body(self.source, "_track_outbound_sip_client")
+        tracker = _function_body(
+            self.outbound_lifecycle,
+            "async_track_outbound_sip_client",
+        )
         watcher = tracker.split("async def _watch_sip_lifecycle()", 1)[1]
         accepted = watcher.split(
             "if public_final == CallState.IN_CALL.value and client.dialog is not None:",
@@ -530,7 +540,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("EndpointAvailability.AVAILABLE", destination_policy)
 
     def test_outbound_failure_and_invite_exception_release_call_ownership(self) -> None:
-        tracker = _function_body(self.source, "_track_outbound_sip_client")
+        tracker = _function_body(
+            self.outbound_lifecycle,
+            "async_track_outbound_sip_client",
+        )
         immediate_failure = tracker.split(
             'if result not in {"ringing", "in_call"}:', 1
         )[1].split("registry.sip_clients[client.dialog_ids.call_id]", 1)[0]
