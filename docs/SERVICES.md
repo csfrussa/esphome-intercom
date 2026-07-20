@@ -32,6 +32,14 @@ Optional:
 
 - `ha_bridge`: force HA to anchor the route when that is valid.
 
+`voip_stack.call` supports Home Assistant's optional action response. When a
+caller requests a response, it receives the authoritative logical-phone
+snapshot after origination, including `call_id`, `state`, endpoint identity and
+the negotiated media fields already available at that point. The Lovelace card
+uses the standard Home Assistant `call_service` WebSocket command with
+`return_response: true`; the older private start command remains only as a
+compatibility adapter for cached or older cards.
+
 ### `voip_stack.forward`
 
 With `call_id`, moves an HA-owned pending, ringing or remotely ringing call to

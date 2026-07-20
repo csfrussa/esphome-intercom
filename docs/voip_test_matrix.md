@@ -86,6 +86,10 @@ state.
   ESP call.
 - `voip_stack.call destination=...`: HA SIP UA originates using roster
   resolver.
+- `voip_stack.call` with a requested Home Assistant action response returns the
+  authoritative endpoint/call snapshot; the current card originates through
+  the standard `call_service` WebSocket command and an older private start
+  command produces the same result through its compatibility adapter.
 - `voip_stack.answer`: pending inbound SIP receives `200 OK` only
   after local media setup path is ready.
 - `voip_stack.decline`: pending inbound SIP receives configured final

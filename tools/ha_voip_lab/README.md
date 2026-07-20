@@ -36,11 +36,18 @@ python tools/ha_voip_lab/refresh_playwright_auth.py
 The helper reads the lab-only refresh token and updates only the local
 Playwright storage-state file. It never prints either token.
 
-Run `experimental_sip_video_browser_probe.py` against the lab dashboard and
-`experimental_sip_video_peer.py` against SIP port `15060` for repeatable media
-tests. The probe checks the rendered canvas, responsive card geometry and
+Run `tools/experimental_sip_video_browser_probe.py` against the lab dashboard
+and `tools/experimental_sip_video_peer.py` against SIP port `15060` for
+repeatable media tests. The probe checks the rendered canvas, responsive card geometry and
 post-call backend ownership. The peer can generate audio-only, H.263,
 H.263-1998, H.264, H.265, JPEG and VP8 offers without a physical door station.
 When the two tools are launched separately, wait for the probe to print
 `READY_FOR_VIDEO_CALL` before starting the peer. This guarantees that optional
 camera settings and browser permissions are committed before the SIP INVITE.
+
+For deterministic outbound qualification, configure the temporary baresip
+sink with exactly the codec being tested. Baresip 4.6 can keep transmitting the
+first configured video encoder after the answer selects a later offered codec;
+that peer behavior is visible as payload-type drops and is not a valid test of
+the selected offer/answer contract. Test H.264 and VP8 in separate runs rather
+than using a combined `video_codecs=H264,VP8` account.

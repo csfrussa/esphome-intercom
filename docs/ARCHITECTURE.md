@@ -90,11 +90,25 @@ independent dial plans.
   increment its generation and wake attached WebSockets. Consumers therefore
   never observe a new generation with a partially updated RTP destination,
   direction or codec description.
+- bridged audio and video peer changes are staged independently but preflighted
+  together. A commit is rejected if either relay leg or the owning call
+  generation changed while the SIP answer was in flight, so a late re-INVITE
+  cannot leave audio and video on different peer revisions.
+- public HA state observations follow an explicit call-phase transition graph.
+  The intentional `connecting -> ringing` fallback remains valid, while a late
+  provisional event cannot regress an established dialog back to `calling` or
+  `ringing`.
 
 Termination is generation-guarded, idempotent and cancellation-safe. The
 session enters `terminating` synchronously, then waits for a shielded cleanup
 barrier so late dial winners, media callbacks or duplicate BYE/CANCEL observers
 cannot resurrect the call.
+
+Card commands use standard Home Assistant service actions. Outbound card calls
+request the optional response from `voip_stack.call`; the backend returns the
+authoritative endpoint snapshot instead of making the frontend infer a new
+Call-ID or state. Integration-specific WebSocket subscriptions remain where
+they carry live call/media presence rather than one-shot commands.
 
 `endpoint_runtime.py` still contains the legacy dispatcher while flows are
 moved behind these ownership primitives. This is intentionally a transitional
