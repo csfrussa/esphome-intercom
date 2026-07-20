@@ -20,10 +20,6 @@ from .config import (
     entry_trunk_config as _entry_trunk_config,
     transport_config as _get_transport_config,
 )
-from .call_scope import (
-    call_belongs_to_endpoint as _call_belongs_to_endpoint,
-    pending_routes as _pending_routes,
-)
 from .config_entry_runtime import (
     async_config_entry_updated as _async_config_entry_updated,
     async_deferred_phonebook_sync as _deferred_phonebook_sync,
@@ -75,6 +71,7 @@ from .softphone_commands import (
 )
 from .softphone_answer import async_answer_browser_call as _answer_browser_call
 from .softphone_originate import async_originate_call as _originate_call
+from .softphone_forward import async_forward_browser_call as _forward_browser_call
 from .softphone_termination import (
     async_hangup_browser_call as _hangup_browser_call,
 )
@@ -276,89 +273,7 @@ async def _handle_select_inbound_destination_service(call: ServiceCall) -> None:
 
 
 async def _handle_sip_forward_service(call: ServiceCall) -> None:
-    """Forward a SIP call through HA's dial plan/B2BUA path."""
-    from homeassistant.exceptions import ServiceValidationError
-
-    from .automation_routing import resolve_forward_call_id
-
-    data = dict(call.data)
-    registry = _call_registry(call.hass)
-    endpoint_id, _endpoint = _service_browser_endpoint(call.hass, call, strict=True)
-    await _require_phone_service_control(
-        call.hass,
-        call,
-        endpoint=_endpoint,
-    )
-    pending_routes = {
-        call_id: route
-        for call_id, route in registry.pending_routes.items()
-        if _call_belongs_to_endpoint(registry, call_id, endpoint_id)
-    }
-    pending_invites = {
-        call_id: invite
-        for call_id, invite in registry.pending_invites.items()
-        if _call_belongs_to_endpoint(registry, call_id, endpoint_id)
-    }
-    try:
-        call_id = resolve_forward_call_id(
-            str(data.get("call_id") or ""),
-            pending_routes,
-            pending_invites,
-        )
-    except ValueError as err:
-        raise ServiceValidationError(str(err)) from err
-    if not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
-        raise ServiceValidationError(
-            f"call_id {call_id} belongs to another phone endpoint"
-        )
-    if not data.get("call_id"):
-        context = registry.event_context(call_id)
-        data["call_id"] = call_id
-        if context is not None:
-            data.setdefault("expected_state", context.state)
-            data.setdefault("expected_sequence", context.sequence)
-    if call_id and call_id in _pending_routes(call.hass):
-        route = _pending_routes(call.hass)[call_id]
-        if route.get("ring_group_endpoint_ids"):
-            # A ring-group coordinator currently owns the candidate legs.
-            # Request an explicit handoff and wait until it has cancelled and
-            # released those legs before the normal forwarding primitive
-            # claims the same source dialog.
-            handoff = asyncio.get_running_loop().create_future()
-            route["forward_handoff"] = handoff
-            data["action"] = "forward"
-            _set_pending_route_decision(call.hass, data)
-            try:
-                await asyncio.wait_for(handoff, timeout=5.0)
-            except TimeoutError as err:
-                raise ServiceValidationError(
-                    f"ring-group route for call_id {call_id} did not release ownership"
-                ) from err
-            previous_coordinator = (
-                call.hass.data.get(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
-            )
-            if previous_coordinator is not None and not previous_coordinator.done():
-                await asyncio.gather(previous_coordinator, return_exceptions=True)
-        else:
-            data["action"] = "forward"
-            _set_pending_route_decision(call.hass, data)
-            return
-    if call_id:
-        callback = call.hass.data.get(DOMAIN, {}).get("async_forward_call")
-        if callback is None:
-            raise ServiceValidationError("SIP endpoint is not running")
-        destination = str(
-            data.get("destination") or data.get("target") or data.get("call") or ""
-        ).strip()
-        await callback(
-            call_id=call_id,
-            destination=destination,
-            on_failure=str(data.get("on_failure") or "resume"),
-            expected_state=str(data.get("expected_state") or ""),
-            expected_sequence=int(data.get("expected_sequence") or 0),
-        )
-        return
-    raise ServiceValidationError(f"call_id {call_id} is not forwardable")
+    await _forward_browser_call(call)
 
 
 async def _handle_sip_set_deadline_service(call: ServiceCall) -> None:
