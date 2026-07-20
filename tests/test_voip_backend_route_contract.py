@@ -31,6 +31,9 @@ STRINGS_JSON = ROOT / "custom_components" / "voip_stack" / "strings.json"
 AUTOMATION_ROUTING = ROOT / "custom_components" / "voip_stack" / "automation_routing.py"
 SERVICE_ENDPOINTS = ROOT / "custom_components" / "voip_stack" / "service_endpoints.py"
 ESPHOME_ACTIONS = ROOT / "custom_components" / "voip_stack" / "esphome_actions.py"
+SOFTPHONE_COMMANDS = (
+    ROOT / "custom_components" / "voip_stack" / "softphone_commands.py"
+)
 OUTBOUND_ATTEMPTS = (
     ROOT / "custom_components" / "voip_stack" / "outbound_attempts.py"
 )
@@ -47,6 +50,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.init_source = INIT.read_text()
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         cls.esphome_actions = ESPHOME_ACTIONS.read_text()
+        cls.softphone_commands = SOFTPHONE_COMMANDS.read_text()
         cls.outbound_attempts = OUTBOUND_ATTEMPTS.read_text()
         cls.dtmf_events = DTMF_EVENTS.read_text()
         cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
@@ -242,9 +246,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             self.esphome_actions.index("async def async_call_action(") :
             self.esphome_actions.index("def has_action(")
         ]
-        answer = self.init_source[
-            self.init_source.index("async def _handle_sip_answer_service(") :
-            self.init_source.index("async def _handle_sip_decline_service(")
+        answer = self.softphone_commands[
+            self.softphone_commands.index("async def async_try_esp_answer(") :
+            self.softphone_commands.index("async def async_try_esp_end_call(")
         ]
         set_dnd = self.init_source[
             self.init_source.index("async def _handle_set_dnd_service(") :

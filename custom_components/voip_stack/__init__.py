@@ -27,7 +27,6 @@ from .call_scope import (
     call_belongs_to_endpoint as _call_belongs_to_endpoint,
     endpoint_call_ids as _endpoint_call_ids,
     pending_routes as _pending_routes,
-    single_pending_route_call_id as _single_pending_route_call_id,
 )
 from .config_entry_runtime import (
     async_config_entry_updated as _async_config_entry_updated,
@@ -76,11 +75,8 @@ from .esphome_state_bridge import (
 )
 from .esphome_actions import (
     async_call_action as _call_esphome_action,
-    async_press_device_button as _press_device_button,
-    async_resolve_command_phone as _resolve_command_phone,
     async_resolve_source_device as _resolve_source_device_from_call,
     async_resolve_target_device as _resolve_target_device,
-    has_action as _has_esphome_action,
 )
 from .fsm import (
     CallState,
@@ -125,6 +121,12 @@ from .service_endpoints import (
     browser_endpoint_name as _browser_endpoint_name,
     service_browser_endpoint as _service_browser_endpoint,
     service_configured_endpoint as _service_configured_endpoint,
+)
+from .softphone_commands import (
+    async_resolve_browser_call_command as _resolve_browser_call_command,
+    async_try_esp_answer as _try_esp_answer,
+    async_try_esp_end_call as _try_esp_end_call,
+    bind_service_call_controller as _bind_service_call_controller,
 )
 from .phone_config import (
     async_ensure_phone_subentries,
@@ -278,27 +280,6 @@ async def _terminate_sip_bridge(
     return result
 
 
-def _bind_service_call_controller(
-    registry,
-    call_id: str,
-    call: ServiceCall,
-    *,
-    endpoint_id: str = "",
-) -> None:
-    """Persist the initiating HA Context before publishing call events."""
-
-    from homeassistant.exceptions import ServiceValidationError
-
-    try:
-        registry.bind_controller(
-            call_id,
-            context=getattr(call, "context", None),
-            endpoint_id=endpoint_id,
-        )
-    except ValueError as err:
-        raise ServiceValidationError(str(err)) from err
-
-
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
     """Remove stale VoIP devices."""
     from datetime import datetime, timedelta, timezone
@@ -337,49 +318,15 @@ async def _handle_purge_devices_service(call: ServiceCall) -> None:
 
 async def _handle_sip_answer_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
-    device = await _resolve_command_phone(hass, call)
-    if device is not None:
-        call_button = str((device.get("entities") or {}).get("call") or "").strip()
-        await _require_phone_service_control(
-            hass,
-            call,
-            device=device,
-            action_entity_ids=(call_button,) if call_button else (),
-        )
-        # On ESP phones the Call button is the local answer control while ringing.
-        if not await _press_device_button(
-            hass,
-            device,
-            "call",
-            "SIP answer",
-            context=call.context,
-        ):
-            from homeassistant.exceptions import ServiceValidationError
-
-            raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no answer/call button")
+    if await _try_esp_answer(call):
         return
-    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call, strict=True)
-    await _require_phone_service_control(
-        hass,
-        call,
-        endpoint=browser_endpoint,
-    )
-    local_name = _browser_endpoint_name(hass, endpoint_id, browser_endpoint)
-    endpoint_device_id = str(
-        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
-    )
-    call_id = str(call.data.get("call_id") or "").strip()
-    if not call_id:
-        call_id = _single_pending_route_call_id(hass, endpoint_id) or str(
-            _ha_softphone_store(hass, endpoint_id).get("call_id") or ""
-        ).strip()
-    registry = _call_registry(hass)
-    if call_id and not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
-        from homeassistant.exceptions import ServiceValidationError
-
-        raise ServiceValidationError(
-            f"call_id {call_id} belongs to another phone endpoint"
-        )
+    command = await _resolve_browser_call_command(hass, call)
+    endpoint_id = command.endpoint_id
+    browser_endpoint = command.endpoint
+    local_name = command.endpoint_name
+    endpoint_device_id = command.device_id
+    call_id = command.call_id
+    registry = command.registry
     if call_id and registry.resolve_session_id(call_id) in registry.sessions:
         _bind_service_call_controller(
             registry,
@@ -791,47 +738,13 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
 
 async def _handle_sip_decline_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
-    device = await _resolve_command_phone(hass, call)
-    if device is not None:
-        decline_button = str(
-            (device.get("entities") or {}).get("decline") or ""
-        ).strip()
-        await _require_phone_service_control(
-            hass,
-            call,
-            device=device,
-            action_entity_ids=(decline_button,) if decline_button else (),
-        )
-        reason = str(call.data.get("reason") or call.data.get("decline_reason") or "").strip()
-        if _has_esphome_action(hass, device, "decline_call"):
-            await _call_esphome_action(
-                hass,
-                device,
-                "decline_call",
-                {"reason": reason},
-                context=call.context,
-            )
-        elif not await _press_device_button(
-            hass,
-            device,
-            "decline",
-            "SIP decline",
-            context=call.context,
-        ):
-            from homeassistant.exceptions import ServiceValidationError
-
-            raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no decline control")
+    if await _try_esp_end_call(call, operation="decline"):
         return
-    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call, strict=True)
-    await _require_phone_service_control(
-        hass,
-        call,
-        endpoint=browser_endpoint,
-    )
-    endpoint_device_id = str(
-        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
-    )
-    call_id = str(call.data.get("call_id") or "").strip()
+    command = await _resolve_browser_call_command(hass, call)
+    endpoint_id = command.endpoint_id
+    endpoint_device_id = command.device_id
+    call_id = command.call_id
+    registry = command.registry
     status = int(call.data.get("status") or 486)
     reason = str(call.data.get("reason") or "Busy Here").strip() or "Busy Here"
     app_reason = str(call.data.get("decline_reason") or "").strip()
@@ -844,17 +757,6 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
             app_reason = TerminalReason.DECLINED.value
         else:
             app_reason = reason or TerminalReason.DECLINED.value
-    if not call_id:
-        call_id = _single_pending_route_call_id(hass, endpoint_id) or str(
-            _ha_softphone_store(hass, endpoint_id).get("call_id") or ""
-        ).strip()
-    registry = _call_registry(hass)
-    if call_id and not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
-        from homeassistant.exceptions import ServiceValidationError
-
-        raise ServiceValidationError(
-            f"call_id {call_id} belongs to another phone endpoint"
-        )
     from .local_softphone_runtime import local_softphone_bridge
 
     local_bridge = local_softphone_bridge(hass)
@@ -974,58 +876,13 @@ async def _handle_sip_decline_service(call: ServiceCall) -> None:
 
 async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     hass: HomeAssistant = call.hass
-    device = await _resolve_command_phone(hass, call)
-    if device is not None:
-        decline_button = str(
-            (device.get("entities") or {}).get("decline") or ""
-        ).strip()
-        await _require_phone_service_control(
-            hass,
-            call,
-            device=device,
-            action_entity_ids=(decline_button,) if decline_button else (),
-        )
-        reason = str(call.data.get("reason") or "local_hangup").strip()
-        if _has_esphome_action(hass, device, "decline_call"):
-            await _call_esphome_action(
-                hass,
-                device,
-                "decline_call",
-                {"reason": reason},
-                context=call.context,
-            )
-        elif not await _press_device_button(
-            hass,
-            device,
-            "decline",
-            "SIP hangup",
-            context=call.context,
-        ):
-            from homeassistant.exceptions import ServiceValidationError
-
-            raise ServiceValidationError(f"{device.get('name') or 'ESP phone'} has no hangup/decline control")
+    if await _try_esp_end_call(call, operation="hangup"):
         return
-    endpoint_id, browser_endpoint = _service_browser_endpoint(hass, call, strict=True)
-    await _require_phone_service_control(
-        hass,
-        call,
-        endpoint=browser_endpoint,
-    )
-    endpoint_device_id = str(
-        getattr(browser_endpoint, "device_id", "") or HA_SOFTPHONE_DEVICE_ID
-    )
-    call_id = str(call.data.get("call_id") or "").strip()
-    if not call_id:
-        call_id = _single_pending_route_call_id(hass, endpoint_id) or str(
-            _ha_softphone_store(hass, endpoint_id).get("call_id") or ""
-        ).strip()
-    registry = _call_registry(hass)
-    if call_id and not _call_belongs_to_endpoint(registry, call_id, endpoint_id):
-        from homeassistant.exceptions import ServiceValidationError
-
-        raise ServiceValidationError(
-            f"call_id {call_id} belongs to another phone endpoint"
-        )
+    command = await _resolve_browser_call_command(hass, call)
+    endpoint_id = command.endpoint_id
+    endpoint_device_id = command.device_id
+    call_id = command.call_id
+    registry = command.registry
     from .local_softphone_runtime import local_softphone_bridge
 
     local_bridge = local_softphone_bridge(hass)
