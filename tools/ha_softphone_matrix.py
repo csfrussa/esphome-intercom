@@ -7,10 +7,13 @@ import argparse
 import json
 import os
 import pty
+import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from contextlib import suppress
@@ -143,11 +146,56 @@ async (enabled) => {
 
 
 class BareSip:
-    def __init__(self, config: Path) -> None:
+    def __init__(
+        self,
+        config: Path,
+        *,
+        headless_audio: bool = False,
+        dtmf_mode: str = "",
+    ) -> None:
         TEST_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+        self._temporary_config: tempfile.TemporaryDirectory[str] | None = None
+        runtime_config = config
+        if headless_audio:
+            self._temporary_config = tempfile.TemporaryDirectory(
+                prefix="voip-baresip-headless-"
+            )
+            runtime_config = Path(self._temporary_config.name)
+            shutil.copytree(config, runtime_config, dirs_exist_ok=True)
+            config_path = runtime_config / "config"
+            content = config_path.read_text(encoding="utf-8")
+            replacements = {
+                "audio_player": "audio_player\t\taubridge,nil",
+                "audio_source": "audio_source\t\tausine,10",
+                "audio_alert": "audio_alert\t\taubridge,nil",
+            }
+            for key, value in replacements.items():
+                content = re.sub(
+                    rf"(?m)^{key}\s+.*$",
+                    value,
+                    content,
+                    count=1,
+                )
+            for module in ("aubridge.so", "ausine.so"):
+                content = re.sub(
+                    rf"(?m)^\s*#?module\s+{re.escape(module)}\s*$",
+                    f"module\t\t\t{module}",
+                    content,
+                    count=1,
+                )
+            config_path.write_text(content, encoding="utf-8")
+            if dtmf_mode:
+                accounts_path = runtime_config / "accounts"
+                accounts = accounts_path.read_text(encoding="utf-8")
+                accounts = re.sub(
+                    r"(?<=;)dtmfmode=[^;\r\n]+",
+                    f"dtmfmode={dtmf_mode}",
+                    accounts,
+                )
+                accounts_path.write_text(accounts, encoding="utf-8")
         self.master, slave = pty.openpty()
         self.proc = subprocess.Popen(
-            ["baresip", "-f", str(config)],
+            ["baresip", "-f", str(runtime_config)],
             stdin=slave,
             stdout=slave,
             stderr=slave,
@@ -252,6 +300,9 @@ class BareSip:
                         self.proc.wait(timeout=2)
         with suppress(OSError):
             os.close(self.master)
+        if self._temporary_config is not None:
+            self._temporary_config.cleanup()
+            self._temporary_config = None
 
 
 def ha_request(path: str, data: dict[str, Any] | None = None) -> Any:
@@ -479,6 +530,87 @@ def main() -> int:
                 }
 
             case("manual_answer_from_card", answer_from_card)
+
+            def wait_dtmf_event(
+                call_id: str,
+                digit: str,
+                transport: str,
+            ) -> dict[str, Any]:
+                deadline = time.monotonic() + 5
+                observed = event_state()
+                while time.monotonic() < deadline and not (
+                    observed.get("event_type") == "dtmf"
+                    and observed.get("call_id") == call_id
+                    and observed.get("digit") == digit
+                ):
+                    time.sleep(0.05)
+                    observed = event_state()
+                if observed.get("event_type") != "dtmf":
+                    raise RuntimeError(
+                        f"in-dialog DTMF event was not published: {observed}"
+                    )
+                if observed.get("source_leg") != "caller":
+                    raise RuntimeError(f"DTMF source leg is not canonical: {observed}")
+                if observed.get("transport") != transport:
+                    raise RuntimeError(
+                        f"DTMF did not use expected {transport}: {observed}"
+                    )
+                return observed
+
+            def in_call_sip_info_dtmf_event() -> dict[str, Any]:
+                caller = dial_trunk()
+                active.append(caller)
+                ringing = matching(page, "ringing")
+                if not page.evaluate(CLICK, "Answer"):
+                    raise RuntimeError("Answer button unavailable")
+                matching(page, "in_call")
+                caller.digits("5")
+                observed = wait_dtmf_event(
+                    ringing["backend"]["call_id"], "5", "sip_info"
+                )
+                caller.hangup()
+                matching(page, "idle")
+                return {
+                    "call_id": ringing["backend"]["call_id"],
+                    "digit": observed.get("digit"),
+                    "transport": observed.get("transport"),
+                    "source_leg": observed.get("source_leg"),
+                    "ingress": observed.get("ingress"),
+                }
+
+            case("in_call_sip_info_dtmf_event", in_call_sip_info_dtmf_event)
+
+            def in_call_rfc4733_dtmf_event() -> dict[str, Any]:
+                caller = BareSip(
+                    LOCAL_CONFIG,
+                    headless_audio=True,
+                    dtmf_mode="rtp",
+                )
+                active.append(caller)
+                caller.dial(
+                    "sip:Casa@192.168.1.10:5060;transport=tcp",
+                    wait_for="180 Ringing",
+                )
+                ringing = matching(page, "ringing")
+                if not page.evaluate(CLICK, "Answer"):
+                    raise RuntimeError("Answer button unavailable")
+                matching(page, "in_call")
+                caller.wait_for("Call established", 5)
+                caller.digits("6")
+                observed = wait_dtmf_event(
+                    ringing["backend"]["call_id"], "6", "rtp_event"
+                )
+                caller.hangup()
+                matching(page, "idle")
+                return {
+                    "call_id": ringing["backend"]["call_id"],
+                    "digit": observed.get("digit"),
+                    "transport": observed.get("transport"),
+                    "source_leg": observed.get("source_leg"),
+                    "ingress": observed.get("ingress"),
+                }
+
+            case("in_call_rfc4733_dtmf_event", in_call_rfc4733_dtmf_event)
 
             def decline_from_card() -> dict[str, Any]:
                 caller = dial_trunk()
