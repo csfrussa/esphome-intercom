@@ -51,6 +51,8 @@ CONFIG_ENTRY_RUNTIME = (
     ROOT / "custom_components" / "voip_stack" / "config_entry_runtime.py"
 )
 PBX_ROUTING = ROOT / "custom_components" / "voip_stack" / "pbx_routing.py"
+TRUNK_DTMF = ROOT / "custom_components" / "voip_stack" / "trunk_dtmf.py"
+TRUNK_ROUTING = ROOT / "custom_components" / "voip_stack" / "trunk_routing.py"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -67,6 +69,8 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.dtmf_events = DTMF_EVENTS.read_text()
         cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
         cls.pbx_routing = PBX_ROUTING.read_text()
+        cls.trunk_dtmf = TRUNK_DTMF.read_text()
+        cls.trunk_routing = TRUNK_ROUTING.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -436,8 +440,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
 
     def test_route_requested_exposes_fallback_and_deadline(self) -> None:
-        self.assertGreaterEqual(self.source.count("fallback_destination="), 2)
-        self.assertGreaterEqual(self.source.count("decision_deadline="), 2)
+        routing_sources = self.source + self.trunk_routing
+        self.assertGreaterEqual(routing_sources.count("fallback_destination="), 2)
+        self.assertGreaterEqual(routing_sources.count("decision_deadline="), 2)
         self.assertIn(
             '"Inbound route selected call_id=%s source=%s destination=%s fallback=%s"',
             self.source,
@@ -1029,16 +1034,17 @@ class VoipBackendRouteContractTest(unittest.TestCase):
                 "async def _run_ring_group_call("
             )
         ]
-        self.assertIn("collect_info_digits(", trunk_route)
-        self.assertIn("DtmfCollector(", trunk_route)
-        self.assertIn("asyncio.FIRST_COMPLETED", trunk_route)
+        self.assertIn("_collect_trunk_dtmf(", trunk_route)
+        self.assertIn("collect_info_digits(", self.trunk_dtmf)
+        self.assertIn("DtmfCollector(", self.trunk_dtmf)
+        self.assertIn("asyncio.FIRST_COMPLETED", self.trunk_dtmf)
         after_collect = trunk_route.split(
             'bucket.setdefault("trunk_info_queues", {}).pop(invite.call_id, None)',
             1,
         )[1]
         self.assertIn('invite.call_id in bucket.get("trunk_closed_calls", set())', after_collect)
         self.assertIn("bridge_ports.release()", after_collect)
-        self.assertIn("remote_host=invite.remote_rtp_host", trunk_route)
+        self.assertIn("remote_host=invite.remote_rtp_host", self.trunk_dtmf)
         preanswer = self.source[
             self.source.index("if trunk_invite:") : self.source.index(
                 'route_action = "default"',
@@ -1396,14 +1402,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
 
     def test_trunk_dtmf_route_request_preserves_trunk_provenance(self) -> None:
-        trunk_route = self.source[
-            self.source.index("async def _run_trunk_inbound_route(") :
-            self.source.index("async def _async_forward_existing_call(")
-        ]
-        route_request = trunk_route[
-            trunk_route.index("route_request=True") - 800 :
-            trunk_route.index("route_request=True") + 100
-        ]
+        route_request = self.trunk_routing
         self.assertIn('ingress="trunk"', route_request)
         self.assertIn('origin="trunk"', route_request)
         self.assertIn('route_kind="trunk"', route_request)
@@ -1605,13 +1604,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             self.source.index("async def _run_trunk_inbound_route(") :
             self.source.index("async def _async_forward_existing_call(")
         ]
-        collector = runner.index("while pending and not digits:")
+        collector = runner.index("selection = await _collect_trunk_dtmf(")
         override = runner.index(
             "if not digits and trunk_cfg.get(CONF_AUTOMATION_ROUTING_ENABLED):"
         )
         self.assertLess(collector, override)
         self.assertNotIn("route_future", runner[:override])
-        self.assertIn("await asyncio.wait_for(", runner[override:])
+        self.assertIn("_request_inbound_destination(", runner[override:])
+        self.assertIn("await asyncio.wait_for(", self.trunk_routing)
 
     def test_preanswered_forward_failure_resumes_ha_ringing(self) -> None:
         forward = self.source[

@@ -125,6 +125,11 @@ from .sip_bridge import (
     dialog_video_rtp_peer,
 )
 from .store import sip_accounts as _sip_accounts
+from .trunk_dtmf import collect_trunk_dtmf as _collect_trunk_dtmf
+from .trunk_routing import (
+    async_request_inbound_destination as _request_inbound_destination,
+    trunk_default_target as _trunk_default_target,
+)
 from .websocket_api import (
     _ha_softphone_store,
     _release_ha_softphone_claim,
@@ -178,7 +183,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         send_final_response as _sip_send_final_response,
         uri_transport as _sip_uri_transport,
     )
-    from .dtmf import DtmfCollector, collect_info_digits, parse_sip_info_digit
+    from .dtmf import parse_sip_info_digit
     from .dial_fork import (
         DialCandidate,
         DialDisposition,
@@ -1053,8 +1058,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         registry = _call_registry(hass)
         trunk_cfg = _get_trunk_config(hass)
         dtmf_timeout_ms = max(0, int(trunk_cfg.get(CONF_TRUNK_DTMF_TIMEOUT_MS) or 0))
-        dtmf_formats = sip_sdp.offered_dtmf_formats(invite.remote_sdp)
-        dtmf_format = dtmf_formats[0] if dtmf_formats else None
         destination = ""
         digits = ""
         automation_decision: dict = {}
@@ -1070,60 +1073,16 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 invite.call_id,
                 asyncio.Queue(maxsize=MAX_TRUNK_INFO_DIGITS),
             )
-            collector_tasks = {
-                asyncio.create_task(
-                    collect_info_digits(
-                        info_queue,
-                        routes=routes,
-                        timeout=timeout,
-                        terminator=terminator,
-                    )
-                )
-            }
-            if dtmf_format is not None:
-                collector_tasks.add(
-                    asyncio.create_task(
-                        DtmfCollector(
-                            host="0.0.0.0",
-                            port=source_relay_port,
-                            payload_type=dtmf_format.payload_type,
-                            routes=routes,
-                            timeout=timeout,
-                            terminator=terminator,
-                            remote_host=invite.remote_rtp_host,
-                        ).collect()
-                    )
-                )
-            else:
-                _LOGGER.info(
-                    "SIP trunk inbound call has no telephone-event SDP offer; collecting SIP INFO for %.1fs",
-                    timeout,
-                )
-            pending = set(collector_tasks)
-            try:
-                while pending and not digits:
-                    done, pending = await asyncio.wait(
-                        pending, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    for task in done:
-                        try:
-                            candidate_digits, candidate_destination = task.result()
-                        except Exception as err:
-                            _LOGGER.info(
-                                "SIP trunk DTMF collector unavailable: %s", err
-                            )
-                            continue
-                        if candidate_digits:
-                            digits, destination = (
-                                candidate_digits,
-                                candidate_destination,
-                            )
-                            break
-            finally:
-                remaining_collectors = list(pending)
-                for task in remaining_collectors:
-                    task.cancel()
-                await asyncio.gather(*remaining_collectors, return_exceptions=True)
+            selection = await _collect_trunk_dtmf(
+                invite,
+                info_queue=info_queue,
+                source_rtp_port=source_relay_port,
+                routes=routes,
+                timeout=timeout,
+                terminator=terminator,
+            )
+            digits = selection.digits
+            destination = selection.destination
         # A source BYE must win before any no-digits automation window is
         # opened. Otherwise a cancelled pre-answer call can emit one stale
         # route_requested occurrence when its DTMF timer expires.
@@ -1140,58 +1099,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         # Explicit digits always select the canonical phonebook route. Only
         # the no-digits fallback may be overridden by an automation.
         if not digits and trunk_cfg.get(CONF_AUTOMATION_ROUTING_ENABLED):
-            future = asyncio.get_running_loop().create_future()
-            expires_at = time.time() + SIP_ROUTE_DECISION_TIMEOUT
-            _pending_routes(hass)[invite.call_id] = {
-                "future": future,
-                "invite": invite,
-                "created_at": time.time(),
-                "expires_at": expires_at,
-                "decision_deadline": expires_at,
-            }
-            default_target = (
-                str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip()
-                or "HA"
-            )
-            _pending_routes(hass)[invite.call_id]["fallback_destination"] = (
-                default_target
-            )
-            _set_sip_bridge_call_state(
+            automation_decision = await _request_inbound_destination(
                 hass,
-                CallState.CONNECTING.value,
-                caller=invite.caller,
-                callee=default_target,
-                peer_name=invite.caller,
-                call_id=invite.call_id,
-                direction="incoming",
-                ingress="trunk",
-                origin="trunk",
-                route_kind="trunk",
-                scope="sip_trunk",
-                phase="route_decision",
-                route_request=True,
-                default_destination=default_target,
-                fallback_destination=default_target,
-                expires_at=expires_at,
-                decision_deadline=expires_at,
-                decision_timeout_ms=int(SIP_ROUTE_DECISION_TIMEOUT * 1000),
-                source_host=invite.source_host,
+                invite,
+                trunk_config=trunk_cfg,
+                timeout=SIP_ROUTE_DECISION_TIMEOUT,
             )
-            try:
-                decision_data = await asyncio.wait_for(
-                    future, timeout=SIP_ROUTE_DECISION_TIMEOUT
-                )
-                action = (
-                    str((decision_data or {}).get("action") or "default")
-                    .strip()
-                    .lower()
-                )
-                if action != "default":
-                    automation_decision = dict(decision_data or {})
-            except asyncio.TimeoutError:
-                pass
-            finally:
-                _pending_routes(hass).pop(invite.call_id, None)
         bucket.setdefault("trunk_info_queues", {}).pop(invite.call_id, None)
 
         if invite.call_id in bucket.get("trunk_closed_calls", set()):
@@ -1258,10 +1171,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             registry.finish_and_pop(invite.call_id, reason=reason)
             return
 
-        default_target = (
-            str(trunk_cfg.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip()
-            or "HA"
-        )
+        default_target = _trunk_default_target(trunk_cfg)
         route_hint = destination or digits
         _LOGGER.info(
             "Inbound route selected call_id=%s source=%s destination=%s fallback=%s",
