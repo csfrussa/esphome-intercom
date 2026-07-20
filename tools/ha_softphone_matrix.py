@@ -152,11 +152,12 @@ class BareSip:
         *,
         headless_audio: bool = False,
         dtmf_mode: str = "",
+        video_codec: str = "",
     ) -> None:
         TEST_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
         self._temporary_config: tempfile.TemporaryDirectory[str] | None = None
         runtime_config = config
-        if headless_audio:
+        if headless_audio or video_codec:
             self._temporary_config = tempfile.TemporaryDirectory(
                 prefix="voip-baresip-headless-"
             )
@@ -164,34 +165,66 @@ class BareSip:
             shutil.copytree(config, runtime_config, dirs_exist_ok=True)
             config_path = runtime_config / "config"
             content = config_path.read_text(encoding="utf-8")
-            replacements = {
-                "audio_player": "audio_player\t\taubridge,nil",
-                "audio_source": "audio_source\t\tausine,10",
-                "audio_alert": "audio_alert\t\taubridge,nil",
-            }
-            for key, value in replacements.items():
+            if headless_audio:
+                replacements = {
+                    "audio_player": "audio_player\t\taubridge,nil",
+                    "audio_source": "audio_source\t\tausine,10",
+                    "audio_alert": "audio_alert\t\taubridge,nil",
+                }
+                for key, value in replacements.items():
+                    content = re.sub(
+                        rf"(?m)^{key}\s+.*$",
+                        value,
+                        content,
+                        count=1,
+                    )
+                for module in ("aubridge.so", "ausine.so"):
+                    content = re.sub(
+                        rf"(?m)^\s*#?module\s+{re.escape(module)}\s*$",
+                        f"module\t\t\t{module}",
+                        content,
+                        count=1,
+                    )
+            if video_codec:
+                codec = video_codec.strip().upper()
+                if codec not in {"H264", "VP8"}:
+                    raise ValueError(f"unsupported bareSIP video codec: {video_codec}")
                 content = re.sub(
-                    rf"(?m)^{key}\s+.*$",
-                    value,
+                    r"(?m)^\s*#?video_source\s+.*$",
+                    "video_source\t\tfakevideo,nil",
                     content,
                     count=1,
                 )
-            for module in ("aubridge.so", "ausine.so"):
                 content = re.sub(
-                    rf"(?m)^\s*#?module\s+{re.escape(module)}\s*$",
-                    f"module\t\t\t{module}",
+                    r"(?m)^\s*#?video_display\s+.*$",
+                    "video_display\t\tfakevideo,nil",
                     content,
                     count=1,
                 )
+                for module in ("avcodec.so", "vp8.so", "fakevideo.so"):
+                    content = re.sub(
+                        rf"(?m)^\s*#?module\s+{re.escape(module)}\s*$",
+                        f"module\t\t\t{module}",
+                        content,
+                        count=1,
+                    )
             config_path.write_text(content, encoding="utf-8")
-            if dtmf_mode:
+            if dtmf_mode or video_codec:
                 accounts_path = runtime_config / "accounts"
                 accounts = accounts_path.read_text(encoding="utf-8")
-                accounts = re.sub(
-                    r"(?<=;)dtmfmode=[^;\r\n]+",
-                    f"dtmfmode={dtmf_mode}",
-                    accounts,
-                )
+                if dtmf_mode:
+                    accounts = re.sub(
+                        r"(?<=;)dtmfmode=[^;\r\n]+",
+                        f"dtmfmode={dtmf_mode}",
+                        accounts,
+                    )
+                if video_codec:
+                    accounts = re.sub(r";video_codecs=[^;>]+", "", accounts)
+                    accounts = re.sub(
+                        r">",
+                        f";video_codecs={video_codec.strip().upper()}>",
+                        accounts,
+                    )
                 accounts_path.write_text(accounts, encoding="utf-8")
         self.master, slave = pty.openpty()
         self.proc = subprocess.Popen(
@@ -357,7 +390,10 @@ def matching(page, state: str) -> dict[str, Any]:
 
 
 def dial_trunk() -> BareSip:
-    caller = BareSip(WILDIX_CONFIG)
+    caller = BareSip(
+        WILDIX_CONFIG,
+        video_codec="VP8" if os.environ.get("EXPECT_VIDEO", "") == "1" else "",
+    )
     try:
         # RTP telephone-event can remain in an early dialog, while SIP INFO
         # collection requires an established dialog.  Both are valid trunk
