@@ -1851,6 +1851,15 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
             target_endpoint.endpoint_id if target_endpoint is not None else ""
         ),
     )
+    from .dtmf_events import attach_direct_client_dtmf_events
+
+    attach_direct_client_dtmf_events(
+        hass,
+        client,
+        call_id=client.dialog_ids.call_id,
+        caller=local_name,
+        callee=display_target,
+    )
     try:
         registry.claim_endpoint(
             client.dialog_ids.call_id,

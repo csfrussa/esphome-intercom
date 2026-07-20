@@ -98,3 +98,25 @@ def attach_dtmf_event_bridge(
     relay.on_dtmf = _emit
     if client is not None:
         client.on_info_dtmf = lambda digit: _emit("right", digit, "sip_info")
+
+
+def attach_direct_client_dtmf_events(
+    hass: HomeAssistant,
+    client,
+    *,
+    call_id: str,
+    caller: str,
+    callee: str,
+) -> None:
+    """Project SIP INFO received by a direct outbound softphone dialog."""
+
+    client.on_info_dtmf = lambda digit: publish_dtmf_event(
+        hass,
+        call_id=call_id,
+        dest_call_id="",
+        caller=caller,
+        callee=callee,
+        side="right",
+        digit=digit,
+        transport="sip_info",
+    )

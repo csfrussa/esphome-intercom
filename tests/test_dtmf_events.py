@@ -120,3 +120,43 @@ def test_bridge_publishes_canonical_dtmf_and_translates_info(monkeypatch) -> Non
     assert right["source_leg"] == "callee"
     assert right["side"] == "right"
     assert right["transport"] == "sip_info"
+
+
+def test_direct_outbound_client_projects_info_from_callee(monkeypatch) -> None:
+    dtmf_events = _load_dtmf_events(monkeypatch)
+    bus = _Bus()
+    hass = SimpleNamespace(bus=bus)
+    session = SimpleNamespace(
+        metadata={"ingress": "extension", "direction": "outgoing"},
+        route_kind="direct",
+    )
+    registry = SimpleNamespace(
+        event_context=lambda _call_id: SimpleNamespace(state="in_call"),
+        sessions={"outbound": session},
+        resolve_session_id=lambda _call_id: "outbound",
+        event_fields=lambda call_id, state: {
+            "session_id": "outbound",
+            "canonical_call_id": call_id,
+            "canonical_state": state,
+        },
+        ha_context=lambda _call_id: None,
+    )
+    monkeypatch.setattr(dtmf_events, "call_registry", lambda _hass: registry)
+    client = SimpleNamespace(on_info_dtmf=None)
+
+    dtmf_events.attach_direct_client_dtmf_events(
+        hass,
+        client,
+        call_id="outbound-call",
+        caller="Casa",
+        callee="Codex",
+    )
+    client.on_info_dtmf("8")
+
+    payload = bus.events[0][1]
+    assert payload["digit"] == "8"
+    assert payload["source"] == "Codex"
+    assert payload["source_leg"] == "callee"
+    assert payload["side"] == "right"
+    assert payload["transport"] == "sip_info"
+    assert payload["direction"] == "outgoing"
