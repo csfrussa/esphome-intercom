@@ -115,6 +115,11 @@ from .router import (
     route_inbound_trunk,
     resolve_ha_router,
 )
+from .ring_group import (
+    endpoint_is_esphome as _endpoint_is_esphome,
+    endpoint_preflight_disposition as _endpoint_preflight_disposition,
+    settle_browser_candidates as _settle_ring_browser_candidates,
+)
 from .session_cleanup import async_cleanup_sip_runtime, async_wait_for_cleanup
 from .sip_bridge import (
     build_local_client_relay,
@@ -3011,39 +3016,18 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             keep_endpoint_id: str = "",
         ) -> None:
             """Release and publish every browser candidate except the winner."""
-            for browser_leg in browser_legs:
-                if browser_leg.endpoint_id == keep_endpoint_id:
-                    continue
-                registry.release_endpoint_claim(
-                    invite.call_id,
-                    browser_leg.endpoint_id,
-                )
-                try:
-                    _set_ha_softphone_call_state(
-                        hass,
-                        state,
-                        endpoint_id=browser_leg.endpoint_id,
-                        session_device_id=browser_leg.device_id,
-                        caller=invite.caller,
-                        callee=entry.display_name,
-                        peer_name=invite.caller,
-                        direction="incoming",
-                        call_id=invite.call_id,
-                        reason=reason,
-                        terminal_reason=reason,
-                        route_kind=GROUP_TYPE_RING,
-                        last_sip_event="SIP_RESPONSE",
-                    )
-                except Exception:
-                    # State publication is an observer boundary.  A broken
-                    # observer must never prevent the registry claim and media
-                    # resources of every other candidate from being released.
-                    _LOGGER.exception(
-                        "SIP ring group candidate cleanup publication failed "
-                        "call_id=%s endpoint_id=%s",
-                        invite.call_id,
-                        browser_leg.endpoint_id,
-                    )
+            _settle_ring_browser_candidates(
+                hass,
+                registry,
+                browser_legs,
+                call_id=invite.call_id,
+                caller=invite.caller,
+                callee=entry.display_name,
+                state=state,
+                reason=reason,
+                route_kind=GROUP_TYPE_RING,
+                keep_endpoint_id=keep_endpoint_id,
+            )
         async def _prepare_candidates() -> None:
             for member_order, member in enumerate(members):
                 if _caller_matches_member(
@@ -3065,23 +3049,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         if endpoint_registry is not None
                         else None
                     )
-                    if endpoint is not None and endpoint.dnd:
+                    disposition = _endpoint_preflight_disposition(
+                        endpoint,
+                        call_id=invite.call_id,
+                        browser=True,
+                    )
+                    if disposition is not None:
                         preflight_failures.append(
                             (
-                                f"preflight:{member_order}:dnd:{browser_leg.endpoint_id}",
+                                f"preflight:{member_order}:{disposition.value}:{browser_leg.endpoint_id}",
                                 browser_leg.endpoint_id,
-                                DialDisposition.DND,
-                                ring_policy.member_tiers.get(member.casefold(), 0),
-                                member_order * 1000,
-                            )
-                        )
-                        continue
-                    if not _browser_endpoint_can_ring(endpoint):
-                        preflight_failures.append(
-                            (
-                                f"preflight:{member_order}:unavailable:{browser_leg.endpoint_id}",
-                                browser_leg.endpoint_id,
-                                DialDisposition.UNAVAILABLE,
+                                disposition,
                                 ring_policy.member_tiers.get(member.casefold(), 0),
                                 member_order * 1000,
                             )
@@ -3114,40 +3092,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 ).strip()
                 if logical_endpoint_id == source_endpoint_id:
                     continue
-                if logical_endpoint is not None and logical_endpoint.dnd:
+                disposition = _endpoint_preflight_disposition(
+                    logical_endpoint,
+                    call_id=invite.call_id,
+                    browser=False,
+                )
+                if disposition is not None:
                     preflight_failures.append(
                         (
-                            f"preflight:{member_order}:dnd:{logical_endpoint_id}",
+                            f"preflight:{member_order}:{disposition.value}:{logical_endpoint_id}",
                             logical_endpoint_id,
-                            DialDisposition.DND,
-                            ring_policy.member_tiers.get(member.casefold(), 0),
-                            member_order * 1000,
-                        )
-                    )
-                    continue
-                if logical_endpoint is not None and (
-                    logical_endpoint.availability
-                    is not EndpointAvailability.AVAILABLE
-                ):
-                    preflight_failures.append(
-                        (
-                            f"preflight:{member_order}:unavailable:{logical_endpoint_id}",
-                            logical_endpoint_id,
-                            DialDisposition.UNAVAILABLE,
-                            ring_policy.member_tiers.get(member.casefold(), 0),
-                            member_order * 1000,
-                        )
-                    )
-                    continue
-                if logical_endpoint is not None and (
-                    logical_endpoint.active_call_id
-                    and logical_endpoint.active_call_id != invite.call_id
-                ):
-                    preflight_failures.append(
-                        (
-                            f"preflight:{member_order}:busy:{logical_endpoint_id}",
-                            logical_endpoint_id,
-                            DialDisposition.BUSY,
+                            disposition,
                             ring_policy.member_tiers.get(member.casefold(), 0),
                             member_order * 1000,
                         )
@@ -3221,10 +3176,8 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                                 invite.call_id,
                                 leg.endpoint_id,
                                 role="group_candidate",
-                                adopt_transport=(
-                                    logical_endpoint is not None
-                                    and logical_endpoint.kind
-                                    is EndpointKind.ESPHOME
+                                adopt_transport=_endpoint_is_esphome(
+                                    logical_endpoint
                                 ),
                             )
                     except EndpointBusyError:
