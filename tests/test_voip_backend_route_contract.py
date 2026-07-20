@@ -31,6 +31,9 @@ STRINGS_JSON = ROOT / "custom_components" / "voip_stack" / "strings.json"
 AUTOMATION_ROUTING = ROOT / "custom_components" / "voip_stack" / "automation_routing.py"
 SERVICE_ENDPOINTS = ROOT / "custom_components" / "voip_stack" / "service_endpoints.py"
 ESPHOME_ACTIONS = ROOT / "custom_components" / "voip_stack" / "esphome_actions.py"
+OUTBOUND_ATTEMPTS = (
+    ROOT / "custom_components" / "voip_stack" / "outbound_attempts.py"
+)
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -40,6 +43,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.init_source = INIT.read_text()
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         cls.esphome_actions = ESPHOME_ACTIONS.read_text()
+        cls.outbound_attempts = OUTBOUND_ATTEMPTS.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -541,10 +545,16 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             "_release_sip_rtp_port_pair(hass, (source_relay_port, dest_relay_port))",
             self.source,
         )
-        self.assertIn("class OutboundLeg", self.source)
-        self.assertIn("async def _close_client_and_release(", self.source)
-        self.assertIn("async def _close_outbound_leg(", self.source)
-        self.assertIn("attempt.ports.release()", self.source)
+        self.assertIn("class OutboundLeg", self.outbound_attempts)
+        self.assertIn(
+            "async def async_close_client_and_release(",
+            self.outbound_attempts,
+        )
+        self.assertIn(
+            "async def async_close_outbound_leg(",
+            self.outbound_attempts,
+        )
+        self.assertIn("attempt.ports.release()", self.outbound_attempts)
         self.assertIn("winner.ports.detach()", self.source)
         self.assertIn("bridge_ports.detach()", self.source)
         self.assertNotIn(

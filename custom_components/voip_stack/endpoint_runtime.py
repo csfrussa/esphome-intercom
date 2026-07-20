@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import logging
 import secrets
 import time
@@ -79,6 +79,14 @@ from .media_ports import (
     reserve_sip_video_relay_media,
 )
 from .media_renegotiation import async_prepare_media_update
+from .outbound_attempts import (
+    BrowserLeg,
+    OutboundLeg,
+    async_cancel_and_join_tasks as _cancel_and_join_tasks,
+    async_cleanup_outbound_attempts as _cleanup_outbound_attempts,
+    async_close_client_and_release as _close_client_and_release,
+    async_close_outbound_leg as _close_outbound_leg,
+)
 from .endpoint_registry import EndpointBusyError
 from .phone_endpoint import (
     DEFAULT_ENDPOINT_ID,
@@ -286,7 +294,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     from .sip_endpoint import SipEndpointManager
     from .sip_listener import SipInvite, SipInviteResult
     from .pbx_runtime import SipEndpointRuntime
-    from .sip_video_relay import SipVideoRtpRelay
     from .sip_registrar import SipRegistrar
     from .conference import MAX_CONFERENCE_LEGS, conference_manager
     from .groups import GROUP_TYPE_CONFERENCE, GROUP_TYPE_RING
@@ -720,27 +727,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
         return None, None, entry
 
-    @dataclass(slots=True)
-    class OutboundLeg:
-        member: str
-        uri: object
-        client: SipCallClient
-        ports: RtpPortReservation
-        bridge_to_softphone: bool = False
-        endpoint_id: str = ""
-        candidate_id: str = ""
-        tier: int = 0
-        order: int = 0
-        video_relay: SipVideoRtpRelay | None = None
-        video_failure_reason: str = ""
-
-    @dataclass(frozen=True, slots=True)
-    class BrowserLeg:
-        member: str
-        endpoint_id: str
-        name: str
-        device_id: str
-
     def _browser_endpoint_can_ring(endpoint) -> bool:
         """Return whether a logical browser phone may receive ringing state.
 
@@ -953,89 +939,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 create_runtime_task(hass, video_relay.stop())
             ports.release()
             raise
-
-    async def _close_client_and_release(
-        client: SipCallClient, ports: RtpPortReservation, *, bye: bool = False
-    ) -> None:
-        async def cleanup() -> None:
-            try:
-                await async_cleanup_sip_runtime(
-                    client=client,
-                    terminate_client=bye,
-                )
-            finally:
-                ports.release()
-
-        task = asyncio.create_task(
-            cleanup(),
-            name=f"voip-outbound-client-close-{client.dialog_ids.call_id}",
-        )
-        await async_wait_for_cleanup(task)
-
-    async def _close_outbound_leg(
-        attempt: OutboundLeg, *, cancel: bool = False, bye_or_cancel: bool = False
-    ) -> None:
-        async def cleanup() -> None:
-            try:
-                await async_cleanup_sip_runtime(
-                    client=attempt.client,
-                    terminate_client=bool(cancel or bye_or_cancel),
-                )
-            finally:
-                try:
-                    if attempt.video_relay is not None:
-                        await attempt.video_relay.stop()
-                        attempt.video_relay = None
-                finally:
-                    # Keep the reservation until CANCEL/BYE teardown has
-                    # consumed late final responses. Reusing it earlier could
-                    # route late RTP into an unrelated new call.
-                    attempt.ports.release()
-
-        task = asyncio.create_task(
-            cleanup(),
-            name=f"voip-outbound-leg-close-{attempt.client.dialog_ids.call_id}",
-        )
-        await async_wait_for_cleanup(task)
-
-    async def _cancel_and_join_tasks(tasks: list[asyncio.Task]) -> None:
-        async def cleanup() -> None:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-        task = asyncio.create_task(
-            cleanup(),
-            name="voip-outbound-dial-task-cleanup",
-        )
-        await async_wait_for_cleanup(task)
-
-    async def _cleanup_outbound_attempts(
-        tasks: list[asyncio.Task],
-        attempts: list[OutboundLeg],
-    ) -> None:
-        async def cleanup() -> None:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            if attempts:
-                await asyncio.gather(
-                    *(
-                        _close_outbound_leg(attempt, bye_or_cancel=True)
-                        for attempt in attempts
-                    ),
-                    return_exceptions=True,
-                )
-
-        task = asyncio.create_task(
-            cleanup(),
-            name="voip-outbound-attempt-cleanup",
-        )
-        await async_wait_for_cleanup(task)
 
     def _caller_matches_member(
         caller: str,
