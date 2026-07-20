@@ -107,10 +107,14 @@ def _winner(page: Any, call_id: str, label: str) -> dict[str, Any]:
 
 def _dial() -> BareSip:
     caller = BareSip(CALLER_CONFIG)
-    caller.dial(
-        "427",
-        wait_for=("183 Session Progress", "Call established"),
-    )
+    try:
+        caller.dial(
+            "427",
+            wait_for=("183 Session Progress", "Call established"),
+        )
+    except BaseException:
+        caller.close()
+        raise
     return caller
 
 

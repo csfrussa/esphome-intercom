@@ -148,6 +148,7 @@ class BareSip:
         os.close(slave)
         os.set_blocking(self.master, False)
         self.output = ""
+        self.call_established = False
         try:
             self.wait_for("registered successfully", 8)
         except BaseException:
@@ -202,12 +203,14 @@ class BareSip:
         target: str,
         *,
         wait_for: str | tuple[str, ...] = "Call established",
-    ) -> None:
+    ) -> str:
         self.command(f"/dial {target}")
         if isinstance(wait_for, tuple):
-            self.wait_for_any(wait_for, 10)
+            output = self.wait_for_any(wait_for, 10)
         else:
-            self.wait_for(wait_for, 10)
+            output = self.wait_for(wait_for, 10)
+        self.call_established = "call established" in output.lower()
+        return output
 
     def digits(self, digits: str, interval: float = 0.45) -> None:
         for digit in digits:
@@ -294,9 +297,17 @@ def matching(page, state: str) -> dict[str, Any]:
 
 def dial_trunk() -> BareSip:
     caller = BareSip(WILDIX_CONFIG)
-    # The inbound call must remain in an early dialog until a destination
-    # actually answers.  Treat 183+SDP as progress, never as establishment.
-    caller.dial("427", wait_for="183 Session Progress")
+    try:
+        # RTP telephone-event can remain in an early dialog, while SIP INFO
+        # collection requires an established dialog.  Both are valid trunk
+        # entry paths and must be observed instead of assumed by the runner.
+        caller.dial(
+            "427",
+            wait_for=("183 Session Progress", "Call established"),
+        )
+    except BaseException:
+        caller.close()
+        raise
     return caller
 
 
@@ -403,11 +414,10 @@ def main() -> int:
                 ringing = matching(page, "ringing")
                 caller.hangup()
                 idle = matching(page, "idle")
-                # The caller hangs up before a final 200/ACK dialog exists,
-                # therefore SIP terminates the early INVITE with CANCEL/487.
-                # ``remote_hangup`` is reserved for an established dialog
-                # ended by BYE.
-                if idle["card"]["terminal_reason"] != "cancelled":
+                expected_terminal = (
+                    "remote_hangup" if caller.call_established else "cancelled"
+                )
+                if idle["card"]["terminal_reason"] != expected_terminal:
                     raise RuntimeError(f"wrong terminal reason: {idle}")
                 return {
                     "call_id": ringing["card"]["call_id"],
