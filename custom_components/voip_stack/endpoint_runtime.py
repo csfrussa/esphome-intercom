@@ -4047,6 +4047,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     local_rtp_port,
                     invite.send_format,
                     invite.recv_format,
+                    dtmf=_invite_dtmf_format(invite),
                     remote_sdp=invite.remote_sdp,
                 )
                 committed = registry.transition(
@@ -6680,6 +6681,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             local_rtp_port,
             invite.send_format,
             invite.recv_format,
+            dtmf=_invite_dtmf_format(invite),
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
             video_format=(

@@ -80,6 +80,7 @@ def _load_audio_ws_runtime_module():
         "call_registry": _load_intercom_module("call_registry"),
         "const": _load_intercom_module("const"),
         "debug_capture": debug_capture,
+        "dtmf": dtmf,
         "media_debug": _load_intercom_module("media_debug"),
         "queue_utils": _load_intercom_module("queue_utils"),
         "sip_client": sip_client,
@@ -1630,6 +1631,118 @@ class SipClientSocketTest(unittest.IsolatedAsyncioTestCase):
                 if packet.payload_type == l16.payload_type:
                     decoded_tx = decoder.decode(packet.payload)
             self.assertEqual(decoded_tx, second_pcm)
+        finally:
+            await ws.messages.put(None)
+            await asyncio.wait_for(runtime, timeout=1)
+            remote.close()
+
+    async def test_audio_websocket_projects_negotiated_rfc4733_once(self) -> None:
+        audio_ws_view = _load_audio_ws_runtime_module()
+        const = _load_intercom_module("const")
+
+        class Bus:
+            def async_listen(self, _event_type, _callback):
+                return lambda: None
+
+        class Hass:
+            def __init__(self) -> None:
+                self.data = {const.DOMAIN: {const.CONF_DEBUG_MODE: False}}
+                self.store = {"call_id": "audio-dtmf", "state": "in_call"}
+                self.bus = Bus()
+
+        class WebSocket:
+            def __init__(self) -> None:
+                self.json: list[dict] = []
+                self.binary: list[bytes] = []
+                self.messages: asyncio.Queue = asyncio.Queue()
+
+            async def send_json(self, payload: dict) -> None:
+                self.json.append(dict(payload))
+
+            async def send_bytes(self, payload: bytes) -> None:
+                self.binary.append(bytes(payload))
+
+            def force_close(self) -> None:
+                return None
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                item = await self.messages.get()
+                if item is None:
+                    raise StopAsyncIteration
+                return item
+
+        loop = asyncio.get_running_loop()
+        remote = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        remote.bind(("127.0.0.1", 0))
+        remote.setblocking(False)
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind(("127.0.0.1", 0))
+        local_port = int(probe.getsockname()[1])
+        probe.close()
+        pcma = sdp.RtpPcmFormat(8, "PCMA", 8000, 1, 20)
+        digits: list[str] = []
+        session = audio_ws_view._SoftphoneMediaSession(
+            call_id="audio-dtmf",
+            local_rtp_port=local_port,
+            remote_rtp_host="127.0.0.1",
+            remote_rtp_port=int(remote.getsockname()[1]),
+            send_format=pcma,
+            recv_format=pcma,
+            signaling_host="127.0.0.1",
+            dtmf_payload_type=101,
+            dtmf_events=frozenset(range(16)),
+            on_dtmf=digits.append,
+        )
+        hass = Hass()
+        ws = WebSocket()
+        runtime = asyncio.create_task(
+            audio_ws_view._run_audio_session(hass, ws, session)
+        )
+        try:
+            deadline = loop.time() + 1.0
+            while not ws.json and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            self.assertTrue(ws.json)
+            for sequence, end in ((1, False), (2, True), (3, True)):
+                packet = rtp.build_packet(
+                    rtp.RtpPacket(
+                        payload_type=101,
+                        sequence=sequence,
+                        timestamp=1234,
+                        ssrc=9,
+                        payload=dtmf.build_telephone_event_payload(
+                            "6", duration=160, end=end
+                        ),
+                    )
+                )
+                await loop.sock_sendto(
+                    remote, packet, ("127.0.0.1", local_port)
+                )
+            deadline = loop.time() + 1.0
+            while digits != ["6"] and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            self.assertEqual(digits, ["6"])
+
+            pcm = bytes(pcma.audio_format.nominal_frame_bytes)
+            audio_packet = rtp.build_packet(
+                rtp.RtpPacket(
+                    payload_type=pcma.payload_type,
+                    sequence=4,
+                    timestamp=1394,
+                    ssrc=7,
+                    payload=sip_client.RtpPayloadEncoder(pcma).encode(pcm),
+                )
+            )
+            await loop.sock_sendto(
+                remote, audio_packet, ("127.0.0.1", local_port)
+            )
+            deadline = loop.time() + 1.0
+            while not ws.binary and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            self.assertTrue(ws.binary)
         finally:
             await ws.messages.put(None)
             await asyncio.wait_for(runtime, timeout=1)

@@ -21,6 +21,7 @@ from .sdp import (
     build_answer_directional,
     constrained_media_direction,
     constrained_video_direction,
+    offered_dtmf_formats,
 )
 from .sip_bridge import invite_rtp_peer
 from .sip_listener import SipInvite, SipInviteResult
@@ -29,6 +30,11 @@ from .websocket_api import _fire_call_event, _ha_softphone_store
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _invite_dtmf_format(invite: SipInvite):
+    formats = offered_dtmf_formats(invite.remote_sdp)
+    return formats[0] if formats else None
 
 
 async def async_prepare_media_update(
@@ -106,6 +112,7 @@ async def async_prepare_media_update(
             local_rtp_port,
             updated.send_format,
             updated.recv_format,
+            dtmf=_invite_dtmf_format(updated),
             remote_sdp=updated.remote_sdp,
             video_port=local_video_rtp_port,
             video_format=updated.answer_video_format,
@@ -292,6 +299,7 @@ async def async_prepare_media_update(
                 local_rtp_port,
                 updated.send_format,
                 updated.recv_format,
+                dtmf=_invite_dtmf_format(updated),
                 remote_sdp=updated.remote_sdp,
                 video_port=local_video_rtp_port,
                 video_format=updated.answer_video_format,
@@ -323,6 +331,13 @@ async def async_prepare_media_update(
                 audio_session.local_audio_direction = updated.local_audio_direction
                 audio_session.remote_audio_connection_held = bool(
                     updated.remote_audio_connection_held
+                )
+                dtmf_format = _invite_dtmf_format(updated)
+                audio_session.dtmf_payload_type = (
+                    dtmf_format.payload_type if dtmf_format is not None else None
+                )
+                audio_session.dtmf_events = (
+                    dtmf_format.events if dtmf_format is not None else frozenset()
                 )
                 audio_session.media_generation += 1
                 audio_session.update_event.set()
@@ -503,6 +518,7 @@ async def async_prepare_media_update(
         int(relay.left_port),
         updated.send_format,
         updated.recv_format,
+        dtmf=_invite_dtmf_format(updated),
         remote_sdp=updated.remote_sdp,
         audio_direction=audio_direction,
         video_port=local_video_port,
@@ -530,4 +546,3 @@ async def async_prepare_media_update(
     return SipInviteResult(
         200, "OK", answer_sdp=answer, commit=_commit_relay_update
     )
-

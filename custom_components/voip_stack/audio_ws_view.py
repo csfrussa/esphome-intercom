@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 import secrets
 import threading
-from typing import Any
+from typing import Any, Callable
 import wave
 
 from aiohttp import WSMsgType, web
@@ -40,6 +40,7 @@ from .debug_capture import (
     try_reserve_debug_capture_write,
     wav_pcm_payload,
 )
+from .dtmf import RtpDtmfDecoder, telephone_event_code
 from .media_debug import merge_media_debug
 from .queue_utils import put_drop_oldest
 from .session_cleanup import async_wait_for_cleanup
@@ -78,6 +79,9 @@ class _SoftphoneMediaSession:
     signaling_host: str = ""
     local_audio_direction: str = "sendrecv"
     remote_audio_connection_held: bool = False
+    dtmf_payload_type: int | None = None
+    dtmf_events: frozenset[int] = frozenset()
+    on_dtmf: Callable[[str], None] | None = None
     conference_room: str = ""
     conference_queue: asyncio.Queue[bytes] | None = None
     local_ssrc: int = 0
@@ -514,6 +518,27 @@ def _active_softphone_media_session(
     if not isinstance(registry, CallRegistry):
         return None
     inbound = registry.softphone_media
+
+    def _dtmf_callback(side: str) -> Callable[[str], None]:
+        def _emit(digit: str) -> None:
+            active = registry.sessions.get(registry.resolve_session_id(call_id))
+            if active is None:
+                return
+            from .dtmf_events import publish_dtmf_event
+
+            publish_dtmf_event(
+                hass,
+                call_id=call_id,
+                dest_call_id="",
+                caller=active.caller,
+                callee=active.callee,
+                side=side,
+                digit=digit,
+                transport="rtp_event",
+            )
+
+        return _emit
+
     if call_id and call_id in inbound:
         item = inbound[call_id]
         if item.get("rtp_loopback"):
@@ -544,6 +569,10 @@ def _active_softphone_media_session(
         invite = item.get("invite")
         local_rtp_port = int(item.get("local_rtp_port") or 0)
         if invite is not None and local_rtp_port:
+            from .sdp import offered_dtmf_formats
+
+            dtmf_formats = offered_dtmf_formats(invite.remote_sdp)
+            dtmf_format = dtmf_formats[0] if dtmf_formats else None
             return _SoftphoneMediaSession(
                 call_id=invite.call_id,
                 local_rtp_port=local_rtp_port,
@@ -556,6 +585,13 @@ def _active_softphone_media_session(
                 remote_audio_connection_held=bool(
                     invite.remote_audio_connection_held
                 ),
+                dtmf_payload_type=(
+                    dtmf_format.payload_type if dtmf_format is not None else None
+                ),
+                dtmf_events=(
+                    dtmf_format.events if dtmf_format is not None else frozenset()
+                ),
+                on_dtmf=_dtmf_callback("left"),
             )
 
     clients: dict[str, SipCallClient] = registry.sip_clients
@@ -575,6 +611,9 @@ def _active_softphone_media_session(
                 remote_audio_connection_held=bool(
                     dialog.remote_audio_connection_held
                 ),
+                dtmf_payload_type=dialog.dtmf_payload_type,
+                dtmf_events=dialog.dtmf_events,
+                on_dtmf=_dtmf_callback("right"),
             )
     return None
 
@@ -739,6 +778,7 @@ async def _run_audio_session(
         "tx_silence_keepalive": 0,
         "drop_direction": 0,
         "drop_connection_hold": 0,
+        "dtmf_rx_events": 0,
     }
     logged_first_rtp = False
     latched_rtp_source: tuple[str, int] | None = None
@@ -759,6 +799,11 @@ async def _run_audio_session(
     )
     rtp_decoder: RtpPayloadDecoder
     rtp_encoder: RtpPayloadEncoder
+    dtmf_decoder = (
+        RtpDtmfDecoder(session.dtmf_payload_type)
+        if session.dtmf_payload_type is not None
+        else None
+    )
     tx_frame_delay = max(0.001, session.send_format.audio_format.frame_ms / 1000.0)
     tx_silence_pcm = bytes(int(session.send_format.audio_format.nominal_frame_bytes))
 
@@ -844,6 +889,7 @@ async def _run_audio_session(
         nonlocal applied_media_generation, remote_rtp_host, remote_rtp_port
         nonlocal latched_rtp_source, latched_rtp_ssrc, logged_first_rtp
         nonlocal rtp_decoder, rtp_encoder, tx_frame_delay, tx_silence_pcm
+        nonlocal dtmf_decoder
         nonlocal debug_capture
         if generation == applied_media_generation:
             return
@@ -856,6 +902,11 @@ async def _run_audio_session(
             # media on the wire.
             next_decoder = RtpPayloadDecoder(session.recv_format)
             next_encoder = RtpPayloadEncoder(session.send_format)
+            next_dtmf_decoder = (
+                RtpDtmfDecoder(session.dtmf_payload_type)
+                if session.dtmf_payload_type is not None
+                else None
+            )
             next_frame_delay = max(
                 0.001,
                 session.send_format.audio_format.frame_ms / 1000.0,
@@ -875,6 +926,7 @@ async def _run_audio_session(
             counters["drop_tx_queue"] += drain_queue(tx_queue)
             rtp_decoder = next_decoder
             rtp_encoder = next_encoder
+            dtmf_decoder = next_dtmf_decoder
             tx_frame_delay = next_frame_delay
             tx_silence_pcm = next_silence_pcm
             if debug_capture is not None:
@@ -927,6 +979,21 @@ async def _run_audio_session(
                 continue
             try:
                 packet = rtp.parse_packet(data)
+                if (
+                    dtmf_decoder is not None
+                    and packet.payload_type == dtmf_decoder.payload_type
+                ):
+                    digit = dtmf_decoder.decode(data)
+                    event = telephone_event_code(digit)
+                    if (
+                        digit
+                        and event is not None
+                        and event in session.dtmf_events
+                        and session.on_dtmf is not None
+                    ):
+                        session.on_dtmf(digit)
+                        counters["dtmf_rx_events"] += 1
+                    continue
                 if not logged_first_rtp:
                     _LOGGER.info(
                         "HA softphone RTP RX first packet call_id=%s from=%s:%s payload_type=%s expected=%s bytes=%d",

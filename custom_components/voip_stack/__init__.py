@@ -578,20 +578,21 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             and not invite.remote_video_connection_held,
         )
     answer_sdp = ""
+    dtmf_formats = offered_dtmf_formats(invite.remote_sdp)
+    dtmf_format = dtmf_formats[0] if dtmf_formats else None
     response_already_sent = bool(
         preanswered is not None and preanswered.get("final_response_sent", True)
     )
     if local_rtp_port:
         if not bool((preanswered or {}).get("final_response_sent", True)):
             local_ip = await _ha_advertise_host(hass)
-            dtmf_formats = offered_dtmf_formats(invite.remote_sdp)
             answer = build_answer_directional(
                 local_ip,
                 local_ip,
                 local_rtp_port,
                 invite.send_format,
                 invite.recv_format,
-                dtmf=dtmf_formats[0] if dtmf_formats else None,
+                dtmf=dtmf_format,
                 remote_sdp=invite.remote_sdp,
                 video_port=local_video_rtp_port,
                 video_format=(
@@ -634,6 +635,7 @@ async def _handle_sip_answer_service(call: ServiceCall) -> None:
             local_rtp_port,
             invite.send_format,
             invite.recv_format,
+            dtmf=dtmf_format,
             remote_sdp=invite.remote_sdp,
             video_port=local_video_rtp_port,
             video_format=(
@@ -1742,6 +1744,8 @@ async def _handle_sip_call_target_service(call: ServiceCall, *, force_ha_bridge:
                 audio_session.remote_audio_connection_held = bool(
                     updated.remote_audio_connection_held
                 )
+                audio_session.dtmf_payload_type = updated.dtmf_payload_type
+                audio_session.dtmf_events = updated.dtmf_events
                 audio_session.media_generation += 1
                 audio_session.update_event.set()
             if video_session is not None and updated_video is not None:
