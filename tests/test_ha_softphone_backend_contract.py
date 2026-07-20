@@ -33,6 +33,9 @@ CONFIG_FLOW = ROOT / "custom_components" / "voip_stack" / "config_flow.py"
 CONFIG_ENTRY_RUNTIME = (
     ROOT / "custom_components" / "voip_stack" / "config_entry_runtime.py"
 )
+SOFTPHONE_TERMINATION = (
+    ROOT / "custom_components" / "voip_stack" / "softphone_termination.py"
+)
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -57,9 +60,12 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         cls.call_scope = CALL_SCOPE.read_text()
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
+        cls.softphone_termination = SOFTPHONE_TERMINATION.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
-        body = _function_body(self.source, "_handle_sip_hangup_service")
+        body = _function_body(
+            self.softphone_termination, "async_hangup_browser_call"
+        )
         self.assertIn("_ha_softphone_store(hass, endpoint_id)", body)
         self.assertIn("_set_ha_softphone_call_state(", body)
         state_update = body.split("_set_ha_softphone_call_state(", 1)[1]
@@ -68,12 +74,16 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("last_sip_event=", state_update)
 
     def test_hangup_does_not_depend_on_card_side_inference(self) -> None:
-        body = _function_body(self.source, "_handle_sip_hangup_service")
+        body = _function_body(
+            self.softphone_termination, "async_hangup_browser_call"
+        )
         self.assertNotIn("card", body.lower())
         self.assertNotIn("frontend", body.lower())
 
     def test_hangup_preserves_canonical_outbound_direction(self) -> None:
-        body = _function_body(self.source, "_handle_sip_hangup_service")
+        body = _function_body(
+            self.softphone_termination, "async_hangup_browser_call"
+        )
         direction = body.split("direction = str(", 1)[1].split("\n    )", 1)[0]
         self.assertLess(
             direction.index('softphone_store.get("direction")'),
@@ -81,13 +91,15 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         )
 
     def test_bridge_hangup_does_not_publish_ha_softphone_session(self) -> None:
-        body = _function_body(self.source, "_handle_sip_hangup_service")
+        body = _function_body(
+            self.softphone_termination, "async_hangup_browser_call"
+        )
         bridge_branch = body.split("if bridge_handled:", 1)[1].split("return", 1)[0]
         self.assertIn("_set_sip_bridge_call_state(", bridge_branch)
         self.assertNotIn("_set_ha_softphone_call_state(", bridge_branch)
 
     def test_bridge_teardown_clears_only_its_matching_softphone_session(self) -> None:
-        body = _function_body(self.source, "_terminate_sip_bridge")
+        body = _function_body(self.softphone_termination, "_terminate_bridge")
         self.assertIn('softphone_call_id = str(softphone.get("call_id") or "")', body)
         self.assertIn("if handled and source_call_id == softphone_call_id:", body)
         matching_branch = body.split(
@@ -802,7 +814,9 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertNotIn("registry.softphone_media.pop", conference_audio)
         self.assertNotIn("registry.finish_and_pop", conference_audio)
         self.assertIn("conference_media_handoff", conference_audio)
-        hangup = _function_body(self.source, "_handle_sip_hangup_service")
+        hangup = _function_body(
+            self.softphone_termination, "async_hangup_browser_call"
+        )
         self.assertIn("await manager.leave_ha_softphone(", hangup)
         self.assertIn("conference_room,", hangup)
         self.assertIn("call_id=call_id", hangup)

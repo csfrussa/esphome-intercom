@@ -34,6 +34,9 @@ ESPHOME_ACTIONS = ROOT / "custom_components" / "voip_stack" / "esphome_actions.p
 SOFTPHONE_COMMANDS = (
     ROOT / "custom_components" / "voip_stack" / "softphone_commands.py"
 )
+SOFTPHONE_TERMINATION = (
+    ROOT / "custom_components" / "voip_stack" / "softphone_termination.py"
+)
 OUTBOUND_ATTEMPTS = (
     ROOT / "custom_components" / "voip_stack" / "outbound_attempts.py"
 )
@@ -891,6 +894,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     ) -> None:
         init_py = INIT.read_text()
         audio_ws = AUDIO_WS.read_text()
+        termination = SOFTPHONE_TERMINATION.read_text()
 
         self.assertIn('call_id.startswith("conference:")', init_py)
         self.assertIn("manager.join_ha_softphone(", init_py)
@@ -902,9 +906,9 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('conference_queue = item.get("conference_queue")', audio_ws)
         self.assertIn("_run_conference_audio_session", audio_ws)
         self.assertIn("manager.push_ha_audio(session.call_id, pcm)", audio_ws)
-        self.assertIn("await manager.leave_ha_softphone(", init_py)
-        self.assertIn("conference_room,", init_py)
-        self.assertIn("call_id=call_id", init_py)
+        self.assertIn("await manager.leave_ha_softphone(", termination)
+        self.assertIn("conference_room,", termination)
+        self.assertIn("call_id=call_id", termination)
         card = CARD_JS.read_text()
         self.assertNotIn("conference_manager", card)
         self.assertNotIn("_ringConference", card)
@@ -1182,15 +1186,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             -1,
         )
 
-        init_py = INIT.read_text()
-        hangup = init_py[
-            init_py.index("async def _handle_sip_hangup_service") : init_py.index(
-                "async def _handle_set_dnd_service"
-            )
-        ]
-        self.assertIn('future = _pending_routes(hass)[call_id].get("future")', hangup)
+        hangup = SOFTPHONE_TERMINATION.read_text()
+        self.assertIn('future = routes[call_id].get("future")', hangup)
         self.assertIn("if future is not None and future.done():", hangup)
-        self.assertIn("_pending_routes(hass).pop(call_id, None)", hangup)
+        self.assertIn("routes.pop(call_id, None)", hangup)
 
     def test_ring_group_ha_winner_publishes_connected_party_to_esp_mirrors(self) -> None:
         ring_group = self.source[

@@ -95,12 +95,10 @@ from .outbound_lifecycle import (
     async_prepare_ha_outbound_call as _async_prepare_ha_outbound_call,
     async_track_outbound_sip_client as _track_outbound_sip_client,
 )
-from .session_cleanup import async_cleanup_sip_runtime
 from .sip_runtime import (
     enable_reused_tcp_connection as _enable_reused_sip_tcp_connection,
     send_bye as _sip_send_bye,
     send_final_response as _sip_send_final_response,
-    sip_servers as _sip_servers,
     uri_transport as _sip_uri_transport,
 )
 from .audio_format import HA_TRUNK_AUDIO_FORMATS
@@ -129,6 +127,9 @@ from .softphone_commands import (
     async_try_esp_end_call as _try_esp_end_call,
     bind_service_call_controller as _bind_service_call_controller,
 )
+from .softphone_termination import (
+    async_hangup_browser_call as _hangup_browser_call,
+)
 from .phone_config import (
     async_ensure_phone_subentries,
     async_load_legacy_default_phone_overrides,
@@ -152,7 +153,6 @@ from .websocket_api import (
     async_set_ha_softphone_settings,
     _ha_softphone_store,
     _set_ha_softphone_call_state,
-    _set_sip_bridge_call_state,
 )
 
 PLATFORMS: list[Platform] = [
@@ -240,45 +240,6 @@ def _ha_peer_name(hass: HomeAssistant) -> str:
     identity.
     """
     return (hass.config.location_name or "").strip() or HA_PEER_FALLBACK_NAME
-
-
-async def _terminate_sip_bridge(
-    hass: HomeAssistant,
-    call_id: str,
-    *,
-    endpoint_id: str = DEFAULT_ENDPOINT_ID,
-    session_device_id: str = HA_SOFTPHONE_DEVICE_ID,
-    terminal_reason: str = TerminalReason.LOCAL_HANGUP.value,
-) -> tuple[bool, str, str, bool, bool]:
-    from .bridge_manager import async_terminate_sip_bridge
-
-    softphone = _ha_softphone_store(hass, endpoint_id)
-    softphone_call_id = str(softphone.get("call_id") or "")
-    result = await async_terminate_sip_bridge(
-        hass,
-        call_id,
-        terminal_reason=terminal_reason,
-        send_bye=lambda source_call_id: _sip_send_bye(hass, source_call_id),
-    )
-    handled, source_call_id, _dest_call_id, _client_closed, _source_bye = result
-    if handled and source_call_id == softphone_call_id:
-        reason = terminal_reason or TerminalReason.LOCAL_HANGUP.value
-        _set_ha_softphone_call_state(
-            hass,
-            CallState.IDLE.value,
-            endpoint_id=endpoint_id,
-            session_device_id=session_device_id,
-            caller=str(softphone.get("caller") or ""),
-            callee=str(softphone.get("callee") or ""),
-            peer_name=str(softphone.get("peer_name") or ""),
-            direction=str(softphone.get("direction") or ""),
-            call_id=source_call_id,
-            reason=reason,
-            terminal_reason=reason,
-            origin="self" if reason == TerminalReason.LOCAL_HANGUP.value else "remote",
-            last_sip_event="SIP_BYE",
-        )
-    return result
 
 
 async def _handle_purge_devices_service(call: ServiceCall) -> None:
@@ -750,219 +711,7 @@ async def _handle_sip_hangup_service(call: ServiceCall) -> None:
     if await _try_esp_end_call(call, operation="hangup"):
         return
     command = await _resolve_browser_call_command(hass, call)
-    endpoint_id = command.endpoint_id
-    endpoint_device_id = command.device_id
-    call_id = command.call_id
-    registry = command.registry
-    from .local_softphone_runtime import local_softphone_bridge
-
-    local_bridge = local_softphone_bridge(hass)
-    if local_bridge is not None and local_bridge.get_call(call_id) is not None:
-        from homeassistant.exceptions import ServiceValidationError
-
-        from .local_softphone_bridge import LocalBridgeError
-
-        try:
-            local_bridge.hangup(call_id, endpoint_id)
-        except LocalBridgeError as err:
-            raise ServiceValidationError(str(err)) from err
-        return
-    forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(call_id)
-    if forward_task is not None and not forward_task.done():
-        forward_task.cancel()
-        await asyncio.gather(forward_task, return_exceptions=True)
-    if call_id and call_id in _pending_routes(hass):
-        future = _pending_routes(hass)[call_id].get("future")
-        if future is not None and future.done():
-            _pending_routes(hass).pop(call_id, None)
-        else:
-            _set_pending_route_decision(
-                hass,
-                {
-                    "call_id": call_id,
-                    "action": "cancel",
-                    "reason": "Request Terminated",
-                    "decline_reason": TerminalReason.LOCAL_HANGUP.value,
-                    "endpoint_id": endpoint_id,
-                },
-            )
-            return
-    clients = registry.sip_clients
-    relays = registry.relays
-    pending = registry.pending_invites
-    media_sessions = registry.softphone_media
-    preanswered = registry.preanswered
-    softphone_store = _ha_softphone_store(hass, endpoint_id)
-    endpoint_bridge_calls = _endpoint_call_ids(
-        registry, registry.bridge_clients, endpoint_id
-    )
-    endpoint_clients = _endpoint_call_ids(registry, clients, endpoint_id)
-    endpoint_pending = _endpoint_call_ids(registry, pending, endpoint_id)
-    endpoint_media = _endpoint_call_ids(registry, media_sessions, endpoint_id)
-    if not call_id and len(endpoint_bridge_calls) == 1:
-        call_id = endpoint_bridge_calls[0]
-    if not call_id and len(endpoint_clients) == 1:
-        call_id = endpoint_clients[0]
-    if not call_id and len(endpoint_pending) == 1:
-        call_id = endpoint_pending[0]
-    if not call_id and len(endpoint_media) == 1:
-        call_id = endpoint_media[0]
-    if not call_id:
-        call_id = str(softphone_store.get("call_id") or "").strip()
-    active_session = (
-        registry.sessions.get(registry.resolve_session_id(call_id)) if call_id else None
-    )
-    caller = str(
-        (active_session.caller if active_session is not None else "")
-        or softphone_store.get("caller")
-        or softphone_store.get("last_terminal_caller")
-        or ""
-    )
-    callee = str(
-        (active_session.callee if active_session is not None else "")
-        or softphone_store.get("callee")
-        or softphone_store.get("last_terminal_callee")
-        or ""
-    )
-    peer_name = str(
-        callee
-        or softphone_store.get("peer_name")
-        or softphone_store.get("last_terminal_peer_name")
-        or ""
-    )
-    direction = str(
-        softphone_store.get("direction")
-        or softphone_store.get("last_terminal_direction")
-        or ("incoming" if active_session is not None else "")
-        or ""
-    )
-    bridge_handled, bridge_source_call_id, bridge_dest_call_id, bridge_client, bridge_server_bye = await _terminate_sip_bridge(
-        hass,
-        call_id,
-        endpoint_id=endpoint_id,
-        session_device_id=endpoint_device_id,
-    )
-    if bridge_handled:
-        call_id = bridge_source_call_id
-        _set_sip_bridge_call_state(
-            hass,
-            CallState.IDLE.value,
-            caller=caller,
-            callee=callee,
-            peer_name=peer_name,
-            call_id=call_id,
-            dest_call_id=bridge_dest_call_id,
-            reason=TerminalReason.LOCAL_HANGUP.value,
-            origin="self",
-            last_sip_event="SIP_BYE",
-        )
-        _LOGGER.info(
-            "SIP bridge hangup call_id=%s dest_call_id=%s client=%s server_bye=%s",
-            bridge_source_call_id,
-            bridge_dest_call_id,
-            bridge_client,
-            bridge_server_bye,
-        )
-        return
-    client, watcher = registry.detach_client(call_id) if call_id else (None, None)
-    if client is not None and watcher is None and client.dialog is None:
-        # The initial INVITE coroutine owns response processing. Ask it to
-        # defer CANCEL until RFC 3261 permits it, rather than racing a second
-        # reader against the same SIP transaction.
-        client.request_cancel()
-        client = None
-    relay = relays.pop(call_id, None) if call_id else None
-    media_session = media_sessions.pop(call_id, None) if call_id else None
-    _release_media_reservation(media_session)
-    conference_room = str((media_session or {}).get("conference_room") or "")
-    if conference_room:
-        manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
-        if manager is not None:
-            await manager.leave_ha_softphone(
-                conference_room,
-                call_id=call_id,
-                reason=TerminalReason.LOCAL_HANGUP.value,
-            )
-    pending_ids = (
-        [call_id]
-        if call_id and call_id in pending
-        else ([] if call_id else endpoint_pending)
-    )
-    server_bye = False
-    pending_closed = 0
-    await async_cleanup_sip_runtime(
-        relay=relay,
-        client=client,
-        watcher=watcher,
-        terminate_client=True,
-        relay_first=False,
-    )
-    for pending_call_id in pending_ids:
-        invite = pending.pop(pending_call_id, None)
-        if invite is None:
-            continue
-        preanswered_item = preanswered.pop(pending_call_id, None)
-        if preanswered_item is not None:
-            _release_media_reservation(preanswered_item)
-            if _sip_send_bye(hass, pending_call_id):
-                pending_closed += 1
-        elif _sip_send_final_response(
-            hass,
-            pending_call_id,
-            487,
-            "Request Terminated",
-            decline_reason=TerminalReason.LOCAL_HANGUP.value,
-        ):
-            pending_closed += 1
-        _set_ha_softphone_call_state(
-            hass,
-            CallState.IDLE.value,
-            endpoint_id=endpoint_id,
-            session_device_id=endpoint_device_id,
-            caller=invite.caller,
-            callee=invite.target,
-            peer_name=invite.caller,
-            direction="incoming",
-            call_id=pending_call_id,
-            reason=TerminalReason.LOCAL_HANGUP.value,
-            origin="self",
-            sip_status_code=487,
-            last_sip_event="SIP_RESPONSE",
-        )
-        registry.finish_and_pop(pending_call_id, reason=TerminalReason.LOCAL_HANGUP.value)
-    if client is None and relay is None:
-        for server in _sip_servers(hass):
-            send_bye = getattr(server, "send_bye", None)
-            if callable(send_bye) and send_bye(call_id):
-                server_bye = True
-                if not call_id:
-                    call_id = "(active)"
-                break
-    _set_ha_softphone_call_state(
-        hass,
-        CallState.IDLE.value,
-        endpoint_id=endpoint_id,
-        session_device_id=endpoint_device_id,
-        caller=caller,
-        callee=callee,
-        peer_name=peer_name,
-        direction=direction,
-        call_id=call_id,
-        reason=TerminalReason.LOCAL_HANGUP.value,
-        origin="self",
-        last_sip_event="SIP_BYE" if (client is not None or relay is not None or server_bye) else "SIP_HANGUP",
-        pending_closed=pending_closed,
-    )
-    if call_id:
-        registry.finish_and_pop(call_id, reason=TerminalReason.LOCAL_HANGUP.value)
-    _LOGGER.info(
-        "SIP hangup call_id=%s client=%s relay=%s pending_closed=%d server_bye=%s",
-        call_id,
-        client is not None,
-        relay is not None,
-        pending_closed,
-        server_bye,
-    )
+    await _hangup_browser_call(hass, command)
 
 
 async def _handle_set_dnd_service(call: ServiceCall) -> None:
