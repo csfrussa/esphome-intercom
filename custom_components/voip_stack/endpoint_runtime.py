@@ -253,10 +253,10 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _get_trunk_config,
         _trunk_enabled,
         _ha_peer_name,
-        _pending_routes,
         _refresh_and_push_phonebook,
         _terminate_sip_bridge,
     )
+    from .call_scope import pending_routes as _pending_routes
     from .peer_snapshot import (
         async_advertise_host as _ha_advertise_host,
         async_build_peer_snapshot as _async_build_peer_snapshot,

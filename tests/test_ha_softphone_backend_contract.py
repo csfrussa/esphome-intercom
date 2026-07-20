@@ -20,6 +20,7 @@ OUTBOUND_LIFECYCLE = (
 ESPHOME_STATE_BRIDGE = (
     ROOT / "custom_components" / "voip_stack" / "esphome_state_bridge.py"
 )
+CALL_SCOPE = ROOT / "custom_components" / "voip_stack" / "call_scope.py"
 SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
@@ -47,6 +48,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         cls.source = INIT.read_text()
         cls.outbound_lifecycle = OUTBOUND_LIFECYCLE.read_text()
         cls.esphome_state_bridge = ESPHOME_STATE_BRIDGE.read_text()
+        cls.call_scope = CALL_SCOPE.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
@@ -609,7 +611,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("dialed_target=invite.target", answer)
 
     def test_call_membership_accepts_both_destination_metadata_spellings(self) -> None:
-        body = _function_body(self.source, "_call_endpoint_ids")
+        body = _function_body(self.call_scope, "call_endpoint_ids")
         self.assertIn('"source_endpoint_id"', body)
         self.assertIn('"dest_endpoint_id"', body)
         self.assertIn('"target_endpoint_id"', body)

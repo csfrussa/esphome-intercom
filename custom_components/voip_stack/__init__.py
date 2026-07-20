@@ -23,6 +23,12 @@ from .config import (
     trunk_config as _get_trunk_config,
     trunk_enabled as _trunk_enabled,
 )
+from .call_scope import (
+    call_belongs_to_endpoint as _call_belongs_to_endpoint,
+    endpoint_call_ids as _endpoint_call_ids,
+    pending_routes as _pending_routes,
+    single_pending_route_call_id as _single_pending_route_call_id,
+)
 from .const import (
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_PIPELINE,
@@ -179,10 +185,6 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 _LOGGER = logging.getLogger(__name__)
 SIP_ROUTE_DECISION_TIMEOUT = 1.5
-def _pending_routes(hass: HomeAssistant) -> dict:
-    return _call_registry(hass).pending_routes
-
-
 async def _mark_sip_account_unreachable(hass: HomeAssistant, username: str) -> None:
     """Drop a stale registrar Contact while keeping the account in the roster."""
 
@@ -216,71 +218,6 @@ def _ha_softphone_has_active_call(
         return False
     state = str(store.get("state") or CallState.IDLE.value)
     return bool(store.get("session_device_id") or state in HA_SOFTPHONE_ACTIVE_STATES)
-
-
-def _call_endpoint_id(registry, call_id: str) -> str:
-    """Return the browser endpoint owning a logical call.
-
-    Sessions created before multi-endpoint support intentionally resolve to the
-    original master endpoint. This is the only compatibility fallback; newly
-    routed calls always persist an explicit endpoint identifier.
-    """
-    session_id = registry.resolve_session_id(str(call_id or "").strip())
-    session = registry.sessions.get(session_id)
-    return str(
-        ((session.metadata if session is not None else {}) or {}).get("endpoint_id")
-        or DEFAULT_ENDPOINT_ID
-    ).strip()
-
-
-def _call_endpoint_ids(registry, call_id: str) -> frozenset[str]:
-    """Return every logical phone participating in one call.
-
-    Ordinary SIP calls keep the historical singular ``endpoint_id``. Local
-    browser calls add source/destination identities so either endpoint can
-    answer, decline, hang up, and attach its own media WebSocket.
-    """
-    session_id = registry.resolve_session_id(str(call_id or "").strip())
-    session = registry.sessions.get(session_id)
-    metadata = ((session.metadata if session is not None else {}) or {})
-    endpoint_ids = {
-        str(metadata.get(key) or "").strip()
-        for key in (
-            "endpoint_id",
-            "source_endpoint_id",
-            "dest_endpoint_id",
-            "target_endpoint_id",
-        )
-    }
-    endpoint_ids.update(
-        str(value or "").strip()
-        for value in (metadata.get("ring_endpoint_ids") or ())
-    )
-    endpoint_ids.discard("")
-    if not endpoint_ids:
-        endpoint_ids.add(DEFAULT_ENDPOINT_ID)
-    return frozenset(endpoint_ids)
-
-
-def _call_belongs_to_endpoint(registry, call_id: str, endpoint_id: str) -> bool:
-    return str(endpoint_id or "").strip() in _call_endpoint_ids(registry, call_id)
-
-
-def _endpoint_call_ids(registry, call_ids, endpoint_id: str) -> list[str]:
-    return [
-        str(call_id)
-        for call_id in call_ids
-        if _call_belongs_to_endpoint(registry, str(call_id), endpoint_id)
-    ]
-
-
-def _single_pending_route_call_id(
-    hass: HomeAssistant,
-    endpoint_id: str = DEFAULT_ENDPOINT_ID,
-) -> str:
-    registry = _call_registry(hass)
-    routes = _endpoint_call_ids(registry, _pending_routes(hass), endpoint_id)
-    return routes[0] if len(routes) == 1 else ""
 
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
