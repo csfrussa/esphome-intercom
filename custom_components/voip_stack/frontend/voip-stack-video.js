@@ -1,3 +1,11 @@
+import {
+  cameraCaptureContract,
+  cameraStorageKey,
+  directionalVideoContract,
+  emptyVideoStats,
+  legacyVideoAliases,
+} from "./voip-stack-video-model.js";
+
 const VIDEO_ACCESS_UNIT = 1;
 const VIDEO_HEADER_BYTES = 6;
 const MAX_VIDEO_WS_BUFFER = 2 * 1024 * 1024;
@@ -5,11 +13,6 @@ const MAX_PENDING_DECODE_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING_DECODE_FRAMES = 60;
 const MAX_DECODE_QUEUE_FRAMES = 8;
 const CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
-
-function cameraStorageKey(endpointId = "default") {
-  const endpoint = String(endpointId || "default").trim() || "default";
-  return `${CAMERA_STORAGE_KEY}:${encodeURIComponent(endpoint)}`;
-}
 
 export class VoipStackVideo extends EventTarget {
   constructor() {
@@ -58,25 +61,7 @@ export class VoipStackVideo extends EventTarget {
   }
 
   _emptyStats() {
-    return {
-      received: 0,
-      sent: 0,
-      rendered: 0,
-      dropped: 0,
-      dropped_no_canvas: 0,
-      dropped_decode_backpressure: 0,
-      dropped_timestamp_regression: 0,
-      dropped_frame_queue: 0,
-      dropped_render_coalesce: 0,
-      dropped_pending_decode: 0,
-      decode_errors: 0,
-      max_frame_gap_ms: 0,
-      max_arrival_gap_ms: 0,
-      max_source_gap_ms: 0,
-      render_gaps_over_100_ms: 0,
-      render_gaps_over_250_ms: 0,
-      playout_ms: 0,
-    };
+    return emptyVideoStats();
   }
 
   configure(hass, clientId = "") {
@@ -301,65 +286,22 @@ export class VoipStackVideo extends EventTarget {
   }
 
   _mediaContract(direction, negotiated = this._negotiated) {
-    // Directional payloads were added without removing the original flat
-    // fields. Older HA backends therefore remain interoperable: in their
-    // payload the same flat media contract is used for both directions.
-    const nested = negotiated?.[direction];
-    const media = nested && typeof nested === "object" && !Array.isArray(nested)
-      ? nested
-      : {};
-    const value = (key, fallback = undefined) => (
-      media[key] ?? negotiated?.[key] ?? fallback
+    return directionalVideoContract(
+      negotiated,
+      direction,
+      this._encoding,
+      this._clockRate,
     );
-    const rawCodec = String(value("codec", "") || "");
-    const codecToken = rawCodec.toLowerCase();
-    const inferredEncoding = codecToken.startsWith("avc1")
-      ? "H264"
-      : codecToken.startsWith("vp")
-        ? "VP8"
-        : codecToken.includes("jpeg")
-          ? "JPEG"
-          : String(this._encoding || "H264").toUpperCase();
-    const encoding = String(value("encoding", inferredEncoding) || inferredEncoding).toUpperCase();
-    const defaultCodec = encoding === "VP8"
-      ? "vp8"
-      : encoding === "JPEG"
-        ? "jpeg"
-        : "avc1.42E01F";
-    const rawClockRate = Number(value("clock_rate", this._clockRate || 90000));
-    const clockRate = Number.isFinite(rawClockRate) && rawClockRate > 0
-      ? rawClockRate
-      : 90000;
-    const rawPayloadType = Number(value("payload_type", -1));
-    return {
-      codec: rawCodec || defaultCodec,
-      encoding,
-      clockRate,
-      payloadType: Number.isInteger(rawPayloadType) && rawPayloadType >= 0 && rawPayloadType <= 127
-        ? rawPayloadType
-        : -1,
-      fmtp: String(value("fmtp", "") || ""),
-      profileLevelId: String(
-        value(
-          "profile_level_id",
-          encoding === "H264" ? (rawCodec || defaultCodec).split(".").at(-1) : "",
-        ) || "",
-      ).toLowerCase(),
-      packetizationMode: Number(value("packetization_mode", 0)) || 0,
-      format: String(value("format", "") || ""),
-    };
   }
 
   _updateLegacyMediaAliases(negotiated) {
-    // `encoding` remains a display/backwards-compatibility alias. Prefer the
-    // active receive path because the canvas historically reported it; use
-    // send for a send-only call. RTP math below never relies on these aliases.
-    const direction = negotiated?.can_receive === false && negotiated?.can_send
-      ? "send"
-      : "receive";
-    const primary = this._mediaContract(direction, negotiated);
-    this._encoding = primary.encoding;
-    this._clockRate = this._mediaContract("receive", negotiated).clockRate;
+    const aliases = legacyVideoAliases(
+      negotiated,
+      this._encoding,
+      this._clockRate,
+    );
+    this._encoding = aliases.encoding;
+    this._clockRate = aliases.clockRate;
   }
 
   _handleEncoderControl(payload) {
@@ -586,103 +528,7 @@ export class VoipStackVideo extends EventTarget {
   }
 
   _cameraCaptureContract() {
-    const send = this._mediaContract("send");
-    const parameters = new Map();
-    for (const item of send.fmtp.split(";")) {
-      const [rawKey, ...rawValue] = item.trim().split("=");
-      const key = String(rawKey || "").trim().toLowerCase();
-      if (key) parameters.set(key, rawValue.join("=").trim());
-    }
-    const positiveInteger = (value) => {
-      const parsed = Number.parseInt(String(value || ""), 10);
-      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-    };
-
-    let maxFs = 3600;
-    let maxMbps = 108000;
-    let maxFr = 20;
-    if (send.encoding === "H264") {
-      const profileLevelId = String(
-        send.profileLevelId ||
-        send.codec.split(".").at(-1) ||
-        "",
-      ).toLowerCase();
-      const profileIop = Number.parseInt(profileLevelId.slice(2, 4), 16);
-      const levelIdc = Number.parseInt(profileLevelId.slice(-2), 16);
-      const levelLimits = new Map([
-        [0x0a, [99, 1485]],
-        [0x0b, [396, 3000]],
-        [0x0c, [396, 6000]],
-        [0x0d, [396, 11880]],
-        [0x14, [396, 11880]],
-        [0x15, [792, 19800]],
-        [0x16, [1620, 20250]],
-        [0x1e, [1620, 40500]],
-        [0x1f, [3600, 108000]],
-        [0x20, [5120, 216000]],
-        [0x28, [8192, 245760]],
-        [0x29, [8192, 245760]],
-        [0x2a, [8704, 522240]],
-        [0x32, [22080, 589824]],
-        [0x33, [36864, 983040]],
-        [0x34, [36864, 2073600]],
-      ]);
-      const limits = levelIdc === 0x0b && (profileIop & 0x10)
-        ? [99, 1485]
-        : levelLimits.get(levelIdc);
-      if (limits) [maxFs, maxMbps] = limits;
-      // Treat additional receiver constraints conservatively. Even when a
-      // peer uses them to advertise capability beyond its level, staying
-      // inside both declarations always produces a conforming bitstream.
-      maxFs = Math.min(maxFs, positiveInteger(parameters.get("max-fs")) || maxFs);
-      maxMbps = Math.min(
-        maxMbps,
-        positiveInteger(parameters.get("max-mbps")) || maxMbps,
-      );
-    } else if (send.encoding === "VP8") {
-      maxFs = positiveInteger(parameters.get("max-fs")) || maxFs;
-      maxFr = Math.min(
-        maxFr,
-        positiveInteger(parameters.get("max-fr")) || maxFr,
-      );
-    }
-
-    const candidates = [
-      [1280, 720],
-      [960, 540],
-      [640, 360],
-      [480, 270],
-      [352, 288],
-      [320, 180],
-      [176, 144],
-    ].map(([width, height]) => ({
-      width,
-      height,
-      macroblocks: Math.ceil(width / 16) * Math.ceil(height / 16),
-    }));
-    const fitting = candidates.filter((item) => item.macroblocks <= maxFs);
-    const maximum = fitting[0] || candidates.at(-1);
-    const ideal = fitting.find(
-      (item) => item.width <= 640 && item.height <= 360,
-    ) || maximum;
-    maxFr = Math.max(
-      1,
-      Math.min(maxFr, Math.floor(maxMbps / Math.max(1, maximum.macroblocks))),
-    );
-    return {
-      maxFs,
-      maxMbps,
-      maxFr,
-      idealWidth: ideal.width,
-      idealHeight: ideal.height,
-      maxWidth: maximum.width,
-      maxHeight: maximum.height,
-      constraints: {
-        width: { ideal: ideal.width, max: maximum.width },
-        height: { ideal: ideal.height, max: maximum.height },
-        frameRate: { ideal: Math.min(15, maxFr), max: maxFr },
-      },
-    };
+    return cameraCaptureContract(this._mediaContract("send"));
   }
 
   async _setupEncoder(codec, generation, senderGeneration) {

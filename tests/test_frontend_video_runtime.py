@@ -19,6 +19,7 @@ VIDEO_ENGINE = (
     / "frontend"
     / "voip-stack-video.js"
 )
+VIDEO_MODEL = VIDEO_ENGINE.with_name("voip-stack-video-model.js")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
@@ -29,6 +30,7 @@ import vm from "vm";
 import assert from "assert/strict";
 
 const source = fs.readFileSync({json.dumps(str(VIDEO_ENGINE))}, "utf8");
+const modelSource = fs.readFileSync({json.dumps(str(VIDEO_MODEL))}, "utf8");
 const cameraStorage = new Map();
 const context = vm.createContext({{
   EventTarget,
@@ -45,8 +47,12 @@ const context = vm.createContext({{
   WebSocket: {{ OPEN: 1, CONNECTING: 0 }},
   EncodedVideoChunk: class EncodedVideoChunk {{ constructor(init) {{ Object.assign(this, init); }} }},
 }});
+const modelModule = new vm.SourceTextModule(modelSource, {{ context }});
 const module = new vm.SourceTextModule(source, {{ context }});
-await module.link(() => {{ throw new Error("unexpected import"); }});
+await module.link((specifier) => {{
+  if (specifier === "./voip-stack-video-model.js") return modelModule;
+  throw new Error(`unexpected import: ${{specifier}}`);
+}});
 await module.evaluate();
 const Video = module.namespace.VoipStackVideo;
 
@@ -552,6 +558,7 @@ import vm from "vm";
 import assert from "assert/strict";
 
 const source = fs.readFileSync({json.dumps(str(VIDEO_ENGINE))}, "utf8");
+const modelSource = fs.readFileSync({json.dumps(str(VIDEO_MODEL))}, "utf8");
 const context = vm.createContext({{
   EventTarget,
   performance,
@@ -564,8 +571,12 @@ const context = vm.createContext({{
   WebSocket: {{ OPEN: 1, CONNECTING: 0 }},
   EncodedVideoChunk: class EncodedVideoChunk {{ constructor(init) {{ Object.assign(this, init); }} }},
 }});
+const modelModule = new vm.SourceTextModule(modelSource, {{ context }});
 const module = new vm.SourceTextModule(source, {{ context }});
-await module.link(() => {{ throw new Error("unexpected import"); }});
+await module.link((specifier) => {{
+  if (specifier === "./voip-stack-video-model.js") return modelModule;
+  throw new Error(`unexpected import: ${{specifier}}`);
+}});
 await module.evaluate();
 const Video = module.namespace.VoipStackVideo;
 
