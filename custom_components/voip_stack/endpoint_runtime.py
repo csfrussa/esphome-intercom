@@ -100,6 +100,13 @@ from .phone_endpoint import (
     EndpointKind,
     OfflinePolicy,
 )
+from .pbx_routing import (
+    browser_endpoint_can_ring as _browser_endpoint_can_ring,
+    caller_matches_group_member as _caller_matches_member,
+    dtmf_extension_routes as _dtmf_extension_routes,
+    roster_entry_for_target as _roster_entry_for_target,
+    unique_group_members as _unique_group_members,
+)
 from .phonebook_runtime import registered_roster_entries as _registered_roster_entries
 from .router import (
     CallContext,
@@ -147,27 +154,6 @@ def _source_dialog_is_answered(early_media: dict | None) -> bool:
     return early_media is not None and bool(
         early_media.get("final_response_sent", True)
     )
-
-
-def _unique_group_members(value) -> list[str]:
-    members: list[str] = []
-    seen: set[str] = set()
-    raw_members = value.split(",") if isinstance(value, str) else (value or [])
-    for raw in raw_members:
-        member = str(raw).strip()
-        key = member.casefold()
-        if member and key not in seen:
-            seen.add(key)
-            members.append(member)
-    return members
-
-
-def _dtmf_extension_routes(entries) -> dict[str, str]:
-    return {
-        str(entry.extension).strip(): str(entry.extension).strip()
-        for entry in entries
-        if str(getattr(entry, "extension", "") or "").strip()
-    }
 
 
 async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
@@ -463,16 +449,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             and int(uri.port or cfg["sip_port"]) == int(cfg["sip_port"])
         )
 
-    def _roster_entry_for_target(target: str, entries: list[RosterEntry]):
-        for entry in entries:
-            if _same_route_name(entry.id, target) or _same_route_name(
-                entry.name, target
-            ):
-                return entry
-            if entry.extension and str(entry.extension).strip() == str(target).strip():
-                return entry
-        return None
-
     async def _start_local_assist_bridge(
         invite: SipInvite,
         *,
@@ -643,23 +619,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 entry,
             )
         return None, None, entry
-
-    def _browser_endpoint_can_ring(endpoint) -> bool:
-        """Return whether a logical browser phone may receive ringing state.
-
-        Browser presence describes whether media can be rendered *now*; it is
-        not the phone's existence.  An offline phone therefore remains a
-        valid logical candidate so automations can observe ringing/missed and
-        a card may reconnect during the ring window.  DND and administratively
-        unavailable phones remain excluded.
-        """
-        return bool(
-            endpoint is None
-            or (
-                not endpoint.dnd
-                and endpoint.availability is not EndpointAvailability.UNAVAILABLE
-            )
-        )
 
     def _logical_endpoint_for_member(
         member: str,
@@ -856,32 +815,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 create_runtime_task(hass, video_relay.stop())
             ports.release()
             raise
-
-    def _caller_matches_member(
-        caller: str,
-        source_host: str,
-        member: str,
-        peers: list[Peer],
-        *,
-        source_endpoint_id: str = "",
-    ) -> bool:
-        if _same_route_name(member, caller):
-            return True
-        peer = _peer_for_target(member, peers)
-        if source_endpoint_id:
-            return bool(
-                peer is not None
-                and peer.endpoint_id
-                and peer.endpoint_id == source_endpoint_id
-            )
-        if peer is None or not peer.host or peer.host != source_host:
-            return False
-        # A transport address is not a SIP identity: several registered phones
-        # can legitimately share one host/NAT.  Retain the legacy ESPHome host
-        # fallback only when that address identifies exactly one peer.
-        return (
-            sum(1 for candidate in peers if candidate.host == source_host) == 1
-        )
 
     def _publish_pending_ha_softphone_ringing(
         invite: SipInvite,

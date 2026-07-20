@@ -50,6 +50,7 @@ DTMF_EVENTS = ROOT / "custom_components" / "voip_stack" / "dtmf_events.py"
 CONFIG_ENTRY_RUNTIME = (
     ROOT / "custom_components" / "voip_stack" / "config_entry_runtime.py"
 )
+PBX_ROUTING = ROOT / "custom_components" / "voip_stack" / "pbx_routing.py"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -65,6 +66,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.outbound_attempts = OUTBOUND_ATTEMPTS.read_text()
         cls.dtmf_events = DTMF_EVENTS.read_text()
         cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
+        cls.pbx_routing = PBX_ROUTING.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -1019,7 +1021,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             self.assertNotIn("CONF_TRUNK_DTMF_ROUTES", source)
             self.assertNotIn("trunk_dtmf_routes", source)
             self.assertNotIn("parse_dtmf_route_map", source)
-        self.assertIn("def _dtmf_extension_routes(entries)", self.source)
+        self.assertIn("def dtmf_extension_routes(", self.pbx_routing)
         self.assertIn("routes = _dtmf_extension_routes(roster_entries)", self.source)
         self.assertIn("route_hint = destination or digits", self.source)
         trunk_route = self.source[
@@ -1089,17 +1091,11 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn('"answer",', forward)
         self.assertIn("initial_selection=True", trunk_route)
 
-        browser_policy = self.source[
-            self.source.index("def _browser_endpoint_can_ring(") : self.source.index(
-                "def _logical_endpoint_for_member("
-            )
-        ]
-        self.assertIn("not endpoint.dnd", browser_policy)
+        self.assertIn("def browser_endpoint_can_ring(", self.pbx_routing)
         self.assertIn(
-            "endpoint.availability is not EndpointAvailability.UNAVAILABLE",
-            browser_policy,
+            "Browser presence is media availability, not phone existence",
+            self.pbx_routing,
         )
-        self.assertNotIn("EndpointAvailability.AVAILABLE", browser_policy)
 
     def test_initial_automation_can_select_the_default_ha_phone(self) -> None:
         forward = self.source[
@@ -1243,7 +1239,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     def test_local_loop_detection_uses_host_and_listener_port(self) -> None:
         helper = self.source[
             self.source.index("def _is_local_listener_uri(") : self.source.index(
-                "def _roster_entry_for_target("
+                "async def _start_local_assist_bridge("
             )
         ]
         self.assertIn("uri.host == local_ip", helper)
