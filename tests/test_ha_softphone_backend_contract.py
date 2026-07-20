@@ -21,6 +21,9 @@ ESPHOME_STATE_BRIDGE = (
     ROOT / "custom_components" / "voip_stack" / "esphome_state_bridge.py"
 )
 CALL_SCOPE = ROOT / "custom_components" / "voip_stack" / "call_scope.py"
+SERVICE_ENDPOINTS = (
+    ROOT / "custom_components" / "voip_stack" / "service_endpoints.py"
+)
 SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
@@ -49,6 +52,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         cls.outbound_lifecycle = OUTBOUND_LIFECYCLE.read_text()
         cls.esphome_state_bridge = ESPHOME_STATE_BRIDGE.read_text()
         cls.call_scope = CALL_SCOPE.read_text()
+        cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
@@ -689,10 +693,12 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("endpoint_id = new_sip_account_endpoint_id()", guarded)
 
     def test_dnd_targets_browser_and_registered_sip_phone_devices(self) -> None:
-        configured_start = self.source.index("def _service_configured_endpoint(")
-        configured = self.source[
-            configured_start : self.source.index(
-                "def _browser_endpoint_name(", configured_start
+        configured_start = self.service_endpoints.index(
+            "def service_configured_endpoint("
+        )
+        configured = self.service_endpoints[
+            configured_start : self.service_endpoints.index(
+                "def browser_endpoint_name(", configured_start
             )
         ]
         self.assertIn("EndpointKind.BROWSER", configured)

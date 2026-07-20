@@ -29,6 +29,7 @@ ICONS_JSON = ROOT / "custom_components" / "voip_stack" / "icons.json"
 CONFIG_FLOW = ROOT / "custom_components" / "voip_stack" / "config_flow.py"
 STRINGS_JSON = ROOT / "custom_components" / "voip_stack" / "strings.json"
 AUTOMATION_ROUTING = ROOT / "custom_components" / "voip_stack" / "automation_routing.py"
+SERVICE_ENDPOINTS = ROOT / "custom_components" / "voip_stack" / "service_endpoints.py"
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -36,6 +37,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = BACKEND.read_text()
         cls.init_source = INIT.read_text()
+        cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -197,23 +199,25 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     def test_call_service_does_not_confuse_esp_target_with_browser_source(
         self,
     ) -> None:
-        start = self.init_source.index("def _service_browser_endpoint(")
-        body = self.init_source[
-            start : self.init_source.index(
-                "def _browser_endpoint_name(", start
+        start = self.service_endpoints.index("def service_browser_endpoint(")
+        body = self.service_endpoints[
+            start : self.service_endpoints.index(
+                "def service_configured_endpoint(", start
             )
         ]
 
         self.assertIn('source_device_id = call.data.get("source_device_id")', body)
         self.assertIn("def _browser_selectors(", body)
-        self.assertIn('call.data.get("device_id"), "by_device_id"', body)
-        self.assertIn('call.data.get("entity_id"), "by_entity_id"', body)
+        self.assertIn('call.data.get("device_id")', body)
+        self.assertIn('call.data.get("entity_id")', body)
+        self.assertIn('"by_device_id"', body)
+        self.assertIn('"by_entity_id"', body)
         self.assertIn(
             'getattr(endpoint, "kind", None) is EndpointKind.BROWSER', body
         )
         self.assertIn("device_id=selected_device_ids", body)
         self.assertIn("entity_id=selected_entity_ids", body)
-        self.assertIn("keeps an ESPHome Device target", body)
+        self.assertIn("Treat it as the browser source only", body)
 
     def test_nested_ha_actions_preserve_service_context_and_exact_entity_scope(
         self,

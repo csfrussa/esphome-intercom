@@ -52,7 +52,6 @@ from .const import (
     DOMAIN,
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
-    HA_SOFTPHONE_ENDPOINT_ENTITY_ID,
     VOIP_STACK_RTP_PORT,
     VOIP_STACK_SIP_PORT,
     TRUNK_INBOUND_MODE_DIRECT,
@@ -97,8 +96,6 @@ from .sip_runtime import (
 from .audio_format import HA_TRUNK_AUDIO_FORMATS
 from .authorization import (
     async_require_service_admin,
-    async_require_service_entity_control,
-    async_require_service_endpoint_control,
 )
 from .peer_snapshot import (
     async_advertise_host as _ha_advertise_host,
@@ -108,7 +105,12 @@ from .phone_endpoint import (
     EndpointAvailability,
     EndpointKind,
     OfflinePolicy,
-    PhoneEndpoint,
+)
+from .service_endpoints import (
+    async_require_phone_service_control as _require_phone_service_control,
+    browser_endpoint_name as _browser_endpoint_name,
+    service_browser_endpoint as _service_browser_endpoint,
+    service_configured_endpoint as _service_configured_endpoint,
 )
 from .phone_config import (
     async_ensure_phone_subentries,
@@ -140,7 +142,6 @@ from .websocket_api import (
     _publish_ha_softphone_state,
     _set_ha_softphone_call_state,
     _set_sip_bridge_call_state,
-    _endpoint_id_from_selector,
 )
 
 PLATFORMS: list[Platform] = [
@@ -384,229 +385,6 @@ async def _resolve_source_device_from_call(hass: HomeAssistant, call: ServiceCal
         ):
             return device
     return None
-
-
-def _service_browser_endpoint(
-    hass: HomeAssistant,
-    call: ServiceCall,
-    *,
-    strict: bool = False,
-):
-    """Resolve the logical HA/browser phone originating a service action."""
-    registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
-    explicit_endpoint_id = call.data.get("endpoint_id")
-    source_device_id = call.data.get("source_device_id")
-
-    def _values(raw: object) -> tuple[str, ...]:
-        if isinstance(raw, (list, tuple, set, frozenset)):
-            values = raw
-        else:
-            values = (raw,)
-        return tuple(
-            text
-            for value in values
-            if (text := str(value or "").strip())
-        )
-
-    def _browser_selectors(raw: object, lookup_name: str) -> tuple[str, ...]:
-        lookup = getattr(registry, lookup_name, None)
-        selected: list[str] = []
-        for value in _values(raw):
-            if value in {HA_SOFTPHONE_DEVICE_ID, HA_SOFTPHONE_ENDPOINT_ENTITY_ID}:
-                selected.append(value)
-                continue
-            endpoint = lookup(value) if callable(lookup) else None
-            if endpoint is None and lookup_name == "by_entity_id" and registry is not None:
-                try:
-                    from homeassistant.helpers import entity_registry as er
-
-                    entity_entry = er.async_get(hass).async_get(value)
-                except (AttributeError, ImportError):
-                    entity_entry = None
-                device_id = str(getattr(entity_entry, "device_id", "") or "")
-                endpoint = registry.by_device_id(device_id) if device_id else None
-            if getattr(endpoint, "kind", None) is EndpointKind.BROWSER:
-                selected.append(value)
-        return tuple(selected)
-
-    selected_device_ids = _browser_selectors(source_device_id, "by_device_id")
-    if not selected_device_ids:
-        # ``device_id`` is also Home Assistant's historical target selector.
-        # Treat it as the browser source only when it actually resolves to a
-        # browser phone. This keeps an ESPHome Device target from being
-        # mistaken for the logical HA phone originating the command.
-        selected_device_ids = _browser_selectors(
-            call.data.get("device_id"), "by_device_id"
-        )
-    selected_entity_ids = _browser_selectors(
-        call.data.get("entity_id"), "by_entity_id"
-    )
-    if strict and not explicit_endpoint_id:
-        supplied_device_ids = _values(
-            source_device_id or call.data.get("device_id")
-        )
-        supplied_entity_ids = _values(call.data.get("entity_id"))
-        if (
-            supplied_device_ids
-            and not selected_device_ids
-            or supplied_entity_ids
-            and not selected_entity_ids
-        ):
-            from homeassistant.exceptions import ServiceValidationError
-
-            raise ServiceValidationError(
-                "The selected Device or Entity is not a Home Assistant browser phone"
-            )
-    try:
-        endpoint_id = _endpoint_id_from_selector(
-            hass,
-            endpoint_id=explicit_endpoint_id,
-            device_id=selected_device_ids,
-            entity_id=selected_entity_ids,
-        )
-    except ValueError as err:
-        from homeassistant.exceptions import ServiceValidationError
-
-        raise ServiceValidationError(str(err)) from err
-    endpoint = None
-    get_endpoint = getattr(registry, "get", None)
-    if callable(get_endpoint):
-        try:
-            endpoint = get_endpoint(endpoint_id)
-        except (KeyError, ValueError):
-            endpoint = None
-    if endpoint is not None and getattr(endpoint, "kind", None) is not EndpointKind.BROWSER:
-        endpoint = None
-    return endpoint_id, endpoint
-
-
-def _service_configured_endpoint(hass: HomeAssistant, call: ServiceCall):
-    """Resolve one integration-owned browser or registrar-account phone."""
-    from homeassistant.exceptions import ServiceValidationError
-
-    registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
-
-    def _values(raw: object) -> tuple[str, ...]:
-        if isinstance(raw, (list, tuple, set, frozenset)):
-            values = raw
-        else:
-            values = (raw,)
-        return tuple(
-            text
-            for value in values
-            if (text := str(value or "").strip())
-        )
-
-    explicit = str(call.data.get("endpoint_id") or "").strip()
-    selected: dict[str, object] = {}
-    unresolved: list[str] = []
-    if explicit:
-        endpoint = registry.get(explicit) if registry is not None else None
-        if endpoint is None and explicit.casefold() == DEFAULT_ENDPOINT_ID:
-            endpoint = registry.get(DEFAULT_ENDPOINT_ID) if registry is not None else None
-        if endpoint is None and registry is not None:
-            unresolved.append(explicit)
-        elif endpoint is not None:
-            selected[endpoint.endpoint_id] = endpoint
-
-    for lookup_name, raw, legacy in (
-        ("by_device_id", call.data.get("device_id"), HA_SOFTPHONE_DEVICE_ID),
-        (
-            "by_entity_id",
-            call.data.get("entity_id"),
-            HA_SOFTPHONE_ENDPOINT_ENTITY_ID,
-        ),
-    ):
-        lookup = getattr(registry, lookup_name, None)
-        for value in _values(raw):
-            if value == legacy:
-                if registry is None:
-                    continue
-                endpoint = registry.get(DEFAULT_ENDPOINT_ID)
-            else:
-                endpoint = lookup(value) if callable(lookup) else None
-                if endpoint is None and lookup_name == "by_entity_id" and registry is not None:
-                    try:
-                        from homeassistant.helpers import entity_registry as er
-
-                        entity_entry = er.async_get(hass).async_get(value)
-                    except (AttributeError, ImportError):
-                        entity_entry = None
-                    device_id = str(getattr(entity_entry, "device_id", "") or "")
-                    endpoint = registry.by_device_id(device_id) if device_id else None
-            if endpoint is None:
-                unresolved.append(value)
-                continue
-            selected[endpoint.endpoint_id] = endpoint
-
-    if registry is None:
-        if unresolved or (explicit and explicit.casefold() != DEFAULT_ENDPOINT_ID):
-            raise ServiceValidationError("Unknown Home Assistant phone selector")
-        return DEFAULT_ENDPOINT_ID, None
-    if unresolved:
-        raise ServiceValidationError(
-            "Unknown Home Assistant phone selector: " + ", ".join(unresolved)
-        )
-    if not selected:
-        endpoint = registry.get(DEFAULT_ENDPOINT_ID)
-        if endpoint is None:
-            raise ServiceValidationError("The default Home Assistant phone is unavailable")
-        selected[endpoint.endpoint_id] = endpoint
-    if len(selected) != 1:
-        raise ServiceValidationError(
-            "Selected endpoint, Device and Entity do not identify the same phone"
-        )
-    endpoint = next(iter(selected.values()))
-    if endpoint.kind not in {EndpointKind.BROWSER, EndpointKind.SIP_ACCOUNT}:
-        raise ServiceValidationError(
-            "The selected Device or Entity is not an integration-owned phone"
-        )
-    return endpoint.endpoint_id, endpoint
-
-
-def _browser_endpoint_name(hass: HomeAssistant, endpoint_id: str, endpoint=None) -> str:
-    return str(getattr(endpoint, "name", "") or _ha_peer_name(hass)).strip()
-
-
-async def _require_phone_service_control(
-    hass: HomeAssistant,
-    call: ServiceCall,
-    *,
-    endpoint=None,
-    device: dict | None = None,
-    action_entity_ids: tuple[str, ...] | None = None,
-) -> None:
-    """Apply per-phone HA permissions after the integration-wide boundary."""
-    if endpoint is None and device is not None:
-        registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
-        endpoint = (
-            registry.by_device_id(str(device.get("device_id") or ""))
-            if registry is not None
-            else None
-        )
-        if endpoint is None:
-            device_id = str(device.get("device_id") or "").strip()
-            entities = frozenset(
-                str(value)
-                for value in (device.get("entities") or {}).values()
-                if isinstance(value, str) and "." in value
-            )
-            # Device resolution can precede roster discovery, so the volatile
-            # registry may not contain this ESP yet. Authorize against an
-            # ephemeral phone descriptor instead of falling back to the
-            # integration-wide event entity (which would be fail-open).
-            endpoint = PhoneEndpoint(
-                endpoint_id=str(device.get("endpoint_id") or f"esphome:{device_id}"),
-                name=str(device.get("name") or device_id or "ESP phone"),
-                kind=EndpointKind.ESPHOME,
-                device_id=device_id,
-                entity_ids=entities,
-                capabilities=frozenset({"audio", "dtmf"}),
-            )
-    if endpoint is not None:
-        await async_require_service_endpoint_control(hass, call, endpoint)
-    if action_entity_ids is not None:
-        await async_require_service_entity_control(hass, call, action_entity_ids)
 
 
 def _bind_service_call_controller(
