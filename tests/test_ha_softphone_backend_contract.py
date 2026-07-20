@@ -11,6 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 ENDPOINT_RUNTIME = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
+MEDIA_RENEGOTIATION = (
+    ROOT / "custom_components" / "voip_stack" / "media_renegotiation.py"
+)
 SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
@@ -260,10 +263,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("audio_session.recv_format = updated.recv_format", outbound)
         self.assertNotIn("audio_contract_changed", outbound)
 
-        endpoint_runtime = ENDPOINT_RUNTIME.read_text()
-        inbound = endpoint_runtime.split("    async def _on_media_update(", 1)[1].split(
-            "\n    async def _on_terminated", 1
-        )[0]
+        inbound = MEDIA_RENEGOTIATION.read_text()
         self.assertIn("audio_session.send_format = updated.send_format", inbound)
         self.assertIn("audio_session.recv_format = updated.recv_format", inbound)
         self.assertNotIn("audio_contract_changed", inbound)
@@ -566,10 +566,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         )[0]
         self.assertNotIn("invite.video_format", authorization)
 
-        endpoint_runtime = ENDPOINT_RUNTIME.read_text()
-        start = endpoint_runtime.index("    async def _on_media_update(")
-        end = endpoint_runtime.index("\n    async def _on_terminated", start)
-        media_update = endpoint_runtime[start:end]
+        media_update = MEDIA_RENEGOTIATION.read_text()
         self.assertIn(
             'allow_video_send = bool(media.get("camera_send_authorized", False))',
             media_update,

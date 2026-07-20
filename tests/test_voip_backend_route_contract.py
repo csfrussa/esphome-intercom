@@ -11,6 +11,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "custom_components" / "voip_stack" / "endpoint_runtime.py"
+MEDIA_RENEGOTIATION = (
+    ROOT / "custom_components" / "voip_stack" / "media_renegotiation.py"
+)
 INIT = ROOT / "custom_components" / "voip_stack" / "__init__.py"
 AUDIO_WS = ROOT / "custom_components" / "voip_stack" / "audio_ws_view.py"
 CARD_JS = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
@@ -1774,9 +1777,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         video_ws = (
             ROOT / "custom_components" / "voip_stack" / "video_ws_view.py"
         ).read_text()
-        start = self.source.index("async def _commit_softphone_update()")
-        commit = self.source[
-            start : self.source.index("return SipInviteResult(", start)
+        media_update = MEDIA_RENEGOTIATION.read_text()
+        start = media_update.index("async def _commit_softphone_update()")
+        commit = media_update[
+            start : media_update.index("return SipInviteResult(", start)
         ]
         self.assertIn("registry.video_parameter_sets.pop(call_id, None)", commit)
         self.assertIn("video_session.remote_video_payload_types = tuple(", commit)
