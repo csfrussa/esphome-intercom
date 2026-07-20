@@ -1831,7 +1831,7 @@ async def websocket_ha_softphone_start(
         connection.send_error(msg["id"], "target_required", "SIP target is required")
         return
     try:
-        await hass.services.async_call(
+        result = await hass.services.async_call(
             DOMAIN,
             "call",
             {
@@ -1844,13 +1844,14 @@ async def websocket_ha_softphone_start(
             },
             blocking=True,
             context=connection.context(msg),
+            return_response=True,
         )
     except Exception as err:
         connection.send_error(msg["id"], "sip_call_failed", str(err))
         return
     connection.send_result(
         msg["id"],
-        {"success": True, **_ha_softphone_state(hass, endpoint_id)},
+        result or {"success": True, **_ha_softphone_state(hass, endpoint_id)},
     )
 
 

@@ -256,6 +256,42 @@ class SipVideoRelayTests(unittest.TestCase):
             )
         )
 
+    def test_peer_reconfiguration_is_staged_until_commit(self) -> None:
+        replacement = VideoRtpPeer(
+            "10.0.0.9", 19000, 19001, _format(120)
+        )
+
+        commit = self.relay.prepare_peer_reconfiguration("left", replacement)
+
+        self.assertIs(self.relay.left, self.left)
+        commit()
+        self.assertIs(self.relay.left, replacement)
+        self.assertIsNone(replacement.rx_ssrc)
+        self.assertIsNone(replacement.rtcp_source_port)
+
+    def test_stale_same_side_peer_reconfiguration_is_rejected(self) -> None:
+        first = VideoRtpPeer("10.0.0.9", 19000, 19001, _format(120))
+        second = VideoRtpPeer("10.0.0.10", 20000, 20001, _format(121))
+        stale_commit = self.relay.prepare_peer_reconfiguration("left", first)
+
+        self.relay.reconfigure_peer("left", second)
+
+        with self.assertRaisesRegex(RuntimeError, "video relay peer changed"):
+            stale_commit()
+        self.assertIs(self.relay.left, second)
+
+    def test_opposite_side_staged_reconfigurations_commit_independently(self) -> None:
+        left = VideoRtpPeer("10.0.0.9", 19000, 19001, _format(120))
+        right = VideoRtpPeer("10.0.0.10", 20000, 20001, _format(121))
+        commit_left = self.relay.prepare_peer_reconfiguration("left", left)
+        commit_right = self.relay.prepare_peer_reconfiguration("right", right)
+
+        commit_left()
+        commit_right()
+
+        self.assertIs(self.relay.left, left)
+        self.assertIs(self.relay.right, right)
+
     def test_vp8_receiver_limits_differ_while_rtp_relays_both_directions(self) -> None:
         self.left.video_format = RtpVideoFormat(
             payload_type=103,

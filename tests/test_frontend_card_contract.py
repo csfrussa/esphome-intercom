@@ -130,9 +130,12 @@ class FrontendCardContractTest(unittest.TestCase):
             "wanted.endpoint_id === DEFAULT_SOFTPHONE_ENDPOINT_ID",
             session_model,
         )
-        self.assertIn('target_device_id: target.device_id || ""', start)
-        self.assertIn("request.endpoint_id = endpointId", start)
-        self.assertIn("request.device_id = deviceId", start)
+        self.assertIn('type: "call_service"', start)
+        self.assertIn('domain: "voip_stack"', start)
+        self.assertIn('service: "call"', start)
+        self.assertIn("return_response: true", start)
+        self.assertIn("request.service_data.endpoint_id = endpointId", start)
+        self.assertIn("request.service_data.source_device_id = deviceId", start)
         self.assertIn("endpoint_id=${encodeURIComponent", audio_url)
         self.assertIn("endpoint_id=${encodeURIComponent", video)
 

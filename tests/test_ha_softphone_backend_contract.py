@@ -81,6 +81,17 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("TerminalReason.LOCAL_HANGUP.value", state_update)
         self.assertIn("last_sip_event=", state_update)
 
+    def test_call_service_exposes_optional_native_ha_response(self) -> None:
+        services = SERVICES.read_text()
+        handler = _function_body(self.source, "_handle_sip_call_target_service")
+
+        registration = services.split('DOMAIN,\n        "call",', 1)[1].split(
+            ")\n", 1
+        )[0]
+        self.assertIn("supports_response=SupportsResponse.OPTIONAL", registration)
+        self.assertIn("if not call.return_response", handler)
+        self.assertIn("_ha_softphone_state(call.hass, endpoint_id)", handler)
+
     def test_hangup_does_not_depend_on_card_side_inference(self) -> None:
         body = _function_body(
             self.softphone_termination, "async_hangup_browser_call"

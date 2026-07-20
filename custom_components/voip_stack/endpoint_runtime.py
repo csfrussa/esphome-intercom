@@ -302,6 +302,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 return None
             call_generation = session.generation
             try:
+                previous_audio_peer = relay.right
                 commit_audio = relay.prepare_peer_reconfiguration(
                     "right", dialog_rtp_peer(updated)
                 )
@@ -309,11 +310,15 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 return None
 
             video_relay = getattr(relay, "video_relay", None)
+            previous_video_peer = (
+                video_relay.right if video_relay is not None else None
+            )
             previous_video = previous.video_format
             updated_video = updated.video_format
             if (previous_video is None) != (updated_video is None):
                 return None
             next_video_peer = None
+            commit_video = None
             if updated_video is not None:
                 next_video_peer = dialog_video_rtp_peer(updated)
                 if (
@@ -329,6 +334,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     or updated.remote_video_rtp_port <= 0
                 ):
                     return None
+                commit_video = video_relay.prepare_peer_reconfiguration(
+                    "right", next_video_peer
+                )
 
             async def _commit() -> None:
                 if not registry.is_generation_current(
@@ -337,9 +345,17 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     raise RuntimeError(
                         "SIP bridge media update belongs to a terminated call"
                     )
+                if relay.right is not previous_audio_peer or (
+                    video_relay is not None
+                    and previous_video_peer is not None
+                    and video_relay.right is not previous_video_peer
+                ):
+                    raise RuntimeError(
+                        "SIP bridge media owner changed before commit"
+                    )
                 commit_audio()
-                if video_relay is not None and next_video_peer is not None:
-                    video_relay.reconfigure_peer("right", next_video_peer)
+                if commit_video is not None:
+                    commit_video()
                 _LOGGER.info(
                     "SIP bridge outbound %s committed source_call_id=%s dest_call_id=%s remote_rtp=%s:%s audio_direction=%s video_direction=%s",
                     method,

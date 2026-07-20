@@ -509,8 +509,12 @@ assert.equal(sockets[0].url, "wss://ha.example/B");
 // compensated with an exact-call hangup and is never claimed by the engine.
 const superseded = new Engine();
 const supersededServices = [];
+const supersededRequests = [];
 superseded._hass = {{
-  callWS: async () => ({{ state: "calling", call_id: "orphan-B" }}),
+  callWS: async (request) => {{
+    supersededRequests.push(request);
+    return {{ response: {{ state: "calling", call_id: "orphan-B" }} }};
+  }},
   callService: async (...args) => supersededServices.push(args),
 }};
 const staleReply = await superseded.startHaSoftphone(
@@ -520,6 +524,11 @@ const staleReply = await superseded.startHaSoftphone(
 );
 assert.equal(staleReply.superseded, true);
 assert.equal(superseded.softphoneCallId, "");
+assert.equal(supersededRequests[0].type, "call_service");
+assert.equal(supersededRequests[0].domain, "voip_stack");
+assert.equal(supersededRequests[0].service, "call");
+assert.equal(supersededRequests[0].return_response, true);
+assert.equal(supersededRequests[0].service_data.target, "peer");
 assert.equal(supersededServices.length, 1);
 assert.equal(supersededServices[0][2].call_id, "orphan-B");
 

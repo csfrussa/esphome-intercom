@@ -296,16 +296,32 @@ class SipVideoRtpRelay:
     def _peers(self, side: str) -> tuple[VideoRtpPeer, VideoRtpPeer]:
         return (self.left, self.right) if side == "left" else (self.right, self.left)
 
-    def reconfigure_peer(self, side: str, peer: VideoRtpPeer) -> None:
-        """Atomically replace one negotiated video peer and reset its latch."""
+    def prepare_peer_reconfiguration(
+        self, side: str, peer: VideoRtpPeer
+    ) -> Callable[[], None]:
+        """Stage one video peer update and reject a stale commit."""
 
         if side not in {"left", "right"}:
             raise ValueError(f"unknown video relay side: {side}")
-        peer.rx_ssrc = None
-        if side == "left":
-            self.left = peer
-        else:
-            self.right = peer
+        previous = self.left if side == "left" else self.right
+
+        def _commit() -> None:
+            current = self.left if side == "left" else self.right
+            if current is not previous:
+                raise RuntimeError(f"video relay peer changed before {side} commit")
+            peer.rx_ssrc = None
+            peer.rtcp_source_port = None
+            if side == "left":
+                self.left = peer
+            else:
+                self.right = peer
+
+        return _commit
+
+    def reconfigure_peer(self, side: str, peer: VideoRtpPeer) -> None:
+        """Atomically replace one negotiated video peer and reset its latch."""
+
+        self.prepare_peer_reconfiguration(side, peer)()
 
     def handle_rtp(self, side: str, data: bytes, addr) -> None:
         source, destination = self._peers(side)

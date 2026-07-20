@@ -70,6 +70,47 @@ _PUBLIC_PHASES: dict[str, SessionPhase] = {
     "transferring": SessionPhase.TRANSFERRING,
 }
 
+_OBSERVED_PHASE_TRANSITIONS: dict[SessionPhase, frozenset[SessionPhase]] = {
+    SessionPhase.NEW: frozenset(
+        {
+            SessionPhase.ROUTING,
+            SessionPhase.CALLING,
+            SessionPhase.RINGING,
+            SessionPhase.CONNECTING,
+            SessionPhase.ESTABLISHED,
+        }
+    ),
+    SessionPhase.ROUTING: frozenset(
+        {
+            SessionPhase.CALLING,
+            SessionPhase.RINGING,
+            SessionPhase.CONNECTING,
+            SessionPhase.ESTABLISHED,
+        }
+    ),
+    SessionPhase.CALLING: frozenset(
+        {
+            SessionPhase.RINGING,
+            SessionPhase.CONNECTING,
+            SessionPhase.ESTABLISHED,
+        }
+    ),
+    SessionPhase.RINGING: frozenset(
+        {SessionPhase.CONNECTING, SessionPhase.ESTABLISHED}
+    ),
+    # A failed forward may deliberately resume the original ringing endpoint.
+    SessionPhase.CONNECTING: frozenset(
+        {SessionPhase.RINGING, SessionPhase.ESTABLISHED}
+    ),
+    SessionPhase.ESTABLISHED: frozenset(
+        {SessionPhase.HELD, SessionPhase.TRANSFERRING}
+    ),
+    SessionPhase.HELD: frozenset(
+        {SessionPhase.ESTABLISHED, SessionPhase.TRANSFERRING}
+    ),
+    SessionPhase.TRANSFERRING: frozenset({SessionPhase.ESTABLISHED}),
+}
+
 _PUBLIC_LEG_PHASES: dict[str, LegPhase] = {
     "new": LegPhase.NEW,
     "calling": LegPhase.INVITING,
@@ -295,8 +336,20 @@ class SipEndpointRuntime:
         next_phase = _PUBLIC_PHASES.get(str(state or "").strip())
         changed = False
         if next_phase is not None and session.phase is not next_phase:
-            session.phase = next_phase
-            changed = True
+            if next_phase in _OBSERVED_PHASE_TRANSITIONS.get(
+                session.phase, frozenset()
+            ):
+                session.phase = next_phase
+                changed = True
+            else:
+                _LOGGER.debug(
+                    "Ignoring stale PBX call phase call_id=%s generation=%s "
+                    "current=%s observed=%s",
+                    session.call_id,
+                    session.generation,
+                    session.phase.value,
+                    next_phase.value,
+                )
         clean_metadata = {
             key: value for key, value in metadata.items() if value not in (None, "")
         }

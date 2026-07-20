@@ -279,7 +279,13 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     hass.services.async_register(DOMAIN, "answer", handler_for("answer"), schema=sip_answer_schema)
     hass.services.async_register(DOMAIN, "decline", handler_for("decline"), schema=sip_decline_schema)
     hass.services.async_register(DOMAIN, "hangup", handler_for("hangup"), schema=sip_hangup_schema)
-    hass.services.async_register(DOMAIN, "call", handler_for("call"), schema=sip_call_schema)
+    hass.services.async_register(
+        DOMAIN,
+        "call",
+        handler_for("call"),
+        schema=sip_call_schema,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     hass.services.async_register(DOMAIN, "forward", handler_for("forward"), schema=sip_forward_schema)
     hass.services.async_register(DOMAIN, "route", handler_for("route"), schema=sip_route_schema)
     hass.services.async_register(

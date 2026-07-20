@@ -256,6 +256,29 @@ class SipEndpointRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("pbx_phase", authoritative.metadata)
         self.assertEqual(projected.metadata["pbx_phase"], "ringing")
 
+    async def test_late_public_state_cannot_regress_established_call(self) -> None:
+        runtime = SipEndpointRuntime()
+        runtime.activate()
+        session = runtime.create_session("call-1")
+
+        self.assertTrue(runtime.observe_call("call-1", state="in_call"))
+        self.assertTrue(runtime.observe_call("call-1", state="ringing"))
+
+        self.assertIs(session.phase, SessionPhase.ESTABLISHED)
+
+    async def test_connecting_call_can_return_to_ringing_after_failed_forward(
+        self,
+    ) -> None:
+        runtime = SipEndpointRuntime()
+        runtime.activate()
+        session = runtime.create_session("call-1")
+
+        self.assertTrue(runtime.observe_call("call-1", state="ringing"))
+        self.assertTrue(runtime.observe_call("call-1", state="connecting"))
+        self.assertTrue(runtime.observe_call("call-1", state="ringing"))
+
+        self.assertIs(session.phase, SessionPhase.RINGING)
+
     async def test_runtime_component_can_be_adopted_after_activation(self) -> None:
         runtime = SipEndpointRuntime()
         runtime.activate()

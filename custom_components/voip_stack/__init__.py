@@ -87,6 +87,7 @@ from .websocket_api import (
     async_register_websocket_api,
     _async_load_ha_softphone_store,
     _get_voip_devices,
+    _ha_softphone_state,
     async_set_ha_softphone_settings,
 )
 
@@ -245,8 +246,14 @@ async def _handle_sip_call_target_service(
     call: ServiceCall,
     *,
     force_ha_bridge: bool = False,
-) -> None:
+) -> dict[str, object] | None:
     await _originate_call(call, force_ha_bridge=force_ha_bridge)
+    if not call.return_response:
+        return None
+    endpoint_id, endpoint = _service_browser_endpoint(call.hass, call)
+    if endpoint is None and not call.data.get("endpoint_id"):
+        return {"success": True}
+    return {"success": True, **_ha_softphone_state(call.hass, endpoint_id)}
 
 
 async def _handle_sip_route_service(call: ServiceCall) -> None:

@@ -1230,17 +1230,21 @@ class VoipStackEngine extends EventTarget {
     if (!endpointId && !deviceId) endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID;
     if (!deviceId && endpointId === DEFAULT_SOFTPHONE_ENDPOINT_ID) deviceId = HA_SOFTPHONE_DEVICE_ID;
     const request = {
-      type: "voip_stack/ha_softphone_start",
-      target_device_id: target.device_id || "",
-      target_name: context.callee || target.name || "",
-      callee: context.callee || target.name || "",
-      call_id: context.call_id || "",
-      send_video: Boolean(context.sendVideo),
-      media_client_id: this._mediaClientId,
+      type: "call_service",
+      domain: "voip_stack",
+      service: "call",
+      return_response: true,
+      service_data: {
+        target: context.callee || target.name || target.device_id || "",
+        call_id: context.call_id || "",
+        send_video: Boolean(context.sendVideo),
+        media_client_id: this._mediaClientId,
+      },
     };
-    if (endpointId) request.endpoint_id = endpointId;
-    if (deviceId) request.device_id = deviceId;
-    const reply = await this._hass.callWS(request);
+    if (endpointId) request.service_data.endpoint_id = endpointId;
+    if (deviceId) request.service_data.source_device_id = deviceId;
+    const serviceReply = await this._hass.callWS(request);
+    const reply = serviceReply?.response || serviceReply || {};
     endpointId = String(reply?.endpoint_id || endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
     deviceId = String(reply?.device_id || deviceId || HA_SOFTPHONE_DEVICE_ID);
     const state = String(reply?.state || "").toLowerCase();

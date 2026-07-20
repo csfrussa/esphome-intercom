@@ -27,7 +27,7 @@ from .sdp import (
     constrained_video_direction,
     offered_dtmf_formats,
 )
-from .sip_bridge import invite_rtp_peer
+from .sip_bridge import invite_rtp_peer, invite_video_rtp_peer
 from .sip_listener import SipInvite, SipInviteResult
 from .sip_video_relay import remote_can_receive, remote_can_send
 from .websocket_api import _fire_call_event, _ha_softphone_store
@@ -437,6 +437,10 @@ async def async_prepare_media_update(
             call_id in registry.relays,
         )
         return SipInviteResult(488, "Not Acceptable Here")
+    session = registry.sessions.get(registry.resolve_session_id(call_id))
+    if session is None:
+        return SipInviteResult(481, "Call/Transaction Does Not Exist")
+    call_generation = session.generation
     right_peer = relay.right
     audio_direction = constrained_media_direction(
         updated.remote_audio_direction,
@@ -507,23 +511,36 @@ async def async_prepare_media_update(
         video_format=updated.answer_video_format,
         video_direction=video_direction,
     )
+    try:
+        previous_audio_peer = relay.left
+        commit_audio = relay.prepare_peer_reconfiguration(
+            "left", invite_rtp_peer(updated)
+        )
+        previous_video_peer = video_relay.left if video_relay is not None else None
+        commit_video = (
+            video_relay.prepare_peer_reconfiguration(
+                "left", invite_video_rtp_peer(updated)
+            )
+            if video_relay is not None and updated.video_format is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        return SipInviteResult(488, "Not Acceptable Here")
 
     async def _commit_relay_update() -> None:
-        relay.reconfigure_peer("left", invite_rtp_peer(updated))
-        if video_relay is not None and updated.video_format is not None:
-            video_relay.left.host = updated.remote_video_rtp_host
-            video_relay.left.port = int(updated.remote_video_rtp_port)
-            video_relay.left.rtcp_host = (
-                updated.remote_video_rtcp_host or updated.remote_video_rtp_host
+        if not registry.is_generation_current(call_id, call_generation):
+            raise RuntimeError(
+                "SIP relay media update belongs to a terminated call"
             )
-            video_relay.left.rtcp_port = int(updated.remote_video_rtcp_port)
-            video_relay.left.video_format = updated.video_format
-            video_relay.left.local_video_format = updated.recv_video_format
-            video_relay.left.signaling_host = updated.source_host
-            video_relay.left.connection_held = bool(
-                updated.remote_video_connection_held
-            )
-            video_relay.left.rx_ssrc = None
+        if relay.left is not previous_audio_peer or (
+            video_relay is not None
+            and previous_video_peer is not None
+            and video_relay.left is not previous_video_peer
+        ):
+            raise RuntimeError("SIP relay media owner changed before commit")
+        commit_audio()
+        if commit_video is not None:
+            commit_video()
 
     return SipInviteResult(
         200, "OK", answer_sdp=answer, commit=_commit_relay_update
