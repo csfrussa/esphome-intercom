@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -10,9 +12,11 @@ from homeassistant.exceptions import ServiceValidationError
 
 from .call_scope import (
     call_belongs_to_endpoint,
+    endpoint_call_ids,
+    pending_routes,
     single_pending_route_call_id,
 )
-from .const import HA_SOFTPHONE_DEVICE_ID
+from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .endpoint_lifecycle import call_registry
 from .esphome_actions import (
     async_call_action,
@@ -25,7 +29,17 @@ from .service_endpoints import (
     browser_endpoint_name,
     service_browser_endpoint,
 )
-from .websocket_api import _ha_softphone_store
+from .fsm import TerminalReason
+from .media_ports import release_media_reservation
+from .route_decisions import set_pending_route_decision
+from .sip_runtime import send_bye, send_final_response
+from .websocket_api import (
+    _ha_softphone_store,
+    _set_ha_softphone_call_state,
+)
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,3 +178,147 @@ async def async_try_esp_end_call(
             f"{device.get('name') or 'ESP phone'} has no {missing_control}"
         )
     return True
+
+
+async def async_decline_browser_call(
+    hass: HomeAssistant,
+    call: ServiceCall,
+    command: BrowserCallCommand,
+) -> None:
+    """Decline one browser-phone leg without affecting sibling fork legs."""
+
+    endpoint_id = command.endpoint_id
+    call_id = command.call_id
+    registry = command.registry
+    status = int(call.data.get("status") or 486)
+    reason = str(call.data.get("reason") or "Busy Here").strip() or "Busy Here"
+    app_reason = str(call.data.get("decline_reason") or "").strip()
+    if not app_reason:
+        if status == 486:
+            app_reason = TerminalReason.BUSY.value
+        elif status == 487:
+            app_reason = TerminalReason.CANCELLED.value
+        elif status == 603:
+            app_reason = TerminalReason.DECLINED.value
+        else:
+            app_reason = reason or TerminalReason.DECLINED.value
+
+    from .local_softphone_bridge import LocalBridgeError
+    from .local_softphone_runtime import local_softphone_bridge
+
+    local_bridge = local_softphone_bridge(hass)
+    if local_bridge is not None and local_bridge.get_call(call_id) is not None:
+        try:
+            local_bridge.decline(call_id, endpoint_id)
+        except LocalBridgeError as err:
+            raise ServiceValidationError(str(err)) from err
+        return
+    if call_id.startswith("conference:"):
+        manager = hass.data.setdefault(DOMAIN, {}).get("conference_manager")
+        if manager is not None and await manager.decline_ha_softphone(
+            call_id,
+            endpoint_id,
+            reason=app_reason,
+        ):
+            return
+        raise ServiceValidationError(
+            f"conference call {call_id} is no longer ringing on phone {endpoint_id}"
+        )
+
+    # A browser member declining a ring group rejects only that B-leg. The
+    # fork controller remains authoritative until another leg wins or every
+    # candidate has completed.
+    if call_id and call_id in pending_routes(hass):
+        set_pending_route_decision(
+            hass,
+            {
+                "call_id": call_id,
+                "action": (
+                    "busy"
+                    if status == 486
+                    else "cancel"
+                    if status == 487
+                    else "decline"
+                ),
+                "status": status,
+                "reason": reason,
+                "decline_reason": app_reason,
+                "endpoint_id": endpoint_id,
+            },
+        )
+        return
+
+    forward_task = hass.data.setdefault(DOMAIN, {}).get("forward_tasks", {}).get(
+        call_id
+    )
+    if forward_task is not None and not forward_task.done():
+        forward_task.cancel()
+        await asyncio.gather(forward_task, return_exceptions=True)
+    pending = registry.pending_invites
+    endpoint_pending = endpoint_call_ids(registry, pending, endpoint_id)
+    if not call_id and len(endpoint_pending) == 1:
+        call_id = endpoint_pending[0]
+    pending.pop(call_id, None)
+    preanswered_item = registry.take_media(call_id, provisional=True) if call_id else None
+    if preanswered_item is not None:
+        release_media_reservation(preanswered_item)
+        final_response_sent = bool(preanswered_item.get("final_response_sent", True))
+        if final_response_sent:
+            send_bye(hass, call_id)
+        elif not send_final_response(
+            hass,
+            call_id,
+            status,
+            reason,
+            decline_reason=app_reason,
+        ):
+            _LOGGER.warning(
+                "sip_decline: early SIP transaction no longer exists for %s",
+                call_id,
+            )
+        _LOGGER.info(
+            "SIP declined %s trunk call_id=%s reason=%s",
+            "answered" if final_response_sent else "early-media",
+            call_id,
+            app_reason,
+        )
+        _set_ha_softphone_call_state(
+            hass,
+            "declined",
+            endpoint_id=endpoint_id,
+            session_device_id=command.device_id,
+            reason=app_reason,
+            call_id=call_id,
+            sip_status_code=status,
+            last_sip_event="BYE" if final_response_sent else "SIP_RESPONSE",
+        )
+        registry.finish_and_pop(call_id, reason=app_reason, state="declined")
+        return
+    if not call_id or not send_final_response(
+        hass,
+        call_id,
+        status,
+        reason,
+        decline_reason=app_reason,
+    ):
+        _LOGGER.warning("sip_decline: no pending SIP call %s", call_id or "(current)")
+        return
+
+    _LOGGER.info(
+        "SIP declined call_id=%s status=%s reason=%s app_reason=%s",
+        call_id,
+        status,
+        reason,
+        app_reason,
+    )
+    _set_ha_softphone_call_state(
+        hass,
+        "declined",
+        endpoint_id=endpoint_id,
+        session_device_id=command.device_id,
+        reason=app_reason,
+        call_id=call_id,
+        sip_status_code=status,
+        last_sip_event="SIP_RESPONSE",
+    )
+    registry.finish_and_pop(call_id, reason=app_reason, state="declined")

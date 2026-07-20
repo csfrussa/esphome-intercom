@@ -42,9 +42,11 @@ def softphone_commands(monkeypatch):
     dependencies = {
         "call_scope": {
             "call_belongs_to_endpoint": Mock(return_value=True),
+            "endpoint_call_ids": Mock(return_value=[]),
+            "pending_routes": Mock(return_value={}),
             "single_pending_route_call_id": Mock(return_value=""),
         },
-        "const": {"HA_SOFTPHONE_DEVICE_ID": "ha-device"},
+        "const": {"DOMAIN": "voip_stack", "HA_SOFTPHONE_DEVICE_ID": "ha-device"},
         "endpoint_lifecycle": {"call_registry": Mock()},
         "esphome_actions": {
             "async_call_action": AsyncMock(),
@@ -57,7 +59,29 @@ def softphone_commands(monkeypatch):
             "browser_endpoint_name": Mock(return_value="Casa"),
             "service_browser_endpoint": Mock(return_value=("default", None)),
         },
-        "websocket_api": {"_ha_softphone_store": Mock(return_value={})},
+        "fsm": {
+            "TerminalReason": SimpleNamespace(
+                BUSY=SimpleNamespace(value="busy"),
+                CANCELLED=SimpleNamespace(value="cancelled"),
+                DECLINED=SimpleNamespace(value="declined"),
+            )
+        },
+        "media_ports": {"release_media_reservation": Mock()},
+        "local_softphone_bridge": {
+            "LocalBridgeError": type("LocalBridgeError", (Exception,), {})
+        },
+        "local_softphone_runtime": {
+            "local_softphone_bridge": Mock(return_value=None)
+        },
+        "route_decisions": {"set_pending_route_decision": Mock()},
+        "sip_runtime": {
+            "send_bye": Mock(return_value=True),
+            "send_final_response": Mock(return_value=True),
+        },
+        "websocket_api": {
+            "_ha_softphone_store": Mock(return_value={}),
+            "_set_ha_softphone_call_state": Mock(),
+        },
     }
     for name, values in dependencies.items():
         dependency = types.ModuleType(f"{package_name}.{name}")
@@ -164,3 +188,35 @@ def test_bind_controller_converts_registry_conflict(softphone_commands) -> None:
             call,
             endpoint_id="kitchen",
         )
+
+
+def test_ring_group_decline_is_a_leg_decision(softphone_commands) -> None:
+    call = _call(status=486, reason="Busy Here")
+    registry = SimpleNamespace()
+    command = softphone_commands.BrowserCallCommand(
+        endpoint_id="kitchen",
+        endpoint=None,
+        endpoint_name="Cucina",
+        device_id="device-kitchen",
+        call_id="call-1",
+        registry=registry,
+    )
+    route = {"call-1": {"future": object()}}
+    softphone_commands.pending_routes = Mock(return_value=route)
+    softphone_commands.set_pending_route_decision = Mock()
+
+    asyncio.run(
+        softphone_commands.async_decline_browser_call(call.hass, call, command)
+    )
+
+    softphone_commands.set_pending_route_decision.assert_called_once_with(
+        call.hass,
+        {
+            "call_id": "call-1",
+            "action": "busy",
+            "status": 486,
+            "reason": "Busy Here",
+            "decline_reason": "busy",
+            "endpoint_id": "kitchen",
+        },
+    )

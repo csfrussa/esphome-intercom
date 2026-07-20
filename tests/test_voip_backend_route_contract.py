@@ -275,12 +275,11 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertLess(pending_route, forward_guard)
 
     def test_ring_group_decline_resolves_leg_before_forward_cancellation(self) -> None:
-        decline = self.init_source[
-            self.init_source.index("async def _handle_sip_decline_service(") :
-            self.init_source.index("async def _handle_sip_hangup_service(")
+        decline = self.softphone_commands[
+            self.softphone_commands.index("async def async_decline_browser_call(") :
         ]
         pending_route = decline.index(
-            "if call_id and call_id in _pending_routes(hass):"
+            "if call_id and call_id in pending_routes(hass):"
         )
         forward_cancel = decline.index("forward_task.cancel()")
         self.assertLess(pending_route, forward_cancel)
