@@ -424,7 +424,15 @@ def main() -> int:
             # startup instead of turning that harmless race into a false
             # qualification failure.
             page.reload(wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_function(f"() => Boolean(({DEEP_CARD})())", timeout=30_000)
+            try:
+                page.wait_for_function(f"() => Boolean(({DEEP_CARD})())", timeout=45_000)
+            except PlaywrightTimeoutError as err:
+                card_count = page.locator("voip-stack-card, intercom-card").count()
+                raise RuntimeError(
+                    "HA softphone card did not become ready after reload "
+                    f"(url={page.url!r}, card_count={card_count}, "
+                    f"console_tail={console[-10:]!r})"
+                ) from err
 
         def sample(label: str) -> dict:
             item = page.evaluate(CARD_SAMPLE) or {}
