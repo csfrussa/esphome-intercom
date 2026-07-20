@@ -149,7 +149,26 @@ def main() -> int:
             casa.goto(CASA_URL, wait_until="domcontentloaded", timeout=30_000)
             test.goto(TEST_URL, wait_until="domcontentloaded", timeout=30_000)
             for page, name in ((casa, "Casa"), (test, "Test")):
-                wait_card(page, lambda item: bool(item), 30, f"{name} card ready")
+                try:
+                    wait_card(
+                        page,
+                        lambda item: bool(item),
+                        30,
+                        f"{name} card ready",
+                    )
+                except RuntimeError:
+                    # Immediately after an HA restart the dashboard may load
+                    # before the integration-owned Lovelace resource is
+                    # registered. One ordinary reload is the same bounded
+                    # recovery used by the single-card matrix; a second
+                    # failure remains a real qualification failure.
+                    page.reload(wait_until="domcontentloaded", timeout=30_000)
+                    wait_card(
+                        page,
+                        lambda item: bool(item),
+                        30,
+                        f"{name} card ready after reload",
+                    )
                 page.evaluate(SET_AUTO_ANSWER, False)
                 if EXPECT_VIDEO and not page.evaluate(SET_SEND_VIDEO, True):
                     raise RuntimeError(f"failed to enable Send Camera on {name}")
