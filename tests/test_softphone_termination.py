@@ -46,9 +46,13 @@ def termination(monkeypatch):
             "endpoint_call_ids": Mock(return_value=[]),
             "pending_routes": Mock(return_value={}),
         },
-        "const": {"DOMAIN": "voip_stack"},
+            "const": {
+                "DOMAIN": "voip_stack",
+                "HA_SOFTPHONE_DEVICE_ID": "ha-device",
+            },
         "fsm": {"CallState": call_state, "TerminalReason": terminal_reason},
-        "media_ports": {"release_media_reservation": Mock()},
+            "media_ports": {"release_media_reservation": Mock()},
+            "phone_endpoint": {"DEFAULT_ENDPOINT_ID": "default"},
         "route_decisions": {"set_pending_route_decision": Mock()},
         "session_cleanup": {"async_cleanup_sip_runtime": AsyncMock()},
         "sip_runtime": {
@@ -129,7 +133,7 @@ def test_bridge_projection_is_scoped_to_matching_softphone(termination) -> None:
     termination._set_ha_softphone_call_state = Mock()
 
     result = asyncio.run(
-        termination._terminate_bridge(
+        termination.async_terminate_sip_bridge_session(
             hass,
             "source-call",
             endpoint_id="default",

@@ -10,9 +10,10 @@ from homeassistant.exceptions import ServiceValidationError
 
 from .bridge_manager import async_terminate_sip_bridge
 from .call_scope import endpoint_call_ids, pending_routes
-from .const import DOMAIN
+from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .fsm import CallState, TerminalReason
 from .media_ports import release_media_reservation
+from .phone_endpoint import DEFAULT_ENDPOINT_ID
 from .route_decisions import set_pending_route_decision
 from .session_cleanup import async_cleanup_sip_runtime
 from .sip_runtime import send_bye, send_final_response, sip_servers
@@ -27,12 +28,13 @@ from .websocket_api import (
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _terminate_bridge(
+async def async_terminate_sip_bridge_session(
     hass: HomeAssistant,
     call_id: str,
     *,
-    endpoint_id: str,
-    session_device_id: str,
+    endpoint_id: str = DEFAULT_ENDPOINT_ID,
+    session_device_id: str = HA_SOFTPHONE_DEVICE_ID,
+    terminal_reason: str = TerminalReason.LOCAL_HANGUP.value,
 ) -> tuple[bool, str, str, bool, bool]:
     """Terminate one B2BUA bridge and project only its matching HA session."""
 
@@ -41,11 +43,12 @@ async def _terminate_bridge(
     result = await async_terminate_sip_bridge(
         hass,
         call_id,
-        terminal_reason=TerminalReason.LOCAL_HANGUP.value,
+        terminal_reason=terminal_reason,
         send_bye=lambda source_call_id: send_bye(hass, source_call_id),
     )
     handled, source_call_id, _dest_call_id, _client_closed, _source_bye = result
     if handled and source_call_id == softphone_call_id:
+        reason = terminal_reason or TerminalReason.LOCAL_HANGUP.value
         _set_ha_softphone_call_state(
             hass,
             CallState.IDLE.value,
@@ -56,9 +59,9 @@ async def _terminate_bridge(
             peer_name=str(softphone.get("peer_name") or ""),
             direction=str(softphone.get("direction") or ""),
             call_id=source_call_id,
-            reason=TerminalReason.LOCAL_HANGUP.value,
-            terminal_reason=TerminalReason.LOCAL_HANGUP.value,
-            origin="self",
+            reason=reason,
+            terminal_reason=reason,
+            origin="self" if reason == TerminalReason.LOCAL_HANGUP.value else "remote",
             last_sip_event="SIP_BYE",
         )
     return result
@@ -169,7 +172,7 @@ async def async_hangup_browser_call(
         bridge_dest_call_id,
         bridge_client,
         bridge_server_bye,
-    ) = await _terminate_bridge(
+    ) = await async_terminate_sip_bridge_session(
         hass,
         call_id,
         endpoint_id=endpoint_id,

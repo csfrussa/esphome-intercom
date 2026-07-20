@@ -1,0 +1,265 @@
+"""Behavioral tests for outbound softphone call routing."""
+
+from __future__ import annotations
+
+import asyncio
+from enum import Enum
+import importlib.util
+from pathlib import Path
+import sys
+import types
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MODULE = ROOT / "custom_components" / "voip_stack" / "softphone_originate.py"
+
+
+class _ServiceValidationError(Exception):
+    pass
+
+
+class _RouteAction(Enum):
+    ANSWER_HA = "answer_ha"
+    TRUNK = "trunk"
+    REJECT = "reject"
+    GROUP = "group"
+    ASSIST = "assist"
+    DIRECT = "direct"
+    FORWARD = "forward"
+    BRIDGE = "bridge"
+
+
+class _Availability(Enum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    OFFLINE = "offline"
+
+
+class _EndpointKind(Enum):
+    BROWSER = "browser"
+    ESPHOME = "esphome"
+
+
+class _OfflinePolicy(Enum):
+    WAIT = "wait"
+    FORWARD = "forward"
+
+
+@pytest.fixture
+def softphone_originate(monkeypatch):
+    package_name = "voip_stack_softphone_originate_test"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(MODULE.parent)]
+    monkeypatch.setitem(sys.modules, package_name, package)
+
+    homeassistant = types.ModuleType("homeassistant")
+    homeassistant.__path__ = []
+    core = types.ModuleType("homeassistant.core")
+    core.HomeAssistant = type("HomeAssistant", (), {})
+    core.ServiceCall = type("ServiceCall", (), {})
+    exceptions = types.ModuleType("homeassistant.exceptions")
+    exceptions.ServiceValidationError = _ServiceValidationError
+    monkeypatch.setitem(sys.modules, "homeassistant", homeassistant)
+    monkeypatch.setitem(sys.modules, "homeassistant.core", core)
+    monkeypatch.setitem(sys.modules, "homeassistant.exceptions", exceptions)
+
+    dependencies = {
+        "audio_format": {"HA_TRUNK_AUDIO_FORMATS": []},
+        "authorization": {"async_require_service_admin": AsyncMock()},
+        "config": {
+            "transport_config": Mock(return_value={}),
+            "trunk_config": Mock(return_value={}),
+            "trunk_enabled": Mock(return_value=False),
+        },
+        "const": {
+            "CONF_EXPERIMENTAL_VIDEO": "experimental_video",
+            "CONF_TRUNK_AUTH_USERNAME": "trunk_auth_username",
+            "CONF_TRUNK_OUTBOUND_PROXY": "trunk_outbound_proxy",
+            "CONF_TRUNK_PASSWORD": "trunk_password",
+            "CONF_TRUNK_PORT": "trunk_port",
+            "CONF_TRUNK_SERVER": "trunk_server",
+            "CONF_TRUNK_TRANSPORT": "trunk_transport",
+            "CONF_TRUNK_USERNAME": "trunk_username",
+            "CONF_VIDEO_CAMERA_SEND": "video_camera_send",
+            "DOMAIN": "voip_stack",
+            "HA_PEER_FALLBACK_NAME": "Home Assistant",
+            "HA_SOFTPHONE_DEVICE_ID": "ha-device",
+        },
+        "endpoint_lifecycle": {
+            "call_registry": Mock(),
+            "create_runtime_task": Mock(),
+        },
+        "endpoint_registry": {
+            "EndpointBusyError": type("EndpointBusyError", (Exception,), {})
+        },
+        "endpoint_routing": {
+            "device_formats": Mock(return_value=[]),
+            "roster_entry_formats": Mock(return_value=[]),
+            "sip_target_audio_profile": Mock(return_value=([], [])),
+        },
+        "esphome_actions": {
+            "async_call_action": AsyncMock(),
+            "async_resolve_source_device": AsyncMock(return_value=None),
+            "async_resolve_target_device": AsyncMock(return_value=None),
+        },
+        "fsm": {
+            "CallState": SimpleNamespace(
+                IDLE=SimpleNamespace(value="idle"),
+                IN_CALL=SimpleNamespace(value="in_call"),
+            ),
+            "TerminalReason": SimpleNamespace(),
+            "sip_public_state": Mock(),
+            "sip_terminal_reason": Mock(),
+        },
+        "media_ports": {
+            "allocate_sip_rtp_port": Mock(return_value=40000),
+            "reserve_sip_video_media": Mock(),
+        },
+        "outbound_lifecycle": {
+            "HA_SOFTPHONE_ACTIVE_STATES": frozenset({"calling", "in_call"}),
+            "async_prepare_ha_outbound_call": AsyncMock(),
+            "async_track_outbound_sip_client": AsyncMock(),
+        },
+        "peer_snapshot": {"async_advertise_host": AsyncMock(return_value="127.0.0.1")},
+        "phone_endpoint": {
+            "DEFAULT_ENDPOINT_ID": "default",
+            "EndpointAvailability": _Availability,
+            "EndpointKind": _EndpointKind,
+            "OfflinePolicy": _OfflinePolicy,
+        },
+        "router": {
+            "RouteAction": _RouteAction,
+            "RouteReason": SimpleNamespace(DIRECT_URI="direct_uri"),
+            "ha_uri_for": Mock(),
+            "resolve_ha_router": Mock(),
+        },
+        "service_endpoints": {
+            "async_require_phone_service_control": AsyncMock(),
+            "browser_endpoint_name": Mock(return_value="Casa"),
+            "service_browser_endpoint": Mock(return_value=("default", None)),
+        },
+        "sip_runtime": {
+            "enable_reused_tcp_connection": Mock(),
+            "uri_transport": Mock(),
+        },
+        "softphone_commands": {"bind_service_call_controller": Mock()},
+        "websocket_api": {
+            "_fire_call_event": Mock(),
+            "_ha_softphone_store": Mock(return_value={}),
+            "_set_ha_softphone_call_state": Mock(),
+        },
+        "roster": {"parse_roster_json": Mock(return_value=[])},
+        "sip": {"parse_sip_uri": Mock()},
+        "sip_client": {"SIP_TIMER_B": 32.0, "SipCallClient": object},
+        "local_softphone_bridge": {
+            "LocalBridgeError": type("LocalBridgeError", (Exception,), {})
+        },
+        "local_softphone_runtime": {"start_local_softphone_call": Mock()},
+    }
+    for name, values in dependencies.items():
+        dependency = types.ModuleType(f"{package_name}.{name}")
+        for key, value in values.items():
+            setattr(dependency, key, value)
+        monkeypatch.setitem(sys.modules, dependency.__name__, dependency)
+
+    module_name = f"{package_name}.softphone_originate"
+    spec = importlib.util.spec_from_file_location(module_name, MODULE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _call(hass, **data):
+    return SimpleNamespace(hass=hass, data=data, context=object())
+
+
+def test_esp_source_delegates_to_native_start_call(softphone_originate) -> None:
+    hass = SimpleNamespace(data={}, config=SimpleNamespace(location_name="Casa"))
+    source = {
+        "name": "WS3",
+        "entities": {"call": "button.ws3_call"},
+    }
+    softphone_originate._resolve_source_device_from_call = AsyncMock(
+        return_value=source
+    )
+    softphone_originate._require_phone_service_control = AsyncMock()
+    softphone_originate._call_esphome_action = AsyncMock()
+    call = _call(hass, destination="667")
+
+    asyncio.run(softphone_originate.async_originate_call(call))
+
+    softphone_originate._require_phone_service_control.assert_awaited_once_with(
+        hass,
+        call,
+        device=source,
+        action_entity_ids=("button.ws3_call",),
+    )
+    softphone_originate._call_esphome_action.assert_awaited_once_with(
+        hass,
+        source,
+        "start_call",
+        {"dest": "667"},
+        context=call.context,
+    )
+    softphone_originate._ha_advertise_host.assert_not_awaited()
+
+
+def test_browser_to_browser_uses_local_bridge_before_network(
+    softphone_originate,
+) -> None:
+    hass = SimpleNamespace(
+        data={"voip_stack": {}},
+        config=SimpleNamespace(location_name="Casa"),
+        states=SimpleNamespace(get=Mock(return_value=None)),
+    )
+    source_endpoint = SimpleNamespace(
+        endpoint_id="casa",
+        device_id="device-casa",
+        name="Casa",
+        availability=_Availability.AVAILABLE,
+        supports=Mock(return_value=True),
+    )
+    destination_endpoint = SimpleNamespace(endpoint_id="test", name="Test")
+    route = SimpleNamespace(action=_RouteAction.ANSWER_HA, entry=object())
+    softphone_originate._service_browser_endpoint = Mock(
+        return_value=("casa", source_endpoint)
+    )
+    softphone_originate._require_phone_service_control = AsyncMock()
+    softphone_originate._get_transport_config = Mock(
+        return_value={"video_camera_send": True}
+    )
+    softphone_originate.resolve_ha_router = Mock(return_value=route)
+    softphone_originate._async_resolve_browser_destination = AsyncMock(
+        return_value=(route, "Test", destination_endpoint)
+    )
+    softphone_originate._async_prepare_ha_outbound_call = AsyncMock()
+    snapshot = SimpleNamespace(call_id="local-1", video_enabled=True)
+    local_runtime = sys.modules[
+        f"{softphone_originate.__package__}.local_softphone_runtime"
+    ]
+    local_runtime.start_local_softphone_call = Mock(return_value=snapshot)
+    call = _call(
+        hass,
+        destination="Test",
+        media_client_id="browser-casa",
+        send_video=True,
+    )
+
+    asyncio.run(softphone_originate.async_originate_call(call))
+
+    local_runtime.start_local_softphone_call.assert_called_once_with(
+        hass,
+        "casa",
+        "test",
+        request_video=True,
+        enable_caller_video_send=True,
+        caller_owner_id="browser-casa",
+        context=call.context,
+    )
+    softphone_originate._ha_advertise_host.assert_not_awaited()

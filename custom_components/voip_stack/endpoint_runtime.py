@@ -172,13 +172,15 @@ def _dtmf_extension_routes(entries) -> dict[str, str]:
 
 async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
     """Bind the enabled SIP signaling listeners for HA softphone and bridge calls."""
-    from . import (
-        _get_transport_config,
-        _get_trunk_config,
-        _trunk_enabled,
-        _ha_peer_name,
-        _terminate_sip_bridge,
+    from .config import (
+        transport_config as _get_transport_config,
+        trunk_config as _get_trunk_config,
+        trunk_enabled as _trunk_enabled,
     )
+    from .softphone_termination import (
+        async_terminate_sip_bridge_session as _terminate_sip_bridge,
+    )
+    from .websocket_api import _ha_peer_name
     from .call_scope import pending_routes as _pending_routes
     from .peer_snapshot import (
         async_advertise_host as _ha_advertise_host,

@@ -292,7 +292,7 @@ async def _resolve_contact_or_area(hass: HomeAssistant, raw_name: str) -> Contac
 
 
 def _ha_peer_name(hass: HomeAssistant) -> str:
-    from . import _ha_peer_name as resolve_ha_peer_name
+    from .websocket_api import _ha_peer_name as resolve_ha_peer_name
 
     return resolve_ha_peer_name(hass)
 
