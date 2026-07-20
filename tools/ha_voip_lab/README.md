@@ -41,3 +41,6 @@ Run `experimental_sip_video_browser_probe.py` against the lab dashboard and
 tests. The probe checks the rendered canvas, responsive card geometry and
 post-call backend ownership. The peer can generate audio-only, H.263,
 H.263-1998, H.264, H.265, JPEG and VP8 offers without a physical door station.
+When the two tools are launched separately, wait for the probe to print
+`READY_FOR_VIDEO_CALL` before starting the peer. This guarantees that optional
+camera settings and browser permissions are committed before the SIP INVITE.

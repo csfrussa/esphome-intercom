@@ -195,7 +195,10 @@ python tools/experimental_sip_video_browser_probe.py \
   --out /tmp/incoming-video.json
 ```
 
-Start the probe, then call HA with the peer:
+Start the probe, wait for `READY_FOR_VIDEO_CALL`, then call HA with the peer.
+This ordering matters when `--send-camera` is used because the option and its
+browser permission must be settled before the incoming INVITE hides idle-only
+controls:
 
 ```bash
 python tools/experimental_sip_video_peer.py \

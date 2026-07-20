@@ -143,7 +143,7 @@ python tools/experimental_sip_video_browser_probe.py \
   --out /tmp/voip-video-result.json
 ```
 
-Start a deterministic audio/video caller while the browser probe waits:
+Wait for `READY_FOR_VIDEO_CALL`, then start a deterministic audio/video caller:
 
 ```bash
 python tools/experimental_sip_video_peer.py \

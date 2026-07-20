@@ -145,20 +145,20 @@ CARD_SAMPLE = r"""
       canvas: canvasRect,
       hangup: hangupRect,
       header: headerRect,
-    stats: statsRect,
+      stats: statsRect,
       horizontal_overflow: surface.scrollWidth > surface.clientWidth + 1,
       vertical_overflow: surface.scrollHeight > surface.clientHeight + 1,
-    header_stats_overlap: overlaps(headerRect, statsRect),
-    stats_outside_hangup: Boolean(
-      statsRect && hangupRect && (
-        statsRect.x < hangupRect.x || statsRect.right > hangupRect.right
-          || statsRect.y < hangupRect.y || statsRect.bottom > hangupRect.bottom
-      )
-    ),
+      header_stats_overlap: overlaps(headerRect, statsRect),
+      stats_outside_hangup: Boolean(
+        statsRect && hangupRect && (
+          statsRect.x < hangupRect.x || statsRect.right > hangupRect.right
+            || statsRect.y < hangupRect.y || statsRect.bottom > hangupRect.bottom
+        )
+      ),
       usable_video_height: Math.max(
         0,
         Number(hangupRect?.y || surface.clientHeight)
-          - Math.max(Number(headerRect?.bottom || 0), Number(statsRect?.bottom || 0)),
+          - Number(headerRect?.bottom || 0),
       ),
     } : null,
     canvas: canvasEvidence,
@@ -477,7 +477,6 @@ def main() -> int:
 
         try:
             reload_rendered = 0
-            sample("ready")
             if args.send_camera:
                 page.wait_for_function(
                     f"() => Boolean(({DEEP_CARD})()?._softphoneSnapshot?.video_camera_send_enabled)",
@@ -485,6 +484,7 @@ def main() -> int:
                 )
                 if not page.evaluate(CLICK_CAMERA_SEND):
                     raise RuntimeError("Send Camera option was not available before the video call")
+            sample("ready")
             if args.outbound:
                 print(f"PLACING_VIDEO_CALL {args.outbound}", flush=True)
                 if not page.evaluate(START_OUTBOUND, args.outbound):
@@ -510,7 +510,7 @@ def main() -> int:
                     raise _ProbeComplete
                 print("WAITING_FOR_REMOTE_ANSWER", flush=True)
             else:
-                print("WAITING_FOR_VIDEO_CALL", flush=True)
+                print("READY_FOR_VIDEO_CALL", flush=True)
                 page.wait_for_function(
                     f"() => (({CARD_SAMPLE})()?.card_state || '').toLowerCase() === 'ringing'",
                     timeout=int(args.ring_timeout * 1000),

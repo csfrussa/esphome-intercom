@@ -82,6 +82,14 @@ independent dial plans.
 - `CallRegistry` is the observable compatibility index/projection used by HA
   entities, services and existing runtime adapters; it is not a second
   lifecycle owner.
+- `ActiveMediaCall` resolves the one generation-current browser media session
+  from the endpoint store and `CallRegistry`. Audio and video WebSocket views
+  subscribe to the same call-lifetime primitive instead of maintaining
+  independent interpretations of when a call has ended.
+- audio and video renegotiation commit the complete media contract before they
+  increment its generation and wake attached WebSockets. Consumers therefore
+  never observe a new generation with a partially updated RTP destination,
+  direction or codec description.
 
 Termination is generation-guarded, idempotent and cancellation-safe. The
 session enters `terminating` synchronously, then waits for a shielded cleanup
