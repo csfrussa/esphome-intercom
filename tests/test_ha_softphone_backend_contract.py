@@ -17,6 +17,9 @@ MEDIA_RENEGOTIATION = (
 OUTBOUND_LIFECYCLE = (
     ROOT / "custom_components" / "voip_stack" / "outbound_lifecycle.py"
 )
+ESPHOME_STATE_BRIDGE = (
+    ROOT / "custom_components" / "voip_stack" / "esphome_state_bridge.py"
+)
 SIP_BRIDGE = ROOT / "custom_components" / "voip_stack" / "sip_bridge.py"
 SERVICES = ROOT / "custom_components" / "voip_stack" / "services.py"
 ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing.py"
@@ -43,6 +46,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = INIT.read_text()
         cls.outbound_lifecycle = OUTBOUND_LIFECYCLE.read_text()
+        cls.esphome_state_bridge = ESPHOME_STATE_BRIDGE.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
@@ -563,7 +567,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("registry.finish_and_pop(", invite_error)
 
     def test_esp_state_mirrors_physical_busy_ownership_into_logical_endpoint(self) -> None:
-        bridge = _function_body(self.source, "_async_emit_esp_state_event")
+        bridge = _function_body(
+            self.esphome_state_bridge,
+            "async_emit_state_event",
+        )
         self.assertIn("endpoint_registry.sync_transport_call(", bridge)
         self.assertIn('fallback_call_id=f"physical:{endpoint.endpoint_id}"', bridge)
         self.assertIn("canonical_state in HA_SOFTPHONE_ACTIVE_STATES", bridge)

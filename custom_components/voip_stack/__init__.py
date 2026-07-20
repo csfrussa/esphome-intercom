@@ -10,7 +10,7 @@ from dataclasses import replace
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED, Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED, Platform
 from homeassistant.core import HomeAssistant, CoreState, Event, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
@@ -60,6 +60,9 @@ from .endpoint_routing import (
     roster_entry_formats as _roster_entry_formats,
     sip_target_audio_profile as _sip_target_audio_profile,
 )
+from .esphome_state_bridge import (
+    register_state_event_bridge as _register_esp_state_event_bridge,
+)
 from .fsm import (
     CallState,
     TerminalReason,
@@ -93,7 +96,6 @@ from .authorization import (
 )
 from .peer_snapshot import (
     async_advertise_host as _ha_advertise_host,
-    device_entity_state as _device_entity_state,
 )
 from .phone_endpoint import (
     DEFAULT_ENDPOINT_ID,
@@ -328,196 +330,6 @@ async def _terminate_sip_bridge(
             last_sip_event="SIP_BYE",
         )
     return result
-
-
-async def _async_emit_esp_state_event(
-    hass: HomeAssistant,
-    entity_id: str,
-    state: str,
-    old_state: str,
-    delay: float = 0.0,
-    *,
-    generation: int = 0,
-    expected_endpoint_id: str = "",
-    expected_call_id: str = "",
-) -> None:
-    """Mirror ESP-published voip_state changes onto the public call bus."""
-    if delay > 0:
-        import asyncio
-
-        await asyncio.sleep(delay)
-    bucket = hass.data.setdefault(DOMAIN, {})
-    if generation and int(
-        bucket.setdefault("esp_state_event_generations", {}).get(entity_id, 0)
-    ) != int(generation):
-        return
-    endpoint_registry = bucket.get("endpoint_registry")
-    guarded_endpoint = (
-        endpoint_registry.get(expected_endpoint_id)
-        if endpoint_registry is not None and expected_endpoint_id
-        else None
-    )
-    raw_state = state.strip().lower()
-    terminal_state = raw_state in {
-        "idle",
-        "ended",
-        "busy",
-        "declined",
-        "cancelled",
-        "local_hangup",
-        "remote_hangup",
-        "not_in_call",
-        "timeout",
-        "error",
-    }
-    if (
-        terminal_state
-        and guarded_endpoint is not None
-        and guarded_endpoint.active_call_id != expected_call_id
-    ):
-        # The delayed terminal event belongs to an earlier dialog. Never emit
-        # it as the state of, or release, a newer call (classic ABA race).
-        return
-    devices = await _get_voip_devices(hass)
-    device = next(
-        (
-            item
-            for item in devices
-            if (item.get("entities") or {}).get("voip_state") == entity_id
-        ),
-        None,
-    )
-    payload = {
-        "state": state,
-        "old_state": old_state,
-        "entity_id": entity_id,
-        "direction": "",
-        "call_id": "",
-    }
-    if device is not None:
-        entities = device.get("entities") or {}
-        endpoint = (
-            guarded_endpoint
-            or endpoint_registry.by_device_id(device.get("device_id"))
-            if endpoint_registry is not None
-            else None
-        )
-        canonical_state = (
-            CallState.RINGING.value
-            if raw_state == "incoming"
-            else _sip_public_state(raw_state)
-        )
-        if endpoint is not None and (
-            canonical_state in HA_SOFTPHONE_ACTIVE_STATES
-            or raw_state
-            in {
-                "idle",
-                "ended",
-                "busy",
-                "declined",
-                "cancelled",
-                "local_hangup",
-                "remote_hangup",
-                "not_in_call",
-                "timeout",
-                "error",
-            }
-        ):
-            active = canonical_state in HA_SOFTPHONE_ACTIVE_STATES
-            transport_call_id = expected_call_id or endpoint.active_call_id or (
-                f"physical:{endpoint.endpoint_id}" if active else ""
-            )
-            if active:
-                endpoint = endpoint_registry.sync_transport_call(
-                    endpoint.endpoint_id,
-                    active=True,
-                    fallback_call_id=f"physical:{endpoint.endpoint_id}",
-                )
-            elif transport_call_id:
-                endpoint_registry.release_call(
-                    endpoint.endpoint_id, transport_call_id
-                )
-                endpoint = endpoint_registry.require(endpoint.endpoint_id)
-            payload["call_id"] = transport_call_id
-        caller = _device_entity_state(hass, device, "incoming_caller")
-        destination = _device_entity_state(hass, device, "destination")
-        reason = _device_entity_state(hass, device, "last_reason")
-        payload.update(
-            {
-                "device_id": device.get("device_id", ""),
-                "endpoint_id": str(getattr(endpoint, "endpoint_id", "") or ""),
-                "peer_name": device.get("name", ""),
-                "local_name": device.get("name", ""),
-                "caller": caller,
-                "callee": destination,
-                "destination": destination,
-                "reason": reason,
-                "endpoint": _device_entity_state(hass, device, "voip_endpoint"),
-                "caller_entity_id": entities.get("incoming_caller", ""),
-                "destination_entity_id": entities.get("destination", ""),
-                "last_reason_entity_id": entities.get("last_reason", ""),
-            }
-        )
-        if raw_state in ("ringing", "incoming"):
-            payload["direction"] = "incoming"
-        elif raw_state in ("calling", "remote_ringing"):
-            payload["direction"] = "outgoing"
-    _fire_call_event(hass, payload, "esp")
-
-
-def _register_esp_state_event_bridge(hass: HomeAssistant) -> None:
-    """Forward ESP voip_state entity changes to voip_stack.call_event."""
-    bucket = hass.data.setdefault(DOMAIN, {})
-    if bucket.get("esp_state_event_bridge_unsub") is not None:
-        return
-
-    @callback
-    def _on_state_changed(event: Event) -> None:
-        entity_id = str(event.data.get("entity_id") or "")
-        if "voip_state" not in entity_id:
-            return
-        old = event.data.get("old_state")
-        new = event.data.get("new_state")
-        if new is None:
-            return
-        old_value = "" if old is None else str(old.state or "")
-        new_value = str(new.state or "")
-        if old_value == new_value:
-            return
-        if new_value.lower() in ("unknown", "unavailable"):
-            return
-        generations = bucket.setdefault("esp_state_event_generations", {})
-        generation = int(generations.get(entity_id, 0) or 0) + 1
-        generations[entity_id] = generation
-        endpoint_registry = bucket.get("endpoint_registry")
-        endpoint = (
-            endpoint_registry.by_entity_id(entity_id)
-            if endpoint_registry is not None
-            else None
-        )
-        terminal_delay = 0.2 if new_value.strip().lower() in ("idle", "ended", "declined") else 0.0
-        create_runtime_task(
-            hass,
-            _async_emit_esp_state_event(
-                hass,
-                entity_id,
-                new_value,
-                old_value,
-                terminal_delay,
-                generation=generation,
-                expected_endpoint_id=str(
-                    getattr(endpoint, "endpoint_id", "") or ""
-                ),
-                expected_call_id=str(
-                    getattr(endpoint, "active_call_id", "") or ""
-                ),
-            )
-        )
-
-    bucket["esp_state_event_bridge_unsub"] = hass.bus.async_listen(
-        EVENT_STATE_CHANGED,
-        _on_state_changed,
-    )
 
 
 async def _press_device_button(
