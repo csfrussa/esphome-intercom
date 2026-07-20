@@ -30,6 +30,9 @@ ENDPOINT_ROUTING = ROOT / "custom_components" / "voip_stack" / "endpoint_routing
 SENSOR = ROOT / "custom_components" / "voip_stack" / "sensor.py"
 VIDEO_WS = ROOT / "custom_components" / "voip_stack" / "video_ws_view.py"
 CONFIG_FLOW = ROOT / "custom_components" / "voip_stack" / "config_flow.py"
+CONFIG_ENTRY_RUNTIME = (
+    ROOT / "custom_components" / "voip_stack" / "config_entry_runtime.py"
+)
 
 
 def _function_body(source: str, function_name: str) -> str:
@@ -53,6 +56,7 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         cls.esphome_state_bridge = ESPHOME_STATE_BRIDGE.read_text()
         cls.call_scope = CALL_SCOPE.read_text()
         cls.service_endpoints = SERVICE_ENDPOINTS.read_text()
+        cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
 
     def test_hangup_publishes_authoritative_idle_state(self) -> None:
         body = _function_body(self.source, "_handle_sip_hangup_service")
@@ -335,12 +339,15 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("return", guard)
 
     def test_esphome_roster_service_registration_refreshes_phonebook(self) -> None:
-        self.assertIn("EVENT_SERVICE_REGISTERED", self.source)
-        body = _function_body(self.source, "_register_phonebook_service_event_sync")
+        self.assertIn("EVENT_SERVICE_REGISTERED", self.config_entry_runtime)
+        body = _function_body(
+            self.config_entry_runtime,
+            "register_phonebook_service_event_sync",
+        )
         self.assertIn('"phonebook_service_event_unsub"', body)
         self.assertIn('event.data.get("domain") != "esphome"', body)
         self.assertIn('service.endswith("_set_roster_json")', body)
-        self.assertIn("_refresh_and_push_phonebook(hass)", body)
+        self.assertIn("async_refresh_and_push_phonebook(hass)", body)
         self.assertNotIn("retry", body.lower())
 
     def test_softphone_rtp_latches_source_port_and_ssrc(self) -> None:

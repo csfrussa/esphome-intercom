@@ -35,6 +35,9 @@ OUTBOUND_ATTEMPTS = (
     ROOT / "custom_components" / "voip_stack" / "outbound_attempts.py"
 )
 DTMF_EVENTS = ROOT / "custom_components" / "voip_stack" / "dtmf_events.py"
+CONFIG_ENTRY_RUNTIME = (
+    ROOT / "custom_components" / "voip_stack" / "config_entry_runtime.py"
+)
 
 
 class VoipBackendRouteContractTest(unittest.TestCase):
@@ -46,6 +49,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         cls.esphome_actions = ESPHOME_ACTIONS.read_text()
         cls.outbound_attempts = OUTBOUND_ATTEMPTS.read_text()
         cls.dtmf_events = DTMF_EVENTS.read_text()
+        cls.config_entry_runtime = CONFIG_ENTRY_RUNTIME.read_text()
         spec = importlib.util.spec_from_file_location(
             "voip_stack_automation_routing_test", AUTOMATION_ROUTING
         )
@@ -1178,7 +1182,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         init_py = INIT.read_text()
         hangup = init_py[
             init_py.index("async def _handle_sip_hangup_service") : init_py.index(
-                "async def _refresh_phonebook_sensor"
+                "async def _handle_set_dnd_service"
             )
         ]
         self.assertIn('future = _pending_routes(hass)[call_id].get("future")', hangup)
@@ -1374,10 +1378,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         )
 
     def test_phone_subentry_live_sync_updates_legacy_endpoint_sensor(self) -> None:
-        init_source = INIT.read_text()
-        update_listener = init_source[
-            init_source.index("async def _async_config_entry_updated(") : init_source.index(
-                "def _register_phonebook_service_event_sync("
+        update_listener = self.config_entry_runtime[
+            self.config_entry_runtime.index("async def async_config_entry_updated(") :
+            self.config_entry_runtime.index(
+                "def register_phonebook_service_event_sync("
             )
         ]
         self.assertIn(

@@ -24,6 +24,9 @@ from .automation_routing import (
 )
 from .call_registry import TERMINAL_STATES
 from .config import debug_mode as _debug_mode
+from .config_entry_runtime import (
+    async_refresh_and_push_phonebook as _refresh_and_push_phonebook,
+)
 from .const import (
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_ASSIST_ADVANCED_CALL_CONTEXT,
@@ -174,7 +177,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         _get_trunk_config,
         _trunk_enabled,
         _ha_peer_name,
-        _refresh_and_push_phonebook,
         _terminate_sip_bridge,
     )
     from .call_scope import pending_routes as _pending_routes
