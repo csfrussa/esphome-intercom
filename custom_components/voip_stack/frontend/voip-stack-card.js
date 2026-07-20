@@ -26,8 +26,13 @@ const { voipStackEngine } = await import(`./voip-stack-engine.js?v=${encodeURICo
 const {
   audioModeLabel,
   formatListFromMetadata,
+  formatCallDuration,
+  formatEndReason,
+  formatKnownReason,
+  formatVideoFailureReason,
   normaliseAudioMode,
   normaliseTransport,
+  reasonKey,
   targetFromRosterEntry,
   targetSupportsVideo,
 } = await import(`./voip-stack-card-model.js?v=${encodeURIComponent(VOIP_STACK_MODULE_VERSION)}`);
@@ -589,15 +594,7 @@ class VoipStackCard extends HTMLElement {
   }
 
   _formatVideoCallDuration() {
-    const connectedAt = Number(this._softphoneSnapshot?.connected_at || 0);
-    if (!connectedAt) return "00:00";
-    const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - connectedAt));
-    const hours = Math.floor(elapsed / 3600);
-    const minutes = Math.floor((elapsed % 3600) / 60);
-    const seconds = elapsed % 60;
-    const mm = String(minutes).padStart(2, "0");
-    const ss = String(seconds).padStart(2, "0");
-    return hours ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+    return formatCallDuration(this._softphoneSnapshot?.connected_at);
   }
 
   _clearEndReason(doRender = true) {
@@ -610,95 +607,19 @@ class VoipStackCard extends HTMLElement {
   }
 
   _formatEndReason(info) {
-    if (!info) return "";
-    const { kind, reason, origin } = info;
-    const knownReason = this._formatKnownReason(reason);
-    if (knownReason) return knownReason;
-    // origin can be "self"/"remote" from the backend's phone perspective.
-    const isSelf = origin === "self";
-    const who = isSelf ? null
-      : origin === "remote" ? "Remote"
-      : origin === "source" ? "Caller"
-      : origin === "dest"   ? "Callee"
-      : null;
-
-    if (kind === "idle") {
-      if (reason === "local_hangup")  return "Local hangup";
-      if (reason === "remote_hangup") return who ? `${who} hung up` : "Remote hangup";
-      if (reason === "remote_device_lost") return who ? `${who} lost` : "Remote device lost";
-      return reason || "Idle";
-    }
-    if (kind === "declined") {
-      if (isSelf) return reason ? `Local decline: "${reason}"` : "Local decline";
-      const head = who ? `${who} declined` : "Declined";
-      return reason ? `${head}: "${reason}"` : head;
-    }
-    if (kind === "error") {
-      const numericCode = reason && /^[0-9]+$/.test(String(reason));
-      if (isSelf) {
-        if (!reason) return "Local error";
-        return numericCode ? `Local error (code ${reason})` : `Local error: "${reason}"`;
-      }
-      const head = who ? `${who} error` : "Error";
-      if (!reason) return head;
-      return numericCode ? `${head} (code ${reason})` : `${head}: "${reason}"`;
-    }
-    return reason || kind;
+    return formatEndReason(info);
   }
 
   _reasonKey(reason) {
-    const text = String(reason || "").trim();
-    if (!text) return "";
-    if (text === "busy") return "busy";
-    const normalized = text.toLowerCase().replace(/[\s-]+/g, "_");
-    const known = new Set([
-      "local_hangup",
-      "remote_hangup",
-      "remote_device_lost",
-      "declined",
-      "timeout",
-      "busy",
-      "cancelled",
-      "forwarded",
-      "media_incompatible",
-      "transport_unreachable",
-      "auth_required_unsupported",
-      "protocol_error",
-      "bridge_error",
-    ]);
-    return known.has(normalized) ? normalized : "";
+    return reasonKey(reason);
   }
 
   _formatKnownReason(reason) {
-    switch (this._reasonKey(reason)) {
-      case "local_hangup": return "Local hangup";
-      case "remote_hangup": return "Remote hangup";
-      case "remote_device_lost": return "Remote device lost";
-      case "declined": return "Declined";
-      case "timeout": return "Timeout";
-      case "busy": return "Busy";
-      case "cancelled": return "Cancelled";
-      case "forwarded": return "Forwarded";
-      case "media_incompatible": return "Media incompatible";
-      case "transport_unreachable": return "Unreachable";
-      case "auth_required_unsupported": return "Authentication unsupported";
-      case "protocol_error": return "Protocol error";
-      case "bridge_error": return "Bridge error";
-      default: return "";
-    }
+    return formatKnownReason(reason);
   }
 
   _formatVideoFailureReason(reason) {
-    switch (String(reason || "").trim().toLowerCase()) {
-      case "local_video_resources_unavailable":
-        return "Home Assistant could not allocate video media.";
-      case "remote_video_rejected":
-        return "The remote endpoint rejected video.";
-      case "endpoint_video_unsupported":
-        return "This endpoint does not support video.";
-      default:
-        return reason ? String(reason).replaceAll("_", " ") : "";
-    }
+    return formatVideoFailureReason(reason);
   }
 
   setConfig(config) {

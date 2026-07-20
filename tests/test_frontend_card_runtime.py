@@ -44,8 +44,10 @@ source = source
   .replace(
     /const \{{\s*audioModeLabel[\s\S]*?\}} = await import\(`\.\/voip-stack-card-model\.js[^;]+;/,
     `const {{
-      audioModeLabel, formatListFromMetadata, normaliseAudioMode,
-      normaliseTransport, targetFromRosterEntry, targetSupportsVideo,
+      audioModeLabel, formatCallDuration, formatEndReason,
+      formatKnownReason, formatListFromMetadata, formatVideoFailureReason,
+      normaliseAudioMode, normaliseTransport, reasonKey,
+      targetFromRosterEntry, targetSupportsVideo,
     }} = globalThis.__cardModel;`,
   )
   .replace("class VoipStackCard extends HTMLElement", "export class VoipStackCard extends HTMLElement");
@@ -760,6 +762,14 @@ assert.equal(model.normaliseAudioMode("mic_only"), "mic_only");
 assert.equal(model.normaliseAudioMode("invalid"), "full_duplex");
 assert.equal(model.audioModeLabel("speaker_only"), "SPK");
 assert.equal(model.audioModeLabel("invalid"), "FULL");
+assert.equal(model.formatCallDuration(100, 165), "01:05");
+assert.equal(model.formatCallDuration(100, 3761), "1:01:01");
+assert.equal(model.reasonKey("Remote Hangup"), "remote_hangup");
+assert.equal(model.reasonKey("vendor failure"), "");
+assert.equal(model.formatKnownReason("media-incompatible"), "Media incompatible");
+assert.equal(model.formatEndReason({{ kind: "declined", reason: "No thanks", origin: "self" }}), "Local decline: \"No thanks\"");
+assert.equal(model.formatEndReason({{ kind: "error", reason: "488", origin: "remote" }}), "Remote error (code 488)");
+assert.equal(model.formatVideoFailureReason("remote_video_rejected"), "The remote endpoint rejected video.");
 """
     completed = subprocess.run(
         ["node", "--input-type=module", "-e", script],

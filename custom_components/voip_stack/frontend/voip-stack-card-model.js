@@ -74,3 +74,106 @@ export function audioModeLabel(mode) {
     default: return "FULL";
   }
 }
+
+export function formatCallDuration(connectedAt, nowSeconds = Date.now() / 1000) {
+  const connected = Number(connectedAt || 0);
+  if (!connected) return "00:00";
+  const elapsed = Math.max(0, Math.floor(Number(nowSeconds) - connected));
+  const hours = Math.floor(elapsed / 3600);
+  const minutes = Math.floor((elapsed % 3600) / 60);
+  const seconds = elapsed % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return hours ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+export function reasonKey(reason) {
+  const text = String(reason || "").trim();
+  if (!text) return "";
+  if (text === "busy") return "busy";
+  const normalized = text.toLowerCase().replace(/[\s-]+/g, "_");
+  const known = new Set([
+    "local_hangup",
+    "remote_hangup",
+    "remote_device_lost",
+    "declined",
+    "timeout",
+    "busy",
+    "cancelled",
+    "forwarded",
+    "media_incompatible",
+    "transport_unreachable",
+    "auth_required_unsupported",
+    "protocol_error",
+    "bridge_error",
+  ]);
+  return known.has(normalized) ? normalized : "";
+}
+
+export function formatKnownReason(reason) {
+  switch (reasonKey(reason)) {
+    case "local_hangup": return "Local hangup";
+    case "remote_hangup": return "Remote hangup";
+    case "remote_device_lost": return "Remote device lost";
+    case "declined": return "Declined";
+    case "timeout": return "Timeout";
+    case "busy": return "Busy";
+    case "cancelled": return "Cancelled";
+    case "forwarded": return "Forwarded";
+    case "media_incompatible": return "Media incompatible";
+    case "transport_unreachable": return "Unreachable";
+    case "auth_required_unsupported": return "Authentication unsupported";
+    case "protocol_error": return "Protocol error";
+    case "bridge_error": return "Bridge error";
+    default: return "";
+  }
+}
+
+export function formatEndReason(info) {
+  if (!info) return "";
+  const { kind, reason, origin } = info;
+  const knownReason = formatKnownReason(reason);
+  if (knownReason) return knownReason;
+  const isSelf = origin === "self";
+  const who = isSelf ? null
+    : origin === "remote" ? "Remote"
+    : origin === "source" ? "Caller"
+    : origin === "dest" ? "Callee"
+    : null;
+
+  if (kind === "idle") {
+    if (reason === "local_hangup") return "Local hangup";
+    if (reason === "remote_hangup") return who ? `${who} hung up` : "Remote hangup";
+    if (reason === "remote_device_lost") return who ? `${who} lost` : "Remote device lost";
+    return reason || "Idle";
+  }
+  if (kind === "declined") {
+    if (isSelf) return reason ? `Local decline: "${reason}"` : "Local decline";
+    const head = who ? `${who} declined` : "Declined";
+    return reason ? `${head}: "${reason}"` : head;
+  }
+  if (kind === "error") {
+    const numericCode = reason && /^[0-9]+$/.test(String(reason));
+    if (isSelf) {
+      if (!reason) return "Local error";
+      return numericCode ? `Local error (code ${reason})` : `Local error: "${reason}"`;
+    }
+    const head = who ? `${who} error` : "Error";
+    if (!reason) return head;
+    return numericCode ? `${head} (code ${reason})` : `${head}: "${reason}"`;
+  }
+  return reason || kind;
+}
+
+export function formatVideoFailureReason(reason) {
+  switch (String(reason || "").trim().toLowerCase()) {
+    case "local_video_resources_unavailable":
+      return "Home Assistant could not allocate video media.";
+    case "remote_video_rejected":
+      return "The remote endpoint rejected video.";
+    case "endpoint_video_unsupported":
+      return "This endpoint does not support video.";
+    default:
+      return reason ? String(reason).replaceAll("_", " ") : "";
+  }
+}
