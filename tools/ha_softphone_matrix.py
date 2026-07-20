@@ -55,6 +55,16 @@ async () => {
     type: "voip_stack/ha_softphone_state", endpoint_id: endpointId,
   });
   const snapshot = card._softphoneSnapshot || {};
+  const text = [...(card.shadowRoot?.querySelectorAll(
+    ".header, .destination-label, .destination-value, .status, .status-reason, " +
+    ".error, .offline-title, .hangup-copy, .version"
+  ) || [])]
+    .filter((item) => !item.hidden)
+    .map((item) => (item.innerText || item.textContent || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
   return {
     backend: {
       state: backend?.state || "", call_id: backend?.call_id || "", caller: backend?.caller || "",
@@ -68,7 +78,7 @@ async () => {
       callee: snapshot.callee || "", terminal_reason: snapshot.terminal_reason || "",
       video_direction: snapshot.video_direction || "inactive",
     },
-    text: (card.shadowRoot?.innerText || card.shadowRoot?.textContent || "").replace(/\s+/g, " ").trim(),
+    text,
     auto_answer: !!card._autoAnswer,
     endpoint_id: endpointId,
     softphone_subscribers: window.__voipStackEngine?._softphoneSubscribers?.size ?? -1,

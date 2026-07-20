@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import argparse
+from contextlib import contextmanager, suppress
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -42,12 +45,70 @@ CALLER_CONFIG = (
     if EXPECT_VIDEO and "WILDIX_CONFIG" not in os.environ
     else WILDIX_CONFIG
 )
+RUN_LOCK = Path("/tmp/voip-stack-ring-group-live-matrix.lock")
 ESP_DND_ENTITY = "switch.cucina_waveshare_s3_audio_do_not_disturb"
 ESP_CALL_STATE_ENTITY = "sensor.cucina_waveshare_s3_audio_voip_state"
 CALL_EVENT_ENTITY = "event.voip_stack_call"
 INBOUND_AUTOMATION = "automation.voip_inbound_trunk_to_rg_casa"
 DIRECT_AUTOMATION_ID = "codex_voip_video_route_matrix"
 DIRECT_AUTOMATION = "automation.codex_voip_video_direct_route_matrix"
+
+
+def _compact_error(error: BaseException, limit: int = 1800) -> str:
+    """Keep state evidence without embedding the complete Lovelace DOM."""
+
+    value = str(error)
+    if len(value) <= limit:
+        return value
+    tail = min(300, limit // 4)
+    return f"{value[: limit - tail]} ... <truncated> ... {value[-tail:]}"
+
+
+@contextmanager
+def _exclusive_run():
+    """Prevent two real callers from corrupting one another's evidence."""
+
+    descriptor = os.open(RUN_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as err:
+            raise RuntimeError(
+                "another ring-group live matrix is already running"
+            ) from err
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the real two-browser Wildix ring-group matrix once."
+    )
+    parser.add_argument(
+        "--out",
+        default=os.environ.get(
+            "RING_GROUP_MATRIX_OUT",
+            str(ROOT / "test_captures" / "ring_group_live_matrix.json"),
+        ),
+    )
+    parser.add_argument(
+        "--expect-video",
+        action=argparse.BooleanOptionalAction,
+        default=EXPECT_VIDEO,
+    )
+    parser.add_argument(
+        "--direct-video-only",
+        action=argparse.BooleanOptionalAction,
+        default=DIRECT_VIDEO_ONLY,
+    )
+    parser.add_argument(
+        "--esp-winner-only",
+        action=argparse.BooleanOptionalAction,
+        default=ESP_WINNER_ONLY,
+    )
+    return parser.parse_args()
 
 
 def _wait_entity(entity_id: str, expected: str, timeout: float = 10) -> dict[str, Any]:
@@ -142,8 +203,8 @@ def _wait_lab_ready(timeout: float = 45) -> tuple[HomeAssistantApi, dict[str, An
     raise RuntimeError(f"HA laboratory not ready after {timeout:.0f}s ({last_error})")
 
 
-def main() -> int:
-    output = Path(
+def main(*, output: Path | None = None) -> int:
+    output = output or Path(
         os.environ.get(
             "RING_GROUP_MATRIX_OUT",
             ROOT / "test_captures" / "ring_group_live_matrix.json",
@@ -264,12 +325,20 @@ def main() -> int:
                             "name": case_name,
                             "status": "fail",
                             "seconds": round(time.monotonic() - started, 3),
-                            "error": str(err),
+                            "error": _compact_error(err),
                         }
                     )
                 finally:
                     if caller is not None:
                         caller.close()
+                    for page, endpoint_name in ((casa, "Casa"), (test, "Test")):
+                        with suppress(Exception):
+                            _state(
+                                page,
+                                "idle",
+                                f"{case_name}: cleanup {endpoint_name}",
+                                8,
+                            )
                     time.sleep(0.5)
 
             def run_case(
@@ -365,12 +434,20 @@ def main() -> int:
                             "name": name,
                             "status": "fail",
                             "seconds": round(time.monotonic() - started, 3),
-                            "error": str(err),
+                            "error": _compact_error(err),
                         }
                     )
                 finally:
                     if caller is not None:
                         caller.close()
+                    for page, endpoint_name in ((casa, "Casa"), (test, "Test")):
+                        with suppress(Exception):
+                            _state(
+                                page,
+                                "idle",
+                                f"{name}: cleanup {endpoint_name}",
+                                8,
+                            )
                     time.sleep(0.5)
 
             def run_direct_video_case(
@@ -479,7 +556,7 @@ def main() -> int:
                             "name": name,
                             "status": "fail",
                             "seconds": round(time.monotonic() - started, 3),
-                            "error": str(err),
+                            "error": _compact_error(err),
                         }
                     )
                 finally:
@@ -565,4 +642,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    arguments = _parse_args()
+    EXPECT_VIDEO = bool(arguments.expect_video)
+    DIRECT_VIDEO_ONLY = bool(arguments.direct_video_only)
+    ESP_WINNER_ONLY = bool(arguments.esp_winner_only)
+    CALLER_CONFIG = (
+        Path("/home/codex/.baresip-wildix-426-video")
+        if EXPECT_VIDEO and "WILDIX_CONFIG" not in os.environ
+        else WILDIX_CONFIG
+    )
+    with _exclusive_run():
+        raise SystemExit(main(output=Path(arguments.out)))

@@ -1,0 +1,56 @@
+"""Safety contracts for the stateful real ring-group qualification tool."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TOOL = ROOT / "tools" / "ring_group_live_matrix.py"
+
+
+def _load_tool():
+    spec = importlib.util.spec_from_file_location("ring_group_live_matrix", TOOL)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load ring-group qualification runner")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_help_is_side_effect_free_and_returns_immediately() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(TOOL), "--help"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=3,
+    )
+    assert completed.returncode == 0
+    assert "--expect-video" in completed.stdout
+
+
+def test_live_matrix_rejects_concurrent_owners(tmp_path: Path) -> None:
+    runner = _load_tool()
+    runner.RUN_LOCK = tmp_path / "ring-group.lock"
+    with runner._exclusive_run():
+        with pytest.raises(
+            RuntimeError, match="another ring-group live matrix is already running"
+        ):
+            with runner._exclusive_run():
+                pass
+
+
+def test_failure_evidence_is_bounded() -> None:
+    runner = _load_tool()
+    compact = runner._compact_error(RuntimeError("A" * 4000), limit=500)
+    assert len(compact) <= 530
+    assert "<truncated>" in compact
+
