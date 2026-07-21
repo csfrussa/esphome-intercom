@@ -1,5 +1,57 @@
 # Breaking changes
 
+Read every section newer than the stable version currently installed before
+upgrading. VoIP Stack is maintained by one person and may deliberately replace
+an earlier development contract instead of carrying two parallel APIs. The
+config-entry migration preserves supported persisted settings, but copied card
+YAML and automations cannot be migrated by Home Assistant automatically.
+
+## 2026.8.0: Upgrade checklist
+
+1. Read the `2026.8.0` sections below and the
+   [`2026.8.0` release notes](RELEASE_2026_8_0.md).
+2. Update VoIP Stack, restart Home Assistant and open **Reconfigure** once.
+   Confirm the incoming-routing, Assist and experimental-video choices.
+3. Open every additional phone under **VoIP Stack > Add phone** and verify its
+   extension, groups, DND, offline policy and video options.
+4. Update copied automations to the service and routing contracts below.
+5. Hard-refresh every browser or Companion WebView that loads the Lovelace
+   card. An old JavaScript module cannot safely drive the new backend.
+
+Do not delete and recreate the integration merely to perform this upgrade.
+Config entry version 3 automatically creates the mandatory default Home
+Assistant phone subentry, carries forward its persisted DND/extension/group
+settings and converts existing local SIP registrar accounts into phone
+subentries. The old inline account list is removed after that migration.
+
+## 2026.8.0: Every logical phone is a separate Home Assistant Device
+
+The former single HA softphone model is now a collection of native config
+subentries and Devices. The migrated default phone remains available, while
+additional browser phones and standard SIP accounts are created with
+**Settings > Devices & services > VoIP Stack > Add phone**.
+
+Each phone owns its call state, DND, extension, groups, offline policy and
+video settings. Consequently:
+
+- bind each `ha_softphone` card to the intended phone Device;
+- trigger room-specific automations from that phone's own call-state Sensor or
+  call Event Entity;
+- do not assume that the aggregate `event.voip_stack_call` identifies one
+  particular room phone;
+- do not use browser-card presence as the definition of whether a logical
+  phone exists. An offline browser phone may still ring logically so that
+  timeout and forwarding automations can run.
+
+The default phone deliberately retains
+`sensor.voip_stack_call_state`. Additional phones receive entity IDs generated
+by Home Assistant; select them from their Device instead of constructing an ID
+from the phone name.
+
+Card YAML may contain both `device_id` and the stable internal `endpoint_id` so
+the frontend can preserve its exact binding. Public Home Assistant actions use
+only `device_id`; `endpoint_id` is not an alternative action field.
+
 ## 2026.8.0: One Home Assistant call-action vocabulary
 
 Home Assistant actions now use `destination` as the only call destination
@@ -9,6 +61,31 @@ Phone actions now use `device_id` as their only optional phone selector;
 remove `endpoint_id`, `entity_id`, `source`, `source_device_id`, `source_name`,
 `name` and `friendly_name` from action data. Internal endpoint/entity IDs
 remain available in state and events for correlation.
+
+Before:
+
+```yaml
+- action: voip_stack.call
+  data:
+    target: Kitchen
+    endpoint_id: ha-kitchen
+```
+
+After:
+
+```yaml
+- action: voip_stack.call
+  data:
+    destination: Kitchen
+    device_id: <kitchen_phone_device_id>
+```
+
+Omit `device_id` to use the migrated default Home Assistant phone. The same
+selector rule applies to `answer`, `decline`, `hangup`, `forward`, `set_dnd`
+and `set_ha_softphone_settings`. `call_id` remains an optional flat action
+field when one of several concurrent calls must be selected; **Advanced
+options** is only how the automation editor groups that field visually.
+
 The duplicate `voip_stack.export_accounts` action was removed; use the
 identical `voip_stack.list_accounts` response action. These development-only
 aliases were removed before the stable release so the automation editor and
@@ -16,6 +93,86 @@ API expose one predictable path. The development-only
 `voip_stack/ha_softphone_start` WebSocket command was also removed: cards and
 clients must use the standard Home Assistant `call_service` command with the
 `voip_stack.call` action.
+
+## 2026.8.0: Incoming trunk routing is explicit
+
+Reconfigure the integration and choose one incoming-routing mode:
+
+- **Route immediately** sends the call to the configured fallback destination
+  without pre-answering it for digit collection.
+- **Collect extension with DTMF** pre-answers the trunk leg and collects
+  negotiated RFC 4733 `telephone-event` or compatible SIP INFO digits. An
+  explicit valid extension is authoritative. An unknown explicit extension
+  fails instead of silently ringing the fallback.
+
+Existing entries migrate without changing their effective mode: an enabled,
+non-zero legacy DTMF timeout becomes DTMF mode; every other configuration
+becomes Direct mode. Experimental automation overrides are always disabled by
+the migration and must be enabled deliberately.
+
+When automation routing is enabled, `route_requested` is a bounded initial
+decision point. Use:
+
+```yaml
+- action: voip_stack.select_inbound_destination
+  data:
+    destination: RG Casa
+```
+
+Do not use `voip_stack.forward` for that initial decision. `forward` moves an
+already delivered ringing or connected HA-owned call. `voip_stack.route` is
+the advanced low-level decision action and is not the ordinary phonebook
+route.
+
+In Direct mode the decision occurs before the fallback. In DTMF mode it occurs
+only when no digits were entered. If no automation acts within the window, the
+configured fallback remains authoritative.
+
+Routing a group now re-enters the canonical PBX dispatcher: eligible members
+ring in parallel, the first answer wins, losing legs are cancelled and the
+originating endpoint is excluded when it belongs to the destination group.
+Automations that previously expanded a group themselves should select the
+group name instead.
+
+## 2026.8.0: Use phone-scoped state for phone-scoped automations
+
+`event.voip_stack_call` is the aggregate PBX-wide Event Entity and is the
+correct trigger for `route_requested`. Each integration-owned phone also has a
+scoped call Event Entity and durable call-state Sensor. Use the scoped Sensor
+for rules such as "Casa has been ringing for 30 seconds": the selected entity,
+not the word `ringing`, determines which phone owns the automation.
+
+Call state and event attributes now expose:
+
+- `direction`: `incoming` or `outgoing` from the selected phone's perspective;
+- `ingress` and `origin`: `trunk` for a provider/PBX call or `extension` for a
+  call originating from a local ESP, browser phone or registered SIP endpoint;
+- `scope`: internal state ownership, not the transport source.
+
+A phone in `ringing` is already receiving a call, so an additional
+`direction: incoming` condition is redundant. Use an `ingress: trunk`
+condition when a no-answer rule must apply only to external PBX/provider
+calls. Replace route-source filters based on `scope` or internal owner IDs with
+`ingress`.
+
+## 2026.8.0: SIP account secrets are returned, not broadcast
+
+Local-account and phonebook export actions are administrator-only when invoked
+by an authenticated user. Internal Home Assistant automations remain allowed
+where documented.
+
+`voip_stack.create_account` no longer publishes a generated password in a
+persistent notification or call event. When Home Assistant generates the
+password, it is returned once in that administrator action response. A
+user-supplied password is preserved but never echoed. Likewise,
+`voip_stack.rotate_account_password` returns the replacement once, and
+`voip_stack.list_accounts` returns account metadata without passwords.
+
+If an old script waited for `sip_account_created`,
+`sip_account_password_rotated`, `list_accounts` or `export_accounts` call
+events, replace that flow with an action response. Save a generated or rotated
+password immediately; it cannot be recovered later and must instead be
+rotated again.
 
 ## 2026.8.0: Optional ESPHome entities are explicit platforms
 
@@ -43,9 +200,10 @@ automation, SIP client or card fork.
   SDP checks still apply. Enforce caller admission at a firewall, VLAN, VPN or
   SBC boundary when required.
 - **Constrained in-dialog renegotiation.** ESP endpoints still return `488 Not
-  Acceptable Here` for media-changing re-INVITEs. HA-owned dialogs accept
-  compatible peer-initiated UPDATE/re-INVITE changes, including hold/resume,
-  but cannot add/remove video, change its established codec or originate a
+  Acceptable Here` for media-changing re-INVITEs. Direct HA browser dialogs
+  accept compatible peer-initiated UPDATE/re-INVITE changes, including
+  hold/resume, RTP endpoint changes and video add/remove. SIP-to-SIP bridges
+  keep their established media topology, and HA does not originate a
   renegotiation. A rejected offer leaves the previous media/dialog active.
 - **DTMF route input.** The trunk digit router accepts RTP `telephone-event`
   and compatible legacy SIP INFO DTMF. It does not decode acoustic in-band tones from
@@ -257,5 +415,5 @@ module version instead of a manually bumped audio asset constant. During custom
 frontend testing, clear the browser cache or change the card resource URL when
 serving files outside the packaged release flow.
 
-Older upgrade notes are kept in their original GitHub release pages. This file
-tracks only the current upgrade delta from `2026.6.3` to `2026.7.0`.
+Older upgrade notes are kept in their original GitHub release pages. The
+sections above track the supported upgrade contracts through `2026.8.0`.
