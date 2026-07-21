@@ -67,17 +67,25 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   checks, log filters and audio-debug capture paths.
 
 - 🧱 **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) describes component
-  decomposition, threading/core affinity, per-frame data flow, the
-  internal audio core contract, and the drain protocol for glitch-free config
-  changes.
+  ownership, SIP transactions/dialogs, routing and media boundaries, governed
+  SIP/TCP backpressure, frontend state projection and runtime diagnostics.
 
 - 🧯 **Troubleshooting**: [troubleshooting.md](troubleshooting.md) covers SIP
   ringing, media negotiation, phonebook/routing, registration, trunk, audio and
   card-state failures with concrete checks.
 
-- 🖼️ **Media refresh plan**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists
-  screenshots, photos, GIFs and demo scenes that should replace obsolete README
-  media.
+- 🖼️ **Media catalogue**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists the
+  screenshots, photos, GIFs, diagrams and repeatable demo scenes currently
+  used to explain the project.
+
+- 📐 **Qualification model**: [voip_test_matrix.md](voip_test_matrix.md) and
+  [architecture/phase_00v_virtual_device.md](architecture/phase_00v_virtual_device.md)
+  separate deterministic protocol coverage from real ESP timing, browser
+  media and hardware-in-the-loop evidence.
+
+- 📡 **ESP SIP/RTP profile**: [voip_profile.md](voip_profile.md) defines the
+  lightweight standards-based endpoint contract; [ESPRESSIF_COMPONENTS.md](ESPRESSIF_COMPONENTS.md)
+  records the Espressif component and licensing boundary.
 
 ## Per-component docs
 

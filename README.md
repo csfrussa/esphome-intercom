@@ -1540,8 +1540,8 @@ triggers:
 conditions:
   - condition: state
     entity_id: sensor.voip_stack_call_state
-    attribute: direction
-    state: incoming
+    attribute: ingress
+    state: trunk
 actions:
   - action: voip_stack.forward
     data:
@@ -1553,6 +1553,9 @@ Replace `1666` with the extension assigned to **Include voice assistant**.
 `on_failure: resume` returns the still-live call to the original HA phone if
 Assist cannot take ownership. With multiple logical HA phones, select that
 phone Device's call-state sensor instead of the default compatibility entity.
+The `ringing` state already implies an incoming call for that phone. Keep the
+`ingress: trunk` condition to limit this fallback to provider/PBX calls, or
+remove the condition when local-extension calls should use it too.
 
 See [Automation Dial Plan](docs/AUTOMATION_DIALPLAN.md) for complete native
 `event.received` and state `for:` examples with no Call-ID or Jinja in ordinary
@@ -1652,6 +1655,11 @@ The three canonical paths share the same phone lifecycle:
 ---
 
 ## Hardware Support
+
+Choose from the canonical hardware/YAML matrix below. If you are not sure
+which audio architecture fits your board and use case, follow the
+[Deployment Guide](docs/DEPLOYMENT_GUIDE.md) decision tree instead of copying
+a nearby configuration blindly.
 
 ### Tested Configurations
 
@@ -2289,40 +2297,6 @@ the same pattern as a standalone file.
 ## Example Dashboard
 
 See [examples/dashboard.yaml](examples/dashboard.yaml) for a complete Lovelace dashboard with VoIP card, volume controls, AEC mode select, auto answer, wake word, and mute switches.
-
----
-
-## Example YAML Files
-
-Working configs tested on real hardware, organized by use case. Not sure which one to pick? See the [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) for a decision tree.
-
-### Full Experience with `esp_aec` (VA + MWW + VoIP, lighter)
-
-| File | Device | Audio |
-|------|--------|-------|
-| [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Generic ESP32-S3 (MEMS+amp) | Single-mic `esp_audio_stack` AEC, single-bus mono, previous-frame reference |
-| [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Generic ESP32-S3 (MEMS+amp, dual bus) | Same full AEC light profile on separated I2S buses |
-
-### Full Experience with `esp_afe` (VA + MWW + VoIP + NS/AGC/VAD, heavier)
-
-| File | Device | Audio |
-|------|--------|-------|
-| [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Generic ESP32-S3 (MEMS+amp) | Untested single-mic AFE, single-bus mono, TYPE2-style software reference, requires >4 MB app slot |
-| [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, AFE (AEC + NS + AGC + VAD) |
-| [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | Waveshare S3-AUDIO (ES8311+ES7210) | TDM dual-mic, AFE + Speech Enhancement |
-| [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) _(experimental)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Portrait LVGL, TDM dual-mic, AFE + Speech Enhancement |
-| [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) _(field-tested)_ | Waveshare P4-Touch-LCD (ES8311+ES7210) | Landscape LVGL, TDM dual-mic, AFE + Speech Enhancement |
-
-### VoIP Only (no VA, no MWW)
-
-| File | Device | Audio |
-|------|--------|-------|
-| [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | Spotpear Ball v2 (ES8311, LVGL) | Single-bus, `esp_aec`, VoIP display |
-| [`generic-s3-voip.yaml`](yamls/voip-only/single-bus/generic-s3-voip.yaml) | Generic ESP32-S3 (MEMS+amp, single bus) | Single-bus, `esp_aec` |
-| [`generic-s3-voip.yaml`](yamls/voip-only/dual-bus/generic-s3-voip.yaml) | Generic ESP32-S3 (dual I2S) | Dual-bus, `esp_aec`, previous-frame reference |
-| [`generic-s3-voip-esphome-native-full-duplex.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-full-duplex.yaml) | Generic ESP32-S3 native full-duplex | Native ESPHome mic and speaker |
-| [`generic-s3-voip-esphome-native-mic-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-mic-only.yaml) | Generic ESP32-S3 native mic-only | One-way microphone endpoint |
-| [`generic-s3-voip-esphome-native-speaker-only.yaml`](yamls/voip-only/esphome-native/generic-s3-voip-esphome-native-speaker-only.yaml) | Generic ESP32-S3 native speaker-only | One-way speaker endpoint |
 
 ---
 

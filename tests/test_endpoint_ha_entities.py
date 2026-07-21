@@ -294,6 +294,34 @@ def test_public_attributes_exclude_live_media_diagnostics() -> None:
     assert not ({"sdp", "rtp", "sip_uri", "contact"} & attributes.keys())
 
 
+def test_call_state_attributes_expose_stable_routing_origin() -> None:
+    attributes = endpoint_device.endpoint_call_state_attributes(
+        _endpoint(extension="401"),
+        {
+            "call_id": "call-1",
+            "direction": "incoming",
+            "ingress": "trunk",
+            "origin": "trunk",
+            "caller": "",
+            "peer_name": "Daniele",
+            "terminal_reason": "",
+            "sdp": "must-not-leak",
+        },
+        extra_keys=("origin", "caller"),
+        include_empty=True,
+    )
+
+    assert attributes["endpoint_id"] == "kitchen"
+    assert attributes["call_id"] == "call-1"
+    assert attributes["direction"] == "incoming"
+    assert attributes["ingress"] == "trunk"
+    assert attributes["origin"] == "trunk"
+    assert attributes["caller"] == ""
+    assert attributes["peer_name"] == "Daniele"
+    assert attributes["terminal_reason"] == ""
+    assert "sdp" not in attributes
+
+
 def test_dynamic_entity_creation_is_not_reentered_by_device_id_update(
     monkeypatch,
 ) -> None:

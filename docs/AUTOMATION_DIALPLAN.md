@@ -183,8 +183,8 @@ triggers:
 conditions:
   - condition: state
     entity_id: sensor.voip_stack_call_state
-    attribute: direction
-    state: incoming
+    attribute: ingress
+    state: trunk
 actions:
   - action: voip_stack.forward
     data:
@@ -196,6 +196,12 @@ The release qualification exercised this exact lifecycle with a real
 30-second unanswered call: Assist returned TTS over RTP, a later video
 re-offer was answered as audio-only with `m=video 0`, BYE ended the dialog and
 all call-scoped sessions, media owners and RTP ports returned to zero.
+
+The `ringing` state already means that this phone is the incoming call target;
+an additional `direction: incoming` condition would be redundant. Keep the
+`ingress: trunk` condition when only provider/PBX calls should fall through to
+Assist. Remove the entire `conditions:` block when unanswered local-extension
+calls should follow the same rule.
 
 Replace `1666` with any destination understood by the phonebook. When exactly
 one HA-owned call is forwardable, the backend resolves its Call-ID and current
@@ -236,8 +242,8 @@ triggers:
 conditions:
   - condition: state
     entity_id: sensor.voip_stack_call_state
-    attribute: direction
-    state: incoming
+    attribute: ingress
+    state: trunk
 actions:
   - action: voip_stack.forward
     data:
@@ -297,17 +303,20 @@ The default phone keeps `sensor.voip_stack_call_state` for backward
 compatibility. Each sensor follows only its phone through ringing, bridging and
 Assist. Its stable states are:
 
+- `offline`
 - `idle`
 - `ringing`
 - `calling`
 - `remote_ringing`
 - `connecting`
 - `in_call`
+- `held`
 - `terminating`
 
-Attributes include `call_id`, `caller`, `callee`, `direction`, `dialed_target`,
-`peer_name`, `sequence`, `revision`, `owner` and `terminal_reason`. Ordinary
-single-call automations do not need to read them.
+Attributes include stable endpoint identity plus active-call `call_id`,
+`direction`, `ingress`, `peer_name` and `terminal_reason`. `ingress` is
+`trunk` for provider/PBX calls and `extension` for locally originated SIP
+calls. Ordinary single-call automations do not need to read these fields.
 
 The phone Device itself is the Home Assistant registry container; entities are
 its triggerable state/event surfaces. The per-phone Event Entity, durable

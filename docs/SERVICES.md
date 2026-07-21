@@ -24,6 +24,8 @@ extension, group name, public number, `user@host` or `sip:user@host`.
 
 Optional:
 
+- `send_video`: offer the selected browser phone's camera when experimental
+  SIP video is enabled. Receiving video does not require this flag.
 - `ha_bridge`: force HA to anchor the route when that is valid.
 
 `voip_stack.call` supports Home Assistant's optional action response. When a
@@ -56,28 +58,32 @@ See [Automation Dial Plan](AUTOMATION_DIALPLAN.md) for complete examples.
 
 ### `voip_stack.answer`
 
-Answer a pending call addressed to the HA softphone.
+Answer the pending call on the selected phone. The Device picker supports
+integration-owned HA phones and compatible ESPHome mirror phones.
 
 If `call_id` is omitted and exactly one call is pending, that call is answered.
+Set `send_video: true` to send that browser phone's camera when experimental
+video is enabled and the negotiated call permits it.
 
 For conference calls, `call_id: conference:<room>` joins the HA softphone to
 the room.
 
 ### `voip_stack.decline`
 
-Reject a pending call.
+Reject the pending call on the selected phone.
 
 Fields:
 
 - `call_id`: optional when only one call is pending.
-- `status`: SIP final status, default normally `486`/`603` depending path.
+- `status`: SIP final status, default `603` for this action. Automatic busy and
+  DND routing decisions use `486` independently.
 - `reason`: SIP reason phrase.
 - `decline_reason`: application terminal reason propagated in Reason headers
   and state.
 
 ### `voip_stack.hangup`
 
-Hang up the active call or a specific `call_id`.
+Hang up the selected phone's active call or a specific `call_id`.
 
 It stops SIP client legs, relay/media reservations, pending invites and HA
 softphone media where applicable.
@@ -129,7 +135,8 @@ Useful fields:
 
 ### `voip_stack.remove_contact`
 
-Remove one manual contact by name, ID, extension or number.
+The action exposes one required field named `name`; its value may match the
+manual contact's name, stable ID, extension or number.
 
 ### `voip_stack.set_contacts`
 
@@ -273,6 +280,13 @@ an incoming call”. Use the aggregate entity for PBX-wide logic and
 `route_requested`. The default phone's state sensor keeps the historical
 `sensor.voip_stack_call_state` entity ID for compatibility even though it is
 now attached to that phone Device.
+
+The call-state sensor is durable and therefore supports native state triggers
+with `for:`. Its attributes include `call_id`, `direction`, `ingress`,
+`peer_name` and `terminal_reason`; `ingress` is `trunk` for provider/PBX calls
+and `extension` for locally originated calls. The selected sensor identifies
+the phone: an automation on Casa's sensor does not apply to every logical
+phone.
 
 ## Experimental: In-call DTMF Automation Event
 

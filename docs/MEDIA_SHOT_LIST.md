@@ -1,7 +1,8 @@
 # Media shot list
 
 This is the working list for refreshing README and documentation media for the
-`2026.7.0` SIP/VoIP release.
+`2026.8.0` SIP/VoIP release. Only assets actually embedded by a README or
+documentation page belong under `docs/images/`.
 
 ## Primary README media
 
@@ -26,8 +27,8 @@ This is the working list for refreshing README and documentation media for the
 | `docs/images/call-from-esp-to-homeassistant.gif` | GIF | ESP calls Home Assistant | Captured: ESP scrolls contacts, calls Home, HA rings, answer or hangup sequence visible |
 | `docs/images/mobile-notification-answer.gif` | GIF | Android notification answers an ESP call | Captured: notification actions, HA app opening, card in full-duplex call |
 | `docs/images/cross-transport-bridge.gif` | GIF | HA SIP bridge | Captured: WS3 SIP/UDP calls Spotpear SIP/TCP through HA, ringing, answer, hangup |
-| `docs/images/decline-reason.png` | Screenshot | Reason propagation | Decline with custom reason, DND or busy visible in card/sensor |
-| `docs/images/busy-reason.png` | Screenshot | Busy behavior | One call active, second caller rejected with `busy` |
+| `docs/images/ha-sip-video-call.gif` | GIF | Browser SIP video | Captured: negotiated browser video call and in-call controls |
+| `docs/images/assist-unanswered-doorbell.png` | Illustration | Unanswered call to Assist | Door station, no-answer timeout, Assist response and household notification |
 
 ## Installation and configuration media
 
@@ -38,14 +39,12 @@ options or old component names.
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
 | `docs/images/hacs-download-voip-stack.png` | Screenshot | HACS download step | Captured: VoIP Stack HACS entry and download menu |
 | `docs/images/voip-stack-add-integration.png` | Screenshot | HA Add Integration search | Captured: VoIP Stack entry in Settings -> Integrations |
 | `docs/images/voip-stack-config-flow.png` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
 | `docs/images/voice-assistant-extension.png` | Screenshot | Optional Assist telephone destination setup | Captured: explicit SIP extension and preferred Assist pipeline selection in the real HA config flow |
 | `docs/images/create-account-service.png` | Screenshot | SIP account service form | Captured: Developer Tools -> Actions account creation |
 | `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local SIP account |
-| `docs/images/create-account-notification.png` | Screenshot | Generated account notification | Captured: one-time generated password notification |
 | `docs/images/esphome-add-device.png` | Screenshot | Add ESPHome device | Recapture if entity names, device names or ESPHome onboarding UI changed. |
 | `docs/images/card-selection.png` | Screenshot | Card picker | Must show `VoIP Stack Card`, not old Intercom card names. |
 | `docs/images/card-configuration.png` | Screenshot | Card YAML/UI config | Must show current `voip-stack-card` modes and options. |
@@ -77,6 +76,11 @@ replace individual photos or GIFs if the UI changes before release.
 | `docs/images/esp-route-decision.png` | Generated raster diagram | ESP routing policy | Phonebook resolution followed by direct SIP or canonical HA dispatch |
 | `docs/images/call-flow-sequences.png` | Generated raster diagram | Canonical call lifecycle | Browser bridge, direct ESP call and HA-bridged ESP call in one visual |
 | `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |
+| `docs/images/shared-audio-aec-pipeline.png` | Generated raster diagram | Shared clean microphone pipeline | Music/TTS/VoIP output reference and post-AEC consumers |
+| `docs/images/home-assistant-local-sip-pbx.png` | Generated raster illustration | HA local PBX use cases | Door station, room phones, registered devices, trunk and Assist |
+| `docs/images/voip-doorbell-room-to-room.png` | Generated raster illustration | Release overview | Video doorbell and room-to-room browser phones |
+| `docs/images/ring-group-conference-group.png` | Generated raster illustration | Group semantics | First-answer-wins ring group and shared conference focus |
+| `docs/images/voip-dashboard-phonebook.png` | Generated raster illustration | Dashboard and roster | Native HA phone controls and shared phonebook |
 
 ## Capture order for live demo
 

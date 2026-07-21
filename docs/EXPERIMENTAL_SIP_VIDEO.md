@@ -188,11 +188,12 @@ Playwright probe. They exercise the real integration, card, WebSocket and RTP
 paths rather than checking only source strings:
 
 ```bash
+mkdir -p test_captures
 export HA_URL="https://home-assistant.example/dashboard/voip"
 export PLAYWRIGHT_STORAGE_STATE="$HOME/.cache/ha-playwright-state.json"
-python tools/experimental_sip_video_browser_probe.py \
+./.venv/bin/python tools/experimental_sip_video_browser_probe.py \
   --reload-in-call \
-  --out /tmp/incoming-video.json
+  --out test_captures/incoming-video.json
 ```
 
 Start the probe, wait for `READY_FOR_VIDEO_CALL`, then call HA with the peer.
@@ -201,13 +202,13 @@ browser permission must be settled before the incoming INVITE hides idle-only
 controls:
 
 ```bash
-python tools/experimental_sip_video_peer.py \
+./.venv/bin/python tools/experimental_sip_video_peer.py \
   --host home-assistant.example \
   --port 5060 \
   --target HA \
   --codec h264 \
   --direction sendrecv \
-  --out /tmp/video-peer.json
+  --out test_captures/video-peer.json
 ```
 
 Add `--video-profile RTP/AVPF` to qualify standards-aligned PLI/FIR feedback.

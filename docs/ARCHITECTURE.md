@@ -287,7 +287,7 @@ HA maps provider-side numbers or DTMF extension digits to local SIP targets.
 
 Inbound trunk calls use deterministic policy:
 
-- no explicit route hint: ring HA/default target;
+- no explicit route hint: resolve the configured inbound default target;
 - explicit DTMF/SIP route hint that resolves: bridge to that target;
 - explicit DTMF/SIP route hint that does not resolve: terminate
   `route_not_found`.

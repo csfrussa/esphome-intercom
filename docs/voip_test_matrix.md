@@ -28,9 +28,9 @@ agree. Counters alone are not proof of audible bidirectional audio.
 
 Run after implementation is complete:
 
-- `python -m pytest -q`
-- `python tools/voip_dev_check.py`
-- `python tests/support/qualification_matrix.py --validate --summary`
+- `./.venv/bin/python -m pytest -q`
+- `./.venv/bin/python tools/voip_dev_check.py`
+- `./.venv/bin/python tests/support/qualification_matrix.py --validate --summary`
 - `./scripts/run_virtual_device_tests.sh --all`
 - `./scripts/run_virtual_device_tests.sh --repeat 1000 --seed 1234 --scenario terminal-no-late-green`
 
@@ -88,8 +88,8 @@ state.
   resolver.
 - `voip_stack.call` with a requested Home Assistant action response returns the
   authoritative endpoint/call snapshot; the current card originates through
-  the standard `call_service` WebSocket command and an older private start
-  command produces the same result through its compatibility adapter.
+  the standard `call_service` WebSocket command. The removed private start
+  command is absent and must not acquire a compatibility adapter.
 - `voip_stack.answer`: pending inbound SIP receives `200 OK` only
   after local media setup path is ready.
 - `voip_stack.decline`: pending inbound SIP receives configured final

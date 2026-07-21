@@ -116,6 +116,7 @@ shapes that central data into the compact roster pushed to each ESP.
 
 - `voip_stack.is_idle`
 - `voip_stack.is_calling`
+- `voip_stack.is_remote_ringing`
 - `voip_stack.is_ringing`
 - `voip_stack.is_in_call`
 - `voip_stack.is_incoming`
@@ -170,6 +171,9 @@ permission are independent.
 - `voip_stack.hangup`
 - `voip_stack.forward`
 - `voip_stack.route`
+- `voip_stack.select_inbound_destination`
+- `voip_stack.set_deadline`
+- `voip_stack.cancel_deadline`
 - `voip_stack.set_dnd`
 - `voip_stack.set_ha_softphone_settings`
 - `voip_stack.add_contact`
@@ -189,7 +193,9 @@ permission are independent.
 `call` accepts one required `destination`. The destination can be a
 phonebook name, extension, ring group, conference group, SIP URI, direct
 `user@host` target or external number. Set `ha_bridge: true` to force the HA
-bridge path.
+bridge path. Set `send_video: true` to offer the selected browser phone's
+camera when experimental video is enabled. `answer` accepts the same
+`send_video` choice; receiving video never requires it.
 
 `call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
 `set_ha_softphone_settings` expose one optional `device_id` phone selector. If
@@ -200,6 +206,11 @@ inputs. Use `call_id` when a concurrent-call automation must select one call.
 `route` applies an automation decision to a pending inbound SIP route. Use
 `action: answer_ha`, `decline`, `busy`, `cancel`, `forward`, `bridge`, or
 `default`.
+
+`select_inbound_destination` is the ordinary initial-routing action for a
+pending `route_requested` occurrence. `set_deadline` and `cancel_deadline` are
+advanced call-global controls: deadline expiry publishes a timeout-requested
+occurrence but never changes routing by itself.
 
 `forward` moves an existing HA-owned call to another dial-plan destination.
 Pass `call_id` when more than one call could be eligible; when exactly one call
@@ -212,7 +223,8 @@ originate a new call.
 `max_payload_bytes`, `ring_group`, `conference_group` and `conference_ring`.
 HA updates `sensor.voip_phonebook` and pushes the roster to online ESP devices.
 
-`remove_contact` removes one manual central contact by `name`.
+`remove_contact` exposes one `name` input whose value may match a manual
+contact's name, stable ID, extension or number.
 `set_contacts` replaces manual central contacts from JSON.
 `clear_contacts` removes manual central contacts. `push_phonebook` republishes
 the current merged roster without changing it.
@@ -304,7 +316,7 @@ entity. `voip_stack` also keeps these bus events for compatibility:
 - `voip_stack.incoming_call`: inbound call or route request.
 - `voip_stack.route_request`: HA dial-plan lookup request.
 - `voip_stack.call_ended`: terminal `ended`, `missed`, or `failed`.
-- `voip_stack.dtmf` (**experimental in 2026.7.1**): one DTMF key observed during an established HA-bridged
+- `voip_stack.dtmf` (**experimental in 2026.8.0**): one DTMF key observed during an established HA-bridged
   call. Initial trunk digit routing remains a separate pre-answer path.
   This is implemented only in the HA backend and adds no DTMF processing to
   ESP firmware.
@@ -315,7 +327,8 @@ The payload includes the canonical SIP fields when available: `state`,
 `automation_control`, `caller`, `callee`, `peer_name`, `direction`,
 `local_name`, `target`, `sip_uri`, `route_kind`, `sip_transport`,
 `sip_status_code`, `terminal_reason`, `endpoint_id`, source/destination endpoint
-and Device IDs, selected media formats, and RTP counters.
+and Device IDs, stable `ingress` / `origin` (`trunk` or `extension`), selected
+media formats, and RTP counters.
 With SIP/RTP debug enabled, the HA softphone snapshot also exposes `sip_trunk`
 when a trunk client exists,
 including registration status, last SIP status and last trunk SIP event.
@@ -331,7 +344,10 @@ the call; direct ESP-to-ESP or third-party peer-to-peer calls bypass HA.
 
 ## SIP State Values
 
-Public states: `idle`, `calling`, `remote_ringing`, `ringing`, `connecting`,
-`in_call`, `terminating`, `busy`, `declined`, `cancelled`,
+Public SIP call states: `idle`, `calling`, `remote_ringing`, `ringing`,
+`connecting`, `in_call`, `terminating`, `busy`, `declined`, `cancelled`,
 `media_incompatible`, `transport_unreachable`, and
-`auth_required_unsupported`.
+`auth_required_unsupported`. A durable logical-phone sensor may additionally
+show `offline` when its endpoint is unavailable and `held` while an established
+call is on hold; these are phone/entity availability phases, not terminal SIP
+outcomes.

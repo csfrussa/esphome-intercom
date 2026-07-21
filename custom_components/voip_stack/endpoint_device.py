@@ -116,6 +116,33 @@ def endpoint_public_attributes(endpoint: PhoneEndpoint) -> dict[str, Any]:
     }
 
 
+def endpoint_call_state_attributes(
+    endpoint: PhoneEndpoint | None,
+    payload: dict[str, object],
+    *,
+    extra_keys: tuple[str, ...] = (),
+    include_empty: bool = False,
+) -> dict[str, Any]:
+    """Return stable endpoint and active-call attributes for one phone sensor."""
+    attributes = endpoint_public_attributes(endpoint) if endpoint is not None else {}
+    keys = (
+        "call_id",
+        "direction",
+        "ingress",
+        "peer_name",
+        "terminal_reason",
+        *extra_keys,
+    )
+    attributes.update(
+        {
+            key: payload.get(key, "")
+            for key in keys
+            if include_empty or payload.get(key) not in (None, "")
+        }
+    )
+    return attributes
+
+
 @callback
 def async_link_endpoint_entity(
     registry: EndpointRegistry | None,

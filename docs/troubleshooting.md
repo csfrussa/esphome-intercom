@@ -31,8 +31,8 @@ collect:
 - Confirm the INVITE Request-URI reaches HA's advertised host and SIP port.
 - Check HA softphone DND and active-call state. A second inbound call while HA
   is ringing or in-call should receive busy.
-- For trunk calls, no route hint means HA/default target; an explicit unresolved
-  route hint terminates as `route_not_found`.
+- For trunk calls, no route hint means the configured inbound default target;
+  an explicit unresolved route hint terminates as `route_not_found`.
 - For local registered SIP endpoints, confirm the REGISTER Contact is present in
   HA logs and the phonebook includes the registered SIP endpoint contact.
 
@@ -89,7 +89,8 @@ leg to a compatible PCM format.
 
 ## Registered Softphone Cannot Register To HA
 
-- Enable the HA SIP TCP or UDP listener used by the softphone.
+- Confirm the always-on HA SIP UDP/TCP listener is reachable on the configured
+  SIP port and that the client's selected transport matches.
 - Enable the local registrar in VoIP Stack setup.
 - Create an account with `voip_stack.create_account`.
 - If no password is supplied, copy it from the administrator-only action

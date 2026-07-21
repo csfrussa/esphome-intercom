@@ -137,22 +137,23 @@ The Playwright probe records runtime evidence rather than relying on a source
 string check:
 
 ```bash
+mkdir -p test_captures
 export HA_URL="https://home-assistant.example/dashboard/voip"
 export PLAYWRIGHT_STORAGE_STATE="$HOME/.cache/ha-playwright-state.json"
-python tools/experimental_sip_video_browser_probe.py \
-  --out /tmp/voip-video-result.json
+./.venv/bin/python tools/experimental_sip_video_browser_probe.py \
+  --out test_captures/voip-video-result.json
 ```
 
 Wait for `READY_FOR_VIDEO_CALL`, then start a deterministic audio/video caller:
 
 ```bash
-python tools/experimental_sip_video_peer.py \
+./.venv/bin/python tools/experimental_sip_video_peer.py \
   --host home-assistant.example \
   --port 5060 \
   --target HA \
   --codec vp8 \
   --direction sendrecv \
-  --out /tmp/voip-video-peer.json
+  --out test_captures/voip-video-peer.json
 ```
 
 See [Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) for an outgoing probe,
@@ -172,7 +173,10 @@ Exercise all public services with temporary data:
   `export_phonebook`, `push_phonebook`;
 - `call` and `forward` to a registered endpoint;
 - `answer`, `decline`, `hangup` against pending SIP calls;
-- `route` against a forced route request;
+- `select_inbound_destination` against an initial `route_requested`
+  occurrence;
+- `route` against an advanced forced route request;
+- `set_deadline` and `cancel_deadline` with current and stale call revisions;
 - `purge_devices` with a high `min_unavailable_hours` as a no-op.
 
 Always restore:

@@ -29,6 +29,7 @@ from .const import (
 )
 from .endpoint_device import (
     async_link_endpoint_entity,
+    endpoint_call_state_attributes,
     endpoint_config_subentry_id,
     endpoint_device_info,
     endpoint_public_attributes,
@@ -213,21 +214,20 @@ class HaSoftphoneCallStateSensor(SensorEntity):
         if terminal and terminal_reason != "forwarded":
             self._active_call_id = ""
             self._revision = -1
-        self._attr_extra_state_attributes = {
-            key: snapshot.get(key, "")
-            for key in (
-                "call_id",
+        self._attr_extra_state_attributes = endpoint_call_state_attributes(
+            self.endpoint,
+            snapshot,
+            extra_keys=(
                 "caller",
                 "callee",
-                "direction",
+                "origin",
                 "dialed_target",
-                "peer_name",
                 "sequence",
                 "revision",
                 "owner",
-                "terminal_reason",
-            )
-        }
+            ),
+            include_empty=True,
+        )
 
 
 class HaSoftphoneEndpointSensor(SensorEntity):
@@ -353,20 +353,10 @@ class PhoneEndpointCallStateSensor(SensorEntity):
         elif state not in PHONE_CALL_STATES:
             state = self._attr_native_value
         self._attr_native_value = state
-        attributes = endpoint_public_attributes(self.endpoint)
-        attributes.update(
-            {
-                key: payload.get(key, "")
-                for key in (
-                    "call_id",
-                    "direction",
-                    "peer_name",
-                    "terminal_reason",
-                )
-                if payload.get(key) not in (None, "")
-            }
+        self._attr_extra_state_attributes = endpoint_call_state_attributes(
+            self.endpoint,
+            payload,
         )
-        self._attr_extra_state_attributes = attributes
 
 
 class VoipPhonebookSensor(SensorEntity):

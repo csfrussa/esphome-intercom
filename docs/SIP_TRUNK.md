@@ -15,7 +15,10 @@ endpoint identity and media ports:
 - SIP port
 - RTP base port
 - advertised host/IP
-- Assist intents
+- optional Assist intents and callable Assist endpoint
+- optional SIP/RTP diagnostics
+- optional experimental browser video
+- optional local SIP registrar
 - optional trunk enable switch
 
 Only when the trunk switch is enabled does the second setup step ask for trunk
@@ -75,8 +78,8 @@ Example user flow:
 2. HA answers the trunk leg.
 3. The caller sends post-dial digits such as `100`.
 4. HA routes the call to the phonebook entry whose `extension` is `100`.
-5. If no digits/route hint arrive before timeout, HA rings the HA softphone or
-   the configured default target.
+5. If no digits/route hint arrive before timeout, HA resolves the configured
+   default target (`HA` is only the default value).
 6. If explicit digits arrive but do not resolve, HA terminates the answered leg
    as `route_not_found`.
 

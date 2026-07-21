@@ -90,9 +90,9 @@ default inbound target and optional DTMF digit collection.
 Inbound provider calls are answered by HA so it can collect DTMF digits through
 RTP `telephone-event` or compatible legacy SIP INFO. Normal mobile dialers can use
 post-dial pauses, for example a contact that dials the provider number, waits,
-and sends `100`. If no digits arrive, HA rings the configured default target or
-HA softphone. If digits arrive, HA resolves them through central phonebook
-`extension` values.
+and sends `100`. If no digits arrive, HA resolves the configured default target
+(`HA` is the initial default). If digits arrive, HA resolves them through
+central phonebook `extension` values.
 If digits arrive and do not resolve, HA terminates the answered leg with
 `route_not_found`.
 
