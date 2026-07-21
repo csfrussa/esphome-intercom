@@ -45,11 +45,11 @@ def _valid_port(value: str) -> int | None:
     return port if 1 <= port <= 65535 else None
 
 
-def _valid_audio_mode(value: str | None) -> str:
+def _valid_audio_mode(value: str | None) -> str | None:
     mode = (value or "full_duplex").strip().lower()
-    if mode in ("full_duplex", "mic_only", "speaker_only", "control_only"):
+    if mode in ("full_duplex", "mic_only", "speaker_only"):
         return mode
-    return "full_duplex"
+    return None
 
 
 def _parse_bool(value: object) -> bool:
@@ -80,6 +80,9 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
 
     def parse_formats(first: int) -> tuple[str, list, list] | None:
         mode = _valid_audio_mode(parts[first] if len(parts) > first else None)
+        if mode is None:
+            _LOGGER.warning("Ignoring voip endpoint with unsupported audio role: %r", text)
+            return None
         try:
             tx_formats = parse_audio_format_list(parts[first + 1] if len(parts) > first + 1 else None)
             rx_formats = parse_audio_format_list(parts[first + 2] if len(parts) > first + 2 else None)

@@ -11,9 +11,10 @@ logic.
 
 The normal automation editor shows one optional `device_id` phone picker. If
 it is omitted, the default HA phone is selected. This is the only public phone
-selector: internal endpoint and entity IDs are deliberately not alternative
-action inputs. `call_id` and stale-decision guards remain under the collapsed
-**Advanced options** section where concurrency requires them.
+selector: it identifies the local phone performing the action, never the
+remote destination. Internal endpoint and entity IDs are deliberately not
+alternative action inputs. `call_id` and stale-decision guards remain under
+the collapsed **Advanced options** section where concurrency requires them.
 
 ### `voip_stack.call`
 
@@ -21,6 +22,7 @@ Originate a call from Home Assistant.
 
 `destination` is the only destination field. Its value can be a roster name,
 extension, group name, public number, `user@host` or `sip:user@host`.
+The central phonebook resolves that value; no destination Device ID is needed.
 
 Optional:
 

@@ -30,7 +30,7 @@ voip_stack:
 | `rtp_port` | Local RTP media port. |
 | `udp_max_payload` | RTP payload budget, default `1200` bytes. The accepted implementation range is `576..1488`; raise it only for a LAN whose MTU was verified. |
 | `microphone` / `microphone_source` | Optional TX audio source. Use only one. `microphone_source` adds channel/sample-width selection for a wider native microphone. |
-| `speaker` | Optional RX audio sink. Omitting one or both audio directions produces `mic_only`, `speaker_only`, or `control_only` endpoints. |
+| `speaker` | Optional RX audio sink. Omitting the speaker produces a `mic_only` endpoint; omitting the microphone produces a `speaker_only` endpoint. |
 | `audio.tx` / `audio.rx` | Primary per-direction PCM contract. Fields are `sample_rate`, `pcm_format`, `channels`, and `frame_ms`; `auto` derives the wired audio surface. |
 | `audio.tx_formats` / `audio.rx_formats` | Up to seven extra explicit formats per direction. TX extras may only change `frame_ms` from `audio.tx`; RX extras may describe other formats the speaker path can accept. |
 | `extension` | Optional internal dial-plan alias published to HA when the endpoint entity surface is exposed. |
@@ -199,9 +199,11 @@ camera when experimental video is enabled. `answer` accepts the same
 
 `call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
 `set_ha_softphone_settings` expose one optional `device_id` phone selector. If
-omitted, the default HA phone is used. Internal endpoint and entity IDs are
-reported in state/events for correlation, but are not alternative action
-inputs. Use `call_id` when a concurrent-call automation must select one call.
+omitted, the default HA phone is used. This is the local phone performing the
+action, not the remote destination: `destination` is resolved independently by
+the central phonebook. Internal endpoint and entity IDs are reported in
+state/events for correlation, but are not alternative action inputs. Use
+`call_id` when a concurrent-call automation must select one call.
 
 `route` applies an automation decision to a pending inbound SIP route. Use
 `action: answer_ha`, `decline`, `busy`, `cancel`, `forward`, `bridge`, or

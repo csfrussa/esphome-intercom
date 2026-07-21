@@ -61,7 +61,7 @@ export function normaliseTransport(value) {
 
 export function normaliseAudioMode(value) {
   const mode = String(value || "").trim().toLowerCase();
-  return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(mode)
+  return ["full_duplex", "mic_only", "speaker_only"].includes(mode)
     ? mode
     : "full_duplex";
 }
@@ -70,7 +70,6 @@ export function audioModeLabel(mode) {
   switch (normaliseAudioMode(mode)) {
     case "mic_only": return "MIC";
     case "speaker_only": return "SPK";
-    case "control_only": return "CTRL";
     default: return "FULL";
   }
 }

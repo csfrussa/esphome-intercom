@@ -68,16 +68,16 @@ system for private room-to-room audio and video calls._
 ## Derived Endpoint Media Roles
 
 These are not user-selectable operating modes. The ESP component derives and
-advertises the role from the audio components actually configured: microphone
-and speaker, microphone only, speaker only, or neither. This lets one dial plan
-describe the real media path without pretending every endpoint is full-duplex.
+advertises the supported role from the audio components actually configured:
+microphone and speaker, microphone only, or speaker only. This lets one dial
+plan describe the real media path without pretending every endpoint is
+full-duplex.
 
 | Derived role | Media path | Use case |
 |---|---|---|
 | `full_duplex` | Microphone TX + speaker RX | Room phones, door intercoms, wall panels and normal two-way calls. |
 | `mic_only` | Microphone TX only | Monitor microphones, outdoor call stations, capture-only endpoints. |
 | `speaker_only` | Speaker RX only | Paging speakers, announcement targets, remote audio outputs. |
-| `control_only` | SIP signaling, state and phonebook only | LVGL/control panels, automation endpoints, call-state devices without local media. |
 
 ## Table of Contents
 

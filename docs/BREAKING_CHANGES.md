@@ -68,7 +68,6 @@ Before:
 - action: voip_stack.call
   data:
     target: Kitchen
-    endpoint_id: ha-kitchen
 ```
 
 After:
@@ -77,14 +76,27 @@ After:
 - action: voip_stack.call
   data:
     destination: Kitchen
-    device_id: <kitchen_phone_device_id>
 ```
 
-Omit `device_id` to use the migrated default Home Assistant phone. The same
-selector rule applies to `answer`, `decline`, `hangup`, `forward`, `set_dnd`
-and `set_ha_softphone_settings`. `call_id` remains an optional flat action
-field when one of several concurrent calls must be selected; **Advanced
-options** is only how the automation editor groups that field visually.
+`destination` is resolved by the central phonebook; no Device ID is needed to
+identify Kitchen. The optional `device_id` selects the **local calling phone**,
+not the remote destination. For example, add the Device ID of a Reception
+browser phone only when Reception, rather than the default HA phone, must place
+the call:
+
+```yaml
+- action: voip_stack.call
+  data:
+    destination: Kitchen
+    device_id: <reception_phone_device_id>
+```
+
+Omit `device_id` to use the migrated default Home Assistant phone. This same
+local-phone selector rule applies to `answer`, `decline`, `hangup`, `forward`,
+`set_dnd` and `set_ha_softphone_settings`. `call_id` remains an optional flat
+action field when one of several concurrent calls must be selected;
+**Advanced options** is only how the automation editor groups that field
+visually.
 
 The duplicate `voip_stack.export_accounts` action was removed; use the
 identical `voip_stack.list_accounts` response action. These development-only

@@ -42,7 +42,7 @@ export function resolveSessionFormats(negotiated = null) {
 
 export function normaliseAudioMode(value) {
   const mode = String(value || "").trim().toLowerCase();
-  return ["full_duplex", "mic_only", "speaker_only", "control_only"].includes(mode)
+  return ["full_duplex", "mic_only", "speaker_only"].includes(mode)
     ? mode
     : "full_duplex";
 }

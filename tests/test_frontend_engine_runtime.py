@@ -729,7 +729,7 @@ assert.deepEqual(model.desiredAudioPaths("full_duplex", "recvonly"), {{ capture:
 assert.deepEqual(model.desiredAudioPaths("full_duplex", "inactive"), {{ capture: false, playback: false }});
 assert.deepEqual(model.desiredAudioPaths("mic_only", "sendrecv"), {{ capture: false, playback: true }});
 assert.deepEqual(model.desiredAudioPaths("speaker_only", "sendrecv"), {{ capture: true, playback: false }});
-assert.deepEqual(model.desiredAudioPaths("control_only", "sendrecv"), {{ capture: false, playback: false }});
+assert.deepEqual(model.desiredAudioPaths("unsupported", "sendrecv"), {{ capture: true, playback: true }});
 
 const format = model.parsePcmFormat("48000:s16le:2:20");
 assert.equal(model.sameAudioFormat(format, {{ ...format }}), true);
