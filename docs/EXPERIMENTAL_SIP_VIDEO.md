@@ -2,7 +2,7 @@
 
 VoIP Stack can optionally turn the Home Assistant softphone card into a SIP
 video phone for standard SIP phones, softphones and door stations. This is an
-experimental `2026.7.2` feature. ESPHome endpoints remain audio-only.
+experimental `2026.8.0` feature. ESPHome endpoints remain audio-only.
 
 Video is disabled by default and does not alter an audio-only installation.
 Open the VoIP Stack integration, choose **Reconfigure**, then enable

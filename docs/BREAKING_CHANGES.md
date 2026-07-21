@@ -1,6 +1,6 @@
 # Breaking changes
 
-## 2026.7.2-dev: Optional ESPHome entities are explicit platforms
+## 2026.8.0: Optional ESPHome entities are explicit platforms
 
 The ESPHome `voip_stack` core no longer accepts `auto_entities`. ESPHome's
 upstream contribution rules prohibit using `AUTO_LOAD` for primary entity

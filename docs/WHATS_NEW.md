@@ -3,6 +3,35 @@
 This page is a short release index. The complete notes for each version live in
 the linked versioned document, which is also the canonical GitHub release body.
 
+## 2026.8.0: Native HA Video Phones, Multi-Room Calling And PBX Routing
+
+`2026.8.0` contains the complete delta after stable `2026.7.1`.
+
+The release adds multiple native Home Assistant browser phones, private
+room-to-room audio/video calls, experimental SIP video for standard phones and
+door stations, canonical ring/conference groups, direct and in-dialog DTMF,
+and an initial opt-in automation surface for PBX routing and forwarding.
+
+![Video doorbell and room-to-room calls](images/voip-doorbell-room-to-room.png)
+
+The underlying PBX runtime was consolidated around explicit call sessions,
+legs, transactions, dialogs, media generations and cleanup barriers. That work
+keeps trunk, browser, ESP, group and registered-SIP paths on the same lifecycle
+instead of accumulating feature-specific shortcuts.
+
+> [!WARNING]
+> Automation-native PBX routing is a preliminary, disabled-by-default preview.
+> Event fields, decision timing and service semantics may change while real
+> deployments shape the final contract. The normal phonebook and configured
+> fallback route remain the stable default.
+
+Read the complete illustrated release note:
+
+- [`2026.8.0` release notes](RELEASE_2026_8_0.md)
+- [Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md)
+- [Automation Dial Plan](AUTOMATION_DIALPLAN.md)
+- [Breaking Changes](BREAKING_CHANGES.md)
+
 ## 2026.7.1: Assist By Phone, Groups And A Stronger VoIP Stack
 
 `2026.7.1` contains only changes made after stable `2026.7.0`.

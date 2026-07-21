@@ -49,6 +49,11 @@ _Runtime demo: browser softphone, ESP call state and audio controls moving toget
 
 ## What Can You Build With It?
 
+![Video doorbell and room-to-room calls through Home Assistant](docs/images/voip-doorbell-room-to-room.png)
+
+_Answer a video doorbell from the app or a wall tablet, then use the same local
+system for private room-to-room audio and video calls._
+
 | You want... | What you do | Result |
 |---|---|---|
 | A full-duplex door intercom | Flash a ready VoIP YAML, add the ESP to Home Assistant and add the card. | Press the ESP button and Home Assistant rings. Answer from browser, wall tablet or Companion app. |
@@ -123,6 +128,17 @@ LVGL button, automation, service call or Lovelace card.
 ## What's New
 
 ### `2026.8.0-dev` In Development
+
+This section contains only the user-visible delta since stable `2026.7.1`.
+The complete illustrated note is in
+[`docs/RELEASE_2026_8_0.md`](docs/RELEASE_2026_8_0.md).
+
+> [!WARNING]
+> Advanced PBX routing through Home Assistant automations is an initial,
+> disabled-by-default preview. Event fields, decision timing and service
+> semantics may change in a future release while real installations shape the
+> final public contract. The ordinary phonebook, extensions and configured
+> fallback route remain the stable default.
 
 Home Assistant can now host more than one logical phone. Keep the migrated
 default phone, then use **Settings > Devices & services > VoIP Stack > Add
@@ -282,6 +298,12 @@ A standard SIP video door station negotiates video with a compatible browser
 phone. Audio-only ESP members simply receive audio; their presence in the same
 ring group must not force the whole call to advertise video.
 
+![Assist answers an unattended doorbell call and queues the delivery notification](docs/images/assist-unanswered-doorbell.png)
+
+_An unanswered door call can be handed to Assist, which talks to the visitor
+and leaves a notification for the household. The personality is entirely up to
+your Assist prompt._
+
 #### Existing SIP phones and softphone applications
 
 Use **Add phone > Standard SIP account** for an IP phone, ATA, Zoiper,
@@ -316,7 +338,7 @@ excluded.
 _Live SIP video demo: the incoming stream becomes the card background while
 call identity, duration and hang-up remain accessible in the bottom bar._
 
-- 🧪 [Follow the incremental `2026.7.2` What's New](docs/RELEASE_2026_7_2.md)
+- 🧪 [Read the illustrated `2026.8.0` What's New](docs/RELEASE_2026_8_0.md)
 
 ## Breaking Changes
 
@@ -371,6 +393,11 @@ VoIP Stack has four main pieces:
   endpoints, softphone registrations and trunk-routed contacts.
 - **Lovelace card**: the UI for one selected HA phone or for
   mirroring/controlling an ESP phone.
+
+![Home Assistant as a local SIP and PBX hub](docs/images/home-assistant-local-sip-pbx.png)
+
+_One local roster connects door stations, ESP devices, apps, tablets, standard
+SIP phones, Assist and an optional external trunk._
 
 ESP devices do not register to an external PBX and do not need SIP
 authentication. Adding an ESP through the ESPHome integration is how Home
@@ -1103,6 +1130,8 @@ endpoint/contact/account as a member. Group names
 must not collide with existing device/contact names; if the same name is
 declared as both a conference and a ring group, conference wins.
 
+![Ring-group first-answer-wins and multi-party conference behavior](docs/images/ring-group-conference-group.png)
+
 **Ring groups** behave like PBX/SIP forking. Calling `RG Home` rings every
 callable member in parallel, excluding the caller when it is also a member. The
 first member to answer wins, HA bridges audio to that leg, and every other
@@ -1828,6 +1857,11 @@ library is updated.
 ## Audio Components
 
 Three ESPHome components sit between your codec and the VoIP / voice assistant pipelines. Each has its own README with the full option list and tuning notes; the highlights below exist just to help you pick.
+
+![Shared music, TTS, wake word, Voice Assistant and VoIP audio pipeline with AEC](docs/images/shared-audio-aec-pipeline.png)
+
+_Playback sources share one controlled output, while the processed post-AEC
+microphone feeds VoIP, Micro Wake Word and Voice Assistant with clean speech._
 
 ![Full voice audio stack](docs/images/audio-stack.png)
 

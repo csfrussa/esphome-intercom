@@ -280,7 +280,7 @@ now attached to that phone Device.
 
 ## Experimental: In-call DTMF Automation Event
 
-This event surface is experimental in `2026.7.1`. Automations that operate
+This event surface remains experimental in `2026.8.0`. Automations that operate
 gates, locks or other security-sensitive devices must validate the expected
 caller/source and digit rather than matching the digit alone.
 

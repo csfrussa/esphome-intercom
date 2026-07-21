@@ -15,7 +15,7 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
   starts from the current SIP/VoIP breaking migration. Development changes for
-  the next release are collected in [RELEASE_2026_7_2.md](RELEASE_2026_7_2.md).
+  the next release are collected in [RELEASE_2026_8_0.md](RELEASE_2026_8_0.md).
   Published notes remain available for [2026.7.1](RELEASE_2026_7_1.md) and
   [2026.7.0](RELEASE_2026_7_0.md).
 

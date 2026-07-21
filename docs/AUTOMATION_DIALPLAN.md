@@ -1,7 +1,11 @@
 # Automation Dial Plan
 
-> Experimental in `2026.7.2-dev`. The normal phonebook route remains the
-> default and does not require automations.
+> [!WARNING]
+> Initial experimental preview in `2026.8.0`. The normal phonebook route
+> remains the default and does not require automations. Event fields, decision
+> timing and service semantics may change in a future release while this API is
+> validated against more real PBX deployments. Keep critical access-control or
+> emergency routing on an explicitly tested stable path.
 
 VoIP Stack has one canonical dial plan: the shared phonebook. Home Assistant
 automations may override a call only at the explicit decision points described
