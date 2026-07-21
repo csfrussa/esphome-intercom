@@ -27,6 +27,7 @@ from .const import (
     HA_PEER_FALLBACK_NAME,
     HA_SOFTPHONE_DEVICE_ID,
     HA_SOFTPHONE_ENDPOINT_ENTITY_ID,
+    SIP_CALL_ENDED_EVENT,
 )
 from .endpoint_lifecycle import call_registry
 from .fsm import CallState, TerminalReason, sip_phone_state, sip_public_state as _sip_public_state
@@ -58,7 +59,6 @@ HA_SOFTPHONE_STATE_EVENT = "voip_stack.ha_softphone_state"
 SIP_CALL_STATE_EVENT = "voip_stack.call_state"
 SIP_INCOMING_CALL_EVENT = "voip_stack.incoming_call"
 SIP_ROUTE_REQUEST_EVENT = "voip_stack.route_request"
-SIP_CALL_ENDED_EVENT = "voip_stack.call_ended"
 SIP_DTMF_EVENT = "voip_stack.dtmf"
 WS_TYPE_LIST = f"{DOMAIN}/list_devices"
 WS_TYPE_RESOLVE_DEVICE = f"{DOMAIN}/resolve_device"

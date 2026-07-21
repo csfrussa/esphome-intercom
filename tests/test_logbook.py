@@ -1,0 +1,101 @@
+"""Tests for concise human-readable VoIP Logbook entries."""
+
+from __future__ import annotations
+
+import importlib
+import sys
+from types import SimpleNamespace
+import types
+
+
+logbook_component = sys.modules.setdefault(
+    "homeassistant.components.logbook",
+    types.ModuleType("homeassistant.components.logbook"),
+)
+logbook_component.LOGBOOK_ENTRY_ENTITY_ID = "entity_id"
+logbook_component.LOGBOOK_ENTRY_ICON = "icon"
+logbook_component.LOGBOOK_ENTRY_MESSAGE = "message"
+logbook_component.LOGBOOK_ENTRY_NAME = "name"
+core = sys.modules.setdefault("homeassistant.core", types.ModuleType("homeassistant.core"))
+
+
+class _Event:
+    def __class_getitem__(cls, _item):
+        return cls
+
+
+core.Event = _Event
+core.HomeAssistant = object
+core.callback = lambda function: function
+sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
+sys.modules.setdefault("homeassistant.components", types.ModuleType("homeassistant.components"))
+
+logbook = importlib.import_module("custom_components.voip_stack.logbook")
+const = importlib.import_module("custom_components.voip_stack.const")
+DOMAIN = const.DOMAIN
+SIP_CALL_ENDED_EVENT = const.SIP_CALL_ENDED_EVENT
+
+
+def test_registers_only_terminal_call_events() -> None:
+    registrations = []
+
+    logbook.async_describe_events(
+        SimpleNamespace(),
+        lambda domain, event_type, describe: registrations.append(
+            (domain, event_type, describe)
+        ),
+    )
+
+    assert len(registrations) == 1
+    domain, event_type, describe = registrations[0]
+    assert domain == DOMAIN
+    assert event_type == SIP_CALL_ENDED_EVENT
+    assert describe(
+        SimpleNamespace(
+            data={
+                "type": "ended",
+                "caller": "Cucina",
+                "callee": "Portone",
+                "duration_seconds": 45,
+            }
+        )
+    ) == {
+        "name": "VoIP Stack",
+        "message": "Cucina called Portone · 45 s",
+        "entity_id": "event.voip_stack_call",
+        "icon": "mdi:phone-log",
+    }
+
+
+def test_missed_call_prefers_the_answered_endpoint_name() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "missed",
+            "caller": "428",
+            "callee": "RG Casa",
+            "answered_by": "Test",
+        }
+    )
+
+    assert entry["message"] == "Missed call from 428 to Test"
+
+
+def test_failure_is_readable_and_sip_uri_is_compact() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "failed",
+            "caller": "sip:428@example.test;transport=tcp",
+            "callee": "Casa",
+            "terminal_reason": "media_incompatible",
+        }
+    )
+
+    assert entry["message"] == "Call from 428@example.test to Casa failed · media incompatible"
+
+
+def test_duration_format_is_bounded_and_human_readable() -> None:
+    assert logbook._format_duration(0) == "0 s"
+    assert logbook._format_duration(125) == "2 min 05 s"
+    assert logbook._format_duration(3725) == "1 h 02 min 05 s"
+    assert logbook._format_duration(-1) == ""
+    assert logbook._format_duration("not-a-number") == ""

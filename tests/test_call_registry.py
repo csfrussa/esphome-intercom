@@ -7,6 +7,7 @@ import importlib.util
 import sys
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -198,6 +199,26 @@ class CallRegistryEventContextTest(unittest.TestCase):
         self.assertEqual(duplicate, first)
         self.assertEqual(answered["sequence"], 2)
         self.assertEqual(answered["previous_state"], "ringing")
+
+    def test_terminal_event_reports_connected_call_duration(self) -> None:
+        registry = call_registry.CallRegistry()
+
+        with mock.patch(
+            "custom_components.voip_stack.call_registry.time.monotonic",
+            side_effect=(100.0, 145.4),
+        ):
+            registry.event_fields("call-1", "in_call")
+            ended = registry.event_fields("call-1", "idle")
+
+        self.assertEqual(ended["duration_seconds"], 45)
+
+    def test_unanswered_terminal_event_has_no_call_duration(self) -> None:
+        registry = call_registry.CallRegistry()
+
+        registry.event_fields("call-1", "ringing")
+        ended = registry.event_fields("call-1", "idle")
+
+        self.assertNotIn("duration_seconds", ended)
 
     def test_event_schema_v2_exposes_generation_phase_and_call_origin(self) -> None:
         registry = call_registry.CallRegistry()

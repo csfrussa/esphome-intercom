@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 DOMAIN = "voip_stack"
+SIP_CALL_ENDED_EVENT = "voip_stack.call_ended"
 CONF_ASSIST_INTENTS = "assist_intents"
 CONF_ASSIST_ENDPOINT_ENABLED = "assist_endpoint_enabled"
 CONF_ASSIST_EXTENSION = "assist_extension"

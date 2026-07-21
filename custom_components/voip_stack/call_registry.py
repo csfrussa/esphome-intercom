@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+import time
 from typing import Any, Literal, Protocol
 
 from .endpoint_session import CleanupStage
@@ -151,6 +152,7 @@ class CallEventContext:
     state: str = ""
     previous_state: str = ""
     route_history: list[dict[str, Any]] = field(default_factory=list)
+    connected_at: float = 0.0
 
 
 class CallRegistry:
@@ -451,6 +453,8 @@ class CallRegistry:
             context.previous_state = context.state
             context.state = state
             context.sequence += 1
+        if state == "in_call" and not context.connected_at:
+            context.connected_at = time.monotonic()
         session = self.sessions.get(call_id)
         fields = {
             "schema_version": CALL_EVENT_SCHEMA_VERSION,
@@ -466,6 +470,11 @@ class CallRegistry:
             "previous_state": context.previous_state,
             "route_history": [dict(item) for item in context.route_history],
         }
+        if state in TERMINAL_STATES and context.connected_at:
+            fields["duration_seconds"] = max(
+                0,
+                round(time.monotonic() - context.connected_at),
+            )
         if session is None:
             return fields
 

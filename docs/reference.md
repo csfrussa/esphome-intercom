@@ -331,6 +331,11 @@ The payload includes the canonical SIP fields when available: `state`,
 `sip_status_code`, `terminal_reason`, `endpoint_id`, source/destination endpoint
 and Device IDs, stable `ingress` / `origin` (`trunk` or `extension`), selected
 media formats, and RTP counters.
+Completed calls are described automatically in the Home Assistant Logbook as
+compact entries such as `Cucina called Portone · 45 s`. Missed and failed calls
+use equally explicit summaries. `duration_seconds` is included in terminal
+events when the call reached `in_call`; unanswered calls deliberately have no
+talk duration.
 With SIP/RTP debug enabled, the HA softphone snapshot also exposes `sip_trunk`
 when a trunk client exists,
 including registration status, last SIP status and last trunk SIP event.
