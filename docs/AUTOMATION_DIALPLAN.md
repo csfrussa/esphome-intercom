@@ -138,6 +138,11 @@ actions:
       on_failure: resume
 ```
 
+The release qualification exercised this exact lifecycle with a real
+30-second unanswered call: Assist returned TTS over RTP, a later video
+re-offer was answered as audio-only with `m=video 0`, BYE ended the dialog and
+all call-scoped sessions, media owners and RTP ports returned to zero.
+
 Replace `1666` with any destination understood by the phonebook. When exactly
 one HA-owned call is forwardable, the backend resolves its Call-ID and current
 revision itself. The source call remains open while VoIP Stack releases the HA

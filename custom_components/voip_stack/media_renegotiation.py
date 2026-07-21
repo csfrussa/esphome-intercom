@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
+from .assist_runtime import AssistMediaSession
 from .const import DOMAIN, HA_SOFTPHONE_DEVICE_ID
 from .endpoint_lifecycle import call_registry as _call_registry
 from .media_offer_answer import (
@@ -441,6 +442,59 @@ async def async_prepare_media_update(
     if session is None:
         return SipInviteResult(481, "Call/Transaction Does Not Exist")
     call_generation = session.generation
+    if isinstance(relay, AssistMediaSession):
+        # Assist terminates the media locally; it is deliberately stored under
+        # the registry's generic media-owner slot for common teardown, but it
+        # is not a two-leg RTP relay.  Answer every offered media section while
+        # rejecting video with port zero, and atomically update its audio leg.
+        try:
+            commit_assist = relay.prepare_media_update(updated)
+            answer = build_answer_directional(
+                local_ip,
+                local_ip,
+                int(relay.local_rtp_port),
+                updated.send_format,
+                updated.recv_format,
+                dtmf=_invite_dtmf_format(updated),
+                remote_sdp=updated.remote_sdp,
+                audio_direction=updated.local_audio_direction,
+                video_port=0,
+                video_format=updated.answer_video_format,
+                video_direction="inactive",
+            )
+        except (RuntimeError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "SIP Assist media update rejected call_id=%s reason=%s",
+                call_id,
+                err,
+            )
+            return SipInviteResult(488, "Not Acceptable Here")
+
+        async def _commit_assist_update() -> None:
+            if not registry.is_generation_current(call_id, call_generation):
+                raise RuntimeError(
+                    "SIP Assist media update belongs to a terminated call"
+                )
+            if registry.relays.get(call_id) is not relay:
+                raise RuntimeError("SIP Assist media owner changed before commit")
+            commit_assist()
+            _LOGGER.info(
+                "SIP Assist %s committed call_id=%s remote_rtp=%s:%s "
+                "audio_direction=%s video=declined",
+                method,
+                call_id,
+                updated.remote_rtp_host,
+                updated.remote_rtp_port,
+                updated.remote_audio_direction,
+            )
+
+        return SipInviteResult(
+            200,
+            "OK",
+            answer_sdp=answer,
+            commit=_commit_assist_update,
+        )
+
     right_peer = relay.right
     audio_direction = constrained_media_direction(
         updated.remote_audio_direction,

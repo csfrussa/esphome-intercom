@@ -143,6 +143,55 @@ class AssistMediaSession:
             "speech_gate_opens": 0,
         }
 
+    def prepare_media_update(self, updated: SipInvite) -> Callable[[], None]:
+        """Prepare an atomic in-dialog audio update for the Assist RTP leg."""
+
+        previous = self.invite
+        if updated.call_id != previous.call_id:
+            raise ValueError("Assist media update belongs to another call")
+        if self.closed.is_set() or self._cleanup_done.is_set():
+            raise RuntimeError("Assist media session is already closed")
+
+        # Codec construction and PCM converter validation may fail.  Do all of
+        # that work before returning the SIP 200 so the active RTP contract is
+        # left untouched when the new offer cannot be supported.
+        decoder = RtpPayloadDecoder(updated.recv_format)
+        encoder = RtpPayloadEncoder(updated.send_format)
+        rx_converter = PcmFrameConverter(
+            updated.recv_format.audio_format, ASSIST_PCM_FORMAT
+        )
+        tx_converter = PcmFrameConverter(
+            ASSIST_PCM_FORMAT, updated.send_format.audio_format
+        )
+        can_receive = updated.local_audio_direction in {"recvonly", "sendrecv"}
+        can_send = (
+            updated.local_audio_direction in {"sendonly", "sendrecv"}
+            and not updated.remote_audio_connection_held
+        )
+        reset_remote_source = (
+            updated.remote_rtp_host != previous.remote_rtp_host
+            or int(updated.remote_rtp_port) != int(previous.remote_rtp_port)
+            or updated.recv_format != previous.recv_format
+        )
+
+        def _commit() -> None:
+            if self.closed.is_set() or self._cleanup_done.is_set():
+                raise RuntimeError("Assist media session ended before media commit")
+            if self.invite is not previous:
+                raise RuntimeError("Assist media contract changed before commit")
+            self.decoder = decoder
+            self.encoder = encoder
+            self.rx_converter = rx_converter
+            self.tx_converter = tx_converter
+            self.remote_rtp_port = int(updated.remote_rtp_port)
+            if reset_remote_source:
+                self.remote_ssrc = None
+            self.can_receive = can_receive
+            self.can_send = can_send
+            self.invite = updated
+
+        return _commit
+
     async def start(self) -> None:
         """Bind RTP and start the persistent pipeline/media tasks."""
         async with self._start_lock:
@@ -250,10 +299,9 @@ class AssistMediaSession:
     async def _send_loop(self) -> None:
         """Maintain the RTP clock and stream TTS frames as soon as they arrive."""
         loop = asyncio.get_running_loop()
-        frame_format = self.invite.send_format.audio_format
-        frame_delay = max(0.001, frame_format.frame_ms / 1000.0)
-        silence = bytes(frame_format.nominal_frame_bytes)
         next_send = loop.time()
+        active_format = None
+        silence = b""
         try:
             while not self.closed.is_set():
                 delay = next_send - loop.time()
@@ -261,6 +309,19 @@ class AssistMediaSession:
                     await asyncio.sleep(delay)
                 if self.closed.is_set():
                     break
+                # Snapshot the committed contract only after the pacing await.
+                # A re-INVITE may commit while this task sleeps; pairing the
+                # current encoder, payload type and destination prevents one
+                # mixed old/new RTP packet at that boundary.
+                invite = self.invite
+                encoder = self.encoder
+                remote_rtp_port = self.remote_rtp_port
+                frame_format = invite.send_format.audio_format
+                if frame_format != active_format:
+                    active_format = frame_format
+                    silence = bytes(frame_format.nominal_frame_bytes)
+                    next_send = max(next_send, loop.time())
+                frame_delay = max(0.001, frame_format.frame_ms / 1000.0)
                 queued = True
                 try:
                     pcm = self.tx_queue.get_nowait()
@@ -274,10 +335,10 @@ class AssistMediaSession:
                         if self.invite.remote_audio_connection_held:
                             self.counters["drop_connection_hold"] += 1
                     else:
-                        payload = self.encoder.encode(pcm)
+                        payload = encoder.encode(pcm)
                         packet = rtp.build_packet(
                             rtp.RtpPacket(
-                                payload_type=self.invite.send_format.payload_type,
+                                payload_type=invite.send_format.payload_type,
                                 sequence=self.sequence,
                                 timestamp=self.timestamp,
                                 ssrc=self.ssrc,
@@ -287,7 +348,7 @@ class AssistMediaSession:
                         if self.transport is not None:
                             self.transport.sendto(
                                 packet,
-                                (self.invite.remote_rtp_host, self.remote_rtp_port),
+                                (invite.remote_rtp_host, remote_rtp_port),
                             )
                             self.counters["rtp_tx"] += 1
                 except Exception as err:  # noqa: BLE001 - keep the media clock alive.

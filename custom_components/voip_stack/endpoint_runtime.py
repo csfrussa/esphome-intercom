@@ -2404,7 +2404,12 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     )
                     registry.attach_relay(call_id, relay)
                     registry.pending_invites.pop(call_id, None)
-                    registry.take_media(call_id, provisional=True)
+                    consumed_preanswer = registry.take_media(
+                        call_id, provisional=True
+                    )
+                    # The audio reservation moved to Assist ownership above;
+                    # any pre-answer video sockets did not and must be released.
+                    _release_video_media_reservation(consumed_preanswer)
                     if preanswered is None or not bool(
                         preanswered.get("final_response_sent", True)
                     ):

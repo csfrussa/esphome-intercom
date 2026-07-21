@@ -172,6 +172,61 @@ def test_assist_respects_sendonly_receive_direction() -> None:
     assert session.counters["drop_direction_rx"] == 1
 
 
+def test_media_update_is_staged_and_commits_assist_audio_contract() -> None:
+    original = _invite()
+    updated_format = sdp.RtpPcmFormat(8, "PCMA", 8000, 1, 20)
+    updated = replace(
+        original,
+        cseq="2 INVITE",
+        send_format=updated_format,
+        recv_format=updated_format,
+        remote_rtp_host="198.51.100.25",
+        remote_rtp_port=42000,
+        remote_audio_direction="sendonly",
+        local_audio_direction="recvonly",
+    )
+    session = _session(original)
+    session.remote_ssrc = 1234
+
+    commit = session.prepare_media_update(updated)
+
+    assert session.invite is original
+    assert session.remote_rtp_port == 40000
+    assert session.remote_ssrc == 1234
+
+    commit()
+
+    assert session.invite is updated
+    assert session.remote_rtp_port == 42000
+    assert session.remote_ssrc is None
+    assert session.decoder.fmt == updated_format
+    assert session.encoder.fmt == updated_format
+    assert session.rx_converter.src == updated_format.audio_format
+    assert session.tx_converter.dst == updated_format.audio_format
+    assert session.can_receive is True
+    assert session.can_send is False
+
+
+def test_stale_assist_media_commit_cannot_overwrite_newer_contract() -> None:
+    original = _invite()
+    first = replace(original, cseq="2 INVITE", remote_rtp_port=42000)
+    second = replace(original, cseq="3 INVITE", remote_rtp_port=43000)
+    session = _session(original)
+    stale_commit = session.prepare_media_update(first)
+    current_commit = session.prepare_media_update(second)
+
+    current_commit()
+
+    try:
+        stale_commit()
+    except RuntimeError as err:
+        assert "changed before commit" in str(err)
+    else:
+        raise AssertionError("stale Assist media update was committed")
+    assert session.invite is second
+    assert session.remote_rtp_port == 43000
+
+
 def test_stop_cancellation_still_closes_transport_and_releases_port() -> None:
     async def run() -> None:
         session = _session()

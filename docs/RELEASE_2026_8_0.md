@@ -118,6 +118,9 @@ decision points instead of replacing the normal dial plan.
 - Per-phone state Sensor and call Event Entities support native HA triggers
   such as `ringing for 30 seconds`, without helper timers or Call-ID templates
   for the ordinary single-call case.
+- Once Assist owns the call, compatible in-dialog audio updates remain live;
+  video re-offers are answered explicitly with `m=video 0` because the Assist
+  endpoint is audio-only, rather than interrupting TTS or stranding the dialog.
 - Revision and sequence guards remain available for concurrent or multi-stage
   routing policies.
 

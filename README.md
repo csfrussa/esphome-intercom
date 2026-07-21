@@ -1543,6 +1543,35 @@ same unanswered call to Assist or another phonebook destination. The backend
 keeps the source call alive, releases the old owner and handles SIP CANCEL for
 any replaced ringing leg. The card remains a pure view of that backend state.
 
+This complete example was qualified with a real 30-second unanswered call,
+Assist TTS over RTP, an in-dialog video re-offer and final BYE cleanup:
+
+```yaml
+alias: VoIP - HA unanswered to Assist
+mode: parallel
+max: 10
+triggers:
+  - trigger: state
+    entity_id: sensor.voip_stack_call_state
+    to: ringing
+    for: "00:00:30"
+conditions:
+  - condition: state
+    entity_id: sensor.voip_stack_call_state
+    attribute: direction
+    state: incoming
+actions:
+  - action: voip_stack.forward
+    data:
+      destination: "1666"
+      on_failure: resume
+```
+
+Replace `1666` with the extension assigned to **Include voice assistant**.
+`on_failure: resume` returns the still-live call to the original HA phone if
+Assist cannot take ownership. With multiple logical HA phones, select that
+phone Device's call-state sensor instead of the default compatibility entity.
+
 See [Automation Dial Plan](docs/AUTOMATION_DIALPLAN.md) for complete native
 `event.received` and state `for:` examples with no Call-ID or Jinja in ordinary
 single-call use.
