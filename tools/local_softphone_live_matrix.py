@@ -13,23 +13,11 @@ import sys
 import time
 from typing import Any
 
-from playwright.sync_api import sync_playwright
-
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "test_runs"))
 
-from ha_playwright_auth import context_kwargs  # noqa: E402
-from ha_softphone_matrix import (  # noqa: E402
-    CLICK,
-    HA_BASE,
-    SET_AUTO_ANSWER,
-    SET_SEND_VIDEO,
-    wait_card,
-)
-
-
+HA_BASE = os.environ.get("HA_BASE", "http://192.168.1.10:8123")
 EXPECT_VIDEO = os.environ.get("EXPECT_VIDEO", "") == "1"
 RUN_LOCK = Path("/tmp/voip-stack-local-softphone-live-matrix.lock")
 CASA_URL = f"{HA_BASE}/lovelace/default_view"
@@ -72,6 +60,36 @@ async () => {
   return true;
 }
 """
+
+
+def _load_runtime_dependencies() -> None:
+    """Load Playwright only after command-line help has been handled."""
+
+    global CLICK, HA_BASE, SET_AUTO_ANSWER, SET_SEND_VIDEO  # noqa: PLW0603
+    global context_kwargs, sync_playwright, wait_card  # noqa: PLW0603
+
+    try:
+        from playwright.sync_api import sync_playwright as playwright_factory
+        from ha_playwright_auth import context_kwargs as browser_context_kwargs
+        from ha_softphone_matrix import (
+            CLICK as click_script,
+            HA_BASE as matrix_ha_base,
+            SET_AUTO_ANSWER as set_auto_answer_script,
+            SET_SEND_VIDEO as set_send_video_script,
+            wait_card as matrix_wait_card,
+        )
+    except ModuleNotFoundError as err:
+        raise RuntimeError(
+            "the local softphone matrix requires Playwright and its laboratory helpers"
+        ) from err
+
+    sync_playwright = playwright_factory
+    context_kwargs = browser_context_kwargs
+    CLICK = click_script
+    HA_BASE = matrix_ha_base
+    SET_AUTO_ANSWER = set_auto_answer_script
+    SET_SEND_VIDEO = set_send_video_script
+    wait_card = matrix_wait_card
 
 
 def _parse_args() -> argparse.Namespace:
@@ -140,6 +158,7 @@ def _wait_video(page: Any, label: str) -> dict[str, Any]:
 
 def main() -> int:
     arguments = _parse_args()
+    _load_runtime_dependencies()
     output = Path(arguments.out)
     results: list[dict[str, Any]] = []
     with sync_playwright() as playwright:
