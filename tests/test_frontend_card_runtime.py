@@ -571,7 +571,7 @@ assert.equal(cameraPermissionChecks, 0);
 assert.equal(JSON.stringify(serviceCalls.at(-1)), JSON.stringify([
   "voip_stack",
   "answer",
-  {{ endpoint_id: "default", device_id: "__voip_stack_ha_softphone__", call_id: "incoming-A", send_video: false }},
+  {{ device_id: "__voip_stack_ha_softphone__", call_id: "incoming-A", send_video: false }},
 ]));
 incoming._applySoftphoneSnapshot({{
   state: "answering",
@@ -639,7 +639,7 @@ await pendingReplacementAnswer;
 assert.equal(JSON.stringify(replacementCalls), JSON.stringify([[
   "voip_stack",
   "answer",
-  {{ endpoint_id: "default", device_id: "__voip_stack_ha_softphone__", call_id: "replace-A", send_video: false }},
+  {{ device_id: "__voip_stack_ha_softphone__", call_id: "replace-A", send_video: false }},
 ]]));
 
 // Hangup is call-scoped and likewise waits for the backend terminal snapshot.
@@ -651,7 +651,25 @@ await incoming._hangup();
 assert.equal(JSON.stringify(serviceCalls.at(-1)), JSON.stringify([
   "voip_stack",
   "hangup",
-  {{ endpoint_id: "default", device_id: "__voip_stack_ha_softphone__", call_id: "incoming-A" }},
+  {{ device_id: "__voip_stack_ha_softphone__", call_id: "incoming-A" }},
+]));
+
+// A non-default phone keeps endpoint_id for subscriptions/media correlation,
+// but every public action sends only its Home Assistant Device selector.
+const testPhone = makeCard();
+testPhone.config = {{
+  mode: "ha_softphone", endpoint_id: "browser:test", device_id: "device-test",
+}};
+testPhone._applySoftphoneSnapshot({{
+  endpoint_id: "browser:test", device_id: "device-test", state: "in_call",
+  direction: "outgoing", call_id: "test-to-ws3", peer_name: "WS3", sequence: 1,
+}});
+testPhone._loadSoftphoneState = async () => {{}};
+await testPhone._hangup();
+assert.equal(JSON.stringify(serviceCalls.at(-1)), JSON.stringify([
+  "voip_stack",
+  "hangup",
+  {{ device_id: "device-test", call_id: "test-to-ws3" }},
 ]));
 assert.equal(incoming._softphoneSnapshot.state, "in_call");
 incoming._applySoftphoneSnapshot({{

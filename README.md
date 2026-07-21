@@ -65,13 +65,14 @@ system for private room-to-room audio and video calls._
 | Call a Home Assistant voice assistant | Enable **Include voice assistant**, choose an Assist pipeline and assign an extension. | ESPs, registered SIP phones and external trunk callers can hold a multi-turn voice conversation with that pipeline. |
 | Voice Assistant calling | Enable the optional VoIP Stack Assist intents. | Satellites can call contacts, answer, decline or hang up by voice. |
 
-## Endpoint Capabilities
+## Derived Endpoint Media Roles
 
-VoIP Stack endpoints advertise what media path they actually have. That lets a
-single dial plan cover normal phones, paging speakers, monitor microphones and
-control panels without pretending every device is full-duplex.
+These are not user-selectable operating modes. The ESP component derives and
+advertises the role from the audio components actually configured: microphone
+and speaker, microphone only, speaker only, or neither. This lets one dial plan
+describe the real media path without pretending every endpoint is full-duplex.
 
-| Capability | Media path | Use case |
+| Derived role | Media path | Use case |
 |---|---|---|
 | `full_duplex` | Microphone TX + speaker RX | Room phones, door intercoms, wall panels and normal two-way calls. |
 | `mic_only` | Microphone TX only | Monitor microphones, outdoor call stations, capture-only endpoints. |
@@ -81,7 +82,7 @@ control panels without pretending every device is full-duplex.
 ## Table of Contents
 
 - [What Can You Build With It?](#what-can-you-build-with-it)
-- [Endpoint Capabilities](#endpoint-capabilities)
+- [Derived Endpoint Media Roles](#derived-endpoint-media-roles)
 - [Fastest Start](#fastest-start)
 - [What's New](#whats-new)
 - [Breaking Changes](#breaking-changes)

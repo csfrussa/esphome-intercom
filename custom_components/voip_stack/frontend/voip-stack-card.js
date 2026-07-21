@@ -978,6 +978,13 @@ class VoipStackCard extends HTMLElement {
     return scope;
   }
 
+  _softphoneServiceScope() {
+    // endpoint_id is an internal card/WebSocket correlation key. Public HA
+    // actions deliberately select a phone only through device_id.
+    const deviceId = String(this._getConfigDeviceId() || "").trim();
+    return deviceId ? { device_id: deviceId } : {};
+  }
+
   _isHaSoftphoneMode() {
     return (this.config?.mode || this.config?.card_mode || "esp_mirror") === "ha_softphone";
   }
@@ -2957,7 +2964,7 @@ class VoipStackCard extends HTMLElement {
         this._markSoftphoneMediaOwner(callId);
         claimedSoftphoneMedia = !alreadyOwned;
         await this._hass.callService("voip_stack", "answer", {
-          ...this._softphoneRequestScope(),
+          ...this._softphoneServiceScope(),
           call_id: callId,
           send_video: sendVideo,
           media_client_id: voipStackEngine.mediaClientId,
@@ -3013,7 +3020,7 @@ class VoipStackCard extends HTMLElement {
       if (softphoneAction) {
         if (this._sessionCallId() !== callId) return;
         await this._hass.callService("voip_stack", "decline", {
-          ...this._softphoneRequestScope(),
+          ...this._softphoneServiceScope(),
           call_id: callId,
           status: 603,
           reason: "Decline",
@@ -3054,7 +3061,7 @@ class VoipStackCard extends HTMLElement {
 
       if (wasSoftphone) {
         await this._hass.callService("voip_stack", "hangup", {
-          ...this._softphoneRequestScope(),
+          ...this._softphoneServiceScope(),
           call_id: callId,
         });
       } else {
@@ -3286,7 +3293,7 @@ class VoipStackCard extends HTMLElement {
     this._render();
     try {
       await this._hass.callService("voip_stack", "set_dnd", {
-        ...this._softphoneRequestScope(),
+        ...this._softphoneServiceScope(),
         dnd: next,
       });
       await this._loadSoftphoneState();
@@ -3398,7 +3405,7 @@ class VoipStackCard extends HTMLElement {
     this._render();
     try {
       await this._hass.callService("voip_stack", "set_ha_softphone_settings", {
-        ...this._softphoneRequestScope(),
+        ...this._softphoneServiceScope(),
         extension: this._softphoneExtension,
         ring_group: this._softphoneGroups.ring_group,
         conference_group: this._softphoneGroups.conference_group,
