@@ -91,6 +91,7 @@ control panels without pretending every device is full-duplex.
 - [Features](#features)
 - [Installation](#installation)
   - [1. Home Assistant Integration](#1-home-assistant-integration)
+    - [Upgrading VoIP Stack](#upgrading-voip-stack)
   - [2. ESPHome Component](#2-esphome-component)
   - [3. Lovelace Card](#3-lovelace-card)
 - [Architecture](#architecture)
@@ -749,6 +750,33 @@ The integration automatically registers the Lovelace card, no manual frontend se
 HACS already includes this repository, so normal installations do not need a
 Custom Repository entry. Install or upgrade the stable integration through
 HACS, then restart Home Assistant when prompted.
+
+#### Upgrading VoIP Stack
+
+Please keep in mind that VoIP Stack is still an enthusiast project maintained
+by one person. Version upgrades may contain breaking changes: maintaining old
+and new implementations in parallel is not currently sustainable, and adding
+features or improving an existing design sometimes requires changing service,
+event, entity or configuration semantics. Those changes may require updates to
+your automations, scripts, dashboards or ESPHome YAML.
+
+**Always read the [Breaking Changes](docs/BREAKING_CHANGES.md) and the release
+notes for the version you are installing before upgrading.** Each release aims
+to improve the previous one, but compatibility must not be assumed merely
+because the integration installs successfully.
+
+Recommended upgrade procedure:
+
+1. Read the breaking changes and the version-specific release notes.
+2. Update VoIP Stack through HACS and restart Home Assistant.
+3. Open **Settings → Devices & services → VoIP Stack → Configure** and review
+   every Reconfigure step. New options and migrations are exposed there, and
+   after a feature release it is quite likely that you will need to confirm or
+   adjust the integration configuration.
+4. Verify any automations that use VoIP services, call events, routing or phone
+   entities.
+5. Hard refresh every dashboard containing a VoIP Stack card as described
+   below.
 
 #### After Every VoIP Stack Upgrade: Hard Refresh The Card Page
 
