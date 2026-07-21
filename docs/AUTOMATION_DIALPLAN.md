@@ -75,6 +75,55 @@ can route to an indoor ESP only while someone is home. If the condition is
 false, no action runs and the default target takes over when the short decision
 window expires.
 
+### Route A Known Caller According To Presence
+
+This example uses only native Home Assistant conditions. Calls from Wildix
+extension `426` ring the kitchen ESP while Daniele is home; every other state,
+including `not_home` or another HA zone, routes the call to extension `667`
+(`Test`). Other callers do not match the automation and continue to the trunk's
+configured fallback destination.
+
+```yaml
+alias: VoIP - Route 426 according to Daniele presence
+description: Route one known trunk caller to WS3 at home, otherwise Test.
+mode: parallel
+max: 10
+triggers:
+  - trigger: event.received
+    target:
+      entity_id: event.voip_stack_call
+    options:
+      event_type:
+        - route_requested
+conditions:
+  - condition: state
+    entity_id: event.voip_stack_call
+    attribute: ingress
+    state: trunk
+  - condition: state
+    entity_id: event.voip_stack_call
+    attribute: caller
+    state: "426"
+actions:
+  - if:
+      - condition: state
+        entity_id: person.daniele
+        state: home
+    then:
+      - action: voip_stack.select_inbound_destination
+        data:
+          destination: Waveshare S3 Audio
+    else:
+      - action: voip_stack.select_inbound_destination
+        data:
+          destination: "667"
+```
+
+The `caller` value is the resolved name or number shown by
+`event.voip_stack_call`; replace `426` with the exact value exposed by your
+caller. The destinations may likewise be phonebook names, extensions, groups,
+registered SIP phones or Assist.
+
 ### Route Only Provider/PBX Trunk Calls To A Ring Group
 
 `route_requested` may also describe an HA-owned extension call. Filter on the
@@ -131,6 +180,11 @@ triggers:
     entity_id: sensor.voip_stack_call_state
     to: ringing
     for: "00:00:30"
+conditions:
+  - condition: state
+    entity_id: sensor.voip_stack_call_state
+    attribute: direction
+    state: incoming
 actions:
   - action: voip_stack.forward
     data:

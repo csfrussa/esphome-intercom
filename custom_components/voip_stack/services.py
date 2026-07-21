@@ -26,10 +26,6 @@ PASSWORD_TEXT = vol.All(cv.string, vol.Length(max=256))
 ROSTER_JSON_TEXT = vol.All(cv.string, vol.Length(max=256 * 1024))
 FORMAT_TEXT = vol.All(cv.string, vol.Length(max=128))
 FORMAT_LIST = vol.All([FORMAT_TEXT], vol.Length(max=32))
-TARGET_IDS = vol.Any(
-    IDENTIFIER_TEXT,
-    vol.All([IDENTIFIER_TEXT], vol.Length(max=64)),
-)
 PORT = vol.All(vol.Coerce(int), vol.Range(min=1, max=65535))
 SAMPLE_RATE = vol.All(vol.Coerce(int), vol.Range(min=8000, max=192000))
 PAYLOAD_BYTES = vol.All(vol.Coerce(int), vol.Range(min=64, max=65507))
@@ -37,25 +33,10 @@ SEQUENCE = vol.All(vol.Coerce(int), vol.Range(min=0, max=2**31 - 1))
 
 
 async def async_register_services(hass: HomeAssistant, handlers: dict[str, object]) -> None:
-    browser_target_fields = {
-        vol.Optional("endpoint_id"): IDENTIFIER_TEXT,
-        vol.Optional("device_id"): TARGET_IDS,
-        vol.Optional("entity_id"): vol.Any(
-            vol.All(cv.entity_id, vol.Length(max=256)),
-            vol.All(
-                [vol.All(cv.entity_id, vol.Length(max=256))],
-                vol.Length(max=64),
-            ),
-        ),
-    }
-    target_fields = {
-        **browser_target_fields,
-        vol.Optional("name"): SHORT_TEXT,
-        vol.Optional("friendly_name"): SHORT_TEXT,
-    }
+    phone_selector_fields = {vol.Optional("device_id"): IDENTIFIER_TEXT}
     purge_schema = vol.Schema(
         {
-            **target_fields,
+            **phone_selector_fields,
             vol.Optional("min_unavailable_hours", default=0): vol.All(
                 vol.Coerce(float), vol.Range(min=0, max=87600)
             ),
@@ -64,10 +45,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     sip_answer_schema = vol.Schema(
         {
-            **target_fields,
-            vol.Optional("source"): SHORT_TEXT,
-            vol.Optional("source_device_id"): IDENTIFIER_TEXT,
-            vol.Optional("source_name"): SHORT_TEXT,
+            **phone_selector_fields,
             vol.Optional("call_id", default=""): SHORT_TEXT,
             vol.Optional("send_video", default=False): cv.boolean,
             vol.Optional("media_client_id", default=""): IDENTIFIER_TEXT,
@@ -76,10 +54,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     sip_decline_schema = vol.Schema(
         {
-            **target_fields,
-            vol.Optional("source"): SHORT_TEXT,
-            vol.Optional("source_device_id"): IDENTIFIER_TEXT,
-            vol.Optional("source_name"): SHORT_TEXT,
+            **phone_selector_fields,
             vol.Optional("call_id", default=""): SHORT_TEXT,
             vol.Optional("status", default=603): SIP_FAILURE_STATUS,
             vol.Optional("reason", default="Decline"): REASON_TEXT,
@@ -89,10 +64,7 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     sip_hangup_schema = vol.Schema(
         {
-            **target_fields,
-            vol.Optional("source"): SHORT_TEXT,
-            vol.Optional("source_device_id"): IDENTIFIER_TEXT,
-            vol.Optional("source_name"): SHORT_TEXT,
+            **phone_selector_fields,
             vol.Optional("call_id", default=""): SHORT_TEXT,
             vol.Optional("reason", default="local_hangup"): REASON_TEXT,
         },
@@ -100,14 +72,9 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     sip_call_schema = vol.Schema(
         {
-            **target_fields,
-            vol.Optional("source"): SHORT_TEXT,
-            vol.Optional("source_device_id"): IDENTIFIER_TEXT,
-            vol.Optional("source_name"): SHORT_TEXT,
+            **phone_selector_fields,
             vol.Optional("call_id", default=""): SHORT_TEXT,
-            vol.Optional("destination"): URI_TEXT,
-            vol.Optional("target"): URI_TEXT,
-            vol.Optional("call"): URI_TEXT,
+            vol.Required("destination"): URI_TEXT,
             vol.Optional("ha_bridge", default=False): cv.boolean,
             vol.Optional("send_video", default=False): cv.boolean,
             vol.Optional("media_client_id", default=""): IDENTIFIER_TEXT,
@@ -116,14 +83,9 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     sip_forward_schema = vol.Schema(
         {
-            **target_fields,
-            vol.Optional("source"): SHORT_TEXT,
-            vol.Optional("source_device_id"): IDENTIFIER_TEXT,
-            vol.Optional("source_name"): SHORT_TEXT,
+            **phone_selector_fields,
             vol.Optional("call_id", default=""): SHORT_TEXT,
-            vol.Optional("destination"): URI_TEXT,
-            vol.Optional("target"): URI_TEXT,
-            vol.Optional("call"): URI_TEXT,
+            vol.Required("destination"): URI_TEXT,
             vol.Optional("ha_bridge", default=False): cv.boolean,
             vol.Optional("on_failure", default="resume"): vol.In(
                 ["resume", "terminate", "busy"]
@@ -156,8 +118,6 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
                 ["answer_ha", "decline", "busy", "forward", "bridge", "default", "cancel"]
             ),
             vol.Optional("destination"): URI_TEXT,
-            vol.Optional("target"): URI_TEXT,
-            vol.Optional("call"): URI_TEXT,
             vol.Optional("status", default=0): SIP_FAILURE_STATUS_OR_DEFAULT,
             vol.Optional("reason", default=""): REASON_TEXT,
             vol.Optional("decline_reason", default=""): REASON_TEXT,
@@ -206,14 +166,14 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     set_dnd_schema = vol.Schema(
         {
-            **browser_target_fields,
+            **phone_selector_fields,
             vol.Required("dnd"): cv.boolean,
         },
         extra=vol.PREVENT_EXTRA,
     )
     set_ha_softphone_settings_schema = vol.Schema(
         {
-            **browser_target_fields,
+            **phone_selector_fields,
             vol.Optional("extension"): IDENTIFIER_TEXT,
             vol.Optional("ring_group"): SHORT_TEXT,
             vol.Optional("conference_group"): SHORT_TEXT,
@@ -255,7 +215,6 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         "enable_account",
         "disable_account",
         "list_accounts",
-        "export_accounts",
         # These mutate routing/timers without a phone selector. Internal HA
         # automations remain allowed; authenticated callers must be admins so
         # global event-entity control cannot affect another user's call.
@@ -342,11 +301,5 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         DOMAIN,
         "list_accounts",
         handler_for("list_accounts"),
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "export_accounts",
-        handler_for("export_accounts"),
         supports_response=SupportsResponse.ONLY,
     )

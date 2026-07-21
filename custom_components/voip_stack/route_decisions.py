@@ -21,11 +21,9 @@ def set_pending_route_decision(hass: HomeAssistant, data: dict) -> None:
     if not call_id:
         raise ServiceValidationError("call_id is required")
     action = str(data.get("action") or "default").strip().lower()
-    destination = str(
-        data.get("destination") or data.get("target") or data.get("call") or ""
-    ).strip()
+    destination = str(data.get("destination") or "").strip()
     if action in {"forward", "bridge"} and not destination:
-        raise ServiceValidationError(f"{action} requires destination, target, or call")
+        raise ServiceValidationError(f"{action} requires destination")
     registry = call_registry(hass)
     route = registry.pending_routes.get(call_id)
     if route is None:

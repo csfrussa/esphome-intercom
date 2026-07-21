@@ -249,6 +249,12 @@ show_extended_info: true
 The editor writes the stable IDs, so copying a card and changing only its
 display name does not create another phone.
 
+The same Device page exposes the browser phone's Extension, Ring groups,
+Conference groups, Ring for conference calls and Do not disturb controls as
+native Home Assistant entities. Those controls, the card and the
+`voip_stack.set_ha_softphone_settings` action all update one persisted phone
+configuration.
+
 #### Tablet to tablet: room-to-room intercom
 
 Create one browser phone and one Lovelace view per room. Open each view on its
@@ -1201,7 +1207,7 @@ show_extended_info: true
 The default card mode is `esp_mirror`: the card mirrors one ESP endpoint and
 presses that ESP's own contact, call, answer, decline and hangup controls. To
 use a Home Assistant logical phone, add a separate card. Omitting both
-`endpoint_id` and `device_id` selects the backward-compatible default phone:
+`endpoint_id` and `device_id` selects the default phone:
 
 ![ESP mirror card](docs/images/esp-mirror-card.png)
 
@@ -1327,40 +1333,10 @@ _The card uses the ESPHome device registry, so the device must be added to HA be
 
 ### System Overview
 
-```mermaid
-flowchart TD
-    Browser["🌐 Browser / HA app<br/>one or more phone cards<br/>mic + speaker"]
+![Home Assistant VoIP Stack system topology](docs/images/sip-topology.png)
 
-    subgraph HA["🏠 Home Assistant"]
-        WS["🌐 WebSocket API<br/>logical browser phones"]
-        Router["🔀 voip_stack call router<br/>call / answer / decline / forward"]
-        Roster["📒 phonebook publisher<br/>sensor.voip_phonebook"]
-        Registrar["📲 optional local registrar<br/>Zoiper / Linphone / baresip"]
-        Trunk["🌍 optional SIP trunk<br/>provider / PBX"]
-        TCP["🔌 SIP TCP listener<br/>:5060"]
-        UDP["📡 SIP UDP listener + RTP<br/>SIP :5060 / RTP base :40000"]
-    end
-
-    subgraph ESP["📟 ESP device"]
-        FSM["📞 voip_stack<br/>SIP phone state"]
-        Book["📒 phonebook<br/>name → SIP URI"]
-        Audio["🎙️ mic / speaker<br/>AEC or AFE"]
-    end
-
-    Browser <-->|"binary PCM + control<br/>/api/voip_stack/ws"| WS
-    WS --> Router
-    Registrar --> Router
-    Trunk --> Router
-    Router --> TCP
-    Router --> UDP
-    Router --> Roster
-    Book -. "voip_endpoint" .-> Roster
-    Roster -. "roster update" .-> Book
-    TCP <-->|"SIP TCP leg"| FSM
-    UDP <-->|"SIP UDP + RTP"| FSM
-    FSM <--> Book
-    FSM <--> Audio
-```
+_Browser phones, ESP endpoints, registered SIP devices and an optional provider
+trunk meet in one HA-owned call router, phonebook, registrar and RTP bridge._
 
 This is the whole product in one picture: HA is the SIP routing and phonebook
 hub; each ESP owns its SIP phone state, audio path and local dial plan mirror.
@@ -1456,6 +1432,12 @@ recommended starting point for routed networks and HA/container deployments
 because connection state is easier to reason about. UDP is best suited to
 simple local LANs where low latency matters and the network is known to pass
 SIP/RTP cleanly.
+
+![SIP signaling transport and RTP media](docs/images/tcp-udp-choice.png)
+
+_TCP and UDP change only the SIP signaling transport. Audio, video and DTMF
+media continue over RTP/UDP, with HA bridging different endpoint choices when
+required._
 
 ### Phonebook Wire Format
 
@@ -1585,11 +1567,7 @@ destination.
 
 _Browser softphone path: the card talks only to HA; HA opens the SIP leg toward the ESP._
 
-```mermaid
-flowchart LR
-    Card["🌐 Browser card"] <-->|"WebSocket<br/>browser audio"| HA["🏠 HA<br/>voip_stack"]
-    HA <-->|"SIP leg<br/>INVITE / ACK / BYE + RTP"| ESP["📟 ESP<br/>rings / streams"]
-```
+![Browser softphone calling an ESP through Home Assistant](docs/images/browser-ha-esp-path.png)
 
 **Browser/App → ESP:**
 1. User clicks "Call" in the card
@@ -1615,16 +1593,7 @@ names, trunk calls and bridge-required routes go to HA.
 
 _ESP-to-ESP routing depends on the selected destination and transport compatibility. In this demo a UDP device calls a TCP device through HA._
 
-```mermaid
-flowchart TD
-    Press["📞 Call pressed"] --> Resolve["📒 resolve selected<br/>phonebook entry"]
-    Resolve --> Policy{"🧭 route decision"}
-    Policy -->|"complete direct SIP endpoint"| Direct["📟 dial peer directly"]
-    Policy -->|"extension / number / unresolved / bridge required"| ViaHA["🏠 dial HA"]
-    ViaHA --> Bridge["🔀 HA bridges<br/>to destination"]
-    Direct --> Stream["🎙️ full-duplex audio"]
-    Bridge --> Stream
-```
+![ESP phonebook resolution and explicit routing](docs/images/esp-route-decision.png)
 
 **Call Flow (ESP #1 calls ESP #2):**
 1. User selects "Bedroom" on ESP #1 via display, button, or service.
@@ -1669,81 +1638,16 @@ Quick links:
 
 ## Call Flow Diagrams
 
-### Browser Card Calls ESP
+![Browser, direct SIP and Home Assistant bridge call flows](docs/images/call-flow-sequences.png)
 
-```mermaid
-sequenceDiagram
-    participant B as 🌐 Browser
-    participant HA as 🏠 HA voip_stack
-    participant E as 📻 ESP
+The three canonical paths share the same phone lifecycle:
 
-    B->>HA: call selected ESP
-    HA->>E: INVITE caller=location_name
-    Note right of E: 180 Ringing or auto-answer
-    E-->>HA: 200 OK
-    Note right of E: STREAMING
-
-    loop Bidirectional Audio
-        B->>HA: browser mic PCM
-        HA->>E: AUDIO to speaker
-        E->>HA: AUDIO from mic
-        HA->>B: browser speaker PCM
-    end
-
-    B->>HA: hangup
-    HA->>E: BYE
-    Note right of E: IDLE
-```
-
-### ESP Calls ESP Directly
-
-```mermaid
-sequenceDiagram
-    participant A as 📟 ESP A
-    participant B as 📟 ESP B
-
-    Note left of A: user selects B<br/>direct SIP route + compatible media
-    A->>B: INVITE caller=A dest=B
-    Note right of B: 180 Ringing
-    B-->>A: 200 OK
-    Note over A,B: STREAMING
-
-    loop Direct audio
-        A->>B: AUDIO
-        B->>A: AUDIO
-    end
-
-    A->>B: BYE reason=local_hangup
-    Note over A,B: IDLE
-```
-
-### ESP Calls ESP Through HA
-
-```mermaid
-sequenceDiagram
-    participant A as 📟 ESP A
-    participant HA as 🏠 HA bridge
-    participant B as 📟 ESP B
-
-    Note left of A: bridge-required route
-    A->>HA: INVITE caller=A dest=B
-    HA->>B: INVITE caller=A dest=B
-    Note right of B: 180 Ringing
-    B-->>HA: 200 OK
-    HA-->>A: 200 OK
-    Note over A,B: STREAMING via HA
-
-    loop Bridge relays audio
-        A->>HA: AUDIO
-        HA->>B: AUDIO
-        B->>HA: AUDIO
-        HA->>A: AUDIO
-    end
-
-    B->>HA: BYE reason=local_hangup
-    HA->>A: BYE reason=remote_hangup
-    Note over A,B: IDLE
-```
+- **Browser → HA → ESP:** the browser uses WebSocket media while HA owns the
+  ESP-facing SIP dialog and RTP stream.
+- **ESP → ESP direct:** compatible endpoints exchange SIP and RTP without an HA
+  media hop.
+- **ESP → HA bridge → ESP:** HA owns two independent SIP legs and relays media
+  when routing, transport or format policy requires it.
 
 ---
 

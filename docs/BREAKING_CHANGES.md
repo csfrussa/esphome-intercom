@@ -1,5 +1,22 @@
 # Breaking changes
 
+## 2026.8.0: One Home Assistant call-action vocabulary
+
+Home Assistant actions now use `destination` as the only call destination
+field. Replace `target:` or `call:` inside `voip_stack.call`,
+`voip_stack.forward` and `voip_stack.route` action data with `destination:`.
+Phone actions now use `device_id` as their only optional phone selector;
+remove `endpoint_id`, `entity_id`, `source`, `source_device_id`, `source_name`,
+`name` and `friendly_name` from action data. Internal endpoint/entity IDs
+remain available in state and events for correlation.
+The duplicate `voip_stack.export_accounts` action was removed; use the
+identical `voip_stack.list_accounts` response action. These development-only
+aliases were removed before the stable release so the automation editor and
+API expose one predictable path. The development-only
+`voip_stack/ha_softphone_start` WebSocket command was also removed: cards and
+clients must use the standard Home Assistant `call_service` command with the
+`voip_stack.call` action.
+
 ## 2026.8.0: Optional ESPHome entities are explicit platforms
 
 The ESPHome `voip_stack` core no longer accepts `auto_entities`. ESPHome's

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import intent
 from homeassistant.helpers.intent import Intent, IntentHandler, IntentResponse
@@ -301,6 +301,8 @@ async def _start_call_to_ha_peer(
     hass: HomeAssistant,
     origin: dict[str, Any],
     dest_name: str,
+    *,
+    context: Context | None = None,
 ) -> None:
     """Ask the originating ESP to call HA by its phonebook peer name."""
     from .phonebook_runtime import available_esphome_services
@@ -318,6 +320,7 @@ async def _start_call_to_ha_peer(
         service_name,
         {"dest": dest_name},
         blocking=True,
+        context=context,
     )
 
 
@@ -404,16 +407,22 @@ class VoipCallIntentHandler(_VoipIntentHandler):
 
         try:
             if _normalize_contact(resolved.canonical) == _normalize_contact(_ha_peer_name(intent_obj.hass)):
-                await _start_call_to_ha_peer(intent_obj.hass, origin, resolved.canonical)
+                await _start_call_to_ha_peer(
+                    intent_obj.hass,
+                    origin,
+                    resolved.canonical,
+                    context=intent_obj.context,
+                )
             else:
                 await intent_obj.hass.services.async_call(
                     DOMAIN,
                     "call",
                     {
-                        "target": resolved.canonical,
-                        "source": origin["device_id"],
+                        "destination": resolved.canonical,
+                        "device_id": origin["device_id"],
                     },
                     blocking=True,
+                    context=intent_obj.context,
                 )
         except Exception as err:
             _LOGGER.error(
@@ -450,6 +459,7 @@ class VoipHangupIntentHandler(_VoipIntentHandler):
                 "hangup",
                 {"device_id": origin["device_id"]},
                 blocking=True,
+                context=intent_obj.context,
             )
         except Exception as err:
             _LOGGER.error("Assist VoIP hangup failed for %s: %s", origin.get("name"), err)
@@ -473,6 +483,7 @@ class VoipAnswerIntentHandler(_VoipIntentHandler):
                 "answer",
                 {"device_id": origin["device_id"]},
                 blocking=True,
+                context=intent_obj.context,
             )
         except Exception as err:
             _LOGGER.error("Assist VoIP answer failed for %s: %s", origin.get("name"), err)
@@ -499,6 +510,7 @@ class VoipDeclineIntentHandler(_VoipIntentHandler):
                     "reason": "declined by voice command",
                 },
                 blocking=True,
+                context=intent_obj.context,
             )
         except Exception as err:
             _LOGGER.error("Assist VoIP decline failed for %s: %s", origin.get("name"), err)

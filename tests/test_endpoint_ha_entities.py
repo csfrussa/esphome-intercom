@@ -28,6 +28,12 @@ def _install_ha_fakes() -> None:
         types.ModuleType("homeassistant.components.switch"),
     )
     switch_component.SwitchEntity = type("SwitchEntity", (), {})
+    text_component = sys.modules.setdefault(
+        "homeassistant.components.text",
+        types.ModuleType("homeassistant.components.text"),
+    )
+    text_component.TextEntity = type("TextEntity", (), {})
+    text_component.TextMode = types.SimpleNamespace(TEXT="text")
     helpers = sys.modules.setdefault(
         "homeassistant.helpers", types.ModuleType("homeassistant.helpers")
     )
@@ -99,6 +105,7 @@ endpoint_registry = _load("endpoint_registry")
 endpoint_device = _load("endpoint_device")
 entity_manager = _load("endpoint_entity_manager")
 endpoint_switch = _load("switch")
+endpoint_text = _load("text")
 
 
 def _endpoint(**changes):
@@ -330,6 +337,86 @@ def test_dynamic_entity_creation_is_not_reentered_by_device_id_update(
     assert manager.entities["kitchen"] is added[0][0][0]
 
 
+def test_entity_manager_predicate_excludes_unsupported_phone_kind(monkeypatch) -> None:
+    registry = endpoint_registry.EndpointRegistry()
+    hass = types.SimpleNamespace(
+        data={"voip_stack": {"endpoint_registry": registry}}
+    )
+    entry = types.SimpleNamespace(async_on_unload=lambda _callback: None)
+    added = []
+    monkeypatch.setattr(
+        entity_manager,
+        "async_ensure_endpoint_device",
+        lambda _hass, _entry, endpoint, _registry: endpoint,
+    )
+    manager = entity_manager.EndpointEntityManager(
+        hass,
+        entry,
+        lambda entities, *args, **kwargs: added.extend(entities),
+        lambda _hass, endpoint, _registry: types.SimpleNamespace(
+            endpoint=endpoint, hass=None
+        ),
+        predicate=lambda endpoint: endpoint.kind is phone_endpoint.EndpointKind.BROWSER,
+    )
+    manager.async_setup()
+
+    registry.register(
+        _endpoint(endpoint_id="browser", kind=phone_endpoint.EndpointKind.BROWSER)
+    )
+    registry.register(
+        _endpoint(
+            endpoint_id="sip",
+            name="Desk SIP",
+            kind=phone_endpoint.EndpointKind.SIP_ACCOUNT,
+        )
+    )
+
+    assert [entity.endpoint.endpoint_id for entity in added] == ["browser"]
+
+
+def test_browser_phone_setting_entities_share_the_service_settings_writer(
+    monkeypatch,
+) -> None:
+    registry = endpoint_registry.EndpointRegistry()
+    endpoint = _endpoint(
+        extension="401",
+        ring_group="Home",
+        conference_group="Family",
+        conference_ring=False,
+    )
+    registry.register(endpoint)
+    calls: list[dict[str, object]] = []
+    fake_websocket = types.ModuleType(f"{PKG_NAME}.websocket_api")
+
+    async def async_set_ha_softphone_settings(_hass, **settings):
+        calls.append(settings)
+
+    fake_websocket.async_set_ha_softphone_settings = async_set_ha_softphone_settings
+    monkeypatch.setitem(sys.modules, f"{PKG_NAME}.websocket_api", fake_websocket)
+
+    setting = endpoint_text._PhoneTextSetting(
+        "ring_group", "phone_endpoint_ring_group", "mdi:phone-ring", 255
+    )
+    text_entity = endpoint_text.PhoneEndpointSettingText(
+        None, endpoint, registry, setting=setting
+    )
+    assert text_entity._attr_icon == "mdi:phone-ring"
+    text_entity.hass = object()
+    asyncio.run(text_entity.async_set_value("Home, Upstairs"))
+
+    conference_switch = endpoint_switch.PhoneEndpointConferenceRingSwitch(
+        None, endpoint, registry
+    )
+    assert conference_switch._attr_icon == "mdi:phone-in-talk"
+    conference_switch.hass = text_entity.hass
+    asyncio.run(conference_switch.async_turn_on())
+
+    assert calls == [
+        {"endpoint_id": "kitchen", "ring_group": "Home, Upstairs"},
+        {"endpoint_id": "kitchen", "conference_ring": True},
+    ]
+
+
 def test_manager_bucket_unload_callback_returns_none() -> None:
     """HA unload callbacks must never leak the removed manager as a job."""
     callbacks = []
@@ -375,7 +462,7 @@ def test_sip_account_dnd_is_persisted_without_transport_hook(monkeypatch) -> Non
     persisted: list[tuple[object, object, str, dict[str, bool]]] = []
     fake_phone_config = types.ModuleType(f"{PKG_NAME}.phone_config")
     fake_phone_config.CONF_PHONE_DND = "dnd"
-    fake_phone_config.update_browser_phone_subentry = (
+    fake_phone_config.update_phone_subentry = (
         lambda received_hass, received_entry, endpoint_id, updates: persisted.append(
             (received_hass, received_entry, endpoint_id, updates)
         )

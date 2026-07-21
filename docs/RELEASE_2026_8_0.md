@@ -227,6 +227,13 @@ longer need empty platform blocks.
 
 ## 🖥️ Card, Diagnostics And Documentation
 
+- Normal call actions now use one vocabulary: `destination` selects what to
+  call and the optional `device_id` selects which phone acts. Development-only
+  destination aliases, selector aliases and the private start WebSocket path
+  were removed before stable release instead of becoming parallel APIs.
+- Browser-phone Devices expose native Extension, Ring groups, Conference
+  groups, Ring for conference calls and DND controls. Device entities, card
+  settings and actions all update the same persisted phone configuration.
 - Card commands use normal Home Assistant services and authoritative response
   snapshots; the frontend does not invent call IDs or a parallel state machine.
 - Phone identity, presentation and browser audio/video negotiation now live in
@@ -240,8 +247,10 @@ longer need empty platform blocks.
 - The repository now includes deterministic SIP peers, headless browser video
   fixtures and real-lab matrices for local phones, trunk calls, groups, DTMF,
   video and final resource quiescence.
-- The README, call-flow, architecture, service, trunk, automation, video,
-  testing and troubleshooting guides describe the same canonical behavior.
+- The README now uses a consistent illustrated visual language for system
+  topology, signaling transport, phonebook routing and canonical call paths;
+  the service, trunk, automation, video, testing and troubleshooting guides
+  describe the same behavior.
 
 ## ⚠️ Compatibility And Deliberate Limits
 
@@ -263,7 +272,7 @@ before updating a custom deployment.
 
 ## 🧪 Qualification
 
-The candidate passes **1057 tests plus 101 subtests**, together with Ruff and
+The candidate passes **1072 tests plus 101 subtests**, together with Ruff and
 JavaScript module parsing. The release gate covers:
 
 - the complete Python and frontend contract suite;

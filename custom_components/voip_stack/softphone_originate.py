@@ -223,16 +223,11 @@ async def async_originate_call(
     dest_device = (
         None if source is not None else await _resolve_target_device(hass, call)
     )
-    target = str(
-        call.data.get("destination")
-        or call.data.get("target")
-        or call.data.get("call")
-        or ""
-    ).strip()
+    target = str(call.data.get("destination") or "").strip()
     if not target and dest_device is not None:
         target = str(dest_device.get("name") or "").strip()
     if not target:
-        raise ServiceValidationError("target is required")
+        raise ServiceValidationError("destination is required")
     if source is not None:
         call_button = str((source.get("entities") or {}).get("call") or "").strip()
         await _require_phone_service_control(

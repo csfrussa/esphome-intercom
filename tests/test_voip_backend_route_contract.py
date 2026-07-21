@@ -227,7 +227,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("enable_caller_video_send=bool(", local_branch)
         self.assertIn('call.data.get("send_video", False)', local_branch)
 
-    def test_call_service_does_not_confuse_esp_target_with_browser_source(
+    def test_call_service_uses_one_device_selector_for_esp_or_browser_source(
         self,
     ) -> None:
         start = self.service_endpoints.index("def service_browser_endpoint(")
@@ -237,18 +237,12 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             )
         ]
 
-        self.assertIn('source_device_id = call.data.get("source_device_id")', body)
-        self.assertIn("def _browser_selectors(", body)
         self.assertIn('call.data.get("device_id")', body)
-        self.assertIn('call.data.get("entity_id")', body)
-        self.assertIn('"by_device_id"', body)
-        self.assertIn('"by_entity_id"', body)
-        self.assertIn(
-            'getattr(endpoint, "kind", None) is EndpointKind.BROWSER', body
-        )
-        self.assertIn("device_id=selected_device_ids", body)
-        self.assertIn("entity_id=selected_entity_ids", body)
-        self.assertIn("Treat it as the browser source only", body)
+        self.assertIn("registry.by_device_id(device_id)", body)
+        self.assertIn("endpoint.kind is not EndpointKind.BROWSER", body)
+        self.assertNotIn('call.data.get("entity_id")', body)
+        self.assertNotIn('call.data.get("endpoint_id")', body)
+        self.assertNotIn("source_device_id", body)
 
     def test_nested_ha_actions_preserve_service_context_and_exact_entity_scope(
         self,
@@ -736,13 +730,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("[:32]", websocket)
         self.assertIn('for raw in str(value or "").split(",")', websocket)
 
-    def test_ha_softphone_settings_persist_in_config_entry_options(self) -> None:
+    def test_ha_softphone_settings_use_phone_subentries_as_the_only_store(self) -> None:
         websocket = WEBSOCKET_API.read_text()
-        self.assertIn("_HA_SOFTPHONE_OPTION_KEYS", websocket)
         self.assertIn('runtime["config_entry_id"]', websocket)
-        self.assertIn("hass.config_entries.async_update_entry(", websocket)
-        self.assertIn("options={**entry.options, **persisted}", websocket)
-        self.assertIn("One-time migration from the legacy Store", websocket)
+        self.assertIn("update_phone_subentry(", websocket)
+        self.assertNotIn("_HA_SOFTPHONE_OPTION_KEYS", websocket)
+        self.assertNotIn("HA_SOFTPHONE_STORE_KEY", websocket)
+        self.assertNotIn("options={**entry.options, **persisted}", websocket)
 
         init_py = INIT.read_text()
         setup = init_py[

@@ -1211,7 +1211,6 @@ class VoipStackEngine extends EventTarget {
       ) {
         await this._hass.callService("voip_stack", "hangup", {
           call_id: callId,
-          endpoint_id: endpointId,
           device_id: deviceId,
           reason: "media_incompatible",
         }).catch(() => {});
@@ -1235,14 +1234,13 @@ class VoipStackEngine extends EventTarget {
       service: "call",
       return_response: true,
       service_data: {
-        target: context.callee || target.name || target.device_id || "",
+        destination: context.callee || target.name || target.device_id || "",
         call_id: context.call_id || "",
         send_video: Boolean(context.sendVideo),
         media_client_id: this._mediaClientId,
       },
     };
-    if (endpointId) request.service_data.endpoint_id = endpointId;
-    if (deviceId) request.service_data.source_device_id = deviceId;
+    if (deviceId) request.service_data.device_id = deviceId;
     const serviceReply = await this._hass.callWS(request);
     const reply = serviceReply?.response || serviceReply || {};
     endpointId = String(reply?.endpoint_id || endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID);
@@ -1256,7 +1254,6 @@ class VoipStackEngine extends EventTarget {
       ) {
         await this._hass.callService("voip_stack", "hangup", {
           call_id: callId,
-          endpoint_id: endpointId,
           device_id: deviceId,
           reason: "superseded",
         }).catch(() => {});

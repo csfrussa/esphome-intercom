@@ -215,11 +215,25 @@
         }
       }
     },
-    "switch": {
-      "phone_endpoint_dnd": {
-        "name": "Non disturbare"
-      }
+  "switch": {
+    "phone_endpoint_dnd": {
+      "name": "Non disturbare"
     },
+    "phone_endpoint_conference_ring": {
+      "name": "Squilla per le conferenze"
+    }
+  },
+  "text": {
+    "phone_endpoint_extension": {
+      "name": "Interno"
+    },
+    "phone_endpoint_ring_group": {
+      "name": "Gruppi di squillo"
+    },
+    "phone_endpoint_conference_group": {
+      "name": "Gruppi conferenza"
+    }
+  },
     "binary_sensor": {
       "phone_endpoint_connectivity": {
         "name": "Connettività"

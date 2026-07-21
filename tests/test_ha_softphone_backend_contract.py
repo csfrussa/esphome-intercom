@@ -658,9 +658,9 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn('"dest_endpoint_id"', body)
         self.assertIn('"target_endpoint_id"', body)
 
-    def test_all_documented_browser_service_selectors_are_accepted(self) -> None:
+    def test_phone_services_accept_only_the_device_selector(self) -> None:
         services = SERVICES.read_text()
-        self.assertIn("browser_target_fields = {", services)
+        self.assertIn('phone_selector_fields = {vol.Optional("device_id"):', services)
         for schema_name in (
             "sip_answer_schema",
             "sip_decline_schema",
@@ -673,13 +673,11 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             schema = services.split(f"{schema_name} = vol.Schema(", 1)[1].split(
                 "extra=vol.PREVENT_EXTRA", 1
             )[0]
-            selector_fields = (
-                "browser_target_fields"
-                if schema_name.startswith("set_")
-                else "target_fields"
-            )
-            self.assertIn(f"**{selector_fields}", schema)
+            self.assertIn("**phone_selector_fields", schema)
+            self.assertNotIn('vol.Optional("endpoint_id")', schema)
+            self.assertNotIn('vol.Optional("entity_id")', schema)
 
+    def test_websocket_state_subscriptions_keep_internal_endpoint_scoping(self) -> None:
         websocket = (
             ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
         ).read_text()
@@ -713,8 +711,9 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             later_starts = [position for position in later_starts if position >= 0]
             end = min(later_starts) if later_starts else len(service_descriptions)
             description = service_descriptions[start:end]
-            for field in ("endpoint_id:", "device_id:", "entity_id:"):
-                self.assertIn(field, description)
+            self.assertIn("device_id:", description)
+            self.assertNotIn("endpoint_id:", description)
+            self.assertNotIn("entity_id:", description)
 
     def test_invalid_new_sip_username_stays_a_form_validation_error(self) -> None:
         config_flow = CONFIG_FLOW.read_text()
@@ -741,9 +740,10 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         ]
         self.assertIn("EndpointKind.BROWSER", configured)
         self.assertIn("EndpointKind.SIP_ACCOUNT", configured)
-        self.assertIn("if len(selected) != 1:", configured)
-        self.assertIn('("by_device_id", call.data.get("device_id")', configured)
-        self.assertIn('"by_entity_id"', configured)
+        self.assertIn('device_id = str(call.data.get("device_id")', configured)
+        self.assertIn("registry.by_device_id(device_id)", configured)
+        self.assertNotIn('call.data.get("endpoint_id")', configured)
+        self.assertNotIn('call.data.get("entity_id")', configured)
 
         dnd = _function_body(self.source, "_handle_set_dnd_service")
         settings = _function_body(

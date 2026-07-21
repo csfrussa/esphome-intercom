@@ -550,8 +550,8 @@ def test_all_external_surfaces_apply_authorization_and_ws_context() -> None:
     video = (ROOT / "custom_components" / "voip_stack" / "video_ws_view.py").read_text()
 
     assert websocket.count("require_websocket_read(connection)") >= 5
-    assert "require_websocket_control(connection)" in websocket
-    assert "context=connection.context(msg)" in websocket
+    assert "require_websocket_control(connection)" not in websocket
+    assert "hass.services.async_call(" not in websocket
     assert "async_require_service_control" in services
     assert "async_require_service_admin" in services
     assert "require_http_control(request)" in audio

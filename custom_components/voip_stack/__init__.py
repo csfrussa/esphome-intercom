@@ -96,6 +96,7 @@ PLATFORMS: list[Platform] = [
     Platform.EVENT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.TEXT,
 ]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -251,7 +252,7 @@ async def _handle_sip_call_target_service(
     if not call.return_response:
         return None
     endpoint_id, endpoint = _service_browser_endpoint(call.hass, call)
-    if endpoint is None and not call.data.get("endpoint_id"):
+    if endpoint is None and not call.data.get("device_id"):
         return {"success": True}
     return {"success": True, **_ha_softphone_state(call.hass, endpoint_id)}
 
@@ -507,9 +508,12 @@ _REMOVED_ENTRY_RUNTIME_KEYS = (
     "endpoint_call_event_entity_manager",
     "endpoint_call_state_entity_manager",
     "endpoint_dnd_entity_manager",
+    "endpoint_conference_ring_entity_manager",
+    "endpoint_extension_entity_manager",
+    "endpoint_ring_group_entity_manager",
+    "endpoint_conference_group_entity_manager",
     # Per-entry browser-phone state. A later entry must start from its own
     # subentries instead of inheriting a removed kiosk or its page presence.
-    "ha_softphone",
     "ha_softphones",
     "ha_softphone_presence",
     "ha_softphone_presence_events",

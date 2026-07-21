@@ -215,11 +215,25 @@
         }
       }
     },
-    "switch": {
-      "phone_endpoint_dnd": {
-        "name": "Do not disturb"
-      }
+  "switch": {
+    "phone_endpoint_dnd": {
+      "name": "Do not disturb"
     },
+    "phone_endpoint_conference_ring": {
+      "name": "Ring for conference calls"
+    }
+  },
+  "text": {
+    "phone_endpoint_extension": {
+      "name": "Extension"
+    },
+    "phone_endpoint_ring_group": {
+      "name": "Ring groups"
+    },
+    "phone_endpoint_conference_group": {
+      "name": "Conference groups"
+    }
+  },
     "binary_sensor": {
       "phone_endpoint_connectivity": {
         "name": "Connectivity"

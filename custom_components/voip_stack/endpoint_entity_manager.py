@@ -56,12 +56,14 @@ class EndpointEntityManager(Generic[_EntityT]):
         factory: Callable[[HomeAssistant, PhoneEndpoint, EndpointRegistry], _EntityT],
         *,
         include_default: bool = True,
+        predicate: Callable[[PhoneEndpoint], bool] | None = None,
     ) -> None:
         self.hass = hass
         self.entry = entry
         self.async_add_entities = async_add_entities
         self.factory = factory
         self.include_default = include_default
+        self.predicate = predicate
         self.entities: dict[str, _EntityT] = {}
         self._creating_endpoint_ids: set[str] = set()
         self.registry: EndpointRegistry | None = hass.data.get(DOMAIN, {}).get(
@@ -93,6 +95,8 @@ class EndpointEntityManager(Generic[_EntityT]):
         if not is_managed_endpoint(endpoint):
             return None
         if not self.include_default and endpoint.endpoint_id == DEFAULT_ENDPOINT_ID:
+            return None
+        if self.predicate is not None and not self.predicate(endpoint):
             return None
         if endpoint.endpoint_id in self.entities:
             return None

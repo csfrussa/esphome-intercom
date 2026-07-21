@@ -111,12 +111,7 @@ async def async_resolve_source_device(
     call: ServiceCall,
 ) -> dict | None:
     """Resolve the explicit physical source of a phone action."""
-    source = str(
-        call.data.get("source")
-        or call.data.get("source_device_id")
-        or call.data.get("source_name")
-        or ""
-    ).strip()
+    source = str(call.data.get("device_id") or "").strip()
     if not source:
         return None
     devices = await _get_voip_devices(hass)
@@ -142,12 +137,7 @@ async def async_resolve_command_phone(
     logical browser Device must never be mistaken for an ESP target.
     """
     endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
-    selector = str(
-        call.data.get("endpoint_id")
-        or call.data.get("source_device_id")
-        or call.data.get("device_id")
-        or ""
-    ).strip()
+    selector = str(call.data.get("device_id") or "").strip()
     resolve_endpoint = getattr(endpoint_registry, "resolve", None)
     if selector and callable(resolve_endpoint):
         try:

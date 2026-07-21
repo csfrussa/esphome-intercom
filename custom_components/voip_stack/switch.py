@@ -16,6 +16,7 @@ from .endpoint_entity_manager import (
     EndpointEntityManager,
     register_endpoint_entity_manager,
 )
+from .phone_endpoint import EndpointKind
 
 
 async def async_set_endpoint_dnd(
@@ -23,7 +24,7 @@ async def async_set_endpoint_dnd(
     endpoint_id: str,
     enabled: bool,
 ) -> None:
-    """Set DND through the runtime hook or the browser compatibility store."""
+    """Set DND through the runtime hook and canonical phone configuration."""
     bucket = hass.data.setdefault(DOMAIN, {})
     handler: Callable[[str, bool], Awaitable[None] | None] | None = bucket.get(
         "async_set_endpoint_dnd"
@@ -43,12 +44,12 @@ async def async_set_endpoint_dnd(
         # integration-owned phone.  Keep the switch durable even when no
         # transport-specific runtime hook is installed (notably registrar
         # accounts, which do not have a browser compatibility store).
-        from .phone_config import CONF_PHONE_DND, update_browser_phone_subentry
+        from .phone_config import CONF_PHONE_DND, update_phone_subentry
         from .store import config_entry
 
         entry = config_entry(hass)
         if entry is not None:
-            update_browser_phone_subentry(
+            update_phone_subentry(
                 hass,
                 entry,
                 endpoint_id,
@@ -86,6 +87,20 @@ async def async_setup_entry(
     register_endpoint_entity_manager(
         entry, bucket, "endpoint_dnd_entity_manager", manager
     )
+    conference_manager = EndpointEntityManager(
+        hass,
+        entry,
+        async_add_entities,
+        PhoneEndpointConferenceRingSwitch,
+        predicate=lambda endpoint: endpoint.kind is EndpointKind.BROWSER,
+    )
+    conference_manager.async_setup()
+    register_endpoint_entity_manager(
+        entry,
+        bucket,
+        "endpoint_conference_ring_entity_manager",
+        conference_manager,
+    )
 
 
 class PhoneEndpointDndSwitch(SwitchEntity):
@@ -94,6 +109,7 @@ class PhoneEndpointDndSwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_translation_key = "phone_endpoint_dnd"
+    _attr_icon = "mdi:phone-off"
 
     def __init__(self, hass, endpoint, registry) -> None:
         self.endpoint = endpoint
@@ -120,3 +136,49 @@ class PhoneEndpointDndSwitch(SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await async_set_endpoint_dnd(self.hass, self.endpoint.endpoint_id, False)
+
+
+class PhoneEndpointConferenceRingSwitch(SwitchEntity):
+    """Whether a browser phone rings when its conference becomes active."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "phone_endpoint_conference_ring"
+    _attr_icon = "mdi:phone-in-talk"
+
+    def __init__(self, hass, endpoint, registry) -> None:
+        self.endpoint = endpoint
+        self.registry = registry
+        self._attr_unique_id = (
+            f"phone_endpoint_{endpoint.endpoint_id}_conference_ring"
+        )
+        self._attr_device_info = endpoint_device_info(endpoint)
+        self._attr_is_on = bool(endpoint.conference_ring)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        async_link_endpoint_entity(
+            self.registry, self.endpoint.endpoint_id, self.entity_id
+        )
+
+    @callback
+    def apply_endpoint(self, endpoint) -> None:
+        self.endpoint = endpoint
+        self._attr_is_on = bool(endpoint.conference_ring)
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+    async def _async_set(self, enabled: bool) -> None:
+        from .websocket_api import async_set_ha_softphone_settings
+
+        await async_set_ha_softphone_settings(
+            self.hass,
+            endpoint_id=self.endpoint.endpoint_id,
+            conference_ring=enabled,
+        )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)

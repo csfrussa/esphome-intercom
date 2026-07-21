@@ -156,9 +156,6 @@ def build_account_service_handlers(
     async def list_accounts(call: ServiceCall) -> dict[str, list[dict[str, Any]]]:
         return account_response(call)
 
-    async def export_accounts(call: ServiceCall) -> dict[str, list[dict[str, Any]]]:
-        return account_response(call)
-
     async def enable_account(call: ServiceCall) -> None:
         await set_account_enabled(call, enabled=True)
 
@@ -172,5 +169,4 @@ def build_account_service_handlers(
         "enable_account": enable_account,
         "disable_account": disable_account,
         "list_accounts": list_accounts,
-        "export_accounts": export_accounts,
     }

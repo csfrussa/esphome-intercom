@@ -9,24 +9,18 @@ logic.
 
 ## Softphone Services
 
-`call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
-`set_ha_softphone_settings` accept one optional logical-phone selector:
-`endpoint_id`, `device_id` or `entity_id`. If omitted, the migrated default HA
-phone is selected. `source_device_id` identifies a physical ESP source and is
-not a substitute for the logical HA-phone selector.
+The normal automation editor shows one optional `device_id` phone picker. If
+it is omitted, the default HA phone is selected. This is the only public phone
+selector: internal endpoint and entity IDs are deliberately not alternative
+action inputs. `call_id` and stale-decision guards remain under the collapsed
+**Advanced options** section where concurrency requires them.
 
 ### `voip_stack.call`
 
 Originate a call from Home Assistant.
 
-Accepted target fields:
-
-- `destination`
-- `target`
-- `call`
-
-All three are aliases. The value can be a roster name, extension, group name,
-public number, `user@host` or `sip:user@host`.
+`destination` is the only destination field. Its value can be a roster name,
+extension, group name, public number, `user@host` or `sip:user@host`.
 
 Optional:
 
@@ -37,8 +31,7 @@ caller requests a response, it receives the authoritative logical-phone
 snapshot after origination, including `call_id`, `state`, endpoint identity and
 the negotiated media fields already available at that point. The Lovelace card
 uses the standard Home Assistant `call_service` WebSocket command with
-`return_response: true`; the older private start command remains only as a
-compatibility adapter for cached or older cards.
+`return_response: true`; there is no parallel private start command.
 
 ### `voip_stack.forward`
 
@@ -110,7 +103,10 @@ Fields:
 
 Changing these settings updates HA's virtual endpoint sensor. The phonebook
 sensor observes that change, rebuilds the central roster and pushes updates to
-online ESP devices.
+online ESP devices. The same values are editable directly from each browser
+phone Device through native Extension, Ring groups, Conference groups and Ring
+for conference calls entities. The Device entities, this action and the card
+all use the same persisted phone configuration.
 
 ## Phonebook Services
 
@@ -209,7 +205,7 @@ Disable an account and clear active registration.
 Generate a new password, clear active registration and return the replacement
 once in the administrator-only action response.
 
-### `voip_stack.list_accounts` / `voip_stack.export_accounts`
+### `voip_stack.list_accounts`
 
 Return configured accounts without passwords in the administrator-only action
 response.
@@ -243,7 +239,7 @@ Fields:
 - `call_id`: required.
 - `action`: `answer_ha`, `decline`, `busy`, `forward`, `bridge`, `default`,
   `cancel`.
-- `destination`, `target`, `call`: aliases for forward/bridge destination.
+- `destination`: forward/bridge destination.
 - `status`, `reason`, `decline_reason`: optional terminal response metadata.
 
 Use this only for the automation fallback path. Known roster targets should be

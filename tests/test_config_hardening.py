@@ -203,6 +203,16 @@ def test_create_account_password_service_field_is_masked() -> None:
     }
 
 
+def _service_description_field(document: dict, service: str, field: str) -> dict:
+    fields = document[service]["fields"]
+    if field in fields:
+        return fields[field]
+    for value in fields.values():
+        if isinstance(value, dict) and field in (value.get("fields") or {}):
+            return value["fields"][field]
+    raise KeyError(f"{service}.{field}")
+
+
 @pytest.mark.parametrize(
     ("service", "expected_integrations"),
     [
@@ -221,11 +231,16 @@ def test_phone_service_pickers_expose_only_compatible_integrations(
 ) -> None:
     document = yaml.safe_load(SERVICES_YAML.read_text())
 
-    for field, selector_name in (("device_id", "device"), ("entity_id", "entity")):
-        selector = document[service]["fields"][field]["selector"]
-        assert selector_name in selector
-        filters = (selector.get(selector_name) or {}).get("filter") or []
-        assert {item["integration"] for item in filters} == expected_integrations
+    selector = _service_description_field(document, service, "device_id")["selector"]
+    assert "device" in selector
+    filters = (selector.get("device") or {}).get("filter") or []
+    assert {item["integration"] for item in filters} == expected_integrations
+    fields = document[service]["fields"]
+    assert "endpoint_id" not in fields
+    assert "entity_id" not in fields
+    advanced = fields.get("advanced", {}).get("fields", {})
+    assert "endpoint_id" not in advanced
+    assert "entity_id" not in advanced
 
 
 def test_purge_picker_is_limited_to_esphome_devices() -> None:
@@ -233,6 +248,68 @@ def test_purge_picker_is_limited_to_esphome_devices() -> None:
     selector = document["purge_devices"]["fields"]["device_id"]["selector"]
 
     assert selector["device"]["filter"] == [{"integration": "esphome"}]
+
+
+def test_everyday_call_actions_hide_technical_fields_in_collapsed_sections() -> None:
+    document = yaml.safe_load(SERVICES_YAML.read_text())
+
+    expected_primary = {
+        "call": {"device_id", "destination", "send_video"},
+        "answer": {"device_id", "send_video"},
+        "decline": {"device_id"},
+        "hangup": {"device_id"},
+        "forward": {"device_id", "destination", "on_failure"},
+        "select_inbound_destination": {"destination"},
+    }
+    for service, primary in expected_primary.items():
+        fields = document[service]["fields"]
+        assert set(fields) == {*primary, "advanced"}
+        assert fields["advanced"]["collapsed"] is True
+
+
+def test_home_assistant_call_actions_have_one_destination_vocabulary() -> None:
+    schemas = _load_service_schemas()
+
+    for service in ("call", "forward"):
+        assert schemas[service]({"destination": "Kitchen"})["destination"] == "Kitchen"
+        for removed_alias in ("target", "call"):
+            with pytest.raises(vol.Invalid):
+                schemas[service]({"destination": "Kitchen", removed_alias: "Desk"})
+
+    route = schemas["route"]
+    for removed_alias in ("target", "call"):
+        with pytest.raises(vol.Invalid):
+            route({"call_id": "call-1", removed_alias: "Desk"})
+
+    document = yaml.safe_load(SERVICES_YAML.read_text())
+    assert "export_accounts" not in document
+
+
+def test_phone_actions_have_one_device_selector() -> None:
+    schemas = _load_service_schemas()
+
+    for service in (
+        "call",
+        "answer",
+        "decline",
+        "hangup",
+        "forward",
+        "set_dnd",
+        "set_ha_softphone_settings",
+    ):
+        required = (
+            {"destination": "Kitchen"}
+            if service in {"call", "forward"}
+            else {"dnd": True}
+            if service == "set_dnd"
+            else {}
+        )
+        assert schemas[service]({**required, "device_id": "device-kitchen"})[
+            "device_id"
+        ] == "device-kitchen"
+        for removed_selector in ("endpoint_id", "entity_id"):
+            with pytest.raises(vol.Invalid):
+                schemas[service]({**required, removed_selector: "kitchen"})
 
 
 def test_final_entry_removal_forgets_runtime_but_preserves_global_views() -> None:

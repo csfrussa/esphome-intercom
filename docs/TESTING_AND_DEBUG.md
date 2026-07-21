@@ -166,7 +166,7 @@ Exercise all public services with temporary data:
 - `set_dnd`;
 - `set_ha_softphone_settings`;
 - `create_account`, `disable_account`, `enable_account`,
-  `rotate_account_password`, `list_accounts`, `export_accounts`,
+  `rotate_account_password`, `list_accounts`,
   `remove_account`;
 - `add_contact`, `remove_contact`, `set_contacts`, `clear_contacts`,
   `export_phonebook`, `push_phonebook`;

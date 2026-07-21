@@ -528,7 +528,7 @@ assert.equal(supersededRequests[0].type, "call_service");
 assert.equal(supersededRequests[0].domain, "voip_stack");
 assert.equal(supersededRequests[0].service, "call");
 assert.equal(supersededRequests[0].return_response, true);
-assert.equal(supersededRequests[0].service_data.target, "peer");
+assert.equal(supersededRequests[0].service_data.destination, "peer");
 assert.equal(supersededServices.length, 1);
 assert.equal(supersededServices[0][2].call_id, "orphan-B");
 

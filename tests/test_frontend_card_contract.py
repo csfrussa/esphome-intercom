@@ -134,8 +134,8 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn('domain: "voip_stack"', start)
         self.assertIn('service: "call"', start)
         self.assertIn("return_response: true", start)
-        self.assertIn("request.service_data.endpoint_id = endpointId", start)
-        self.assertIn("request.service_data.source_device_id = deviceId", start)
+        self.assertNotIn("request.service_data.endpoint_id", start)
+        self.assertIn("request.service_data.device_id = deviceId", start)
         self.assertIn("endpoint_id=${encodeURIComponent", audio_url)
         self.assertIn("endpoint_id=${encodeURIComponent", video)
 

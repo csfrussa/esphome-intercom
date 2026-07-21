@@ -149,6 +149,10 @@ window, default 60 seconds) and loop-safe `forward` to another dial-plan
 target. Each phone owns at most one call; concurrent calls receive `486 Busy
 Here`.
 
+Browser-phone Devices expose extension and group membership as native text
+entities plus DND and conference-ringing switches. These entities, the card
+and the settings action share the same config-subentry-backed values.
+
 One HA phone may be displayed by several cards. The first browser that answers
 atomically owns its audio/video media; later answers cannot steal it. Create a
 separate phone when a tablet must behave as a separately callable handset. A
@@ -181,18 +185,17 @@ permission are independent.
 - `voip_stack.enable_account`
 - `voip_stack.disable_account`
 - `voip_stack.list_accounts`
-- `voip_stack.export_accounts`
 
-`call` accepts `destination`, `target`, or `call`. The destination can be a
+`call` accepts one required `destination`. The destination can be a
 phonebook name, extension, ring group, conference group, SIP URI, direct
 `user@host` target or external number. Set `ha_bridge: true` to force the HA
 bridge path.
 
 `call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
-`set_ha_softphone_settings` accept an optional logical-phone selector:
-`endpoint_id`, `device_id` or `entity_id`. If omitted, the original default HA
-phone is used. `source_device_id` remains the physical-source selector used by
-ESP mirror calls and is not interchangeable with the logical HA phone.
+`set_ha_softphone_settings` expose one optional `device_id` phone selector. If
+omitted, the default HA phone is used. Internal endpoint and entity IDs are
+reported in state/events for correlation, but are not alternative action
+inputs. Use `call_id` when a concurrent-call automation must select one call.
 
 `route` applies an automation decision to a pending inbound SIP route. Use
 `action: answer_ha`, `decline`, `busy`, `cancel`, `forward`, `bridge`, or
@@ -223,8 +226,7 @@ HA generates one and returns it once in the action response. Capture that
 response in an automation with `response_variable`, or copy it from Developer
 Tools immediately. A caller-supplied password is preserved but deliberately
 not echoed. Registered clients appear in the central phonebook and are pushed
-to ESPs. `list_accounts` and `export_accounts` return configured accounts
-without passwords.
+to ESPs. `list_accounts` returns configured accounts without passwords.
 
 Ring groups and conference groups are dynamic phonebook entries. A ring group
 forks a call to all callable members except the caller and bridges the first

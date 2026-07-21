@@ -35,204 +35,137 @@ purge_devices:
           mode: box
 
 answer:
-  name: Answer SIP Call
-  description: Send 200 OK for a pending SIP call addressed to Home Assistant.
+  name: Answer call
+  description: Answer the ringing call on the selected phone. Omit the phone to use the default Home Assistant softphone.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: HA phone device
-      description: Optional logical HA phone or ESPHome intercom Device. It must identify the same phone as Endpoint ID when both are set.
+      name: Phone
+      description: Optional Home Assistant or ESPHome phone device.
       required: false
       selector:
         device:
           filter:
             - integration: voip_stack
             - integration: esphome
-    entity_id:
-      name: HA phone entity
-      description: Optional Entity belonging to the logical HA phone or ESPHome intercom.
-      required: false
-      selector:
-        entity:
-          filter:
-            - integration: voip_stack
-            - integration: esphome
-    call_id:
-      name: Call ID
-      description: Pending SIP Call-ID. If omitted and only one call is pending, that call is answered.
-      required: false
-      selector:
-        text:
     send_video:
-      name: Send browser camera
-      description: Send this browser's camera when experimental SIP video and camera transmission are enabled.
+      name: Send video
+      description: Send the browser camera when video is enabled for this phone.
       required: false
       default: false
       selector:
         boolean:
+    advanced:
+      name: Advanced options
+      description: Select a specific concurrent call.
+      collapsed: true
+      fields:
+        call_id:
+          name: Call ID
+          description: Select a specific call when more than one call is ringing.
+          required: false
+          selector:
+            text:
 
 decline:
-  name: Decline SIP Call
-  description: Send a final SIP rejection for a pending SIP call.
+  name: Decline call
+  description: Decline the ringing call on the selected phone. Omit the phone to use the default Home Assistant softphone.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: HA phone device
-      description: Optional logical HA phone or ESPHome intercom Device. It must identify the same phone as Endpoint ID when both are set.
+      name: Phone
+      description: Optional Home Assistant or ESPHome phone device.
       required: false
       selector:
         device:
           filter:
             - integration: voip_stack
             - integration: esphome
-    entity_id:
-      name: HA phone entity
-      description: Optional Entity belonging to the logical HA phone or ESPHome intercom.
-      required: false
-      selector:
-        entity:
-          filter:
-            - integration: voip_stack
-            - integration: esphome
-    call_id:
-      name: Call ID
-      description: Pending SIP Call-ID. If omitted and only one call is pending, that call is declined.
-      required: false
-      selector:
-        text:
-    status:
-      name: SIP Status
-      description: Final SIP status code to send.
-      required: false
-      default: 603
-      selector:
-        number:
-          min: 400
-          max: 699
-          step: 1
-          mode: box
-    reason:
-      name: Reason
-      description: SIP reason phrase.
-      required: false
-      default: Decline
-      selector:
-        text:
-    decline_reason:
-      name: Decline reason
-      description: Application terminal reason propagated in SIP Reason and X-Voip-Stack-Decline-Reason headers.
-      required: false
-      default: declined
-      selector:
-        text:
+    advanced:
+      name: Advanced options
+      description: Select a specific call or customize its SIP rejection.
+      collapsed: true
+      fields:
+        call_id:
+          name: Call ID
+          required: false
+          selector:
+            text:
+        status:
+          name: SIP status
+          required: false
+          default: 603
+          selector:
+            number:
+              min: 400
+              max: 699
+              step: 1
+              mode: box
+        reason:
+          name: SIP reason
+          required: false
+          default: Decline
+          selector:
+            text:
+        decline_reason:
+          name: Automation reason
+          required: false
+          default: declined
+          selector:
+            text:
 
 call:
-  name: SIP Call
-  description: Originate a standards-SIP call from Home Assistant to a roster target or SIP URI.
+  name: Call
+  description: Call a phonebook contact, extension, group, number or SIP address.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical source-phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: Phone device
-      description: Optional VoIP phone Device. A logical HA phone originates the call; an ESP phone remains a legacy physical command target.
+      name: Calling phone
+      description: Optional phone that starts the call. Omit it to use the default Home Assistant softphone.
       required: false
       selector:
         device:
           filter:
             - integration: voip_stack
             - integration: esphome
-    entity_id:
-      name: Phone entity
-      description: Optional Entity belonging to the logical HA phone or legacy ESP phone.
-      required: false
-      selector:
-        entity:
-          filter:
-            - integration: voip_stack
-            - integration: esphome
     destination:
       name: Destination
-      description: Contact ID/name, number, user@host, or sip:user@host URI.
-      required: false
+      description: Phonebook name, extension, group, number or SIP address.
+      required: true
       selector:
         text:
-    target:
-      name: Target
-      description: Contact ID/name, number, user@host, or sip:user@host URI.
-      required: false
-      selector:
-        text:
-    call:
-      name: Call
-      description: Alias for target, useful in scripts and automations.
-      required: false
-      selector:
-        text:
-    ha_bridge:
-      name: Bridge Via HA
-      description: Force HA as the SIP destination even if the contact has a direct endpoint.
-      required: false
-      default: false
-      selector:
-        boolean:
     send_video:
-      name: Send browser camera
-      description: Offer this browser's camera for this call when experimental camera transmission is enabled.
+      name: Send video
+      description: Offer the browser camera when video is enabled for this phone.
       required: false
       default: false
       selector:
         boolean:
+    advanced:
+      name: Advanced options
+      description: Explicit routing controls.
+      collapsed: true
+      fields:
+        ha_bridge:
+          name: Force routing through HA
+          required: false
+          default: false
+          selector:
+            boolean:
 
 forward:
-  name: SIP Forward
-  description: Route an active HA-owned SIP call to another dial-plan destination. Call ID is inferred when exactly one call is forwardable.
+  name: Forward call
+  description: Forward the current ringing or active call to another destination.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: Phone device
-      description: Optional VoIP Stack logical phone Device. It must identify the same phone as Endpoint ID when both are set.
+      name: Phone
+      description: Optional Home Assistant phone that owns the call.
       required: false
       selector:
         device:
           filter:
             - integration: voip_stack
-    entity_id:
-      name: Phone entity
-      description: Optional Entity belonging to the logical VoIP Stack phone.
-      required: false
-      selector:
-        entity:
-          filter:
-            - integration: voip_stack
-    call_id:
-      name: Call ID
-      description: Optional pending SIP Call-ID. Omit it when exactly one call is forwardable.
-      required: false
-      selector:
-        text:
     destination:
       name: Destination
-      description: Contact ID/name, number, user@host, or sip:user@host URI.
-      required: false
+      description: Phonebook name, extension, group, number or SIP address.
+      required: true
       selector:
         text:
     on_failure:
@@ -246,25 +179,33 @@ forward:
             - resume
             - terminate
             - busy
-    expected_state:
-      name: Expected state
-      description: Optional stale-automation guard. The forward is rejected if the call has already changed state.
-      required: false
-      selector:
-        text:
-    expected_sequence:
-      name: Expected sequence
-      description: Optional stale-automation guard copied from the call event.
-      required: false
-      default: 0
-      selector:
-        number:
-          min: 0
-          step: 1
-          mode: box
+    advanced:
+      name: Advanced options
+      description: Select a specific concurrent call or reject stale automation decisions.
+      collapsed: true
+      fields:
+        call_id:
+          name: Call ID
+          required: false
+          selector:
+            text:
+        expected_state:
+          name: Expected state
+          required: false
+          selector:
+            text:
+        expected_sequence:
+          name: Expected sequence
+          required: false
+          default: 0
+          selector:
+            number:
+              min: 0
+              step: 1
+              mode: box
 
 set_deadline:
-  name: Set SIP Call Deadline
+  name: "Advanced: Set call deadline"
   description: Arm an explicit calling or ringing deadline. Expiry emits an automation event but never changes routing by itself.
   fields:
     call_id:
@@ -309,7 +250,7 @@ set_deadline:
           mode: box
 
 cancel_deadline:
-  name: Cancel SIP Call Deadline
+  name: "Advanced: Cancel call deadline"
   description: Cancel a previously armed deadline without changing the call.
   fields:
     call_id:
@@ -319,7 +260,7 @@ cancel_deadline:
         text:
 
 route:
-  name: SIP Route Decision
+  name: "Advanced: Apply route decision"
   description: Apply an automation dial-plan decision to a pending inbound SIP route.
   fields:
     call_id:
@@ -345,18 +286,6 @@ route:
     destination:
       name: Destination
       description: Contact ID/name, number, user@host, or sip:user@host URI for forward/bridge.
-      required: false
-      selector:
-        text:
-    target:
-      name: Target
-      description: Alias for destination.
-      required: false
-      selector:
-        text:
-    call:
-      name: Call
-      description: Alias for destination.
       required: false
       selector:
         text:
@@ -386,7 +315,7 @@ route:
 
 select_inbound_destination:
   name: Select inbound call destination
-  description: Select the initial destination before the fallback route starts. When exactly one route request is pending, call_id is optional.
+  description: Send a new inbound call to a phone, group, extension or Assist. Normally only Destination is needed.
   fields:
     destination:
       name: Destination
@@ -394,63 +323,54 @@ select_inbound_destination:
       required: true
       selector:
         text:
-    call_id:
-      name: Call ID
-      description: Optional for the normal single pending inbound call. Required only when several route requests are pending concurrently.
-      required: false
-      selector:
-        text:
-    expected_state:
-      name: Expected state
-      description: Optional stale-automation guard copied from the call event.
-      required: false
-      selector:
-        text:
-    expected_sequence:
-      name: Expected sequence
-      description: Optional stale-automation guard copied from the call event.
-      required: false
-      default: 0
-      selector:
-        number:
-          min: 0
-          step: 1
-          mode: box
+    advanced:
+      name: Advanced options
+      description: Select one of several simultaneous route requests or reject stale decisions.
+      collapsed: true
+      fields:
+        call_id:
+          name: Call ID
+          required: false
+          selector:
+            text:
+        expected_state:
+          name: Expected state
+          required: false
+          selector:
+            text:
+        expected_sequence:
+          name: Expected sequence
+          required: false
+          default: 0
+          selector:
+            number:
+              min: 0
+              step: 1
+              mode: box
 
 hangup:
-  name: SIP Hang Up
-  description: Send BYE and stop any SIP RTP relay for an active SIP call.
+  name: Hang up
+  description: End the call on the selected phone. Omit the phone to use the default Home Assistant softphone.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: Phone device
-      description: Optional logical HA phone or ESPHome intercom Device. It must identify the same phone as Endpoint ID when both are set.
+      name: Phone
+      description: Optional Home Assistant or ESPHome phone device.
       required: false
       selector:
         device:
           filter:
             - integration: voip_stack
             - integration: esphome
-    entity_id:
-      name: Phone entity
-      description: Optional Entity belonging to the logical HA phone or ESPHome intercom.
-      required: false
-      selector:
-        entity:
-          filter:
-            - integration: voip_stack
-            - integration: esphome
-    call_id:
-      name: Call ID
-      description: Active SIP Call-ID. If omitted and only one call is active, that call is ended.
-      required: false
-      selector:
-        text:
+    advanced:
+      name: Advanced options
+      description: Select a specific concurrent call.
+      collapsed: true
+      fields:
+        call_id:
+          name: Call ID
+          required: false
+          selector:
+            text:
 
 add_contact:
   name: Add Phonebook Contact
@@ -620,65 +540,37 @@ push_phonebook:
     Use this for diagnostics or manual recovery.
 
 set_dnd:
-  name: Set SIP DND
-  description: Enable or disable Do Not Disturb on the Home Assistant softphone.
+  name: Set do not disturb
+  description: Enable or disable do not disturb on a Home Assistant phone.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: HA phone device
-      description: Optional VoIP Stack phone Device. It must identify the same phone as Endpoint ID when both are set.
+      name: Phone
+      description: Optional Home Assistant phone. Omit it to use the default phone.
       required: false
       selector:
         device:
           filter:
             - integration: voip_stack
-    entity_id:
-      name: HA phone entity
-      description: Optional Entity belonging to the logical HA phone.
-      required: false
-      selector:
-        entity:
-          filter:
-            - integration: voip_stack
     dnd:
-      name: DND
+      name: Do not disturb
       required: true
       selector:
         boolean:
 
 set_ha_softphone_settings:
-  name: Set HA Softphone Settings
+  name: Configure Home Assistant phone
   description: >-
     Set the Home Assistant softphone extension, ring group, conference group
     and ring-on-conference behavior. A manually entered group name is a valid
     declaration: the HA softphone endpoint publishes it to the central phonebook,
     which creates or updates the dynamic group like it does for ESP endpoints.
   fields:
-    endpoint_id:
-      name: HA phone endpoint
-      description: Optional stable logical phone ID. Omit it for the default HA phone.
-      required: false
-      selector:
-        text:
     device_id:
-      name: HA phone device
-      description: Optional VoIP Stack phone Device. It must identify the same phone as Endpoint ID when both are set.
+      name: Phone
+      description: Optional Home Assistant phone. Omit it to use the default phone.
       required: false
       selector:
         device:
-          filter:
-            - integration: voip_stack
-    entity_id:
-      name: HA phone entity
-      description: Optional Entity belonging to the logical HA phone.
-      required: false
-      selector:
-        entity:
           filter:
             - integration: voip_stack
     extension:
@@ -809,8 +701,4 @@ disable_account:
 
 list_accounts:
   name: List SIP Endpoint Accounts
-  description: Return configured local SIP endpoint accounts without passwords to the administrator who called this service.
-
-export_accounts:
-  name: Export SIP Endpoint Accounts
   description: Return configured local SIP endpoint accounts without passwords to the administrator who called this service.

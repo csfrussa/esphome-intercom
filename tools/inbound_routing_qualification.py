@@ -504,13 +504,19 @@ def create_automations(api: HomeAssistantApi) -> None:
                     "options": {"event_type": ["route_requested"]},
                 }
             ],
-            "conditions": [],
+            "conditions": [
+                {
+                    "condition": "state",
+                    "entity_id": CALL_EVENT_ENTITY,
+                    "attribute": "ingress",
+                    "state": "trunk",
+                }
+            ],
             "actions": [
                 {
-                    "action": "voip_stack.forward",
+                    "action": "voip_stack.select_inbound_destination",
                     "data": {
                         "destination": ROUTE_DESTINATION,
-                        "on_failure": "resume",
                     },
                 }
             ],
@@ -532,7 +538,14 @@ def create_automations(api: HomeAssistantApi) -> None:
                     "for": "00:00:02",
                 }
             ],
-            "conditions": [],
+            "conditions": [
+                {
+                    "condition": "state",
+                    "entity_id": CALL_STATE_ENTITY,
+                    "attribute": "direction",
+                    "state": "incoming",
+                }
+            ],
             "actions": [
                 {
                     "action": "voip_stack.forward",

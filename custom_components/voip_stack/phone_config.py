@@ -726,7 +726,3 @@ def update_phone_subentry(
     )
     sync_registry_from_entry(hass, entry)
     return changed
-
-
-# Compatibility name retained for the first multi-softphone development builds.
-update_browser_phone_subentry = update_phone_subentry

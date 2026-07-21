@@ -880,7 +880,7 @@ class ConferenceRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(room.legs["call-1"].rx_packets, 1)
         heard = await asyncio.wait_for(queue.get(), timeout=1.0)
         self.assertEqual(_first_sample(heard), 1200)
-        store = hass.data[const.DOMAIN]["ha_softphone"]
+        store = hass.data[const.DOMAIN]["ha_softphones"]["default"]
         self.assertEqual(store["state"], "ringing")
         self.assertEqual(store["call_id"], "conference:Conference")
 

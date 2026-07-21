@@ -41,7 +41,7 @@ options or old component names.
 | `docs/images/hacs-custom-repository.png` | Screenshot | HACS custom repository setup | Captured: custom repository URL and Integration type |
 | `docs/images/hacs-download-voip-stack.png` | Screenshot | HACS download step | Captured: VoIP Stack HACS entry and download menu |
 | `docs/images/voip-stack-add-integration.png` | Screenshot | HA Add Integration search | Captured: VoIP Stack entry in Settings -> Integrations |
-| `docs/images/voip-stack-config-flow.png` / `.svg` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
+| `docs/images/voip-stack-config-flow.png` | Setup image | HA integration setup | Current asset: SIP/RTP ports, advertise host, Assist/debug, registrar and trunk toggles. Recapture a real HA screenshot before stable release. |
 | `docs/images/voice-assistant-extension.png` | Screenshot | Optional Assist telephone destination setup | Captured: explicit SIP extension and preferred Assist pipeline selection in the real HA config flow |
 | `docs/images/create-account-service.png` | Screenshot | SIP account service form | Captured: Developer Tools -> Actions account creation |
 | `docs/images/create-account-service-filled.png` | Screenshot | Filled SIP account service form | Captured: example local SIP account |
@@ -70,9 +70,12 @@ replace individual photos or GIFs if the UI changes before release.
 
 | Asset | Type | Purpose | Capture notes |
 |---|---|---|---|
-| `docs/images/sip-topology.png` / `.svg` | Diagram | SIP/VoIP topology | Created: ESP SIP phones, HA softphone/router/B2BUA, local registrar, registered SIP endpoints and optional provider trunk |
-| `docs/images/phonebook-endpoint.png` / `.svg` | Diagram | SIP phonebook and dial plan | Created: endpoint publication, manual/static contacts, SIP account registration, direct/bridge/trunk/reject routing |
-| `docs/images/tcp-udp-choice.png` / `.svg` | Diagram | ESP SIP transport guidance | Created: ESP SIP/TCP vs SIP/UDP signaling choice, RTP always UDP, HA bridge path when routing needs it |
+| `docs/images/sip-topology.png` | Generated raster diagram | SIP/VoIP topology | Browser phones, ESP endpoints, HA router/registrar/RTP bridge, registered SIP devices and optional provider trunk |
+| `docs/images/phonebook-endpoint.png` | Generated raster diagram | SIP phonebook and dial plan | Endpoint publication, logical HA phones, contacts, SIP registration and explicit route results |
+| `docs/images/tcp-udp-choice.png` | Generated raster diagram | ESP SIP transport guidance | SIP/TCP vs SIP/UDP signaling, RTP/UDP media and HA bridging |
+| `docs/images/browser-ha-esp-path.png` | Generated raster diagram | Browser-to-ESP path | WebSocket control/media into HA and the HA-owned SIP/RTP leg toward the ESP |
+| `docs/images/esp-route-decision.png` | Generated raster diagram | ESP routing policy | Phonebook resolution followed by direct SIP or canonical HA dispatch |
+| `docs/images/call-flow-sequences.png` | Generated raster diagram | Canonical call lifecycle | Browser bridge, direct ESP call and HA-bridged ESP call in one visual |
 | `docs/images/audio-stack.png` | Diagram | Audio components | Created: `esp_audio_stack`, ESPHome consumers, `esp_afe` / `esp_aec`, codec/no-codec output paths |
 
 ## Capture order for live demo

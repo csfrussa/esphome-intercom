@@ -77,7 +77,7 @@ For every service, assert HA event bus output, logs and resulting entity/card
 state.
 
 - `voip_stack.call` without source: HA originates to roster destination.
-- `voip_stack.call` with `source/source_device_id/source_name`: selected
+- `voip_stack.call` with an ESP `device_id`: selected
   ESP originates the call through its own `start_call` action.
 - `voip_stack.call destination=Kitchen`: resolves roster name.
 - `voip_stack.call destination=sip:Kitchen@IP:5060;transport=tcp`: direct
@@ -118,7 +118,7 @@ state.
 - `voip_stack.purge_devices`: no-op and removal cases report exactly which
   unavailable devices were selected.
 - `voip_stack.create_account`, `remove_account`, `rotate_account_password`,
-  `enable_account`, `disable_account`, `list_accounts`, and `export_accounts`:
+  `enable_account`, `disable_account`, and `list_accounts`:
   validate credential lifecycle, one-time secret handling, registrar refresh
   and redacted exports.
 

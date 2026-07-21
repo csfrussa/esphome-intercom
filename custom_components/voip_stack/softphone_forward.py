@@ -85,9 +85,7 @@ async def async_forward_browser_call(call: ServiceCall) -> None:
     callback = hass.data.get(DOMAIN, {}).get("async_forward_call")
     if callback is None:
         raise ServiceValidationError("SIP endpoint is not running")
-    destination = str(
-        data.get("destination") or data.get("target") or data.get("call") or ""
-    ).strip()
+    destination = str(data.get("destination") or "").strip()
     await callback(
         call_id=selected_call_id,
         destination=destination,
