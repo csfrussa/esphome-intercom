@@ -797,3 +797,91 @@ assert.equal(model.formatVideoFailureReason("remote_video_rejected"), "The remot
         text=True,
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_card_picker_suggests_only_primary_controllable_phone_entities() -> None:
+    """Exercise the synchronous Home Assistant card-picker callback."""
+
+    script = rf"""
+import fs from "fs";
+import vm from "vm";
+import assert from "assert/strict";
+
+const source = fs.readFileSync({json.dumps(str(CARD))}, "utf8");
+const registration = source.slice(source.indexOf("window.customCards ="));
+const window = {{ customCards: [] }};
+vm.runInNewContext(registration, {{ window }});
+const suggest = window.customCards[0].getEntitySuggestion;
+
+const hass = {{
+  entities: {{
+    "sensor.default_call_state": {{ platform: "voip_stack", device_id: "device-default" }},
+    "sensor.casa_call_state": {{ platform: "voip_stack", device_id: "device-casa", translation_key: "phone_endpoint_call_state" }},
+    "sensor.ws3_call_state": {{ platform: "voip_stack", device_id: "device-ws3", translation_key: "phone_endpoint_call_state" }},
+    "sensor.new_phone_call_state": {{ platform: "voip_stack", device_id: "device-new", translation_key: "phone_endpoint_call_state" }},
+    "sensor.new_esp_call_state": {{ platform: "voip_stack", device_id: "device-new-esp", translation_key: "phone_endpoint_call_state" }},
+    "sensor.mobile_call_state": {{ platform: "voip_stack", device_id: "device-mobile", translation_key: "phone_endpoint_call_state" }},
+    "sensor.casa_endpoint": {{ platform: "voip_stack", device_id: "device-casa", translation_key: "phone_endpoint_connectivity" }},
+    "switch.casa_dnd": {{ platform: "voip_stack", device_id: "device-casa", translation_key: "phone_endpoint_dnd" }},
+    "sensor.foreign_call_state": {{ platform: "other", device_id: "device-foreign" }},
+    "sensor.voip_phonebook": {{ platform: "voip_stack" }},
+  }},
+  devices: {{
+    "device-default": {{ model: "Home Assistant softphone" }},
+    "device-casa": {{ model: "Home Assistant softphone" }},
+    "device-ws3": {{ model: "ESP32-S3" }},
+    "device-new": {{ model: "Home Assistant softphone" }},
+    "device-new-esp": {{ model: "ESP32-S3" }},
+    "device-mobile": {{ model: "SIP account" }},
+  }},
+  states: {{
+    "sensor.default_call_state": {{ attributes: {{ endpoint_id: "default", endpoint_kind: "browser" }} }},
+    "sensor.casa_call_state": {{ attributes: {{ endpoint_id: "browser:casa", endpoint_kind: "browser" }} }},
+    "sensor.ws3_call_state": {{ attributes: {{ endpoint_id: "esphome:ws3", endpoint_kind: "esphome" }} }},
+    "sensor.new_phone_call_state": {{ state: "unavailable", attributes: {{}} }},
+    "sensor.new_esp_call_state": {{ state: "unavailable", attributes: {{}} }},
+    "sensor.mobile_call_state": {{ attributes: {{ endpoint_id: "sip:mobile", endpoint_kind: "sip_account" }} }},
+    "sensor.casa_endpoint": {{ attributes: {{ endpoint_id: "browser:casa", endpoint_kind: "browser" }} }},
+    "switch.casa_dnd": {{ attributes: {{ endpoint_id: "browser:casa", endpoint_kind: "browser" }} }},
+    "sensor.foreign_call_state": {{ attributes: {{ endpoint_id: "browser:foreign", endpoint_kind: "browser" }} }},
+    "sensor.voip_phonebook": {{ attributes: {{}} }},
+  }},
+}};
+
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suggest(hass, "sensor.default_call_state"))),
+  {{ config: {{ type: "custom:voip-stack-card", mode: "ha_softphone", device_id: "device-default" }} }},
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suggest(hass, "sensor.casa_call_state"))),
+  {{ config: {{ type: "custom:voip-stack-card", mode: "ha_softphone", device_id: "device-casa" }} }},
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suggest(hass, "sensor.ws3_call_state"))),
+  {{ config: {{ type: "custom:voip-stack-card", mode: "esp_mirror", device_id: "device-ws3" }} }},
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suggest(hass, "sensor.new_phone_call_state"))),
+  {{ config: {{ type: "custom:voip-stack-card", mode: "ha_softphone", device_id: "device-new" }} }},
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suggest(hass, "sensor.new_esp_call_state"))),
+  {{ config: {{ type: "custom:voip-stack-card", mode: "esp_mirror", device_id: "device-new-esp" }} }},
+);
+assert.equal(suggest(hass, "sensor.mobile_call_state"), null);
+assert.equal(suggest(hass, "sensor.casa_endpoint"), null);
+assert.equal(suggest(hass, "switch.casa_dnd"), null);
+assert.equal(suggest(hass, "sensor.foreign_call_state"), null);
+assert.equal(suggest(hass, "sensor.voip_phonebook"), null);
+assert.equal(suggest(hass, "sensor.missing"), null);
+assert.equal(JSON.stringify(suggest(hass, "sensor.casa_call_state")).includes("endpoint_id"), false);
+"""
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout

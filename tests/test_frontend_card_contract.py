@@ -511,6 +511,19 @@ class FrontendCardContractTest(unittest.TestCase):
             2,
         )
 
+    def test_existing_entity_and_device_card_bindings_remain_supported(self) -> None:
+        """Pin old entity dashboards while new configs use Device Registry IDs."""
+
+        selector = _method_body(self.source, "_getConfigSelector")
+        device_id = _method_body(self.source, "_getConfigDeviceId")
+        editor = _method_body(self.source, "_deviceChanged")
+
+        self.assertIn("this.config?.entity_id || this.config?.device_id", selector)
+        self.assertIn("this._resolvedDeviceId || this._getConfigSelector()", device_id)
+        self.assertIn("newConfig.device_id = deviceId", editor)
+        self.assertIn("delete newConfig.entity_id", editor)
+        self.assertIn('device_id: deviceId', self.source)
+
     def test_device_discovery_is_single_flight_with_bounded_startup_retry(self) -> None:
         finder = _method_body(self.source, "async _findEntityIds")
         scheduler = _method_body(self.source, "_scheduleDeviceBindingsLoad")

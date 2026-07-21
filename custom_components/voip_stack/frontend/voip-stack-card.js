@@ -3864,5 +3864,49 @@ if (!window.customCards.some(card => card.type === "voip-stack-card")) {
     name: "VoIP Stack Card",
     description: "ESP SIP phone mirror and HA SIP softphone controls",
     preview: true,
+    getEntitySuggestion: (hass, entityId) => {
+      const registryEntry = hass?.entities?.[entityId];
+      const state = hass?.states?.[entityId];
+      const deviceId = String(registryEntry?.device_id || "").trim();
+      const device = deviceId ? hass?.devices?.[deviceId] : null;
+      const deviceModel = String(device?.model || "").trim().toLowerCase();
+      const endpointId = String(state?.attributes?.endpoint_id || "").trim();
+      let endpointKind = String(state?.attributes?.endpoint_kind || "")
+        .trim()
+        .toLowerCase();
+      const isPrimaryPhoneSensor =
+        registryEntry?.translation_key === "phone_endpoint_call_state";
+      // The migrated default browser phone predates translated per-phone
+      // entities. Its call-state sensor has no translation_key, so recognise
+      // only the fully-qualified combination observed in HA's registries.
+      const isDefaultBrowserCallState =
+        !registryEntry?.translation_key &&
+        endpointKind === "browser" &&
+        !!endpointId &&
+        deviceModel === "home assistant softphone";
+      if (
+        !String(entityId || "").startsWith("sensor.") ||
+        registryEntry?.platform !== "voip_stack" ||
+        !deviceId ||
+        (!isPrimaryPhoneSensor && !isDefaultBrowserCallState)
+      ) return null;
+
+      // A freshly-created entity can still be unavailable when the picker is
+      // opened. Infer only device models whose meaning is unambiguous; never
+      // perform a WebSocket lookup from this synchronous picker callback.
+      if (!endpointKind) {
+        if (deviceModel === "home assistant softphone") endpointKind = "browser";
+        else if (deviceModel === "sip account") endpointKind = "sip_account";
+        else if (deviceModel) endpointKind = "esphome";
+      }
+      if (!["browser", "esphome"].includes(endpointKind)) return null;
+      return {
+        config: {
+          type: "custom:voip-stack-card",
+          mode: endpointKind === "browser" ? "ha_softphone" : "esp_mirror",
+          device_id: deviceId,
+        },
+      };
+    },
   });
 }
