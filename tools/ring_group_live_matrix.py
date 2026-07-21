@@ -18,9 +18,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "test_runs"))
 
 HA_BASE = os.environ.get("HA_BASE", "http://192.168.1.10:8123")
-WILDIX_CONFIG = Path(
-    os.environ.get("WILDIX_CONFIG", "/home/codex/.baresip-wildix-426")
-)
+WILDIX_CONFIG = Path(os.environ.get("WILDIX_CONFIG", "/home/codex/.baresip-wildix-426"))
 CASA_URL = f"{HA_BASE}/lovelace/default_view"
 TEST_URL = f"{HA_BASE}/lovelace/test"
 EXPECT_VIDEO = os.environ.get("EXPECT_VIDEO", "") == "1"
@@ -206,7 +204,9 @@ def _dial() -> BareSip:
     return caller
 
 
-def _wait_lab_ready(timeout: float = 45) -> tuple[HomeAssistantApi, dict[str, Any], dict[str, Any]]:
+def _wait_lab_ready(
+    timeout: float = 45,
+) -> tuple[HomeAssistantApi, dict[str, Any], dict[str, Any]]:
     """Wait until HA auth, VoIP entities and the ESP mirror are all available."""
 
     deadline = time.monotonic() + timeout
@@ -228,6 +228,28 @@ def _wait_lab_ready(timeout: float = 45) -> tuple[HomeAssistantApi, dict[str, An
             last_error = f"{type(err).__name__}: {err}"
         time.sleep(0.5)
     raise RuntimeError(f"HA laboratory not ready after {timeout:.0f}s ({last_error})")
+
+
+def _set_inbound_automation(enabled: bool, timeout: float = 10) -> None:
+    """Set the test dialplan state and wait until HA has applied it."""
+
+    expected = "on" if enabled else "off"
+    service_data: dict[str, object] = {"entity_id": INBOUND_AUTOMATION}
+    if not enabled:
+        service_data["stop_actions"] = True
+    service("automation", "turn_on" if enabled else "turn_off", service_data)
+    deadline = time.monotonic() + timeout
+    last_state = ""
+    while time.monotonic() < deadline:
+        last_state = str(
+            ha_request(f"/api/states/{INBOUND_AUTOMATION}").get("state") or ""
+        )
+        if last_state == expected:
+            return
+        time.sleep(0.1)
+    raise RuntimeError(
+        f"{INBOUND_AUTOMATION} did not become {expected}; got {last_state or 'unknown'}"
+    )
 
 
 def main(*, output: Path | None = None) -> int:
@@ -541,7 +563,9 @@ def main(*, output: Path | None = None) -> int:
                             pass
                         time.sleep(0.1)
                     else:
-                        raise RuntimeError("temporary direct route automation unavailable")
+                        raise RuntimeError(
+                            "temporary direct route automation unavailable"
+                        )
                     caller = _dial()
                     ringing = _state(
                         target_page,
@@ -567,9 +591,7 @@ def main(*, output: Path | None = None) -> int:
                             "call_id": call_id,
                             "route_destination": target_name,
                             "winner": target_name,
-                            "video_direction": answered["backend"][
-                                "video_direction"
-                            ],
+                            "video_direction": answered["backend"]["video_direction"],
                             "video_rtp_tx_packets": answered["backend"][
                                 "video_rtp_tx_packets"
                             ],
@@ -601,6 +623,10 @@ def main(*, output: Path | None = None) -> int:
                     time.sleep(0.5)
 
             if not DIRECT_VIDEO_ONLY:
+                # The operator may deliberately keep this automation disabled.
+                # Ring-group qualification owns it only for this bounded phase;
+                # the outer finally restores the exact original state.
+                _set_inbound_automation(True)
                 run_esp_winner()
                 if not ESP_WINNER_ONLY:
                     _set_esp_dnd(True)

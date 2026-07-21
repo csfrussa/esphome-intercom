@@ -1089,6 +1089,13 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("async def _wait_browser_group_member", forward)
         self.assertIn('result == "in_call_browser"', forward)
         self.assertIn('"answer",', forward)
+        browser_answer = forward[
+            forward.index('"answer",') : forward.index(
+                "answer_commits.discard(call_id)", forward.index('"answer",')
+            )
+        ]
+        self.assertIn('"device_id": winner.device_id', browser_answer)
+        self.assertNotIn('"endpoint_id": winner.endpoint_id', browser_answer)
         self.assertIn("initial_selection=True", trunk_route)
 
         self.assertIn("def browser_endpoint_can_ring(", self.pbx_routing)

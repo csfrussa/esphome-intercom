@@ -67,3 +67,40 @@ def test_failure_evidence_is_bounded() -> None:
     compact = runner._compact_error(RuntimeError("A" * 4000), limit=500)
     assert len(compact) <= 530
     assert "<truncated>" in compact
+
+
+@pytest.mark.parametrize(
+    "enabled,expected_service,expected_state",
+    [
+        (True, "turn_on", "on"),
+        (False, "turn_off", "off"),
+    ],
+)
+def test_inbound_automation_state_is_applied_before_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    expected_service: str,
+    expected_state: str,
+) -> None:
+    runner = _load_tool()
+    observed: list[tuple[str, str, dict[str, object]]] = []
+    state = {"value": "off" if enabled else "on"}
+
+    def fake_service(domain: str, action: str, data: dict[str, object]) -> None:
+        observed.append((domain, action, data))
+        state["value"] = expected_state
+
+    monkeypatch.setattr(runner, "service", fake_service, raising=False)
+    monkeypatch.setattr(
+        runner,
+        "ha_request",
+        lambda _path: {"state": state["value"]},
+        raising=False,
+    )
+
+    runner._set_inbound_automation(enabled, timeout=0.1)
+
+    expected_data: dict[str, object] = {"entity_id": runner.INBOUND_AUTOMATION}
+    if not enabled:
+        expected_data["stop_actions"] = True
+    assert observed == [("automation", expected_service, expected_data)]

@@ -2321,7 +2321,9 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                                 "answer",
                                 {
                                     "call_id": call_id,
-                                    "endpoint_id": winner.endpoint_id,
+                                    # Service selectors are HA Device IDs; the
+                                    # endpoint ID remains runtime metadata.
+                                    "device_id": winner.device_id,
                                     "media_client_id": str(
                                         browser_decision.get("media_client_id") or ""
                                     ),
