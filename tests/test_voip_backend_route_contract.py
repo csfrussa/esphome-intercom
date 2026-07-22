@@ -101,26 +101,14 @@ class VoipBackendRouteContractTest(unittest.TestCase):
         self.assertIn("_set_ha_softphone_call_state(", self.source)
         self.assertIn("CallState.RINGING.value", self.source)
 
-    def test_offline_browser_waiter_stops_when_call_is_no_longer_pending(
-        self,
-    ) -> None:
-        start = self.source.index("async def _wait_for_browser()")
-        end = self.source.index("create_runtime_task(hass, _wait_for_browser())", start)
-        waiter = self.source[start:end]
-
-        self.assertIn("while _is_current_owner():", waiter)
-        self.assertIn("if not _is_current_owner():", waiter)
-        self.assertIn("timeout=min(remaining, 1.0)", waiter)
-        ownership = self.source[
-            self.source.index("def _is_current_owner()") : start
+    def test_browser_presence_never_owns_the_logical_call_lifetime(self) -> None:
+        self.assertNotIn("def _schedule_ha_softphone_offline_wait(", self.source)
+        defer = self.source[
+            self.source.index("def _defer_invite_to_ha_softphone(") :
+            self.source.index("def _inbound_route_decision(")
         ]
-        self.assertIn("invite.call_id in registry.pending_invites", ownership)
-        self.assertIn('current.owner == "ha_softphone"', ownership)
-        self.assertIn('current.metadata.get("endpoint_id")', ownership)
-        self.assertIn(
-            "registry.take_media(invite.call_id, provisional=True)", waiter
-        )
-        self.assertIn("_sip_send_bye(hass, invite.call_id)", waiter)
+        self.assertNotIn("offline_wait_seconds", defer)
+        self.assertNotIn("ha_softphone_presence_events", defer)
 
     def test_ha_phone_forward_hands_off_the_existing_sip_dialog(self) -> None:
         forward = self.source[
@@ -138,10 +126,10 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             reservation_start
         ]
 
-        self.assertIn("while decision.action is RouteAction.ANSWER_HA:", forward)
+        self.assertIn("if decision.action is RouteAction.ANSWER_HA:", forward)
         self.assertIn("_logical_endpoint_for_member(", forward)
-        self.assertIn("has an offline-forward loop", forward)
         self.assertIn("cannot forward a call to itself", forward)
+        self.assertNotIn("target_browser_endpoint.offline_policy", forward)
         self.assertIn("registry.claim_endpoint(", browser_branch)
         self.assertIn("registry.release_endpoint_claim(", browser_branch)
         self.assertIn("_defer_invite_to_ha_softphone(", browser_branch)
@@ -156,7 +144,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
     ) -> None:
         publish = self.source[
             self.source.index("def _publish_pending_ha_softphone_ringing(") :
-            self.source.index("def _schedule_ha_softphone_offline_wait(")
+            self.source.index("def _defer_invite_to_ha_softphone(")
         ]
         for field in (
             'endpoint.supports("video")',

@@ -902,92 +902,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             ),
         )
 
-    def _schedule_ha_softphone_offline_wait(
-        invite: SipInvite,
-        *,
-        endpoint_id: str,
-        endpoint_device_id: str,
-        callee: str,
-        offline_wait_seconds: int,
-    ) -> None:
-        """Expire only the still-current offline browser owner of an INVITE."""
-        if offline_wait_seconds <= 0:
-            return
-        registry = _call_registry(hass)
-
-        def _is_current_owner() -> bool:
-            current = registry.sessions.get(
-                registry.resolve_session_id(invite.call_id)
-            )
-            return bool(
-                invite.call_id in registry.pending_invites
-                and current is not None
-                and current.state == CallState.RINGING.value
-                and current.owner == "ha_softphone"
-                and str(current.metadata.get("endpoint_id") or "") == endpoint_id
-            )
-
-        async def _wait_for_browser() -> None:
-            event = (
-                hass.data.setdefault(DOMAIN, {})
-                .setdefault("ha_softphone_presence_events", {})
-                .setdefault(endpoint_id, asyncio.Event())
-            )
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + float(offline_wait_seconds)
-            while _is_current_owner():
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    break
-                try:
-                    # Presence may legitimately remain offline for hours.
-                    # Recheck ownership periodically so an answer, decline or
-                    # second forward cannot leave or misapply this timeout.
-                    await asyncio.wait_for(
-                        event.wait(), timeout=min(remaining, 1.0)
-                    )
-                    return
-                except asyncio.TimeoutError:
-                    continue
-            if not _is_current_owner():
-                return
-            registry.pending_invites.pop(invite.call_id, None)
-            preanswered = registry.take_media(invite.call_id, provisional=True)
-            if preanswered is not None:
-                _release_media_reservation(preanswered)
-                _sip_send_bye(hass, invite.call_id)
-            else:
-                _sip_send_final_response(
-                    hass,
-                    invite.call_id,
-                    480,
-                    "Temporarily Unavailable",
-                    decline_reason=RouteReason.TARGET_UNREACHABLE.value,
-                )
-            _set_ha_softphone_call_state(
-                hass,
-                CallState.TRANSPORT_UNREACHABLE.value,
-                endpoint_id=endpoint_id,
-                session_device_id=endpoint_device_id,
-                caller=invite.caller,
-                callee=callee,
-                peer_name=invite.caller,
-                direction="incoming",
-                call_id=invite.call_id,
-                reason=RouteReason.TARGET_UNREACHABLE.value,
-                sip_status_code=480,
-                last_sip_event=(
-                    "BYE" if preanswered is not None else "OFFLINE_WAIT_TIMEOUT"
-                ),
-            )
-            registry.finish_and_pop(
-                invite.call_id,
-                reason=RouteReason.TARGET_UNREACHABLE.value,
-                state=CallState.TRANSPORT_UNREACHABLE.value,
-            )
-
-        create_runtime_task(hass, _wait_for_browser())
-
     def _defer_invite_to_ha_softphone(
         invite: SipInvite,
         *,
@@ -996,7 +910,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         endpoint_device_id: str = HA_SOFTPHONE_DEVICE_ID,
         callee: str | None = None,
         sip_uri: str | None = None,
-        offline_wait_seconds: int = 0,
         last_sip_event: str = "INVITE",
     ) -> None:
         registry = _call_registry(hass)
@@ -1050,13 +963,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
 
         hass.loop.call_soon(_publish_ringing_if_current)
-        _schedule_ha_softphone_offline_wait(
-            invite,
-            endpoint_id=endpoint_id,
-            endpoint_device_id=endpoint_device_id,
-            callee=callee or invite.target,
-            offline_wait_seconds=offline_wait_seconds,
-        )
 
     def _inbound_route_decision(
         invite: SipInvite, peers: list[Peer], entries: list[RosterEntry]
@@ -1694,8 +1600,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             )
             decision = _ha_router_decision(destination, roster_entries)
             endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
-            visited_browser_endpoints: set[str] = set()
-            while decision.action is RouteAction.ANSWER_HA:
+            if decision.action is RouteAction.ANSWER_HA:
                 target_browser_endpoint = _logical_endpoint_for_member(
                     decision.target or destination,
                     peers,
@@ -1708,22 +1613,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     raise ServiceValidationError(
                         f"destination {destination} is not a configured Home Assistant phone"
                     )
-                if target_browser_endpoint.endpoint_id in visited_browser_endpoints:
-                    raise ServiceValidationError(
-                        f"destination {destination} has an offline-forward loop"
-                    )
-                if (
-                    target_browser_endpoint.availability
-                    is not EndpointAvailability.AVAILABLE
-                    and target_browser_endpoint.offline_policy
-                    is OfflinePolicy.FORWARD
-                ):
-                    visited_browser_endpoints.add(target_browser_endpoint.endpoint_id)
-                    destination = target_browser_endpoint.offline_forward_target
-                    decision = _ha_router_decision(destination, roster_entries)
-                    target_browser_endpoint = None
-                    continue
-                break
             if decision.action is RouteAction.REJECT:
                 raise ServiceValidationError(
                     f"destination {destination} is not a forwardable SIP dial-plan target"
@@ -1943,12 +1832,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                         raise RuntimeError("target Home Assistant phone is busy")
                     if endpoint.availability is EndpointAvailability.UNAVAILABLE:
                         raise RuntimeError("target Home Assistant phone is disabled")
-                    offline_wait_seconds = 0
-                    if endpoint.availability is EndpointAvailability.OFFLINE:
-                        if endpoint.offline_policy is not OfflinePolicy.WAIT:
-                            raise RuntimeError("target Home Assistant phone is offline")
-                        offline_wait_seconds = endpoint.offline_wait_seconds
-
                     session_id = registry.resolve_session_id(call_id)
                     claims = registry.endpoint_claims.get(session_id, {})
                     target_was_claimed = endpoint.endpoint_id in claims
@@ -1976,7 +1859,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                             ),
                             callee=endpoint.name,
                             sip_uri=decision.sip_uri,
-                            offline_wait_seconds=offline_wait_seconds,
                             last_sip_event="ROUTE_FORWARD",
                         )
                     except Exception:
@@ -5561,6 +5443,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 candidate_endpoint is None
                 or candidate_endpoint.availability
                 is EndpointAvailability.AVAILABLE
+                or candidate_endpoint.kind is EndpointKind.BROWSER
                 or candidate_endpoint.offline_policy is not OfflinePolicy.FORWARD
             ):
                 break
@@ -6326,13 +6209,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 getattr(browser_endpoint, "device_id", "")
                 or HA_SOFTPHONE_DEVICE_ID
             )
-            offline_wait_seconds = (
-                browser_endpoint.offline_wait_seconds
-                if browser_endpoint is not None
-                and browser_endpoint.availability is EndpointAvailability.OFFLINE
-                and browser_endpoint.offline_policy is OfflinePolicy.WAIT
-                else 0
-            )
             try:
                 if (
                     source_endpoint is not None
@@ -6360,7 +6236,6 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     endpoint_device_id=endpoint_device_id,
                     callee=resolved_callee,
                     sip_uri=decision.sip_uri,
-                    offline_wait_seconds=offline_wait_seconds,
                 )
             except EndpointBusyError:
                 registry.finish_and_pop(
@@ -6404,10 +6279,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     to_tag="",
                     decline_reason=TerminalReason.BUSY.value,
                 )
-            if browser_endpoint.availability is EndpointAvailability.UNAVAILABLE or (
-                browser_endpoint.availability is EndpointAvailability.OFFLINE
-                and browser_endpoint.offline_policy is OfflinePolicy.UNAVAILABLE
-            ):
+            if browser_endpoint.availability is EndpointAvailability.UNAVAILABLE:
                 return SipInviteResult(
                     480,
                     "Temporarily Unavailable",

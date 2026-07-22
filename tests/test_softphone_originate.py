@@ -263,3 +263,33 @@ def test_browser_to_browser_uses_local_bridge_before_network(
         context=call.context,
     )
     softphone_originate._ha_advertise_host.assert_not_awaited()
+
+
+def test_offline_browser_phone_remains_a_local_ringing_destination(
+    softphone_originate,
+) -> None:
+    destination = SimpleNamespace(
+        endpoint_id="casa",
+        kind=_EndpointKind.BROWSER,
+        name="Casa",
+        availability=_Availability.OFFLINE,
+        dnd=False,
+        active_call_id="",
+    )
+    endpoint_registry = SimpleNamespace(get=Mock(return_value=destination))
+    hass = SimpleNamespace(data={"voip_stack": {"endpoint_registry": endpoint_registry}})
+    route = SimpleNamespace(
+        action=_RouteAction.ANSWER_HA,
+        entry=SimpleNamespace(metadata={"endpoint_id": "casa"}),
+    )
+
+    resolved = asyncio.run(
+        softphone_originate._async_resolve_browser_destination(
+            hass,
+            route=route,
+            target="Casa",
+            source_endpoint_id="test",
+        )
+    )
+
+    assert resolved == (route, "Casa", destination)

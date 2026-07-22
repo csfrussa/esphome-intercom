@@ -314,7 +314,6 @@ def test_phone_actions_have_one_device_selector() -> None:
 
 def test_final_entry_removal_forgets_runtime_but_preserves_global_views() -> None:
     hook = _load_remove_entry_hook()
-    wakeups: list[str] = []
     unsubscribed: list[str] = []
 
     class Registry:
@@ -334,9 +333,6 @@ def test_final_entry_removal_forgets_runtime_but_preserves_global_views() -> Non
         "call_registry": registry,
         "ha_softphones": {"kitchen": {"state": "in_call"}},
         "ha_softphone_presence": {"kitchen": 1},
-        "ha_softphone_presence_events": {
-            "kitchen": SimpleNamespace(set=lambda: wakeups.append("kitchen"))
-        },
         "local_softphone_bridge_unsub": lambda: unsubscribed.append("local"),
         "pending_endpoint_removal_unsub": lambda: unsubscribed.append("pending"),
         "entry-id": {"legacy": True},
@@ -347,7 +343,6 @@ def test_final_entry_removal_forgets_runtime_but_preserves_global_views() -> Non
     asyncio.run(hook(hass, entry))
 
     assert registry.cleared
-    assert wakeups == ["kitchen"]
     assert unsubscribed == ["local", "pending"]
     assert "endpoint_registry" not in bucket
     assert "call_registry" not in bucket

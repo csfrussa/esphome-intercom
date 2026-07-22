@@ -166,12 +166,8 @@ async def async_config_entry_updated(
         }
         removed_browser_ids = previous_browser_ids - current_browser_ids
         presence = bucket.setdefault("ha_softphone_presence", {})
-        waiters = bucket.setdefault("ha_softphone_presence_events", {})
         for endpoint_id in removed_browser_ids:
             presence.pop(endpoint_id, None)
-            waiter = waiters.get(endpoint_id)
-            if waiter is not None:
-                waiter.clear()
         for endpoint_id in sorted(previous_browser_ids | current_browser_ids):
             _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
         endpoint_sensor = bucket.get("ha_softphone_endpoint_sensor")

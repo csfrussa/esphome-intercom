@@ -69,11 +69,9 @@ class PhoneEndpointTest(unittest.TestCase):
             availability="available",
             capabilities=[" Audio ", "VIDEO", "audio", ""],
             dnd="yes",
-            offline_policy="wait",
             ring_group=" Ground Floor ",
             conference_group=" Staff ",
             conference_ring=1,
-            offline_wait_seconds="45",
             active_call_id=" call-1 ",
         )
 
@@ -91,7 +89,6 @@ class PhoneEndpointTest(unittest.TestCase):
         self.assertTrue(item.supports(" Video "))
         self.assertTrue(item.dnd)
         self.assertTrue(item.conference_ring)
-        self.assertEqual(item.offline_wait_seconds, 45)
         self.assertTrue(item.has_active_call)
         self.assertTrue(item.is_available)
 
@@ -110,18 +107,6 @@ class PhoneEndpointTest(unittest.TestCase):
                 "endpoint_id": "kitchen",
                 "name": "Kitchen",
                 "kind": "browser",
-                "offline_wait_seconds": 0,
-            },
-            {
-                "endpoint_id": "kitchen",
-                "name": "Kitchen",
-                "kind": "browser",
-                "offline_wait_seconds": 1.5,
-            },
-            {
-                "endpoint_id": "kitchen",
-                "name": "Kitchen",
-                "kind": "browser",
                 "dnd": "sometimes",
             },
             {
@@ -129,13 +114,14 @@ class PhoneEndpointTest(unittest.TestCase):
                 "name": "Kitchen",
                 "kind": "browser",
                 "offline_policy": "forward",
+                "offline_forward_target": "Reception",
             },
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(phone_endpoint.EndpointValidationError):
                     phone_endpoint.PhoneEndpoint(**kwargs)
 
-    def test_forward_policy_and_group_configuration_are_generic(self) -> None:
+    def test_forward_policy_is_available_to_sip_accounts(self) -> None:
         item = endpoint(
             "warehouse",
             "Warehouse",

@@ -7,10 +7,6 @@ from enum import StrEnum
 
 
 DEFAULT_ENDPOINT_ID = "default"
-DEFAULT_OFFLINE_WAIT_SECONDS = 60
-MAX_OFFLINE_WAIT_SECONDS = 86_400
-
-
 class EndpointKind(StrEnum):
     """Supported logical endpoint implementations."""
 
@@ -31,7 +27,6 @@ class OfflinePolicy(StrEnum):
     """Behavior when a call targets an endpoint that is not available."""
 
     UNAVAILABLE = "unavailable"
-    WAIT = "wait"
     FORWARD = "forward"
 
 
@@ -121,7 +116,6 @@ class PhoneEndpoint:
     conference_group: str = ""
     conference_ring: bool = False
     offline_forward_target: str = ""
-    offline_wait_seconds: int = DEFAULT_OFFLINE_WAIT_SECONDS
     active_call_id: str = ""
 
     def __post_init__(self) -> None:
@@ -169,31 +163,19 @@ class PhoneEndpoint:
             _boolean(self.conference_ring, "conference_ring"),
         )
 
-        if isinstance(self.offline_wait_seconds, bool):
-            raise EndpointValidationError("offline_wait_seconds must be an integer")
-        if (
-            isinstance(self.offline_wait_seconds, float)
-            and not self.offline_wait_seconds.is_integer()
-        ):
-            raise EndpointValidationError("offline_wait_seconds must be an integer")
-        try:
-            wait_seconds = int(self.offline_wait_seconds)
-        except (TypeError, ValueError) as err:
-            raise EndpointValidationError(
-                "offline_wait_seconds must be an integer"
-            ) from err
-        if not 1 <= wait_seconds <= MAX_OFFLINE_WAIT_SECONDS:
-            raise EndpointValidationError(
-                f"offline_wait_seconds must be between 1 and {MAX_OFFLINE_WAIT_SECONDS}"
-            )
-        object.__setattr__(self, "offline_wait_seconds", wait_seconds)
-
         if (
             self.offline_policy is OfflinePolicy.FORWARD
             and not self.offline_forward_target
         ):
             raise EndpointValidationError(
                 "offline_forward_target is required for the forward offline policy"
+            )
+        if self.kind is EndpointKind.BROWSER and (
+            self.offline_policy is not OfflinePolicy.UNAVAILABLE
+            or self.offline_forward_target
+        ):
+            raise EndpointValidationError(
+                "browser phones do not use card-presence routing policies"
             )
 
     @property

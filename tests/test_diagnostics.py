@@ -287,7 +287,6 @@ def test_device_diagnostics_expose_behavior_not_identity(monkeypatch) -> None:
         "availability": "available",
         "capabilities": ["audio", "video"],
         "dnd": True,
-        "offline_policy": "wait",
         "active": True,
         "entity_count": 1,
         "ring_group_configured": True,

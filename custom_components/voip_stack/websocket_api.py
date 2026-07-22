@@ -358,12 +358,6 @@ def _update_browser_presence(
         if endpoint.availability is not EndpointAvailability.UNAVAILABLE:
             registry.update(endpoint_id, availability=availability)
 
-    waiters = bucket.setdefault("ha_softphone_presence_events", {})
-    event = waiters.setdefault(endpoint_id, asyncio.Event())
-    if current:
-        event.set()
-    else:
-        event.clear()
     if previous != current:
         _publish_ha_softphone_state(hass, endpoint_id=endpoint_id)
 

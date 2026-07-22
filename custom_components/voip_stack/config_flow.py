@@ -37,7 +37,6 @@ from .phone_config import (
     CONF_PHONE_NAME,
     CONF_PHONE_OFFLINE_FORWARD_TARGET,
     CONF_PHONE_OFFLINE_POLICY,
-    CONF_PHONE_OFFLINE_WAIT_SECONDS,
     CONF_PHONE_PASSWORD,
     CONF_PHONE_RING_GROUP,
     CONF_PHONE_USERNAME,
@@ -670,12 +669,6 @@ class PhoneSubentryFlowHandler(ConfigSubentryFlow):
 
     def _common_schema(self, *, sip_account: bool) -> vol.Schema:
         current = self._current_data()
-        offline_policy = str(
-            current.get(CONF_PHONE_OFFLINE_POLICY)
-            or OfflinePolicy.UNAVAILABLE.value
-        )
-        if sip_account and offline_policy == OfflinePolicy.WAIT.value:
-            offline_policy = OfflinePolicy.UNAVAILABLE.value
         fields: dict[Any, Any] = {
             vol.Required(
                 CONF_PHONE_NAME,
@@ -709,41 +702,34 @@ class PhoneSubentryFlowHandler(ConfigSubentryFlow):
                 CONF_PHONE_VIDEO_ENABLED,
                 default=bool(current.get(CONF_PHONE_VIDEO_ENABLED, True)),
             ): BooleanSelector(),
-            vol.Required(
-                CONF_PHONE_OFFLINE_POLICY,
-                default=offline_policy,
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=(
-                        [
-                            OfflinePolicy.UNAVAILABLE.value,
-                            OfflinePolicy.FORWARD.value,
-                        ]
-                        if sip_account
-                        else [item.value for item in OfflinePolicy]
-                    ),
-                    mode="dropdown",
-                )
-            ),
-            vol.Optional(
-                CONF_PHONE_OFFLINE_FORWARD_TARGET,
-                default=str(
-                    current.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
-                ),
-            ): TextSelector(),
         }
-        if not sip_account:
-            fields[
-                vol.Required(
-                    CONF_PHONE_OFFLINE_WAIT_SECONDS,
-                    default=int(
-                        current.get(CONF_PHONE_OFFLINE_WAIT_SECONDS) or 60
-                    ),
-                )
-            ] = NumberSelector(
-                NumberSelectorConfig(min=1, max=86400, step=1, mode="box")
-            )
         if sip_account:
+            offline_policy = str(
+                current.get(CONF_PHONE_OFFLINE_POLICY)
+                or OfflinePolicy.UNAVAILABLE.value
+            )
+            fields.update(
+                {
+                    vol.Required(
+                        CONF_PHONE_OFFLINE_POLICY,
+                        default=offline_policy,
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                OfflinePolicy.UNAVAILABLE.value,
+                                OfflinePolicy.FORWARD.value,
+                            ],
+                            mode="dropdown",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_PHONE_OFFLINE_FORWARD_TARGET,
+                        default=str(
+                            current.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
+                        ),
+                    ): TextSelector(),
+                }
+            )
             if not self._suggested_password:
                 self._suggested_password = str(
                     current.get(CONF_PHONE_PASSWORD) or generate_password()
@@ -815,18 +801,16 @@ class PhoneSubentryFlowHandler(ConfigSubentryFlow):
             password = str(user_input.get(CONF_PHONE_PASSWORD) or "")
             if not password:
                 errors[CONF_PHONE_PASSWORD] = "phone_password_required"
-            if (
-                str(user_input.get(CONF_PHONE_OFFLINE_POLICY) or "")
-                == OfflinePolicy.WAIT.value
-            ):
-                errors[CONF_PHONE_OFFLINE_POLICY] = (
-                    "phone_offline_policy_unsupported"
-                )
         if not name:
             errors[CONF_PHONE_NAME] = "phone_name_required"
-        if str(user_input.get(CONF_PHONE_OFFLINE_POLICY)) == OfflinePolicy.FORWARD.value and not str(
-            user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
-        ).strip():
+        if (
+            kind is EndpointKind.SIP_ACCOUNT
+            and str(user_input.get(CONF_PHONE_OFFLINE_POLICY))
+            == OfflinePolicy.FORWARD.value
+            and not str(
+                user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
+            ).strip()
+        ):
             errors[CONF_PHONE_OFFLINE_FORWARD_TARGET] = "phone_forward_target_required"
         if not self._validate_aliases(
             name=name,
@@ -865,17 +849,19 @@ class PhoneSubentryFlowHandler(ConfigSubentryFlow):
             CONF_PHONE_VIDEO_ENABLED: bool(
                 user_input.get(CONF_PHONE_VIDEO_ENABLED, True)
             ),
-            CONF_PHONE_OFFLINE_POLICY: str(
-                user_input.get(CONF_PHONE_OFFLINE_POLICY)
-                or OfflinePolicy.UNAVAILABLE.value
-            ),
-            CONF_PHONE_OFFLINE_FORWARD_TARGET: str(
-                user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
-            ).strip(),
-            CONF_PHONE_OFFLINE_WAIT_SECONDS: int(
-                user_input.get(CONF_PHONE_OFFLINE_WAIT_SECONDS) or 60
-            ),
         }
+        if kind is EndpointKind.SIP_ACCOUNT:
+            data.update(
+                {
+                    CONF_PHONE_OFFLINE_POLICY: str(
+                        user_input.get(CONF_PHONE_OFFLINE_POLICY)
+                        or OfflinePolicy.UNAVAILABLE.value
+                    ),
+                    CONF_PHONE_OFFLINE_FORWARD_TARGET: str(
+                        user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
+                    ).strip(),
+                }
+            )
         return data, errors
 
     def _finish(self, data: dict[str, Any]):

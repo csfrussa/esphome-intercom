@@ -516,7 +516,6 @@ _REMOVED_ENTRY_RUNTIME_KEYS = (
     # subentries instead of inheriting a removed kiosk or its page presence.
     "ha_softphones",
     "ha_softphone_presence",
-    "ha_softphone_presence_events",
     "ha_softphone_start_locks",
     "ha_softphone_endpoint_sensor",
     "ha_softphone_call_state_sensor",
@@ -581,16 +580,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     bucket = hass.data.get(DOMAIN)
     if not isinstance(bucket, dict):
         return
-
-    # Wake any bounded offline wait before discarding its Event object. The
-    # normal unload has already cancelled runtime tasks, but this keeps the
-    # final-removal hook safe when called by a minimal HA test harness too.
-    waiters = bucket.get("ha_softphone_presence_events")
-    if isinstance(waiters, dict):
-        for waiter in tuple(waiters.values()):
-            set_waiter = getattr(waiter, "set", None)
-            if callable(set_waiter):
-                set_waiter()
 
     registry = bucket.get("call_registry")
     clear_runtime = getattr(registry, "clear_runtime", None)

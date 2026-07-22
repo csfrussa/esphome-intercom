@@ -53,7 +53,6 @@ CONF_PHONE_CONFERENCE_RING = "conference_ring"
 CONF_PHONE_VIDEO_ENABLED = "video_enabled"
 CONF_PHONE_OFFLINE_POLICY = "offline_policy"
 CONF_PHONE_OFFLINE_FORWARD_TARGET = "offline_forward_target"
-CONF_PHONE_OFFLINE_WAIT_SECONDS = "offline_wait_seconds"
 LEGACY_HA_SOFTPHONE_STORE_KEY = f"{DOMAIN}_ha_softphone"
 LEGACY_HA_SOFTPHONE_STORE_VERSION = 1
 
@@ -130,9 +129,6 @@ def default_phone_data(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any
             options.get(CONF_HA_SOFTPHONE_CONFERENCE_RING, False)
         ),
         CONF_PHONE_VIDEO_ENABLED: True,
-        CONF_PHONE_OFFLINE_POLICY: OfflinePolicy.UNAVAILABLE.value,
-        CONF_PHONE_OFFLINE_FORWARD_TARGET: "",
-        CONF_PHONE_OFFLINE_WAIT_SECONDS: 60,
         CONF_PHONE_ENABLED: True,
     }
 
@@ -159,7 +155,6 @@ def sip_account_phone_data(
         CONF_PHONE_VIDEO_ENABLED: True,
         CONF_PHONE_OFFLINE_POLICY: OfflinePolicy.UNAVAILABLE.value,
         CONF_PHONE_OFFLINE_FORWARD_TARGET: "",
-        CONF_PHONE_OFFLINE_WAIT_SECONDS: 60,
     }
 
 
@@ -364,17 +359,21 @@ def endpoint_from_data(
         availability=availability,
         capabilities=_endpoint_capabilities(entry, data),
         dnd=bool(data.get(CONF_PHONE_DND, False)),
-        offline_policy=str(
-            data.get(CONF_PHONE_OFFLINE_POLICY) or OfflinePolicy.UNAVAILABLE.value
+        offline_policy=(
+            str(
+                data.get(CONF_PHONE_OFFLINE_POLICY)
+                or OfflinePolicy.UNAVAILABLE.value
+            )
+            if kind is EndpointKind.SIP_ACCOUNT
+            else OfflinePolicy.UNAVAILABLE.value
         ),
         ring_group=str(data.get(CONF_PHONE_RING_GROUP) or ""),
         conference_group=str(data.get(CONF_PHONE_CONFERENCE_GROUP) or ""),
         conference_ring=bool(data.get(CONF_PHONE_CONFERENCE_RING, False)),
-        offline_forward_target=str(
-            data.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
-        ),
-        offline_wait_seconds=int(
-            data.get(CONF_PHONE_OFFLINE_WAIT_SECONDS) or 60
+        offline_forward_target=(
+            str(data.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or "")
+            if kind is EndpointKind.SIP_ACCOUNT
+            else ""
         ),
     )
 
@@ -382,11 +381,6 @@ def endpoint_from_data(
 def _clear_browser_runtime(bucket: dict[str, Any], endpoint_id: str) -> None:
     """Forget transient state owned by a deleted browser phone."""
     bucket.setdefault("ha_softphone_presence", {}).pop(endpoint_id, None)
-    waiter = bucket.setdefault("ha_softphone_presence_events", {}).pop(
-        endpoint_id, None
-    )
-    if waiter is not None:
-        waiter.clear()
     if endpoint_id != DEFAULT_ENDPOINT_ID:
         bucket.setdefault("ha_softphones", {}).pop(endpoint_id, None)
 
@@ -666,7 +660,6 @@ def replace_sip_account_subentries(
                 CONF_PHONE_VIDEO_ENABLED,
                 CONF_PHONE_OFFLINE_POLICY,
                 CONF_PHONE_OFFLINE_FORWARD_TARGET,
-                CONF_PHONE_OFFLINE_WAIT_SECONDS,
             ):
                 if key in previous.data:
                     data[key] = previous.data[key]

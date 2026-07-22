@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 import logging
 
@@ -66,7 +65,6 @@ from .phone_endpoint import (
     DEFAULT_ENDPOINT_ID,
     EndpointAvailability,
     EndpointKind,
-    OfflinePolicy,
 )
 from .router import RouteAction, RouteReason, ha_uri_for, resolve_ha_router
 from .service_endpoints import (
@@ -141,63 +139,30 @@ async def _async_resolve_browser_destination(
     *,
     route,
     target: str,
-    contacts: list,
-    trunk_ready: bool,
     source_endpoint_id: str,
 ):
-    """Apply browser availability policy and return the effective route."""
+    """Resolve a logical browser phone independently from card presence."""
     endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
     if endpoint_registry is None:
         return route, target, None
 
-    visited: set[str] = set()
-    effective_target = target
-    while route.action is RouteAction.ANSWER_HA and route.entry is not None:
-        endpoint_id = str((route.entry.metadata or {}).get("endpoint_id") or "").strip()
-        endpoint = endpoint_registry.get(endpoint_id) if endpoint_id else None
-        if endpoint is None or endpoint.kind is not EndpointKind.BROWSER:
-            return route, effective_target, None
-        if endpoint.endpoint_id == source_endpoint_id:
-            raise ServiceValidationError("a Home Assistant phone cannot call itself")
-        if endpoint.endpoint_id in visited:
-            raise ServiceValidationError("browser phone offline-forward loop detected")
-        if endpoint.dnd or endpoint.active_call_id:
-            raise ServiceValidationError(f"{endpoint.name} is busy")
-        if endpoint.availability is EndpointAvailability.AVAILABLE:
-            return route, effective_target, endpoint
+    if route.action is not RouteAction.ANSWER_HA or route.entry is None:
+        return route, target, None
+    endpoint_id = str((route.entry.metadata or {}).get("endpoint_id") or "").strip()
+    endpoint = endpoint_registry.get(endpoint_id) if endpoint_id else None
+    if endpoint is None or endpoint.kind is not EndpointKind.BROWSER:
+        return route, target, None
+    if endpoint.endpoint_id == source_endpoint_id:
+        raise ServiceValidationError("a Home Assistant phone cannot call itself")
+    if endpoint.dnd or endpoint.active_call_id:
+        raise ServiceValidationError(f"{endpoint.name} is busy")
+    if endpoint.availability is EndpointAvailability.UNAVAILABLE:
+        raise ServiceValidationError(f"{endpoint.name} is disabled")
 
-        if (
-            endpoint.availability is EndpointAvailability.OFFLINE
-            and endpoint.offline_policy is OfflinePolicy.WAIT
-        ):
-            waiters = hass.data.setdefault(DOMAIN, {}).setdefault(
-                "ha_softphone_presence_events", {}
-            )
-            event = waiters.setdefault(endpoint.endpoint_id, asyncio.Event())
-            try:
-                await asyncio.wait_for(
-                    event.wait(), timeout=float(endpoint.offline_wait_seconds)
-                )
-            except TimeoutError as err:
-                raise ServiceValidationError(
-                    f"{endpoint.name} did not come online within "
-                    f"{endpoint.offline_wait_seconds} seconds"
-                ) from err
-            continue
-
-        if endpoint.offline_policy is OfflinePolicy.FORWARD:
-            visited.add(endpoint.endpoint_id)
-            effective_target = endpoint.offline_forward_target
-            route = resolve_ha_router(
-                effective_target,
-                contacts,
-                trunk_ready=trunk_ready,
-            )
-            continue
-
-        raise ServiceValidationError(f"{endpoint.name} is unavailable")
-
-    return route, effective_target, None
+    # OFFLINE means that no browser currently owns media. The configured
+    # logical phone still rings so automations can observe or reroute it, and
+    # a card that connects during ringing can take over the existing call.
+    return route, target, endpoint
 
 
 def _logical_endpoint_for_route(hass: HomeAssistant, route):
@@ -279,8 +244,6 @@ async def async_originate_call(
         hass,
         route=route,
         target=target,
-        contacts=contacts,
-        trunk_ready=trunk_ready,
         source_endpoint_id=endpoint_id,
     )
     if browser_destination is not None:

@@ -13,7 +13,7 @@ YAML and automations cannot be migrated by Home Assistant automatically.
 2. Update VoIP Stack, restart Home Assistant and open **Reconfigure** once.
    Confirm the incoming-routing, Assist and experimental-video choices.
 3. Open every additional phone under **VoIP Stack > Add phone** and verify its
-   extension, groups, DND, offline policy and video options.
+   extension, groups, DND and video options.
 4. Update copied automations to the service and routing contracts below.
 5. Hard-refresh every browser or Companion WebView that loads the Lovelace
    card. An old JavaScript module cannot safely drive the new backend.
@@ -31,8 +31,9 @@ subentries and Devices. The migrated default phone remains available, while
 additional browser phones and standard SIP accounts are created with
 **Settings > Devices & services > VoIP Stack > Add phone**.
 
-Each phone owns its call state, DND, extension, groups, offline policy and
-video settings. Consequently:
+Each phone owns its call state, DND, extension, groups and video settings.
+Standard SIP accounts additionally own their unregistered-endpoint policy.
+Consequently:
 
 - bind each `ha_softphone` card to the intended phone Device;
 - trigger room-specific automations from that phone's own call-state Sensor or

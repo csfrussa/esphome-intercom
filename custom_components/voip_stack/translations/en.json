@@ -129,17 +129,11 @@
             "ring_group": "Ring group",
             "conference_group": "Conference group",
             "conference_ring": "Ring for conference calls",
-            "video_enabled": "Allow video",
-            "offline_policy": "When no card is connected",
-            "offline_forward_target": "Forward destination",
-            "offline_wait_seconds": "Wait time"
+            "video_enabled": "Allow video"
           },
           "data_description": {
             "name": "Required phone name used by the card, phonebook and call routing.",
-            "extension": "Optional unique dialable extension.",
-            "offline_policy": "Return unavailable, wait for a card to connect, or forward with loop protection.",
-            "offline_forward_target": "Required only for Forward. Use another phonebook name or extension.",
-            "offline_wait_seconds": "Maximum seconds to wait for a browser card before the call is unavailable."
+            "extension": "Optional unique dialable extension. The logical phone remains ringable when no browser card is connected."
           }
         },
         "sip_account": {
@@ -157,8 +151,7 @@
             "conference_ring": "Ring for conference calls",
             "video_enabled": "Allow video negotiation",
             "offline_policy": "When not registered",
-            "offline_forward_target": "Forward destination",
-            "offline_wait_seconds": "Wait time"
+            "offline_forward_target": "Forward destination"
           }
         },
         "reconfigure": {
@@ -170,7 +163,6 @@
         "phone_username_invalid": "Use only letters, numbers, dots, underscores or hyphens.",
         "phone_password_required": "A SIP password is required.",
         "phone_forward_target_required": "A forward destination is required for the Forward policy.",
-        "phone_offline_policy_unsupported": "SIP accounts cannot use the Wait-for-browser policy.",
         "phone_alias_conflict": "The name, extension or username is already used by another phone."
       },
       "abort": {

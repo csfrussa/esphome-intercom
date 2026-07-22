@@ -175,9 +175,10 @@ def _device_summary(bucket: dict[str, Any], device: DeviceEntry) -> dict[str, An
     endpoint = _endpoint_for_device(bucket, device)
     if endpoint is None:
         return {"found": False}
-    return {
+    kind = _enum_value(getattr(endpoint, "kind", "unknown"))
+    summary = {
         "found": True,
-        "kind": _enum_value(getattr(endpoint, "kind", "unknown")),
+        "kind": kind,
         "availability": _enum_value(
             getattr(endpoint, "availability", "unknown")
         ),
@@ -185,9 +186,6 @@ def _device_summary(bucket: dict[str, Any], device: DeviceEntry) -> dict[str, An
             str(item) for item in (getattr(endpoint, "capabilities", ()) or ())
         ),
         "dnd": bool(getattr(endpoint, "dnd", False)),
-        "offline_policy": _enum_value(
-            getattr(endpoint, "offline_policy", "unknown")
-        ),
         "active": bool(getattr(endpoint, "active_call_id", "")),
         "entity_count": len(getattr(endpoint, "entity_ids", ()) or ()),
         "ring_group_configured": bool(getattr(endpoint, "ring_group", "")),
@@ -196,6 +194,11 @@ def _device_summary(bucket: dict[str, Any], device: DeviceEntry) -> dict[str, An
         ),
         "conference_ring": bool(getattr(endpoint, "conference_ring", False)),
     }
+    if kind == "sip_account":
+        summary["offline_policy"] = _enum_value(
+            getattr(endpoint, "offline_policy", "unknown")
+        )
+    return summary
 
 
 async def async_get_config_entry_diagnostics(

@@ -203,13 +203,6 @@ def test_deferred_browser_removal_clears_presence_after_terminal_call() -> None:
         def call_soon(callback, *args) -> None:
             callbacks.append((callback, args))
 
-    class Waiter:
-        cleared = False
-
-        def clear(self) -> None:
-            self.cleared = True
-
-    waiter = Waiter()
     subentry = types.SimpleNamespace(
         subentry_type=phone_config.PHONE_SUBENTRY_TYPE,
         subentry_id="phone-kitchen",
@@ -229,7 +222,6 @@ def test_deferred_browser_removal_clears_presence_after_terminal_call() -> None:
         data={
             "voip_stack": {
                 "ha_softphone_presence": {"kitchen": 1},
-                "ha_softphone_presence_events": {"kitchen": waiter},
                 "ha_softphones": {
                     "kitchen": {"state": "in_call", "caller": "Door"}
                 },
@@ -249,9 +241,7 @@ def test_deferred_browser_removal_clears_presence_after_terminal_call() -> None:
     callback(*args)
     assert registry.get("kitchen") is None
     assert "kitchen" not in hass.data["voip_stack"]["ha_softphone_presence"]
-    assert "kitchen" not in hass.data["voip_stack"]["ha_softphone_presence_events"]
     assert "kitchen" not in hass.data["voip_stack"]["ha_softphones"]
-    assert waiter.cleared
 
 
 def test_idle_browser_removal_immediately_forgets_runtime_store() -> None:

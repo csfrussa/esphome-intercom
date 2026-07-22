@@ -144,11 +144,13 @@ automations, entity ownership and config-subentry removal semantics without a
 private HA Core patch.
 
 Common phone options are name, extension, enabled, DND, ring/conference group,
-conference ringing, video capability and offline behavior. Browser offline
-policies are `unavailable` (immediate `480`), `wait` (ring for the configured
-window, default 60 seconds) and loop-safe `forward` to another dial-plan
-target. Each phone owns at most one call; concurrent calls receive `486 Busy
-Here`.
+conference ringing and video capability. A configured browser phone remains a
+routable logical handset even with no card connected: it enters `ringing`,
+automations can act on that state, and a card connected during the ring window
+can answer. Browser presence controls media availability, never dial-plan
+membership. Unregistered SIP accounts may instead reject or forward because
+they have no reachable Contact. Each phone owns at most one call; concurrent
+calls receive `486 Busy Here`.
 
 Browser-phone Devices expose extension and group membership as native text
 entities plus DND and conference-ringing switches. These entities, the card
