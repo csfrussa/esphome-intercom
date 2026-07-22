@@ -54,9 +54,10 @@ Supported audio shapes:
 - full duplex: microphone plus speaker;
 - mic only: sends audio but ignores remote playback;
 - speaker only: plays remote audio but sends no mic RTP;
-- control only: call signaling/phonebook without audio.
 
 These are first-class SIP endpoint shapes. They are not compatibility modes.
+An endpoint must provide at least one real audio direction; a signaling-only
+device is not a VoIP phone and is rejected.
 
 ## Home Assistant
 

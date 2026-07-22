@@ -287,7 +287,8 @@ devices receive the central roster. Dial by phonebook name or extension. When
 direct endpoint metadata is reachable, VoIP Stack can select the direct
 standards-based SIP/SDP/RTP route; otherwise HA routes the call. Endpoint audio
 capabilities still determine full-duplex, microphone-only, speaker-only or
-control-only behavior.
+speaker-only behavior. Every ESP VoIP endpoint must expose at least one real
+audio direction; signaling-only endpoints are rejected.
 
 #### Doorbell or door station
 

@@ -12,7 +12,8 @@ Every ESP running `voip_stack` is a SIP user agent:
 - it does not register to a PBX;
 - it does not require SIP authentication;
 - it accepts compatible PCM SDP and rejects incompatible media with SIP status;
-- it can run full-duplex, mic-only, speaker-only or control-only.
+- it can run full-duplex, mic-only or speaker-only; signaling-only endpoints
+  are rejected because every VoIP endpoint must expose real audio media.
 
 Inbound reachability is deliberately independent of roster membership. The
 phonebook is a dial plan, not a caller allowlist: a reachable compatible SIP
