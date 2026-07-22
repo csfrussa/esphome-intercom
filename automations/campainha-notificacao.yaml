@@ -1,0 +1,141 @@
+# Notificação da Campainha - múltiplos destinatários
+#
+# Quando "campainha" chama a localização HA ("Casa"), o VoIP Stack emite o
+# evento voip_stack.incoming_call. Esta automação envia notificação push com
+# ações de Atender/Recusar para todos os moradores.
+#
+# - "Atender" abre o dashboard compartilhado com ?voip_answer=1, que é o
+#   único lugar que pode pedir permissão de microfone e abrir o áudio
+#   full-duplex (nem HA em si, nem os cartões-espelho dos ESPs fazem isso).
+# - "Recusar" é tratado aqui: HA chama voip_stack.decline com o call_id do
+#   evento e replica o motivo para o ESP.
+#
+# View compartilhada usada no deep link: /dashboard-mobile/interfone
+# (precisa ser a mesma para todos os perfis, não a "Visão geral" pessoal
+# de cada morador).
+
+alias: Campainha - Notificação
+description: Notifica todos os moradores quando a campainha chama a Casa
+triggers:
+  - trigger: event
+    event_type: voip_stack.incoming_call
+conditions:
+  - condition: template
+    value_template: "{{ trigger.event.data.state == 'ringing' }}"
+  - condition: template
+    value_template: "{{ 'campainha' in (trigger.event.data.caller | default('') | lower) }}"
+actions:
+  - action: notify.mobile_app_sm_g991b # Carlos
+    data:
+      title: "🔔 Campainha"
+      message: "📞 {{ trigger.event.data.caller }} está chamando..."
+      data:
+        tag: voip_call
+        clickAction: /dashboard-mobile/interfone
+        url: /dashboard-mobile/interfone
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: "✅ Atender"
+            uri: /dashboard-mobile/interfone?voip_answer=1
+          - action: VOIP_DECLINE
+            title: "❌ Recusar"
+  - action: notify.mobile_app_a55_thomas # Thomas
+    data:
+      title: "🔔 Campainha"
+      message: "📞 {{ trigger.event.data.caller }} está chamando..."
+      data:
+        tag: voip_call
+        clickAction: /dashboard-mobile/interfone
+        url: /dashboard-mobile/interfone
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: "✅ Atender"
+            uri: /dashboard-mobile/interfone?voip_answer=1
+          - action: VOIP_DECLINE
+            title: "❌ Recusar"
+  - action: notify.mobile_app_sm_a536e # Carol
+    data:
+      title: "🔔 Campainha"
+      message: "📞 {{ trigger.event.data.caller }} está chamando..."
+      data:
+        tag: voip_call
+        clickAction: /dashboard-mobile/interfone
+        url: /dashboard-mobile/interfone
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: "✅ Atender"
+            uri: /dashboard-mobile/interfone?voip_answer=1
+          - action: VOIP_DECLINE
+            title: "❌ Recusar"
+  - action: notify.mobile_app_thomas # Thomas (Asus)
+    data:
+      title: "🔔 Campainha"
+      message: "📞 {{ trigger.event.data.caller }} está chamando..."
+      data:
+        tag: voip_call
+        clickAction: /dashboard-mobile/interfone
+        url: /dashboard-mobile/interfone
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: "✅ Atender"
+            uri: /dashboard-mobile/interfone?voip_answer=1
+          - action: VOIP_DECLINE
+            title: "❌ Recusar"
+  - action: persistent_notification.create
+    data:
+      title: "🔔 Campainha"
+      message: "📞 {{ trigger.event.data.caller }} está chamando..."
+      notification_id: voip_call
+  - wait_for_trigger:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: VOIP_DECLINE
+    timeout: "00:00:30"
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger is not none }}"
+    then:
+      - action: voip_stack.decline
+        data:
+          call_id: "{{ trigger.event.data.call_id }}"
+          reason: declined
+  # Limpa a notificação em todos os aparelhos, tenha alguém atendido,
+  # recusado ou a chamada expirado (ringing_timeout do ESP encerra sozinho).
+  - action: notify.mobile_app_sm_g991b
+    data:
+      message: clear_notification
+      data:
+        tag: voip_call
+  - action: notify.mobile_app_a55_thomas
+    data:
+      message: clear_notification
+      data:
+        tag: voip_call
+  - action: notify.mobile_app_sm_a536e
+    data:
+      message: clear_notification
+      data:
+        tag: voip_call
+  - action: notify.mobile_app_thomas
+    data:
+      message: clear_notification
+      data:
+        tag: voip_call
+mode: single

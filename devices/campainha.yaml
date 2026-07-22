@@ -1,0 +1,424 @@
+# =============================================================================
+# CAMPAINHA - ESP32-S3 door intercom (VoIP Stack, dual I2S bus, no codec)
+# =============================================================================
+# Physical unit at the front door. Pressing the doorbell button calls the
+# "RG Campainha" ring group, which HA and "interna" both belong to: whichever
+# answers first (HA app/card or the indoor unit) gets bridged to this ESP.
+#
+# Hardware: same breadboard ESP32-S3 build previously flashed with
+# xiaozhi-esp32's "bread-compact-wifi" board. Wiring taken from that board's
+# config.h (separate mic/speaker I2S buses, no amp enable/SD pin wired):
+#   Mic (RX bus):     WS/LRCLK=GPIO4, SCK/BCLK=GPIO5, DIN=GPIO6
+#   Speaker (TX bus):  BCLK=GPIO15,   LRCK=GPIO16,     DOUT=GPIO7
+#   Status LED:        WS2812 (led_strip), 1 pixel, GPIO48
+#   Doorbell button:   GPIO0 (board BOOT button)
+#   Volume up/down:    GPIO40 / GPIO39 (xiaozhi's VOLUME_UP/DOWN_BUTTON_GPIO)
+# =============================================================================
+
+substitutions:
+  name: campainha
+  friendly_name: Campainha
+
+  voip_stack_components_source: "github://n-IA-hane/esphome-voip-stack@main"
+  audio_stack_components_source: "github://n-IA-hane/esphome-audio-stack@main"
+
+  # Pinout: microphone I2S bus
+  rx_i2s_bclk_pin: GPIO5
+  rx_i2s_lrclk_pin: GPIO4
+  rx_i2s_din_pin: GPIO6
+
+  # Pinout: speaker I2S bus
+  tx_i2s_bclk_pin: GPIO15
+  tx_i2s_lrclk_pin: GPIO16
+  tx_i2s_dout_pin: GPIO7
+
+  # Status LED
+  status_led_pin: GPIO48
+  status_led_chipset: WS2812
+  status_led_rgb_order: GRB
+
+  # Ringback asset, served from our own fork so it resolves without
+  # depending on upstream availability.
+  assets_base: "https://github.com/csfrussa/esphome-intercom/raw/main/"
+
+  # Volume buttons, confirmed from this board's xiaozhi-esp32 bread-compact-wifi
+  # config.h (VOLUME_UP_BUTTON_GPIO / VOLUME_DOWN_BUTTON_GPIO).
+  volume_up_pin: GPIO40
+  volume_down_pin: GPIO39
+
+packages:
+  core: github://csfrussa/esphome-intercom/packages/voip_only.yaml@main
+  voip_entities_full_duplex: github://csfrussa/esphome-intercom/packages/voip/entities_full_duplex.yaml@main
+  call_settings: github://csfrussa/esphome-intercom/packages/voip/call_settings.yaml@main
+  ha_api: github://csfrussa/esphome-intercom/packages/voip/ha_api.yaml@main
+  phonebook_subscribe: github://csfrussa/esphome-intercom/packages/voip/phonebook_subscribe.yaml@main
+  voip_transport: github://csfrussa/esphome-intercom/packages/voip/transport.yaml@main
+  speaker_mute: github://csfrussa/esphome-intercom/packages/voip/speaker_mute.yaml@main
+  s3_base: github://csfrussa/esphome-intercom/packages/platform/esp32s3_base.yaml@main
+  native_diagnostics: github://csfrussa/esphome-intercom/packages/diagnostics/native.yaml@main
+  status_led: github://csfrussa/esphome-intercom/packages/led/status_ws2812_single.yaml@main
+  audio_stack_controls: github://csfrussa/esphome-intercom/packages/esp_audio_stack/controls.yaml@main
+  audio_stack_aec_controls: github://csfrussa/esphome-intercom/packages/esp_audio_stack/aec_controls.yaml@main
+
+# =============================================================================
+# BOARD AND MEMORY
+# =============================================================================
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    advanced:
+      compiler_optimization: PERF
+    sdkconfig_options:
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+      # Native USB-Serial-JTAG console (matches this board's USB-C wiring,
+      # confirmed by flashing/monitoring over /dev/ttyACM0 with xiaozhi-esp32).
+      CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: "y"
+      CONFIG_ESP_CONSOLE_SECONDARY_NONE: "y"
+
+# Octal PSRAM @ 80MHz, confirmed from this board's xiaozhi-esp32 sdkconfig
+# (CONFIG_SPIRAM_MODE_OCT=y, CONFIG_SPIRAM_SPEED_80M=y).
+psram:
+  mode: octal
+  speed: 80MHz
+
+preferences:
+  flash_write_interval: 5min
+
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+
+external_components:
+  - source: ${voip_stack_components_source}
+    components: [voip_stack]
+  - source: ${audio_stack_components_source}
+    components: [esp_audio_stack, esp_aec]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: NONE
+
+ota:
+  - platform: esphome
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: INFO
+  logs:
+    voip_stack: INFO
+    voip_stack.fsm: INFO
+    voip_stack.tcp: INFO
+    voip_stack.udp: INFO
+    voip_stack.audio: INFO
+    voip_stack.settings: INFO
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+    switch: WARN
+    number: WARN
+    button: WARN
+    api: WARN
+    api.connection: WARN
+    component: WARN
+
+# =============================================================================
+# AUDIO PIPELINE
+# =============================================================================
+# No amp enable/SD pin is wired on this board (matches xiaozhi's
+# NoAudioCodecSimplex driver, which never toggles one), so there is no
+# `output: speaker_enable` here and no speaker_power package.
+
+esp_audio_stack:
+  id: audio_stack
+  rx_bus:
+    i2s_num: 0
+    i2s_lrclk_pin: ${rx_i2s_lrclk_pin}
+    i2s_bclk_pin: ${rx_i2s_bclk_pin}
+    i2s_din_pin: ${rx_i2s_din_pin}
+  tx_bus:
+    i2s_num: 1
+    i2s_lrclk_pin: ${tx_i2s_lrclk_pin}
+    i2s_bclk_pin: ${tx_i2s_bclk_pin}
+    i2s_dout_pin: ${tx_i2s_dout_pin}
+  sample_rate: 48000
+  output_sample_rate: 16000
+  bits_per_sample: 32
+  slot_bit_width: 32
+  correct_dc_offset: true
+  # This breadboard's mic/amp wiring uses mono/left I2S slots, confirmed by
+  # the xiaozhi-esp32 NoAudioCodecSimplex driver previously flashed on this
+  # same hardware (I2S_SLOT_MODE_MONO + I2S_STD_SLOT_LEFT for both mic and
+  # speaker). The generic reference profile's right/stereo defaults were
+  # wrong for this board and produced silent/garbage audio.
+  mic_channel: left
+  rx_slot_mode: mono
+  processor_id: aec_processor
+  # `previous_frame` (the generic reference default) has no buffering and
+  # no jitter tolerance. The ringback mixer below adds variable delay
+  # between what actually plays and what the AEC treats as "the current TX
+  # frame", which previous_frame cannot absorb -- it made the adaptive
+  # filter diverge into noise instead of cancelling echo. `ring_buffer` is
+  # the component's own documented default/recommendation for no-codec
+  # setups (discrete MEMS mic + I2S amp) precisely because it tolerates
+  # this kind of producer/consumer jitter, at the cost of some latency.
+  aec_reference: ring_buffer
+  aec_reference_buffer_ms: 150
+  aec_ref_ring_in_psram: true
+  buffers_in_psram: true
+  audio_task_stack_in_psram: true
+
+esp_aec:
+  id: aec_processor
+  sample_rate: 16000
+  filter_length: 8
+  mode: fd_high_perf
+
+microphone:
+  - platform: esp_audio_stack
+    id: mic_main
+    esp_audio_stack_id: audio_stack
+
+speaker:
+  - platform: esp_audio_stack
+    id: hw_speaker
+    esp_audio_stack_id: audio_stack
+    sample_rate: 48000
+    bits_per_sample: 16
+
+  # VoIP RX and the ringback announcement share hw_speaker through this
+  # mixer instead of competing directly on it.
+  - platform: mixer
+    id: audio_mixer
+    output_speaker: hw_speaker
+    num_channels: 1
+    source_speakers:
+      - id: voip_mixer_input
+        timeout: 10s
+        buffer_duration: 128ms
+      - id: ringtone_speaker_mix
+        timeout: 10s
+        buffer_duration: 100ms
+
+  - platform: resampler
+    id: voip_speaker_input            # VoIP RX (16kHz) -> 48kHz
+    output_speaker: voip_mixer_input
+    buffer_duration: 128ms
+
+  - platform: resampler
+    id: ringtone_speaker              # Ringback FLAC -> 48kHz
+    output_speaker: ringtone_speaker_mix
+
+# =============================================================================
+# RINGBACK
+# =============================================================================
+# Audible feedback for whoever presses the doorbell, while the far end
+# (HA app / interna) is ringing. Without this, only the status LED changed,
+# which is the "no ring tone" symptom seen in testing.
+
+media_player:
+  - platform: speaker
+    id: speaker_media_player
+    name: None
+    internal: true
+    volume_initial: 1.0
+    volume_min: 1.0
+    volume_max: 1.0
+    announcement_pipeline:
+      speaker: ringtone_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    files:
+      # Soft "calling" cue for whoever presses the doorbell -- distinct from
+      # the louder ring Interna plays for an actual incoming call, same idea
+      # as a traditional phone's ringback/dial tone for the caller.
+      - id: voip_dialback_sound
+        file: ${assets_base}assets/sounds/dialback.flac
+
+# =============================================================================
+# VOIP
+# =============================================================================
+
+voip_stack:
+  id: phone
+  buffers_in_psram: true
+  audio:
+    tx_formats:
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
+    rx:
+      sample_rate: 48000
+      pcm_format: s16le
+      channels: 1
+      frame_ms: 10
+    rx_formats:
+      - sample_rate: 32000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 32
+  microphone: mic_main
+  speaker: voip_speaker_input
+  dc_offset_removal: false
+  ringing_timeout: 30s
+  delete_contact_missing_from:
+    updates_number: 1
+
+# =============================================================================
+# DOORBELL BUTTON
+# =============================================================================
+# Rings both the HA app/card and "interna" via the shared "RG Campainha" ring
+# group. HA's softphone must also be added to that group once, with:
+#   service: voip_stack.set_ha_softphone_settings
+#   data:
+#     ring_group: "RG Campainha"
+
+binary_sensor:
+  - platform: gpio
+    name: Doorbell Button
+    id: doorbell_button
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - voip_stack.call:
+          id: phone
+          target: "RG Campainha"
+
+# =============================================================================
+# VOLUME BUTTONS
+# =============================================================================
+# Physical +/- buttons already wired on this breadboard from the earlier
+# xiaozhi-esp32 build (VOLUME_UP_BUTTON_GPIO/VOLUME_DOWN_BUTTON_GPIO in that
+# firmware's bread-compact-wifi config.h). Drive the Master Volume number
+# entity from packages/esp_audio_stack/controls.yaml.
+
+  - platform: gpio
+    name: Volume Up Button
+    pin:
+      number: ${volume_up_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - number.increment:
+          id: master_volume
+          cycle: false
+
+  - platform: gpio
+    name: Volume Down Button
+    pin:
+      number: ${volume_down_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - number.decrement:
+          id: master_volume
+          cycle: false
+
+# =============================================================================
+# RINGBACK PLAYBACK
+# =============================================================================
+# Extends the LED reducer's update_status (called on every voip_stack state
+# transition, see packages/voip/callbacks.yaml). is_ringing only covers
+# incoming calls, so the outgoing-side condition here is "we placed a call
+# and the far end is ringing" instead.
+
+script:
+  - id: !extend update_status
+    then:
+      - if:
+          condition:
+            and:
+              - voip_stack.is_calling:
+              - voip_stack.is_remote_ringing:
+          then:
+            - script.execute: voip_ringing_loop
+          else:
+            - script.stop: voip_ringing_loop
+            - media_player.stop:
+                announcement: true
+
+  - id: voip_ringing_loop
+    mode: restart
+    then:
+      - while:
+          condition:
+            and:
+              - voip_stack.is_calling:
+              - voip_stack.is_remote_ringing:
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                media_file: voip_dialback_sound
+                announcement: true
+            - wait_until:
+                condition:
+                  media_player.is_announcing:
+                timeout: 2s
+            - wait_until:
+                condition:
+                  not:
+                    media_player.is_announcing:
+                timeout: 5s
+            - delay: 1s
+
+select:
+  - platform: template
+    name: AEC Mode
+    id: aec_mode_select
+    icon: mdi:tune-vertical
+    options:
+      - "fd_low_cost"
+      - "fd_high_perf"
+    initial_option: "fd_high_perf"
+    optimistic: false
+    restore_value: true
+    set_action:
+      - if:
+          condition:
+            not:
+              voip_stack.is_idle:
+          then:
+            - logger.log:
+                level: WARN
+                format: "Cannot switch AEC mode during active VoIP call"
+          else:
+            - logger.log:
+                format: "Switching AEC mode to %s"
+                args: ['x.c_str()']
+            - esp_audio_stack.stop: audio_stack
+            - esp_aec.set_mode:
+                id: aec_processor
+                mode: !lambda 'return x;'
+            - esp_audio_stack.start: audio_stack
+      - lambda: |-
+          id(aec_mode_select).publish_state(id(aec_processor).get_mode_name());
