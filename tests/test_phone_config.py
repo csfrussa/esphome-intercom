@@ -67,6 +67,25 @@ phone_endpoint = _load("phone_endpoint")
 endpoint_registry = _load("endpoint_registry")
 
 
+def test_removed_sip_offline_policy_falls_back_without_breaking_setup(
+    caplog,
+) -> None:
+    entry = types.SimpleNamespace(data={})
+    endpoint = phone_config.endpoint_from_data(
+        entry,
+        {
+            phone_config.CONF_PHONE_ENDPOINT_ID: "sip:dev-upgrade",
+            phone_config.CONF_PHONE_KIND: phone_endpoint.EndpointKind.SIP_ACCOUNT.value,
+            phone_config.CONF_PHONE_NAME: "Dev phone",
+            phone_config.CONF_PHONE_USERNAME: "dev-phone",
+            phone_config.CONF_PHONE_OFFLINE_POLICY: "wait",
+        },
+    )
+
+    assert endpoint.offline_policy is phone_endpoint.OfflinePolicy.UNAVAILABLE
+    assert "Unsupported persisted SIP account offline policy 'wait'" in caplog.text
+
+
 def test_legacy_store_fills_only_settings_missing_from_entry_options() -> None:
     raw = {
         "dnd": True,

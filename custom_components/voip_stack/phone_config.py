@@ -321,6 +321,23 @@ def _endpoint_capabilities(entry: ConfigEntry, data: Mapping[str, Any]) -> set[s
     return capabilities
 
 
+def _persisted_sip_offline_policy(data: Mapping[str, Any]) -> OfflinePolicy:
+    """Load a SIP policy without stranding entries from older dev builds."""
+    raw = str(
+        data.get(CONF_PHONE_OFFLINE_POLICY) or OfflinePolicy.UNAVAILABLE.value
+    )
+    try:
+        return OfflinePolicy(raw)
+    except ValueError:
+        _LOGGER.warning(
+            "Unsupported persisted SIP account offline policy %r for endpoint=%s; "
+            "using unavailable",
+            raw,
+            str(data.get(CONF_PHONE_ENDPOINT_ID) or "unknown"),
+        )
+        return OfflinePolicy.UNAVAILABLE
+
+
 def endpoint_from_subentry(
     entry: ConfigEntry,
     subentry: ConfigSubentry,
@@ -360,10 +377,7 @@ def endpoint_from_data(
         capabilities=_endpoint_capabilities(entry, data),
         dnd=bool(data.get(CONF_PHONE_DND, False)),
         offline_policy=(
-            str(
-                data.get(CONF_PHONE_OFFLINE_POLICY)
-                or OfflinePolicy.UNAVAILABLE.value
-            )
+            _persisted_sip_offline_policy(data)
             if kind is EndpointKind.SIP_ACCOUNT
             else OfflinePolicy.UNAVAILABLE.value
         ),
