@@ -184,8 +184,19 @@ esp_audio_stack:
 esp_aec:
   id: aec_processor
   sample_rate: 16000
-  filter_length: 8
-  mode: fd_high_perf
+  # `fd_*` modes are for codec-backed boards with a hardware DAC reference
+  # loopback (e.g. ES8311) -- the opposite of this hardware. This is a
+  # no-codec breadboard build with a software `ring_buffer` AEC reference,
+  # which is exactly the `voip_*` engine's target case per the esp_aec
+  # README ("Call-focused enclosure where stronger residual suppression is
+  # useful... use voip_low_cost if you don't need wake word detection").
+  # filter_length capped at 4 (not the max of 8) because esp-sr has a silent
+  # FFT calloc-fail bug on cross-engine-family transitions above 4 -- stay
+  # low until heap headroom on this specific board is confirmed, then this
+  # can be raised (still within the voip_* family) if more echo-tail
+  # coverage is needed.
+  filter_length: 4
+  mode: voip_low_cost
 
 microphone:
   - platform: esp_audio_stack
@@ -397,9 +408,9 @@ select:
     id: aec_mode_select
     icon: mdi:tune-vertical
     options:
-      - "fd_low_cost"
-      - "fd_high_perf"
-    initial_option: "fd_high_perf"
+      - "voip_low_cost"
+      - "voip_high_perf"
+    initial_option: "voip_low_cost"
     optimistic: false
     restore_value: true
     set_action:
