@@ -74,30 +74,48 @@ def _describe_call(data: Mapping[str, Any]) -> dict[str, str]:
     """Build one durable summary from the terminal event payload."""
 
     caller = _party(data, "caller", "peer_name") or "Unknown caller"
+    direction = str(data.get("direction") or "").strip().lower()
     destination_keys = (
         ("answered_by", "connected_party", "local_name", "callee", "dialed_target")
-        if str(data.get("direction") or "").strip().lower() == "incoming"
+        if direction == "incoming"
         else ("answered_by", "connected_party", "callee", "dialed_target", "local_name")
     )
     route_destination = (
         _route_destination(data)
-        if str(data.get("direction") or "").strip().lower() == "incoming"
+        if direction == "incoming"
         else ""
     )
     destination = route_destination or _party(data, *destination_keys)
     destination = destination or "unknown destination"
     event_type = str(data.get("type") or "ended").strip().lower()
     duration = _format_duration(data.get("duration_seconds"))
+    state = str(data.get("state") or "").strip().lower()
+    terminal_reason = str(
+        data.get("terminal_reason") or data.get("reason") or ""
+    ).strip().lower()
+    declined = (
+        event_type in {"decline", "declined"}
+        or state == "declined"
+        or terminal_reason in {"declined", "dnd"}
+    )
+    unanswered_incoming = (
+        event_type == "ended"
+        and direction == "incoming"
+        and not duration
+        and not declined
+    )
 
-    if event_type == "missed":
-        message = f"Missed call from {caller} to {destination}"
-    elif event_type == "failed":
+    if event_type == "failed":
         reason = str(
             data.get("terminal_reason") or data.get("reason") or "call failed"
         ).strip()
         message = f"Call from {caller} to {destination} failed"
         if reason:
             message += f" · {reason.replace('_', ' ')}"
+    elif declined:
+        message = f"Declined call from {caller} to {destination}"
+    elif event_type == "missed" or unanswered_incoming:
+        message = f"Missed call from {caller} to {destination}"
     else:
         message = f"{caller} called {destination}"
         if duration:

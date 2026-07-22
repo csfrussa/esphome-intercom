@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 import types
@@ -30,10 +31,17 @@ core.callback = lambda function: function
 sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
 sys.modules.setdefault("homeassistant.components", types.ModuleType("homeassistant.components"))
 
-logbook = importlib.import_module("custom_components.voip_stack.logbook")
-const = importlib.import_module("custom_components.voip_stack.const")
+PACKAGE_NAME = "voip_stack_logbook_test"
+package = types.ModuleType(PACKAGE_NAME)
+package.__path__ = [
+    str(Path(__file__).resolve().parents[1] / "custom_components" / "voip_stack")
+]
+sys.modules.setdefault(PACKAGE_NAME, package)
+
+logbook = importlib.import_module(f"{PACKAGE_NAME}.logbook")
+const = importlib.import_module(f"{PACKAGE_NAME}.const")
 automation_routing = importlib.import_module(
-    "custom_components.voip_stack.automation_routing"
+    f"{PACKAGE_NAME}.automation_routing"
 )
 DOMAIN = const.DOMAIN
 SIP_CALL_ENDED_EVENT = const.SIP_CALL_ENDED_EVENT
@@ -83,10 +91,72 @@ def test_missed_call_prefers_the_answered_endpoint_name() -> None:
     assert entry["message"] == "Missed call from 428 to Test"
 
 
+def test_incoming_caller_cancel_is_presented_as_missed() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "ended",
+            "direction": "incoming",
+            "state": "cancelled",
+            "terminal_reason": "cancelled",
+            "caller": "Courier",
+            "local_name": "Door",
+        }
+    )
+
+    assert entry["message"] == "Missed call from Courier to Door"
+
+
+def test_incoming_busy_without_answer_is_presented_as_missed() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "ended",
+            "direction": "incoming",
+            "state": "busy",
+            "terminal_reason": "busy",
+            "caller": "Courier",
+            "local_name": "Door",
+        }
+    )
+
+    assert entry["message"] == "Missed call from Courier to Door"
+
+
+def test_explicit_incoming_decline_is_not_presented_as_missed() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "ended",
+            "direction": "incoming",
+            "state": "declined",
+            "terminal_reason": "declined",
+            "caller": "Courier",
+            "local_name": "Door",
+        }
+    )
+
+    assert entry["message"] == "Declined call from Courier to Door"
+
+
+def test_zero_second_connected_incoming_call_is_not_presented_as_missed() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "ended",
+            "direction": "incoming",
+            "state": "idle",
+            "terminal_reason": "remote_hangup",
+            "caller": "Courier",
+            "local_name": "Door",
+            "duration_seconds": 0,
+        }
+    )
+
+    assert entry["message"] == "Courier called Door · 0 s"
+
+
 def test_failure_is_readable_and_sip_uri_is_compact() -> None:
     entry = logbook._describe_call(
         {
             "type": "failed",
+            "direction": "incoming",
             "caller": "sip:428@example.test;transport=tcp",
             "callee": "Casa",
             "terminal_reason": "media_incompatible",
