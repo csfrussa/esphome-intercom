@@ -242,6 +242,13 @@ longer need empty platform blocks.
   destination DOM during call setup.
 - Browser media handoff is scoped by phone, call and direction, so reloading one
   dashboard cannot block or steal another phone's microphone/camera.
+- Config-entry and per-device diagnostics can be downloaded through Home
+  Assistant with credentials, addresses and other private values redacted.
+- The Home Assistant card picker suggests the VoIP Stack card directly from a
+  browser-phone call-state entity and binds the resulting card to the correct
+  phone Device.
+- Logbook records one readable summary per PBX session instead of exposing a
+  stream of internal leg transitions.
 - Runtime snapshots expose sessions, legs, routes, SIP clients, relays, audio
   and video WebSockets, owners, cleanup tasks and allocated RTP ports.
 - The repository now includes deterministic SIP peers, headless browser video
@@ -272,7 +279,7 @@ before updating a custom deployment.
 
 ## 🧪 Qualification
 
-The candidate passes **1076 tests plus 101 subtests**, together with Ruff and
+The candidate passes **1087 tests plus 99 subtests**, together with Ruff and
 JavaScript module parsing. The release gate covers:
 
 - the complete Python and frontend contract suite;
