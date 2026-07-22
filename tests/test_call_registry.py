@@ -212,6 +212,35 @@ class CallRegistryEventContextTest(unittest.TestCase):
 
         self.assertEqual(ended["duration_seconds"], 45)
 
+    def test_terminal_duration_is_frozen_and_resets_for_reused_physical_id(self) -> None:
+        registry = call_registry.CallRegistry()
+
+        with mock.patch(
+            "custom_components.voip_stack.call_registry.time.monotonic",
+            side_effect=(100.0, 145.4, 200.0, 207.2),
+        ):
+            registry.event_fields("physical:esp", "in_call")
+            first = registry.event_fields("physical:esp", "idle")
+            duplicate = registry.event_fields("physical:esp", "idle")
+            registry.event_fields("physical:esp", "ringing")
+            registry.event_fields("physical:esp", "in_call")
+            second = registry.event_fields("physical:esp", "idle")
+
+        self.assertEqual(first["duration_seconds"], 45)
+        self.assertEqual(duplicate["duration_seconds"], 45)
+        self.assertEqual(second["duration_seconds"], 7)
+
+    def test_terminal_summary_claim_is_once_per_lifecycle(self) -> None:
+        registry = call_registry.CallRegistry()
+
+        registry.event_fields("call-1", "ringing")
+        self.assertTrue(registry.claim_terminal_summary("call-1"))
+        self.assertFalse(registry.claim_terminal_summary("call-1"))
+        registry.event_fields("call-1", "idle")
+        registry.event_fields("call-1", "ringing")
+
+        self.assertTrue(registry.claim_terminal_summary("call-1"))
+
     def test_unanswered_terminal_event_has_no_call_duration(self) -> None:
         registry = call_registry.CallRegistry()
 

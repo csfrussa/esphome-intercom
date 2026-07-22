@@ -245,6 +245,80 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(event["ingress"], "trunk")
         self.assertEqual(event["origin"], "trunk")
 
+    def test_logbook_terminal_event_is_emitted_once_for_the_logical_call(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "group-call",
+            state="ringing",
+            owner="router",
+            caller="Door",
+            callee="All rooms",
+        )
+
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "group-call",
+                "state": "cancelled",
+                "caller": "Door",
+                "callee": "All rooms",
+                "endpoint_id": "losing-room",
+            },
+            "session",
+        )
+        registry.transition("group-call", state="terminating", owner="bridge")
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "group-call",
+                "state": "idle",
+                "caller": "Door",
+                "callee": "All rooms",
+            },
+            "sip_bridge",
+        )
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "group-call",
+                "state": "idle",
+                "caller": "Door",
+                "callee": "All rooms",
+            },
+            "sip_bridge",
+        )
+
+        terminal = [
+            event
+            for event_type, event in hass.bus.events
+            if event_type == websocket_api.SIP_CALL_ENDED_EVENT
+        ]
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["state"], "idle")
+
+    def test_esp_physical_state_is_not_a_second_logbook_call(self) -> None:
+        hass = _FakeHass()
+
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "physical:esp:ws3",
+                "state": "idle",
+                "caller": "",
+                "callee": "Casa",
+                "duration_seconds": 2,
+            },
+            "esp",
+        )
+
+        self.assertFalse(
+            any(
+                event_type == websocket_api.SIP_CALL_ENDED_EVENT
+                for event_type, _event in hass.bus.events
+            )
+        )
+
     def test_ring_group_decline_is_per_phone_and_cannot_be_reversed(self) -> None:
         async def scenario() -> None:
             hass = _FakeHass()

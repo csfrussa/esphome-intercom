@@ -32,6 +32,9 @@ sys.modules.setdefault("homeassistant.components", types.ModuleType("homeassista
 
 logbook = importlib.import_module("custom_components.voip_stack.logbook")
 const = importlib.import_module("custom_components.voip_stack.const")
+automation_routing = importlib.import_module(
+    "custom_components.voip_stack.automation_routing"
+)
 DOMAIN = const.DOMAIN
 SIP_CALL_ENDED_EVENT = const.SIP_CALL_ENDED_EVENT
 
@@ -93,9 +96,79 @@ def test_failure_is_readable_and_sip_uri_is_compact() -> None:
     assert entry["message"] == "Call from 428@example.test to Casa failed · media incompatible"
 
 
+def test_incoming_call_prefers_local_phone_name_over_dialed_extension() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "ended",
+            "direction": "incoming",
+            "caller": "426",
+            "callee": "427",
+            "local_name": "Casa",
+            "duration_seconds": 2,
+        }
+    )
+
+    assert entry["message"] == "426 called Casa · 2 s"
+
+
+def test_incoming_call_prefers_selected_pbx_destination() -> None:
+    entry = logbook._describe_call(
+        {
+            "type": "ended",
+            "direction": "incoming",
+            "caller": "426",
+            "callee": "427",
+            "local_name": "Casa",
+            "route_history": [
+                {"action": "forward", "destination": "RG Casa"},
+                {"action": "decline", "destination": ""},
+            ],
+            "duration_seconds": 2,
+        }
+    )
+
+    assert entry["message"] == "426 called RG Casa · 2 s"
+
+
 def test_duration_format_is_bounded_and_human_readable() -> None:
     assert logbook._format_duration(0) == "0 s"
     assert logbook._format_duration(125) == "2 min 05 s"
     assert logbook._format_duration(3725) == "1 h 02 min 05 s"
     assert logbook._format_duration(-1) == ""
     assert logbook._format_duration("not-a-number") == ""
+
+
+def test_only_logical_terminal_occurrences_are_logbook_summaries() -> None:
+    common = {"call_id": "call-1", "type": "ended", "scope": "session"}
+
+    assert not automation_routing.is_logbook_call_summary(
+        {
+            **common,
+            "state": "cancelled",
+            "owner": "router",
+            "pbx_phase": "ringing",
+        }
+    )
+    assert automation_routing.is_logbook_call_summary(
+        {
+            **common,
+            "state": "idle",
+            "owner": "bridge",
+            "pbx_phase": "terminating",
+        }
+    )
+    assert automation_routing.is_logbook_call_summary(
+        {
+            **common,
+            "state": "idle",
+            "duration_seconds": 0,
+        }
+    )
+    assert not automation_routing.is_logbook_call_summary(
+        {
+            **common,
+            "scope": "esp",
+            "state": "idle",
+            "duration_seconds": 12,
+        }
+    )

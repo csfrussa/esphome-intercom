@@ -17,7 +17,11 @@ from .authorization import (
     require_websocket_read,
     websocket_can_control_endpoint,
 )
-from .automation_routing import CALL_ORIGINS, canonical_call_origin
+from .automation_routing import (
+    CALL_ORIGINS,
+    canonical_call_origin,
+    is_logbook_call_summary,
+)
 from .call_registry import TERMINAL_STATES, CallRegistry
 from .const import (
     CONF_DEBUG_MODE,
@@ -277,7 +281,7 @@ def _fire_call_event(hass: HomeAssistant, payload: dict[str, Any], scope: str) -
         )
     ):
         _async_fire_with_context(hass, SIP_INCOMING_CALL_EVENT, event, context)
-    if event["type"] in {"ended", "missed", "failed"}:
+    if is_logbook_call_summary(event) and registry.claim_terminal_summary(call_id):
         _async_fire_with_context(hass, SIP_CALL_ENDED_EVENT, event, context)
     return event
 

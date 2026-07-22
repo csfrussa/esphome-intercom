@@ -51,18 +51,37 @@ def _format_duration(value: Any) -> str:
     return f"{seconds} s"
 
 
+def _route_destination(data: Mapping[str, Any]) -> str:
+    """Return the last explicit PBX destination selected for the call."""
+
+    history = data.get("route_history")
+    if not isinstance(history, list):
+        return ""
+    for item in reversed(history):
+        if not isinstance(item, Mapping):
+            continue
+        destination = str(item.get("destination") or "").strip()
+        if destination:
+            return destination
+    return ""
+
+
 def _describe_call(data: Mapping[str, Any]) -> dict[str, str]:
     """Build one durable summary from the terminal event payload."""
 
     caller = _party(data, "caller", "peer_name") or "Unknown caller"
-    destination = _party(
-        data,
-        "answered_by",
-        "connected_party",
-        "callee",
-        "dialed_target",
-        "local_name",
-    ) or "unknown destination"
+    destination_keys = (
+        ("answered_by", "connected_party", "local_name", "callee", "dialed_target")
+        if str(data.get("direction") or "").strip().lower() == "incoming"
+        else ("answered_by", "connected_party", "callee", "dialed_target", "local_name")
+    )
+    route_destination = (
+        _route_destination(data)
+        if str(data.get("direction") or "").strip().lower() == "incoming"
+        else ""
+    )
+    destination = route_destination or _party(data, *destination_keys)
+    destination = destination or "unknown destination"
     event_type = str(data.get("type") or "ended").strip().lower()
     duration = _format_duration(data.get("duration_seconds"))
 

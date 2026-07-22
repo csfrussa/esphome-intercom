@@ -27,6 +27,7 @@ TERMINAL_STATES = {
     "error",
 }
 MAX_TERMINATED_CALL_IDS = 512
+MAX_TERMINAL_SUMMARY_IDS = 512
 
 
 def _owner_observation_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +154,7 @@ class CallEventContext:
     previous_state: str = ""
     route_history: list[dict[str, Any]] = field(default_factory=list)
     connected_at: float = 0.0
+    duration_seconds: int | None = None
 
 
 class CallRegistry:
@@ -171,6 +173,7 @@ class CallRegistry:
         self.relays: dict[str, Any] = {}
         self.bridge_clients: dict[str, str] = {}
         self.event_contexts: dict[str, CallEventContext] = {}
+        self.terminal_summary_ids: OrderedDict[str, None] = OrderedDict()
         self.endpoint_claims: dict[str, dict[str, str]] = {}
         self.terminated_call_ids: OrderedDict[str, int] = OrderedDict()
         self._generation = 0
@@ -449,6 +452,15 @@ class CallRegistry:
                 self.event_contexts.pop(next(iter(self.event_contexts)))
             context = CallEventContext()
             self.event_contexts[call_id] = context
+        starts_new_lifecycle = bool(
+            state
+            and state not in TERMINAL_STATES
+            and (not context.state or context.state in TERMINAL_STATES)
+        )
+        if starts_new_lifecycle:
+            context.connected_at = 0.0
+            context.duration_seconds = None
+            self.terminal_summary_ids.pop(call_id, None)
         if state and state != context.state:
             context.previous_state = context.state
             context.state = state
@@ -471,10 +483,12 @@ class CallRegistry:
             "route_history": [dict(item) for item in context.route_history],
         }
         if state in TERMINAL_STATES and context.connected_at:
-            fields["duration_seconds"] = max(
-                0,
-                round(time.monotonic() - context.connected_at),
-            )
+            if context.duration_seconds is None:
+                context.duration_seconds = max(
+                    0,
+                    round(time.monotonic() - context.connected_at),
+                )
+            fields["duration_seconds"] = context.duration_seconds
         if session is None:
             return fields
 
@@ -523,6 +537,18 @@ class CallRegistry:
                 participant_endpoint_ids
             )
         return fields
+
+    def claim_terminal_summary(self, call_id: str) -> bool:
+        """Claim the single Logbook summary emitted for one logical call."""
+
+        call_id = self.resolve_session_id(str(call_id or "").strip())
+        if not call_id or call_id in self.terminal_summary_ids:
+            return False
+        self.terminal_summary_ids[call_id] = None
+        self.terminal_summary_ids.move_to_end(call_id)
+        while len(self.terminal_summary_ids) > MAX_TERMINAL_SUMMARY_IDS:
+            self.terminal_summary_ids.popitem(last=False)
+        return True
 
     def event_context(self, call_id: str) -> CallEventContext | None:
         """Return the current automation event context for a call or leg."""
@@ -1212,6 +1238,7 @@ class CallRegistry:
         self.relays.clear()
         self.bridge_clients.clear()
         self.event_contexts.clear()
+        self.terminal_summary_ids.clear()
         self.terminated_call_ids.clear()
 
     def active_count(self, *, include_ha_softphone: bool = True) -> int:

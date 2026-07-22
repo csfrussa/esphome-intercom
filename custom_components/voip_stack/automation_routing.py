@@ -67,6 +67,38 @@ def automation_event_type(payload: dict[str, Any]) -> str:
     return "state_changed"
 
 
+def is_logbook_call_summary(payload: dict[str, Any]) -> bool:
+    """Return whether a terminal occurrence represents the logical call.
+
+    Ring groups publish terminal state for every losing leg. ESP physical
+    state mirrors are also observations, not a second logical call. The
+    Logbook must therefore consume only the winner/final PBX occurrence.
+    """
+
+    if not str(payload.get("call_id") or "").strip():
+        return False
+    if str(payload.get("scope") or "").strip().lower() == "esp":
+        return False
+    if str(payload.get("type") or "").strip().lower() not in {
+        "ended",
+        "missed",
+        "failed",
+    }:
+        return False
+
+    state = str(payload.get("state") or "").strip().lower()
+    phase = str(payload.get("pbx_phase") or "").strip().lower()
+    owner = str(payload.get("owner") or "").strip().lower()
+    if payload.get("duration_seconds") is not None or state == "idle":
+        return True
+    if owner not in {"router", "bridge"}:
+        return True
+    return str(payload.get("type") or "").strip().lower() == "failed" and phase in {
+        "terminating",
+        "terminated",
+    }
+
+
 def deadline_is_current(
     current_state: str,
     current_sequence: int,
