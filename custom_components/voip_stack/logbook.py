@@ -26,8 +26,12 @@ def _party(data: Mapping[str, Any], *keys: str) -> str:
         value = str(data.get(key) or "").strip()
         if not value:
             continue
-        if value.lower().startswith("sip:"):
-            value = value[4:].split(";", 1)[0]
+        lower = value.lower()
+        if lower.startswith(("sip:", "sips:")):
+            value = value.split(":", 1)[1].split(";", 1)[0]
+            # A Logbook party is a human-facing identity, not a routable URI.
+            # Keeping the user part is both clearer and less topology-revealing.
+            value = value.split("@", 1)[0]
         return value
     return ""
 

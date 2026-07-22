@@ -28,7 +28,6 @@ TO_REDACT = {
     "device_id",
     "discovery_keys",
     "display_name",
-    "domain",
     "endpoint_id",
     "entity_id",
     "entry_id",

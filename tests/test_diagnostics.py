@@ -253,6 +253,18 @@ def test_config_entry_diagnostics_are_bounded_and_private(monkeypatch) -> None:
     assert "allocated_rtp_ports" not in result["runtime"]["resources"]
 
 
+def test_config_entry_keeps_the_public_integration_domain(monkeypatch) -> None:
+    diagnostics = _load_module(monkeypatch)
+    hass = SimpleNamespace(data={"voip_stack": {}})
+
+    result = asyncio.run(
+        diagnostics.async_get_config_entry_diagnostics(hass, _entry())
+    )
+
+    assert result["config_entry"]["domain"] == "voip_stack"
+    assert result["config_entry"]["data"]["trunk_domain"] == "**REDACTED**"
+
+
 def test_device_diagnostics_expose_behavior_not_identity(monkeypatch) -> None:
     diagnostics = _load_module(monkeypatch)
     endpoint = _endpoint()

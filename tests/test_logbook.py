@@ -93,7 +93,13 @@ def test_failure_is_readable_and_sip_uri_is_compact() -> None:
         }
     )
 
-    assert entry["message"] == "Call from 428@example.test to Casa failed · media incompatible"
+    assert entry["message"] == "Call from 428 to Casa failed · media incompatible"
+
+
+def test_sips_party_is_reduced_to_its_human_identity() -> None:
+    assert logbook._party(
+        {"caller": "sips:daniele@pbx.example;transport=tls"}, "caller"
+    ) == "daniele"
 
 
 def test_incoming_call_prefers_local_phone_name_over_dialed_extension() -> None:

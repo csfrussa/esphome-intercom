@@ -127,7 +127,7 @@ def test_virtual_phone_device_is_service_owned_by_voip_stack() -> None:
     assert info["identifiers"] == {
         ("voip_stack", "phone_endpoint:kitchen")
     }
-    assert info["model"] == "Home Assistant softphone"
+    assert info["model"] == endpoint_device.BROWSER_PHONE_DEVICE_MODEL
 
 
 def test_sip_account_uses_same_generic_device_model() -> None:
@@ -135,7 +135,7 @@ def test_sip_account_uses_same_generic_device_model() -> None:
         _endpoint(kind=phone_endpoint.EndpointKind.SIP_ACCOUNT)
     )
     assert info is not None
-    assert info["model"] == "SIP account"
+    assert info["model"] == endpoint_device.SIP_ACCOUNT_DEVICE_MODEL
     assert "mobotix" not in repr(info).lower()
     assert "zoiper" not in repr(info).lower()
 

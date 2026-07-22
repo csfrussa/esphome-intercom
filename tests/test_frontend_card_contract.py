@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-card.js"
 CARD_MODEL = CARD.with_name("voip-stack-card-model.js")
 PHONEBOOK_CARD = ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-phonebook-card.js"
+ENDPOINT_DEVICE = ROOT / "custom_components" / "voip_stack" / "endpoint_device.py"
 
 
 def _method_body(source: str, method_name: str) -> str:
@@ -97,6 +98,19 @@ class FrontendCardContractTest(unittest.TestCase):
         body = _method_body(self.source, "_isHaSoftphoneMode")
         self.assertIn('"esp_mirror"', body)
         self.assertNotIn('"hybrid"', body)
+
+    def test_card_picker_device_models_match_backend_contract(self) -> None:
+        backend = ENDPOINT_DEVICE.read_text()
+        expected = {
+            "BROWSER_PHONE_DEVICE_MODEL": "home assistant softphone",
+            "SIP_ACCOUNT_DEVICE_MODEL": "sip account",
+        }
+        for constant, frontend_value in expected.items():
+            match = re.search(rf'^{constant} = "([^"]+)"$', backend, re.MULTILINE)
+            self.assertIsNotNone(match, constant)
+            assert match is not None
+            self.assertEqual(match.group(1).lower(), frontend_value)
+            self.assertIn(f'deviceModel === "{frontend_value}"', self.source)
 
     def test_ha_softphone_uses_its_authoritative_state_stream(self) -> None:
         call_event = _method_body(self.source, "_onCallEvent")

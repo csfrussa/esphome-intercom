@@ -279,7 +279,7 @@ before updating a custom deployment.
 
 ## 🧪 Qualification
 
-The candidate passes **1088 tests plus 99 subtests**, together with Ruff and
+The candidate passes **1091 tests plus 99 subtests**, together with Ruff and
 JavaScript module parsing. The release gate covers:
 
 - the complete Python and frontend contract suite;
