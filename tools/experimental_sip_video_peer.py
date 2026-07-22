@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
@@ -167,6 +168,7 @@ def _offer(
     codec: str,
     direction: str,
     video_profile: str,
+    audio_direction: str = "sendrecv",
 ) -> bytes:
     lines = [
         "v=0",
@@ -179,7 +181,7 @@ def _offer(
         "a=rtpmap:101 telephone-event/8000",
         "a=fmtp:101 0-16",
         "a=ptime:20",
-        "a=sendrecv",
+        f"a={audio_direction}",
     ]
     if codec == "audio":
         return ("\r\n".join(lines) + "\r\n").encode()
@@ -534,6 +536,8 @@ async def async_main(args: argparse.Namespace) -> int:
         "codec": args.codec,
         "initial_codec": initial_codec,
         "add_video_after": args.add_video_after,
+        "audio_hold_after": args.audio_hold_after,
+        "audio_hold_seconds": args.audio_hold_seconds,
         "video_profile": args.video_profile,
         "call_id": call_id,
         "local_sip": f"{local_ip}:{sip_port}",
@@ -712,6 +716,11 @@ async def async_main(args: argparse.Namespace) -> int:
         call_deadline = loop.time() + args.duration
         reinvite_at = loop.time() + max(0.0, args.add_video_after)
         reinvite_done = not add_video_mid_dialog
+        hold_enabled = args.audio_hold_after >= 0
+        hold_at = loop.time() + max(0.0, args.audio_hold_after)
+        resume_at = float("inf")
+        hold_done = not hold_enabled
+        resume_done = not hold_enabled
         next_cseq = 2
 
         async def _add_video() -> None:
@@ -823,10 +832,110 @@ async def async_main(args: argparse.Namespace) -> int:
             result["reinvite_remote_video_rtp"] = int(parsed["media_port"])
             await _start_negotiated_video(parsed)
 
+        async def _change_audio_direction(direction: str, prefix: str) -> None:
+            nonlocal next_cseq, remote_bye
+            branch = f"z9hG4bK{secrets.token_hex(8)}"
+            request = sip.build_request(
+                "INVITE",
+                remote_uri,
+                _request_headers(
+                    method="INVITE",
+                    local_ip=local_ip,
+                    local_port=sip_port,
+                    local_user=args.user,
+                    remote_uri=remote_uri,
+                    remote_to=remote_to,
+                    call_id=call_id,
+                    local_tag=local_tag,
+                    cseq=next_cseq,
+                    branch=branch,
+                    content_type="application/sdp",
+                ),
+                _offer(
+                    local_ip=local_ip,
+                    audio_port=audio_port,
+                    video_port=0,
+                    codec="audio",
+                    direction=args.direction,
+                    video_profile=args.video_profile,
+                    audio_direction=direction,
+                ),
+            )
+            await loop.sock_sendto(sip_socket, request, (args.host, args.port))
+            statuses: list[int] = []
+            final_response = None
+            async with asyncio.timeout(args.answer_timeout):
+                while final_response is None:
+                    raw, addr = await loop.sock_recvfrom(sip_socket, 65535)
+                    message = sip.parse_message(raw)
+                    if message.header("Call-ID") != call_id:
+                        continue
+                    if message.method == "BYE":
+                        await loop.sock_sendto(
+                            sip_socket,
+                            sip.build_response(200, "OK", _response_headers(message)),
+                            addr,
+                        )
+                        remote_bye = True
+                        return
+                    if message.status_code is None:
+                        continue
+                    if message.header("CSeq") != f"{next_cseq} INVITE":
+                        continue
+                    status = int(message.status_code)
+                    statuses.append(status)
+                    print(
+                        f"{prefix} re-INVITE SIP {status} {message.reason}",
+                        flush=True,
+                    )
+                    if status >= 200:
+                        final_response = message
+            result[f"{prefix}_statuses"] = statuses
+            result[f"{prefix}_status"] = int(final_response.status_code)
+            result[f"{prefix}_answer_sdp"] = final_response.body.decode(
+                errors="replace"
+            )
+            ack = sip.build_request(
+                "ACK",
+                remote_uri,
+                _request_headers(
+                    method="ACK",
+                    local_ip=local_ip,
+                    local_port=sip_port,
+                    local_user=args.user,
+                    remote_uri=remote_uri,
+                    remote_to=final_response.header("To") or remote_to,
+                    call_id=call_id,
+                    local_tag=local_tag,
+                    cseq=next_cseq,
+                    branch=branch,
+                ),
+            )
+            await loop.sock_sendto(sip_socket, ack, (args.host, args.port))
+            next_cseq += 1
+            if int(final_response.status_code) >= 300:
+                raise RuntimeError(
+                    f"{prefix} re-INVITE failed: {final_response.status_code}"
+                )
+            result[f"{prefix}_answer_direction"] = str(
+                sdp.parse_sdp(final_response.body)["direction"]
+            )
+
         while loop.time() < call_deadline:
             if not reinvite_done and loop.time() >= reinvite_at:
                 await _add_video()
                 reinvite_done = True
+                if remote_bye:
+                    break
+            if not hold_done and loop.time() >= hold_at:
+                await _change_audio_direction("sendonly", "hold")
+                hold_done = True
+                resume_at = loop.time() + args.audio_hold_seconds
+                if remote_bye:
+                    break
+            if hold_done and not resume_done and loop.time() >= resume_at:
+                await _change_audio_direction("sendrecv", "resume")
+                resume_done = True
                 if remote_bye:
                     break
             if (
@@ -879,6 +988,8 @@ async def async_main(args: argparse.Namespace) -> int:
             bye_sent = True
         if not reinvite_done:
             raise RuntimeError("call ended before the video re-INVITE was sent")
+        if not hold_done or not resume_done:
+            raise RuntimeError("call ended before the audio hold/resume cycle completed")
         if result["audio_tx_packets"] <= 0 or result["audio_rx_packets"] <= 0:
             raise RuntimeError(
                 "established dialog did not retain bidirectional audio RTP"
@@ -983,7 +1094,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=15060)
-    parser.add_argument("--target", default="VoIP%20Stack%20Lab")
+    parser.add_argument(
+        "--target",
+        default=os.environ.get("SIP_VIDEO_TARGET", "2600"),
+        help="SIP destination; defaults to the stable HA lab extension 2600",
+    )
     parser.add_argument("--user", default="video-lab-peer")
     parser.add_argument("--local-ip", default="")
     parser.add_argument("--codec", choices=("audio", *sorted(VIDEO_PROFILES)), required=True)
@@ -1021,6 +1136,18 @@ def main() -> int:
         default=0,
         help="require this final response to the video-adding re-INVITE",
     )
+    parser.add_argument(
+        "--audio-hold-after",
+        type=float,
+        default=-1,
+        help="send an audio sendonly hold re-INVITE after this many seconds",
+    )
+    parser.add_argument(
+        "--audio-hold-seconds",
+        type=float,
+        default=2,
+        help="resume audio with sendrecv after this many seconds on hold",
+    )
     parser.add_argument("--duration", type=float, default=15.0)
     parser.add_argument("--video-file", default="")
     parser.add_argument(
@@ -1029,6 +1156,12 @@ def main() -> int:
     )
     parser.add_argument("--out", default="/tmp/experimental_sip_video_peer.json")
     args = parser.parse_args()
+    if args.audio_hold_after >= 0 and (
+        args.codec != "audio" or args.add_video_after >= 0
+    ):
+        parser.error("audio hold qualification requires --codec audio without video re-INVITE")
+    if args.audio_hold_seconds <= 0:
+        parser.error("--audio-hold-seconds must be greater than zero")
     try:
         return asyncio.run(async_main(args))
     except KeyboardInterrupt:

@@ -72,6 +72,7 @@ async () => {
     backend: {
       state: backend?.state || "", call_id: backend?.call_id || "", caller: backend?.caller || "",
       callee: backend?.callee || "", terminal_reason: backend?.terminal_reason || "",
+      device_id: backend?.device_id || card.config?.device_id || "",
       video_direction: backend?.video_direction || "inactive",
       video_rtp_tx_packets: Number(backend?.video_rtp_tx_packets || 0),
       video_rtp_rx_packets: Number(backend?.video_rtp_rx_packets || 0),
@@ -494,12 +495,15 @@ def main() -> int:
                 # a second failure remains a real test failure.
                 page.reload(wait_until="domcontentloaded", timeout=30_000)
                 page.wait_for_function(card_ready, timeout=30_000)
-            wait_card(
+            initial = wait_card(
                 page,
                 lambda item: item["backend"]["state"] == "idle",
                 15,
                 "initial idle",
             )
+            phone_device_id = str(initial["backend"].get("device_id") or "")
+            if not phone_device_id:
+                raise RuntimeError("HA softphone device_id is unavailable")
             page.evaluate(SET_AUTO_ANSWER, False)
             if os.environ.get("EXPECT_VIDEO", "") == "1":
                 if not page.evaluate(SET_SEND_VIDEO, True):
@@ -665,7 +669,10 @@ def main() -> int:
                 service(
                     "voip_stack",
                     "call",
-                    {"destination": "Codex", "endpoint_id": "default"},
+                    {
+                        "destination": "Codex",
+                        "device_id": phone_device_id,
+                    },
                 )
                 calling = wait_card(
                     page,

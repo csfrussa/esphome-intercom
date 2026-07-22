@@ -41,6 +41,8 @@ and `tools/experimental_sip_video_peer.py` against SIP port `15060` for
 repeatable media tests. The probe checks the rendered canvas, responsive card geometry and
 post-call backend ownership. The peer can generate audio-only, H.263,
 H.263-1998, H.264, H.265, JPEG and VP8 offers without a physical door station.
+Its default destination is the lab phone extension `2600`; set
+`SIP_VIDEO_TARGET` or pass `--target` when a local lab uses another extension.
 When the two tools are launched separately, wait for the probe to print
 `READY_FOR_VIDEO_CALL` before starting the peer. This guarantees that optional
 camera settings and browser permissions are committed before the SIP INVITE.
