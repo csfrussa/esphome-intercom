@@ -20,6 +20,12 @@ light:
     chipset: ${status_led_chipset}
     num_leds: 1
     rgb_order: ${status_led_rgb_order}
+    # Force off at boot instead of restoring whatever color/effect was last
+    # commanded before power loss/reflash -- the VoIP LED reducer only
+    # recomputes state on voip_stack callbacks (see simple_led_status_*.yaml's
+    # `on_boot` hook), so without this the LED can appear "stuck on" at boot
+    # showing a stale pre-reflash state (e.g. mid-ring) instead of idle.
+    restore_mode: ALWAYS_OFF
     effects:
       - pulse:
           name: "Slow Pulse"

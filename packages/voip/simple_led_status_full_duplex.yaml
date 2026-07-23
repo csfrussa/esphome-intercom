@@ -28,6 +28,16 @@ globals:
     restore_value: false
     initial_value: "false"
 
+# `update_status` only runs from voip_stack callbacks (on_calling/on_idle/...),
+# so without this hook the LED never reflects real state at startup -- it just
+# shows whatever the light restored from flash (see status_led's
+# restore_mode: ALWAYS_OFF) until the first call event. This recomputes the
+# correct color once mute switches have restored their own persisted state.
+esphome:
+  on_boot:
+    then:
+      - script.execute: update_status
+
 script:
   - id: update_status
     mode: restart
