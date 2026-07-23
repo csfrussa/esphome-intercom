@@ -2043,7 +2043,7 @@ class VoipStackCard extends HTMLElement {
         gap: 12px;
         justify-content: flex-start;
         overflow: hidden;
-        background: linear-gradient(90deg, rgba(122, 5, 5, .40), rgba(230, 35, 35, .32));
+        background: linear-gradient(90deg, rgba(122, 5, 5, .24), rgba(230, 35, 35, .18));
         -webkit-backdrop-filter: blur(8px) saturate(1.12);
         backdrop-filter: blur(8px) saturate(1.12);
         box-shadow: 0 -1px 0 rgba(255,255,255,.18), 0 -8px 30px rgba(0,0,0,.24);
