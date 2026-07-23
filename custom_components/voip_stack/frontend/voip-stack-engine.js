@@ -438,6 +438,32 @@ class VoipStackEngine extends EventTarget {
     }
   }
 
+  async _mediaAttachState(callId, endpointId) {
+    if (!this._hass?.callWS) return null;
+    try {
+      return await this._hass.callWS({
+        type: "voip_stack/ha_softphone_state",
+        endpoint_id: String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID),
+        media_client_id: this._mediaClientId,
+      });
+    } catch (_) {
+      // Failure to inspect ownership is not proof of an expected conflict.
+      // In that case the normal media WebSocket error remains user-visible.
+      return null;
+    }
+  }
+
+  _mediaAttachNoLongerBelongsHere(snapshot, callId) {
+    if (!snapshot) return false;
+    if (String(snapshot.media_owner || "") === "other") return true;
+    const currentCallId = String(snapshot.call_id || "");
+    const currentState = String(snapshot.state || "").toLowerCase();
+    return (
+      currentCallId !== String(callId || "") ||
+      !ACTIVE_SOFTPHONE_STATES.has(currentState)
+    );
+  }
+
   tryRecoverSoftphoneSession(callId, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
     const wanted = String(callId || "").trim();
     const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
@@ -1214,6 +1240,11 @@ class VoipStackEngine extends EventTarget {
     let connected = false;
     const callId = String(reply?.call_id || "");
     try {
+      const beforeAttach = await this._mediaAttachState(callId, endpointId);
+      if (String(beforeAttach?.media_owner || "") === "other") {
+        this.releaseSoftphoneSession(callId, endpointId);
+        return false;
+      }
       let negotiated = null;
       for (let attempt = 0; attempt < MEDIA_RECONNECT_ATTEMPTS; attempt++) {
         try {
@@ -1258,9 +1289,13 @@ class VoipStackEngine extends EventTarget {
       // must not terminate the live SIP dialog.  Once the socket opened, a
       // real browser media-format/setup failure is still fatal for this leg.
       if (!connected) {
+        const afterFailure = await this._mediaAttachState(callId, endpointId);
+        const expectedSpectatorOrTerminalRace =
+          this._mediaAttachNoLongerBelongsHere(afterFailure, callId);
         this.releaseSoftphoneSession(callId, endpointId);
         await this.close("media_attach_conflict");
         this._forceIdle();
+        if (expectedSpectatorOrTerminalRace) return false;
         this.dispatchEvent(new CustomEvent("error", {
           detail: "Call media is active in another tab or could not be attached.",
         }));

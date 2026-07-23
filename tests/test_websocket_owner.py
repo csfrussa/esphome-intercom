@@ -32,6 +32,7 @@ async_release_local_media_if_unowned = (
 )
 async_release_media_owner = OWNER_MODULE.async_release_media_owner
 async_revoke_media_owners = OWNER_MODULE.async_revoke_media_owners
+media_websocket_owner_status = OWNER_MODULE.media_websocket_owner_status
 
 
 class _FakeWebSocket:
@@ -81,6 +82,38 @@ class _CallRegistry:
 
 
 class WebSocketOwnerTest(unittest.IsolatedAsyncioTestCase):
+    def test_owner_status_never_exposes_browser_identity(self) -> None:
+        key = "kitchen|call-1"
+        bucket: dict[str, object] = {}
+        self.assertEqual(
+            media_websocket_owner_status(
+                bucket, "call-1", "kitchen", "document-a"
+            ),
+            "available",
+        )
+        bucket["audio_ws_owners"] = {
+            key: MediaWebSocketOwner(client_id="document-a")
+        }
+        self.assertEqual(
+            media_websocket_owner_status(
+                bucket, "call-1", "kitchen", "document-a"
+            ),
+            "self",
+        )
+        self.assertEqual(
+            media_websocket_owner_status(
+                bucket, "call-1", "kitchen", "document-b"
+            ),
+            "other",
+        )
+        bucket["video_ws_owners"] = {key: object()}
+        self.assertEqual(
+            media_websocket_owner_status(
+                bucket, "call-1", "kitchen", "document-a"
+            ),
+            "other",
+        )
+
     async def test_handoff_for_one_call_does_not_block_an_unrelated_call(
         self,
     ) -> None:

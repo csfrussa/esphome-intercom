@@ -435,6 +435,37 @@ def test_media_controller_accepts_only_the_user_who_controls_the_call(
         )
 
 
+def test_media_controller_status_is_scoped_without_exposing_user_ids(
+    authorization,
+) -> None:
+    registry = _ScopedRegistry({"kitchen": "user-a", "office": "user-b"})
+
+    assert (
+        authorization.media_controller_status(
+            registry, "call-1", "kitchen", "user-a"
+        )
+        == "self"
+    )
+    assert (
+        authorization.media_controller_status(
+            registry, "call-1", "kitchen", "user-b"
+        )
+        == "other"
+    )
+    assert (
+        authorization.media_controller_status(
+            registry, "call-1", "hall", "user-c"
+        )
+        == "available"
+    )
+    assert (
+        authorization.media_controller_status(
+            registry, "missing", "kitchen", "user-a"
+        )
+        == "available"
+    )
+
+
 def test_only_admin_can_atomically_bind_media_for_an_internal_call(
     authorization,
 ) -> None:

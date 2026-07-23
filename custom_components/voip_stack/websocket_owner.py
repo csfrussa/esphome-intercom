@@ -86,6 +86,36 @@ def _call_media_client_id(registry: Any, call_id: str) -> str:
     return session_id_value or str(media.get("media_client_id") or "")
 
 
+def media_websocket_owner_status(
+    bucket: dict[str, Any],
+    call_id: str,
+    endpoint_id: str,
+    client_id: str,
+) -> str:
+    """Return whether this browser owns, may claim, or must observe media."""
+
+    owner_key = (
+        f"{str(endpoint_id or '').strip()}|{str(call_id or '').strip()}"
+    )
+    live_owners = [
+        owner
+        for channel in ("audio", "video")
+        if (
+            owner := bucket.get(f"{channel}_ws_owners", {}).get(owner_key)
+        )
+        is not None
+    ]
+    if not live_owners:
+        return "available"
+    if all(
+        isinstance(owner, MediaWebSocketOwner)
+        and owner.client_id == client_id
+        for owner in live_owners
+    ):
+        return "self"
+    return "other"
+
+
 def _set_call_media_client_id(registry: Any, call_id: str, client_id: str) -> None:
     """Atomically rebind a disconnected call to a new browser document."""
     session_id = registry.resolve_session_id(str(call_id or "").strip())

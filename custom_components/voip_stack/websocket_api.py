@@ -13,6 +13,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .authorization import (
+    media_controller_status,
     require_websocket_endpoint_read,
     require_websocket_read,
     websocket_can_control_endpoint,
@@ -53,7 +54,10 @@ from .phone_config import (
 )
 from .debug_capture import debug_capture_pending_writes
 from .runtime_diagnostics import runtime_resource_snapshot
-from .websocket_owner import async_revoke_media_owners
+from .websocket_owner import (
+    async_revoke_media_owners,
+    media_websocket_owner_status,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import Event
@@ -1710,6 +1714,10 @@ def websocket_subscribe_ha_softphone_state(
         vol.Required("type"): WS_TYPE_HA_SOFTPHONE_STATE,
         vol.Optional("endpoint_id", default=""): str,
         vol.Optional("device_id", default=""): str,
+        vol.Optional("media_client_id", default=""): vol.Any(
+            "",
+            vol.Match(r"^[A-Za-z0-9][A-Za-z0-9._~-]{15,127}$"),
+        ),
     }
 )
 @websocket_api.async_response
@@ -1731,7 +1739,25 @@ async def websocket_ha_softphone_state(
     selected_endpoint = _browser_endpoint(hass, endpoint_id)
     if selected_endpoint is not None:
         require_websocket_endpoint_read(hass, connection, selected_endpoint)
-    connection.send_result(msg["id"], _ha_softphone_state(hass, endpoint_id))
+    state = _ha_softphone_state(hass, endpoint_id)
+    media_client_id = str(msg.get("media_client_id") or "")
+    if media_client_id:
+        owner_status = media_websocket_owner_status(
+            hass.data.get(DOMAIN, {}),
+            str(state.get("call_id") or ""),
+            endpoint_id,
+            media_client_id,
+        )
+        controller_status = media_controller_status(
+            call_registry(hass),
+            str(state.get("call_id") or ""),
+            endpoint_id,
+            str(getattr(connection.user, "id", "") or ""),
+        )
+        state["media_owner"] = (
+            "other" if controller_status == "other" else owner_status
+        )
+    connection.send_result(msg["id"], state)
 
 
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST})

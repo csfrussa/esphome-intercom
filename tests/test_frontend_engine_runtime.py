@@ -393,6 +393,62 @@ assert.equal(ownership.ownsSoftphoneSession("call-A", "default"), false);
 assert.equal(ownership._state, "IDLE");
 assert.match(ownershipErrors.at(-1), /another tab|could not be attached/i);
 
+// A known live owner in another tab is an ordinary spectator state. The
+// backend remains authoritative and the card must not display a false media
+// error or retry an attach that cannot succeed.
+const spectator = new Engine();
+let spectatorConnects = 0;
+const spectatorErrors = [];
+spectator._hass = {{
+  callWS: async () => ({{
+    state: "in_call",
+    call_id: "spectator-call",
+    media_owner: "other",
+  }}),
+}};
+spectator._connect = async () => {{ spectatorConnects++; throw new Error("must not connect"); }};
+spectator.addEventListener("error", (event) => spectatorErrors.push(event.detail));
+spectator.claimSoftphoneSession("spectator-call", "test");
+assert.equal(
+  await spectator._setupAudioOrAbort(
+    "test-device",
+    {{ endpoint_id: "test" }},
+    {{ call_id: "spectator-call" }},
+    "",
+    "test",
+  ),
+  false,
+);
+assert.equal(spectatorConnects, 0);
+assert.deepEqual(spectatorErrors, []);
+assert.equal(spectator.ownsSoftphoneSession("spectator-call", "test"), false);
+
+// A media attach racing the terminal state is also expected: after BYE there
+// is no call left to attach and therefore no user-facing media error.
+const terminalRace = new Engine();
+const terminalErrors = [];
+terminalRace._hass = {{
+  callWS: async () => ({{
+    state: "idle",
+    call_id: "terminal-call",
+    media_owner: "available",
+  }}),
+}};
+terminalRace._connect = async () => {{ throw new Error("socket closed during BYE"); }};
+terminalRace.close = async () => {{}};
+terminalRace.addEventListener("error", (event) => terminalErrors.push(event.detail));
+terminalRace.claimSoftphoneSession("terminal-call", "default");
+assert.equal(
+  await terminalRace._setupAudioOrAbort(
+    "__voip_stack_ha_softphone__",
+    {{ endpoint_id: "default" }},
+    {{ call_id: "terminal-call" }},
+  ),
+  false,
+);
+assert.deepEqual(terminalErrors, []);
+assert.equal(terminalRace.ownsSoftphoneSession("terminal-call", "default"), false);
+
 // A reload can race the old document's socket teardown. An engine that owns
 // the exact call retries the bounded media claim; a mirror that never claimed
 // the call (the case above) remains fail-fast.

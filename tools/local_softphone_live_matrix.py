@@ -75,6 +75,7 @@ BROWSER_MEDIA_BUSY = r"""
     busy: Boolean(card._otherPhoneOwnsBrowserMedia?.()),
     call_disabled: Boolean(card.shadowRoot.querySelector(".voip-button.call")?.disabled),
     state: String(card._softphoneSnapshot?.state || ""),
+    error: String(card._errorMsg || ""),
   };
 }
 """
@@ -342,6 +343,10 @@ def main() -> int:
                 raise RuntimeError(
                     f"active Test call did not reserve the browser: {active_busy}"
                 )
+            if active_busy["error"]:
+                raise RuntimeError(
+                    f"spectator card exposed expected media ownership as an error: {active_busy}"
+                )
 
             if not casa.evaluate(HANGUP):
                 raise RuntimeError("Hangup unavailable on Casa")
@@ -354,12 +359,18 @@ def main() -> int:
                     released
                     and not released["busy"]
                     and not released["call_disabled"]
+                    and not released["error"]
                 ):
                     break
                 test.wait_for_timeout(100)
             else:
                 raise RuntimeError(
-                    f"stale Test browser claim survived terminal call: {released}"
+                    f"browser claim/error survived terminal call: {released}"
+                )
+            original_released = casa.evaluate(BROWSER_MEDIA_BUSY)
+            if not original_released or original_released["error"]:
+                raise RuntimeError(
+                    f"original card retained a media error after hangup: {original_released}"
                 )
             results.append(
                 {
@@ -368,6 +379,7 @@ def main() -> int:
                     "seconds": round(time.monotonic() - started, 3),
                     "active_busy": active_busy,
                     "released": released,
+                    "original_released": original_released,
                 }
             )
         except Exception as err:  # noqa: BLE001

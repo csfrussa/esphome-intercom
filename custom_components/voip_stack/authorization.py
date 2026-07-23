@@ -280,6 +280,46 @@ def require_media_client_id(request: Any) -> str:
     return client_id
 
 
+def _media_controller_user_id(
+    registry: Any,
+    call_id: str,
+    endpoint_id: str = "",
+) -> str:
+    """Return the sticky HA user controlling one call or local phone leg."""
+
+    session_id = registry.resolve_session_id(str(call_id or "").strip())
+    session = registry.sessions.get(session_id)
+    if session is None:
+        return ""
+    requested_endpoint_id = str(endpoint_id or "").strip()
+    if requested_endpoint_id and session.metadata.get("local_bridge"):
+        return str(
+            (session.metadata.get("controller_user_ids") or {}).get(
+                requested_endpoint_id
+            )
+            or ""
+        ).strip()
+    return str(session.metadata.get("controller_user_id") or "").strip()
+
+
+def media_controller_status(
+    registry: Any,
+    call_id: str,
+    endpoint_id: str,
+    user_id: str,
+) -> str:
+    """Return whether this HA user controls or may observe one media leg."""
+
+    controller_user_id = _media_controller_user_id(
+        registry,
+        call_id,
+        endpoint_id,
+    )
+    if not controller_user_id:
+        return "available"
+    return "self" if controller_user_id == str(user_id or "").strip() else "other"
+
+
 async def async_require_media_controller(
     hass: Any,
     registry: Any,
@@ -310,17 +350,11 @@ async def async_require_media_controller(
         scoped = bool(
             requested_endpoint_id and session.metadata.get("local_bridge")
         )
-        if scoped:
-            controller_user_id = str(
-                (session.metadata.get("controller_user_ids") or {}).get(
-                    requested_endpoint_id
-                )
-                or ""
-            ).strip()
-        else:
-            controller_user_id = str(
-                session.metadata.get("controller_user_id") or ""
-            ).strip()
+        controller_user_id = _media_controller_user_id(
+            registry,
+            session_id,
+            requested_endpoint_id,
+        )
         if controller_user_id:
             if controller_user_id != user_id:
                 raise Unauthorized(user_id=user_id)
