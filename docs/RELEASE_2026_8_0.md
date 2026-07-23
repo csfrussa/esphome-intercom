@@ -1,11 +1,12 @@
-# 2026.8.0-dev: Native HA Video Phones, Multi-Room Calling And PBX Routing
+# 2026.8.0: Native HA Video Phones, Multi-Room Calling And PBX Routing
 
-<!-- Canonical source for the v2026.8.0-dev GitHub pre-release body. -->
+<!-- Canonical source for the v2026.8.0 GitHub release body. -->
 
 > [!IMPORTANT]
-> This is a development pre-release for manual testing. Stable HACS users
-> remain on `2026.7.1`; install the attached `voip_stack.zip` only when you
-> want to qualify the new call, video and routing paths.
+> Read the [Breaking Changes](https://github.com/n-IA-hane/esphome-intercom/blob/v2026.8.0/docs/BREAKING_CHANGES.md)
+> before upgrading. This
+> release deliberately removes development-only aliases and may require
+> reconfiguring VoIP Stack and updating existing automations.
 
 `2026.8.0` is the release where VoIP Stack stops looking like one clever
 intercom and starts behaving like a small, Home Assistant-native communications
@@ -17,7 +18,7 @@ This note contains only the user-visible delta since stable `2026.7.1`.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0-dev/docs/images/voip-doorbell-room-to-room.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0/docs/images/voip-doorbell-room-to-room.png"
     alt="Video doorbell and private room-to-room calls through Home Assistant"
     width="1000"
   />
@@ -47,7 +48,7 @@ default phone, then add Kitchen, Reception, Office or any other room from
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0-dev/docs/images/home-assistant-local-sip-pbx.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0/docs/images/home-assistant-local-sip-pbx.png"
     alt="Home Assistant as the local SIP and PBX hub"
     width="1000"
   />
@@ -63,8 +64,9 @@ audio-only.
   re-encoding video on the HA server.
 - Compatible H.264 and VP8 calls can send the browser camera when both the
   integration-wide permission and that phone's persistent **Send Camera**
-  switch are on. The choice survives browser cache clearing; permission remains
-  local to the browser that owns the call media.
+  switch are on. **Auto Answer** and **Send Camera** are phone settings stored
+  by the integration, so clearing browser cache does not reset them; microphone
+  and camera permission remains local to the browser that owns the call media.
 - Optional bounded FFmpeg receive converts H.263, H.263-1998 or H.265 to VP8.
   It is receive-only, single-slot and never records an intermediate file.
 - Incoming and outgoing calls support `sendrecv`, `sendonly`, `recvonly` and
@@ -85,15 +87,16 @@ audio-only.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0-dev/docs/images/ha-sip-video-call.gif"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0/docs/images/ha-sip-video-call.gif"
     alt="Live SIP video in the Home Assistant softphone card"
     width="800"
   />
 </p>
 
 Video remains opt-in and requires HTTPS, a compatible browser and an RTP path
-permitted by the local firewall. Read [SIP Video](SIP_VIDEO.md) for codec,
-network and privacy requirements.
+permitted by the local firewall. Read
+[SIP Video](https://github.com/n-IA-hane/esphome-intercom/blob/v2026.8.0/docs/SIP_VIDEO.md)
+for codec, network and privacy requirements.
 
 ## 🧭 Initial Preview: Automation-Native PBX Routing
 
@@ -128,7 +131,7 @@ decision points instead of replacing the normal dial plan.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0-dev/docs/images/assist-unanswered-doorbell.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0/docs/images/assist-unanswered-doorbell.png"
     alt="Assist answers an unattended delivery call"
     width="1000"
   />
@@ -139,7 +142,7 @@ says is controlled by your pipeline prompt. Good judgement is still not
 included.
 
 Copyable native-UI automation examples are in
-[Automation Dial Plan](AUTOMATION_DIALPLAN.md).
+[Automation Dial Plan](https://github.com/n-IA-hane/esphome-intercom/blob/v2026.8.0/docs/AUTOMATION_DIALPLAN.md).
 
 ## 👥 Ring Groups And Conference Groups
 
@@ -161,7 +164,7 @@ ownership rules.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0-dev/docs/images/ring-group-conference-group.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0/docs/images/ring-group-conference-group.png"
     alt="Ring group first-answer-wins and conference group behavior"
     width="1000"
   />
@@ -216,7 +219,7 @@ Assistant and VoIP TX consume the same cleaned post-AEC microphone.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0-dev/docs/images/shared-audio-aec-pipeline.png"
+    src="https://raw.githubusercontent.com/n-IA-hane/esphome-intercom/v2026.8.0/docs/images/shared-audio-aec-pipeline.png"
     alt="Shared audio output and clean post-AEC microphone pipeline"
     width="1000"
   />
@@ -244,6 +247,9 @@ longer need empty platform blocks.
   destination DOM during call setup.
 - Browser media handoff is scoped by phone, call and direction, so reloading one
   dashboard cannot block or steal another phone's microphone/camera.
+- Navigating between dashboards or closing a completed call releases browser
+  media claims without leaving another phone disabled or showing a false
+  "media active in another tab" error.
 - Config-entry and per-device diagnostics can be downloaded through Home
   Assistant with credentials, addresses and other private values redacted.
 - The Home Assistant card picker suggests the VoIP Stack card directly from a
@@ -273,22 +279,24 @@ The `2026.7.0` SIP migration remains the breaking baseline. For `2026.8.0`:
 - there is no SRTP, SIP/TLS on ESP, ICE/STUN/TURN, recording or general-purpose
   video transcoding PBX.
 
-See [Breaking Changes](BREAKING_CHANGES.md) and the individual feature guides
-before updating a custom deployment.
+See the
+[Breaking Changes](https://github.com/n-IA-hane/esphome-intercom/blob/v2026.8.0/docs/BREAKING_CHANGES.md)
+and the individual feature guides before updating a custom deployment.
 
 ## 🧪 Qualification
 
-The candidate passes **1098 tests plus 99 subtests**, together with Ruff and
+The release passes **1102 tests plus 99 subtests**, together with Ruff and
 JavaScript parsing. Real calls cover browser phones, ESP endpoints, registered
 SIP accounts, groups, conferences, trunks, audio, bidirectional video and
 post-call cleanup.
 
-## 📦 Installing The Development Build
+## 📦 Installing Or Upgrading
 
 1. Back up the existing integration and configuration.
-2. Download `voip_stack.zip` from the `v2026.8.0-dev` GitHub pre-release.
+2. Install or update VoIP Stack through HACS. Manual installations can download
+   `voip_stack.zip` from the `v2026.8.0` GitHub release.
 3. Extract it into `config/custom_components/voip_stack/`, replacing the
-   previous component directory.
+   previous component directory only when installing manually.
 4. Restart Home Assistant.
 5. Hard-refresh every dashboard and fully restart the Android Companion app so
    the card version matches the backend.

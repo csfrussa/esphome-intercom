@@ -129,7 +129,7 @@ LVGL button, automation, service call or Lovelace card.
 
 ## What's New
 
-### `2026.8.0-dev` In Development
+### `2026.8.0`
 
 This section contains only the user-visible delta since stable `2026.7.1`.
 The complete illustrated note is in
@@ -1707,8 +1707,8 @@ a nearby configuration blindly.
 | **Spotpear Ball v2 (AFE)** | Tested | [`spotpear-ball-v2-full-afe.yaml`](yamls/full-experience/single-bus/spotpear-ball-v2-full-afe.yaml) | ES8311 | ES8311 | Single bus | `esp_afe` (AEC + NS + AGC + VAD) | VA + MWW + VoIP + LVGL |
 | **Spotpear Ball v2 (VoIP)** | Tested | [`spotpear-ball-v2-voip.yaml`](yamls/voip-only/single-bus/spotpear-ball-v2-voip.yaml) | ES8311 | ES8311 | Single bus | `esp_aec` (SR stereo loopback) | VoIP only |
 | **Waveshare S3-Audio (AFE)** | Tested | [`waveshare-s3-full-afe.yaml`](yamls/full-experience/single-bus/waveshare-s3-full-afe.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LED + AFE switches/sensors |
-| **Waveshare P4-Touch portrait (AFE)** _(experimental)_ | Hardware-test target | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LVGL touch |
-| **Waveshare P4-Touch landscape (AFE)** _(experimental)_ | Field-tested target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
+| **Waveshare P4-Touch portrait (AFE)** | Hardware-test target | [`waveshare-p4-touch-full-afe-portrait.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-portrait.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | VA + MWW + VoIP + LVGL touch |
+| **Waveshare P4-Touch landscape (AFE)** | Field-tested target | [`waveshare-p4-touch-full-afe-landscape.yaml`](yamls/full-experience/single-bus/waveshare-p4-touch-full-afe-landscape.yaml) | ES7210 4-ch | ES8311 | Single bus TDM | `esp_afe` (AEC + Speech Enhancement + VAD) | Landscape LVGL dashboard, VA + MWW + VoIP |
 | **Generic S3 (full AEC light)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/single-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP, lighter 4 MB-oriented preset |
 | **Generic S3 (full AEC light, dual bus)** | Reference YAML | [`generic-s3-full-aec.yaml`](yamls/full-experience/dual-bus/generic-s3-full-aec.yaml) | Any I2S MEMS | Any I2S amp | Dual bus | `esp_aec` SR + `previous_frame` ref | VA + MWW + VoIP on separated I2S buses |
 | **Generic S3 (full AFE, untested)** | Expected-working | [`generic-s3-full-afe.yaml`](yamls/untested/generic-s3-full-afe.yaml) | Any I2S MEMS | Any I2S amp | Single bus (duplex) | `esp_afe` (AEC + NS + AGC + VAD) + TYPE2 ring ref | VA + MWW + VoIP, requires >4 MB app slot |
@@ -1965,7 +1965,7 @@ Full ESP-SR audio front-end. Chains AEC, optional spatial source separation, noi
 - **AEC** (Acoustic Echo Cancellation) - removes the speaker signal from the mic input. Same engine as `esp_aec`. Required by everything downstream and by wake word detection during a call.
 - **Speech Enhancement** (dual-mic only; ESP-SR BSS internally) - uses the spatial difference between two microphones to isolate the speaker's voice and suppress directional noise (TV, kitchen fan, neighbour talking). Active when `se_enabled: true` and `mic_num: 2`. While Speech Enhancement is on, esp-sr replaces NS and AGC in the pipeline; their toggles become noops until Speech Enhancement is turned off.
 - **NS** (Noise Suppression, single-mic mode) - WebRTC-style spectral noise reduction for stationary background (HVAC hum, fan whir). Less surgical than dual-mic Speech Enhancement but the only option on single-mic boards where spatial separation is impossible.
-- **VAD** (Voice Activity Detection) - marks frames as speech vs noise when the upstream ESP-SR VAD state machine is active. Treat the `voice_present` sensor and `vad_enabled` switch as experimental until validated on your target AFE profile; Micro Wake Word remains ESPHome/TFLite and separate from ESP-SR app-level wake handling.
+- **VAD** (Voice Activity Detection) - marks frames as speech vs noise when the upstream ESP-SR VAD state machine is active. Treat the `voice_present` sensor as target-dependent diagnostics and validate it on your AFE profile; Micro Wake Word remains ESPHome/TFLite and separate from ESP-SR app-level wake handling.
 - **AGC** (Automatic Gain Control, single-mic mode) - WebRTC-style level normalization that pulls quiet speech up and limits loud peaks. Useful on boards where mic distance varies (room scale).
 
 **Configuration shape**

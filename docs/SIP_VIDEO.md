@@ -186,7 +186,7 @@ stale updates preserve the previous media contract.
 
 ## Qualification
 
-The current candidate passes **1098 tests plus 99 subtests**. SIP video has
+The `2026.8.0` release passes **1102 tests plus 99 subtests**. SIP video has
 also been exercised on real browser-to-browser, HA-to-HA and video-capable
 trunk calls, including bidirectional media, re-INVITE and cleanup.
 Compatibility with a particular third-party phone or door station still
