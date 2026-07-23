@@ -111,7 +111,7 @@ CLICK = r"""
 """
 
 SET_AUTO_ANSWER = r"""
-(enabled) => {
+async (enabled) => {
   const deep = (selector, root = document) => {
     const found = [...root.querySelectorAll(selector)];
     for (const node of root.querySelectorAll("*")) if (node.shadowRoot) found.push(...deep(selector, node.shadowRoot));
@@ -123,7 +123,14 @@ SET_AUTO_ANSWER = r"""
   const input = card.shadowRoot.querySelector("#auto-answer-cb");
   if (!input) return false;
   if (!!input.checked !== !!enabled) input.click();
-  return !!card._autoAnswer === !!enabled;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (
+      !!card._autoAnswer === !!enabled &&
+      !card._autoAnswerPermissionPending
+    ) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
 }
 """
 

@@ -1278,7 +1278,9 @@ In `ha_softphone` mode the card has its own destination selector, Auto Answer
 and Do Not Disturb controls. Home Assistant administrators also see the
 persistent extension and group controls; ordinary users with control access to
 that phone can operate calls and DND without being able to reconfigure its dial
-plan. The card rings only for calls addressed to its selected logical phone and
+plan. Enabling Auto Answer asks for microphone access while the user gesture is
+still active; the option remains disabled and shows an error if the browser
+does not grant it. The card rings only for calls addressed to its selected logical phone and
 does not mirror an ESP card state. A `device_id` may therefore identify either
 a logical HA phone in `ha_softphone` mode or a physical ESPHome phone in
 `esp_mirror` mode.

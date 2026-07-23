@@ -165,6 +165,9 @@ class FakeResizeObserver {{ observe() {{}} disconnect() {{}} }}
 
 const storage = new Map();
 const registry = new Map();
+let microphonePermissionState = "prompt";
+let microphonePermissionError = null;
+let microphonePermissionRequests = 0;
 const context = vm.createContext({{
   __engine: {{ voipStackEngine: engine }},
   __cardModel: cardModel,
@@ -187,6 +190,22 @@ const context = vm.createContext({{
     removeItem(key) {{ storage.delete(key); }},
   }},
   sessionStorage: {{ getItem() {{ return null; }}, setItem() {{}}, removeItem() {{}} }},
+  navigator: {{
+    permissions: {{
+      async query() {{ return {{ state: microphonePermissionState }}; }},
+    }},
+    mediaDevices: {{
+      async getUserMedia() {{
+        microphonePermissionRequests++;
+        if (microphonePermissionError) throw microphonePermissionError;
+        const track = {{ stop() {{}} }};
+        return {{
+          getAudioTracks() {{ return [track]; }},
+          getTracks() {{ return [track]; }},
+        }};
+      }},
+    }},
+  }},
   console,
   URL,
   encodeURIComponent,
@@ -257,6 +276,62 @@ const base = {{
   callee: "Home HA",
   peer_name: "Home HA",
 }};
+
+// Enabling Auto Answer on a HA browser phone must prove microphone access for
+// the local phone, regardless of the remote destination selected in the
+// dialer. That successful user-gesture acquisition is authoritative even when
+// the browser Permissions API still reports "prompt".
+const autoAnswerCard = makeCard();
+autoAnswerCard.config = {{
+  mode: "ha_softphone",
+  name: "Casa",
+  device_id: "device-casa",
+}};
+autoAnswerCard._rosterEntries = [{{
+  id: "test",
+  name: "Test",
+  metadata: {{
+    device_id: "device-test",
+    endpoint_kind: "browser",
+    audio_mode: "mic_only",
+  }},
+}}];
+autoAnswerCard._softphoneTargetDeviceId = "device-test";
+let automaticAnswer = null;
+autoAnswerCard._answer = async (options) => {{ automaticAnswer = options; }};
+await autoAnswerCard._toggleAutoAnswer();
+assert.equal(microphonePermissionRequests, 1);
+assert.equal(autoAnswerCard._autoAnswer, true);
+assert.equal(autoAnswerCard._autoAnswerMicReady, true);
+assert.equal(storage.get("voip_auto_answer_device-casa"), "true");
+autoAnswerCard._applySoftphoneSnapshot({{
+  endpoint_id: "default",
+  device_id: "device-casa",
+  state: "ringing",
+  direction: "incoming",
+  call_id: "auto-answer-A",
+  audio_direction: "sendrecv",
+  sequence: 1,
+}});
+await Promise.resolve();
+await Promise.resolve();
+assert.equal(automaticAnswer?.callId, "auto-answer-A");
+
+// A denied permission cannot leave a checked preference that will silently
+// remain ringing on every future incoming call.
+const deniedAutoAnswerCard = makeCard();
+deniedAutoAnswerCard.config = {{
+  mode: "ha_softphone",
+  name: "Denied",
+  device_id: "device-denied",
+}};
+microphonePermissionError = new Error("permission denied");
+await deniedAutoAnswerCard._toggleAutoAnswer();
+microphonePermissionError = null;
+assert.equal(deniedAutoAnswerCard._autoAnswer, false);
+assert.equal(deniedAutoAnswerCard._autoAnswerMicReady, false);
+assert.equal(storage.get("voip_auto_answer_device-denied"), "false");
+assert.match(deniedAutoAnswerCard._errorMsg, /was not enabled.*permission denied/i);
 
 // Cards accept only snapshots belonging to their configured logical phone;
 // a legacy endpoint-less snapshot remains exclusive to the default card.

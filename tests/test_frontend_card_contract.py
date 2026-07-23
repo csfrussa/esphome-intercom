@@ -594,7 +594,8 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("this._softphoneSnapshot?.call_id", incoming)
         self.assertNotIn("!this._autoAnswer", ringtone)
         self.assertIn('["sendonly", "sendrecv"].includes(audioDirection)', autoanswer)
-        self.assertIn("requirePersistentPermission && needsMicrophone", autoanswer)
+        self.assertIn("requirePersistentPermission &&", autoanswer)
+        self.assertIn("needsMicrophone &&", autoanswer)
 
     def test_frontend_has_no_esp_call_control_ws_commands(self) -> None:
         engine = (ROOT / "custom_components" / "voip_stack" / "frontend" / "voip-stack-engine.js").read_text()

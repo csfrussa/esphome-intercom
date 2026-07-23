@@ -140,6 +140,9 @@ class VoipStackCard extends HTMLElement {
     this._autoAnswer = false;
     this._autoAnswering = false;  // Prevents re-entry during auto-answer
     this._autoAnswerCallId = "";
+    this._autoAnswerMicReady = false;
+    this._autoAnswerPermissionPending = false;
+    this._autoAnswerPermissionGeneration = 0;
     this._ringtoneEnabled = false;
     this._settingsOpen = false;
     this._ringtoneRequestKey = `voip-stack-card-${Math.random().toString(36).slice(2)}`;
@@ -3141,7 +3144,11 @@ class VoipStackCard extends HTMLElement {
       ).toLowerCase();
       const needsMicrophone = !softphoneAction ||
         ["sendonly", "sendrecv"].includes(audioDirection);
-      if (requirePersistentPermission && needsMicrophone) {
+      if (
+        requirePersistentPermission &&
+        needsMicrophone &&
+        !this._autoAnswerMicReady
+      ) {
         if (!navigator.permissions?.query) {
           _voip_log.info("voip: auto-answer skipped, persistent mic permission unavailable");
           return;
@@ -3152,6 +3159,7 @@ class VoipStackCard extends HTMLElement {
           _voip_log.info("voip: auto-answer skipped, mic permission not persistent");
           return;
         }
+        this._autoAnswerMicReady = true;
       }
       let videoPermission;
       if (
@@ -3212,31 +3220,68 @@ class VoipStackCard extends HTMLElement {
       this._render();
       return;
     }
-    this._autoAnswer = !this._autoAnswer;
     const deviceId = this._autoAnswerStorageId();
-    if (deviceId) {
+    const permissionGeneration = ++this._autoAnswerPermissionGeneration;
+    const persist = (enabled) => {
+      this._autoAnswer = enabled;
       try {
-        localStorage.setItem(`voip_auto_answer_${deviceId}`, this._autoAnswer.toString());
+        if (deviceId) {
+          localStorage.setItem(`voip_auto_answer_${deviceId}`, enabled.toString());
+        }
       } catch (_) {}
+    };
+    if (this._autoAnswer || this._autoAnswerPermissionPending) {
+      this._autoAnswerPermissionPending = false;
+      this._autoAnswerMicReady = false;
+      persist(false);
+      this._render();
+      return;
     }
-    // If enabling, request mic permission now (user gesture from the toggle click)
-    const device = this._isHaSoftphoneMode()
-      ? this._getSoftphoneTargetDevice()
-      : null;
-    const needsBrowserMic = ["full_duplex", "speaker_only"].includes(
-      this._normaliseAudioMode(device?.audio_mode)
-    );
-    if (this._autoAnswer && needsBrowserMic && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(stream => {
-          // Got permission, release stream immediately
-          stream.getTracks().forEach(t => t.stop());
-          _voip_log.info("voip: mic permission granted for auto-answer");
-        })
-        .catch(err => {
-          console.warn("voip: mic permission denied, auto-answer may not work", err);
-        });
+
+    // A HA browser phone normally answers with sendrecv audio. Acquire and
+    // release the microphone while this user gesture is active, then enable
+    // Auto Answer only after the browser proved that future media attachment
+    // can succeed. The remote phone selected in the dialer is irrelevant.
+    if (this._isHaSoftphoneMode()) {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        persist(false);
+        this._showError("Auto Answer requires browser microphone access.");
+        this._render();
+        return;
+      }
+      this._autoAnswerPermissionPending = true;
+      this._render();
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (permissionGeneration !== this._autoAnswerPermissionGeneration) return;
+        const microphoneReady = Boolean(stream?.getAudioTracks?.()[0]);
+        if (!microphoneReady) {
+          throw new Error("The browser did not provide a microphone track.");
+        }
+        this._autoAnswerMicReady = true;
+        persist(true);
+        _voip_log.info("voip: mic permission granted for auto-answer");
+      } catch (err) {
+        this._autoAnswerMicReady = false;
+        persist(false);
+        this._showError(
+          `Auto Answer was not enabled: ${err?.message || String(err)}`,
+        );
+      } finally {
+        for (const track of stream?.getTracks?.() || []) track.stop();
+        if (permissionGeneration === this._autoAnswerPermissionGeneration) {
+          this._autoAnswerPermissionPending = false;
+        }
+      }
+      if (this._autoAnswer) {
+        this._maybeAutoAnswer(this._softphoneSnapshot || {});
+      }
+      this._render();
+      return;
     }
+
+    persist(true);
     this._render();
   }
 

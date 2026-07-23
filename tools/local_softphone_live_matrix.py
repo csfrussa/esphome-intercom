@@ -195,20 +195,42 @@ def main() -> int:
             callee_name: str,
             *,
             hangup: Any,
+            auto_answer: bool = False,
         ) -> None:
             started = time.monotonic()
             try:
+                if auto_answer and not callee.evaluate(SET_AUTO_ANSWER, True):
+                    raise RuntimeError(f"failed to enable Auto Answer on {callee_name}")
                 if not caller.evaluate(SET_TARGET, callee_name):
                     raise RuntimeError(f"{callee_name} is not selectable from {caller_name}")
                 if not caller.evaluate(CLICK, "Call"):
                     raise RuntimeError(f"Call unavailable on {caller_name}")
-                outgoing = _state(caller, "calling", f"{name}: caller calling")
-                incoming = _state(callee, "ringing", f"{name}: callee ringing")
+                outgoing = wait_card(
+                    caller,
+                    lambda item: (
+                        item["backend"]["state"] in {"calling", "in_call"}
+                        and item["card"]["state"] in {"calling", "in_call"}
+                        and item["backend"]["call_id"] == item["card"]["call_id"]
+                    ),
+                    12,
+                    f"{name}: caller started",
+                )
+                incoming = wait_card(
+                    callee,
+                    lambda item: (
+                        item["backend"]["state"] in {"ringing", "in_call"}
+                        and item["card"]["state"] in {"ringing", "in_call"}
+                        and item["backend"]["call_id"] == item["card"]["call_id"]
+                    ),
+                    12,
+                    f"{name}: callee incoming",
+                )
                 call_id = outgoing["backend"]["call_id"]
                 if incoming["backend"]["call_id"] != call_id:
                     raise RuntimeError("local endpoints received different Call-IDs")
-                if not callee.evaluate(CLICK, "Answer"):
-                    raise RuntimeError(f"Answer unavailable on {callee_name}")
+                if not auto_answer:
+                    if not callee.evaluate(CLICK, "Answer"):
+                        raise RuntimeError(f"Answer unavailable on {callee_name}")
                 _state(caller, "in_call", f"{name}: caller in call")
                 _state(callee, "in_call", f"{name}: callee in call")
                 media: dict[str, Any] = {}
@@ -219,6 +241,8 @@ def main() -> int:
                     raise RuntimeError("Hangup unavailable")
                 _state(caller, "idle", f"{name}: caller idle")
                 _state(callee, "idle", f"{name}: callee idle")
+                if auto_answer:
+                    callee.evaluate(SET_AUTO_ANSWER, False)
                 results.append(
                     {
                         "name": name,
@@ -240,6 +264,9 @@ def main() -> int:
                 for page in (caller, callee):
                     with suppress(Exception):
                         page.evaluate(HANGUP)
+                if auto_answer:
+                    with suppress(Exception):
+                        callee.evaluate(SET_AUTO_ANSWER, False)
                 for page, endpoint_name in (
                     (caller, caller_name),
                     (callee, callee_name),
@@ -250,6 +277,15 @@ def main() -> int:
 
         run_case("casa_to_test_caller_hangup", casa, "Casa", test, "Test", hangup=casa)
         run_case("test_to_casa_callee_hangup", test, "Test", casa, "Casa", hangup=casa)
+        run_case(
+            "test_to_casa_auto_answer",
+            test,
+            "Test",
+            casa,
+            "Casa",
+            hangup=test,
+            auto_answer=True,
+        )
         context.close()
         browser.close()
     output.parent.mkdir(parents=True, exist_ok=True)
