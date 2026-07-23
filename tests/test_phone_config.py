@@ -86,6 +86,23 @@ def test_removed_sip_offline_policy_falls_back_without_breaking_setup(
     assert "Unsupported persisted SIP account offline policy 'wait'" in caplog.text
 
 
+def test_browser_phone_persists_auto_answer_and_send_video() -> None:
+    entry = types.SimpleNamespace(data={})
+    endpoint = phone_config.endpoint_from_data(
+        entry,
+        {
+            phone_config.CONF_PHONE_ENDPOINT_ID: "browser:kitchen",
+            phone_config.CONF_PHONE_KIND: phone_endpoint.EndpointKind.BROWSER.value,
+            phone_config.CONF_PHONE_NAME: "Kitchen",
+            phone_config.CONF_PHONE_AUTO_ANSWER: True,
+            phone_config.CONF_PHONE_SEND_VIDEO: True,
+        },
+    )
+
+    assert endpoint.auto_answer is True
+    assert endpoint.send_video is True
+
+
 def test_legacy_store_fills_only_settings_missing_from_entry_options() -> None:
     raw = {
         "dnd": True,

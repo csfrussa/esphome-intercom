@@ -557,13 +557,50 @@ set_dnd:
       selector:
         boolean:
 
+set_auto_answer:
+  name: Set auto answer
+  description: Enable or disable automatic answering on a Home Assistant phone.
+  fields:
+    device_id:
+      name: Phone
+      description: Optional Home Assistant phone. Omit it to use the default phone.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+    auto_answer:
+      name: Auto answer
+      required: true
+      selector:
+        boolean:
+
+set_send_video:
+  name: Set send video
+  description: Enable or disable camera transmission by default on a Home Assistant phone.
+  fields:
+    device_id:
+      name: Phone
+      description: Optional Home Assistant phone. Omit it to use the default phone.
+      required: false
+      selector:
+        device:
+          filter:
+            - integration: voip_stack
+    send_video:
+      name: Send video
+      required: true
+      selector:
+        boolean:
+
 set_ha_softphone_settings:
   name: Configure Home Assistant phone
   description: >-
     Set the Home Assistant softphone extension, ring group, conference group
-    and ring-on-conference behavior. A manually entered group name is a valid
-    declaration: the HA softphone endpoint publishes it to the central phonebook,
-    which creates or updates the dynamic group like it does for ESP endpoints.
+    ring-on-conference behavior, auto answer and default camera transmission.
+    A manually entered group name is a valid declaration: the HA softphone
+    endpoint publishes it to the central phonebook, which creates or updates
+    the dynamic group like it does for ESP endpoints.
   fields:
     device_id:
       name: Phone
@@ -594,6 +631,18 @@ set_ha_softphone_settings:
     conference_ring:
       name: Ring On Conference
       description: Ring the Home Assistant softphone when another participant starts or joins the selected conference group.
+      required: false
+      selector:
+        boolean:
+    auto_answer:
+      name: Auto answer
+      description: Automatically answer incoming calls on this logical phone when an attached browser has microphone permission.
+      required: false
+      selector:
+        boolean:
+    send_video:
+      name: Send video
+      description: Send an attached browser camera by default when video is negotiated and browser permission is available.
       required: false
       selector:
         boolean:

@@ -111,6 +111,8 @@ class PhoneEndpoint:
     availability: EndpointAvailability = EndpointAvailability.OFFLINE
     capabilities: frozenset[str] = field(default_factory=frozenset)
     dnd: bool = False
+    auto_answer: bool = False
+    send_video: bool = False
     offline_policy: OfflinePolicy = OfflinePolicy.UNAVAILABLE
     ring_group: str = ""
     conference_group: str = ""
@@ -157,6 +159,12 @@ class PhoneEndpoint:
             self, "capabilities", _token_set(self.capabilities, "capabilities")
         )
         object.__setattr__(self, "dnd", _boolean(self.dnd, "dnd"))
+        object.__setattr__(
+            self, "auto_answer", _boolean(self.auto_answer, "auto_answer")
+        )
+        object.__setattr__(
+            self, "send_video", _boolean(self.send_video, "send_video")
+        )
         object.__setattr__(
             self,
             "conference_ring",

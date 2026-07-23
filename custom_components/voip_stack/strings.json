@@ -36,7 +36,7 @@
         },
         "data_description": {
           "video_transcoding_enabled": "Allow the HA softphone to use the available FFmpeg binary for receive-only H.263, H.263-1998 or H.265 video. Direct H.264, VP8 and JPEG never use it. Failure leaves the audio call running.",
-          "video_camera_send_enabled": "Expose a Send Camera choice in the card. Each browser keeps its own choice and permission. Receiving video never requires camera access."
+          "video_camera_send_enabled": "Expose a Send Camera choice in the card. Each logical Home Assistant phone keeps its choice; camera permission remains local to each browser. Receiving video never requires camera access."
         }
       },
     "assist": {
@@ -129,11 +129,15 @@
             "ring_group": "Ring group",
             "conference_group": "Conference group",
             "conference_ring": "Ring for conference calls",
-            "video_enabled": "Allow video"
+            "video_enabled": "Allow video",
+            "auto_answer": "Auto answer",
+            "send_video": "Send video"
           },
           "data_description": {
             "name": "Required phone name used by the card, phonebook and call routing.",
-            "extension": "Optional unique dialable extension. The logical phone remains ringable when no browser card is connected."
+            "extension": "Optional unique dialable extension. The logical phone remains ringable when no browser card is connected.",
+            "auto_answer": "Automatically answer when an attached browser has microphone permission.",
+            "send_video": "Send an attached browser camera by default when video is negotiated and permission is available."
           }
         },
         "sip_account": {
@@ -213,6 +217,12 @@
     },
     "phone_endpoint_conference_ring": {
       "name": "Ring for conference calls"
+    },
+    "phone_endpoint_auto_answer": {
+      "name": "Auto answer"
+    },
+    "phone_endpoint_send_video": {
+      "name": "Send video"
     }
   },
   "text": {

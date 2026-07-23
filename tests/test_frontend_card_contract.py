@@ -475,17 +475,17 @@ class FrontendCardContractTest(unittest.TestCase):
         ).read_text()
         permission = _method_body(engine, "async prepareVideoCameraPermission")
 
-        self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", answer)
+        self.assertIn("this._softphoneSnapshot?.send_video", answer)
         wants_video = answer.split("const wantsVideo = Boolean(", 1)[1].split(
             ");", 1
         )[0]
         self.assertNotIn("video_offered", wants_video)
-        self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", start)
+        self.assertIn("this._softphoneSnapshot?.send_video", start)
         self.assertIn("this._targetSupportsVideo(target)", start)
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", answer)
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", start)
         self.assertIn("persistentOnly: true", auto_answer)
-        self.assertIn("videoCameraEnabledFor(this._getSoftphoneEndpointId())", auto_answer)
+        self.assertIn("this._softphoneSnapshot?.send_video", auto_answer)
         self.assertIn("endpointId: this._getSoftphoneEndpointId()", auto_answer)
         self.assertIn("navigator.permissions?.query", permission)
         self.assertIn('permission.state === "granted"', permission)

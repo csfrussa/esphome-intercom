@@ -13,8 +13,9 @@ offers two independent capabilities:
   H.263-1998 or H.265 through the FFmpeg binary already available to Home
   Assistant.
 - **Allow browser camera transmission** exposes a **Send Camera** control in
-  the card. Each browser stores its own choice and asks for its own camera
-  permission. Receiving video never requires camera access.
+  the card. The logical Home Assistant phone stores that choice in its config
+  subentry and exposes it as a native switch; each attached browser still asks
+  for its own camera permission. Receiving video never requires camera access.
 
 If video setup, decoding, camera permission or transcoding fails, the SIP
 dialog and browser audio remain active whenever audio negotiation succeeded.
@@ -93,8 +94,10 @@ Detailed codec, packet and frame counters appear only when VoIP Stack debug
 mode is enabled. The normal card does not cover the picture with diagnostics.
 
 Camera transmission has two gates. The integration-level option must first be
-enabled, then the user must turn on **Send Camera** in that browser. Browser
-permission denial stops only the outgoing camera track. Incoming video, audio
+enabled, then **Send Camera** must be enabled on that logical HA phone. The
+preference survives cache clearing and is shared by every card bound to the
+same phone; camera permission remains local to the browser that owns media.
+Permission denial stops only the outgoing camera track. Incoming video, audio
 and call controls continue independently. Reloading the dashboard during
 ringing or an established call transfers media ownership to the new card and
 releases the old WebSocket deterministically.

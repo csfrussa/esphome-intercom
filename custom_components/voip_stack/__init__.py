@@ -229,6 +229,46 @@ async def _handle_set_dnd_service(call: ServiceCall) -> None:
     )
 
 
+async def _handle_browser_preference_service(
+    call: ServiceCall,
+    *,
+    preference: str,
+) -> None:
+    hass = call.hass
+    endpoint_id, endpoint = _service_browser_endpoint(hass, call, strict=True)
+    switch_entities = tuple(
+        entity_id
+        for entity_id in getattr(endpoint, "entity_ids", ())
+        if str(entity_id).startswith("switch.")
+    )
+    await _require_phone_service_control(
+        hass,
+        call,
+        endpoint=endpoint,
+        action_entity_ids=switch_entities,
+    )
+    enabled = bool(call.data.get(preference))
+    await async_set_ha_softphone_settings(
+        hass,
+        endpoint_id=endpoint_id,
+        **{preference: enabled},
+    )
+    _LOGGER.info(
+        "HA softphone endpoint=%s %s set to %s via service",
+        endpoint_id,
+        preference,
+        enabled,
+    )
+
+
+async def _handle_set_auto_answer_service(call: ServiceCall) -> None:
+    await _handle_browser_preference_service(call, preference="auto_answer")
+
+
+async def _handle_set_send_video_service(call: ServiceCall) -> None:
+    await _handle_browser_preference_service(call, preference="send_video")
+
+
 async def _handle_set_ha_softphone_settings_service(call: ServiceCall) -> None:
     hass = call.hass
     endpoint_id, _endpoint = _service_browser_endpoint(hass, call, strict=True)
@@ -239,6 +279,8 @@ async def _handle_set_ha_softphone_settings_service(call: ServiceCall) -> None:
         ring_group=call.data.get("ring_group"),
         conference_group=call.data.get("conference_group"),
         conference_ring=call.data.get("conference_ring"),
+        auto_answer=call.data.get("auto_answer"),
+        send_video=call.data.get("send_video"),
     )
     await _refresh_and_push_phonebook(hass)
 
@@ -314,6 +356,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "hangup": _handle_sip_hangup_service,
             **phonebook_handlers,
             "set_dnd": _handle_set_dnd_service,
+            "set_auto_answer": _handle_set_auto_answer_service,
+            "set_send_video": _handle_set_send_video_service,
             "set_ha_softphone_settings": _handle_set_ha_softphone_settings_service,
             "call": _handle_sip_call_target_service,
             "forward": _handle_sip_forward_service,

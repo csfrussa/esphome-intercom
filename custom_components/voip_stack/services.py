@@ -171,6 +171,20 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
         },
         extra=vol.PREVENT_EXTRA,
     )
+    set_auto_answer_schema = vol.Schema(
+        {
+            **phone_selector_fields,
+            vol.Required("auto_answer"): cv.boolean,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
+    set_send_video_schema = vol.Schema(
+        {
+            **phone_selector_fields,
+            vol.Required("send_video"): cv.boolean,
+        },
+        extra=vol.PREVENT_EXTRA,
+    )
     set_ha_softphone_settings_schema = vol.Schema(
         {
             **phone_selector_fields,
@@ -178,6 +192,8 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
             vol.Optional("ring_group"): SHORT_TEXT,
             vol.Optional("conference_group"): SHORT_TEXT,
             vol.Optional("conference_ring"): cv.boolean,
+            vol.Optional("auto_answer"): cv.boolean,
+            vol.Optional("send_video"): cv.boolean,
         },
         extra=vol.PREVENT_EXTRA,
     )
@@ -274,6 +290,18 @@ async def async_register_services(hass: HomeAssistant, handlers: dict[str, objec
     )
     hass.services.async_register(DOMAIN, "push_phonebook", handler_for("push_phonebook"))
     hass.services.async_register(DOMAIN, "set_dnd", handler_for("set_dnd"), schema=set_dnd_schema)
+    hass.services.async_register(
+        DOMAIN,
+        "set_auto_answer",
+        handler_for("set_auto_answer"),
+        schema=set_auto_answer_schema,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_send_video",
+        handler_for("set_send_video"),
+        schema=set_send_video_schema,
+    )
     hass.services.async_register(
         DOMAIN,
         "set_ha_softphone_settings",

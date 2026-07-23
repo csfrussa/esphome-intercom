@@ -93,6 +93,34 @@ await module.link(() => {{ throw new Error("unexpected import"); }});
 await module.evaluate();
 const Engine = module.namespace.VoipStackEngine;
 
+// The backend phone snapshot remains authoritative while a video call is
+// already attached: changing Send Video must reconcile the live camera
+// sender, not merely affect the next call.
+const liveVideoPreference = new Engine();
+liveVideoPreference._callId = "live-video-call";
+liveVideoPreference._endpointId = "kitchen";
+const cameraSelections = [];
+liveVideoPreference._video = {{
+  active: true,
+  callId: "live-video-call",
+  setCameraEnabled: async (enabled, endpointId) => {{
+    cameraSelections.push([enabled, endpointId]);
+  }},
+}};
+await liveVideoPreference._ensureVideo({{
+  video_active: true,
+  call_id: "live-video-call",
+  endpoint_id: "kitchen",
+  send_video: true,
+}});
+await liveVideoPreference._ensureVideo({{
+  video_active: true,
+  call_id: "live-video-call",
+  endpoint_id: "kitchen",
+  send_video: false,
+}});
+assert.deepEqual(cameraSelections, [[true, "kitchen"], [false, "kitchen"]]);
+
 // Media ownership identity is stable for this document and is part of the
 // Home Assistant signed path. A duplicated tab inherits sessionStorage, so a
 // copied legacy token must not become the new document's identity.
@@ -248,18 +276,14 @@ assert.equal(missingRetrySchedules, 0);
 assert.equal(missingStates.at(-1).state, "unavailable");
 assert.equal(missingStates.at(-1).terminal_reason, "unknown_endpoint");
 
-// Auto-answer permission probing is fail-closed and never opens a camera
-// prompt when persistent camera access is absent.
-storage.set("voip_stack_video_camera_enabled", "true");
-storage.set("voip_stack_video_camera_enabled:kitchen", "false");
+// Permission probing is independent from preference storage: camera intent is
+// supplied by the authoritative logical-phone snapshot.
 let mediaRequests = 0;
 context.navigator.permissions = {{ query: async () => ({{ state: "prompt" }}) }};
 context.navigator.mediaDevices = {{
   getUserMedia: async () => {{ mediaRequests++; throw new Error("must not prompt"); }},
 }};
 const permission = new Engine();
-assert.equal(permission.videoCameraEnabledFor("default"), true);
-assert.equal(permission.videoCameraEnabledFor("kitchen"), false);
 assert.equal(
   await permission.prepareVideoCameraPermission({{ persistentOnly: true }}),
   false,

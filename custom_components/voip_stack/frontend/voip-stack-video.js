@@ -1,6 +1,5 @@
 import {
   cameraCaptureContract,
-  cameraStorageKey,
   directionalVideoContract,
   emptyVideoStats,
   legacyVideoAliases,
@@ -12,7 +11,6 @@ const MAX_VIDEO_WS_BUFFER = 2 * 1024 * 1024;
 const MAX_PENDING_DECODE_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING_DECODE_FRAMES = 60;
 const MAX_DECODE_QUEUE_FRAMES = 8;
-const CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 
 export class VoipStackVideo extends EventTarget {
   constructor() {
@@ -37,7 +35,7 @@ export class VoipStackVideo extends EventTarget {
     this._clockRate = 90000;
     this._negotiated = null;
     this._cameraAllowed = false;
-    this._cameraEnabled = this.cameraEnabledFor(this._endpointId);
+    this._cameraEnabled = false;
     this._rtpTimestampBase = null;
     this._rtpTimestampLast = null;
     this._rtpTimestampTicks = 0;
@@ -96,26 +94,11 @@ export class VoipStackVideo extends EventTarget {
     return this._cameraEnabled;
   }
 
-  cameraEnabledFor(endpointId = "default") {
-    try {
-      const scoped = localStorage.getItem(cameraStorageKey(endpointId));
-      if (scoped !== null) return scoped === "true";
-      // Migrate the original browser-wide preference lazily. Existing users
-      // keep their choice, while the first change on each logical phone writes
-      // an independent endpoint-scoped value.
-      return localStorage.getItem(CAMERA_STORAGE_KEY) === "true";
-    } catch (_) {
-      return false;
-    }
-  }
-
   async setCameraEnabled(enabled, endpointId = this._endpointId) {
     const endpoint = String(endpointId || "default").trim() || "default";
     const selected = Boolean(enabled);
-    try { localStorage.setItem(cameraStorageKey(endpoint), String(selected)); } catch (_) {}
-    // An idle engine resets its media endpoint to default. A settings toggle
-    // for another phone must still persist without mutating an unrelated live
-    // sender.
+    // This only reconciles the active media sender. Persistent intent belongs
+    // to the logical HA phone and arrives in the backend state snapshot.
     if (this._active && endpoint !== this._endpointId) return;
     this._cameraEnabled = selected;
     if (!this._cameraEnabled) {
@@ -191,7 +174,7 @@ export class VoipStackVideo extends EventTarget {
     const generation = ++this._generation;
     this._callId = callId;
     this._endpointId = endpointId;
-    this._cameraEnabled = this.cameraEnabledFor(endpointId);
+    this._cameraEnabled = Boolean(statePayload?.send_video);
     this._stats = this._emptyStats();
     const url = await this._wsUrl(callId, endpointId);
     if (

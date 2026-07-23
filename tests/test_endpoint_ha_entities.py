@@ -439,9 +439,23 @@ def test_browser_phone_setting_entities_share_the_service_settings_writer(
     conference_switch.hass = text_entity.hass
     asyncio.run(conference_switch.async_turn_on())
 
+    auto_answer_switch = endpoint_switch.PhoneEndpointAutoAnswerSwitch(
+        None, endpoint, registry
+    )
+    auto_answer_switch.hass = text_entity.hass
+    asyncio.run(auto_answer_switch.async_turn_on())
+
+    send_video_switch = endpoint_switch.PhoneEndpointSendVideoSwitch(
+        None, endpoint, registry
+    )
+    send_video_switch.hass = text_entity.hass
+    asyncio.run(send_video_switch.async_turn_on())
+
     assert calls == [
         {"endpoint_id": "kitchen", "ring_group": "Home, Upstairs"},
         {"endpoint_id": "kitchen", "conference_ring": True},
+        {"endpoint_id": "kitchen", "auto_answer": True},
+        {"endpoint_id": "kitchen", "send_video": True},
     ]
 
 

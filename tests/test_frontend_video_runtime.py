@@ -56,20 +56,33 @@ await module.link((specifier) => {{
 await module.evaluate();
 const Video = module.namespace.VoipStackVideo;
 
-// Camera transmission is a browser preference per logical phone. The legacy
-// global choice is inherited until that endpoint writes its own value.
-cameraStorage.set("voip_stack_video_camera_enabled", "true");
+// Camera intent comes from the logical-phone snapshot, not localStorage.
 const preferences = new Video();
-assert.equal(preferences.cameraEnabledFor("default"), true);
-assert.equal(preferences.cameraEnabledFor("kitchen"), true);
-await preferences.setCameraEnabled(false, "kitchen");
-assert.equal(preferences.cameraEnabledFor("kitchen"), false);
-assert.equal(preferences.cameraEnabledFor("default"), true);
-await preferences.setCameraEnabled(true, "test-phone");
-assert.equal(cameraStorage.get("voip_stack_video_camera_enabled:test-phone"), "true");
-const restoredPreferences = new Video();
-assert.equal(restoredPreferences.cameraEnabledFor("kitchen"), false);
-assert.equal(restoredPreferences.cameraEnabledFor("test-phone"), true);
+assert.equal(preferences.cameraEnabled, false);
+assert.equal(cameraStorage.size, 0);
+preferences.close = async () => {{}};
+preferences._wsUrl = async () => "/signed";
+// start() projects send_video before any camera sender can be prepared.
+const originalWebSocket = context.WebSocket;
+context.window = {{
+  isSecureContext: true,
+  location: {{ protocol: "https:", host: "ha.example" }},
+  setTimeout,
+}};
+context.WebSocket = class {{
+  static OPEN = 1;
+  constructor() {{ throw new Error("stop after state projection"); }}
+}};
+await assert.rejects(
+  preferences.start({{
+    call_id: "snapshot-call",
+    endpoint_id: "kitchen",
+    video_active: true,
+    send_video: true,
+  }}),
+);
+assert.equal(preferences.cameraEnabled, true);
+context.WebSocket = originalWebSocket;
 
 // RFC 6184 Main/High streams can arrive in decode order with non-monotonic
 // presentation timestamps (I00, R03, N01, N02). Preserve those timestamps.

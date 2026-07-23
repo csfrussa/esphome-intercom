@@ -156,6 +156,20 @@ def _wait_video(page: Any, label: str) -> dict[str, Any]:
     raise RuntimeError(f"timeout waiting for {label}: {last}")
 
 
+def _wait_card_ready(page: Any, name: str) -> dict[str, Any]:
+    """Wait through HA's post-restart Lovelace resource registration window."""
+    try:
+        return wait_card(page, lambda item: bool(item), 15, f"{name} card ready")
+    except RuntimeError:
+        page.reload(wait_until="domcontentloaded", timeout=30_000)
+        return wait_card(
+            page,
+            lambda item: bool(item),
+            30,
+            f"{name} card ready after reload",
+        )
+
+
 def main() -> int:
     arguments = _parse_args()
     _load_runtime_dependencies()
@@ -178,8 +192,7 @@ def main() -> int:
         casa.goto(CASA_URL, wait_until="domcontentloaded", timeout=30_000)
         test.goto(TEST_URL, wait_until="domcontentloaded", timeout=30_000)
         for page, name in ((casa, "Casa"), (test, "Test")):
-            wait_card(page, lambda item: bool(item), 30, f"{name} card ready")
-            current = wait_card(page, lambda item: bool(item), 5, f"{name} state")
+            current = _wait_card_ready(page, name)
             if current["backend"]["state"] != "idle":
                 page.evaluate(HANGUP)
                 _state(page, "idle", f"{name} initial cleanup")

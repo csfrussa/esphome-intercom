@@ -303,10 +303,15 @@ await autoAnswerCard._toggleAutoAnswer();
 assert.equal(microphonePermissionRequests, 1);
 assert.equal(autoAnswerCard._autoAnswer, true);
 assert.equal(autoAnswerCard._autoAnswerMicReady, true);
-assert.equal(storage.get("voip_auto_answer_device-casa"), "true");
+assert.equal(serviceCalls.at(-1)[0], "voip_stack");
+assert.equal(serviceCalls.at(-1)[1], "set_auto_answer");
+assert.equal(serviceCalls.at(-1)[2].device_id, "device-casa");
+assert.equal(serviceCalls.at(-1)[2].auto_answer, true);
+assert.equal(storage.has("voip_auto_answer_device-casa"), false);
 autoAnswerCard._applySoftphoneSnapshot({{
   endpoint_id: "default",
   device_id: "device-casa",
+  auto_answer: true,
   state: "ringing",
   direction: "incoming",
   call_id: "auto-answer-A",
@@ -326,12 +331,60 @@ deniedAutoAnswerCard.config = {{
   device_id: "device-denied",
 }};
 microphonePermissionError = new Error("permission denied");
+const deniedServiceCount = serviceCalls.length;
 await deniedAutoAnswerCard._toggleAutoAnswer();
 microphonePermissionError = null;
 assert.equal(deniedAutoAnswerCard._autoAnswer, false);
 assert.equal(deniedAutoAnswerCard._autoAnswerMicReady, false);
-assert.equal(storage.get("voip_auto_answer_device-denied"), "false");
+assert.equal(storage.has("voip_auto_answer_device-denied"), false);
+assert.equal(serviceCalls.length, deniedServiceCount);
 assert.match(deniedAutoAnswerCard._errorMsg, /was not enabled.*permission denied/i);
+
+// Cache-local state cannot override the logical phone. Two cards project the
+// same backend preference even with an empty browser storage.
+storage.clear();
+const sharedPreferenceA = makeCard();
+const sharedPreferenceB = makeCard();
+for (const sharedCard of [sharedPreferenceA, sharedPreferenceB]) {{
+  sharedCard.config = {{
+    mode: "ha_softphone",
+    endpoint_id: "shared",
+    device_id: "device-shared",
+  }};
+  sharedCard._applySoftphoneSnapshot({{
+    endpoint_id: "shared",
+    device_id: "device-shared",
+    state: "idle",
+    auto_answer: true,
+    send_video: true,
+  }});
+  assert.equal(sharedCard._autoAnswer, true);
+  assert.equal(sharedCard._softphoneSnapshot.send_video, true);
+}}
+
+// Send Video follows the same backend-owned path. Camera access is proved by
+// the current browser, then the logical phone service persists the preference.
+engine.prepareVideoCameraPermission = async () => {{
+  cameraPermissionChecks++;
+  return true;
+}};
+await sharedPreferenceA._toggleVideoCamera(false);
+assert.equal(serviceCalls.at(-1)[1], "set_send_video");
+assert.equal(serviceCalls.at(-1)[2].send_video, false);
+await sharedPreferenceA._toggleVideoCamera(true);
+assert.equal(serviceCalls.at(-1)[1], "set_send_video");
+assert.equal(serviceCalls.at(-1)[2].device_id, "device-shared");
+assert.equal(serviceCalls.at(-1)[2].send_video, true);
+assert.equal(cameraPermissionChecks, 1);
+assert.equal(
+  [...storage.keys()].some((key) => key.includes("video_camera")),
+  false,
+);
+cameraPermissionChecks = 0;
+engine.prepareVideoCameraPermission = async () => {{
+  cameraPermissionChecks++;
+  return false;
+}};
 
 // Cards accept only snapshots belonging to their configured logical phone;
 // a legacy endpoint-less snapshot remains exclusive to the default card.
@@ -379,14 +432,14 @@ deviceOnly.config = {{
   mode: "ha_softphone", name: "Device only", device_id: "device-kiosk",
 }};
 const runtimeKeyBefore = deviceOnly._softphoneRuntimeKey();
-const storageKeyBefore = deviceOnly._autoAnswerStorageId();
+const storageKeyBefore = deviceOnly._phonePreferenceStorageId();
 const targetKeyBefore = deviceOnly._softphoneTargetStorageKey();
 deviceOnly._onSoftphoneState({{
   endpoint_id: "browser:kiosk", device_id: "device-kiosk", state: "idle", sequence: 1,
 }});
 assert.equal(deviceOnly._softphoneRuntimeKey(), runtimeKeyBefore);
 assert.equal(runtimeKeyBefore, "device:device-kiosk");
-assert.equal(deviceOnly._autoAnswerStorageId(), storageKeyBefore);
+assert.equal(deviceOnly._phonePreferenceStorageId(), storageKeyBefore);
 assert.equal(deviceOnly._softphoneTargetStorageKey(), targetKeyBefore);
 
 // A disabled or removed idle logical phone must stop advertising a Call

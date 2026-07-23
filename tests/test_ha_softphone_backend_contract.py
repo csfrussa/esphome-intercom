@@ -668,6 +668,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             "sip_call_schema",
             "sip_forward_schema",
             "set_dnd_schema",
+            "set_auto_answer_schema",
+            "set_send_video_schema",
             "set_ha_softphone_settings_schema",
         ):
             schema = services.split(f"{schema_name} = vol.Schema(", 1)[1].split(
@@ -700,6 +702,8 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
             "call",
             "forward",
             "set_dnd",
+            "set_auto_answer",
+            "set_send_video",
             "set_ha_softphone_settings",
         )
         for index, service_name in enumerate(service_names):
@@ -752,6 +756,28 @@ class HaSoftphoneBackendContractTest(unittest.TestCase):
         self.assertIn("_service_configured_endpoint(hass, call)", dnd)
         self.assertIn(
             "_service_browser_endpoint(hass, call, strict=True)", settings
+        )
+
+    def test_browser_preference_services_use_the_canonical_phone_writer(self) -> None:
+        preference = _function_body(
+            self.source, "_handle_browser_preference_service"
+        )
+        self.assertIn(
+            "_service_browser_endpoint(hass, call, strict=True)", preference
+        )
+        self.assertIn("await async_set_ha_softphone_settings(", preference)
+        self.assertIn("**{preference: enabled}", preference)
+
+        websocket = (
+            ROOT / "custom_components" / "voip_stack" / "websocket_api.py"
+        ).read_text()
+        settings = _function_body(
+            websocket, "async_set_ha_softphone_settings"
+        )
+        self.assertIn('store["auto_answer"] = bool(auto_answer)', settings)
+        self.assertIn('store["send_video"] = bool(send_video)', settings)
+        self.assertIn(
+            "await _async_save_ha_softphone_store(hass, endpoint_id)", settings
         )
 
     def test_video_bridge_projects_destination_h264_level_to_source_leg(self) -> None:

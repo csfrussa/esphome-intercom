@@ -36,7 +36,7 @@
         },
         "data_description": {
           "video_transcoding_enabled": "Consente al softphone HA di usare il binario FFmpeg disponibile per ricevere video H.263, H.263-1998 o H.265. H.264, VP8 e JPEG restano diretti. Un errore lascia attiva la chiamata audio.",
-          "video_camera_send_enabled": "Espone nella card la scelta Invia videocamera. Ogni browser conserva la propria scelta e il proprio permesso. La ricezione video non richiede accesso alla videocamera."
+          "video_camera_send_enabled": "Espone nella card la scelta Invia videocamera. Ogni telefono logico Home Assistant conserva la propria scelta; il permesso della videocamera resta locale a ciascun browser. La ricezione video non richiede accesso alla videocamera."
         }
       },
     "assist": {
@@ -129,11 +129,15 @@
             "ring_group": "Gruppo di chiamata",
             "conference_group": "Gruppo conferenza",
             "conference_ring": "Squilla per le conferenze",
-            "video_enabled": "Abilita video"
+            "video_enabled": "Abilita video",
+            "auto_answer": "Risposta automatica",
+            "send_video": "Invia video"
           },
           "data_description": {
             "name": "Nome obbligatorio usato da card, rubrica e instradamento.",
-            "extension": "Interno componibile opzionale e univoco. Il telefono logico resta chiamabile anche senza card browser collegata."
+            "extension": "Interno componibile opzionale e univoco. Il telefono logico resta chiamabile anche senza card browser collegata.",
+            "auto_answer": "Risponde automaticamente quando un browser collegato dispone del permesso microfono.",
+            "send_video": "Invia per impostazione predefinita la videocamera del browser quando il video è negoziato e il permesso è disponibile."
           }
         },
         "sip_account": {
@@ -213,6 +217,12 @@
     },
     "phone_endpoint_conference_ring": {
       "name": "Squilla per le conferenze"
+    },
+    "phone_endpoint_auto_answer": {
+      "name": "Risposta automatica"
+    },
+    "phone_endpoint_send_video": {
+      "name": "Invia video"
     }
   },
   "text": {

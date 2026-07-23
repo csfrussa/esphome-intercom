@@ -76,11 +76,15 @@ async () => {
       video_direction: backend?.video_direction || "inactive",
       video_rtp_tx_packets: Number(backend?.video_rtp_tx_packets || 0),
       video_rtp_rx_packets: Number(backend?.video_rtp_rx_packets || 0),
+      auto_answer: !!backend?.auto_answer,
+      send_video: !!backend?.send_video,
     },
     card: {
       state: snapshot.state || "", call_id: snapshot.call_id || "", caller: snapshot.caller || "",
       callee: snapshot.callee || "", terminal_reason: snapshot.terminal_reason || "",
       video_direction: snapshot.video_direction || "inactive",
+      auto_answer: !!snapshot.auto_answer,
+      send_video: !!snapshot.send_video,
     },
     text,
     auto_answer: !!card._autoAnswer,
@@ -126,6 +130,7 @@ async (enabled) => {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (
       !!card._autoAnswer === !!enabled &&
+      !!card._softphoneSnapshot?.auto_answer === !!enabled &&
       !card._autoAnswerPermissionPending
     ) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -144,11 +149,12 @@ async (enabled) => {
   const card = deep("voip-stack-card, intercom-card")
     .find((item) => (item.config?.mode || item.config?.card_mode || "") === "ha_softphone");
   if (!card?._toggleVideoCamera) return false;
-  const endpointId = card._getSoftphoneEndpointId?.() || card.config?.endpoint_id || "default";
   await card._toggleVideoCamera(!!enabled);
-  return window.__voipStackEngine?.videoCameraEnabledFor
-    ? !!window.__voipStackEngine.videoCameraEnabledFor(endpointId) === !!enabled
-    : !!window.__voipStackEngine?.videoCameraEnabled === !!enabled;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (!!card._softphoneSnapshot?.send_video === !!enabled) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
 }
 """
 

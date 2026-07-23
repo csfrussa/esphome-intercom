@@ -26,8 +26,8 @@ The central phonebook resolves that value; no destination Device ID is needed.
 
 Optional:
 
-- `send_video`: offer the selected browser phone's camera when SIP video
-  SIP video is enabled. Receiving video does not require this flag.
+- `send_video`: offer the selected browser phone's camera when SIP video is
+  enabled. Receiving video does not require this flag.
 - `ha_bridge`: force HA to anchor the route when that is valid.
 
 `voip_stack.call` supports Home Assistant's optional action response. When a
@@ -64,8 +64,8 @@ Answer the pending call on the selected phone. The Device picker supports
 integration-owned HA phones and compatible ESPHome mirror phones.
 
 If `call_id` is omitted and exactly one call is pending, that call is answered.
-Set `send_video: true` to send that browser phone's camera when SIP video
-video is enabled and the negotiated call permits it.
+Set `send_video: true` to send that browser phone's camera when SIP video is
+enabled and the negotiated call permits it.
 
 For conference calls, `call_id: conference:<room>` joins the HA softphone to
 the room.
@@ -97,6 +97,22 @@ Enable or disable DND on the selected HA softphone.
 When DND is enabled, calls targeting HA return `486 Busy Here` with terminal
 reason `dnd`.
 
+### `voip_stack.set_auto_answer`
+
+Enable or disable Auto Answer on the selected logical HA phone. The value is
+persisted in that phone's config subentry and exposed by its native **Auto
+answer** switch. Every card bound to the phone sees the same setting; clearing
+one browser's cache does not reset it. A browser still needs persistent
+microphone permission before it can answer automatically.
+
+### `voip_stack.set_send_video`
+
+Enable or disable default camera transmission on the selected logical HA
+phone. The value is persisted in that phone's config subentry and exposed by
+its native **Send video** switch. Every card bound to the phone sees the same
+setting. Camera permission remains local to whichever browser wins media
+ownership for the call.
+
 ### `voip_stack.set_ha_softphone_settings`
 
 Publish HA softphone identity and group membership.
@@ -108,13 +124,16 @@ Fields:
 - `conference_group`: comma-separated conference group memberships.
 - `conference_ring`: whether HA rings when another participant starts one of
   its conference groups.
+- `auto_answer`: persistent Auto Answer preference.
+- `send_video`: persistent default camera-transmission preference.
 
 Changing these settings updates HA's virtual endpoint sensor. The phonebook
 sensor observes that change, rebuilds the central roster and pushes updates to
 online ESP devices. The same values are editable directly from each browser
 phone Device through native Extension, Ring groups, Conference groups and Ring
-for conference calls entities. The Device entities, this action and the card
-all use the same persisted phone configuration.
+for conference calls entities, plus Auto answer and Send video switches. The
+Device entities, this action and the card all use the same persisted phone
+configuration.
 
 ## Phonebook Services
 

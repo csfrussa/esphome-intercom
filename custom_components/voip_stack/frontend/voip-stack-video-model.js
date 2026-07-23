@@ -1,10 +1,3 @@
-const CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
-
-export function cameraStorageKey(endpointId = "default") {
-  const endpoint = String(endpointId || "default").trim() || "default";
-  return `${CAMERA_STORAGE_KEY}:${encodeURIComponent(endpoint)}`;
-}
-
 export function emptyVideoStats() {
   return {
     received: 0,

@@ -13,6 +13,12 @@
     "switch": {
       "phone_endpoint_dnd": {
         "default": "mdi:minus-circle"
+      },
+      "phone_endpoint_auto_answer": {
+        "default": "mdi:phone-check"
+      },
+      "phone_endpoint_send_video": {
+        "default": "mdi:video-wireless"
       }
     },
     "binary_sensor": {
@@ -72,6 +78,12 @@
     },
     "set_dnd": {
       "service": "mdi:minus-circle"
+    },
+    "set_auto_answer": {
+      "service": "mdi:phone-check"
+    },
+    "set_send_video": {
+      "service": "mdi:video-wireless"
     },
     "set_ha_softphone_settings": {
       "service": "mdi:phone-cog"

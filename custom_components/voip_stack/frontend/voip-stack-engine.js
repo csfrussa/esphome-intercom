@@ -33,7 +33,6 @@ const SOFTPHONE_MEDIA_SESSIONS_KEY = "voip_stack_owned_softphone_calls";
 const MEDIA_CLIENT_GLOBAL_KEY = "__voipStackMediaClientId";
 const MEDIA_RECONNECT_ATTEMPTS = 3;
 const MEDIA_RECONNECT_DELAY_MS = 250;
-const VIDEO_CAMERA_STORAGE_KEY = "voip_stack_video_camera_enabled";
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
 
@@ -464,35 +463,11 @@ class VoipStackEngine extends EventTarget {
     return Boolean(this._video?.canSend);
   }
 
-  get videoCameraEnabled() {
-    return this.videoCameraEnabledFor(this._endpointId);
-  }
-
-  videoCameraEnabledFor(endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
-    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
-      DEFAULT_SOFTPHONE_ENDPOINT_ID;
-    if (this._video?.cameraEnabledFor) return Boolean(this._video.cameraEnabledFor(endpoint));
-    try {
-      const scoped = localStorage.getItem(
-        `${VIDEO_CAMERA_STORAGE_KEY}:${encodeURIComponent(endpoint)}`,
-      );
-      if (scoped !== null) return scoped === "true";
-      return localStorage.getItem(VIDEO_CAMERA_STORAGE_KEY) === "true";
-    } catch (_) { return false; }
-  }
-
-  async setVideoCameraEnabled(enabled, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
-    const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
-      DEFAULT_SOFTPHONE_ENDPOINT_ID;
-    const video = await this._loadVideo();
-    await video.setCameraEnabled(enabled, endpoint);
-  }
-
   async prepareVideoCameraPermission({
     persistentOnly = false,
-    endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID,
+    endpointId: _endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID,
   } = {}) {
-    if (!this.videoCameraEnabledFor(endpointId) || !navigator.mediaDevices?.getUserMedia) return false;
+    if (!navigator.mediaDevices?.getUserMedia) return false;
     if (persistentOnly) {
       if (!navigator.permissions?.query) return false;
       try {
@@ -1391,7 +1366,13 @@ class VoipStackEngine extends EventTarget {
       this._callId !== wantedCallId
     ) return;
 
-    if (video.active && video.callId === wantedCallId) return;
+    if (video.active && video.callId === wantedCallId) {
+      await video.setCameraEnabled(
+        Boolean(statePayload?.send_video),
+        String(statePayload?.endpoint_id || this._endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID),
+      );
+      return;
+    }
     if (this._videoAttachPromise && this._videoAttachCallId === wantedCallId) {
       await this._videoAttachPromise;
       return;

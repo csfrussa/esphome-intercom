@@ -177,6 +177,8 @@ permission are independent.
 - `voip_stack.set_deadline`
 - `voip_stack.cancel_deadline`
 - `voip_stack.set_dnd`
+- `voip_stack.set_auto_answer`
+- `voip_stack.set_send_video`
 - `voip_stack.set_ha_softphone_settings`
 - `voip_stack.add_contact`
 - `voip_stack.remove_contact`
@@ -198,6 +200,9 @@ phonebook name, extension, ring group, conference group, SIP URI, direct
 bridge path. Set `send_video: true` to offer the selected browser phone's
 camera when SIP video is enabled. `answer` accepts the same
 `send_video` choice; receiving video never requires it.
+`set_auto_answer` and `set_send_video` persist the selected logical phone's
+defaults and update its native switches. Browser microphone/camera permission
+remains local and is never stored by Home Assistant.
 
 `call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
 `set_ha_softphone_settings` expose one optional `device_id` phone selector. If
@@ -267,7 +272,7 @@ The setup flow has two layers:
 | `debug_mode` | Opt-in detailed diagnostics plus private WAV/JSON call captures under `~/.cache/voip_stack_debug`: up to 15 s per HA-softphone direction and 8 s per relay leg, retained at most 24 files / 64 MiB with directory mode `0700`. Leave disabled for normal operation and remove artifacts according to your privacy policy. |
 | `experimental_sip_video` | Enables the supported SIP video profile for HA browser phones. Direct H.264, VP8 and JPEG require a secure context and compatible browser. ESP endpoints remain audio-only. The persisted option key retains its original name so existing configured entries do not need migration. |
 | `video_transcoding_enabled` | Shown only after SIP video is enabled. Uses Home Assistant's available FFmpeg binary for bounded receive-only H.263, H.263-1998 or H.265 to VP8 conversion. Direct codecs never use it. |
-| `video_camera_send_enabled` | Shown only after SIP video is enabled. Exposes the card's per-browser **Send Camera** choice for negotiated H.264 or VP8 transmit media. Receiving video never needs camera permission. |
+| `video_camera_send_enabled` | Shown only after SIP video is enabled. Exposes the logical HA phone's persistent **Send Camera** switch for negotiated H.264 or VP8 transmit media. Browser camera permission remains local; receiving video never needs it. |
 | `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
 

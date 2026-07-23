@@ -62,7 +62,9 @@ audio-only.
 - Direct receive supports H.264, VP8 and RTP/JPEG without decoding or
   re-encoding video on the HA server.
 - Compatible H.264 and VP8 calls can send the browser camera when both the
-  integration-wide permission and that phone's **Send Camera** option are on.
+  integration-wide permission and that phone's persistent **Send Camera**
+  switch are on. The choice survives browser cache clearing; permission remains
+  local to the browser that owns the call media.
 - Optional bounded FFmpeg receive converts H.263, H.263-1998 or H.265 to VP8.
   It is receive-only, single-slot and never records an intermediate file.
 - Incoming and outgoing calls support `sendrecv`, `sendonly`, `recvonly` and

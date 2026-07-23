@@ -27,6 +27,7 @@ from homeassistant.helpers.selector import (
 
 from .config_validation import extension_conflicts, route_namespace_conflicts
 from .phone_config import (
+    CONF_PHONE_AUTO_ANSWER,
     CONF_PHONE_CONFERENCE_GROUP,
     CONF_PHONE_CONFERENCE_RING,
     CONF_PHONE_DND,
@@ -39,6 +40,7 @@ from .phone_config import (
     CONF_PHONE_OFFLINE_POLICY,
     CONF_PHONE_PASSWORD,
     CONF_PHONE_RING_GROUP,
+    CONF_PHONE_SEND_VIDEO,
     CONF_PHONE_USERNAME,
     CONF_PHONE_VIDEO_ENABLED,
     PHONE_SUBENTRY_TYPE,
@@ -748,6 +750,21 @@ class PhoneSubentryFlowHandler(ConfigSubentryFlow):
                     ),
                 }
             )
+        else:
+            fields.update(
+                {
+                    vol.Required(
+                        CONF_PHONE_AUTO_ANSWER,
+                        default=bool(
+                            current.get(CONF_PHONE_AUTO_ANSWER, False)
+                        ),
+                    ): BooleanSelector(),
+                    vol.Required(
+                        CONF_PHONE_SEND_VIDEO,
+                        default=bool(current.get(CONF_PHONE_SEND_VIDEO, False)),
+                    ): BooleanSelector(),
+                }
+            )
         return vol.Schema(fields)
 
     def _validate_aliases(
@@ -860,6 +877,17 @@ class PhoneSubentryFlowHandler(ConfigSubentryFlow):
                     CONF_PHONE_OFFLINE_FORWARD_TARGET: str(
                         user_input.get(CONF_PHONE_OFFLINE_FORWARD_TARGET) or ""
                     ).strip(),
+                }
+            )
+        else:
+            data.update(
+                {
+                    CONF_PHONE_AUTO_ANSWER: bool(
+                        user_input.get(CONF_PHONE_AUTO_ANSWER, False)
+                    ),
+                    CONF_PHONE_SEND_VIDEO: bool(
+                        user_input.get(CONF_PHONE_SEND_VIDEO, False)
+                    ),
                 }
             )
         return data, errors

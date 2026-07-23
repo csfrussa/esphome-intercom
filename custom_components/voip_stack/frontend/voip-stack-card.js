@@ -456,6 +456,8 @@ class VoipStackCard extends HTMLElement {
       audio_connection_held: !!payload.audio_connection_held,
       connected_at: Number(payload.connected_at || 0),
       debug_mode: !!payload.debug_mode,
+      auto_answer: !!payload.auto_answer,
+      send_video: !!payload.send_video,
       video_camera_send_enabled: !!payload.video_camera_send_enabled,
       video_requested: !!payload.video_requested,
       video_negotiated: !!payload.video_negotiated,
@@ -501,6 +503,7 @@ class VoipStackCard extends HTMLElement {
     }
     this._softphoneSnapshot = snapshot;
     this._softphoneDnd = !!snapshot.dnd;
+    this._autoAnswer = !!snapshot.auto_answer;
     this._softphoneExtension = snapshot.extension;
     this._softphoneGroups = {
       ring_group: String(snapshot.groups?.ring_group || "").trim(),
@@ -667,11 +670,11 @@ class VoipStackCard extends HTMLElement {
     this._softphoneTargetDeviceId =
       this._loadSoftphoneTargetPreference() ||
       this._softphoneTargetDeviceId;
-    // Load auto-answer preference from localStorage
-    const deviceId = this._autoAnswerStorageId();
+    // Audible ringing is a browser preference. Auto-answer and camera intent
+    // come from the logical phone snapshot and survive browser cache changes.
+    const deviceId = this._phonePreferenceStorageId();
     if (deviceId) {
       try {
-        this._autoAnswer = localStorage.getItem(`voip_auto_answer_${deviceId}`) === "true";
         this._ringtoneEnabled = localStorage.getItem(`voip_ringtone_${deviceId}`) === "true";
       } catch (_) {}
     }
@@ -1000,7 +1003,7 @@ class VoipStackCard extends HTMLElement {
     return (this.config?.mode || this.config?.card_mode || "esp_mirror") === "phonebook";
   }
 
-  _autoAnswerStorageId() {
+  _phonePreferenceStorageId() {
     return this._isHaSoftphoneMode()
       ? (
           String(this.config?.endpoint_id || "").trim() ||
@@ -1027,7 +1030,7 @@ class VoipStackCard extends HTMLElement {
   }
 
   _softphoneTargetStorageKey() {
-    return `voip_softphone_target_${this._autoAnswerStorageId() || "default"}`;
+    return `voip_softphone_target_${this._phonePreferenceStorageId() || "default"}`;
   }
 
   _loadSoftphoneTargetPreference() {
@@ -1752,9 +1755,7 @@ class VoipStackCard extends HTMLElement {
         this._softphoneSupportsVideo() &&
         !!this._softphoneSnapshot?.video_camera_send_enabled;
       els.videoCameraRow.hidden = !(showSettingsPanel && cameraAvailable);
-      els.videoCameraCheckbox.checked = voipStackEngine.videoCameraEnabledFor
-        ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
-        : voipStackEngine.videoCameraEnabled;
+      els.videoCameraCheckbox.checked = !!this._softphoneSnapshot?.send_video;
     }
     if (els.dndRow) {
       const dndAvailable = softphoneMode || !!this._dndSwitchEntityId;
@@ -2863,11 +2864,7 @@ class VoipStackCard extends HTMLElement {
       this._softphoneSupportsVideo() &&
       this._targetSupportsVideo(target) &&
       this._softphoneSnapshot?.video_camera_send_enabled &&
-      (
-        voipStackEngine.videoCameraEnabledFor
-          ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
-          : voipStackEngine.videoCameraEnabled
-      )
+      this._softphoneSnapshot?.send_video
     );
     if (sendVideo) {
       sendVideo = await voipStackEngine.prepareVideoCameraPermission({
@@ -2930,11 +2927,7 @@ class VoipStackCard extends HTMLElement {
         const wantsVideo = Boolean(
           this._softphoneSupportsVideo() &&
           this._softphoneSnapshot?.video_camera_send_enabled &&
-          (
-            voipStackEngine.videoCameraEnabledFor
-              ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
-              : voipStackEngine.videoCameraEnabled
-          )
+          this._softphoneSnapshot?.send_video
         );
         // A peer such as Wildix commonly establishes audio first and adds
         // video with an in-dialog re-INVITE.  A manual answer must preserve
@@ -3167,11 +3160,7 @@ class VoipStackCard extends HTMLElement {
         this._softphoneSupportsVideo() &&
         this._softphoneSnapshot?.video_offered &&
         this._softphoneSnapshot?.video_camera_send_enabled &&
-        (
-          voipStackEngine.videoCameraEnabledFor
-            ? voipStackEngine.videoCameraEnabledFor(this._getSoftphoneEndpointId())
-            : voipStackEngine.videoCameraEnabled
-        )
+        this._softphoneSnapshot?.send_video
       ) {
         videoPermission = await voipStackEngine.prepareVideoCameraPermission({
           persistentOnly: true,
@@ -3220,20 +3209,22 @@ class VoipStackCard extends HTMLElement {
       this._render();
       return;
     }
-    const deviceId = this._autoAnswerStorageId();
     const permissionGeneration = ++this._autoAnswerPermissionGeneration;
-    const persist = (enabled) => {
-      this._autoAnswer = enabled;
-      try {
-        if (deviceId) {
-          localStorage.setItem(`voip_auto_answer_${deviceId}`, enabled.toString());
-        }
-      } catch (_) {}
-    };
     if (this._autoAnswer || this._autoAnswerPermissionPending) {
       this._autoAnswerPermissionPending = false;
       this._autoAnswerMicReady = false;
-      persist(false);
+      const previous = this._autoAnswer;
+      this._autoAnswer = false;
+      this._render();
+      try {
+        await this._hass.callService("voip_stack", "set_auto_answer", {
+          ...this._softphoneServiceScope(),
+          auto_answer: false,
+        });
+      } catch (err) {
+        this._autoAnswer = previous;
+        this._showError(err.message || String(err));
+      }
       this._render();
       return;
     }
@@ -3244,7 +3235,6 @@ class VoipStackCard extends HTMLElement {
     // can succeed. The remote phone selected in the dialer is irrelevant.
     if (this._isHaSoftphoneMode()) {
       if (!navigator.mediaDevices?.getUserMedia) {
-        persist(false);
         this._showError("Auto Answer requires browser microphone access.");
         this._render();
         return;
@@ -3260,11 +3250,16 @@ class VoipStackCard extends HTMLElement {
           throw new Error("The browser did not provide a microphone track.");
         }
         this._autoAnswerMicReady = true;
-        persist(true);
+        await this._hass.callService("voip_stack", "set_auto_answer", {
+          ...this._softphoneServiceScope(),
+          auto_answer: true,
+        });
+        if (permissionGeneration !== this._autoAnswerPermissionGeneration) return;
+        this._autoAnswer = true;
         _voip_log.info("voip: mic permission granted for auto-answer");
       } catch (err) {
         this._autoAnswerMicReady = false;
-        persist(false);
+        this._autoAnswer = false;
         this._showError(
           `Auto Answer was not enabled: ${err?.message || String(err)}`,
         );
@@ -3281,7 +3276,7 @@ class VoipStackCard extends HTMLElement {
       return;
     }
 
-    persist(true);
+    this._autoAnswer = true;
     this._render();
   }
 
@@ -3293,7 +3288,7 @@ class VoipStackCard extends HTMLElement {
   _toggleRingtone() {
     this._settingsOpen = true;
     this._ringtoneEnabled = !this._ringtoneEnabled;
-    const deviceId = this._autoAnswerStorageId();
+    const deviceId = this._phonePreferenceStorageId();
     if (deviceId) {
       try {
         localStorage.setItem(`voip_ringtone_${deviceId}`, this._ringtoneEnabled.toString());
@@ -3306,13 +3301,23 @@ class VoipStackCard extends HTMLElement {
 
   async _toggleVideoCamera(enabled) {
     this._settingsOpen = true;
+    const next = Boolean(enabled);
+    const previous = !!this._softphoneSnapshot?.send_video;
+    if (this._softphoneSnapshot) this._softphoneSnapshot.send_video = next;
     this._render();
     try {
-      await voipStackEngine.setVideoCameraEnabled(
-        Boolean(enabled),
-        this._getSoftphoneEndpointId(),
-      );
+      if (next) {
+        const permitted = await voipStackEngine.prepareVideoCameraPermission({
+          endpointId: this._getSoftphoneEndpointId(),
+        });
+        if (!permitted) throw new Error("Browser camera access was not granted.");
+      }
+      await this._hass.callService("voip_stack", "set_send_video", {
+        ...this._softphoneServiceScope(),
+        send_video: next,
+      });
     } catch (err) {
+      if (this._softphoneSnapshot) this._softphoneSnapshot.send_video = previous;
       this._showError(err.message || String(err));
     }
     this._render();

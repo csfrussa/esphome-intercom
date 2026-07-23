@@ -396,9 +396,10 @@ callback before clearing the caller sensor. Device displays and the HA card
 should show the peer from the active call, not whichever phonebook contact is
 currently selected for the next outbound call.
 
-The HA softphone card exposes Auto Answer, DND and browser ringtone behind an
-idle-only Options panel. Browser ringtone is a per-browser localStorage
-preference; HA softphone DND is stored in Home Assistant state.
+The HA softphone card exposes Auto Answer, DND, Send Camera and browser ringtone
+behind an idle-only Options panel. Auto Answer, DND and Send Camera are
+persistent logical-phone settings exposed through HA entities and services.
+Browser ringtone remains a per-browser localStorage preference.
 
 ESP mirror and HA-softphone Lovelace modes have intentionally separate
 semantics. `esp_mirror` mirrors one ESP endpoint and exposes controls from that

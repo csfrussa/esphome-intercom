@@ -101,6 +101,24 @@ async def async_setup_entry(
         "endpoint_conference_ring_entity_manager",
         conference_manager,
     )
+    for key, entity_class in (
+        ("endpoint_auto_answer_entity_manager", PhoneEndpointAutoAnswerSwitch),
+        ("endpoint_send_video_entity_manager", PhoneEndpointSendVideoSwitch),
+    ):
+        preference_manager = EndpointEntityManager(
+            hass,
+            entry,
+            async_add_entities,
+            entity_class,
+            predicate=lambda endpoint: endpoint.kind is EndpointKind.BROWSER,
+        )
+        preference_manager.async_setup()
+        register_endpoint_entity_manager(
+            entry,
+            bucket,
+            key,
+            preference_manager,
+        )
 
 
 class PhoneEndpointDndSwitch(SwitchEntity):
@@ -182,3 +200,64 @@ class PhoneEndpointConferenceRingSwitch(SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._async_set(False)
+
+
+class _PhoneEndpointBrowserPreferenceSwitch(SwitchEntity):
+    """Persistent preference owned by one logical browser phone."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    preference_name = ""
+
+    def __init__(self, hass, endpoint, registry) -> None:
+        self.endpoint = endpoint
+        self.registry = registry
+        self._attr_unique_id = (
+            f"phone_endpoint_{endpoint.endpoint_id}_{self.preference_name}"
+        )
+        self._attr_device_info = endpoint_device_info(endpoint)
+        self._attr_is_on = bool(getattr(endpoint, self.preference_name))
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        async_link_endpoint_entity(
+            self.registry, self.endpoint.endpoint_id, self.entity_id
+        )
+
+    @callback
+    def apply_endpoint(self, endpoint) -> None:
+        self.endpoint = endpoint
+        self._attr_is_on = bool(getattr(endpoint, self.preference_name))
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+    async def _async_set(self, enabled: bool) -> None:
+        from .websocket_api import async_set_ha_softphone_settings
+
+        await async_set_ha_softphone_settings(
+            self.hass,
+            endpoint_id=self.endpoint.endpoint_id,
+            **{self.preference_name: enabled},
+        )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)
+
+
+class PhoneEndpointAutoAnswerSwitch(_PhoneEndpointBrowserPreferenceSwitch):
+    """Whether this logical browser phone answers incoming calls automatically."""
+
+    _attr_translation_key = "phone_endpoint_auto_answer"
+    _attr_icon = "mdi:phone-check"
+    preference_name = "auto_answer"
+
+
+class PhoneEndpointSendVideoSwitch(_PhoneEndpointBrowserPreferenceSwitch):
+    """Whether this logical browser phone offers its camera by default."""
+
+    _attr_translation_key = "phone_endpoint_send_video"
+    _attr_icon = "mdi:video-wireless"
+    preference_name = "send_video"

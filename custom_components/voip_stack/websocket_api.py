@@ -42,11 +42,13 @@ from .phone_endpoint import (
     PhoneEndpoint,
 )
 from .phone_config import (
+    CONF_PHONE_AUTO_ANSWER,
     CONF_PHONE_CONFERENCE_GROUP,
     CONF_PHONE_CONFERENCE_RING,
     CONF_PHONE_DND,
     CONF_PHONE_EXTENSION,
     CONF_PHONE_RING_GROUP,
+    CONF_PHONE_SEND_VIDEO,
     update_phone_subentry,
 )
 from .debug_capture import debug_capture_pending_writes
@@ -468,6 +470,18 @@ def _ha_softphone_extension(
     )
 
 
+def _ha_softphone_auto_answer(
+    hass: HomeAssistant, endpoint_id: str = DEFAULT_ENDPOINT_ID
+) -> bool:
+    return bool(_ha_softphone_store(hass, endpoint_id).get("auto_answer", False))
+
+
+def _ha_softphone_send_video(
+    hass: HomeAssistant, endpoint_id: str = DEFAULT_ENDPOINT_ID
+) -> bool:
+    return bool(_ha_softphone_store(hass, endpoint_id).get("send_video", False))
+
+
 async def async_set_ha_softphone_settings(
     hass: HomeAssistant,
     *,
@@ -476,6 +490,8 @@ async def async_set_ha_softphone_settings(
     ring_group: object = None,
     conference_group: object = None,
     conference_ring: object = None,
+    auto_answer: object = None,
+    send_video: object = None,
 ) -> dict[str, Any]:
     endpoint_id = _normalise_endpoint_id(endpoint_id)
     store = _ha_softphone_store(hass, endpoint_id)
@@ -488,6 +504,10 @@ async def async_set_ha_softphone_settings(
         groups["conference_group"] = _clean_group_name(conference_group)
     if conference_ring is not None:
         groups["conference_ring"] = bool(conference_ring)
+    if auto_answer is not None:
+        store["auto_answer"] = bool(auto_answer)
+    if send_video is not None:
+        store["send_video"] = bool(send_video)
     if not groups["conference_group"]:
         groups["conference_ring"] = False
     store["groups"] = groups
@@ -604,6 +624,12 @@ async def _async_load_ha_softphone_store(
         runtime["config_entry_id"] = str(getattr(config_entry, "entry_id", ""))
     data = endpoint_data or {}
     runtime["dnd"] = bool(data.get(CONF_PHONE_DND, runtime.get("dnd", False)))
+    runtime["auto_answer"] = bool(
+        data.get(CONF_PHONE_AUTO_ANSWER, runtime.get("auto_answer", False))
+    )
+    runtime["send_video"] = bool(
+        data.get(CONF_PHONE_SEND_VIDEO, runtime.get("send_video", False))
+    )
     runtime["extension"] = _clean_endpoint_field(
         data.get(CONF_PHONE_EXTENSION, runtime.get("extension", ""))
     )
@@ -639,6 +665,8 @@ async def _async_save_ha_softphone_store(
     groups = _ha_softphone_groups(hass, endpoint_id)
     persisted = {
         CONF_PHONE_DND: bool(runtime.get("dnd", False)),
+        CONF_PHONE_AUTO_ANSWER: _ha_softphone_auto_answer(hass, endpoint_id),
+        CONF_PHONE_SEND_VIDEO: _ha_softphone_send_video(hass, endpoint_id),
         CONF_PHONE_EXTENSION: _ha_softphone_extension(hass, endpoint_id),
         CONF_PHONE_RING_GROUP: groups["ring_group"],
         CONF_PHONE_CONFERENCE_GROUP: groups["conference_group"],
@@ -1007,6 +1035,8 @@ def _ha_softphone_state(
             "video_receive_format", store.get("video_format", "")
         ),
         "video_direction": store.get("video_direction", "inactive"),
+        "auto_answer": _ha_softphone_auto_answer(hass, endpoint_id),
+        "send_video": _ha_softphone_send_video(hass, endpoint_id),
         "video_camera_send_enabled": bool(
             transport_config.get(CONF_VIDEO_CAMERA_SEND, False)
         ),

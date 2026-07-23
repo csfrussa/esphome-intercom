@@ -1275,7 +1275,15 @@ Answer, DND, extension, ring-group and conference-group controls are visible
 together. The values shown are example endpoint settings._
 
 In `ha_softphone` mode the card has its own destination selector, Auto Answer
-and Do Not Disturb controls. Home Assistant administrators also see the
+and Do Not Disturb controls. **Auto Answer** and **Send Camera** belong to the
+logical Home Assistant phone: changing either one calls a VoIP Stack service,
+updates the phone's native HA switch and persists the value in its config
+subentry. Clearing browser cache therefore does not reset them, and every card
+bound to that phone sees the same value. Browser microphone/camera permission
+is still local to each browser. The ringtone remains intentionally local
+because it controls whether that particular browser makes noise.
+
+Home Assistant administrators also see the
 persistent extension and group controls; ordinary users with control access to
 that phone can operate calls and DND without being able to reconfigure its dial
 plan. Enabling Auto Answer asks for microphone access while the user gesture is

@@ -47,6 +47,8 @@ CONF_PHONE_USERNAME = "username"
 CONF_PHONE_PASSWORD = "password"
 CONF_PHONE_ENABLED = "enabled"
 CONF_PHONE_DND = "dnd"
+CONF_PHONE_AUTO_ANSWER = "auto_answer"
+CONF_PHONE_SEND_VIDEO = "send_video"
 CONF_PHONE_RING_GROUP = "ring_group"
 CONF_PHONE_CONFERENCE_GROUP = "conference_group"
 CONF_PHONE_CONFERENCE_RING = "conference_ring"
@@ -119,6 +121,8 @@ def default_phone_data(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any
             options.get(CONF_HA_SOFTPHONE_EXTENSION) or ""
         ).strip(),
         CONF_PHONE_DND: bool(options.get(CONF_HA_SOFTPHONE_DND, False)),
+        CONF_PHONE_AUTO_ANSWER: False,
+        CONF_PHONE_SEND_VIDEO: False,
         CONF_PHONE_RING_GROUP: str(
             options.get(CONF_HA_SOFTPHONE_RING_GROUP) or ""
         ).strip(),
@@ -376,6 +380,8 @@ def endpoint_from_data(
         availability=availability,
         capabilities=_endpoint_capabilities(entry, data),
         dnd=bool(data.get(CONF_PHONE_DND, False)),
+        auto_answer=bool(data.get(CONF_PHONE_AUTO_ANSWER, False)),
+        send_video=bool(data.get(CONF_PHONE_SEND_VIDEO, False)),
         offline_policy=(
             _persisted_sip_offline_policy(data)
             if kind is EndpointKind.SIP_ACCOUNT
