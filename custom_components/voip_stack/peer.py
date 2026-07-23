@@ -12,6 +12,9 @@ class Peer:
 
     name: str
     host: str
+    endpoint_id: str = ""
+    endpoint_kind: str = ""
+    capabilities: tuple[str, ...] = ()
     local_ha: bool = False
     sip_port: int | None = None
     rtp_port: int | None = None
@@ -19,7 +22,7 @@ class Peer:
     conference_group: str = ""
     conference_ring: bool = False
     ring_group: str = ""
-    audio_mode: Literal["full_duplex", "mic_only", "speaker_only", "control_only"] = "full_duplex"
+    audio_mode: Literal["full_duplex", "mic_only", "speaker_only"] = "full_duplex"
     tx_formats: list[str] | None = None
     rx_formats: list[str] | None = None
     device: dict[str, Any] | None = None

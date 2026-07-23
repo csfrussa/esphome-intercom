@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import logging
+from typing import Any
 
-from homeassistant.components import persistent_notification
 from homeassistant.core import ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 
@@ -17,17 +17,16 @@ from .sip_registrar import (
     normalize_username,
 )
 from .store import sip_account_dicts, update_sip_accounts
-from .websocket_api import _fire_call_event
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def build_account_service_handlers(
     refresh_and_push_phonebook: Callable[[object], Awaitable[None]],
-) -> dict[str, Callable[[ServiceCall], Awaitable[None]]]:
+) -> dict[str, Callable[[ServiceCall], Awaitable[Any]]]:
     """Build account service handlers with the phonebook refresh dependency injected."""
 
-    async def create_account(call: ServiceCall) -> None:
+    async def create_account(call: ServiceCall) -> dict[str, Any]:
         hass = call.hass
         username = normalize_username(str(call.data["username"]))
         display_name = str(call.data.get("display_name") or username).strip()
@@ -60,34 +59,24 @@ def build_account_service_handlers(
             if str(item.get("username") or "").lower() != username.lower()
         ]
         accounts.append(dump_account(account))
-        update_sip_accounts(hass, accounts)
+        try:
+            update_sip_accounts(hass, accounts)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
         await refresh_and_push_phonebook(hass)
-        event = {
-            "state": "sip_account_created",
+        response: dict[str, Any] = {
             "username": username,
             "display_name": display_name,
+            "password_generated": generated_password,
         }
         if generated_password:
-            event["password"] = password
-        _fire_call_event(hass, event, "sip")
-        password_note = (
-            f"Password: `{password}`\n\n"
-            "This generated password is shown only now. Save it in the SIP endpoint "
-            "configuration or rotate the account password later."
-            if generated_password
-            else "Password: user-provided value (not shown)."
-        )
-        persistent_notification.async_create(
-            hass,
-            f"SIP account `{username}` created for `{display_name}`.\n\n{password_note}",
-            title="VoIP Stack SIP Account",
-            notification_id=f"{DOMAIN}_sip_account_{username.lower()}",
-        )
+            response["password"] = password
         _LOGGER.info(
             "SIP local account created username=%s enabled=%s",
             username,
             account.enabled,
         )
+        return response
 
     async def remove_account(call: ServiceCall) -> None:
         hass = call.hass
@@ -100,11 +89,11 @@ def build_account_service_handlers(
         update_sip_accounts(hass, accounts)
         registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
         if registrar is not None:
-            registrar.registrations.pop(username, None)
+            registrar.remove_registration(username)
         await refresh_and_push_phonebook(hass)
         _LOGGER.info("SIP local account removed username=%s", username)
 
-    async def rotate_account_password(call: ServiceCall) -> None:
+    async def rotate_account_password(call: ServiceCall) -> dict[str, str]:
         hass = call.hass
         username = normalize_username(str(call.data["username"]))
         password = generate_password()
@@ -120,27 +109,10 @@ def build_account_service_handlers(
         update_sip_accounts(hass, accounts)
         registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
         if registrar is not None:
-            registrar.registrations.pop(username, None)
+            registrar.remove_registration(username)
         await refresh_and_push_phonebook(hass)
-        _fire_call_event(
-            hass,
-            {
-                "state": "sip_account_password_rotated",
-                "username": username,
-                "password": password,
-            },
-            "sip",
-        )
-        persistent_notification.async_create(
-            hass,
-            (
-                f"Password: `{password}`\n\n"
-                "This generated password is shown only now. Save it in the SIP endpoint configuration."
-            ),
-            title=f"VoIP Stack SIP Password: {username}",
-            notification_id=f"{DOMAIN}_sip_account_{username.lower()}",
-        )
         _LOGGER.info("SIP local account password rotated username=%s", username)
+        return {"username": username, "password": password}
 
     async def set_account_enabled(call: ServiceCall, *, enabled: bool) -> None:
         hass = call.hass
@@ -158,7 +130,7 @@ def build_account_service_handlers(
         if not enabled:
             registrar = hass.data.get(DOMAIN, {}).get("sip_registrar")
             if registrar is not None:
-                registrar.registrations.pop(username, None)
+                registrar.remove_registration(username)
         await refresh_and_push_phonebook(hass)
         _LOGGER.info(
             "SIP local account %s username=%s",
@@ -166,7 +138,7 @@ def build_account_service_handlers(
             username,
         )
 
-    def emit_accounts(call: ServiceCall, state: str) -> None:
+    def account_response(call: ServiceCall) -> dict[str, list[dict[str, Any]]]:
         accounts = [
             {
                 "username": item.get("username", ""),
@@ -179,28 +151,10 @@ def build_account_service_handlers(
             }
             for item in sip_account_dicts(call.hass)
         ]
-        _fire_call_event(call.hass, {"state": state, "accounts": accounts}, "sip")
-        lines = [
-            (
-                f"- `{item['username']}`"
-                f" ({item['display_name'] or item['username']})"
-                f"{' ext ' + item['extension'] if item['extension'] else ''}"
-                f": {'enabled' if item['enabled'] else 'disabled'}"
-            )
-            for item in accounts
-        ]
-        persistent_notification.async_create(
-            call.hass,
-            "\n".join(lines) if lines else "No local SIP endpoint accounts configured.",
-            title="VoIP Stack SIP Endpoint Accounts",
-            notification_id=f"{DOMAIN}_sip_endpoint_accounts",
-        )
+        return {"accounts": accounts}
 
-    async def list_accounts(call: ServiceCall) -> None:
-        emit_accounts(call, "list_accounts")
-
-    async def export_accounts(call: ServiceCall) -> None:
-        emit_accounts(call, "export_accounts")
+    async def list_accounts(call: ServiceCall) -> dict[str, list[dict[str, Any]]]:
+        return account_response(call)
 
     async def enable_account(call: ServiceCall) -> None:
         await set_account_enabled(call, enabled=True)
@@ -215,5 +169,4 @@ def build_account_service_handlers(
         "enable_account": enable_account,
         "disable_account": disable_account,
         "list_accounts": list_accounts,
-        "export_accounts": export_accounts,
     }

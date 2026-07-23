@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 
 from homeassistant.core import HomeAssistant
@@ -10,7 +11,6 @@ from .audio_format import (
     AudioFormat,
     HA_SIP_PCM_RX_FORMATS,
     HA_SIP_PCM_TX_FORMATS,
-    choose_common_frame_ms,
     parse_audio_format_list,
 )
 from .peer import Peer
@@ -121,22 +121,24 @@ def sip_target_audio_profile(
         )
         return [], []
 
-    common_frame_ms = choose_common_frame_ms(send_candidates, recv_candidates)
-    if common_frame_ms is None:
+    common_formats = set(send_candidates) & set(recv_candidates)
+    if not common_formats:
         _LOGGER.warning(
-            "No common SIP ptime for %s (send=%s recv=%s)",
+            "No bidirectional SIP RTP format for %s (send=%s recv=%s)",
             target,
             [fmt.wire_token() for fmt in send_candidates],
             [fmt.wire_token() for fmt in recv_candidates],
         )
         return [], []
 
-    send_candidates = [fmt for fmt in send_candidates if fmt.frame_ms == common_frame_ms]
-    recv_candidates = [fmt for fmt in recv_candidates if fmt.frame_ms == common_frame_ms]
+    # A single RFC 3264 sendrecv m=audio cannot assign one payload contract
+    # to TX and another to RX. Keep direction-specific preference ordering,
+    # but expose only formats supported on both sides of this dialog leg.
+    send_candidates = [fmt for fmt in send_candidates if fmt in common_formats]
+    recv_candidates = [fmt for fmt in recv_candidates if fmt in common_formats]
     _LOGGER.debug(
-        "Directional SIP PCM profile for %s: ptime=%sms send=%s recv=%s",
+        "Bidirectional SIP PCM profile for %s: send=%s recv=%s",
         target,
-        common_frame_ms,
         [fmt.wire_token() for fmt in send_candidates],
         [fmt.wire_token() for fmt in recv_candidates],
     )
@@ -159,6 +161,10 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
                 port=int(peer.sip_port or 0),
                 metadata={
                     "local_ha": bool(peer.is_ha),
+                    "endpoint_id": peer.endpoint_id,
+                    "endpoint_kind": peer.endpoint_kind,
+                    "device_id": peer.device_id or "",
+                    "capabilities": list(peer.capabilities),
                     "sip_transport": (
                         str((peer.device or {}).get("sip_transport") or "tcp").lower()
                         if peer.is_ha or peer.device is not None
@@ -177,7 +183,53 @@ def roster_from_peers(hass: HomeAssistant, peers: list[Peer], registered_entries
         )
     manual_entries = manual_roster_entries(hass)
     entries = merge_roster_overrides(entries, manual_entries)
-    entries.extend(registered_entries)
+    endpoint_registry = hass.data.get(DOMAIN, {}).get("endpoint_registry")
+    registered_endpoint_ids: set[str] = set()
+    for registered in registered_entries:
+        endpoint = None
+        if endpoint_registry is not None:
+            endpoint = endpoint_registry.by_username(registered.id)
+        metadata = dict(registered.metadata or {})
+        if endpoint is not None:
+            registered_endpoint_ids.add(endpoint.endpoint_id)
+            metadata.update(
+                {
+                    "endpoint_id": endpoint.endpoint_id,
+                    "endpoint_kind": endpoint.kind.value,
+                    "device_id": endpoint.device_id,
+                    "capabilities": sorted(endpoint.capabilities),
+                    "registered": True,
+                }
+            )
+        entries.append(replace(registered, metadata=metadata))
+    if endpoint_registry is not None:
+        from .phone_endpoint import EndpointAvailability, EndpointKind
+
+        for endpoint in endpoint_registry.endpoints:
+            if (
+                endpoint.kind is not EndpointKind.SIP_ACCOUNT
+                or endpoint.endpoint_id in registered_endpoint_ids
+                or endpoint.availability is EndpointAvailability.UNAVAILABLE
+            ):
+                continue
+            entries.append(
+                RosterEntry(
+                    id=endpoint.username or endpoint.endpoint_id,
+                    name=endpoint.name,
+                    extension=endpoint.extension,
+                    enabled=True,
+                    metadata={
+                        "endpoint_id": endpoint.endpoint_id,
+                        "endpoint_kind": endpoint.kind.value,
+                        "device_id": endpoint.device_id,
+                        "capabilities": sorted(endpoint.capabilities),
+                        "registered": False,
+                        "conference_group": endpoint.conference_group,
+                        "conference_ring": endpoint.conference_ring,
+                        "ring_group": endpoint.ring_group,
+                    },
+                )
+            )
     assist = hass.data.get(DOMAIN, {}).get("assist_config", {})
     if assist.get(CONF_ASSIST_ENDPOINT_ENABLED) and assist.get(CONF_ASSIST_EXTENSION):
         extension = assist[CONF_ASSIST_EXTENSION]

@@ -9,69 +9,109 @@ logic.
 
 ## Softphone Services
 
+The normal automation editor shows one optional `device_id` phone picker. If
+it is omitted, the default HA phone is selected. This is the only public phone
+selector: it identifies the local phone performing the action, never the
+remote destination. Internal endpoint and entity IDs are deliberately not
+alternative action inputs. `call_id` and stale-decision guards remain under
+the collapsed **Advanced options** section where concurrency requires them.
+
 ### `voip_stack.call`
 
 Originate a call from Home Assistant.
 
-Accepted target fields:
-
-- `destination`
-- `target`
-- `call`
-
-All three are aliases. The value can be a roster name, extension, group name,
-public number, `user@host` or `sip:user@host`.
+`destination` is the only destination field. Its value can be a roster name,
+extension, group name, public number, `user@host` or `sip:user@host`.
+The central phonebook resolves that value; no destination Device ID is needed.
 
 Optional:
 
+- `send_video`: offer the selected browser phone's camera when SIP video is
+  enabled. Receiving video does not require this flag.
 - `ha_bridge`: force HA to anchor the route when that is valid.
+
+`voip_stack.call` supports Home Assistant's optional action response. When a
+caller requests a response, it receives the authoritative logical-phone
+snapshot after origination, including `call_id`, `state`, endpoint identity and
+the negotiated media fields already available at that point. The Lovelace card
+uses the standard Home Assistant `call_service` WebSocket command with
+`return_response: true`; there is no parallel private start command.
 
 ### `voip_stack.forward`
 
-With `call_id`, applies a forward decision to a pending inbound
-`route_requested` call.
+With `call_id`, moves an HA-owned pending, ringing or remotely ringing call to
+another dial-plan destination. Repeated forwarding cancels the previous
+ringing SIP leg before starting the replacement.
 
-Without `call_id`, originates a HA-anchored call using the same central dial
-plan as `voip_stack.call`.
+If `call_id` is omitted, HA infers it only when exactly one call is forwardable
+for the selected logical phone. Use `voip_stack.call` to originate a new call.
 
 Important rule: forwarding to a registered SIP endpoint keeps that endpoint's
 current registration Contact as the destination. It must not rewrite to
 `sip:<target>@<ha-ip>`.
 
+Optional stale-decision guards:
+
+- `expected_state`: state copied from `event.voip_stack_call`.
+- `expected_sequence`: sequence copied from the same occurrence.
+- `on_failure`: `resume` (default), `terminate`, or `busy`.
+
+See [Automation Dial Plan](AUTOMATION_DIALPLAN.md) for complete examples.
+
 ### `voip_stack.answer`
 
-Answer a pending call addressed to the HA softphone.
+Answer the pending call on the selected phone. The Device picker supports
+integration-owned HA phones and compatible ESPHome mirror phones.
 
 If `call_id` is omitted and exactly one call is pending, that call is answered.
+Set `send_video: true` to send that browser phone's camera when SIP video is
+enabled and the negotiated call permits it.
 
 For conference calls, `call_id: conference:<room>` joins the HA softphone to
 the room.
 
 ### `voip_stack.decline`
 
-Reject a pending call.
+Reject the pending call on the selected phone.
 
 Fields:
 
 - `call_id`: optional when only one call is pending.
-- `status`: SIP final status, default normally `486`/`603` depending path.
+- `status`: SIP final status, default `603` for this action. Automatic busy and
+  DND routing decisions use `486` independently.
 - `reason`: SIP reason phrase.
 - `decline_reason`: application terminal reason propagated in Reason headers
   and state.
 
 ### `voip_stack.hangup`
 
-Hang up the active call or a specific `call_id`.
+Hang up the selected phone's active call or a specific `call_id`.
 
 It stops SIP client legs, relay/media reservations, pending invites and HA
 softphone media where applicable.
 
 ### `voip_stack.set_dnd`
 
-Enable or disable DND on the HA softphone.
+Enable or disable DND on the selected HA softphone.
 
 When DND is enabled, calls targeting HA return `486 Busy Here` with terminal
 reason `dnd`.
+
+### `voip_stack.set_auto_answer`
+
+Enable or disable Auto Answer on the selected logical HA phone. The value is
+persisted in that phone's config subentry and exposed by its native **Auto
+answer** switch. Every card bound to the phone sees the same setting; clearing
+one browser's cache does not reset it. A browser still needs persistent
+microphone permission before it can answer automatically.
+
+### `voip_stack.set_send_video`
+
+Enable or disable default camera transmission on the selected logical HA
+phone. The value is persisted in that phone's config subentry and exposed by
+its native **Send video** switch. Every card bound to the phone sees the same
+setting. Camera permission remains local to whichever browser wins media
+ownership for the call.
 
 ### `voip_stack.set_ha_softphone_settings`
 
@@ -84,10 +124,16 @@ Fields:
 - `conference_group`: comma-separated conference group memberships.
 - `conference_ring`: whether HA rings when another participant starts one of
   its conference groups.
+- `auto_answer`: persistent Auto Answer preference.
+- `send_video`: persistent default camera-transmission preference.
 
 Changing these settings updates HA's virtual endpoint sensor. The phonebook
 sensor observes that change, rebuilds the central roster and pushes updates to
-online ESP devices.
+online ESP devices. The same values are editable directly from each browser
+phone Device through native Extension, Ring groups, Conference groups and Ring
+for conference calls entities, plus Auto answer and Send video switches. The
+Device entities, this action and the card all use the same persisted phone
+configuration.
 
 ## Phonebook Services
 
@@ -110,7 +156,8 @@ Useful fields:
 
 ### `voip_stack.remove_contact`
 
-Remove one manual contact by name, ID, extension or number.
+The action exposes one required field named `name`; its value may match the
+manual contact's name, stable ID, extension or number.
 
 ### `voip_stack.set_contacts`
 
@@ -125,7 +172,8 @@ Clear manual contacts only.
 
 ### `voip_stack.export_phonebook`
 
-Emit the current central JSON phonebook as a `voip_stack.call_event`.
+Return the current central JSON phonebook in the administrator-only service
+response. The roster is never broadcast on the Home Assistant event bus.
 
 ### `voip_stack.push_phonebook`
 
@@ -157,15 +205,16 @@ Fields:
 
 - `username`: SIP username and roster ID.
 - `display_name`: optional friendly name.
-- `password`: optional. If omitted, HA generates one and shows it once.
+- `password`: optional. If omitted, HA generates one and returns it once in the
+  administrator-only action response.
 - `enabled`: default true.
 - `replace`: allow replacing an existing account.
 - `extension`: optional internal extension. When set, the endpoint can be
   called by name or extension.
 - `ring_group`, `conference_group`, `conference_ring`: group membership.
 
-If a manual password is provided, HA preserves it exactly and creates a
-notification without echoing the password back.
+If a manual password is provided, HA preserves it exactly without echoing the
+password in the response, logs or events.
 
 ### `voip_stack.remove_account`
 
@@ -181,33 +230,88 @@ Disable an account and clear active registration.
 
 ### `voip_stack.rotate_account_password`
 
-Generate a new password, clear active registration and show the replacement
-once in both the call event stream and a persistent notification.
+Generate a new password, clear active registration and return the replacement
+once in the administrator-only action response.
 
-### `voip_stack.list_accounts` / `voip_stack.export_accounts`
+### `voip_stack.list_accounts`
 
-Emit configured accounts without passwords.
+Return configured accounts without passwords in the administrator-only action
+response.
 
 ## Automation Route Service
+
+### `voip_stack.set_deadline` / `voip_stack.cancel_deadline`
+
+Arm or cancel an explicit per-call `calling` or `ringing` deadline. Expiry
+publishes `calling_timeout_requested` or `ringing_timeout_requested` only when
+the call is still in the same state and sequence. A deadline never changes the
+route itself.
+
+These call-global controls are administrator-only for authenticated service
+callers. Internal Home Assistant automations remain allowed.
+
+Fields for `set_deadline`:
+
+- `call_id`, `phase`, `timeout`.
+- optional `expected_state` and `expected_sequence` stale-decision guards.
 
 ### `voip_stack.route`
 
 Apply a decision to a pending inbound SIP route request.
+
+This call-global control is administrator-only for authenticated service
+callers. Internal Home Assistant automations remain allowed.
 
 Fields:
 
 - `call_id`: required.
 - `action`: `answer_ha`, `decline`, `busy`, `forward`, `bridge`, `default`,
   `cancel`.
-- `destination`, `target`, `call`: aliases for forward/bridge destination.
+- `destination`: forward/bridge destination.
 - `status`, `reason`, `decline_reason`: optional terminal response metadata.
 
 Use this only for the automation fallback path. Known roster targets should be
 handled by the central dial plan without waiting for this service.
 
+### `voip_stack.select_inbound_destination`
+
+Select the initial destination while an inbound `route_requested` decision is
+pending. This is the normal automation action for initial trunk routing.
+
+- `destination`: required phonebook name, group, extension, registered phone,
+  Assist extension, SIP URI or routable number.
+- `call_id`: optional when exactly one inbound route is pending; required when
+  several calls are waiting concurrently.
+- `expected_state` / `expected_sequence`: optional stale-event guards.
+
+This action does not forward an already-ringing call. Use
+`voip_stack.forward` for that later lifecycle operation.
+
+## Native Call Event Entity
+
+`event.voip_stack_call` is the browsable automation surface for call lifecycle,
+routing deadlines and in-call DTMF. Its state is the last occurrence timestamp;
+the occurrence type and call envelope are attributes. The legacy event-bus
+events remain available for compatibility.
+
+Each integration-owned phone Device also exposes a scoped call Event Entity
+and an enum call-state Sensor Entity. Prefer those entities for automations
+about one room/handset, such as “Casa has rung for 30 seconds” or “Test missed
+an incoming call”. Use the aggregate entity for PBX-wide logic and
+`route_requested`. The default phone's state sensor keeps the historical
+`sensor.voip_stack_call_state` entity ID for compatibility even though it is
+now attached to that phone Device.
+
+The call-state sensor is durable and therefore supports native state triggers
+with `for:`. Its attributes include `call_id`, `direction`, `ingress`,
+`peer_name` and `terminal_reason`; `ingress` is `trunk` for provider/PBX calls
+and `extension` for locally originated calls. The selected sensor identifies
+the phone: an automation on Casa's sensor does not apply to every logical
+phone.
+
 ## Experimental: In-call DTMF Automation Event
 
-This event surface is experimental in `2026.7.1`. Automations that operate
+This event surface remains experimental in `2026.8.0`. Automations that operate
 gates, locks or other security-sensitive devices must validate the expected
 caller/source and digit rather than matching the digit alone.
 

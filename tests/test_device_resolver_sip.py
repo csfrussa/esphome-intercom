@@ -249,6 +249,14 @@ class SipEndpointParseTest(unittest.TestCase):
         self.assertIsNone(device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|x|40000|sip_udp"))
         self.assertIsNone(device_resolver.parse_voip_endpoint("Kitchen|192.168.1.4|5060|40000|udp"))
 
+    def test_rejects_signaling_only_endpoint_role(self) -> None:
+        self.assertIsNone(
+            device_resolver.parse_voip_endpoint(
+                "Panel|192.168.1.8|5060|40000|control_only|"
+                "16000:s16le:1:20|16000:s16le:1:20|sip_udp"
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

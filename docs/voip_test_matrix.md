@@ -28,9 +28,9 @@ agree. Counters alone are not proof of audible bidirectional audio.
 
 Run after implementation is complete:
 
-- `python -m pytest -q`
-- `python tools/voip_dev_check.py`
-- `python tests/support/qualification_matrix.py --validate --summary`
+- `./.venv/bin/python -m pytest -q`
+- `./.venv/bin/python tools/voip_dev_check.py`
+- `./.venv/bin/python tests/support/qualification_matrix.py --validate --summary`
 - `./scripts/run_virtual_device_tests.sh --all`
 - `./scripts/run_virtual_device_tests.sh --repeat 1000 --seed 1234 --scenario terminal-no-late-green`
 
@@ -42,6 +42,10 @@ coverage map. It must include every supported SIP transport pair, route mode,
 direction, audio role, negotiated format, terminal failure and race condition.
 Adding a new mode or public option requires extending that matrix first, then
 implementing the runner coverage behind the generated scenario IDs.
+
+The generated matrix currently contains 325 usage scenarios and 2,162
+transport/codec combinations. These rows are coverage obligations, not a claim
+that a single physical-device run exercises every Cartesian combination.
 
 Required simulator scenarios:
 
@@ -73,7 +77,7 @@ For every service, assert HA event bus output, logs and resulting entity/card
 state.
 
 - `voip_stack.call` without source: HA originates to roster destination.
-- `voip_stack.call` with `source/source_device_id/source_name`: selected
+- `voip_stack.call` with an ESP `device_id`: selected
   ESP originates the call through its own `start_call` action.
 - `voip_stack.call destination=Kitchen`: resolves roster name.
 - `voip_stack.call destination=sip:Kitchen@IP:5060;transport=tcp`: direct
@@ -82,6 +86,10 @@ state.
   ESP call.
 - `voip_stack.call destination=...`: HA SIP UA originates using roster
   resolver.
+- `voip_stack.call` with a requested Home Assistant action response returns the
+  authoritative endpoint/call snapshot; the current card originates through
+  the standard `call_service` WebSocket command. The removed private start
+  command is absent and must not acquire a compatibility adapter.
 - `voip_stack.answer`: pending inbound SIP receives `200 OK` only
   after local media setup path is ready.
 - `voip_stack.decline`: pending inbound SIP receives configured final
@@ -103,21 +111,24 @@ state.
   self-forward rejection all publish terminal/forward events.
 - `voip_stack.route`: resolves an outstanding explicit route request and
   rejects missing/stale requests deterministically.
-- `voip_stack.export_phonebook`: emits the current canonical roster without
-  mutating it.
+- `voip_stack.export_phonebook`: returns the current canonical roster only in
+  the administrator's service response, without mutating or broadcasting it.
 - `voip_stack.set_ha_softphone_settings`: updates extension and group settings,
   refreshes the roster and leaves unrelated settings intact.
 - `voip_stack.purge_devices`: no-op and removal cases report exactly which
   unavailable devices were selected.
 - `voip_stack.create_account`, `remove_account`, `rotate_account_password`,
-  `enable_account`, `disable_account`, `list_accounts`, and `export_accounts`:
+  `enable_account`, `disable_account`, and `list_accounts`:
   validate credential lifecycle, one-time secret handling, registrar refresh
   and redacted exports.
 
 ## Live Device Call Matrix
 
-Run on WS3 and Spotpear after HA deployment and only after local tests pass.
-Collect HA logs, ESP logs and sampled entity snapshots.
+Run after HA deployment and only after local tests pass. Exercise every powered
+device in the qualification environment and record unavailable devices as not
+run, never as passed or failed. Collect HA logs, ESP logs and sampled entity
+snapshots. The 2026-07-18 home qualification had only WS3 powered; Spotpear and
+P4 were therefore outside that physical run.
 
 - HA softphone card calls WS3 over SIP TCP.
 - HA softphone card calls Spotpear over SIP TCP.
@@ -152,11 +163,44 @@ Collect HA logs, ESP logs and sampled entity snapshots.
   rejected merely because the source is absent from the phonebook.
 - Unknown, unregistered SIP peer calls WS3 and Spotpear directly with compatible
   SDP; each endpoint rings or returns only its normal busy/DND response.
-- Established HA and ESP calls receive a hold/codec re-INVITE: responder sends
-  `488`, the original RTP/dialog stays usable, and a later BYE cleans up.
+- Established ESP calls receive a hold/codec re-INVITE: the ESP sends `488`,
+  the original RTP/dialog stays usable, and a later BYE cleans up.
+- Established HA-owned calls receive compatible UPDATE and re-INVITE offers:
+  hold/resume, direction, RTP endpoint and supported audio-format changes
+  commit once; rejected or retransmitted offers do not duplicate the commit.
+- HA video hold/resume retains the directional H.264/VP8/JPEG contract and
+  camera authorization. Adding/removing video or changing its codec receives
+  `488` without damaging the current call.
 - HA/Baresip legs negotiate Opus at 48 kHz where offered and supported; a
   separate L16 48 kHz case verifies high-rate PCM without implying that ESP
   endpoints support compressed codecs.
+
+## Real HA Qualification Runners
+
+- `tools/live_voip_qualification.py --all --allow-trunk`: HA, powered ESP,
+  ring/conference, DND, self-busy and external cancellation paths.
+- `tools/ring_group_live_matrix.py`: ESP/browser winners, individual decline,
+  caller cancellation and bidirectional browser video.
+- `tools/ha_softphone_matrix.py`: remote hangup, reload while ringing, manual
+  and automatic answer, decline, forward/resume, multiple browsers, registered
+  SIP and automation fallback.
+- `tools/inbound_routing_qualification.py`: trunk default routing, native
+  automation override, DTMF valid/invalid/no-digits, Assist forwarding and
+  cancellation during the DTMF window.
+
+An external-call qualification must include a completed PSTN call, not only
+ringing followed by CANCEL: answer the remote phone, require the audio dialog
+and RTP counters to remain active, then hang up normally. Repeat with an
+audio/video offer and an audio-only gateway answer so omission of trailing
+video cannot tear down the accepted audio leg. Separately verify that a
+video-capable endpoint can accept the offered video and that mid-dialog video
+addition still works.
+
+For inbound DTMF, test both negotiated transports. An offer containing
+`telephone-event` validates provisional RFC 4733 collection. An offer without
+it validates confirmed-dialog SIP INFO collection. Do not force an RTP-only
+test profile against an SDP offer that contains no named-event payload and then
+classify the missing digit as a PBX failure.
 
 ## Card Visual Matrix
 

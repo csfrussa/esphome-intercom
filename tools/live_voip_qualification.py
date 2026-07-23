@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import importlib.util
 import json
 from pathlib import Path
 import ssl
@@ -27,18 +28,40 @@ from urllib.parse import urlsplit
 
 try:
     from aioesphomeapi import APIClient
-except ModuleNotFoundError:  # pragma: no cover - dependency-light CI only imports contracts.
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - dependency-light CI only imports contracts.
     APIClient = None
 
 try:
     import websockets
-except ModuleNotFoundError:  # pragma: no cover - dependency-light CI only imports contracts.
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - dependency-light CI only imports contracts.
     websockets = None
 
 
 DEFAULT_HA_URL = "https://f0260ef3d722.sn.mynetname.net"
 DEFAULT_TOKEN_FILE = Path("/home/codex/.secrets/esphome-intercom/ha_token_codex")
 OUT = Path("test_runs/live_voip_qualification")
+
+
+def qualification_token(args: argparse.Namespace) -> str:
+    """Load a live-test token without persisting a refreshed credential."""
+    if args.token:
+        return str(args.token).strip()
+    helper_path = Path(__file__).resolve().parents[1] / "test_runs/ha_playwright_auth.py"
+    if not helper_path.is_file():
+        return args.token_file.read_text(encoding="utf-8").strip()
+    spec = importlib.util.spec_from_file_location(
+        "_voip_live_ha_auth",
+        helper_path,
+    )
+    if spec is None or spec.loader is None:
+        return args.token_file.read_text(encoding="utf-8").strip()
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return str(module.ha_token()).strip()
 
 
 def normalize_ha_url(value: str) -> str:
@@ -52,7 +75,9 @@ def normalize_ha_url(value: str) -> str:
 def ha_ssl_context(base_url: str, *, insecure: bool) -> ssl.SSLContext | None:
     if urlsplit(base_url).scheme != "https":
         return None
-    return ssl._create_unverified_context() if insecure else ssl.create_default_context()
+    return (
+        ssl._create_unverified_context() if insecure else ssl.create_default_context()
+    )
 
 
 def norm(value: Any) -> str:
@@ -78,15 +103,27 @@ class EspDevice:
 
 
 DEFAULT_ESPS = {
-    "p4": EspDevice("p4", "Waveshare P4 Touch", "192.168.1.45",
-                    ha_state_entity="sensor.waveshare_p4_touch_voip_state",
-                    runtime_entity="sensor.waveshare_p4_touch_runtime_snapshot"),
-    "ws3": EspDevice("ws3", "Waveshare S3 Audio", "192.168.1.47",
-                     ha_state_entity="sensor.cucina_waveshare_s3_audio_voip_state",
-                     runtime_entity="sensor.cucina_waveshare_s3_audio_runtime_snapshot"),
-    "spotpear": EspDevice("spotpear", "Spotpear Ball v2", "192.168.1.31",
-                          ha_state_entity="sensor.casa_spotpear_ball_v2_voip_state",
-                          runtime_entity="sensor.casa_spotpear_ball_v2_runtime_snapshot"),
+    "p4": EspDevice(
+        "p4",
+        "Waveshare P4 Touch",
+        "192.168.1.45",
+        ha_state_entity="sensor.waveshare_p4_touch_voip_state",
+        runtime_entity="sensor.waveshare_p4_touch_runtime_snapshot",
+    ),
+    "ws3": EspDevice(
+        "ws3",
+        "Waveshare S3 Audio",
+        "192.168.1.47",
+        ha_state_entity="sensor.cucina_waveshare_s3_audio_voip_state",
+        runtime_entity="sensor.cucina_waveshare_s3_audio_runtime_snapshot",
+    ),
+    "spotpear": EspDevice(
+        "spotpear",
+        "Spotpear Ball v2",
+        "192.168.1.31",
+        ha_state_entity="sensor.casa_spotpear_ball_v2_voip_state",
+        runtime_entity="sensor.casa_spotpear_ball_v2_runtime_snapshot",
+    ),
 }
 
 
@@ -105,26 +142,38 @@ class HaRest:
         self.token = token
         self.ssl_context = ha_ssl_context(self.base_url, insecure=insecure)
 
-    def _request(self, method: str, path: str, data: dict[str, Any] | None = None) -> Any:
+    def _request(
+        self, method: str, path: str, data: dict[str, Any] | None = None
+    ) -> Any:
         raw = None
         headers = {"Authorization": f"Bearer {self.token}"}
         if data is not None:
             raw = json.dumps(data).encode()
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(f"{self.base_url}{path}", data=raw, headers=headers, method=method)
+        req = urllib.request.Request(
+            f"{self.base_url}{path}", data=raw, headers=headers, method=method
+        )
         try:
-            with urllib.request.urlopen(req, timeout=14, context=self.ssl_context) as resp:
+            with urllib.request.urlopen(
+                req, timeout=14, context=self.ssl_context
+            ) as resp:
                 body = resp.read().decode()
         except urllib.error.HTTPError as err:
             detail = err.read().decode(errors="replace")
-            raise AssertionError(f"HA {method} {path} failed: {err.code} {detail}") from err
+            raise AssertionError(
+                f"HA {method} {path} failed: {err.code} {detail}"
+            ) from err
         return json.loads(body) if body else None
 
     async def state(self, entity_id: str) -> dict[str, Any]:
         return await asyncio.to_thread(self._request, "GET", f"/api/states/{entity_id}")
 
-    async def service(self, domain: str, service: str, data: dict[str, Any] | None = None) -> Any:
-        return await asyncio.to_thread(self._request, "POST", f"/api/services/{domain}/{service}", data or {})
+    async def service(
+        self, domain: str, service: str, data: dict[str, Any] | None = None
+    ) -> Any:
+        return await asyncio.to_thread(
+            self._request, "POST", f"/api/services/{domain}/{service}", data or {}
+        )
 
 
 class HaWs:
@@ -138,8 +187,13 @@ class HaWs:
 
     async def __aenter__(self) -> "HaWs":
         if websockets is None:
-            raise RuntimeError("websockets is required to run live HA websocket qualification")
-        url = self.base_url.replace("https://", "wss://").replace("http://", "ws://") + "/api/websocket"
+            raise RuntimeError(
+                "websockets is required to run live HA websocket qualification"
+            )
+        url = (
+            self.base_url.replace("https://", "wss://").replace("http://", "ws://")
+            + "/api/websocket"
+        )
         self.ws = await websockets.connect(url, ssl=self.ssl_context)
         hello = json.loads(await self.ws.recv())
         if hello.get("type") != "auth_required":
@@ -148,21 +202,27 @@ class HaWs:
         auth = json.loads(await self.ws.recv())
         if auth.get("type") != "auth_ok":
             raise AssertionError(f"HA websocket auth failed: {auth}")
-        await self.command({"type": "subscribe_events", "event_type": "voip_stack.call_event"})
+        await self.command(
+            {"type": "subscribe_events", "event_type": "voip_stack.call_event"}
+        )
         return self
 
     async def __aexit__(self, *_: object) -> None:
         if self.ws is not None:
             await self.ws.close()
 
-    async def command(self, msg: dict[str, Any], timeout: float = 8.0) -> dict[str, Any]:
+    async def command(
+        self, msg: dict[str, Any], timeout: float = 8.0
+    ) -> dict[str, Any]:
         assert self.ws is not None
         msg_id = self._next_id
         self._next_id += 1
         await self.ws.send(json.dumps({"id": msg_id, **msg}))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            raw = await asyncio.wait_for(self.ws.recv(), timeout=max(0.1, deadline - time.monotonic()))
+            raw = await asyncio.wait_for(
+                self.ws.recv(), timeout=max(0.1, deadline - time.monotonic())
+            )
             packet = json.loads(raw)
             if packet.get("type") == "event":
                 self.events.append(packet)
@@ -182,7 +242,9 @@ class HaWs:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             try:
-                raw = await asyncio.wait_for(self.ws.recv(), timeout=max(0.05, deadline - time.monotonic()))
+                raw = await asyncio.wait_for(
+                    self.ws.recv(), timeout=max(0.05, deadline - time.monotonic())
+                )
             except asyncio.TimeoutError:
                 return
             packet = json.loads(raw)
@@ -193,7 +255,9 @@ class HaWs:
 class EspApi:
     def __init__(self, spec: EspDevice) -> None:
         if APIClient is None:
-            raise RuntimeError("aioesphomeapi is required to run live ESP qualification")
+            raise RuntimeError(
+                "aioesphomeapi is required to run live ESP qualification"
+            )
         self.spec = spec
         self.client = APIClient(spec.host, spec.port, spec.password)
         self.entities: dict[str, Any] = {}
@@ -205,9 +269,16 @@ class EspApi:
     async def __aenter__(self) -> "EspApi":
         await self.client.connect(login=True)
         entities, services = await self.client.list_entities_services()
-        self.entities = {str(getattr(entity, "object_id", "")): entity for entity in entities}
-        self.services = {str(getattr(service, "name", "")): service for service in services}
-        self._object_by_key = {int(getattr(entity, "key", -1)): object_id for object_id, entity in self.entities.items()}
+        self.entities = {
+            str(getattr(entity, "object_id", "")): entity for entity in entities
+        }
+        self.services = {
+            str(getattr(service, "name", "")): service for service in services
+        }
+        self._object_by_key = {
+            int(getattr(entity, "key", -1)): object_id
+            for object_id, entity in self.entities.items()
+        }
         await maybe_await(self.client.subscribe_states(self._on_state))
         await asyncio.sleep(0.6)
         return self
@@ -235,13 +306,17 @@ class EspApi:
     async def button(self, object_id: str) -> None:
         entity = self.entities.get(object_id)
         if entity is None:
-            raise AssertionError(f"{self.spec.key}: ESP button {object_id!r} not exposed")
+            raise AssertionError(
+                f"{self.spec.key}: ESP button {object_id!r} not exposed"
+            )
         await maybe_await(self.client.button_command(entity.key))
 
     async def switch(self, object_id: str, value: bool) -> None:
         entity = self.entities.get(object_id)
         if entity is None:
-            raise AssertionError(f"{self.spec.key}: ESP switch {object_id!r} not exposed")
+            raise AssertionError(
+                f"{self.spec.key}: ESP switch {object_id!r} not exposed"
+            )
         await maybe_await(self.client.switch_command(entity.key, value))
         await self.wait(object_id, {"on" if value else "off"}, timeout=5)
 
@@ -274,7 +349,9 @@ class EspApi:
                 self._updates.clear()
             except asyncio.TimeoutError:
                 pass
-        raise AssertionError(f"{self.spec.key}: {object_id} expected {sorted(wanted)}, current={self.values.get(object_id)!r}")
+        raise AssertionError(
+            f"{self.spec.key}: {object_id} expected {sorted(wanted)}, current={self.values.get(object_id)!r}"
+        )
 
     async def wait_predicate(
         self,
@@ -292,7 +369,9 @@ class EspApi:
                 self._updates.clear()
             except asyncio.TimeoutError:
                 pass
-        raise AssertionError(f"{self.spec.key}: timed out waiting for {description}; snapshot={self.snapshot()}")
+        raise AssertionError(
+            f"{self.spec.key}: timed out waiting for {description}; snapshot={self.snapshot()}"
+        )
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -323,7 +402,11 @@ class LiveContext:
     async def cleanup(self) -> None:
         for _ in range(2):
             await self.ha.service("voip_stack", "hangup", {})
-            await self.ha.service("voip_stack", "decline", {"reason": "cleanup", "decline_reason": "cleanup"})
+            await self.ha.service(
+                "voip_stack",
+                "decline",
+                {"reason": "cleanup", "decline_reason": "cleanup"},
+            )
         with contextlib.suppress(Exception):
             await self.esp.service("decline_call", {"reason": "cleanup"})
         deadline = time.monotonic() + 8.0
@@ -337,17 +420,23 @@ class LiveContext:
                 await asyncio.sleep(0.8)
                 return
             await asyncio.sleep(0.3)
-        raise AssertionError(f"cleanup did not settle HA/ESP runtime: softphone={last} esp={self.esp.snapshot()}")
+        raise AssertionError(
+            f"cleanup did not settle HA/ESP runtime: softphone={last} esp={self.esp.snapshot()}"
+        )
 
     def capture(self, label: str) -> None:
-        self.artifacts.append({
-            "label": label,
-            "t": time.monotonic(),
-            "esp": self.esp.snapshot(),
-        })
+        self.artifacts.append(
+            {
+                "label": label,
+                "t": time.monotonic(),
+                "esp": self.esp.snapshot(),
+            }
+        )
 
 
-async def wait_phonebook_contains(ha: HaRest, target: str, *, timeout: float = 12.0) -> dict[str, Any]:
+async def wait_phonebook_contains(
+    ha: HaRest, target: str, *, timeout: float = 12.0
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     last: dict[str, Any] | None = None
     while time.monotonic() < deadline:
@@ -386,15 +475,25 @@ async def wait_phonebook_group_member(
             for item in payload.get("contacts") or []:
                 if str(item.get("id") or item.get("name") or "") != group:
                     continue
-                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-                values = [str(value).strip() for value in metadata.get(member_key) or []]
+                metadata = (
+                    item.get("metadata")
+                    if isinstance(item.get("metadata"), dict)
+                    else {}
+                )
+                values = [
+                    str(value).strip() for value in metadata.get(member_key) or []
+                ]
                 if member in values:
                     return item
         await asyncio.sleep(0.35)
-    raise AssertionError(f"phonebook group {group!r} did not expose {member!r} in {member_key}; last={last}")
+    raise AssertionError(
+        f"phonebook group {group!r} did not expose {member!r} in {member_key}; last={last}"
+    )
 
 
-async def wait_softphone_state(ctx: LiveContext, wanted: set[str], *, timeout: float = 10.0) -> dict[str, Any]:
+async def wait_softphone_state(
+    ctx: LiveContext, wanted: set[str], *, timeout: float = 10.0
+) -> dict[str, Any]:
     wanted_norm = {norm(value) for value in wanted}
     deadline = time.monotonic() + timeout
     last: dict[str, Any] | None = None
@@ -406,7 +505,9 @@ async def wait_softphone_state(ctx: LiveContext, wanted: set[str], *, timeout: f
     raise AssertionError(f"HA softphone expected {sorted(wanted)}, last={last}")
 
 
-async def wait_esp_voip_state(ctx: LiveContext, wanted: set[str], *, timeout: float = 10.0) -> Any:
+async def wait_esp_voip_state(
+    ctx: LiveContext, wanted: set[str], *, timeout: float = 10.0
+) -> Any:
     try:
         return await ctx.esp.wait("voip_state", wanted, timeout=timeout)
     except AssertionError as err:
@@ -424,8 +525,13 @@ async def wait_esp_voip_state(ctx: LiveContext, wanted: set[str], *, timeout: fl
         raise err
 
 
-async def wait_runtime(ctx: LiveContext, predicate: Callable[[dict[str, Any]], bool], description: str,
-                       *, timeout: float = 8.0) -> dict[str, Any]:
+async def wait_runtime(
+    ctx: LiveContext,
+    predicate: Callable[[dict[str, Any]], bool],
+    description: str,
+    *,
+    timeout: float = 8.0,
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
@@ -442,14 +548,34 @@ async def wait_runtime(ctx: LiveContext, predicate: Callable[[dict[str, Any]], b
     raise AssertionError(f"runtime expected {description}; last={last}")
 
 
+async def runtime_snapshot_available(ctx: LiveContext) -> bool:
+    """Return whether this installed ESP firmware publishes its debug snapshot."""
+    if not ctx.esp.spec.runtime_entity:
+        return False
+    try:
+        await ctx.ha.state(ctx.esp.spec.runtime_entity)
+    except AssertionError as err:
+        if "404" in str(err):
+            return False
+        raise
+    return True
+
+
 async def set_baseline(ctx: LiveContext) -> dict[str, Any]:
+    ha_phone = await ctx.ws.softphone_state()
+    ha_groups = dict(ha_phone.get("groups") or {})
     original = {
         "extension": str(ctx.esp.values.get("voip_extension") or ""),
         "ring_groups": str(ctx.esp.values.get("voip_ring_groups") or ""),
         "conference_groups": str(ctx.esp.values.get("voip_conference_groups") or ""),
-        "ring_on_conference": norm(ctx.esp.values.get("voip_ring_on_conference")) == "on",
+        "ring_on_conference": norm(ctx.esp.values.get("voip_ring_on_conference"))
+        == "on",
         "dnd": norm(ctx.esp.values.get("do_not_disturb")) == "on",
         "auto_answer": norm(ctx.esp.values.get("auto_answer")) == "on",
+        "ha_extension": str(ha_phone.get("extension") or ""),
+        "ha_ring_group": str(ha_groups.get("ring_group") or ""),
+        "ha_conference_group": str(ha_groups.get("conference_group") or ""),
+        "ha_conference_ring": bool(ha_groups.get("conference_ring", False)),
     }
     await ctx.esp.text("voip_extension", ctx.args.esp_extension)
     await ctx.esp.text("voip_ring_groups", ctx.args.ring_group)
@@ -479,20 +605,38 @@ async def restore_baseline(ctx: LiveContext, original: dict[str, Any]) -> None:
     await ctx.esp.text("voip_extension", original["extension"])
     await ctx.esp.text("voip_ring_groups", original["ring_groups"])
     await ctx.esp.text("voip_conference_groups", original["conference_groups"])
-    await ctx.esp.switch("voip_ring_on_conference", bool(original["ring_on_conference"]))
+    await ctx.esp.switch(
+        "voip_ring_on_conference", bool(original["ring_on_conference"])
+    )
     await ctx.esp.switch("do_not_disturb", bool(original["dnd"]))
     await ctx.esp.switch("auto_answer", bool(original["auto_answer"]))
+    await ctx.ha.service(
+        "voip_stack",
+        "set_ha_softphone_settings",
+        {
+            "extension": original["ha_extension"],
+            "ring_group": original["ha_ring_group"],
+            "conference_group": original["ha_conference_group"],
+            "conference_ring": bool(original["ha_conference_ring"]),
+        },
+    )
 
 
 async def scenario_ha_to_esp_extension_answer_hangup(ctx: LiveContext) -> None:
     await ctx.cleanup()
+    await ctx.esp.switch("auto_answer", False)
     await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
     await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
     await ctx.esp.button("call")
     await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"in_call"}, timeout=8)
-    if str(soft.get("peer_name") or "") not in {ctx.esp.spec.name, ctx.args.esp_extension}:
-        raise AssertionError(f"HA softphone did not resolve ESP extension to ESP peer: {soft}")
+    if str(soft.get("peer_name") or "") not in {
+        ctx.esp.spec.name,
+        ctx.args.esp_extension,
+    }:
+        raise AssertionError(
+            f"HA softphone did not resolve ESP extension to ESP peer: {soft}"
+        )
     await ctx.ha.service("voip_stack", "hangup", {})
     await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     ctx.capture("ha_to_esp_extension_answer_hangup")
@@ -501,11 +645,18 @@ async def scenario_ha_to_esp_extension_answer_hangup(ctx: LiveContext) -> None:
 async def scenario_ha_to_esp_auto_answer(ctx: LiveContext) -> None:
     """Exercise both real incoming-call contracts and restore the option."""
     await ctx.cleanup()
+    has_runtime_snapshot = await runtime_snapshot_available(ctx)
     await ctx.esp.switch("auto_answer", False)
     await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
     await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
-    await wait_runtime(ctx, lambda value: value.get("ui") == 11 and value.get("ring") == 1,
-                       "ringing UI with active local ringtone")
+    if has_runtime_snapshot:
+        await wait_runtime(
+            ctx,
+            lambda value: value.get("ui") == 11 and value.get("ring") == 1,
+            "ringing UI with active local ringtone",
+        )
+    else:
+        ctx.capture("runtime_snapshot_not_exposed_by_installed_esp_firmware")
     await asyncio.sleep(1.0)
     await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=2)
     await ctx.esp.button("call")
@@ -516,11 +667,19 @@ async def scenario_ha_to_esp_auto_answer(ctx: LiveContext) -> None:
     await ctx.esp.switch("auto_answer", True)
     await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
     await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
-    await wait_runtime(ctx, lambda value: value.get("ui") == 13 and value.get("duck") == 1
-                       and value.get("ring") == 0,
-                       "in-call UI, ducking retained and ringtone stopped")
+    if has_runtime_snapshot:
+        await wait_runtime(
+            ctx,
+            lambda value: (
+                value.get("ui") == 13
+                and value.get("duck") == 1
+                and value.get("ring") == 0
+            ),
+            "in-call UI, ducking retained and ringtone stopped",
+        )
     await ctx.ha.service("voip_stack", "hangup", {})
     await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
+    await ctx.esp.switch("auto_answer", False)
     ctx.capture("ha_to_esp_auto_answer")
 
 
@@ -528,11 +687,20 @@ async def scenario_ha_to_esp_dnd(ctx: LiveContext) -> None:
     await ctx.cleanup()
     await ctx.esp.switch("do_not_disturb", True)
     try:
-        await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.esp_extension})
+        await ctx.ha.service(
+            "voip_stack", "call", {"destination": ctx.args.esp_extension}
+        )
         await wait_esp_voip_state(ctx, {"idle"}, timeout=10)
         soft = await wait_softphone_state(ctx, {"idle", "busy", "declined"}, timeout=10)
-        if norm(soft.get("terminal_reason")) not in {"busy", "dnd", "declined", "remote_hangup"}:
-            raise AssertionError(f"HA softphone did not surface ESP DND/busy terminal: {soft}")
+        if norm(soft.get("terminal_reason")) not in {
+            "busy",
+            "dnd",
+            "declined",
+            "remote_hangup",
+        }:
+            raise AssertionError(
+                f"HA softphone did not surface ESP DND/busy terminal: {soft}"
+            )
     finally:
         await ctx.esp.switch("do_not_disturb", False)
     ctx.capture("ha_to_esp_dnd")
@@ -540,13 +708,16 @@ async def scenario_ha_to_esp_dnd(ctx: LiveContext) -> None:
 
 async def scenario_ha_to_ring_group_answer(ctx: LiveContext) -> None:
     await ctx.cleanup()
+    await ctx.esp.switch("auto_answer", False)
     await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.ring_group})
     await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
     await ctx.esp.button("call")
     await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"in_call"}, timeout=8)
     if str(soft.get("peer_name") or "") == ctx.args.ring_group:
-        raise AssertionError(f"HA softphone still displays ring group instead of winning member: {soft}")
+        raise AssertionError(
+            f"HA softphone still displays ring group instead of winning member: {soft}"
+        )
     await ctx.ha.service("voip_stack", "hangup", {})
     await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     ctx.capture("ha_to_ring_group_answer")
@@ -554,6 +725,7 @@ async def scenario_ha_to_ring_group_answer(ctx: LiveContext) -> None:
 
 async def scenario_ha_to_conference_group_rings_esp(ctx: LiveContext) -> None:
     await ctx.cleanup()
+    await ctx.esp.switch("auto_answer", False)
     await ctx.esp.switch("voip_ring_on_conference", True)
     try:
         await wait_phonebook_group_member(
@@ -563,7 +735,9 @@ async def scenario_ha_to_conference_group_rings_esp(ctx: LiveContext) -> None:
             "ring_members",
             timeout=15,
         )
-        await ctx.ha.service("voip_stack", "call", {"destination": ctx.args.conference_group})
+        await ctx.ha.service(
+            "voip_stack", "call", {"destination": ctx.args.conference_group}
+        )
         await wait_esp_voip_state(ctx, {"ringing", "incoming"}, timeout=12)
         await ctx.esp.button("call")
         await wait_esp_voip_state(ctx, {"in_call"}, timeout=12)
@@ -581,7 +755,10 @@ async def scenario_esp_to_ha_extension_cancel(ctx: LiveContext) -> None:
     await ctx.esp.service("start_call", {"dest": ctx.args.ha_extension})
     await wait_esp_voip_state(ctx, {"calling", "remote_ringing"}, timeout=12)
     soft = await wait_softphone_state(ctx, {"ringing"}, timeout=8)
-    if str(soft.get("dialed_target") or soft.get("callee") or "") != ctx.args.ha_extension:
+    if (
+        str(soft.get("dialed_target") or soft.get("callee") or "")
+        != ctx.args.ha_extension
+    ):
         raise AssertionError(f"HA softphone did not preserve dialed extension: {soft}")
     await ctx.esp.service("decline_call", {"reason": "qualification_cancel"})
     await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
@@ -595,15 +772,26 @@ async def scenario_esp_to_self_extension_busy(ctx: LiveContext) -> None:
     await ctx.cleanup()
     await ctx.esp.service("start_call", {"dest": ctx.args.esp_extension})
     await ctx.esp.wait_predicate(
-        lambda: str(ctx.esp.values.get("voip_destination") or "") == ctx.args.esp_extension
-        or norm(ctx.esp.values.get("voip_last_reason")) in {"busy", "declined", "cancelled", "routing_failed", "local_hangup"},
+        lambda: (
+            str(ctx.esp.values.get("voip_destination") or "") == ctx.args.esp_extension
+            or norm(ctx.esp.values.get("voip_last_reason"))
+            in {"busy", "declined", "cancelled", "routing_failed", "local_hangup"}
+        ),
         f"ESP self-extension attempt to {ctx.args.esp_extension}",
         timeout=4,
     )
     await wait_esp_voip_state(ctx, {"idle"}, timeout=12)
     reason = norm(ctx.esp.values.get("voip_last_reason"))
-    if reason not in {"busy", "declined", "cancelled", "routing_failed", "local_hangup"}:
-        raise AssertionError(f"ESP self-extension terminal reason was not explicit: {ctx.esp.snapshot()}")
+    if reason not in {
+        "busy",
+        "declined",
+        "cancelled",
+        "routing_failed",
+        "local_hangup",
+    }:
+        raise AssertionError(
+            f"ESP self-extension terminal reason was not explicit: {ctx.esp.snapshot()}"
+        )
     ctx.capture("esp_to_self_extension_busy")
 
 
@@ -617,23 +805,34 @@ async def scenario_esp_to_trunk_cancel(ctx: LiveContext) -> None:
     await wait_esp_voip_state(ctx, {"idle"}, timeout=18)
     snap = ctx.esp.snapshot()
     if str(snap.get("destination") or "") not in {ctx.args.trunk_number, ""}:
-        raise AssertionError(f"ESP trunk terminal target was rewritten unexpectedly: {snap}")
+        raise AssertionError(
+            f"ESP trunk terminal target was rewritten unexpectedly: {snap}"
+        )
     ctx.capture("esp_to_trunk_cancel")
 
 
 SCENARIOS: dict[str, Scenario] = {
     "ha_to_esp_auto_answer": Scenario(
         "ha_to_esp_auto_answer",
-        "HA calls ESP with auto-answer off and on; ringtone and teardown are verified",
+        "HA calls ESP with auto-answer off and on; ringtone internals are checked when exposed",
         frozenset({"ha", "esp", "auto_answer", "ringtone", "extension"}),
-        frozenset({"manual_ringing", "ringtone_active", "automatic_in_call", "ringtone_stopped", "cleanup_idle"}),
+        frozenset(
+            {
+                "manual_ringing",
+                "automatic_in_call",
+                "cleanup_idle",
+                "optional_runtime_snapshot",
+            }
+        ),
         scenario_ha_to_esp_auto_answer,
     ),
     "ha_to_esp_extension_answer_hangup": Scenario(
         "ha_to_esp_extension_answer_hangup",
         "HA calls ESP by dynamic extension; ESP answers; HA hangs up",
         frozenset({"ha", "esp", "phonebook", "extension"}),
-        frozenset({"esp_ringing", "esp_in_call", "ha_in_call", "remote_bye", "esp_idle"}),
+        frozenset(
+            {"esp_ringing", "esp_in_call", "ha_in_call", "remote_bye", "esp_idle"}
+        ),
         scenario_ha_to_esp_extension_answer_hangup,
     ),
     "ha_to_esp_dnd": Scenario(
@@ -647,7 +846,9 @@ SCENARIOS: dict[str, Scenario] = {
         "ha_to_ring_group_answer",
         "HA calls ring group; ESP rings, answers, and becomes visible winner",
         frozenset({"ha", "esp", "ring_group", "phonebook"}),
-        frozenset({"esp_ringing", "winner_not_group_label", "esp_in_call", "cleanup_idle"}),
+        frozenset(
+            {"esp_ringing", "winner_not_group_label", "esp_in_call", "cleanup_idle"}
+        ),
         scenario_ha_to_ring_group_answer,
     ),
     "ha_to_conference_group_rings_esp": Scenario(
@@ -702,9 +903,11 @@ def selected_scenarios(args: argparse.Namespace) -> list[Scenario]:
 async def run(args: argparse.Namespace) -> int:
     if args.list:
         for scenario in SCENARIOS.values():
-            print(f"{scenario.id}: {scenario.title} requires={','.join(sorted(scenario.requires))}")
+            print(
+                f"{scenario.id}: {scenario.title} requires={','.join(sorted(scenario.requires))}"
+            )
         return 0
-    token = args.token or args.token_file.read_text(encoding="utf-8").strip()
+    token = qualification_token(args)
     ha = HaRest(args.ha_url, token, insecure=args.insecure)
     esp_spec = DEFAULT_ESPS[args.esp]
     OUT.mkdir(parents=True, exist_ok=True)
@@ -717,16 +920,35 @@ async def run(args: argparse.Namespace) -> int:
             try:
                 for scenario in selected_scenarios(args):
                     if "trunk" in scenario.requires and not args.allow_trunk:
-                        results.append({"scenario": scenario.id, "status": "skipped", "reason": "requires --allow-trunk"})
+                        results.append(
+                            {
+                                "scenario": scenario.id,
+                                "status": "skipped",
+                                "reason": "requires --allow-trunk",
+                            }
+                        )
                         continue
                     start = time.monotonic()
                     try:
                         await scenario.run(ctx)
                     except Exception as err:  # noqa: BLE001 - write artifact before failing.
                         ctx.capture(f"{scenario.id}_failed")
-                        results.append({"scenario": scenario.id, "status": "failed", "error": str(err), "duration_s": time.monotonic() - start})
+                        results.append(
+                            {
+                                "scenario": scenario.id,
+                                "status": "failed",
+                                "error": str(err),
+                                "duration_s": time.monotonic() - start,
+                            }
+                        )
                         raise
-                    results.append({"scenario": scenario.id, "status": "passed", "duration_s": time.monotonic() - start})
+                    results.append(
+                        {
+                            "scenario": scenario.id,
+                            "status": "passed",
+                            "duration_s": time.monotonic() - start,
+                        }
+                    )
                     print(f"PASS {scenario.id}")
                     await ctx.cleanup()
             finally:
@@ -738,8 +960,13 @@ async def run(args: argparse.Namespace) -> int:
                     "samples": ctx.artifacts,
                     "events": ws.events,
                 }
-                path = OUT / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{esp_spec.key}_live_matrix.json"
-                path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8")
+                path = (
+                    OUT
+                    / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{esp_spec.key}_live_matrix.json"
+                )
+                path.write_text(
+                    json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
                 print(f"artifact={path}")
     return 0
 
@@ -755,7 +982,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE)
     parser.add_argument("--token")
     parser.add_argument("--esp", choices=sorted(DEFAULT_ESPS), default="ws3")
-    parser.add_argument("--scenario", choices=sorted(SCENARIOS), action="append", default=[])
+    parser.add_argument(
+        "--scenario", choices=sorted(SCENARIOS), action="append", default=[]
+    )
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--allow-trunk", action="store_true")

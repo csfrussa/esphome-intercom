@@ -10,7 +10,8 @@
           "advertise_host": "Advertised HA host/IP",
         "assist_intents": "Enable Assist intents",
         "assist_endpoint_enabled": "Include voice assistant",
-          "debug_mode": "Enable SIP/RTP debug mode",
+          "debug_mode": "Enable SIP/RTP debug and private audio captures",
+          "experimental_sip_video": "Enable SIP video for the Home Assistant softphone",
           "sip_registrar_enabled": "Enable local SIP accounts",
           "trunk_enabled": "Enable optional SIP trunk"
         },
@@ -20,26 +21,41 @@
           "advertise_host": "Optional override published in ESP phonebooks. Use this when HA is behind routing, NAT, LXC, VPN, or multiple subnets and the automatically announced address is not reachable by ESP devices.",
         "assist_intents": "Register optional Assist handlers for call, hang up, answer and decline (\"Hey Jarvis, call Kitchen\"). Spoken contact names are resolved dynamically against the live VoIP phonebook.",
         "assist_endpoint_enabled": "Add a SIP extension backed directly by a Home Assistant Assist pipeline. No separate VoIP integration or SIP listener is required.",
-          "debug_mode": "Expose detailed SIP/RTP/media diagnostics in HA softphone snapshots and event bus, and emit additional debug logs for call investigation.",
+          "debug_mode": "Enables detailed SIP/RTP/media diagnostics and logs. It also records private call audio automatically: up to 15 seconds per HA-softphone direction and 8 seconds per relay leg, stored as WAV/JSON in ~/.cache/voip_stack_debug (mode 0700) and pruned to 24 files / 64 MiB. Disable it after testing.",
+          "experimental_sip_video": "Let the Home Assistant softphone negotiate SIP video with compatible standard phones, softphones and door stations. H.264, VP8 and JPEG use a direct browser path. ESP audio endpoints remain audio-only. Requires HTTPS and a compatible browser.",
           "sip_registrar_enabled": "Accept REGISTER from local SIP endpoints such as VoIP phones, Zoiper, Linphone or baresip using accounts managed by VoIP Stack services.",
           "trunk_enabled": "Show provider/PBX trunk settings. When disabled, no trunk registration, external route or DTMF collector starts."
         }
       },
+      "video": {
+        "title": "SIP video",
+        "description": "Video is optional and applies only to the Home Assistant softphone and standard SIP endpoints. ESP endpoints remain audio-only.",
+        "data": {
+          "video_transcoding_enabled": "Enable video transcoding",
+          "video_camera_send_enabled": "Allow browser camera transmission"
+        },
+        "data_description": {
+          "video_transcoding_enabled": "Allow the HA softphone to use the available FFmpeg binary for receive-only H.263, H.263-1998 or H.265 video. Direct H.264, VP8 and JPEG never use it. Failure leaves the audio call running.",
+          "video_camera_send_enabled": "Expose a Send Camera choice in the card. Each logical Home Assistant phone keeps its choice; camera permission remains local to each browser. Receiving video never requires camera access."
+        }
+      },
     "assist": {
       "title": "Voice assistant extension",
-        "description": "Choose the SIP extension and Home Assistant Assist pipeline used for telephone calls. You must choose an extension; VoIP Stack does not assign a default.",
+        "description": "Choose the SIP extension and Home Assistant Assist pipeline used for telephone calls. VoIP Stack starts the conversation with a user message such as `Incoming SIP call from \"Daniele\".` Configure telephone behavior in the selected conversation agent's own Instructions or prompt field under Settings > Devices & services > the agent integration > Configure. Example instructions: `When you receive a message beginning with \"Incoming SIP call from\", treat it as a live phone call. Greet the caller once, act as a concise receptionist, and do not repeat their name in every reply.` Friendly mood: `During SIP calls, sound cheerful and informal while remaining concise and helpful.` Terrible mood: `Hi. I don't give a s**t—please go f**k yourself.`",
         "data": {
           "assist_extension": "Voice assistant extension",
-          "assist_pipeline": "Voice assistant pipeline"
+          "assist_pipeline": "Voice assistant pipeline",
+          "assist_advanced_call_context": "Provide advanced call details to the assistant"
         },
         "data_description": {
           "assist_extension": "Numeric extension from 1 to 8 digits, unique across accounts, contacts and groups.",
-          "assist_pipeline": "Assist pipeline used for speech recognition, conversation and text-to-speech on telephone calls."
-      }
+          "assist_pipeline": "Assist pipeline used for speech recognition, conversation and text-to-speech on telephone calls.",
+          "assist_advanced_call_context": "Append caller ID, phonebook match, source and called extension once to the initial user message. These values are untrusted call metadata and a phonebook match is not authentication."
+        }
     },
     "trunk": {
         "title": "Optional SIP Trunk",
-        "description": "Register Home Assistant to one provider/PBX trunk for external outbound calls and inbound DTMF routing.",
+        "description": "Register Home Assistant to one provider/PBX trunk. Incoming calls use the central phonebook and may optionally expose a short decision point to experimental automations.",
         "data": {
           "trunk_transport": "Trunk SIP transport",
           "trunk_server": "Trunk server",
@@ -50,8 +66,9 @@
           "trunk_password": "Password",
           "trunk_register_expires": "REGISTER expires",
           "trunk_outbound_proxy": "Outbound proxy",
-          "trunk_inbound_default_target": "Inbound default target",
-          "trunk_dtmf_enabled": "Enable inbound DTMF routing",
+          "trunk_inbound_default_target": "Fallback destination",
+          "trunk_inbound_mode": "Incoming call handling",
+          "automation_routing_enabled": "Allow automations to select the inbound destination",
           "trunk_dtmf_timeout_ms": "DTMF timeout (seconds)",
           "trunk_dtmf_terminator": "DTMF terminator"
         },
@@ -65,9 +82,10 @@
           "trunk_password": "Digest auth password.",
           "trunk_register_expires": "REGISTER expiration in seconds.",
           "trunk_outbound_proxy": "Optional proxy host or sip:host:port used as signaling next hop.",
-          "trunk_inbound_default_target": "Local phonebook target used when no DTMF extension resolves. Use HA for the HA softphone.",
-          "trunk_dtmf_enabled": "Collect RFC2833/telephone-event digits after answering inbound trunk calls and route them through phonebook extensions.",
-          "trunk_dtmf_timeout_ms": "Digit collection window after pre-answer. Default is 3 seconds, maximum is 10 seconds. Set 0 to skip DTMF/pre-answer and let the normal inbound dialplan decide; without an automation override, the HA softphone rings directly.",
+          "trunk_inbound_default_target": "Phonebook name, SIP URI, extension or number used only when no DTMF extension or automation selects another destination.",
+          "trunk_inbound_mode": "Route immediately skips digit collection. Collect extension with DTMF answers the trunk leg first and lets explicit digits select a phonebook extension.",
+          "automation_routing_enabled": "Before using the fallback destination, publish a short routing request that an automation may answer. Explicit DTMF digits always keep priority.",
+          "trunk_dtmf_timeout_ms": "Digit collection window used only in DTMF mode. Default is 3 seconds, maximum is 10 seconds.",
           "trunk_dtmf_terminator": "Optional terminator digit such as #. Empty means timeout or exact phonebook extension match decides."
         }
       }
@@ -83,6 +101,145 @@
     "abort": {
       "reconfigure_successful": "VoIP Stack reconfigured successfully.",
       "already_configured": "VoIP Stack is already configured."
+    }
+  },
+  "config_subentries": {
+    "phone": {
+      "entry_type": "Phone",
+      "initiate_flow": {
+        "user": "Add phone"
+      },
+      "title": "Phone endpoint",
+      "step": {
+        "user": {
+          "title": "Add phone",
+          "description": "Create another Home Assistant browser softphone or a standard SIP account. Every phone shares the same SIP listener and RTP pool.",
+          "data": {
+            "kind": "Phone type"
+          }
+        },
+        "browser": {
+          "title": "Home Assistant softphone",
+          "description": "Create a logical phone for one or more Lovelace cards. Cards bound to the same phone ring together; the first one to answer owns the media.",
+          "data": {
+            "name": "Name",
+            "extension": "Extension",
+            "enabled": "Enabled",
+            "dnd": "Do not disturb",
+            "ring_group": "Ring group",
+            "conference_group": "Conference group",
+            "conference_ring": "Ring for conference calls",
+            "video_enabled": "Allow video",
+            "auto_answer": "Auto answer",
+            "send_video": "Send video"
+          },
+          "data_description": {
+            "name": "Required phone name used by the card, phonebook and call routing.",
+            "extension": "Optional unique dialable extension. The logical phone remains ringable when no browser card is connected.",
+            "auto_answer": "Automatically answer when an attached browser has microphone permission.",
+            "send_video": "Send an attached browser camera by default when video is negotiated and permission is available."
+          }
+        },
+        "sip_account": {
+          "title": "Standard SIP account",
+          "description": "Create credentials for any standard SIP/RTP phone or softphone. No vendor-specific behavior is used.",
+          "data": {
+            "name": "Name",
+            "extension": "Extension",
+            "username": "SIP username",
+            "password": "SIP password",
+            "enabled": "Enabled",
+            "dnd": "Do not disturb",
+            "ring_group": "Ring group",
+            "conference_group": "Conference group",
+            "conference_ring": "Ring for conference calls",
+            "video_enabled": "Allow video negotiation",
+            "offline_policy": "When not registered",
+            "offline_forward_target": "Forward destination"
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure phone"
+        }
+      },
+      "error": {
+        "phone_name_required": "A phone name is required.",
+        "phone_username_invalid": "Use only letters, numbers, dots, underscores or hyphens.",
+        "phone_password_required": "A SIP password is required.",
+        "phone_forward_target_required": "A forward destination is required for the Forward policy.",
+        "phone_alias_conflict": "The name, extension or username is already used by another phone."
+      },
+      "abort": {
+        "reconfigure_successful": "Phone reconfigured successfully.",
+        "already_configured": "This phone already exists."
+      }
+    }
+  },
+  "selector": {
+    "trunk_inbound_mode": {
+      "options": {
+        "direct": "Route immediately",
+        "dtmf": "Collect extension with DTMF"
+      }
+    }
+  },
+  "entity": {
+    "event": {
+      "voip_stack_call_event": {
+        "name": "VoIP Stack Call"
+      },
+      "phone_endpoint_call": {
+        "name": "Call"
+      }
+    },
+    "sensor": {
+      "voip_stack_ha_softphone_call_state": {
+        "name": "VoIP Stack Call State"
+      },
+      "phone_endpoint_call_state": {
+        "name": "Call state",
+        "state": {
+          "offline": "Offline",
+          "idle": "Idle",
+          "calling": "Calling",
+          "remote_ringing": "Remote ringing",
+          "ringing": "Ringing",
+          "connecting": "Connecting",
+          "in_call": "In call",
+          "held": "Held",
+          "terminating": "Terminating"
+        }
+      }
+    },
+  "switch": {
+    "phone_endpoint_dnd": {
+      "name": "Do not disturb"
+    },
+    "phone_endpoint_conference_ring": {
+      "name": "Ring for conference calls"
+    },
+    "phone_endpoint_auto_answer": {
+      "name": "Auto answer"
+    },
+    "phone_endpoint_send_video": {
+      "name": "Send video"
+    }
+  },
+  "text": {
+    "phone_endpoint_extension": {
+      "name": "Extension"
+    },
+    "phone_endpoint_ring_group": {
+      "name": "Ring groups"
+    },
+    "phone_endpoint_conference_group": {
+      "name": "Conference groups"
+    }
+  },
+    "binary_sensor": {
+      "phone_endpoint_connectivity": {
+        "name": "Connectivity"
+      }
     }
   }
 }

@@ -1,0 +1,421 @@
+"""Explicit PBX call-session ownership and cancellation-safe teardown."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import IntEnum, StrEnum
+import inspect
+import logging
+from typing import Any, TypeAlias
+
+from .session_cleanup import async_wait_for_cleanup
+
+
+_LOGGER = logging.getLogger(__name__)
+
+AsyncCloser: TypeAlias = Callable[[str], Awaitable[None] | None]
+
+
+class SessionPhase(StrEnum):
+    """Internal lifecycle of one logical PBX call."""
+
+    NEW = "new"
+    ROUTING = "routing"
+    CALLING = "calling"
+    RINGING = "ringing"
+    CONNECTING = "connecting"
+    ESTABLISHED = "established"
+    HELD = "held"
+    TRANSFERRING = "transferring"
+    TERMINATING = "terminating"
+    TERMINATED = "terminated"
+
+
+class LegKind(StrEnum):
+    SIP = "sip"
+    BROWSER = "browser"
+    ESPHOME = "esphome"
+    TRUNK = "trunk"
+    ASSIST = "assist"
+    CONFERENCE = "conference"
+
+
+class LegPhase(StrEnum):
+    NEW = "new"
+    INVITING = "inviting"
+    RINGING = "ringing"
+    ANSWERED = "answered"
+    HELD = "held"
+    CLOSING = "closing"
+    CLOSED = "closed"
+
+
+class CleanupStage(IntEnum):
+    """Teardown order; higher stages close before lower stages."""
+
+    OBSERVER = 40
+    MEDIA = 30
+    LEG = 20
+    RESERVATION = 10
+    PROJECTION = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CallToken:
+    call_id: str
+    generation: int
+
+
+async def _run_closer(closer: AsyncCloser | None, reason: str) -> None:
+    if closer is None:
+        return
+    result = closer(reason)
+    if inspect.isawaitable(result):
+        await result
+
+
+@dataclass(slots=True)
+class CallLeg:
+    """One independently closable signaling/media leg of a call."""
+
+    leg_id: str
+    kind: LegKind
+    endpoint_id: str = ""
+    sip_call_id: str = ""
+    phase: LegPhase = LegPhase.NEW
+    dialog: Any | None = None
+    media: Any | None = None
+    closer: AsyncCloser | None = field(default=None, repr=False)
+    _close_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+
+    @property
+    def closed(self) -> bool:
+        return self.phase is LegPhase.CLOSED
+
+    async def close(self, reason: str) -> None:
+        """Close exactly once and keep the close operation cancellation-safe."""
+
+        if self._close_task is None:
+            self.phase = LegPhase.CLOSING
+
+            async def _close() -> None:
+                try:
+                    await _run_closer(self.closer, reason)
+                finally:
+                    self.phase = LegPhase.CLOSED
+
+            self._close_task = asyncio.create_task(
+                _close(),
+                name=f"voip-call-leg-close-{self.leg_id}",
+            )
+        await async_wait_for_cleanup(self._close_task)
+
+
+@dataclass(slots=True)
+class ManagedResource:
+    """One non-leg resource owned by a call session."""
+
+    name: str
+    value: Any
+    closer: AsyncCloser
+    stage: CleanupStage = CleanupStage.RESERVATION
+    _close_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+
+    async def close(self, reason: str) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                _run_closer(self.closer, reason),
+                name=f"voip-call-resource-close-{self.name}",
+            )
+        await async_wait_for_cleanup(self._close_task)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionTerminationResult:
+    reason: str
+    closed_legs: tuple[str, ...]
+    closed_resources: tuple[str, ...]
+    errors: tuple[str, ...]
+
+
+class EndpointCallSession:
+    """Authoritative owner of one PBX call and all of its resources."""
+
+    def __init__(
+        self,
+        call_id: str,
+        generation: int,
+        *,
+        phase: SessionPhase = SessionPhase.NEW,
+        on_changed: Callable[["EndpointCallSession"], None] | None = None,
+        on_terminated: Callable[["EndpointCallSession", SessionTerminationResult], None]
+        | None = None,
+    ) -> None:
+        clean_call_id = str(call_id or "").strip()
+        if not clean_call_id:
+            raise ValueError("call_id must not be empty")
+        if int(generation) <= 0:
+            raise ValueError("generation must be positive")
+        self.call_id = clean_call_id
+        self.generation = int(generation)
+        self.phase = phase
+        self.terminal_reason = ""
+        self.legs: dict[str, CallLeg] = {}
+        self.resources: list[ManagedResource] = []
+        self.tasks: set[asyncio.Task[Any]] = set()
+        self.metadata: dict[str, Any] = {}
+        self.termination_started = asyncio.Event()
+        self.terminated = asyncio.Event()
+        self._termination_task: asyncio.Task[SessionTerminationResult] | None = None
+        self._termination_initiator: asyncio.Task[Any] | None = None
+        self._on_changed = on_changed
+        self._on_terminated = on_terminated
+
+    @property
+    def token(self) -> CallToken:
+        return CallToken(self.call_id, self.generation)
+
+    @property
+    def live(self) -> bool:
+        return self.phase not in {SessionPhase.TERMINATING, SessionPhase.TERMINATED}
+
+    def owns(self, token: CallToken) -> bool:
+        return bool(
+            self.live
+            and token.call_id == self.call_id
+            and token.generation == self.generation
+        )
+
+    def ensure_live(self, token: CallToken | None = None) -> None:
+        if not self.live or (token is not None and not self.owns(token)):
+            raise RuntimeError(f"call session {self.call_id!r} is no longer current")
+
+    def transition(
+        self,
+        phase: SessionPhase,
+        *,
+        expected: set[SessionPhase] | frozenset[SessionPhase] | None = None,
+    ) -> None:
+        self.ensure_live()
+        if expected is not None and self.phase not in expected:
+            raise RuntimeError(
+                f"invalid call transition {self.phase.value}->{phase.value}"
+            )
+        self.phase = phase
+        if self._on_changed is not None:
+            self._on_changed(self)
+
+    def update_metadata(self, **values: Any) -> None:
+        """Update observable call metadata while this generation is live."""
+
+        self.ensure_live()
+        changed = False
+        for key, value in values.items():
+            if self.metadata.get(key) != value:
+                self.metadata[key] = value
+                changed = True
+        if changed and self._on_changed is not None:
+            self._on_changed(self)
+
+    def add_leg(self, leg: CallLeg) -> CallLeg:
+        self.ensure_live()
+        if not leg.leg_id or leg.leg_id in self.legs:
+            raise ValueError(f"duplicate or empty leg_id {leg.leg_id!r}")
+        self.legs[leg.leg_id] = leg
+        return leg
+
+    def add_resource(
+        self,
+        name: str,
+        value: Any,
+        closer: AsyncCloser,
+        *,
+        stage: CleanupStage = CleanupStage.RESERVATION,
+    ) -> ManagedResource:
+        self.ensure_live()
+        if not str(name or "").strip():
+            raise ValueError("resource name must not be empty")
+        if any(resource.name == str(name) for resource in self.resources):
+            raise ValueError(f"duplicate resource name {name!r}")
+        resource = ManagedResource(str(name), value, closer, stage)
+        self.resources.append(resource)
+        return resource
+
+    def release_resource(
+        self,
+        name: str,
+        *,
+        value: Any | None = None,
+    ) -> ManagedResource | None:
+        """Transfer a live resource away without closing it."""
+
+        self.ensure_live()
+        for index, resource in enumerate(self.resources):
+            if resource.name == name and (value is None or resource.value is value):
+                return self.resources.pop(index)
+        return None
+
+    def release_leg(
+        self,
+        leg_id: str,
+        *,
+        dialog: Any | None = None,
+    ) -> CallLeg | None:
+        """Transfer a leg to an explicit legacy cleanup path."""
+
+        self.ensure_live()
+        leg = self.legs.get(str(leg_id or "").strip())
+        if leg is None or (dialog is not None and leg.dialog is not dialog):
+            return None
+        return self.legs.pop(leg.leg_id)
+
+    def own_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+        self.ensure_live()
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
+    def release_task(self, task: asyncio.Task[Any]) -> bool:
+        """Transfer a background task away from session cancellation."""
+
+        self.ensure_live()
+        if task not in self.tasks:
+            return False
+        self.tasks.discard(task)
+        return True
+
+    def create_task(
+        self,
+        coroutine: Awaitable[Any],
+        *,
+        name: str,
+    ) -> asyncio.Task[Any]:
+        return self.own_task(asyncio.create_task(coroutine, name=name))
+
+    async def _close_resources(
+        self,
+        resources: list[ManagedResource],
+        reason: str,
+        closed: list[str],
+        errors: list[str],
+    ) -> None:
+        for resource in resources:
+            try:
+                await resource.close(reason)
+                closed.append(resource.name)
+            except BaseException as err:  # teardown must continue through all owners
+                errors.append(f"resource:{resource.name}:{type(err).__name__}")
+                _LOGGER.debug(
+                    "PBX session resource cleanup failed call_id=%s resource=%s",
+                    self.call_id,
+                    resource.name,
+                    exc_info=True,
+                )
+
+    async def _run_termination(self, reason: str) -> SessionTerminationResult:
+        errors: list[str] = []
+        closed_legs: list[str] = []
+        closed_resources: list[str] = []
+
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in tuple(self.tasks)
+            if task is not current and task is not self._termination_initiator
+        ]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for task, result in zip(tasks, results, strict=True):
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    errors.append(f"task:{task.get_name()}:{type(result).__name__}")
+
+        ordered = sorted(
+            reversed(self.resources),
+            key=lambda resource: int(resource.stage),
+            reverse=True,
+        )
+        before_legs = [
+            resource for resource in ordered if resource.stage >= CleanupStage.LEG
+        ]
+        after_legs = [
+            resource for resource in ordered if resource.stage < CleanupStage.LEG
+        ]
+        await self._close_resources(
+            before_legs,
+            self.terminal_reason,
+            closed_resources,
+            errors,
+        )
+
+        for leg in reversed(tuple(self.legs.values())):
+            try:
+                await leg.close(self.terminal_reason)
+                closed_legs.append(leg.leg_id)
+            except BaseException as err:  # teardown must continue through all legs
+                errors.append(f"leg:{leg.leg_id}:{type(err).__name__}")
+                _LOGGER.debug(
+                    "PBX session leg cleanup failed call_id=%s leg_id=%s",
+                    self.call_id,
+                    leg.leg_id,
+                    exc_info=True,
+                )
+
+        await self._close_resources(
+            after_legs,
+            self.terminal_reason,
+            closed_resources,
+            errors,
+        )
+        self.phase = SessionPhase.TERMINATED
+        self.terminated.set()
+        result = SessionTerminationResult(
+            reason=self.terminal_reason,
+            closed_legs=tuple(closed_legs),
+            closed_resources=tuple(closed_resources),
+            errors=tuple(errors),
+        )
+        if self._on_terminated is not None:
+            try:
+                self._on_terminated(self, result)
+            except Exception:
+                _LOGGER.exception(
+                    "PBX session termination observer failed call_id=%s",
+                    self.call_id,
+                )
+        return result
+
+    async def terminate(self, reason: str) -> SessionTerminationResult:
+        """Terminate once; every caller waits for the same cleanup barrier."""
+
+        return await async_wait_for_cleanup(self.start_termination(reason))
+
+    def start_termination(self, reason: str) -> asyncio.Task[SessionTerminationResult]:
+        """Start teardown synchronously and return its unique cleanup barrier.
+
+        Signalling callbacks are deliberately synchronous at several ownership
+        boundaries (CANCEL/BYE registry updates, transport disconnects).  They
+        must be able to make the session terminal before yielding without
+        spawning a second, untracked wrapper task.
+        """
+
+        if self._termination_task is None:
+            self._termination_initiator = asyncio.current_task()
+            if self._termination_initiator is not None:
+                self.tasks.discard(self._termination_initiator)
+            self.phase = SessionPhase.TERMINATING
+            self.terminal_reason = str(reason or "terminated")
+            self.termination_started.set()
+            if self._on_changed is not None:
+                self._on_changed(self)
+            self._termination_task = asyncio.create_task(
+                self._run_termination(reason),
+                name=f"voip-call-session-terminate-{self.call_id}",
+            )
+        return self._termination_task

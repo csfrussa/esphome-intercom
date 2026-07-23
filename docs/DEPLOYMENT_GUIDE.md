@@ -54,9 +54,10 @@ Supported audio shapes:
 - full duplex: microphone plus speaker;
 - mic only: sends audio but ignores remote playback;
 - speaker only: plays remote audio but sends no mic RTP;
-- control only: call signaling/phonebook without audio.
 
 These are first-class SIP endpoint shapes. They are not compatibility modes.
+An endpoint must provide at least one real audio direction; a signaling-only
+device is not a VoIP phone and is rejected.
 
 ## Home Assistant
 
@@ -90,9 +91,9 @@ default inbound target and optional DTMF digit collection.
 Inbound provider calls are answered by HA so it can collect DTMF digits through
 RTP `telephone-event` or compatible legacy SIP INFO. Normal mobile dialers can use
 post-dial pauses, for example a contact that dials the provider number, waits,
-and sends `100`. If no digits arrive, HA rings the configured default target or
-HA softphone. If digits arrive, HA resolves them through central phonebook
-`extension` values.
+and sends `100`. If no digits arrive, HA resolves the configured default target
+(`HA` is the initial default). If digits arrive, HA resolves them through
+central phonebook `extension` values.
 If digits arrive and do not resolve, HA terminates the answered leg with
 `route_not_found`.
 

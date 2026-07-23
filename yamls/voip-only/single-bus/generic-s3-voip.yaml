@@ -214,6 +214,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    timeout: 1s
 
   - platform: resampler
     id: voip_speaker_input
@@ -254,6 +255,10 @@ voip_stack:
         pcm_format: s16le
         channels: 1
         frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1

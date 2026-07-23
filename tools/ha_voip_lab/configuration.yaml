@@ -1,0 +1,25 @@
+homeassistant:
+  name: VoIP Stack Lab
+  latitude: 0
+  longitude: 0
+  elevation: 0
+  unit_system: metric
+  time_zone: Etc/UTC
+
+default_config:
+
+http:
+  server_host: 127.0.0.1
+  server_port: 18123
+
+logger:
+  default: warning
+  logs:
+    custom_components.voip_stack: debug
+
+recorder:
+  purge_keep_days: 1
+  commit_interval: 5
+
+lovelace:
+  mode: storage

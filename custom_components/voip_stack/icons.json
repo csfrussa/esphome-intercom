@@ -1,4 +1,32 @@
 {
+  "entity": {
+    "sensor": {
+      "phone_endpoint_call_state": {
+        "default": "mdi:phone-in-talk"
+      }
+    },
+    "event": {
+      "phone_endpoint_call": {
+        "default": "mdi:phone-sync"
+      }
+    },
+    "switch": {
+      "phone_endpoint_dnd": {
+        "default": "mdi:minus-circle"
+      },
+      "phone_endpoint_auto_answer": {
+        "default": "mdi:phone-check"
+      },
+      "phone_endpoint_send_video": {
+        "default": "mdi:video-wireless"
+      }
+    },
+    "binary_sensor": {
+      "phone_endpoint_connectivity": {
+        "default": "mdi:phone-check"
+      }
+    }
+  },
   "services": {
     "purge_devices": {
       "service": "mdi:phone-remove"
@@ -15,8 +43,17 @@
     "forward": {
       "service": "mdi:phone-forward"
     },
+    "set_deadline": {
+      "service": "mdi:timer-plus-outline"
+    },
+    "cancel_deadline": {
+      "service": "mdi:timer-cancel-outline"
+    },
     "route": {
       "service": "mdi:routes"
+    },
+    "select_inbound_destination": {
+      "service": "mdi:sign-direction"
     },
     "hangup": {
       "service": "mdi:phone-hangup"
@@ -42,6 +79,15 @@
     "set_dnd": {
       "service": "mdi:minus-circle"
     },
+    "set_auto_answer": {
+      "service": "mdi:phone-check"
+    },
+    "set_send_video": {
+      "service": "mdi:video-wireless"
+    },
+    "set_ha_softphone_settings": {
+      "service": "mdi:phone-cog"
+    },
     "create_account": {
       "service": "mdi:account-voice"
     },
@@ -59,9 +105,6 @@
     },
     "list_accounts": {
       "service": "mdi:account-search"
-    },
-    "export_accounts": {
-      "service": "mdi:account-arrow-up"
     }
   }
 }

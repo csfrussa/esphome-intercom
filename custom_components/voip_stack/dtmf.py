@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import socket
+import struct
 import time
 from typing import Callable
 
@@ -33,6 +34,7 @@ _EVENT_DIGITS = {
 }
 _INFO_SIGNAL_RE = re.compile(r"(?:^|\r?\n)\s*Signal\s*=\s*([0-9]{1,2}|[*#A-D])\s*(?:\r?\n|$)", re.IGNORECASE)
 _INFO_EVENT_CODES = {"10": "*", "11": "#", "12": "A", "13": "B", "14": "C", "15": "D"}
+_DIGIT_EVENT_CODES = {digit: event for event, digit in _EVENT_DIGITS.items()}
 
 
 def parse_sip_info_digit(content_type: str, body: bytes) -> str:
@@ -49,6 +51,32 @@ def parse_sip_info_digit(content_type: str, body: bytes) -> str:
         digit = text[0].upper()
         return digit if digit in "0123456789*#ABCD" else ""
     return ""
+
+
+def telephone_event_code(digit: str) -> int | None:
+    """Return the RFC 4733 event code for one DTMF symbol."""
+
+    return _DIGIT_EVENT_CODES.get(str(digit or "").strip().upper())
+
+
+def build_telephone_event_payload(
+    digit: str,
+    *,
+    duration: int,
+    end: bool = False,
+    volume: int = 10,
+) -> bytes:
+    """Build the four-byte RFC 4733 named-event payload."""
+
+    event = telephone_event_code(digit)
+    if event is None:
+        raise ValueError("unsupported DTMF digit")
+    if not 1 <= int(duration) <= 0xFFFF:
+        raise ValueError("telephone-event duration must be between 1 and 65535")
+    if not 0 <= int(volume) <= 63:
+        raise ValueError("telephone-event volume must be between 0 and 63")
+    flags = (0x80 if end else 0) | int(volume)
+    return struct.pack("!BBH", event, flags, int(duration))
 
 
 class RtpDtmfDecoder:

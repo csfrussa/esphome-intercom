@@ -241,7 +241,7 @@ std::string RuntimeDiag::build_snapshot_(const char *reason) {
                                  : 0;
     if (i != 0)
       out << ",";
-    char core_buf[8];
+    char core_buf[16];
     out << "{"
         << "\"name\":";
     append_json_string(out, tasks[i].pcTaskName == nullptr ? "" : std::string(tasks[i].pcTaskName));

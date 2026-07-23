@@ -75,6 +75,24 @@ class FailingClient(FakeClient):
         raise OSError("close failed")
 
 
+class SlowRelay(FakeRelay):
+    def __init__(
+        self,
+        events: list[str],
+        started: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        super().__init__(events)
+        self.started = started
+        self.release = release
+
+    async def stop(self) -> None:
+        self.events.append("relay.stop.started")
+        self.started.set()
+        await self.release.wait()
+        self.events.append("relay.stop.finished")
+
+
 async def _sleep_forever(events: list[str]) -> None:
     try:
         await asyncio.Event().wait()
@@ -84,6 +102,33 @@ async def _sleep_forever(events: list[str]) -> None:
 
 
 class SipRuntimeCleanupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cleanup_barrier_survives_repeated_cancellation(self) -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def owned_cleanup() -> str:
+            entered.set()
+            await release.wait()
+            finished.set()
+            return "closed"
+
+        child = asyncio.create_task(owned_cleanup())
+        waiter = asyncio.create_task(session_cleanup.async_wait_for_cleanup(child))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        waiter.cancel()
+        await asyncio.sleep(0)
+        waiter.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(waiter.done())
+        self.assertFalse(child.cancelled())
+
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        self.assertTrue(finished.is_set())
+        self.assertEqual(child.result(), "closed")
+
     async def test_cleanup_closes_watcher_client_and_relay(self) -> None:
         events: list[str] = []
         watcher = asyncio.create_task(_sleep_forever(events))
@@ -132,6 +177,36 @@ class SipRuntimeCleanupTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.watcher_cancelled)
         self.assertFalse(result.client_closed)
         self.assertFalse(result.relay_stopped)
+
+    async def test_caller_cancellation_waits_for_detached_resources_to_close(self) -> None:
+        events: list[str] = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+        cleanup = asyncio.create_task(
+            session_cleanup.async_cleanup_sip_runtime(
+                relay=SlowRelay(events, started, release),
+                client=FakeClient(events),
+                relay_first=True,
+            )
+        )
+        await started.wait()
+
+        cleanup.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(cleanup.done())
+        release.set()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await cleanup
+        self.assertEqual(
+            events,
+            [
+                "relay.stop.started",
+                "relay.stop.finished",
+                "client.terminate",
+                "client.close",
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -11,26 +11,42 @@ from . import sip
 _LOGGER = logging.getLogger(__name__)
 
 
-async def read_sip_stream_message(reader: asyncio.StreamReader) -> bytes | None:
+async def read_sip_stream_message(
+    reader: asyncio.StreamReader,
+    *,
+    first_byte_timeout: float | None = None,
+    frame_timeout: float | None = 10.0,
+) -> bytes | None:
     """Read one bounded SIP record from a TCP stream."""
 
     try:
-        head = await reader.readuntil(b"\r\n\r\n")
-    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+        if first_byte_timeout is None:
+            first = await reader.readexactly(1)
+        else:
+            async with asyncio.timeout(max(0.001, float(first_byte_timeout))):
+                first = await reader.readexactly(1)
+    except (TimeoutError, asyncio.IncompleteReadError):
         return None
-    if len(head) > sip.MAX_SIP_MESSAGE_BYTES:
-        return None
-    try:
-        text = head.decode("utf-8", errors="strict")
-    except UnicodeDecodeError:
-        return None
-    content_length = 0
-    content_length_seen = False
-    for line in text.split("\r\n")[1:]:
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        if key.strip().lower() in {"content-length", "l"}:
+
+    async def _read_remainder() -> bytes | None:
+        try:
+            head = first + await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            return None
+        if len(head) > sip.MAX_SIP_MESSAGE_BYTES:
+            return None
+        try:
+            text = head.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return None
+        content_length = 0
+        content_length_seen = False
+        for line in text.split("\r\n")[1:]:
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            if key.strip().lower() not in {"content-length", "l"}:
+                continue
             if content_length_seen:
                 return None
             content_length_seen = True
@@ -38,17 +54,25 @@ async def read_sip_stream_message(reader: asyncio.StreamReader) -> bytes | None:
                 content_length = int(value.strip())
             except ValueError:
                 return None
-    if (
-        content_length < 0
-        or content_length > sip.MAX_SIP_BODY_BYTES
-        or len(head) + content_length > sip.MAX_SIP_MESSAGE_BYTES
-    ):
-        return None
+        if (
+            content_length < 0
+            or content_length > sip.MAX_SIP_BODY_BYTES
+            or len(head) + content_length > sip.MAX_SIP_MESSAGE_BYTES
+        ):
+            return None
+        try:
+            body = await reader.readexactly(content_length) if content_length else b""
+        except asyncio.IncompleteReadError:
+            return None
+        return head + body
+
     try:
-        body = await reader.readexactly(content_length) if content_length else b""
-    except asyncio.IncompleteReadError:
+        if frame_timeout is None:
+            return await _read_remainder()
+        async with asyncio.timeout(max(0.001, float(frame_timeout))):
+            return await _read_remainder()
+    except TimeoutError:
         return None
-    return head + body
 
 
 class SipTcpWriter:

@@ -157,8 +157,6 @@ esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   name_add_mac_suffix: false
-  platformio_options:
-    board_build.partitions: ../../../partitions_16mb_huge_factory.csv
   on_boot:
     priority: 600
     then:
@@ -192,6 +190,11 @@ esphome:
 esp32:
   board: esp32-s3-devkitc-1
   flash_size: 16MB
+  # ESPHome 2026.7+ native ESP-IDF builds no longer consume PlatformIO's
+  # board_build.partitions option. Keep the intentionally single-app layout
+  # explicit here: the raw 360x360 LVGL assets do not fit in the default
+  # dual-slot OTA table.
+  partitions: partitions_16mb_huge_factory.csv
   framework:
     type: esp-idf
     advanced:
@@ -412,6 +415,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    timeout: 1s
 
 # =============================================================================
 # MEDIA, ASSIST AND VOIP
@@ -2589,7 +2593,7 @@ script:
       - lambda: |-
           // Determine target page
           lv_obj_t* target = nullptr;
-          auto s = id(phone).get_state_str();
+          const std::string s = id(phone).get_state_str();
           bool in_call = (s == "ringing" || s == "calling" ||
                           s == "remote_ringing" || s == "connecting" ||
                           s == "in_call");
@@ -2616,7 +2620,7 @@ script:
             target = id(no_ha_page)->obj;
           } else if (id(current_mode) == 1) {
             // VoIP mode
-            auto s = id(phone).get_state_str();
+            const std::string s = id(phone).get_state_str();
             if (s == "ringing") {
               target = id(call_ringing_in_page)->obj;
             } else if (s == "calling" || s == "remote_ringing") {
@@ -2788,7 +2792,7 @@ script:
           lv_obj_add_style(id(timer_bar), any_active ? &style_active : &style_paused, LV_PART_INDICATOR);
 
           // Format time text
-          char buf[8];
+          char buf[16];
           int h = sec / 3600;
           int m = (sec / 60) % 60;
           int s = sec % 60;
@@ -3075,7 +3079,7 @@ binary_sensor:
                           condition:
                             lambda: |-
                               if (id(current_mode) != 1) return false;
-                              auto s = id(phone).get_state_str();
+                              const std::string s = id(phone).get_state_str();
                               return s != "idle";
                           then:
                             - voip_stack.call_toggle:
@@ -3094,7 +3098,7 @@ binary_sensor:
               condition:
                 lambda: |-
                   if (id(current_mode) != 1) return false;
-                  auto s = id(phone).get_state_str();
+                  const std::string s = id(phone).get_state_str();
                   return s == "ringing";
               then:
                 - voip_stack.decline_call:

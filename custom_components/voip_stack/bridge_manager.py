@@ -27,7 +27,7 @@ async def async_terminate_sip_bridge(
     if not source_call_id:
         return False, "", "", False, False
 
-    media = registry.softphone_media.pop(source_call_id, None)
+    media = registry.take_media(source_call_id)
     release_media_reservation(media)
 
     cleanup = await async_cleanup_sip_runtime(

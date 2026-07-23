@@ -14,9 +14,10 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   HA-managed central roster examples.
 
 - 🧾 **Release / upgrade notes**: [BREAKING_CHANGES.md](BREAKING_CHANGES.md)
-  starts from the current SIP/VoIP breaking migration. The current manual-only
-  current release is [RELEASE_2026_7_1.md](RELEASE_2026_7_1.md); the
-  stable release note is [RELEASE_2026_7_0.md](RELEASE_2026_7_0.md).
+  starts from the current SIP/VoIP breaking migration. Development changes for
+  the next release are collected in [RELEASE_2026_8_0.md](RELEASE_2026_8_0.md).
+  Published notes remain available for [2026.7.1](RELEASE_2026_7_1.md) and
+  [2026.7.0](RELEASE_2026_7_0.md).
 
 - 📚 **Configuration reference**: [reference.md](reference.md) covers the ESP
   `voip_stack` options, triggers, actions and conditions plus the Home Assistant
@@ -45,8 +46,18 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 - 📞 **Call flows**: [CALL_FLOWS.md](CALL_FLOWS.md) explains the expected
   signaling/media path for ESP, HA, registered endpoint, group and trunk calls.
 
+- 🎥 **SIP video**:
+  [SIP_VIDEO.md](SIP_VIDEO.md) defines the opt-in
+  SIP video-phone profile for the HA softphone, its direct and optional
+  transcoded codec matrix, browser privacy controls, requirements and
+  deliberate limits. ESPHome endpoints remain audio-only.
+
 - 🧰 **HA services**: [SERVICES.md](SERVICES.md) documents every
   `voip_stack.*` service and the expected side effects.
+
+- 🧭 **Automation dial plan**: [AUTOMATION_DIALPLAN.md](AUTOMATION_DIALPLAN.md)
+  shows conditional forwarding, explicit ringing deadlines and unanswered-call
+  fallback to Assist without changing the default phonebook route.
 
 - 👥 **Groups**: [GROUPS.md](GROUPS.md) documents ring group and conference
   group semantics, including `conference_ring`.
@@ -56,17 +67,25 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
   checks, log filters and audio-debug capture paths.
 
 - 🧱 **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) describes component
-  decomposition, threading/core affinity, per-frame data flow, the
-  internal audio core contract, and the drain protocol for glitch-free config
-  changes.
+  ownership, SIP transactions/dialogs, routing and media boundaries, governed
+  SIP/TCP backpressure, frontend state projection and runtime diagnostics.
 
 - 🧯 **Troubleshooting**: [troubleshooting.md](troubleshooting.md) covers SIP
   ringing, media negotiation, phonebook/routing, registration, trunk, audio and
   card-state failures with concrete checks.
 
-- 🖼️ **Media refresh plan**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists
-  screenshots, photos, GIFs and demo scenes that should replace obsolete README
-  media.
+- 🖼️ **Media catalogue**: [MEDIA_SHOT_LIST.md](MEDIA_SHOT_LIST.md) lists the
+  screenshots, photos, GIFs, diagrams and repeatable demo scenes currently
+  used to explain the project.
+
+- 📐 **Qualification model**: [voip_test_matrix.md](voip_test_matrix.md) and
+  [architecture/phase_00v_virtual_device.md](architecture/phase_00v_virtual_device.md)
+  separate deterministic protocol coverage from real ESP timing, browser
+  media and hardware-in-the-loop evidence.
+
+- 📡 **ESP SIP/RTP profile**: [voip_profile.md](voip_profile.md) defines the
+  lightweight standards-based endpoint contract; [ESPRESSIF_COMPONENTS.md](ESPRESSIF_COMPONENTS.md)
+  records the Espressif component and licensing boundary.
 
 ## Per-component docs
 

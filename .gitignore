@@ -4,6 +4,7 @@
 
 # Python virtual environment
 /venv/
+/.venv/
 
 # Secrets (contains WiFi passwords, etc.)
 secrets.yaml
@@ -12,6 +13,14 @@ secrets.yaml
 # Local project notes
 CLAUDE.md
 codex.md
+/CHANGELOG.local.md
+
+# Local test, lint, and release artifacts
+/test_runs/
+/test_captures/
+/.pytest_cache/
+/.ruff_cache/
+/voip_stack.zip
 
 # Private development notes and local helper tools
 docs/private/

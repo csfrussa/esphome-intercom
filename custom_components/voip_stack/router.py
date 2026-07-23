@@ -200,12 +200,22 @@ def resolve_ha_router(target: str, entries: list[RosterEntry], *, trunk_ready: b
     if entry is not None and not entry.enabled:
         return RouteDecision(RouteAction.REJECT, target=target, status=403, reason=RouteReason.TARGET_DISABLED, entry=entry)
     if entry is not None:
+        endpoint_kind = str(entry.metadata.get("endpoint_kind") or "")
         if entry.metadata.get("virtual_endpoint") == "assist_pipeline":
             return RouteDecision(RouteAction.ASSIST, target=entry.id, sip_uri=entry.sip_uri, reason=RouteReason.EXPLICIT_ROUTE, source="phonebook", entry=entry)
         if entry.metadata.get("group_type"):
             return RouteDecision(RouteAction.GROUP, target=entry.id, reason=RouteReason.EXPLICIT_ROUTE, source="phonebook", entry=entry)
         if bool(entry.metadata.get("local_ha")):
             return RouteDecision(RouteAction.ANSWER_HA, target=entry.id, reason=RouteReason.DEFAULT_HA, source="phonebook", entry=entry)
+        if endpoint_kind == "sip_account" and not entry.sip_uri:
+            return RouteDecision(
+                RouteAction.REJECT,
+                target=entry.id,
+                status=480,
+                reason=RouteReason.TARGET_UNREACHABLE,
+                source="phonebook",
+                entry=entry,
+            )
         matched_extension = entry_matches_extension(entry, target)
         if entry.number and not entry.address and not entry.sip_uri and not matched_extension:
             if trunk_ready:

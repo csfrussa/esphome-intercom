@@ -1,0 +1,75 @@
+"""Inbound trunk routing decision primitives."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+
+from homeassistant.core import HomeAssistant
+
+from .call_scope import pending_routes
+from .const import CONF_TRUNK_INBOUND_DEFAULT_TARGET
+from .fsm import CallState
+from .websocket_api import _set_sip_bridge_call_state
+
+
+def trunk_default_target(trunk_config: dict) -> str:
+    """Return the explicit trunk fallback, preserving the HA compatibility alias."""
+
+    return (
+        str(trunk_config.get(CONF_TRUNK_INBOUND_DEFAULT_TARGET) or "HA").strip()
+        or "HA"
+    )
+
+
+async def async_request_inbound_destination(
+    hass: HomeAssistant,
+    invite,
+    *,
+    trunk_config: dict,
+    timeout: float,
+) -> dict:
+    """Expose one bounded automation decision and always release its future."""
+
+    future = asyncio.get_running_loop().create_future()
+    now = time.time()
+    expires_at = now + float(timeout)
+    fallback = trunk_default_target(trunk_config)
+    routes = pending_routes(hass)
+    routes[invite.call_id] = {
+        "future": future,
+        "invite": invite,
+        "created_at": now,
+        "expires_at": expires_at,
+        "decision_deadline": expires_at,
+        "fallback_destination": fallback,
+    }
+    _set_sip_bridge_call_state(
+        hass,
+        CallState.CONNECTING.value,
+        caller=invite.caller,
+        callee=fallback,
+        peer_name=invite.caller,
+        call_id=invite.call_id,
+        direction="incoming",
+        ingress="trunk",
+        origin="trunk",
+        route_kind="trunk",
+        scope="sip_trunk",
+        phase="route_decision",
+        route_request=True,
+        default_destination=fallback,
+        fallback_destination=fallback,
+        expires_at=expires_at,
+        decision_deadline=expires_at,
+        decision_timeout_ms=int(float(timeout) * 1000),
+        source_host=invite.source_host,
+    )
+    try:
+        decision = await asyncio.wait_for(future, timeout=float(timeout))
+        action = str((decision or {}).get("action") or "default").strip().lower()
+        return dict(decision or {}) if action != "default" else {}
+    except TimeoutError:
+        return {}
+    finally:
+        routes.pop(invite.call_id, None)

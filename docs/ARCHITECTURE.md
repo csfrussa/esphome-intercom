@@ -12,7 +12,8 @@ Every ESP running `voip_stack` is a SIP user agent:
 - it does not register to a PBX;
 - it does not require SIP authentication;
 - it accepts compatible PCM SDP and rejects incompatible media with SIP status;
-- it can run full-duplex, mic-only, speaker-only or control-only.
+- it can run full-duplex, mic-only or speaker-only; signaling-only endpoints
+  are rejected because every VoIP endpoint must expose real audio media.
 
 Inbound reachability is deliberately independent of roster membership. The
 phonebook is a dial plan, not a caller allowlist: a reachable compatible SIP
@@ -63,6 +64,58 @@ Component ownership:
 - Cards never own the call FSM. They render state pushed by the owner and send
   user commands back to that owner.
 
+### HA Runtime Ownership Model
+
+The PBX ownership core is built alongside the existing SIP dispatcher as a
+migration seam; it is not a second router and a call never passes through two
+independent dial plans.
+
+- `SipEndpointRuntime` owns endpoint-wide components such as listeners,
+  registrar, trunk and conference manager.
+- `EndpointCallSession` is the authoritative owner of one logical call,
+  including its generation, legs, tasks, media reservations and cleanup
+  barrier.
+- `CallLeg` represents one SIP, browser, ESP, trunk or Assist participant.
+- `DialForkController` supplies the shared first-answer-wins primitive used by
+  ring groups and other parallel dial attempts.
+- `AnswerTransaction` implements prepare, final response and commit with
+  rollback of ports, sockets and optional video resources.
+- `CallRegistry` is the observable compatibility index/projection used by HA
+  entities, services and existing runtime adapters; it is not a second
+  lifecycle owner.
+- `ActiveMediaCall` resolves the one generation-current browser media session
+  from the endpoint store and `CallRegistry`. Audio and video WebSocket views
+  subscribe to the same call-lifetime primitive instead of maintaining
+  independent interpretations of when a call has ended.
+- audio and video renegotiation commit the complete media contract before they
+  increment its generation and wake attached WebSockets. Consumers therefore
+  never observe a new generation with a partially updated RTP destination,
+  direction or codec description.
+- bridged audio and video peer changes are staged independently but preflighted
+  together. A commit is rejected if either relay leg or the owning call
+  generation changed while the SIP answer was in flight, so a late re-INVITE
+  cannot leave audio and video on different peer revisions.
+- public HA state observations follow an explicit call-phase transition graph.
+  The intentional `connecting -> ringing` fallback remains valid, while a late
+  provisional event cannot regress an established dialog back to `calling` or
+  `ringing`.
+
+Termination is generation-guarded, idempotent and cancellation-safe. The
+session enters `terminating` synchronously, then waits for a shielded cleanup
+barrier so late dial winners, media callbacks or duplicate BYE/CANCEL observers
+cannot resurrect the call.
+
+Card commands use standard Home Assistant service actions. Outbound card calls
+request the optional response from `voip_stack.call`; the backend returns the
+authoritative endpoint snapshot instead of making the frontend infer a new
+Call-ID or state. Integration-specific WebSocket subscriptions remain where
+they carry live call/media presence rather than one-shot commands.
+
+`endpoint_runtime.py` still contains the legacy dispatcher while flows are
+moved behind these ownership primitives. This is intentionally a transitional
+boundary: new routing policy must enter the canonical dispatcher and must not
+create a parallel code path in the ownership core.
+
 ## Call Control
 
 All call control is SIP:
@@ -87,12 +140,25 @@ For outbound INVITE failures, HA sends the required ACK for non-2xx final
 responses before surfacing the terminal reason. This keeps failed calls SIP
 compliant rather than relying on retry side effects.
 
-The current profile does not renegotiate established media. ESP and HA reject a
-hold or media-changing in-dialog re-INVITE with `488 Not Acceptable Here`
-without replacing or tearing down the original dialog. HA may acknowledge a
-session refresh whose SDP is unchanged, without rerunning routing or replacing
-media. Existing media and a later BYE continue to use the original negotiated
-session.
+ESP endpoints do not renegotiate established media. They reject a hold or
+media-changing in-dialog re-INVITE with `488 Not Acceptable Here` without
+replacing or tearing down the original dialog.
+
+HA-owned dialogs accept a compatible peer-initiated re-INVITE or UPDATE. The
+new offer may change direction, RTP destination, payload type, packet duration
+or another audio format already supported on that leg. An established video
+stream may be held and resumed or move its RTP endpoint only while its codec
+contract remains compatible. A direct HA-browser dialog may also add or remove
+a compatible video stream. A SIP-to-SIP bridge keeps its established topology
+and rejects incompatible additions, removals or codec changes. HA stages the
+replacement resources, sends the SDP answer and commits only the current call
+generation. Rejected or stale updates leave the original session usable, and
+a later BYE still terminates it normally.
+
+Confirmed dialogs retain the remote Contact and every Record-Route value. UAC
+route sets reverse the response order, UAS route sets preserve request order,
+and subsequent ACK/BYE requests follow RFC 3261 loose or strict routing instead
+of bypassing an intervening proxy.
 
 ## Media
 
@@ -124,10 +190,12 @@ negotiate different supported media shapes, HA decodes/converts/resamples and
 reframes between the formats. If conversion is not possible, the bridge fails
 with `media_incompatible`.
 
-Inbound provider trunk calls are also two-leg calls. HA answers the trunk leg to
-receive DTMF routing digits through RTP `telephone-event` or compatible legacy SIP INFO,
-then originates a normal SIP call to HA softphone or a local phonebook target
-and bridges RTP with the same relay.
+Inbound provider trunk calls are also two-leg calls. When SDP negotiates RTP
+`telephone-event`, HA may collect RFC 4733 digits using provisional `183`
+early media. When the offer has no named-event payload and legacy SIP INFO is
+the available compatibility transport, HA confirms the dialog with `200 OK`
+before collecting digits. It then originates a normal call to the selected HA
+softphone or local phonebook target and bridges RTP with the same relay.
 
 An Assist destination is local to the HA SIP endpoint, so it does not create a
 second SIP dialog or listener. VoIP Stack decodes the negotiated incoming RTP,
@@ -176,14 +244,14 @@ Terminal reasons are backend-owned and may contain exact SIP/application
 reasons. The frontend must display the supplied reason rather than mapping it
 through a private parallel FSM.
 
-HA runtime call ownership is centralized in `CallRegistry`. Pending routes,
-pending INVITEs, pre-answered trunk legs, HA softphone media, SIP clients,
-bridge clients, relays and client watcher tasks live behind that registry
-instead of separate mutable maps. Service handlers, inbound SIP callbacks,
-WebSocket audio and debug snapshots all derive active call information from the
-same session/leg registry. This avoids HA softphone state being polluted by
-router-only bridges and makes bridge teardown propagate BYE/cleanup through the
-same call session.
+HA runtime call ownership is centralized in `EndpointCallSession`; the
+`CallRegistry` projects and indexes that ownership for compatibility. Pending
+routes, pending INVITEs, pre-answered trunk legs, HA softphone media, SIP
+clients, bridge clients, relays and watcher tasks are generation-bound to the
+same logical session. Service handlers, inbound SIP callbacks, WebSocket media
+and debug snapshots therefore observe one lifecycle. This avoids HA softphone
+state being polluted by router-only bridges and makes bridge teardown propagate
+BYE and cleanup through the same call session.
 
 ## Routing
 
@@ -220,7 +288,7 @@ HA maps provider-side numbers or DTMF extension digits to local SIP targets.
 
 Inbound trunk calls use deterministic policy:
 
-- no explicit route hint: ring HA/default target;
+- no explicit route hint: resolve the configured inbound default target;
 - explicit DTMF/SIP route hint that resolves: bridge to that target;
 - explicit DTMF/SIP route hint that does not resolve: terminate
   `route_not_found`.
@@ -260,7 +328,10 @@ Every SIP/TCP connection has one governed writer task. Producers enqueue SIP
 messages through `SipTcpWriter`; the writer owns `StreamWriter.write()` and
 `drain()`. Queue pressure is explicit and logged instead of spawning ad-hoc
 drain tasks or writing from multiple call paths. Closing or reconnecting a TCP
-leg first closes the governed writer and only then replaces the stream.
+flow first closes the governed writer and only then replaces the stream. A
+confirmed dialog is not owned by that flow: Call-ID and local/remote tags keep
+it addressable when an authenticated peer sends the next in-dialog request on
+a replacement connection.
 
 This applies to outbound SIP clients, the TCP SIP listener and trunk
 registration/call legs. UDP signaling still sends datagrams directly.
@@ -297,4 +368,8 @@ carry SIP/SDP/RTP details useful for protocol investigation.
 
 Snapshots expose listener readiness, active dialogs, pending transactions,
 selected formats, RTP packet/byte counters, last SIP event/status and terminal
-reason. Debug mode increases snapshot and log detail for live investigation.
+reason. Debug mode additionally exposes one bounded call-resource snapshot:
+sessions, legs, routes, SIP clients, browser owners, active audio/video
+sessions, media locks, transcoders and allocated RTP ports. A terminal lab test
+must return `call_scoped_quiescent` to `true`; an idle card alone is not proof
+that teardown completed.

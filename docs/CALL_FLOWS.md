@@ -112,17 +112,26 @@ The HA registrar authenticates REGISTER and publishes the endpoint's current
 Contact. It does not make registered accounts the only callers HA or an ESP can
 receive. Use network policy when an installation needs that restriction.
 
-## Hold Or Media-Changing Re-INVITE
+## In-Dialog Hold Or Media Update
 
 1. A call is already established with its original negotiated media.
-2. One peer sends an in-dialog INVITE whose SDP signals hold or changes media.
-3. The ESP or HA returns `488 Not Acceptable Here`.
-4. The established dialog and RTP selection remain active; no second call
-   state is created.
-5. Either peer can later send BYE and both sides clean up the original call.
+2. One peer sends an in-dialog INVITE or UPDATE carrying an SDP offer.
+3. An ESP endpoint returns `488 Not Acceptable Here`; its original dialog and
+   RTP selection remain active.
+4. An HA-owned dialog validates the offer against the live media owner. A
+   compatible audio change or direction/hold/resume update is answered and
+   committed once without rerunning the dial plan or creating a second call.
+5. An established HA video stream may change direction or RTP endpoint while
+   keeping a compatible codec contract. A direct HA-browser dialog may also
+   add/remove compatible video; a SIP-to-SIP bridge rejects topology or codec
+   changes with `488`, leaving the original media usable.
+6. A successful re-INVITE follows the normal 2xx/ACK transaction. If ACK never
+   arrives, HA terminates the uncertain dialog; UPDATE needs no ACK.
+7. Either peer can later send BYE and both sides clean up the active call.
 
-HA may answer an in-dialog session refresh with unchanged SDP using the
-existing answer. It does not rerun the dial plan or create a second call.
+An offerless UPDATE is accepted as a session refresh. An offerless re-INVITE is
+rejected because HA does not implement the delayed offer-in-2xx/answer-in-ACK
+exchange.
 
 ## Registered SIP Endpoint To HA
 
@@ -138,14 +147,18 @@ transaction.
 
 ## HA Forward To Registered SIP Endpoint
 
-1. HA service `voip_stack.forward` is called without a pending `call_id`, for
-   example destination `SvcPhone` or extension `761`.
-2. HA resolves the registered endpoint to its current Contact URI.
-3. HA originates a SIP call to that Contact.
+1. An HA-owned inbound/ringing call already exists.
+2. HA service `voip_stack.forward` is called with that `call_id`, or without it
+   when exactly one call is forwardable on the selected logical phone; the
+   destination is, for example, `SvcPhone` or extension `761`.
+3. HA resolves the registered endpoint to its current Contact URI and replaces
+   the destination leg while preserving the source call.
 4. HA must not rewrite the destination to `sip:<target>@<ha-ip>`.
 
 If it does rewrite to HA itself, the call loops into the inbound router and
 appears as `route_requested`. That is a bug.
+
+Use `voip_stack.call`, not `forward`, when there is no existing source call.
 
 ## Ring Group
 
@@ -187,21 +200,83 @@ except itself.
 
 If trunk is not registered, HA rejects with `trunk_unavailable`.
 
-## Route Requested Fallback
+## Trunk Inbound: Direct Mode
 
-`route_requested` is the automation escape hatch, not the normal path for
-known roster targets.
+1. A provider or PBX sends an INVITE to the registered HA trunk account.
+2. HA replaces the provider Request-URI with the configured inbound default
+   target.
+3. With automation routing disabled, HA resolves that target immediately
+   through the phonebook.
+4. The result can ring HA, bridge to an ESP or registered phone, join a ring or
+   conference group, or start the configured Assist destination.
+5. HA negotiates and bridges the source and destination media legs when the
+   route needs a bridge.
 
-It is expected when:
+There is no DTMF collection and no pre-answer delay in Direct mode.
 
-- inbound trunk handling needs an automation decision;
-- an unknown external SIP caller reaches HA and the route is not immediately
-  known;
-- tests intentionally exercise `voip_stack.route`.
+## Trunk Inbound: DTMF Mode
 
-It is not expected for:
+1. HA answers the trunk leg with its negotiated audio, telephone-event and,
+   when offered and enabled, compatible video formats. Video sockets are
+   pre-bound before the answer.
+2. HA collects RTP telephone-event and SIP INFO digits for the configured
+   timeout.
+3. Explicit digits are resolved only as canonical phonebook extensions.
+4. A valid extension routes to its entry. An HA browser phone inherits the
+   pre-bound video sockets; an audio-only target releases them. An unknown
+   explicit extension ends as `route_not_found`, releases every reservation
+   and never falls back to another destination.
+5. If the caller enters no digits, HA follows the configured default target.
+
+The initial extension digits are route selection, not established-call DTMF
+events. Once a bridged call is connected, later negotiated keys are published
+as individual `dtmf` occurrences without interrupting media.
+
+## Optional Automation Decision
+
+Automation routing is an experimental, independently configurable override.
+It is disabled by default.
+
+When enabled, HA publishes one `route_requested` occurrence and waits up to
+1.5 seconds for a decision:
+
+- before the default route in Direct mode;
+- before the no-digits fallback in DTMF mode.
+
+Explicit DTMF extensions never enter this decision path. If no automation
+acts, the original phonebook decision continues. A forward action moves the
+same logical source call and does not create a second inbound call.
+
+The legacy `voip_stack.route_request` bus event remains for compatibility. The
+normal public surface is the `route_requested` type on
+`event.voip_stack_call`, consumed through Home Assistant's native
+`event.received` trigger.
+
+The decision point is not expected for:
 
 - registered endpoint calling another roster target;
 - HA/card calling a roster target;
 - ESP calling a known roster target;
-- `forward` to a registered account.
+- an explicit DTMF extension;
+- any inbound call while automation routing is disabled.
+
+## Unanswered HA Forward
+
+1. The default route places the HA-owned logical call in `ringing`.
+2. The call-state Sensor Entity attached to the destination phone publishes
+   the same state and Call-ID as its softphone/card stream. The migrated
+   default phone retains `sensor.voip_stack_call_state` for compatibility;
+   additional phones have their own generated entity IDs.
+3. A native HA state trigger may wait with `for:`, for example 30 seconds.
+4. `voip_stack.forward` resolves the only forwardable call and claims a new
+   routing revision.
+5. HA releases the softphone, publishes its terminal `forwarded` transition,
+   and attaches the replacement destination to the still-open source call.
+6. On route failure, `on_failure: resume` restores HA ringing exactly once.
+
+Room-specific automations should use the destination phone's state Sensor or
+call Event Entity. Reserve aggregate `event.voip_stack_call` triggers for
+PBX-wide inspection and the initial `route_requested` decision.
+
+Callbacks from the previous revision cannot resurrect the released HA ringing
+state. The card only renders these authoritative backend transitions.

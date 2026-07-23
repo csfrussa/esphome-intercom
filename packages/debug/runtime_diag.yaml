@@ -31,8 +31,8 @@ api:
         - lambda: |-
             id(runtime_diag_component).start_burst(
               reason.c_str(),
-              static_cast<uint32_t>(std::max(1, samples)),
-              static_cast<uint32_t>(std::max(250, interval_ms))
+              static_cast<uint32_t>(std::max<int32_t>(1, samples)),
+              static_cast<uint32_t>(std::max<int32_t>(250, interval_ms))
             );
 
 button:

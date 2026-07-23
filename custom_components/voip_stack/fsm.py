@@ -27,6 +27,7 @@ class TerminalReason(StrEnum):
     REMOTE_HANGUP = "remote_hangup"
     DECLINED = "declined"
     CANCELLED = "cancelled"
+    FORWARDED = "forwarded"
     TIMEOUT = "timeout"
     BUSY = "busy"
     TRANSPORT_UNREACHABLE = "transport_unreachable"
@@ -142,6 +143,11 @@ def sip_failure_response(result: str) -> tuple[int, str, str, str]:
     """Map an outbound SIP failure to status, reason, terminal reason and state."""
     public_state = sip_public_state(result)
     terminal_reason = sip_terminal_reason(result, public_state)
+    if terminal_reason == "dnd":
+        # DND makes this contact temporarily unwilling to take the call; keep
+        # it distinct in HA while using the same endpoint-local SIP response
+        # as the direct-call path.
+        return 486, "Busy Here", terminal_reason, public_state
     if public_state == CallState.BUSY.value:
         return 486, "Busy Here", terminal_reason, public_state
     if public_state == CallState.DECLINED.value:

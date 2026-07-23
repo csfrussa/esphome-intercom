@@ -364,6 +364,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    timeout: 1s
 
   - platform: mixer
     id: audio_mixer
@@ -452,6 +453,10 @@ voip_stack:
         pcm_format: s16le
         channels: 1
         frame_ms: 16
+      - sample_rate: 16000
+        pcm_format: s16le
+        channels: 1
+        frame_ms: 10
       - sample_rate: 16000
         pcm_format: s16le
         channels: 1
@@ -1327,7 +1332,7 @@ script:
       - lambda: |-
           lv_obj_t* target = nullptr;
           // Active call always wins so we don't hide an incoming/calling screen.
-          auto s = id(phone).get_state_str();
+          const std::string s = id(phone).get_state_str();
           bool in_call = (s == "ringing" || s == "calling" ||
                           s == "remote_ringing" || s == "connecting" ||
                           s == "in_call");
@@ -1349,7 +1354,7 @@ script:
           } else if (!api::global_api_server->is_connected()) {
             target = id(no_ha_page)->obj;
           } else {
-            auto s = id(phone).get_state_str();
+            const std::string s = id(phone).get_state_str();
             if (s == "ringing") {
               target = id(call_ringing_in_page)->obj;
             } else if (s == "calling" || s == "remote_ringing") {

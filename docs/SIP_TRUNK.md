@@ -15,7 +15,10 @@ endpoint identity and media ports:
 - SIP port
 - RTP base port
 - advertised host/IP
-- Assist intents
+- optional Assist intents and callable Assist endpoint
+- optional SIP/RTP diagnostics
+- optional browser SIP video
+- optional local SIP registrar
 - optional trunk enable switch
 
 Only when the trunk switch is enabled does the second setup step ask for trunk
@@ -27,7 +30,9 @@ details:
 - REGISTER expiration
 - optional outbound proxy
 - inbound default target
-- optional DTMF routing
+- incoming routing mode: Direct or DTMF extension selection
+- optional experimental automation routing override
+- DTMF timeout and optional terminator
 
 ## Outbound Routing
 
@@ -45,9 +50,18 @@ as routing errors. There is no proprietary intercom compatibility route.
 
 ## Inbound Routing
 
-Provider inbound calls arrive at HA's SIP endpoint. HA answers the trunk leg
-with SDP so it can receive RFC2833/telephone-event DTMF digits from normal
-mobile dialers and SIP softphones.
+Provider inbound calls arrive at HA's SIP endpoint and use the shared phonebook
+as their default dial plan. **Inbound default target** accepts HA, a phonebook
+name, extension, group, registered SIP phone, Assist extension, SIP URI or a
+routable number.
+
+Choose one routing mode in the config flow:
+
+- **Direct to default destination** skips DTMF collection and immediately
+  resolves the configured target through the phonebook.
+- **DTMF extension selection** answers the trunk leg with SDP, collects
+  negotiated telephone-event or SIP INFO digits, and resolves explicit digits
+  as phonebook extensions.
 
 DTMF digits resolve against the central phonebook `extension` field:
 
@@ -64,8 +78,8 @@ Example user flow:
 2. HA answers the trunk leg.
 3. The caller sends post-dial digits such as `100`.
 4. HA routes the call to the phonebook entry whose `extension` is `100`.
-5. If no digits/route hint arrive before timeout, HA rings the HA softphone or
-   the configured default target.
+5. If no digits/route hint arrive before timeout, HA resolves the configured
+   default target (`HA` is only the default value).
 6. If explicit digits arrive but do not resolve, HA terminates the answered leg
    as `route_not_found`.
 
@@ -78,6 +92,27 @@ be resolved.
 The route collector prefers negotiated RTP `telephone-event` and also accepts
 the widely deployed legacy SIP INFO DTMF representation. Acoustic in-band
 tones are not decoded.
+
+## Experimental Automation Override
+
+**Allow experimental automation routing overrides** is a separate switch and
+is disabled by default. Enabling it adds one bounded `route_requested` decision
+point:
+
+- Direct mode exposes it before the default target.
+- DTMF mode exposes it only after the digit window produced no digits.
+- Explicit DTMF digits always retain priority and never enter the automation
+  path.
+
+If no matching automation acts within 1.5 seconds, the original phonebook route
+continues. This makes time, presence and other HA state useful for contextual
+routing without replacing the normal dial plan. See
+[Automation Dial Plan](AUTOMATION_DIALPLAN.md) for native UI-compatible
+examples.
+
+Version 1 entries migrate without changing their route. Existing DTMF-enabled
+entries with a non-zero timeout become DTMF mode; other entries become Direct
+mode. Automation routing stays off until explicitly enabled.
 
 ## Media
 

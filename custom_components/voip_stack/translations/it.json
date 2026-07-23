@@ -10,7 +10,8 @@
           "advertise_host": "Host/IP HA annunciato",
         "assist_intents": "Abilita intent Assist",
         "assist_endpoint_enabled": "Includi assistente vocale",
-          "debug_mode": "Abilita debug SIP/RTP",
+          "debug_mode": "Abilita debug SIP/RTP e catture audio private",
+          "experimental_sip_video": "Abilita video SIP per il softphone Home Assistant",
           "sip_registrar_enabled": "Abilita account softphone SIP locali",
           "trunk_enabled": "Abilita trunk SIP opzionale"
         },
@@ -20,26 +21,41 @@
           "advertise_host": "Override opzionale pubblicato nelle rubriche ESP. Usalo quando HA è dietro routing, NAT, LXC, VPN o più subnet e l'indirizzo annunciato automaticamente non è raggiungibile dagli ESP.",
         "assist_intents": "Permette di chiamare e gestire vocalmente le chiamate con l'assistente (per esempio: \"Hey Jarvis, chiama Cucina\"). Abilita comandi Assist opzionali per chiamare, riagganciare, rispondere e rifiutare; i nomi pronunciati vengono risolti dinamicamente dalla rubrica VoIP live.",
         "assist_endpoint_enabled": "Aggiunge un interno SIP collegato direttamente a una pipeline Assist di Home Assistant, senza integrazioni VoIP o listener SIP separati.",
-          "debug_mode": "Espone diagnostica dettagliata SIP/RTP/media negli snapshot del softphone HA e nell'event bus, e abilita log aggiuntivi mirati per analizzare le chiamate.",
+          "debug_mode": "Abilita diagnostica e log SIP/RTP/media dettagliati. Registra inoltre automaticamente audio privato delle chiamate: fino a 15 secondi per direzione del softphone HA e 8 secondi per tratta relay, salvati come WAV/JSON in ~/.cache/voip_stack_debug (permessi 0700) e limitati a 24 file / 64 MiB. Disabilitalo dopo i test.",
+          "experimental_sip_video": "Permette al softphone Home Assistant di negoziare video SIP con telefoni, softphone e videocitofoni standard compatibili. H.264, VP8 e JPEG usano un percorso diretto nel browser. Gli endpoint audio ESP restano solo audio. Richiede HTTPS e un browser compatibile.",
           "sip_registrar_enabled": "Accetta REGISTER da softphone locali come Zoiper, Linphone o baresip usando account gestiti dai servizi VoIP Stack.",
           "trunk_enabled": "Mostra le impostazioni provider/PBX. Se disattivo, non parte nessuna registrazione trunk, rotta esterna o raccolta DTMF."
         }
       },
+      "video": {
+        "title": "Video SIP",
+        "description": "Il video è opzionale e riguarda soltanto il softphone Home Assistant e gli endpoint SIP standard. Gli ESP restano solo audio.",
+        "data": {
+          "video_transcoding_enabled": "Abilita transcodifica video",
+          "video_camera_send_enabled": "Consenti la trasmissione della videocamera dal browser"
+        },
+        "data_description": {
+          "video_transcoding_enabled": "Consente al softphone HA di usare il binario FFmpeg disponibile per ricevere video H.263, H.263-1998 o H.265. H.264, VP8 e JPEG restano diretti. Un errore lascia attiva la chiamata audio.",
+          "video_camera_send_enabled": "Espone nella card la scelta Invia videocamera. Ogni telefono logico Home Assistant conserva la propria scelta; il permesso della videocamera resta locale a ciascun browser. La ricezione video non richiede accesso alla videocamera."
+        }
+      },
     "assist": {
       "title": "Interno assistente vocale",
-        "description": "Scegli l'interno SIP e la pipeline Assist usati per le chiamate telefoniche. Devi scegliere un interno: VoIP Stack non ne assegna uno predefinito.",
+        "description": "Scegli l'interno SIP e la pipeline Assist usati per le chiamate telefoniche. VoIP Stack avvia la conversazione con un messaggio utente come `Incoming SIP call from \"Daniele\".` Configura il comportamento telefonico nel campo Instructions o prompt dell'agente di conversazione selezionato in Impostazioni > Dispositivi e servizi > integrazione dell'agente > Configura. Istruzioni di esempio: `When you receive a message beginning with \"Incoming SIP call from\", treat it as a live phone call. Greet the caller once, act as a concise receptionist, and do not repeat their name in every reply.` Mood amichevole: `During SIP calls, sound cheerful and informal while remaining concise and helpful.` Pessimo umore: `Hi. I don't give a s**t—please go f**k yourself.`",
         "data": {
           "assist_extension": "Interno assistente vocale",
-          "assist_pipeline": "Pipeline assistente vocale"
+          "assist_pipeline": "Pipeline assistente vocale",
+          "assist_advanced_call_context": "Fornisci dettagli avanzati della chiamata all'assistente"
         },
         "data_description": {
           "assist_extension": "Interno numerico da 1 a 8 cifre, univoco tra account, contatti e gruppi.",
-          "assist_pipeline": "Pipeline Assist usata per riconoscimento vocale, conversazione e sintesi vocale nelle chiamate."
-      }
+          "assist_pipeline": "Pipeline Assist usata per riconoscimento vocale, conversazione e sintesi vocale nelle chiamate.",
+          "assist_advanced_call_context": "Aggiunge ID chiamante, corrispondenza in rubrica, provenienza e interno chiamato una sola volta al messaggio utente iniziale. Sono metadati non attendibili e la corrispondenza in rubrica non costituisce autenticazione."
+        }
     },
     "trunk": {
         "title": "Trunk SIP opzionale",
-        "description": "Registra Home Assistant a un trunk provider/PBX per chiamate esterne e routing DTMF in ingresso.",
+        "description": "Registra Home Assistant a un trunk provider/PBX. Le chiamate in ingresso usano la rubrica centrale e possono offrire un breve punto di decisione alle automazioni sperimentali.",
         "data": {
           "trunk_transport": "Transport SIP trunk",
           "trunk_server": "Server trunk",
@@ -50,8 +66,9 @@
           "trunk_password": "Password",
           "trunk_register_expires": "Scadenza REGISTER",
           "trunk_outbound_proxy": "Proxy outbound",
-          "trunk_inbound_default_target": "Destinazione default ingresso",
-          "trunk_dtmf_enabled": "Abilita routing DTMF ingresso",
+          "trunk_inbound_default_target": "Destinazione di fallback",
+          "trunk_inbound_mode": "Gestione chiamate in ingresso",
+          "automation_routing_enabled": "Consenti alle automazioni di scegliere la destinazione in ingresso",
           "trunk_dtmf_timeout_ms": "Timeout DTMF (secondi)",
           "trunk_dtmf_terminator": "Terminatore DTMF"
         },
@@ -65,9 +82,10 @@
           "trunk_password": "Password digest auth.",
           "trunk_register_expires": "Scadenza REGISTER in secondi.",
           "trunk_outbound_proxy": "Proxy opzionale o sip:host:port usato come next hop di signaling.",
-          "trunk_inbound_default_target": "Target rubrica locale usato quando nessuna extension DTMF risolve. Usa HA per il softphone HA.",
-          "trunk_dtmf_enabled": "Raccoglie cifre RFC2833/telephone-event dopo aver risposto alle chiamate trunk in ingresso e le instrada tramite le extension della rubrica.",
-          "trunk_dtmf_timeout_ms": "Finestra di raccolta cifre dopo pre-risposta. Default 3 secondi, massimo 10 secondi. Imposta 0 per saltare DTMF/pre-risposta e lasciare decidere il normale dialplan in ingresso; senza override di automazione squilla direttamente il softphone HA.",
+          "trunk_inbound_default_target": "Nome rubrica, URI SIP, interno o numero usato solo quando nessun interno DTMF e nessuna automazione selezionano un'altra destinazione.",
+          "trunk_inbound_mode": "Instrada subito evita la raccolta cifre. Raccogli interno con DTMF risponde prima sul trunk e permette alle cifre esplicite di scegliere un interno della rubrica.",
+          "automation_routing_enabled": "Prima di usare la destinazione di fallback, pubblica una breve richiesta di instradamento a cui può rispondere un'automazione. Le cifre DTMF esplicite mantengono sempre la priorità.",
+          "trunk_dtmf_timeout_ms": "Finestra di raccolta cifre usata solo in modalità DTMF. Default 3 secondi, massimo 10 secondi.",
           "trunk_dtmf_terminator": "Terminatore opzionale, per esempio #. Vuoto significa che decide timeout o match esatto con una extension in rubrica."
         }
       }
@@ -83,6 +101,145 @@
     "abort": {
       "reconfigure_successful": "VoIP Stack riconfigurato correttamente.",
       "already_configured": "VoIP Stack è già configurato."
+    }
+  },
+  "config_subentries": {
+    "phone": {
+      "entry_type": "Telefono",
+      "initiate_flow": {
+        "user": "Aggiungi telefono"
+      },
+      "title": "Endpoint telefonico",
+      "step": {
+        "user": {
+          "title": "Aggiungi telefono",
+          "description": "Crea un altro softphone browser di Home Assistant oppure un account SIP standard. Tutti i telefoni condividono lo stesso listener SIP e pool RTP.",
+          "data": {
+            "kind": "Tipo di telefono"
+          }
+        },
+        "browser": {
+          "title": "Softphone Home Assistant",
+          "description": "Crea un telefono logico per una o più card Lovelace. Le card associate allo stesso telefono squillano insieme; la prima che risponde acquisisce i media.",
+          "data": {
+            "name": "Nome",
+            "extension": "Interno",
+            "enabled": "Abilitato",
+            "dnd": "Non disturbare",
+            "ring_group": "Gruppo di chiamata",
+            "conference_group": "Gruppo conferenza",
+            "conference_ring": "Squilla per le conferenze",
+            "video_enabled": "Abilita video",
+            "auto_answer": "Risposta automatica",
+            "send_video": "Invia video"
+          },
+          "data_description": {
+            "name": "Nome obbligatorio usato da card, rubrica e instradamento.",
+            "extension": "Interno componibile opzionale e univoco. Il telefono logico resta chiamabile anche senza card browser collegata.",
+            "auto_answer": "Risponde automaticamente quando un browser collegato dispone del permesso microfono.",
+            "send_video": "Invia per impostazione predefinita la videocamera del browser quando il video è negoziato e il permesso è disponibile."
+          }
+        },
+        "sip_account": {
+          "title": "Account SIP standard",
+          "description": "Crea le credenziali per qualunque telefono o softphone SIP/RTP standard. Non viene usato alcun comportamento specifico del produttore.",
+          "data": {
+            "name": "Nome",
+            "extension": "Interno",
+            "username": "Nome utente SIP",
+            "password": "Password SIP",
+            "enabled": "Abilitato",
+            "dnd": "Non disturbare",
+            "ring_group": "Gruppo di chiamata",
+            "conference_group": "Gruppo conferenza",
+            "conference_ring": "Squilla per le conferenze",
+            "video_enabled": "Consenti negoziazione video",
+            "offline_policy": "Quando non registrato",
+            "offline_forward_target": "Destinazione inoltro"
+          }
+        },
+        "reconfigure": {
+          "title": "Riconfigura telefono"
+        }
+      },
+      "error": {
+        "phone_name_required": "Il nome del telefono è obbligatorio.",
+        "phone_username_invalid": "Usa solo lettere, numeri, punti, trattini bassi o trattini.",
+        "phone_password_required": "La password SIP è obbligatoria.",
+        "phone_forward_target_required": "La destinazione è obbligatoria con la policy Inoltra.",
+        "phone_alias_conflict": "Nome, interno o username è già usato da un altro telefono."
+      },
+      "abort": {
+        "reconfigure_successful": "Telefono riconfigurato.",
+        "already_configured": "Questo telefono esiste già."
+      }
+    }
+  },
+  "selector": {
+    "trunk_inbound_mode": {
+      "options": {
+        "direct": "Instrada subito",
+        "dtmf": "Raccogli interno con DTMF"
+      }
+    }
+  },
+  "entity": {
+    "event": {
+      "voip_stack_call_event": {
+        "name": "Chiamata VoIP Stack"
+      },
+      "phone_endpoint_call": {
+        "name": "Chiamata"
+      }
+    },
+    "sensor": {
+      "voip_stack_ha_softphone_call_state": {
+        "name": "Stato chiamata VoIP Stack"
+      },
+      "phone_endpoint_call_state": {
+        "name": "Stato chiamata",
+        "state": {
+          "offline": "Non in linea",
+          "idle": "Libero",
+          "calling": "Chiamata in corso",
+          "remote_ringing": "Squillo remoto",
+          "ringing": "Sta squillando",
+          "connecting": "Connessione",
+          "in_call": "In chiamata",
+          "held": "In attesa",
+          "terminating": "Chiusura"
+        }
+      }
+    },
+  "switch": {
+    "phone_endpoint_dnd": {
+      "name": "Non disturbare"
+    },
+    "phone_endpoint_conference_ring": {
+      "name": "Squilla per le conferenze"
+    },
+    "phone_endpoint_auto_answer": {
+      "name": "Risposta automatica"
+    },
+    "phone_endpoint_send_video": {
+      "name": "Invia video"
+    }
+  },
+  "text": {
+    "phone_endpoint_extension": {
+      "name": "Interno"
+    },
+    "phone_endpoint_ring_group": {
+      "name": "Gruppi di squillo"
+    },
+    "phone_endpoint_conference_group": {
+      "name": "Gruppi conferenza"
+    }
+  },
+    "binary_sensor": {
+      "phone_endpoint_connectivity": {
+        "name": "Connettività"
+      }
     }
   }
 }

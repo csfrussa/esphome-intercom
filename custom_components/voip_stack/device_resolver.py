@@ -45,33 +45,15 @@ def _valid_port(value: str) -> int | None:
     return port if 1 <= port <= 65535 else None
 
 
-def _valid_audio_mode(value: str | None) -> str:
+def _valid_audio_mode(value: str | None) -> str | None:
     mode = (value or "full_duplex").strip().lower()
-    if mode in ("full_duplex", "mic_only", "speaker_only", "control_only"):
+    if mode in ("full_duplex", "mic_only", "speaker_only"):
         return mode
-    return "full_duplex"
+    return None
 
 
 def _parse_bool(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _match_name(value: str | None, *candidates: str | None) -> bool:
-    wanted = (value or "").strip()
-    if not wanted:
-        return False
-    wanted_slug = slugify_route_id(wanted).replace("_", "-")
-    for candidate in candidates:
-        text = (candidate or "").strip()
-        if not text:
-            continue
-        if text == wanted:
-            return True
-        if text.lower() == wanted.lower():
-            return True
-        if slugify_route_id(text).replace("_", "-") == wanted_slug:
-            return True
-    return False
 
 
 def parse_voip_endpoint(value: str | None) -> dict | None:
@@ -98,6 +80,9 @@ def parse_voip_endpoint(value: str | None) -> dict | None:
 
     def parse_formats(first: int) -> tuple[str, list, list] | None:
         mode = _valid_audio_mode(parts[first] if len(parts) > first else None)
+        if mode is None:
+            _LOGGER.warning("Ignoring voip endpoint with unsupported audio role: %r", text)
+            return None
         try:
             tx_formats = parse_audio_format_list(parts[first + 1] if len(parts) > first + 1 else None)
             rx_formats = parse_audio_format_list(parts[first + 2] if len(parts) > first + 2 else None)
@@ -188,6 +173,13 @@ class VoipDeviceResolver:
         for entity in entity_registry.entities.values():
             if entity.device_id is None:
                 continue
+            # This resolver is the legacy ESPHome transport inventory.  The
+            # integration also exposes logical browser-phone entities whose
+            # object ids intentionally contain ``voip_endpoint``; treating
+            # those as ESP devices produces a misleading "missing endpoint"
+            # warning and can hide the canonical logical endpoint path.
+            if str(getattr(entity, "platform", "") or "") == DOMAIN:
+                continue
             entities_by_device.setdefault(entity.device_id, []).append(entity)
             if "voip_endpoint" in entity.entity_id:
                 voip_device_ids.add(entity.device_id)
@@ -242,7 +234,6 @@ class VoipDeviceResolver:
     async def resolve_target(self, call: ServiceCall) -> Optional[dict]:
         """Match a service call's target selector to one of our devices."""
         device_ids: set[str] = set()
-        names: list[str] = []
         entity_registry = er.async_get(self.hass)
         for source in [call.data, getattr(call, "target", None) or {}]:
             ids = source.get("device_id")
@@ -258,15 +249,10 @@ class VoipDeviceResolver:
                     entry = entity_registry.async_get(eid)
                     if entry and entry.device_id:
                         device_ids.add(entry.device_id)
-            name = source.get("name") or source.get("friendly_name")
-            if isinstance(name, str):
-                names.append(name)
-        if not device_ids and not names:
+        if not device_ids:
             return None
         for dev in await self.list_devices():
             if dev["device_id"] in device_ids:
-                return dev
-            if any(_match_name(name, dev.get("name"), dev.get("esphome_id"), dev.get("route_id")) for name in names):
                 return dev
         return None
 

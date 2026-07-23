@@ -449,6 +449,7 @@ speaker:
     esp_audio_stack_id: audio_stack
     sample_rate: 48000
     bits_per_sample: 16
+    timeout: 1s
     buffer_duration: 128ms
 
   # 3-source mixer: media (duckable) + TTS (never ducked) + VoIP
@@ -2660,7 +2661,7 @@ script:
           }
 
           // === Update VoIP tile (top right) ===
-          auto call_state = id(phone).get_state_str();
+          const std::string call_state = id(phone).get_state_str();
 
           set_hidden(id(call_idle_group), true);
           set_hidden(id(call_ringing_in_group), true);
@@ -2930,7 +2931,7 @@ script:
           }
           uint32_t sec = first_active.seconds_left;
           lv_bar_set_value(id(timer_bar), 100, LV_ANIM_OFF);
-          char buf[8];
+          char buf[16];
           int h = sec / 3600;
           int m = (sec / 60) % 60;
           int s = sec % 60;

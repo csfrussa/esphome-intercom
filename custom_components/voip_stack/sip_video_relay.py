@@ -1,0 +1,454 @@
+"""Exact-codec RTP/RTCP video relay for HA-owned SIP bridges."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+import logging
+import socket
+import struct
+from typing import Any, Callable
+
+from . import rtp
+from .sdp import RtpVideoFormat, video_formats_passthrough_compatible
+from .session_cleanup import async_wait_for_cleanup
+from .video_rtcp import RtcpError, parse_compound
+
+
+_LOGGER = logging.getLogger(__name__)
+_RTP_IP_TOS = 0x88
+
+
+def remote_can_send(video_format: RtpVideoFormat | None) -> bool:
+    """Return whether a remote endpoint may send media in its SDP direction."""
+
+    return bool(
+        video_format is not None and video_format.direction in {"sendonly", "sendrecv"}
+    )
+
+
+def remote_can_receive(
+    video_format: RtpVideoFormat | None,
+    *,
+    connection_held: bool = False,
+) -> bool:
+    """Return whether a remote endpoint may receive media in its SDP direction."""
+
+    return bool(
+        video_format is not None
+        and not connection_held
+        and video_format.direction in {"recvonly", "sendrecv"}
+    )
+
+
+@dataclass(slots=True)
+class VideoRtpPeer:
+    """One negotiated remote video leg."""
+
+    host: str
+    port: int
+    rtcp_port: int
+    video_format: RtpVideoFormat
+    # Backward compatibility keeps ``video_format`` as the contract for RTP
+    # sent by the relay toward this peer.  RTP received from the peer may have
+    # a distinct receiver contract after directional offer/answer.
+    local_video_format: RtpVideoFormat | None = None
+    rtcp_host: str = ""
+    signaling_host: str = ""
+    advertised_host: str = ""
+    rx_ssrc: int | None = None
+    rtcp_source_port: int | None = None
+    connection_held: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.advertised_host:
+            self.advertised_host = self.host
+        if not self.rtcp_host:
+            self.rtcp_host = self.host
+
+    @property
+    def send_format(self) -> RtpVideoFormat:
+        """RTP format sent locally toward the remote peer."""
+
+        return self.video_format
+
+    @property
+    def recv_format(self) -> RtpVideoFormat:
+        """RTP format received locally from the remote peer."""
+
+        return self.local_video_format or self.video_format
+
+    def accepts_rtp_source_host(self, source_host: str) -> bool:
+        """Allow RTP only from its media or authenticated signaling host."""
+
+        return str(source_host) in {
+            self.host,
+            self.advertised_host,
+            self.signaling_host,
+        }
+
+    def accepts_rtcp_source_host(self, source_host: str) -> bool:
+        """Allow RTCP from its explicit or symmetric media source host."""
+
+        return str(source_host) in {
+            self.rtcp_host,
+            self.host,
+            self.advertised_host,
+            self.signaling_host,
+        }
+
+
+class _VideoRelayProtocol(asyncio.DatagramProtocol):
+    def __init__(
+        self, relay: "SipVideoRtpRelay", side: str, *, rtcp: bool = False
+    ) -> None:
+        self.relay = relay
+        self.side = side
+        self.rtcp = rtcp
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        if self.rtcp:
+            self.relay.handle_rtcp(self.side, data, addr)
+        else:
+            self.relay.handle_rtp(self.side, data, addr)
+
+
+class SipVideoRtpRelay:
+    """Relay encoded video without decoding or changing timestamps/SSRC.
+
+    The payload type is the only RTP header field rewritten because it is
+    negotiated independently on each SIP leg. RTP extensions, CSRCs, marker,
+    sequence, timestamp and encoded payload remain byte-for-byte intact.
+    """
+
+    def __init__(
+        self,
+        *,
+        left: VideoRtpPeer,
+        right: VideoRtpPeer,
+        left_port: int,
+        right_port: int,
+        left_socket: socket.socket | None = None,
+        right_socket: socket.socket | None = None,
+        left_rtcp_socket: socket.socket | None = None,
+        right_rtcp_socket: socket.socket | None = None,
+        on_release: Callable[[tuple[int, int]], None] | None = None,
+    ) -> None:
+        self.left = left
+        self.right = right
+        self.left_port = int(left_port)
+        self.right_port = int(right_port)
+        self._sockets = {
+            ("left", False): left_socket,
+            ("right", False): right_socket,
+            ("left", True): left_rtcp_socket,
+            ("right", True): right_rtcp_socket,
+        }
+        self._transports: dict[tuple[str, bool], asyncio.DatagramTransport] = {}
+        self._on_release = on_release
+        self._released = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._start_task: asyncio.Task[None] | None = None
+        self._stop_task: asyncio.Task[None] | None = None
+        self._stop_requested = False
+        self.started = False
+        self.forwarded = 0
+        self.rtcp_forwarded = 0
+        self.dropped = 0
+        self.drop_connection_hold = 0
+        self.left_rx_packets = 0
+        self.left_rx_bytes = 0
+        self.left_tx_packets = 0
+        self.left_tx_bytes = 0
+        self.right_rx_packets = 0
+        self.right_rx_bytes = 0
+        self.right_tx_packets = 0
+        self.right_tx_bytes = 0
+
+    @staticmethod
+    def _socket(port: int) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setblocking(False)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, _RTP_IP_TOS)
+            sock.bind(("0.0.0.0", int(port)))
+            return sock
+        except BaseException:
+            sock.close()
+            raise
+
+    async def start(self) -> None:
+        async with self._lifecycle_lock:
+            if self.started:
+                return
+            if self._released or self._stop_requested or self._stop_task is not None:
+                raise RuntimeError("SIP video relay has already been stopped")
+            task = self._start_task
+            if task is None:
+                task = asyncio.create_task(
+                    self._start(),
+                    name=f"voip-video-relay-start-{self.left_port}-{self.right_port}",
+                )
+                self._start_task = task
+        try:
+            await task
+        finally:
+            async with self._lifecycle_lock:
+                if self._start_task is task and task.done():
+                    self._start_task = None
+
+    async def _start(self) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            for side, port in (("left", self.left_port), ("right", self.right_port)):
+                for rtcp in (False, True):
+                    key = (side, rtcp)
+                    sock = self._sockets.get(key)
+                    if sock is None:
+                        sock = self._socket(port + (1 if rtcp else 0))
+                        # Keep ownership visible before the first cancellation
+                        # point.  create_datagram_endpoint() only takes over
+                        # the socket when it succeeds; a failed or cancelled
+                        # await must leave stop() able to close it.
+                        self._sockets[key] = sock
+                    transport, _ = await loop.create_datagram_endpoint(
+                        lambda side=side, rtcp=rtcp: _VideoRelayProtocol(
+                            self, side, rtcp=rtcp
+                        ),
+                        sock=sock,
+                    )
+                    if self._stop_requested:
+                        transport.close()
+                        raise asyncio.CancelledError
+                    # Ownership moves to the transport only after endpoint
+                    # creation succeeds. On failure stop() must still see and
+                    # close the pre-bound socket supplied by the port owner.
+                    self._sockets[key] = None
+                    self._transports[key] = transport
+            self.started = True
+        except BaseException:
+            self._close_resources()
+            self._release_ports()
+            raise
+        _LOGGER.info(
+            "SIP video relay ready left=%s/%s right=%s/%s codec=%s",
+            self.left_port,
+            self.left_port + 1,
+            self.right_port,
+            self.right_port + 1,
+            self.left.video_format.encoding,
+        )
+
+    async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            self._stop_requested = True
+            task = self._stop_task
+            if task is None:
+                task = asyncio.create_task(
+                    self._stop(),
+                    name=(f"voip-video-relay-stop-{self.left_port}-{self.right_port}"),
+                )
+                self._stop_task = task
+        await async_wait_for_cleanup(task)
+
+    async def _stop(self) -> None:
+        """Finish one idempotent shutdown independently of caller lifetime."""
+
+        async with self._lifecycle_lock:
+            start_task = self._start_task
+            if start_task is not None and not start_task.done():
+                start_task.cancel()
+        if start_task is not None and start_task is not asyncio.current_task():
+            await asyncio.gather(start_task, return_exceptions=True)
+        async with self._lifecycle_lock:
+            self._close_resources()
+            self._release_ports()
+
+    def _close_resources(self) -> None:
+        """Synchronously detach every socket/transport from the relay."""
+
+        for transport in self._transports.values():
+            transport.close()
+        self._transports.clear()
+        for sock in self._sockets.values():
+            if sock is not None:
+                sock.close()
+        self._sockets.clear()
+        was_started = self.started
+        self.started = False
+        if was_started:
+            _LOGGER.info(
+                "SIP video relay stopped forwarded=%d rtcp=%d dropped=%d",
+                self.forwarded,
+                self.rtcp_forwarded,
+                self.dropped,
+            )
+
+    def _release_ports(self) -> None:
+        """Return the reserved RTP pairs exactly once."""
+
+        if self._on_release is not None and not self._released:
+            self._released = True
+            self._on_release((self.left_port, self.right_port))
+
+    def _peers(self, side: str) -> tuple[VideoRtpPeer, VideoRtpPeer]:
+        return (self.left, self.right) if side == "left" else (self.right, self.left)
+
+    def prepare_peer_reconfiguration(
+        self, side: str, peer: VideoRtpPeer
+    ) -> Callable[[], None]:
+        """Stage one video peer update and reject a stale commit."""
+
+        if side not in {"left", "right"}:
+            raise ValueError(f"unknown video relay side: {side}")
+        previous = self.left if side == "left" else self.right
+
+        def _commit() -> None:
+            current = self.left if side == "left" else self.right
+            if current is not previous:
+                raise RuntimeError(f"video relay peer changed before {side} commit")
+            peer.rx_ssrc = None
+            peer.rtcp_source_port = None
+            if side == "left":
+                self.left = peer
+            else:
+                self.right = peer
+
+        return _commit
+
+    def reconfigure_peer(self, side: str, peer: VideoRtpPeer) -> None:
+        """Atomically replace one negotiated video peer and reset its latch."""
+
+        self.prepare_peer_reconfiguration(side, peer)()
+
+    def handle_rtp(self, side: str, data: bytes, addr) -> None:
+        source, destination = self._peers(side)
+        output = self._transports.get(("right" if side == "left" else "left", False))
+        try:
+            if destination.connection_held:
+                self.drop_connection_hold += 1
+                raise ValueError("destination connection is held")
+            if not remote_can_send(source.video_format) or not remote_can_receive(
+                destination.video_format,
+                connection_held=destination.connection_held,
+            ):
+                raise ValueError("RTP direction is not negotiated")
+            if not video_formats_passthrough_compatible(
+                source.recv_format,
+                destination.send_format,
+            ):
+                raise ValueError("directional RTP codec contracts are incompatible")
+            if not source.accepts_rtp_source_host(str(addr[0])):
+                raise ValueError("unexpected RTP source host")
+            packet = rtp.parse_packet(data)
+            if packet.payload_type != int(source.recv_format.payload_type):
+                raise ValueError("unexpected RTP payload type")
+            if source.rx_ssrc is not None and packet.ssrc != source.rx_ssrc:
+                raise ValueError("unexpected RTP SSRC")
+            if source.rx_ssrc is None:
+                source.rx_ssrc = packet.ssrc
+            source.host = str(addr[0])
+            source.port = int(addr[1])
+            if output is None or destination.port <= 0:
+                raise ValueError("destination RTP leg is not ready")
+            payload_type = int(destination.send_format.payload_type)
+            if not 0 <= payload_type <= 127:
+                raise ValueError("invalid destination RTP payload type")
+            outgoing = (
+                data
+                if payload_type == packet.payload_type
+                else bytes((data[0], (data[1] & 0x80) | payload_type)) + data[2:]
+            )
+            output.sendto(outgoing, (destination.host, int(destination.port)))
+        except (OSError, RuntimeError, ValueError) as err:
+            self.dropped += 1
+            _LOGGER.debug("SIP video RTP relay drop side=%s: %s", side, err)
+            return
+        self._account(side, len(data), len(outgoing))
+        self.forwarded += 1
+
+    def handle_rtcp(self, side: str, data: bytes, addr) -> None:
+        source, destination = self._peers(side)
+        output = self._transports.get(("right" if side == "left" else "left", True))
+        try:
+            if destination.connection_held:
+                self.drop_connection_hold += 1
+                raise ValueError("destination RTCP connection is held")
+            if not source.accepts_rtcp_source_host(str(addr[0])):
+                raise ValueError("unexpected RTCP source host")
+            packets = parse_compound(data)
+            if destination.rx_ssrc is not None:
+                expected_ssrc = int(destination.rx_ssrc)
+                for packet in packets:
+                    if packet.packet_type != 206:
+                        continue
+                    if packet.fmt == 1:
+                        feedback_targets = (struct.unpack_from("!I", packet.payload, 4)[0],)
+                    elif packet.fmt == 4:
+                        feedback_targets = tuple(
+                            struct.unpack_from("!I", packet.payload, offset)[0]
+                            for offset in range(8, len(packet.payload), 8)
+                        )
+                    else:
+                        continue
+                    if any(target != expected_ssrc for target in feedback_targets):
+                        raise ValueError("RTCP feedback targets an unexpected media SSRC")
+            source_port = int(addr[1])
+            if (
+                source.rtcp_source_port is not None
+                and source_port != source.rtcp_source_port
+            ):
+                raise ValueError("unexpected RTCP source port")
+            if source.rtcp_source_port is None:
+                source.rtcp_source_port = source_port
+            source.rtcp_host = str(addr[0])
+            source.rtcp_port = source_port
+            if output is None or destination.rtcp_port <= 0:
+                raise ValueError("destination RTCP leg is not ready")
+            output.sendto(data, (destination.rtcp_host, int(destination.rtcp_port)))
+        except (OSError, RuntimeError, RtcpError, ValueError) as err:
+            self.dropped += 1
+            _LOGGER.debug("SIP video RTCP relay drop side=%s: %s", side, err)
+            return
+        self.rtcp_forwarded += 1
+
+    def _account(self, side: str, received: int, sent: int) -> None:
+        if side == "left":
+            self.left_rx_packets += 1
+            self.left_rx_bytes += int(received)
+            self.right_tx_packets += 1
+            self.right_tx_bytes += int(sent)
+        else:
+            self.right_rx_packets += 1
+            self.right_rx_bytes += int(received)
+            self.left_tx_packets += 1
+            self.left_tx_bytes += int(sent)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "codec": self.left.video_format.encoding,
+            "left_port": self.left_port,
+            "right_port": self.right_port,
+            "left_peer": f"{self.left.host}:{self.left.port}",
+            "right_peer": f"{self.right.host}:{self.right.port}",
+            "forwarded_packets": self.forwarded,
+            "forwarded_rtcp_packets": self.rtcp_forwarded,
+            "dropped_packets": self.dropped,
+            "drop_connection_hold": self.drop_connection_hold,
+            "left_connection_held": self.left.connection_held,
+            "right_connection_held": self.right.connection_held,
+            "left_send_format": self.left.send_format.wire_token(),
+            "left_recv_format": self.left.recv_format.wire_token(),
+            "right_send_format": self.right.send_format.wire_token(),
+            "right_recv_format": self.right.recv_format.wire_token(),
+            "left_rx_packets": self.left_rx_packets,
+            "left_rx_bytes": self.left_rx_bytes,
+            "left_tx_packets": self.left_tx_packets,
+            "left_tx_bytes": self.left_tx_bytes,
+            "right_rx_packets": self.right_rx_packets,
+            "right_rx_bytes": self.right_rx_bytes,
+            "right_tx_packets": self.right_tx_packets,
+            "right_tx_bytes": self.right_tx_bytes,
+        }

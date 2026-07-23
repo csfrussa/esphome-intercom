@@ -30,7 +30,21 @@ Phonebook membership and HA registration are not inbound caller admission
 rules. Any peer that can reach an ESP or HA SIP listener may send an INVITE;
 normal routing, busy/DND and SDP checks then decide the result. Deploy SIP/RTP
 on a trusted LAN/VPN and enforce stricter admission with network controls or an
-SBC.
+SBC. This inbound openness does not make HA an anonymous PSTN gateway:
+external-trunk routes require a registered, roster-known, HA-local or trusted
+trunk origin.
+
+Configured local SIP accounts are retained by the PBX as logical endpoints so
+their group membership and settings survive disconnects. Cards expose such an
+account as a callable contact only while the registrar has at least one live
+Contact binding; expiry or explicit deregistration removes it from the card.
+
+Outbound audio/video offers remain video-capable. A standards-compliant answer
+retains rejected media sections with port zero. For PSTN interoperability, the
+outbound client also accepts a gateway answer that keeps the leading compatible
+audio section but omits only trailing video sections; those omitted sections
+are treated as rejected without disabling video offers or later video
+re-INVITE negotiation.
 
 ## SIP Core
 
@@ -61,10 +75,15 @@ Required responses:
 Unsupported methods are rejected explicitly. Unsupported media is rejected with
 `488 Not Acceptable Here`.
 
-Session-modifying in-dialog INVITE, including ordinary hold or codec
-renegotiation, is not supported. ESP and HA answer it with `488` while keeping
-the established dialog and its selected media unchanged; the original dialog
-can still be terminated normally with BYE.
+ESP endpoints do not support session-modifying in-dialog INVITE. They answer
+hold or codec renegotiation with `488` while keeping the established dialog and
+its selected media unchanged; the original dialog can still be terminated
+normally with BYE.
+
+HA-owned dialogs accept compatible peer-initiated UPDATE or re-INVITE offers.
+They may update audio direction, supported audio format and RTP endpoint, and
+may hold/resume an already negotiated compatible video stream. HA does not add,
+remove or change the codec of video in-dialog and does not originate the offer.
 
 SIP signaling transports:
 
@@ -72,6 +91,16 @@ SIP signaling transports:
 - TCP on the same configured SIP listen port
 
 RTP audio remains UDP in the current profile, even when SIP signaling is TCP.
+
+The HA softphone has an optional SIP video extension to this profile.
+It does not change the ESP media contract and is disabled by default. When
+enabled, standard SIP endpoints may negotiate direct H.264, VP8 or JPEG over
+RTP/AVP, or RTP/AVPF when the remote offer selects feedback. A separate
+opt-in can receive H.263, H.263-1998 or H.265 through the FFmpeg binary already
+available to Home Assistant. Exact-codec HA-owned SIP bridges relay encoded
+RTP and RTCP without transcoding when the codec and transport profile match. See
+[SIP Video](SIP_VIDEO.md) for the exact capability
+and security boundaries.
 
 ## SDP And RTP
 
@@ -92,6 +121,9 @@ ESP must convert at the RTP boundary:
 Compressed codecs are not implemented on ESP. If a SIP softphone offers only
 compressed codecs such as PCMU, PCMA, Opus, Speex, GSM or G.722, ESP returns
 `488 Not Acceptable Here`.
+
+ESP devices never advertise or decode video. The optional HA softphone video
+path is not routed into an ESP, ring group, conference room or Assist pipeline.
 
 ## Roster
 

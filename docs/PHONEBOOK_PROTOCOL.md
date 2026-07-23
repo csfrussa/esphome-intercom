@@ -147,14 +147,15 @@ Central roster services:
 - `voip_stack.add_contact`: add or replace one manual central
   contact. `name` is the only required field.
 - `voip_stack.remove_contact`: remove one manual central contact
-  by name.
+  through its required `name` input, which may match the contact name, stable
+  ID, extension or number.
 - `voip_stack.set_contacts`: replace manual contacts from a JSON
   roster document.
 - `voip_stack.clear_contacts`: clear manual central contacts.
 - `voip_stack.push_phonebook`: push the current roster immediately to
   online ESP devices.
-- `voip_stack.export_phonebook`: emit the current roster as an HA event for
-  diagnostics/backup.
+- `voip_stack.export_phonebook`: return the current roster privately in the
+  administrator-only service response for diagnostics/backup.
 
 ESPHome also exposes native API actions such as
 `esphome.<slug>_add_contact`, `esphome.<slug>_remove_contact`,
@@ -172,9 +173,9 @@ diagnostic/manual recovery tool, not the normal synchronization path.
 
 Local SIP accounts are created with `voip_stack.create_account`.
 The `username` becomes the SIP username and central roster ID. If `password` is
-omitted, HA generates one and shows it once in a persistent notification and in
-the `voip_stack.call_event` stream. Registered clients publish a dynamic
-Contact into the roster so ESP devices can call them by name.
+omitted, HA generates one and returns it once in the administrator-only action
+response. Registered clients publish a dynamic Contact into the roster so ESP
+devices can call them by name.
 
 ## Routing
 
@@ -185,11 +186,15 @@ Contact into the roster so ESP devices can call them by name.
 - If HA has a registered trunk, external numbers and unresolved number-like
   targets can route through the trunk.
 - Inbound trunk DTMF digits resolve against phonebook `extension` values. No
-  DTMF route hint means "ring HA". A received explicit route hint that cannot
-  be resolved terminates as `route_not_found`; it does not silently fall back
-  to HA.
-- HA automations can override a pending route request by listening for
-  `voip_stack.route_request` and calling `voip_stack.route`.
+  DTMF route hint means "use the configured inbound default target". A
+  received explicit route hint that cannot be resolved terminates as
+  `route_not_found`; it does not silently fall back to HA or another target.
+- When the experimental automation override is enabled, HA automations select
+  the initial target from the `route_requested` occurrence on
+  `event.voip_stack_call` by calling
+  `voip_stack.select_inbound_destination`. `voip_stack.route` is the advanced
+  action for explicitly pending route decisions, not the ordinary initial
+  destination selector.
 - Missing or incompatible media routes must fail explicitly with SIP terminal
   reasons such as `media_incompatible` or `transport_unreachable`.
 
@@ -214,7 +219,7 @@ HA-router calls:
 
 Inbound trunk calls:
 
-- if no route hint arrives, HA softphone rings;
+- if no route hint arrives, the configured inbound default target is resolved;
 - if a DTMF/SIP route hint resolves, HA bridges to that local target;
 - if a DTMF/SIP route hint is explicit but does not resolve, HA terminates the
   answered trunk leg with `route_not_found`.

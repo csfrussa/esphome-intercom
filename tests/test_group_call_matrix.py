@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import types
@@ -30,6 +31,12 @@ PKG_NAME = "custom_components.voip_stack"
 PKG_DIR = ROOT / "custom_components" / "voip_stack"
 
 
+class _FakeUnauthorized(Exception):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args)
+        self.details = kwargs
+
+
 def _install_ha_fakes() -> None:
     if "homeassistant" not in sys.modules:
         ha_pkg = types.ModuleType("homeassistant")
@@ -44,11 +51,28 @@ def _install_ha_fakes() -> None:
     if "homeassistant.config_entries" not in sys.modules:
         config_entries = types.ModuleType("homeassistant.config_entries")
         config_entries.ConfigEntry = object
+        config_entries.ConfigSubentry = object
         sys.modules["homeassistant.config_entries"] = config_entries
-    if "homeassistant.exceptions" not in sys.modules:
-        exceptions = types.ModuleType("homeassistant.exceptions")
-        exceptions.ConfigEntryError = RuntimeError
-        sys.modules["homeassistant.exceptions"] = exceptions
+    else:
+        config_entries = sys.modules["homeassistant.config_entries"]
+        config_entries.ConfigSubentry = getattr(
+            config_entries, "ConfigSubentry", object
+        )
+    exceptions = sys.modules.setdefault(
+        "homeassistant.exceptions", types.ModuleType("homeassistant.exceptions")
+    )
+    exceptions.ConfigEntryError = getattr(
+        exceptions, "ConfigEntryError", RuntimeError
+    )
+    exceptions.Unauthorized = getattr(
+        exceptions, "Unauthorized", _FakeUnauthorized
+    )
+    exceptions.UnknownUser = getattr(exceptions, "UnknownUser", _FakeUnauthorized)
+    exceptions.ServiceValidationError = getattr(
+        exceptions,
+        "ServiceValidationError",
+        type("ServiceValidationError", (ValueError,), {}),
+    )
     if "homeassistant.components" not in sys.modules:
         components = types.ModuleType("homeassistant.components")
         components.__path__ = []
@@ -60,11 +84,16 @@ def _install_ha_fakes() -> None:
         websocket_api.websocket_command = lambda _schema: (lambda fn: fn)
         websocket_api.async_response = lambda fn: fn
         sys.modules["homeassistant.components.websocket_api"] = websocket_api
+    # Use the real validator when available so this dynamic loader cannot
+    # poison later tests through the process-wide module cache.
     if "voluptuous" not in sys.modules:
-        vol = types.ModuleType("voluptuous")
-        vol.Required = lambda key: key
-        vol.Optional = lambda key, default=None: key
-        sys.modules["voluptuous"] = vol
+        try:
+            import voluptuous  # noqa: F401
+        except ImportError:
+            vol = types.ModuleType("voluptuous")
+            vol.Required = lambda key: key
+            vol.Optional = lambda key, default=None: key
+            sys.modules["voluptuous"] = vol
 
 
 def _load_module(name: str):
@@ -85,7 +114,11 @@ def _load_module(name: str):
         raise RuntimeError(f"cannot load {full_name}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[full_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(full_name, None)
+        raise
     return module
 
 
@@ -98,6 +131,7 @@ websocket_api = _load_module("websocket_api")
 fsm = _load_module("fsm")
 const = _load_module("const")
 conference = _load_module("conference")
+route_decisions = _load_module("route_decisions")
 
 
 class _FakeConfig:
@@ -107,9 +141,11 @@ class _FakeConfig:
 class _FakeBus:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict]] = []
+        self.contexts: list[object | None] = []
 
-    def async_fire(self, event_type: str, event: dict) -> None:
+    def async_fire(self, event_type: str, event: dict, *, context=None) -> None:
         self.events.append((event_type, dict(event)))
+        self.contexts.append(context)
 
 
 class _FakeHass:
@@ -120,6 +156,293 @@ class _FakeHass:
 
 
 class GroupCallMatrixTest(unittest.TestCase):
+    def test_video_degradation_is_explicit_and_can_recover(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="video-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            video_offered=True,
+        )
+        offered = websocket_api._ha_softphone_state(hass)
+        self.assertTrue(offered["video_requested"])
+        self.assertFalse(offered["video_negotiated"])
+        self.assertEqual(offered["video_status"], "offered")
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="video-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            video_active=False,
+            video_negotiated=False,
+            video_status="degraded",
+            video_failure_reason="local_video_resources_unavailable",
+        )
+        degraded = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(degraded["video_status"], "degraded")
+        self.assertEqual(
+            degraded["video_failure_reason"],
+            "local_video_resources_unavailable",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="video-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            video_active=True,
+            video_negotiated=True,
+            video_status="active",
+            video_failure_reason="",
+        )
+        recovered = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(recovered["video_status"], "active")
+        self.assertEqual(recovered["video_failure_reason"], "")
+
+    def test_call_event_preserves_explicit_local_leg_owner(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "local-call",
+            state="ringing",
+            owner="local_bridge",
+            ingress="trunk",
+            origin="trunk",
+            endpoint_id="office",
+            source_endpoint_id="office",
+            dest_endpoint_id="kitchen",
+        )
+
+        event = websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "local-call",
+                "state": "ringing",
+                "endpoint_id": "kitchen",
+                "device_id": "kitchen-device",
+                "direction": "incoming",
+                "origin": "remote",
+            },
+            "session",
+        )
+
+        self.assertEqual(event["endpoint_id"], "kitchen")
+        self.assertEqual(event["device_id"], "kitchen-device")
+        self.assertEqual(event["source_endpoint_id"], "office")
+        self.assertEqual(event["dest_endpoint_id"], "kitchen")
+        self.assertEqual(event["schema_version"], 2)
+        self.assertGreater(event["generation"], 0)
+        self.assertEqual(event["pbx_phase"], "ringing")
+        self.assertEqual(event["actor"], "remote")
+        self.assertEqual(event["ingress"], "trunk")
+        self.assertEqual(event["origin"], "trunk")
+
+    def test_logbook_terminal_event_is_emitted_once_for_the_logical_call(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "group-call",
+            state="ringing",
+            owner="router",
+            caller="Door",
+            callee="All rooms",
+        )
+
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "group-call",
+                "state": "cancelled",
+                "caller": "Door",
+                "callee": "All rooms",
+                "endpoint_id": "losing-room",
+            },
+            "session",
+        )
+        registry.transition("group-call", state="terminating", owner="bridge")
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "group-call",
+                "state": "idle",
+                "caller": "Door",
+                "callee": "All rooms",
+            },
+            "sip_bridge",
+        )
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "group-call",
+                "state": "idle",
+                "caller": "Door",
+                "callee": "All rooms",
+            },
+            "sip_bridge",
+        )
+
+        terminal = [
+            event
+            for event_type, event in hass.bus.events
+            if event_type == websocket_api.SIP_CALL_ENDED_EVENT
+        ]
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["state"], "idle")
+
+    def test_esp_physical_state_is_not_a_second_logbook_call(self) -> None:
+        hass = _FakeHass()
+
+        websocket_api._fire_call_event(
+            hass,
+            {
+                "call_id": "physical:esp:ws3",
+                "state": "idle",
+                "caller": "",
+                "callee": "Casa",
+                "duration_seconds": 2,
+            },
+            "esp",
+        )
+
+        self.assertFalse(
+            any(
+                event_type == websocket_api.SIP_CALL_ENDED_EVENT
+                for event_type, _event in hass.bus.events
+            )
+        )
+
+    def test_ring_group_decline_is_per_phone_and_cannot_be_reversed(self) -> None:
+        async def scenario() -> None:
+            hass = _FakeHass()
+            registry = websocket_api.call_registry(hass)
+            registry.upsert(
+                "group-call",
+                state="ringing",
+                owner="router",
+                caller="Door",
+                callee="All rooms",
+                route_kind="ring",
+            )
+            future = asyncio.get_running_loop().create_future()
+            registry.pending_routes["group-call"] = {
+                "future": future,
+                "invite": types.SimpleNamespace(
+                    caller="Door",
+                    target="All rooms",
+                    send_format=conference.CONFERENCE_RTP_FORMAT,
+                    recv_format=conference.CONFERENCE_RTP_FORMAT,
+                ),
+                "ring_group_endpoint_ids": ("kitchen", "hall"),
+                "declined_endpoint_ids": set(),
+            }
+
+            route_decisions.set_pending_route_decision(
+                hass,
+                {
+                    "call_id": "group-call",
+                    "action": "decline",
+                    "endpoint_id": "kitchen",
+                },
+            )
+            self.assertFalse(future.done())
+            self.assertEqual(
+                hass.data[const.DOMAIN]["ha_softphones"]["kitchen"]["state"],
+                "idle",
+            )
+            self.assertEqual(
+                hass.data[const.DOMAIN]["ha_softphones"]["kitchen"][
+                    "terminal_reason"
+                ],
+                "declined",
+            )
+            with self.assertRaises(
+                sys.modules["homeassistant.exceptions"].ServiceValidationError
+            ):
+                route_decisions.set_pending_route_decision(
+                    hass,
+                    {
+                        "call_id": "group-call",
+                        "action": "answer_ha",
+                        "endpoint_id": "kitchen",
+                    },
+                )
+
+            route_decisions.set_pending_route_decision(
+                hass,
+                {
+                    "call_id": "group-call",
+                    "action": "answer_ha",
+                    "endpoint_id": "hall",
+                    "media_client_id": "hall-card",
+                    "send_video": True,
+                },
+            )
+            decision = await future
+            self.assertEqual(decision["endpoint_id"], "hall")
+            self.assertEqual(decision["media_client_id"], "hall-card")
+            self.assertTrue(decision["send_video"])
+
+        asyncio.run(scenario())
+
+    def test_call_and_softphone_events_preserve_the_initiating_ha_context(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        context = types.SimpleNamespace(user_id="user-a", id="context-a")
+        registry.upsert("call-1", state="calling", owner="ha_softphone")
+        registry.bind_controller("call-1", context=context)
+
+        websocket_api._fire_call_event(
+            hass,
+            {"call_id": "call-1", "state": "calling", "direction": "outgoing"},
+            "session",
+        )
+        websocket_api._publish_ha_softphone_state(
+            hass,
+            {"call_id": "call-1", "state": "calling"},
+        )
+
+        self.assertTrue(hass.bus.contexts)
+        self.assertTrue(all(item is context for item in hass.bus.contexts))
+
+    def test_sip_target_profile_keeps_only_bidirectional_rtp_contracts(self) -> None:
+        audio_format = endpoint_routing.AudioFormat
+        remote_tx = [
+            audio_format(32000, "s16le", 1, 10),
+            audio_format(16000, "s16le", 1, 10),
+        ]
+        remote_rx = [
+            audio_format(48000, "s16le", 1, 10),
+            audio_format(16000, "s16le", 1, 10),
+        ]
+
+        send, recv = endpoint_routing.sip_target_audio_profile(
+            remote_tx_formats=remote_tx,
+            remote_rx_formats=remote_rx,
+            target="standard-phone",
+        )
+
+        expected = [audio_format(16000, "s16le", 1, 10)]
+        self.assertEqual(send, expected)
+        self.assertEqual(recv, expected)
+
+    def test_sip_target_profile_rejects_disjoint_tx_rx_contracts(self) -> None:
+        audio_format = endpoint_routing.AudioFormat
+        send, recv = endpoint_routing.sip_target_audio_profile(
+            remote_tx_formats=[audio_format(16000, "s16le", 1, 10)],
+            remote_rx_formats=[audio_format(48000, "s16le", 1, 10)],
+            target="nonstandard-phone",
+        )
+
+        self.assertEqual((send, recv), ([], []))
+
     def test_voip_matrix_runner_all_scenarios_validate(self) -> None:
         results, errors = run_matrix()
         self.assertEqual(errors, [])
@@ -373,6 +696,96 @@ class GroupCallMatrixTest(unittest.TestCase):
         self.assertEqual(idle["peer_name"], "Waveshare S3 Audio")
         self.assertEqual(idle["dialed_target"], "666")
         self.assertEqual(idle["terminal_reason"], "local_hangup")
+
+    def test_late_state_cannot_resurrect_terminated_softphone_call(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "finished-call",
+            state=fsm.CallState.IN_CALL.value,
+            owner="ha_softphone",
+        )
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="finished-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+        )
+        registry.finish_and_pop("finished-call", reason="remote_hangup")
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IDLE.value,
+            call_id="finished-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+            reason="remote_hangup",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.IN_CALL.value,
+            call_id="finished-call",
+            direction="incoming",
+            caller="Door",
+            callee="Casa",
+        )
+
+        state = websocket_api._ha_softphone_state(hass)
+        self.assertEqual(state["state"], fsm.CallState.IDLE.value)
+        self.assertEqual(state["call_id"], "finished-call")
+        self.assertEqual(state["terminal_reason"], "remote_hangup")
+
+    def test_new_call_replaces_orphaned_ringing_projection(self) -> None:
+        hass = _FakeHass()
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="orphaned-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="current-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        state = websocket_api._ha_softphone_state(hass, "test")
+        self.assertEqual(state["state"], fsm.CallState.RINGING.value)
+        self.assertEqual(state["call_id"], "current-call")
+
+    def test_new_call_cannot_replace_live_ringing_projection(self) -> None:
+        hass = _FakeHass()
+        registry = websocket_api.call_registry(hass)
+        registry.upsert(
+            "live-call",
+            state=fsm.CallState.RINGING.value,
+            owner="ha_softphone",
+        )
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="live-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        websocket_api._set_ha_softphone_call_state(
+            hass,
+            fsm.CallState.RINGING.value,
+            call_id="competing-call",
+            endpoint_id="test",
+            direction="incoming",
+        )
+
+        state = websocket_api._ha_softphone_state(hass, "test")
+        self.assertEqual(state["call_id"], "live-call")
 
     def test_virtual_endpoint_phonebook_push_matrix(self) -> None:
         pbx = self._mini_pbx()

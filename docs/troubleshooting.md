@@ -31,8 +31,8 @@ collect:
 - Confirm the INVITE Request-URI reaches HA's advertised host and SIP port.
 - Check HA softphone DND and active-call state. A second inbound call while HA
   is ringing or in-call should receive busy.
-- For trunk calls, no route hint means HA/default target; an explicit unresolved
-  route hint terminates as `route_not_found`.
+- For trunk calls, no route hint means the configured inbound default target;
+  an explicit unresolved route hint terminates as `route_not_found`.
 - For local registered SIP endpoints, confirm the REGISTER Contact is present in
   HA logs and the phonebook includes the registered SIP endpoint contact.
 
@@ -43,6 +43,11 @@ or HA may therefore receive a compatible SIP INVITE from any peer that can
 reach its listener, even when the caller is absent from the phonebook and has
 not registered to HA. The optional HA registrar authenticates `REGISTER`; it
 does not require every inbound caller to own an account.
+
+Unknown callers may reach local HA, ESP, registered-phone and group targets.
+They cannot use HA as an unauthenticated gateway to the configured external
+trunk; outbound trunk routes require a registered, roster-known, HA-local or
+trusted-trunk origin.
 
 - Check DND, busy state, Request-URI routing and SDP compatibility before
   treating an unknown caller as unauthorized.
@@ -84,11 +89,13 @@ leg to a compatible PCM format.
 
 ## Registered Softphone Cannot Register To HA
 
-- Enable the HA SIP TCP or UDP listener used by the softphone.
+- Confirm the always-on HA SIP UDP/TCP listener is reachable on the configured
+  SIP port and that the client's selected transport matches.
 - Enable the local registrar in VoIP Stack setup.
 - Create an account with `voip_stack.create_account`.
-- If no password is supplied, read it from the `sip_account_created` event or
-  the persistent notification. The generated password is shown only once.
+- If no password is supplied, copy it from the administrator-only action
+  response or capture that response with `response_variable`. The generated
+  password is returned only once.
 - Configure the softphone with HA advertised host, SIP port, username and
   password. Do not configure an external PBX/outbound proxy for local HA
   registration.
@@ -101,13 +108,19 @@ DND and active-call contention should produce `486 Busy Here` or a terminal
 reason of `busy`. Decline should produce `603 Decline` or a configured SIP
 final response.
 
-## Hold Or Re-INVITE Receives `488`
+## Hold, UPDATE Or Re-INVITE
 
-Session-modifying in-dialog INVITE is not supported in the current ESP or HA
-profile. A hold or codec-renegotiation re-INVITE receives `488 Not Acceptable
-Here`; the already established dialog and media selection remain active. A
-later BYE must still end that original call normally. Do not diagnose this as a
-dropped call unless the original dialog or RTP also stops.
+ESP endpoints do not renegotiate established media. A hold or media-changing
+re-INVITE receives `488 Not Acceptable Here`; the original dialog and media
+remain active and a later BYE must still end the call normally.
+
+HA-owned dialogs accept compatible peer-initiated UPDATE or re-INVITE offers.
+If HA returns `488`, inspect whether the peer tried to add/remove video, change
+the established video codec, supplied an unsupported audio shape or sent an
+offerless re-INVITE. A rejected offer must not replace the previous media. For
+an accepted update, inspect `media_renegotiations`, the current directional
+formats and the WebSocket `media_update` notification. A re-INVITE 2xx also
+requires ACK; HA terminates the dialog if that ACK never arrives.
 
 ## No Audio
 
