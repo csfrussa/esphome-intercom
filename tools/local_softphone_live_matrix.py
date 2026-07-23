@@ -61,6 +61,24 @@ async () => {
 }
 """
 
+BROWSER_MEDIA_BUSY = r"""
+() => {
+  const deep = (selector, root = document) => {
+    const found = [...root.querySelectorAll(selector)];
+    for (const node of root.querySelectorAll("*")) if (node.shadowRoot) found.push(...deep(selector, node.shadowRoot));
+    return found;
+  };
+  const card = deep("voip-stack-card, intercom-card")
+    .find((item) => (item.config?.mode || item.config?.card_mode || "") === "ha_softphone");
+  if (!card?.shadowRoot) return null;
+  return {
+    busy: Boolean(card._otherPhoneOwnsBrowserMedia?.()),
+    call_disabled: Boolean(card.shadowRoot.querySelector(".voip-button.call")?.disabled),
+    state: String(card._softphoneSnapshot?.state || ""),
+  };
+}
+"""
+
 
 def _load_runtime_dependencies() -> None:
     """Load Playwright only after command-line help has been handled."""
@@ -299,6 +317,74 @@ def main() -> int:
             hangup=test,
             auto_answer=True,
         )
+
+        started = time.monotonic()
+        try:
+            if not casa.evaluate(SET_AUTO_ANSWER, True):
+                raise RuntimeError("failed to enable Auto Answer on Casa")
+            if not test.evaluate(SET_TARGET, "Casa"):
+                raise RuntimeError("Casa is not selectable from Test")
+            if not test.evaluate(CLICK, "Call"):
+                raise RuntimeError("Call unavailable on Test")
+            _state(test, "in_call", "navigation cleanup: Test in call")
+            _state(casa, "in_call", "navigation cleanup: Casa in call")
+            if arguments.expect_video:
+                _wait_video(test, "navigation cleanup: Test video")
+                _wait_video(casa, "navigation cleanup: Casa video")
+
+            # A full Lovelace navigation destroys the Test card and document,
+            # but sessionStorage intentionally survives so a real active call
+            # can be handed off after reload.
+            test.goto(CASA_URL, wait_until="domcontentloaded", timeout=30_000)
+            _wait_card_ready(test, "Casa after Test navigation")
+            active_busy = test.evaluate(BROWSER_MEDIA_BUSY)
+            if not active_busy or not active_busy["busy"]:
+                raise RuntimeError(
+                    f"active Test call did not reserve the browser: {active_busy}"
+                )
+
+            if not casa.evaluate(HANGUP):
+                raise RuntimeError("Hangup unavailable on Casa")
+            _state(casa, "idle", "navigation cleanup: original Casa idle")
+            deadline = time.monotonic() + 12
+            released = None
+            while time.monotonic() < deadline:
+                released = test.evaluate(BROWSER_MEDIA_BUSY)
+                if (
+                    released
+                    and not released["busy"]
+                    and not released["call_disabled"]
+                ):
+                    break
+                test.wait_for_timeout(100)
+            else:
+                raise RuntimeError(
+                    f"stale Test browser claim survived terminal call: {released}"
+                )
+            results.append(
+                {
+                    "name": "test_navigation_releases_terminal_browser_claim",
+                    "status": "pass",
+                    "seconds": round(time.monotonic() - started, 3),
+                    "active_busy": active_busy,
+                    "released": released,
+                }
+            )
+        except Exception as err:  # noqa: BLE001
+            results.append(
+                {
+                    "name": "test_navigation_releases_terminal_browser_claim",
+                    "status": "fail",
+                    "seconds": round(time.monotonic() - started, 3),
+                    "error": str(err),
+                }
+            )
+            for page in (casa, test):
+                with suppress(Exception):
+                    page.evaluate(HANGUP)
+        finally:
+            with suppress(Exception):
+                casa.evaluate(SET_AUTO_ANSWER, False)
         context.close()
         browser.close()
     output.parent.mkdir(parents=True, exist_ok=True)

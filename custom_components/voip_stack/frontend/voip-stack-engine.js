@@ -35,6 +35,20 @@ const MEDIA_RECONNECT_ATTEMPTS = 3;
 const MEDIA_RECONNECT_DELAY_MS = 250;
 const MAX_AUDIO_WS_BUFFER_MS = 120;
 const MIN_AUDIO_WS_BUFFER_FRAMES = 4;
+const ACTIVE_SOFTPHONE_STATES = new Set([
+  "calling",
+  "remote_ringing",
+  "ringing",
+  "connecting",
+  "in_call",
+  "terminating",
+]);
+const TERMINAL_CALL_EVENT_TYPES = new Set([
+  "ended",
+  "missed",
+  "declined",
+  "failed",
+]);
 
 function mediaClientInstanceId() {
   try {
@@ -134,6 +148,7 @@ class VoipStackEngine extends EventTarget {
     this._videoAttachPromise = null;
     this._videoAttachCallId = "";
     this._mediaCleanupPromise = null;
+    this._ownedSessionReconcilePromise = null;
     this._pageHiding = false;
 
     window.addEventListener("pagehide", () => {
@@ -151,6 +166,7 @@ class VoipStackEngine extends EventTarget {
   configure(hass) {
     this._hass = hass;
     if (this._video) this._video.configure(hass, this._mediaClientId);
+    void this.reconcileOwnedSoftphoneSessions();
     const conn = hass?.connection || null;
     if (!conn) return;
     if (conn !== this._busConnection) {
@@ -373,6 +389,55 @@ class VoipStackEngine extends EventTarget {
     }
   }
 
+  async reconcileOwnedSoftphoneSessions() {
+    if (
+      this._ownedSessionReconcilePromise ||
+      !this._hass?.callWS ||
+      !this._ownedSoftphoneCalls.size
+    ) return this._ownedSessionReconcilePromise;
+    const claims = [...this._ownedSoftphoneCalls.entries()];
+    const reconcile = (async () => {
+      let changed = false;
+      await Promise.all(claims.map(async ([endpointId, callId]) => {
+        let state;
+        try {
+          state = await this._hass.callWS({
+            type: "voip_stack/ha_softphone_state",
+            endpoint_id: endpointId,
+          });
+        } catch (_) {
+          // A network/config reload failure cannot prove the claim stale.
+          return;
+        }
+        if (this._ownedSoftphoneCalls.get(endpointId) !== callId) return;
+        const currentCallId = String(state?.call_id || "");
+        const currentState = String(state?.state || "").toLowerCase();
+        if (
+          currentCallId === callId &&
+          ACTIVE_SOFTPHONE_STATES.has(currentState)
+        ) return;
+        this.releaseSoftphoneSession(callId, endpointId);
+        changed = true;
+        if (
+          this.active &&
+          this._endpointId === endpointId &&
+          this._callId === callId
+        ) {
+          await this.close("backend_session_ended");
+        }
+      }));
+      if (changed) this._emit();
+    })();
+    this._ownedSessionReconcilePromise = reconcile;
+    try {
+      await reconcile;
+    } finally {
+      if (this._ownedSessionReconcilePromise === reconcile) {
+        this._ownedSessionReconcilePromise = null;
+      }
+    }
+  }
+
   tryRecoverSoftphoneSession(callId, endpointId = DEFAULT_SOFTPHONE_ENDPOINT_ID) {
     const wanted = String(callId || "").trim();
     const endpoint = String(endpointId || DEFAULT_SOFTPHONE_ENDPOINT_ID).trim() ||
@@ -554,6 +619,31 @@ class VoipStackEngine extends EventTarget {
   _onBusEvent(event) {
     const data = event?.data;
     if (!data) return;
+    const eventType = String(data.type || "").toLowerCase();
+    const eventState = String(data.state || "").toLowerCase();
+    const terminal = TERMINAL_CALL_EVENT_TYPES.has(eventType) ||
+      (!ACTIVE_SOFTPHONE_STATES.has(eventState) &&
+        ["idle", "ended", "cancelled", "timeout", "failed", "declined", "busy"]
+          .includes(eventState));
+    const terminalCallId = String(data.call_id || "");
+    const terminalEndpointId = String(data.endpoint_id || "");
+    if (terminal && terminalCallId) {
+      let released = false;
+      for (const [endpointId, callId] of [...this._ownedSoftphoneCalls]) {
+        if (
+          callId !== terminalCallId ||
+          (terminalEndpointId && endpointId !== terminalEndpointId)
+        ) continue;
+        this.releaseSoftphoneSession(callId, endpointId);
+        released = true;
+        if (
+          this.active &&
+          this._endpointId === endpointId &&
+          this._callId === callId
+        ) void this.close("terminal_event");
+      }
+      if (released) this._emit();
+    }
     const scope = (data.scope || "").toLowerCase();
     for (const id of [data.device_id, data.source_device_id, data.dest_device_id, data.session_device_id]) {
       if (!id) continue;

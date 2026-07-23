@@ -93,6 +93,52 @@ await module.link(() => {{ throw new Error("unexpected import"); }});
 await module.evaluate();
 const Engine = module.namespace.VoipStackEngine;
 
+// sessionStorage is only a reload/handoff hint. A backend snapshot is
+// authoritative and must prune a claim whose call already ended, while a
+// genuinely active call on another logical phone must continue to block the
+// single browser media pipeline.
+const staleClaim = new Engine();
+staleClaim.claimSoftphoneSession("ended-test-call", "test");
+let claimedSnapshot = {{
+  endpoint_id: "test",
+  call_id: "ended-test-call",
+  state: "in_call",
+}};
+staleClaim._hass = {{
+  callWS: async () => claimedSnapshot,
+}};
+await staleClaim.reconcileOwnedSoftphoneSessions();
+assert.equal(
+  staleClaim.hasOwnedSoftphoneSessionForOtherEndpoint("default"),
+  true,
+);
+claimedSnapshot = {{
+  endpoint_id: "test",
+  call_id: "ended-test-call",
+  state: "idle",
+}};
+await staleClaim.reconcileOwnedSoftphoneSessions();
+assert.equal(staleClaim.softphoneCallIdFor("test"), "");
+assert.equal(
+  staleClaim.hasOwnedSoftphoneSessionForOtherEndpoint("default"),
+  false,
+);
+assert.equal(storage.has("voip_stack_owned_softphone_calls"), false);
+
+// A terminal event clears the same stale hint even when the Test card was
+// removed before its endpoint-scoped state subscription saw the terminal.
+staleClaim.claimSoftphoneSession("cancelled-test-call", "test");
+staleClaim._onBusEvent({{
+  data: {{
+    type: "ended",
+    state: "cancelled",
+    call_id: "cancelled-test-call",
+    endpoint_id: "test",
+    scope: "session",
+  }},
+}});
+assert.equal(staleClaim.softphoneCallIdFor("test"), "");
+
 // The backend phone snapshot remains authoritative while a video call is
 // already attached: changing Send Video must reconcile the live camera
 // sender, not merely affect the next call.
@@ -690,7 +736,10 @@ serialized._video = {{
   close: () => new Promise((resolve) => {{ releaseVideoCleanup = resolve; }}),
 }};
 serialized.configure({{
-  callWS: async () => {{
+  callWS: async (request) => {{
+    if (request.type === "voip_stack/ha_softphone_state") {{
+      return {{ state: "idle", call_id: "" }};
+    }}
     outboundStarts++;
     return {{ state: "idle", call_id: "" }};
   }},
