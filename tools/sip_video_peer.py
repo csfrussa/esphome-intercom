@@ -1154,7 +1154,7 @@ def main() -> int:
         "--video-rx-file", default="",
         help="record video returned by the HA browser to this media file",
     )
-    parser.add_argument("--out", default="/tmp/experimental_sip_video_peer.json")
+    parser.add_argument("--out", default="/tmp/sip_video_peer.json")
     args = parser.parse_args()
     if args.audio_hold_after >= 0 and (
         args.codec != "audio" or args.add_video_after >= 0

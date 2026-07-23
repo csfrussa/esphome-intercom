@@ -186,7 +186,7 @@ export class VoipStackVideo extends EventTarget {
     ) return true;
     await this.close();
     if (!window.isSecureContext) {
-      throw new Error("Experimental SIP video requires a secure browser context");
+      throw new Error("SIP video requires a secure browser context");
     }
     const generation = ++this._generation;
     this._callId = callId;

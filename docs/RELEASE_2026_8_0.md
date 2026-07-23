@@ -53,7 +53,7 @@ default phone, then add Kitchen, Reception, Office or any other room from
   />
 </p>
 
-## 🎥 Experimental SIP Video Calling
+## 🎥 SIP Video Calling
 
 The HA softphone can now become an opt-in SIP video phone for standard phones,
 softphones, PBXs and video door stations. ESPHome endpoints intentionally remain
@@ -89,9 +89,9 @@ audio-only.
   />
 </p>
 
-Video is experimental and disabled by default. It requires HTTPS, a compatible
-browser and an RTP path permitted by the local firewall. Read
-[Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) before enabling it.
+Video remains opt-in and requires HTTPS, a compatible browser and an RTP path
+permitted by the local firewall. Read [SIP Video](SIP_VIDEO.md) for codec,
+network and privacy requirements.
 
 ## 🧭 Initial Preview: Automation-Native PBX Routing
 
@@ -251,9 +251,6 @@ longer need empty platform blocks.
   stream of internal leg transitions.
 - Runtime snapshots expose sessions, legs, routes, SIP clients, relays, audio
   and video WebSockets, owners, cleanup tasks and allocated RTP ports.
-- The repository now includes deterministic SIP peers, headless browser video
-  fixtures and real-lab matrices for local phones, trunk calls, groups, DTMF,
-  video and final resource quiescence.
 - The README now uses a consistent illustrated visual language for system
   topology, signaling transport, phonebook routing and canonical call paths;
   the service, trunk, automation, video, testing and troubleshooting guides
@@ -266,7 +263,7 @@ The `2026.7.0` SIP migration remains the breaking baseline. For `2026.8.0`:
 - custom ESP YAMLs that relied on `auto_entities` must declare the desired
   native `platform: voip_stack` entities or include the maintained package;
 - experimental automation routing is opt-in and may evolve;
-- experimental video remains HA-browser only: ESP and Assist endpoints are
+- SIP video remains HA-browser only: ESP and Assist endpoints are
   audio-only, conference video mixing is not implemented, and standard
   SIP-to-SIP bridges require an exact compatible codec/profile;
 - local SIP/RTP is plaintext. Use a trusted LAN/VLAN/VPN and do not expose ESP
@@ -279,26 +276,10 @@ before updating a custom deployment.
 
 ## 🧪 Qualification
 
-The candidate passes **1095 tests plus 99 subtests**, together with Ruff and
-JavaScript module parsing. The release gate covers:
-
-- the complete Python and frontend contract suite;
-- Ruff, JavaScript parsing, Hassfest and HACS validation;
-- real inbound/outbound trunk audio and video;
-- direct and routed DTMF;
-- Casa/Test browser phones in both directions;
-- ESP, registered SIP, ring-group and conference paths;
-- answer, decline, CANCEL, local/remote BYE and crossed final responses;
-- concurrent calls to independent endpoints;
-- browser reload/media ownership recovery;
-- final idle state with call-scoped tasks, owners, relays, sockets and RTP
-  reservations returned to zero.
-
-Real-lab qualification covers inbound and outbound trunk calls, Casa/Test
-browser phones in both directions, ESP and ring-group winners, standard SIP
-accounts, audio and bidirectional video, DTMF, answer/decline/cancel, local and
-remote hangup, concurrent calls and final idle cleanup. The GitHub workflow
-repeats the static suite and release-asset validation on the published commit.
+The candidate passes **1098 tests plus 99 subtests**, together with Ruff and
+JavaScript parsing. Real calls cover browser phones, ESP endpoints, registered
+SIP accounts, groups, conferences, trunks, audio, bidirectional video and
+post-call cleanup.
 
 ## 📦 Installing The Development Build
 
@@ -309,7 +290,7 @@ repeats the static suite and release-asset validation on the published commit.
 4. Restart Home Assistant.
 5. Hard-refresh every dashboard and fully restart the Android Companion app so
    the card version matches the backend.
-6. Reopen VoIP Stack options to enable experimental video or automation
+6. Reopen VoIP Stack options to enable SIP video or automation
    routing; both remain off by default.
 
 Please report the exact call path, SIP transport, offer/answer SDP, endpoint

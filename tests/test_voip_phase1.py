@@ -5557,7 +5557,7 @@ class RosterResolverTest(unittest.TestCase):
 
 
 class RouterContractTest(unittest.TestCase):
-    def test_trunk_route_keeps_experimental_video_despite_audio_contact_hints(self) -> None:
+    def test_trunk_route_keeps_sip_video_despite_audio_contact_hints(self) -> None:
         source = (PKG_DIR / "softphone_originate.py").read_text()
         self.assertIn(
             "use_trunk or not native_audio_endpoint",

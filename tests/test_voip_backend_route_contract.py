@@ -173,7 +173,7 @@ class VoipBackendRouteContractTest(unittest.TestCase):
             forward.index("relay = build_invite_client_relay(", video_start)
         ]
 
-        self.assertIn("cfg.get(CONF_EXPERIMENTAL_VIDEO, False)", video)
+        self.assertIn("cfg.get(CONF_SIP_VIDEO, False)", video)
         self.assertIn('source_route_endpoint.supports("video")', video)
         self.assertIn('target_route_endpoint.supports("video")', video)
         self.assertIn("build_pending_invite_video_relay(", video)

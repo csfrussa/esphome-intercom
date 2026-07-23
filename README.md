@@ -187,12 +187,12 @@ idempotent, and browser media ownership is scoped per phone and call. Debug
 snapshots now expose every call-scoped session, leg, owner, media task and RTP
 port, making “the card looks idle” an observation rather than a cleanup test.
 
-And yes, we appear to be getting rather close to a real native Home Assistant
-video phone. From the safety of your sealed fortress of misanthropy and despair,
-you can watch exactly how ugly the person ringing the doorbell is. I do not own
-a SIP video door station yet (I told you I am poor), so current tests use SIP
-clients sending webcam, generated video and real streams. The results are
-encouraging, but real user hardware is the next test.
+And yes, Home Assistant is now a real native SIP video phone. From the safety
+of your sealed fortress of misanthropy and despair, you can watch exactly how
+ugly the person ringing the doorbell is. The complete audio/video lifecycle is
+qualified with standard SIP peers, browser softphones, HA-to-HA calls and a
+real video-capable trunk. Broader phone and door-station interoperability now
+depends on compatible SIP/SDP/RTP profiles and feedback from hardware owners.
 
 The opt-in path supports direct H.264, VP8 and JPEG; an independent FFmpeg
 option receives H.263, H.263-1998 or H.265 without saving an intermediate file.
@@ -208,10 +208,10 @@ bottom bar only when **Extended information** is enabled. Outbound call setup
 also caches unchanged phonebook/destination DOM and avoids starting an already
 authorised camera twice, keeping kiosk controls responsive through
 calling/ringing. See the
-[experimental SIP video profile](docs/EXPERIMENTAL_SIP_VIDEO.md) for the less
-funny codec, security and qualification details.
+[SIP video profile](docs/SIP_VIDEO.md) for the less
+funny codec, compatibility and security details.
 
-![Experimental SIP video call in the Home Assistant softphone](docs/images/ha-sip-video-call.gif)
+![SIP video call in the Home Assistant softphone](docs/images/ha-sip-video-call.gif)
 
 ### Build real phones, rooms and door stations
 
@@ -1555,8 +1555,7 @@ same unanswered call to Assist or another phonebook destination. The backend
 keeps the source call alive, releases the old owner and handles SIP CANCEL for
 any replaced ringing leg. The card remains a pure view of that backend state.
 
-This complete example was qualified with a real 30-second unanswered call,
-Assist TTS over RTP, an in-dialog video re-offer and final BYE cleanup:
+Example:
 
 ```yaml
 alias: VoIP - HA unanswered to Assist

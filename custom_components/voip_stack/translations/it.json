@@ -11,7 +11,7 @@
         "assist_intents": "Abilita intent Assist",
         "assist_endpoint_enabled": "Includi assistente vocale",
           "debug_mode": "Abilita debug SIP/RTP e catture audio private",
-          "experimental_sip_video": "Abilita video SIP sperimentale per il softphone Home Assistant",
+          "experimental_sip_video": "Abilita video SIP per il softphone Home Assistant",
           "sip_registrar_enabled": "Abilita account softphone SIP locali",
           "trunk_enabled": "Abilita trunk SIP opzionale"
         },
@@ -22,13 +22,13 @@
         "assist_intents": "Permette di chiamare e gestire vocalmente le chiamate con l'assistente (per esempio: \"Hey Jarvis, chiama Cucina\"). Abilita comandi Assist opzionali per chiamare, riagganciare, rispondere e rifiutare; i nomi pronunciati vengono risolti dinamicamente dalla rubrica VoIP live.",
         "assist_endpoint_enabled": "Aggiunge un interno SIP collegato direttamente a una pipeline Assist di Home Assistant, senza integrazioni VoIP o listener SIP separati.",
           "debug_mode": "Abilita diagnostica e log SIP/RTP/media dettagliati. Registra inoltre automaticamente audio privato delle chiamate: fino a 15 secondi per direzione del softphone HA e 8 secondi per tratta relay, salvati come WAV/JSON in ~/.cache/voip_stack_debug (permessi 0700) e limitati a 24 file / 64 MiB. Disabilitalo dopo i test.",
-          "experimental_sip_video": "Sperimentale. Permette al softphone Home Assistant di negoziare video SIP con telefoni e videocitofoni standard. H.264, VP8 e JPEG usano un percorso diretto nel browser. Gli endpoint audio ESP restano solo audio. Richiede HTTPS e un browser compatibile.",
+          "experimental_sip_video": "Permette al softphone Home Assistant di negoziare video SIP con telefoni, softphone e videocitofoni standard compatibili. H.264, VP8 e JPEG usano un percorso diretto nel browser. Gli endpoint audio ESP restano solo audio. Richiede HTTPS e un browser compatibile.",
           "sip_registrar_enabled": "Accetta REGISTER da softphone locali come Zoiper, Linphone o baresip usando account gestiti dai servizi VoIP Stack.",
           "trunk_enabled": "Mostra le impostazioni provider/PBX. Se disattivo, non parte nessuna registrazione trunk, rotta esterna o raccolta DTMF."
         }
       },
       "video": {
-        "title": "Video SIP sperimentale",
+        "title": "Video SIP",
         "description": "Il video è opzionale e riguarda soltanto il softphone Home Assistant e gli endpoint SIP standard. Gli ESP restano solo audio.",
         "data": {
           "video_transcoding_enabled": "Abilita transcodifica video",

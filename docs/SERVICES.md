@@ -26,7 +26,7 @@ The central phonebook resolves that value; no destination Device ID is needed.
 
 Optional:
 
-- `send_video`: offer the selected browser phone's camera when experimental
+- `send_video`: offer the selected browser phone's camera when SIP video
   SIP video is enabled. Receiving video does not require this flag.
 - `ha_bridge`: force HA to anchor the route when that is valid.
 
@@ -64,7 +64,7 @@ Answer the pending call on the selected phone. The Device picker supports
 integration-owned HA phones and compatible ESPHome mirror phones.
 
 If `call_id` is omitted and exactly one call is pending, that call is answered.
-Set `send_video: true` to send that browser phone's camera when experimental
+Set `send_video: true` to send that browser phone's camera when SIP video
 video is enabled and the negotiated call permits it.
 
 For conference calls, `call_id: conference:<room>` joins the HA softphone to

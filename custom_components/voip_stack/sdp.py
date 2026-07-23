@@ -284,7 +284,7 @@ class RemoteMediaTarget:
 
 
 # Kept as a public compatibility alias for integrations and tests that used
-# the experimental H.264-only type before the video format model was widened.
+# the original H.264-only type before the video format model was widened.
 RtpH264Format = RtpVideoFormat
 
 

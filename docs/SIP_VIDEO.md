@@ -1,12 +1,12 @@
-# Experimental SIP Video
+# SIP Video
 
 VoIP Stack can optionally turn the Home Assistant softphone card into a SIP
-video phone for standard SIP phones, softphones and door stations. This is an
-experimental `2026.8.0` feature. ESPHome endpoints remain audio-only.
+video phone for standard SIP phones, softphones and door stations. SIP video
+is a supported `2026.8.0` capability. ESPHome endpoints remain audio-only.
 
 Video is disabled by default and does not alter an audio-only installation.
 Open the VoIP Stack integration, choose **Reconfigure**, then enable
-**Experimental SIP video for the Home Assistant softphone**. A second step
+**SIP video for the Home Assistant softphone**. A second step
 offers two independent capabilities:
 
 - **Enable video transcoding** lets the HA softphone receive H.263,
@@ -56,7 +56,7 @@ codecs are not transcoded between two SIP endpoints.
 
 ## Direct, Trunk And PBX Calls
 
-Experimental video is not limited to LAN or VPN SIP URIs. The HA softphone
+SIP video is not limited to LAN or VPN SIP URIs. The HA softphone
 offers and accepts the same video profile when a call uses a configured SIP
 trunk or a video-capable PBX. An authenticated `401` or `407` retry preserves
 the complete audio/video SDP offer, including media direction and codec
@@ -158,7 +158,7 @@ informational, not legal advice.
 
 ## Deliberate Limits
 
-This experimental profile does not claim support for:
+This profile does not claim support for:
 
 - video on ESPHome endpoints;
 - video through Assist, conference rooms or ring-group legs that traverse
@@ -183,70 +183,11 @@ stale updates preserve the previous media contract.
 
 ## Qualification
 
-The repository includes a deterministic SIP peer and an authenticated
-Playwright probe. They exercise the real integration, card, WebSocket and RTP
-paths rather than checking only source strings:
-
-```bash
-mkdir -p test_captures
-export HA_URL="https://home-assistant.example/dashboard/voip"
-export PLAYWRIGHT_STORAGE_STATE="$HOME/.cache/ha-playwright-state.json"
-./.venv/bin/python tools/experimental_sip_video_browser_probe.py \
-  --reload-in-call \
-  --out test_captures/incoming-video.json
-```
-
-Start the probe, wait for `READY_FOR_VIDEO_CALL`, then call HA with the peer.
-This ordering matters when `--send-camera` is used because the option and its
-browser permission must be settled before the incoming INVITE hides idle-only
-controls:
-
-```bash
-./.venv/bin/python tools/experimental_sip_video_peer.py \
-  --host home-assistant.example \
-  --port 5060 \
-  --target HA \
-  --codec h264 \
-  --direction sendrecv \
-  --out test_captures/video-peer.json
-```
-
-Add `--video-profile RTP/AVPF` to qualify standards-aligned PLI/FIR feedback.
-The default remains `RTP/AVP`, and feedback attributes are never advertised on
-that profile.
-
-The peer also supports `audio`, `h263`, `h263p`, `h265`, `jpeg` and `vp8`.
-The probe records card and backend state, negotiated direction, audio and video
-counters, WebCodecs errors, canvas pixels, responsive geometry and post-call
-resource ownership. It fails if the card overflows, media does not arrive or
-the call leaves sessions, dialogs, RTP owners, transcoders or cleanup tasks
-behind.
-
-The local disposable HA Core harness under `tools/ha_voip_lab/` is a test
-environment, not an addon or runtime dependency. It keeps synthetic calls away
-from household ESP devices and production trunks.
-
-Qualification for this implementation covered:
-
-- direct H.264, VP8 and JPEG receive;
-- H.263, H.263-1998 and H.265 receive through FFmpeg;
-- H.264 and VP8 bidirectional camera calls;
-- local hangup, remote BYE and caller CANCEL while ringing;
-- audio-only calls with all video options enabled;
-- camera permission denial without losing incoming media;
-- reload while ringing and while media is active;
-- exact-codec RTP/RTCP relay contracts;
-- RTP/AVP compatibility and RTP/AVPF compound RR/SDES/PLI feedback;
-- peer-initiated UPDATE/re-INVITE video hold/resume with immutable camera
-  authorization and compatible directional codec contracts;
-- repeated mixed-codec calls with zero post-call owners or RTP sockets;
-- compact, default, wide and tall Home Assistant card sizes.
-
-The real trunk matrix also includes DTMF extension selection into a logical HA
-browser phone: one audio and one video WebSocket, bidirectional OPUS/VP8, local
-Hangup and a final call-scoped resource snapshot with zero sessions, owners and
-allocated RTP ports. Automated source/protocol tests and real lab evidence are
-reported separately; a green unit suite alone is not treated as media proof.
+The current candidate passes **1098 tests plus 99 subtests**. SIP video has
+also been exercised on real browser-to-browser, HA-to-HA and video-capable
+trunk calls, including bidirectional media, re-INVITE and cleanup.
+Compatibility with a particular third-party phone or door station still
+depends on its exact codec, SDP and RTP behavior.
 
 The protocol work follows
 [RFC 3264 offer/answer](https://www.rfc-editor.org/rfc/rfc3264),
@@ -261,6 +202,3 @@ The protocol work follows
 Browser media uses the
 [W3C WebCodecs API](https://www.w3.org/TR/webcodecs/) and the
 [AVC Annex B registration](https://www.w3.org/TR/webcodecs-avc-codec-registration/).
-Physical door-station qualification remains device-specific. Advertising a
-codec in SDP does not prove that every device's exact RTP behavior has been
-tested.

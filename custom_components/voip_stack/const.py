@@ -11,7 +11,9 @@ CONF_ASSIST_EXTENSION = "assist_extension"
 CONF_ASSIST_PIPELINE = "assist_pipeline"
 CONF_ASSIST_ADVANCED_CALL_CONTEXT = "assist_advanced_call_context"
 CONF_DEBUG_MODE = "debug_mode"
-CONF_EXPERIMENTAL_VIDEO = "experimental_sip_video"
+# Keep the persisted key stable for configured entries created before the SIP
+# video profile graduated from preview status.
+CONF_SIP_VIDEO = "experimental_sip_video"
 CONF_VIDEO_TRANSCODING = "video_transcoding_enabled"
 CONF_VIDEO_CAMERA_SEND = "video_camera_send_enabled"
 CONF_HA_SOFTPHONE_DND = "ha_softphone_dnd"

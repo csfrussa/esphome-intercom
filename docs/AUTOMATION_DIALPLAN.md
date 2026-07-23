@@ -192,10 +192,8 @@ actions:
       on_failure: resume
 ```
 
-The release qualification exercised this exact lifecycle with a real
-30-second unanswered call: Assist returned TTS over RTP, a later video
-re-offer was answered as audio-only with `m=video 0`, BYE ended the dialog and
-all call-scoped sessions, media owners and RTP ports returned to zero.
+This lifecycle is covered by the release tests, including unanswered calls,
+forwarding to Assist and final remote hangup.
 
 The `ringing` state already means that this phone is the incoming call target;
 an additional `direction: incoming` condition would be redundant. Keep the

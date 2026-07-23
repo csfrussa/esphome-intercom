@@ -16,7 +16,7 @@ from .config import (
     trunk_enabled as _trunk_enabled,
 )
 from .const import (
-    CONF_EXPERIMENTAL_VIDEO,
+    CONF_SIP_VIDEO,
     CONF_TRUNK_AUTH_USERNAME,
     CONF_TRUNK_OUTBOUND_PROXY,
     CONF_TRUNK_PASSWORD,
@@ -470,7 +470,7 @@ async def async_originate_call(
     )
     target_video_enabled = target_endpoint is None or target_endpoint.supports("video")
     video_enabled = (
-        bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False))
+        bool(cfg.get(CONF_SIP_VIDEO, False))
         and source_video_enabled
         and target_video_enabled
         and (use_trunk or not native_audio_endpoint)
@@ -506,7 +506,7 @@ async def async_originate_call(
 
     # Camera transmission is opt-in for each call.  Keep offering a receive
     # path when it is off, but never advertise send capability solely because
-    # the administrator enabled the experimental camera feature globally.
+    # the administrator enabled browser camera transmission globally.
     camera_send_enabled = (
         video_enabled
         and bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False))

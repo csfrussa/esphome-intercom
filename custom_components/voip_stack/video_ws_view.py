@@ -1,4 +1,4 @@
-"""Experimental browser video WebSocket for the HA SIP softphone."""
+"""Browser video WebSocket for the HA SIP softphone."""
 
 from __future__ import annotations
 
@@ -348,7 +348,7 @@ def async_register_video_ws_view(hass: HomeAssistant) -> None:
         return
     hass.http.register_view(VoipVideoWebSocketView)
     bucket["video_ws_view_registered"] = True
-    _LOGGER.info("Experimental SIP video websocket ready on %s", VoipVideoWebSocketView.url)
+    _LOGGER.info("SIP video websocket ready on %s", VoipVideoWebSocketView.url)
 
 
 def _active_video_session(

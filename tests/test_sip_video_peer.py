@@ -9,12 +9,12 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL = ROOT / "tools" / "experimental_sip_video_peer.py"
+TOOL = ROOT / "tools" / "sip_video_peer.py"
 SOFTPHONE_MATRIX = ROOT / "tools" / "ha_softphone_matrix.py"
 
 
 def _load_tool():
-    spec = importlib.util.spec_from_file_location("experimental_sip_video_peer", TOOL)
+    spec = importlib.util.spec_from_file_location("sip_video_peer", TOOL)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load SIP media qualification peer")
     module = importlib.util.module_from_spec(spec)

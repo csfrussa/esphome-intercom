@@ -33,7 +33,7 @@ from .const import (
     CONF_ASSIST_PIPELINE,
     CONF_ASSIST_INTENTS,
     CONF_DEBUG_MODE,
-    CONF_EXPERIMENTAL_VIDEO,
+    CONF_SIP_VIDEO,
     CONF_PHONEBOOK_CONTACTS,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_TRUNK_DTMF_ENABLED,
@@ -352,7 +352,7 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
         # unload, so restore just those idempotent subscriptions here.
         _register_esp_state_event_bridge(hass)
         _register_phonebook_service_event_sync(hass)
-        if _get_transport_config(hass).get(CONF_EXPERIMENTAL_VIDEO, False):
+        if _get_transport_config(hass).get(CONF_SIP_VIDEO, False):
             from .video_ws_view import async_register_video_ws_view
 
             async_register_video_ws_view(hass)
@@ -365,7 +365,7 @@ async def _async_setup_shared(hass: HomeAssistant, config: dict | None = None) -
     from .audio_ws_view import async_register_audio_ws_view
 
     async_register_audio_ws_view(hass)
-    if _get_transport_config(hass).get(CONF_EXPERIMENTAL_VIDEO, False):
+    if _get_transport_config(hass).get(CONF_SIP_VIDEO, False):
         from .video_ws_view import async_register_video_ws_view
 
         async_register_video_ws_view(hass)

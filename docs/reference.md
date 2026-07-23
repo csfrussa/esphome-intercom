@@ -196,7 +196,7 @@ permission are independent.
 phonebook name, extension, ring group, conference group, SIP URI, direct
 `user@host` target or external number. Set `ha_bridge: true` to force the HA
 bridge path. Set `send_video: true` to offer the selected browser phone's
-camera when experimental video is enabled. `answer` accepts the same
+camera when SIP video is enabled. `answer` accepts the same
 `send_video` choice; receiving video never requires it.
 
 `call`, `answer`, `decline`, `hangup`, `forward`, `set_dnd` and
@@ -265,9 +265,9 @@ The setup flow has two layers:
 | `assist_pipeline` | HA pipeline ID, or `preferred` to resolve HA's preferred pipeline. The pipeline's existing STT, conversation agent, TTS, language and voice settings are used. |
 | `assist_advanced_call_context` | Disabled by default. Appends caller ID, phonebook match, source and called extension once to the initial `Incoming SIP call from ...` user message. These values are untrusted metadata; a phonebook match is not authentication. |
 | `debug_mode` | Opt-in detailed diagnostics plus private WAV/JSON call captures under `~/.cache/voip_stack_debug`: up to 15 s per HA-softphone direction and 8 s per relay leg, retained at most 24 files / 64 MiB with directory mode `0700`. Leave disabled for normal operation and remove artifacts according to your privacy policy. |
-| `experimental_sip_video` | Experimental and disabled by default. Allows the HA softphone to negotiate SIP video with standard phones and door stations. Direct H.264, VP8 and JPEG require a secure context and compatible browser. ESP endpoints remain audio-only. |
-| `video_transcoding_enabled` | Shown only after experimental video is enabled. Uses Home Assistant's available FFmpeg binary for bounded receive-only H.263, H.263-1998 or H.265 to VP8 conversion. Direct codecs never use it. |
-| `video_camera_send_enabled` | Shown only after experimental video is enabled. Exposes the card's per-browser **Send Camera** choice for negotiated H.264 or VP8 transmit media. Receiving video never needs camera permission. |
+| `experimental_sip_video` | Enables the supported SIP video profile for HA browser phones. Direct H.264, VP8 and JPEG require a secure context and compatible browser. ESP endpoints remain audio-only. The persisted option key retains its original name so existing configured entries do not need migration. |
+| `video_transcoding_enabled` | Shown only after SIP video is enabled. Uses Home Assistant's available FFmpeg binary for bounded receive-only H.263, H.263-1998 or H.265 to VP8 conversion. Direct codecs never use it. |
+| `video_camera_send_enabled` | Shown only after SIP video is enabled. Exposes the card's per-browser **Send Camera** choice for negotiated H.264 or VP8 transmit media. Receiving video never needs camera permission. |
 | `sip_registrar_enabled` | Allow standard SIP endpoints to register to HA with accounts created through the account services. This does not gate inbound calls by phonebook membership. |
 | `trunk_enabled` | Enables the second setup step for provider/PBX registration. When false, no trunk client, registration, external route or DTMF collector starts. |
 

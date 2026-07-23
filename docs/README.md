@@ -46,11 +46,11 @@ Welcome. These pages cover everything beyond the project pitch on the [top-level
 - 📞 **Call flows**: [CALL_FLOWS.md](CALL_FLOWS.md) explains the expected
   signaling/media path for ESP, HA, registered endpoint, group and trunk calls.
 
-- 🎥 **Experimental SIP video**:
-  [EXPERIMENTAL_SIP_VIDEO.md](EXPERIMENTAL_SIP_VIDEO.md) defines the opt-in
+- 🎥 **SIP video**:
+  [SIP_VIDEO.md](SIP_VIDEO.md) defines the opt-in
   SIP video-phone profile for the HA softphone, its direct and optional
-  transcoded codec matrix, browser privacy controls, test probe and deliberate
-  limits. ESPHome endpoints remain audio-only.
+  transcoded codec matrix, browser privacy controls, requirements and
+  deliberate limits. ESPHome endpoints remain audio-only.
 
 - 🧰 **HA services**: [SERVICES.md](SERVICES.md) documents every
   `voip_stack.*` service and the expected side effects.

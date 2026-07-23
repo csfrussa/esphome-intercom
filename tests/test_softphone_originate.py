@@ -76,7 +76,7 @@ def softphone_originate(monkeypatch):
             "trunk_enabled": Mock(return_value=False),
         },
         "const": {
-            "CONF_EXPERIMENTAL_VIDEO": "experimental_video",
+            "CONF_SIP_VIDEO": "sip_video",
             "CONF_TRUNK_AUTH_USERNAME": "trunk_auth_username",
             "CONF_TRUNK_OUTBOUND_PROXY": "trunk_outbound_proxy",
             "CONF_TRUNK_PASSWORD": "trunk_password",

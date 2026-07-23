@@ -56,7 +56,7 @@ from .const import (
     CONF_ASSIST_INTENTS,
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_DEBUG_MODE,
-    CONF_EXPERIMENTAL_VIDEO,
+    CONF_SIP_VIDEO,
     CONF_VIDEO_CAMERA_SEND,
     CONF_VIDEO_TRANSCODING,
     CONF_PHONEBOOK_CONTACTS,
@@ -235,7 +235,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_ASSIST_ENDPOINT_ENABLED, False
             ),
             CONF_DEBUG_MODE: existing.get(CONF_DEBUG_MODE, False),
-            CONF_EXPERIMENTAL_VIDEO: existing.get(CONF_EXPERIMENTAL_VIDEO, False),
+            CONF_SIP_VIDEO: existing.get(CONF_SIP_VIDEO, False),
             CONF_REGISTRAR_ENABLED: existing.get(CONF_REGISTRAR_ENABLED, False),
             CONF_TRUNK_ENABLED: existing.get(CONF_TRUNK_ENABLED, False),
         }
@@ -260,8 +260,8 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_DEBUG_MODE, default=defaults[CONF_DEBUG_MODE]
                 ): BooleanSelector(),
                 vol.Required(
-                    CONF_EXPERIMENTAL_VIDEO,
-                    default=defaults[CONF_EXPERIMENTAL_VIDEO],
+                    CONF_SIP_VIDEO,
+                    default=defaults[CONF_SIP_VIDEO],
                 ): BooleanSelector(),
                 vol.Required(
                     CONF_REGISTRAR_ENABLED, default=defaults[CONF_REGISTRAR_ENABLED]
@@ -284,7 +284,7 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 self._base_input = dict(user_input)
-                if user_input[CONF_EXPERIMENTAL_VIDEO]:
+                if user_input[CONF_SIP_VIDEO]:
                     return await self.async_step_video()
                 self._base_input[CONF_VIDEO_TRANSCODING] = False
                 self._base_input[CONF_VIDEO_CAMERA_SEND] = False
@@ -581,8 +581,8 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                             existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
                         ),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
-                        CONF_EXPERIMENTAL_VIDEO: bool(
-                            existing.get(CONF_EXPERIMENTAL_VIDEO, False)
+                        CONF_SIP_VIDEO: bool(
+                            existing.get(CONF_SIP_VIDEO, False)
                         ),
                         CONF_VIDEO_TRANSCODING: bool(
                             existing.get(CONF_VIDEO_TRANSCODING, False)
@@ -627,8 +627,8 @@ class VoipStackConfigFlow(ConfigFlow, domain=DOMAIN):
                             existing.get(CONF_ASSIST_ADVANCED_CALL_CONTEXT, False)
                         ),
                         CONF_DEBUG_MODE: bool(existing.get(CONF_DEBUG_MODE, False)),
-                        CONF_EXPERIMENTAL_VIDEO: bool(
-                            existing.get(CONF_EXPERIMENTAL_VIDEO, False)
+                        CONF_SIP_VIDEO: bool(
+                            existing.get(CONF_SIP_VIDEO, False)
                         ),
                         CONF_VIDEO_TRANSCODING: bool(
                             existing.get(CONF_VIDEO_TRANSCODING, False)

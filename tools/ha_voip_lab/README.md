@@ -36,8 +36,8 @@ python tools/ha_voip_lab/refresh_playwright_auth.py
 The helper reads the lab-only refresh token and updates only the local
 Playwright storage-state file. It never prints either token.
 
-Run `tools/experimental_sip_video_browser_probe.py` against the lab dashboard
-and `tools/experimental_sip_video_peer.py` against SIP port `15060` for
+Run `tools/sip_video_browser_probe.py` against the lab dashboard
+and `tools/sip_video_peer.py` against SIP port `15060` for
 repeatable media tests. The probe checks the rendered canvas, responsive card geometry and
 post-call backend ownership. The peer can generate audio-only, H.263,
 H.263-1998, H.264, H.265, JPEG and VP8 offers without a physical door station.

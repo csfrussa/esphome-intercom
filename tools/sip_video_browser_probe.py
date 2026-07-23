@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise an incoming or outgoing experimental SIP video call on the HA card.
+"""Exercise an incoming or outgoing SIP video call on the HA card.
 
 The caller is intentionally external to this process (bareSIP or a real video
 phone).  Start the probe, place the call while it is waiting, and let the probe
@@ -342,7 +342,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--out",
-        default="/tmp/experimental_sip_video_browser_probe.json",
+        default="/tmp/sip_video_browser_probe.json",
     )
     args = parser.parse_args()
     if args.expect_audio_only and (args.send_camera or args.deny_camera):

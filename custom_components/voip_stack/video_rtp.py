@@ -1,4 +1,4 @@
-"""Bounded RTP video packetization for the experimental HA video phone."""
+"""Bounded RTP video packetization for the HA video phone."""
 
 from __future__ import annotations
 

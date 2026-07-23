@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavioral tests for the experimental RFC 6184 media path."""
+"""Behavioral tests for the RFC 6184 media path."""
 
 from __future__ import annotations
 

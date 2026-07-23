@@ -1,4 +1,4 @@
-"""Small RTCP feedback profile used by experimental SIP video."""
+"""Small RTCP feedback profile used by SIP video."""
 
 from __future__ import annotations
 

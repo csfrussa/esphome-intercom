@@ -95,7 +95,7 @@ Expected route evidence:
 - no `SIP route requested` for registered endpoint calls to normal roster
   targets.
 
-## Experimental SIP Video Matrix
+## SIP Video Matrix
 
 Enable video only on the HA softphone and use a standard SIP peer. Cover at
 least:
@@ -140,14 +140,14 @@ string check:
 mkdir -p test_captures
 export HA_URL="https://home-assistant.example/dashboard/voip"
 export PLAYWRIGHT_STORAGE_STATE="$HOME/.cache/ha-playwright-state.json"
-./.venv/bin/python tools/experimental_sip_video_browser_probe.py \
+./.venv/bin/python tools/sip_video_browser_probe.py \
   --out test_captures/voip-video-result.json
 ```
 
 Wait for `READY_FOR_VIDEO_CALL`, then start a deterministic audio/video caller:
 
 ```bash
-./.venv/bin/python tools/experimental_sip_video_peer.py \
+./.venv/bin/python tools/sip_video_peer.py \
   --host home-assistant.example \
   --port 5060 \
   --target HA \
@@ -156,7 +156,7 @@ Wait for `READY_FOR_VIDEO_CALL`, then start a deterministic audio/video caller:
   --out test_captures/voip-video-peer.json
 ```
 
-See [Experimental SIP Video](EXPERIMENTAL_SIP_VIDEO.md) for an outgoing probe,
+See [SIP Video](SIP_VIDEO.md) for an outgoing probe,
 the current codec profile and deliberate limitations.
 
 ## Service Matrix

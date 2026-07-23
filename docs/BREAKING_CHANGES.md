@@ -11,7 +11,7 @@ YAML and automations cannot be migrated by Home Assistant automatically.
 1. Read the `2026.8.0` sections below and the
    [`2026.8.0` release notes](RELEASE_2026_8_0.md).
 2. Update VoIP Stack, restart Home Assistant and open **Reconfigure** once.
-   Confirm the incoming-routing, Assist and experimental-video choices.
+   Confirm the incoming-routing, Assist and SIP-video choices.
 3. Open every additional phone under **VoIP Stack > Add phone** and verify its
    extension, groups, DND and video options.
 4. Update copied automations to the service and routing contracts below.

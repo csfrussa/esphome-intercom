@@ -31,7 +31,7 @@ def main() -> int:
          "custom_components/voip_stack/video_rtp.py",
          "custom_components/voip_stack/video_ws_view.py",
          "custom_components/voip_stack/websocket_api.py",
-         "tools/experimental_sip_video_browser_probe.py",
+         "tools/sip_video_browser_probe.py",
          "tests/support/qualification_matrix.py"])
     run([py, "tests/test_voip_phase1.py"])
     run([py, "tests/test_device_resolver_sip.py"])

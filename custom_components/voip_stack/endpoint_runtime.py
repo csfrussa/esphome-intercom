@@ -31,7 +31,7 @@ from .const import (
     CONF_AUTOMATION_ROUTING_ENABLED,
     CONF_ASSIST_ADVANCED_CALL_CONTEXT,
     CONF_ASSIST_PIPELINE,
-    CONF_EXPERIMENTAL_VIDEO,
+    CONF_SIP_VIDEO,
     CONF_REGISTRAR_ENABLED,
     CONF_VIDEO_CAMERA_SEND,
     CONF_VIDEO_TRANSCODING,
@@ -748,7 +748,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
             if (
                 invite is not None
                 and invite.video_format is not None
-                and bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False))
+                and bool(cfg.get(CONF_SIP_VIDEO, False))
                 and (
                     target_endpoint is None
                     or target_endpoint.supports("video")
@@ -2483,7 +2483,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 )
                 forward_video_enabled = bool(
                     preanswered is None
-                    and cfg.get(CONF_EXPERIMENTAL_VIDEO, False)
+                    and cfg.get(CONF_SIP_VIDEO, False)
                     and invite.video_format is not None
                     and (
                         source_route_endpoint is None
@@ -4964,7 +4964,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                 video_failure_reason = ""
                 if (
                     invite.video_format is not None
-                    and cfg.get(CONF_EXPERIMENTAL_VIDEO, False)
+                    and cfg.get(CONF_SIP_VIDEO, False)
                 ):
                     try:
                         (
@@ -5689,7 +5689,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
                     target_endpoint is None or target_endpoint.supports("video")
                 )
                 if (
-                    bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False))
+                    bool(cfg.get(CONF_SIP_VIDEO, False))
                     and invite.video_format is not None
                     and source_video_enabled
                     and target_video_enabled
@@ -6665,7 +6665,7 @@ async def async_start_sip_endpoint(hass: HomeAssistant) -> bool:
         on_media_update=_on_media_update,
         udp_enabled=True,
         tcp_enabled=True,
-        enable_video=bool(cfg.get(CONF_EXPERIMENTAL_VIDEO, False)),
+        enable_video=bool(cfg.get(CONF_SIP_VIDEO, False)),
         enable_video_transcoding=bool(cfg.get(CONF_VIDEO_TRANSCODING, False)),
         prefer_browser_video_send=bool(cfg.get(CONF_VIDEO_CAMERA_SEND, False)),
     )

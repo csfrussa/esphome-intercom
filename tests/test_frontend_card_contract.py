@@ -776,7 +776,7 @@ class FrontendCardContractTest(unittest.TestCase):
             state_loader,
         )
 
-    def test_experimental_video_keeps_send_and_receive_paths_independent(self) -> None:
+    def test_sip_video_keeps_send_and_receive_paths_independent(self) -> None:
         video = (
             ROOT
             / "custom_components"
@@ -810,7 +810,7 @@ class FrontendCardContractTest(unittest.TestCase):
         self.assertIn("import(`./voip-stack-video.js", engine)
         self.assertNotIn('from "./voip-stack-video.js"', engine)
 
-    def test_experimental_video_layout_is_bounded_and_responsive(self) -> None:
+    def test_sip_video_layout_is_bounded_and_responsive(self) -> None:
         self.assertIn(".card.video-active { overflow: hidden;", self.source)
         self.assertIn("ha-card.card.video-active > .button-container", self.source)
         self.assertIn("bottom: 0;", self.source)

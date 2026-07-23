@@ -16,7 +16,7 @@ from .config_validation import route_namespace_conflicts
 from .const import (
     CONF_ASSIST_ENDPOINT_ENABLED,
     CONF_ASSIST_EXTENSION,
-    CONF_EXPERIMENTAL_VIDEO,
+    CONF_SIP_VIDEO,
     CONF_HA_SOFTPHONE_CONFERENCE_GROUP,
     CONF_HA_SOFTPHONE_CONFERENCE_RING,
     CONF_HA_SOFTPHONE_DND,
@@ -314,7 +314,7 @@ def restore_default_phone_subentry(
 
 def _endpoint_capabilities(entry: ConfigEntry, data: Mapping[str, Any]) -> set[str]:
     capabilities = {"audio", "dtmf"}
-    if bool(entry.data.get(CONF_EXPERIMENTAL_VIDEO, False)) and bool(
+    if bool(entry.data.get(CONF_SIP_VIDEO, False)) and bool(
         data.get(CONF_PHONE_VIDEO_ENABLED, True)
     ):
         capabilities.add("video")

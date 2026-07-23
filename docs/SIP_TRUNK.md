@@ -17,7 +17,7 @@ endpoint identity and media ports:
 - advertised host/IP
 - optional Assist intents and callable Assist endpoint
 - optional SIP/RTP diagnostics
-- optional experimental browser video
+- optional browser SIP video
 - optional local SIP registrar
 - optional trunk enable switch
 
